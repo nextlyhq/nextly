@@ -163,9 +163,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the view, as the admin draws it at that page's own
   // address.
@@ -202,6 +206,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
   // Nothing stored, read successfully: the site's style is ready, so the

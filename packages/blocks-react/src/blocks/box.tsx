@@ -30,8 +30,11 @@ import type { ContainerProps } from "./container";
 export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
   name: "core/box",
   version: 1,
-  description:
-    "A generic container. Full width with no padding of its own; use display to make it a flex row, a stack, or a grid.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A generic container. Full
+  // width with no padding of its own; use display to make it a flex row, a
+  // stack, or a grid.
+  description: "A plain container for grouping blocks.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.
@@ -42,16 +45,20 @@ export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     keywords: ["container", "div", "group", "wrapper"],
   },
   props: {
-    as: { type: "select", options: ["div", "article", "aside"] },
+    as: {
+      label: "HTML tag",
+      type: "select",
+      options: ["div", "article", "aside"],
+    },
     // Declared even though a box is full width by default: a preset differs
     // from its sibling in what it starts as, never in what it can be told to
     // do, and a schema is what lets anything but a human change a value.
-    contained: { type: "checkbox" },
+    contained: { label: "Constrain content width", type: "checkbox" },
     // A whole-block link. Content, because where a box leads is what an
     // editor changes; the block reads it through `url()` like Heading and
     // Button, so an unusable value renders no link and makes nothing
     // interactive.
-    link: { role: "content", type: "url" },
+    link: { label: "Link", role: "content", type: "url" },
   },
   defaultProps: { as: "div", contained: false },
   example: { props: { as: "div" } },

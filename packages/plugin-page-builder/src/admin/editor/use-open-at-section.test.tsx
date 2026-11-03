@@ -19,6 +19,7 @@ import { SETTLE_MS, useOpenAtSection } from "./use-open-at-section";
 
 afterEach(() => {
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
 });
 
 const DOCUMENT = {
@@ -196,6 +197,41 @@ describe("useOpenAtSection while the editor settles", () => {
     expect(scroll).toHaveBeenCalledTimes(1);
   });
 
+  it("lets go when the author clicks in the editor around a canvas in a frame", () => {
+    // In a frame, the canvas has a window of its own, and a click, key or
+    // wheel over the editor's panels is delivered to the EDITOR's window, not
+    // the canvas's. Listening on the canvas's alone, settling carries on and
+    // the next resize pulls the author back to the section.
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    const view = inner?.defaultView ?? null;
+    if (inner === null || view === null) throw new Error("no frame realm");
+    expect(view).not.toBe(window);
+    Object.defineProperty(view, "ResizeObserver", {
+      value: globalThis.ResizeObserver,
+    });
+    const canvas = inner.createElement("div");
+    inner.body.append(canvas);
+    const section = inner.createElement("section");
+    section.setAttribute(NODE_ID_ATTRIBUTE, "plans");
+    const scroll = vi.fn();
+    section.scrollIntoView = scroll;
+    canvas.append(section);
+    setup("plans", canvas);
+    // The control: settling is under way, so a resize reveals the section
+    // again.
+    resize();
+    expect(scroll).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      window.dispatchEvent(new Event("pointerdown"));
+    });
+    resize();
+
+    expect(scroll).toHaveBeenCalledTimes(2);
+  });
+
   it("lets go once the editor has had time to settle", () => {
     vi.useFakeTimers();
     const canvas = canvasElement();
@@ -207,6 +243,58 @@ describe("useOpenAtSection while the editor settles", () => {
     });
     resize();
 
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a canvas rendered in a frame", () => {
+  it("waits for the section with an observer from the frame's own window", async () => {
+    // The canvas's nodes belong to the frame's document, so the observer
+    // watching for the section to be drawn is built from that window. Two
+    // recorders tell the windows apart: the editor's is what a bare
+    // `new MutationObserver` reaches for.
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    const view = inner?.defaultView ?? null;
+    if (inner === null || view === null) throw new Error("no frame realm");
+    expect(view).not.toBe(window);
+    const framed: unknown[] = [];
+    const strays: unknown[] = [];
+    const FrameBase = view.MutationObserver;
+    Object.defineProperty(view, "MutationObserver", {
+      value: class extends FrameBase {
+        constructor(callback: MutationCallback) {
+          super(callback);
+          framed.push(this);
+        }
+      },
+    });
+    const EditorBase = globalThis.MutationObserver;
+    vi.stubGlobal(
+      "MutationObserver",
+      class extends EditorBase {
+        constructor(callback: MutationCallback) {
+          super(callback);
+          strays.push(this);
+        }
+      }
+    );
+    const canvas = inner.createElement("div");
+    inner.body.append(canvas);
+    setup("hero", canvas);
+
+    const element = inner.createElement("section");
+    element.setAttribute(NODE_ID_ATTRIBUTE, "hero");
+    const scroll = vi.fn();
+    element.scrollIntoView = scroll;
+    canvas.append(element);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(framed).toHaveLength(1);
+    expect(strays).toEqual([]);
     expect(scroll).toHaveBeenCalledTimes(1);
   });
 });

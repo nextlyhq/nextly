@@ -54,7 +54,9 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import {
+  layersLockRefusalFor,
   lockRefusalWording,
+  savedLockRemovedBy,
   type LockEditRefusal,
   type LockRefusalFacts,
 } from "./lock-refusal";
@@ -70,6 +72,46 @@ import {
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
+
+/**
+ * A change made outside the document that the editor's history takes back and
+ * puts forward, such as a write to the site's shared styles.
+ *
+ * Each half resolves whether it took effect. A half that did not (a refused
+ * or failed write) leaves the change where it was, so the step is dropped
+ * rather than kept as an undo that never clears.
+ */
+interface HistoryStep {
+  /** Takes the change back. */
+  readonly undo: () => Promise<boolean>;
+  /** Makes the change again. */
+  readonly redo: () => Promise<boolean>;
+}
+
+/**
+ * One entry of the history: a group of the op layer's inverses, or a step
+ * recorded from outside the document. Both stacks hold the entry to replay
+ * next, so a step on the redo stack is the recorded one with its halves
+ * swapped.
+ */
+type HistoryEntry =
+  | { readonly kind: "ops"; readonly ops: readonly BuilderOp[] }
+  | {
+      readonly kind: "step";
+      readonly step: HistoryStep;
+      /** The step as recorded, kept as it moves between the stacks. */
+      readonly origin: HistoryStep;
+    };
+
+/** The step that replays `step` the other way, for the opposite stack. */
+function reversed(step: HistoryStep): HistoryStep {
+  return { undo: step.redo, redo: step.undo };
+}
+
+/** How many entries change the document, which is what a save point counts. */
+function documentEntries(stack: readonly HistoryEntry[]): number {
+  return stack.filter(entry => entry.kind === "ops").length;
+}
 
 export interface EditorState {
   /** The document as it currently stands. */
@@ -137,8 +179,23 @@ export interface EditorState {
    * holds reads these, so it holds what `apply` refuses.
    */
   lockDefinitions: SlotDefaultSource;
-  undo: () => void;
-  redo: () => void;
+  /**
+   * Take back the newest step, and answer whether it took effect: at once for
+   * a document edit, and as a promise for a recorded step, once its own undo
+   * has answered. So a surface says "Undone" only for a change that was undone.
+   */
+  undo: () => boolean | Promise<boolean>;
+  /** Repeat the newest undone step, answering as `undo` does. */
+  redo: () => boolean | Promise<boolean>;
+  /**
+   * Record a change made outside the document as one step of this history,
+   * when the author makes it, so it takes its place in order among the page's
+   * edits even while it is still being stored. It ends the redo branch, as an
+   * edit does. Answers a function that withdraws the step, for a change that
+   * did not take effect after all.
+   * @experimental
+   */
+  recordStep: (step: HistoryStep) => () => void;
   canUndo: boolean;
   canRedo: boolean;
   /**
@@ -153,7 +210,10 @@ export interface EditorState {
    */
   limits: DocumentLimits;
   /**
-   * How many edits are on the undo stack.
+   * The document's position in its history: the document edits on the undo
+   * stack, plus those that fell off its old end. A recorded step is not one:
+   * it is stored where it was made, so it is no unsaved work here. The same as
+   * the number on the stack until the history passes its bound.
    *
    * Exported because "did anything change" is not answerable from the document
    * alone: an edit and its undo leave a document equal to the original but not
@@ -309,7 +369,12 @@ function composerFrom(
   return document => {
     let composed = byDocument.get(document);
     if (composed === undefined) {
-      composed = resolveComponentInstances(document, components, { limits });
+      // With the exposure map: the editor's composition is never rendered or
+      // saved, and the canvas reaches a value inside a component through it.
+      composed = resolveComponentInstances(document, components, {
+        limits,
+        exposures: true,
+      });
       byDocument.set(document, composed);
     }
     return composed;
@@ -550,8 +615,9 @@ function useComposer(
 }
 
 /**
- * Whether a fresh edit is refused: the page no longer composes, or the edit
- * adds a lock break. The host is told why, in that order.
+ * Whether a fresh edit is refused: it deletes a block the saved page still
+ * holds locked, the page no longer composes, or the edit adds a lock break.
+ * The host is told why, in that order.
  */
 function refusedAsFresh(
   before: BlockDocument,
@@ -561,6 +627,7 @@ function refusedAsFresh(
     current,
     limits,
     compose,
+    ops,
   }: {
     stored: BlockDocument;
     current: Pick<
@@ -569,8 +636,16 @@ function refusedAsFresh(
     >;
     limits: DocumentLimits;
     compose: Composer | undefined;
+    /** The edit's ops, for the saved page's Layers lock on what it deletes. */
+    ops: readonly BuilderOp[];
   }
 ): boolean {
+  // A delete of a block the SAVED page still holds locked, though the author
+  // has unlocked it since: a save would refuse it, so the edit is refused now,
+  // with the way forward.
+  if (reportLayersLock(before, ops, current.onLockRefused, after, stored)) {
+    return true;
+  }
   if (
     compose !== undefined &&
     refusedForRoom(before, after, current, limits, compose)
@@ -587,9 +662,11 @@ function refusedAsFresh(
 }
 
 /**
- * The lock break `ops` would add to `document`, applied only to ask. Ops the
- * document cannot take are the apply's to refuse; they add no lock break,
- * because they add nothing.
+ * The lock `ops` would break in `document`, applied only to ask: a block
+ * locked in Layers first, now or on the saved page for a delete, then the
+ * slot locks a block declares. Ops the document cannot take for another
+ * reason are the apply's to refuse; they add no lock break, because they add
+ * nothing.
  */
 function lockAnswerFor(
   document: BlockDocument,
@@ -597,6 +674,8 @@ function lockAnswerFor(
   stored: BlockDocument,
   judgement: LockJudgement
 ): LockRefusalFacts | undefined {
+  const layers = layersLockRefusalFor(document, ops, stored);
+  if (layers !== undefined) return layers;
   let group;
   try {
     group = applyOps(document, ops, judgement.limits);
@@ -605,6 +684,33 @@ function lockAnswerFor(
   }
   if (group.inverses.length === 0) return undefined;
   return lockBreakAdded(document, group.document, stored, judgement);
+}
+
+/**
+ * Tell the host which Layers lock refused an edit, and answer whether one did.
+ *
+ * With `after` and `stored`, the edit applied and only the saved page's lock
+ * on a block it deletes is asked (`savedLockRemovedBy`); without them, the
+ * edit was refused by the op layer and the lock it broke is found again.
+ */
+function reportLayersLock(
+  before: BlockDocument,
+  ops: readonly BuilderOp[],
+  onLockRefused: UseEditorStateArgs["onLockRefused"],
+  after?: BlockDocument,
+  stored?: BlockDocument
+): boolean {
+  const found =
+    after === undefined || stored === undefined
+      ? layersLockRefusalFor(before, ops)
+      : savedLockRemovedBy(before, after, stored, ops);
+  if (found === undefined) return false;
+  onLockRefused?.({
+    reason: "locked",
+    sentence: refusalAnnouncement(lockRefusalWording(found)),
+    lock: found,
+  });
+  return true;
 }
 
 /** The lock judgement from what the store reads at apply time. */
@@ -661,6 +767,136 @@ function lockSourcesOf(
     stored: [stored],
     limits,
   };
+}
+
+/**
+ * The undo and redo stacks, and the depths a render reads from them.
+ *
+ * READONLY groups. A recorded inverse describes the document as it stood when
+ * its op ran, so nothing may append to or reorder one after the fact — the
+ * history would then describe an edit that never happened. `applyOps` returns
+ * them already in undo order and already frozen to the type.
+ */
+function useHistoryStacks(): {
+  depths: { undo: number; redo: number; document: number };
+  push: (
+    entry: HistoryEntry,
+    into: "undo" | "redo" | "new"
+  ) => HistoryEntry | undefined;
+  pop: (from: "undo" | "redo") => HistoryEntry | undefined;
+  remove: (entry: HistoryEntry) => void;
+  withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
+} {
+  const undoStack = useRef<HistoryEntry[]>([]);
+  const redoStack = useRef<HistoryEntry[]>([]);
+  // Mirrors the stack lengths so the flags below are STATE and re-render when
+  // they change. Reading `undoStack.current.length` directly would leave an
+  // undo button disabled after the first edit, because a ref mutation does not
+  // schedule a render.
+  const [depths, setDepths] = useState({ undo: 0, redo: 0, document: 0 });
+  /*
+   * Document edits dropped off the old end. The save point measures the
+   * document's position in its history, and that position does not move
+   * because the history forgets how it got there: counted in, a page saved
+   * before a run of style changes stays saved once its edit falls off.
+   */
+  const forgotten = useRef(0);
+  const sync = useCallback(() => {
+    setDepths({
+      undo: undoStack.current.length,
+      redo: redoStack.current.length,
+      document: documentEntries(undoStack.current) + forgotten.current,
+    });
+  }, []);
+  const push = useCallback(
+    (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
+      let dropped: HistoryEntry | undefined;
+      if (into === "redo") {
+        redoStack.current.push(entry);
+      } else {
+        undoStack.current.push(entry);
+      }
+      if (into === "new") {
+        // Bounded from the OLD end. Dropping the newest would make the most
+        // recent edit unrepeatable, which is the one an author is most likely
+        // to want back.
+        if (undoStack.current.length > MAX_HISTORY) {
+          dropped = undoStack.current.shift();
+          if (dropped?.kind === "ops") forgotten.current += 1;
+        }
+        // A new edit invalidates the redo branch: those inverses were computed
+        // against a document that no longer exists, so replaying one would
+        // apply an edit derived from a tree that has since changed.
+        redoStack.current = [];
+      }
+      sync();
+      return dropped;
+    },
+    [sync]
+  );
+  const pop = useCallback(
+    (from: "undo" | "redo") => {
+      const entry = (from === "undo" ? undoStack : redoStack).current.pop();
+      sync();
+      return entry;
+    },
+    [sync]
+  );
+  const remove = useCallback(
+    (entry: HistoryEntry) => {
+      undoStack.current = undoStack.current.filter(held => held !== entry);
+      redoStack.current = redoStack.current.filter(held => held !== entry);
+      sync();
+    },
+    [sync]
+  );
+  /*
+   * Take a recorded step back out, wherever it sits: undone, it is on the
+   * redo stack under another entry. The entry its recording pushed off a full
+   * history comes back to the old end, since a change that never took effect
+   * must not cost the oldest edit.
+   */
+  const withdraw = useCallback(
+    (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
+      const kept = (held: HistoryEntry) =>
+        held.kind !== "step" || held.origin !== origin;
+      undoStack.current = undoStack.current.filter(kept);
+      redoStack.current = redoStack.current.filter(kept);
+      if (dropped !== undefined && undoStack.current.length < MAX_HISTORY) {
+        undoStack.current.unshift(dropped);
+        if (dropped.kind === "ops") forgotten.current -= 1;
+      }
+      sync();
+    },
+    [sync]
+  );
+  return { depths, push, pop, remove, withdraw };
+}
+
+/**
+ * Replay a recorded step and move it to the other stack at once, so a second
+ * press reaches the entry before it rather than waiting on a write. Dropped
+ * again if the replay did not take effect, for the reason a refused inverse is
+ * not pushed back.
+ */
+function replayStep(
+  { step, origin }: { step: HistoryStep; origin: HistoryStep },
+  into: "undo" | "redo",
+  push: (entry: HistoryEntry, into: "undo" | "redo") => void,
+  remove: (entry: HistoryEntry) => void
+): Promise<boolean> {
+  const moved: HistoryEntry = { kind: "step", step: reversed(step), origin };
+  push(moved, into);
+  return step.undo().then(
+    took => {
+      if (!took) remove(moved);
+      return took;
+    },
+    () => {
+      remove(moved);
+      return false;
+    }
+  );
 }
 
 /**
@@ -734,17 +970,7 @@ export function useEditorState({
     );
   latestDocument.current = document;
 
-  // READONLY groups. A recorded inverse describes the document as it stood when
-  // its op ran, so nothing may append to or reorder one after the fact — the
-  // history would then describe an edit that never happened. `applyOps` returns
-  // them already in undo order and already frozen to the type.
-  const undoStack = useRef<(readonly BuilderOp[])[]>([]);
-  const redoStack = useRef<(readonly BuilderOp[])[]>([]);
-  // Mirrors the stack lengths so the flags below are STATE and re-render when
-  // they change. Reading `undoStack.current.length` directly would leave an
-  // undo button disabled after the first edit, because a ref mutation does not
-  // schedule a render.
-  const [depths, setDepths] = useState({ undo: 0, redo: 0 });
+  const { depths, push, pop, remove, withdraw } = useHistoryStacks();
 
   /**
    * Run an op and record its inverse on the given stack.
@@ -804,6 +1030,17 @@ export function useEditorState({
         // cap, a move onto a node that no longer exists, an update to a node
         // a concurrent edit removed. The caller decides what to say about it.
         // Nothing is committed — see the atomicity note above.
+        //
+        // A block locked in Layers is the one refusal the host is told the
+        // reason for here, in the lock's own words, whichever surface sent the
+        // edit: nothing on the canvas explains it otherwise.
+        if (into === "new") {
+          reportLayersLock(
+            latestDocument.current,
+            ops,
+            composition.current.onLockRefused
+          );
+        }
         return null;
       }
 
@@ -831,6 +1068,7 @@ export function useEditorState({
           current: composition.current,
           limits,
           compose: composerNow(),
+          ops,
         })
       ) {
         return null;
@@ -850,27 +1088,9 @@ export function useEditorState({
       }
 
       const applied = { document: group.document, inverse: group.inverses };
+      const entry: HistoryEntry = { kind: "ops", ops: applied.inverse };
 
-      if (into === "new") {
-        undoStack.current.push(applied.inverse);
-        // Bounded from the OLD end. Dropping the newest would make the most
-        // recent edit unrepeatable, which is the one an author is most likely
-        // to want back.
-        if (undoStack.current.length > MAX_HISTORY) undoStack.current.shift();
-        // A new edit invalidates the redo branch: those inverses were computed
-        // against a document that no longer exists, so replaying one would
-        // apply an edit derived from a tree that has since changed.
-        redoStack.current = [];
-      } else if (into === "undo") {
-        undoStack.current.push(applied.inverse);
-      } else {
-        redoStack.current.push(applied.inverse);
-      }
-
-      setDepths({
-        undo: undoStack.current.length,
-        redo: redoStack.current.length,
-      });
+      push(entry, into);
       // Ahead of `setDocument`, which does not take effect until the next
       // render: two ops applied in one tick must see each other, or the second
       // is folded onto the document the first already replaced.
@@ -890,7 +1110,7 @@ export function useEditorState({
     // would rebuild these callbacks every edit for a value none of them close
     // over. Stable identity is also the point — a stale `run` is now the same
     // `run`, folding onto the tree as it stands.
-    [limits, composerNow]
+    [limits, composerNow, push]
   );
 
   const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
@@ -900,23 +1120,37 @@ export function useEditorState({
     [run]
   );
 
-  const undo = useCallback(() => {
-    const group = undoStack.current.pop();
-    if (group === undefined) return;
-    // Popped before running, and NOT pushed back on failure. A refused undo
-    // means the inverse no longer applies to this document, so keeping it would
-    // leave a step that fails every time it is reached — an undo button that
-    // does nothing and never clears.
-    setDepths(d => ({ ...d, undo: undoStack.current.length }));
-    run(group, "redo");
-  }, [run]);
-
-  const redo = useCallback(() => {
-    const group = redoStack.current.pop();
-    if (group === undefined) return;
-    setDepths(d => ({ ...d, redo: redoStack.current.length }));
-    run(group, "undo");
-  }, [run]);
+  /**
+   * Take the newest entry off one stack and replay it, recording what takes
+   * it back on the other.
+   *
+   * Popped before running, and NOT pushed back on failure. A refused undo
+   * means the inverse no longer applies to this document, so keeping it would
+   * leave a step that fails every time it is reached — an undo button that
+   * does nothing and never clears.
+   */
+  const replay = useCallback(
+    (from: "undo" | "redo"): boolean | Promise<boolean> => {
+      const entry = pop(from);
+      if (entry === undefined) return false;
+      const into = from === "undo" ? "redo" : "undo";
+      if (entry.kind === "step") {
+        return replayStep(entry, into, push, remove);
+      }
+      return run(entry.ops, into) !== null;
+    },
+    [pop, push, remove, run]
+  );
+  const undo = useCallback(() => replay("undo"), [replay]);
+  const redo = useCallback(() => replay("redo"), [replay]);
+  // Bounded and branch-ending exactly as a fresh document edit is.
+  const recordStep = useCallback(
+    (step: HistoryStep) => {
+      const dropped = push({ kind: "step", step, origin: step }, "new");
+      return () => withdraw(step, dropped);
+    },
+    [push, withdraw]
+  );
 
   const select = useCallback(
     (id: string | null, mode: SelectionMode = "replace") =>
@@ -940,10 +1174,11 @@ export function useEditorState({
       lockDefinitions,
       undo,
       redo,
+      recordStep,
       canUndo: depths.undo > 0,
       canRedo: depths.redo > 0,
       limits,
-      undoDepth: depths.undo,
+      undoDepth: depths.document,
     }),
     [
       document,
@@ -957,6 +1192,7 @@ export function useEditorState({
       lockDefinitions,
       undo,
       redo,
+      recordStep,
       depths,
       limits,
     ]

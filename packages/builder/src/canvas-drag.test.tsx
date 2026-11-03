@@ -101,6 +101,8 @@ function documentOf(nodes: BlockNode[]): BlockDocument {
 
 /** The editor the last render produced, for asserting what a drop did. */
 let editorRef: EditorState | null = null;
+/** The drag state the last render produced, for what it says it refuses. */
+let dragRef: ReturnType<typeof useCanvasDrag> | null = null;
 
 /**
  * Everything is permitted, so a refused placement never masks a case that is
@@ -141,6 +143,7 @@ function Host({
     nesting,
     ...(definitions === undefined ? {} : { definitions }),
   });
+  dragRef = drag;
 
   return (
     <Canvas
@@ -476,6 +479,110 @@ describe("useCanvasDrag", () => {
     expect(indicator(container)).toBeNull();
     release(root, 200, 190);
     expect(editorRef?.document.nodes.map(n => n.id)).toEqual(order);
+  });
+
+  it("says why a block holding a locked block will not move, over the block, and lets go on release", () => {
+    // The press still selects; a drag that cannot happen draws the lock's
+    // reason over the held block rather than nothing, and moves nothing.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const holder = {
+      ...node("a", "test/box", {
+        children: [{ ...node("a1", "test/heading"), locked: true }],
+      }),
+    } as BlockNode;
+    const { container } = render(
+      <Host document={documentOf([holder, node("b", "test/heading")])} />
+    );
+    layout(container, { a: 100, a1: 50, b: 100 });
+    const root = rootOf(container);
+    const order = editorRef?.document.nodes.map(n => n.id);
+
+    press(root, blockElement(container, "a"), 200, 10);
+    // A press that has not travelled far enough says nothing yet.
+    moveTo(root, 201, 11);
+    expect(dragRef?.refusal ?? null).toBeNull();
+    moveTo(root, 200, 190);
+
+    expect(indicator(container)).toBeNull();
+    expect(dragRef?.refusal).toMatchObject({
+      parentId: "a",
+      lock: { code: "layers-locked", relation: "inside", verb: "move" },
+    });
+    release(root, 200, 190);
+    expect(dragRef?.refusal ?? null).toBeNull();
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual(order);
+  });
+
+  it("lets go of a held block's reason on a release outside the canvas, and on Escape", () => {
+    // Once the reason is drawn the hand may leave the canvas, as any drag
+    // may: its release lands on the document, and Escape abandons it there.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const locked = { ...node("a", "test/heading"), locked: true } as BlockNode;
+    const { container } = render(
+      <Host document={documentOf([locked, node("b", "test/heading")])} />
+    );
+    layout(container, { a: 100, b: 100 });
+    const root = rootOf(container);
+
+    press(root, blockElement(container, "a"), 200, 10);
+    moveTo(root, 200, 190);
+    expect(dragRef?.refusal).toMatchObject({ parentId: "a" });
+    fireEvent.pointerUp(document, { pointerId: 1, clientX: 900, clientY: 900 });
+    expect(dragRef?.refusal ?? null).toBeNull();
+
+    press(root, blockElement(container, "a"), 200, 10);
+    moveTo(root, 200, 190);
+    expect(dragRef?.refusal).toMatchObject({ parentId: "a" });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(dragRef?.refusal ?? null).toBeNull();
+    // Abandoned, not merely hidden: the same press draws nothing more.
+    moveTo(root, 200, 10);
+    moveTo(root, 200, 190);
+    expect(dragRef?.refusal ?? null).toBeNull();
+  });
+
+  it("forgets a held press released outside the canvas before it meant a drag", () => {
+    // The press never travelled far enough to draw the reason, and its
+    // release landed off the canvas: a hover back afterwards is no press.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const locked = { ...node("a", "test/heading"), locked: true } as BlockNode;
+    const { container } = render(
+      <Host document={documentOf([locked, node("b", "test/heading")])} />
+    );
+    layout(container, { a: 100, b: 100 });
+    const root = rootOf(container);
+
+    press(root, blockElement(container, "a"), 200, 10);
+    moveTo(root, 201, 11);
+    fireEvent.pointerUp(document, { pointerId: 1, clientX: 900, clientY: 900 });
+    moveTo(root, 200, 190);
+
+    expect(dragRef?.refusal ?? null).toBeNull();
+  });
+
+  it("refuses a drop into a locked block, in the lock's words", () => {
+    // The drop indicator asks the editor's lock question, which answers for a
+    // block locked in Layers now that its refusal is no longer swallowed.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const locked = {
+      ...node("box", "test/box", { children: [node("in", "test/heading")] }),
+      locked: true,
+    } as BlockNode;
+    const { container } = render(
+      <Host document={documentOf([node("a", "test/heading"), locked])} />
+    );
+    layout(container, { a: 100, box: 200, in: 50 });
+    const root = rootOf(container);
+
+    press(root, blockElement(container, "a"), 200, 50);
+    moveTo(root, 200, 140);
+    moveTo(root, 200, 145);
+
+    expect(dragRef?.refusal).toMatchObject({
+      lock: { code: "layers-locked", relation: "destination" },
+    });
+    release(root, 200, 145);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["a", "box"]);
   });
 
   it("judges a moved component instance by the roots of its definition", () => {

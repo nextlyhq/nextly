@@ -80,8 +80,11 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
   {
     name: COLUMN_BLOCK,
     version: COLUMN_VERSION,
-    description:
-      "One column of a core/columns row. A container with an identity, so it can be selected, styled and dropped into.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: One column of a
+    // core/columns row. A container with an identity, so it can be selected,
+    // styled and dropped into.
+    description: "One column inside Columns.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -96,8 +99,8 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       // `article` inside a row is nearly always a mistake the author meant to
       // make one level up. Anything genuinely semantic belongs in the column
       // rather than as the column.
-      as: { type: "select", options: ["div"] },
-      contained: { type: "checkbox" },
+      as: { label: "HTML tag", type: "select", options: ["div"] },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: COLUMN_DEFAULT_PROPS,
     example: { props: { as: "div" } },

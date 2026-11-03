@@ -21,7 +21,7 @@
  *
  * @module admin/BlocksField.classes.test
  */
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +40,13 @@ let storedRead: { data: unknown; isPending: boolean; error: unknown };
 /** What a save answers, and what it was handed. */
 let saveResult: { success: boolean } | Error;
 const saved: Array<Record<string, unknown>> = [];
+/** How many times the top bar's breakpoint manager has been mounted. */
+let managerMounts = 0;
+/** The steps the editor's history was handed. */
+const recorded: Array<{
+  undo: () => Promise<boolean>;
+  redo: () => Promise<boolean>;
+}> = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
@@ -57,14 +64,27 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       topBarCenter,
       topBarEnd,
       children,
+      renderSettings,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       topBarCenter?: React.ReactNode;
       topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
+      renderSettings?: (dialog: {
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        returnFocus: () => HTMLElement | null;
+      }) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
+        {/* The real shell renders the host's Settings on every pass, open
+            or not, which is where the breakpoint manager now lives. */}
+        {renderSettings?.({
+          open: false,
+          onOpenChange: () => {},
+          returnFocus: () => null,
+        })}
         {topBar}
         {topBarCenter}
         {topBarEnd}
@@ -120,6 +140,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       select: () => {},
       undo: () => {},
       redo: () => {},
+      recordStep: (step: (typeof recorded)[number]) => {
+        recorded.push(step);
+        return () => {
+          recorded.splice(recorded.indexOf(step), 1);
+        };
+      },
       canUndo: false,
       canRedo: false,
       undoDepth: 0,
@@ -128,7 +154,20 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+// Counts the Settings dialog's mounts: its breakpoint section holds its own
+// draft, so a style step undone or redone has to mount it afresh.
+vi.mock("./editor/settings-dialog", () => ({
+  SettingsDialog: (): null => {
+    React.useEffect(() => {
+      managerMounts += 1;
+    }, []);
+    return null;
+  },
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -156,9 +195,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
@@ -222,6 +266,8 @@ beforeEach(() => {
   storedRead = { data: undefined, isPending: false, error: null };
   saveResult = { success: true };
   saved.length = 0;
+  recorded.length = 0;
+  managerMounts = 0;
 });
 
 afterEach(cleanup);
@@ -410,5 +456,94 @@ describe("creating a class", () => {
 
     expect(created.ok).toBe(false);
     expect(created.ok === false && created.reason.length).toBeGreaterThan(0);
+  });
+});
+
+describe("undoing a class created from the editor", () => {
+  it("records the creation as a step that writes the library back, and forward again", async () => {
+    // The class writer runs in the editor component itself, so this is also
+    // the proof that the history reaches it there.
+    const hero = { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} };
+    storedRead = {
+      data: { classes: [hero] },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+
+    await classProps().onCreateClass!("call-to-action");
+    expect(recorded).toHaveLength(1);
+    const created = saved.at(-1);
+
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await recorded[0]?.undo();
+    });
+    expect(undone).toBe(true);
+    expect(saved.at(-1)).toEqual({ classes: [hero] });
+
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual(created);
+  });
+
+  it("records nothing when the creation is refused", async () => {
+    saveResult = new Error("refused");
+    openEditor();
+    await classProps().onCreateClass!("call-to-action");
+    expect(recorded).toEqual([]);
+  });
+
+  it("mounts the breakpoint manager afresh when a style step is undone", async () => {
+    // It holds its own draft and the save it is waiting on the read for, and
+    // would otherwise keep showing the set the undo took back.
+    const hero = { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} };
+    storedRead = { data: { classes: [hero] }, isPending: false, error: null };
+    const { rerender } = render(<Host />);
+    await classProps().onCreateClass!("call-to-action");
+    // The read catches up with the creation.
+    storedRead = {
+      data: { classes: saved.at(-1)?.classes },
+      isPending: false,
+      error: null,
+    };
+    rerender(<Host />);
+    const before = managerMounts;
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    // Not yet: the read still holds the class the undo took back.
+    expect(managerMounts).toBe(before);
+    storedRead = { data: { classes: [hero] }, isPending: false, error: null };
+    rerender(<Host />);
+    expect(managerMounts).toBe(before + 1);
+  });
+
+  it("refuses a new class while a classes undo is settling, then allows it", async () => {
+    // The inspector composes a creation from the library it holds, which
+    // still has the class the undo removed until the read catches up.
+    const hero = { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} };
+    storedRead = { data: { classes: [hero] }, isPending: false, error: null };
+    const { rerender } = render(<Host />);
+    await classProps().onCreateClass!("call-to-action");
+    storedRead = {
+      data: { classes: saved.at(-1)?.classes },
+      isPending: false,
+      error: null,
+    };
+    rerender(<Host />);
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    const writes = saved.length;
+    const refused = await classProps().onCreateClass!("another");
+    expect(refused.ok).toBe(false);
+    expect(saved).toHaveLength(writes);
+
+    storedRead = { data: { classes: [hero] }, isPending: false, error: null };
+    rerender(<Host />);
+    const created = await classProps().onCreateClass!("another");
+    expect(created.ok).toBe(true);
   });
 });

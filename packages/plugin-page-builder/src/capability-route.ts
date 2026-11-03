@@ -38,6 +38,7 @@ import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { isHostStore } from "./composition-route-kit";
 import {
   CAPABILITY_ROUTE_PATH,
   type PatternCapabilityResponse,
@@ -147,6 +148,42 @@ async function componentEditingFor(
 }
 
 /**
+ * Whether this caller may make a component from a selection: `create` and
+ * `publish` on the plugin's own components (under the host's name for them),
+ * since the component is created published. Never where the host keeps its
+ * components in a store of its own, which the route refuses.
+ */
+export async function mayCreateComponent(
+  ctx: CapabilityRouteContext,
+  store: Pick<ComponentStore, "collection"> = {}
+): Promise<boolean> {
+  // A host's own store is not one this plugin makes components in.
+  if (ctx.caller === null || isHostStore(ctx, store)) return false;
+  const slug = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+  return (
+    (await ctx.caller.can("create", slug)) &&
+    (await ctx.caller.can("publish", slug))
+  );
+}
+
+/**
+ * Whether this caller may replace a pattern's content from a selection:
+ * `read` (to choose the pattern and for the route's own read of it),
+ * `update` and `publish` on the collection the host resolved.
+ */
+export async function mayUpdatePattern(
+  ctx: CapabilityRouteContext
+): Promise<boolean> {
+  if (ctx.caller === null) return false;
+  const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
+  return (
+    (await ctx.caller.can("read", slug)) &&
+    (await ctx.caller.can("update", slug)) &&
+    (await ctx.caller.can("publish", slug))
+  );
+}
+
+/**
  * The route declaration.
  *
  * No `public: true`, so it is authenticated: the answer is about the caller and
@@ -164,6 +201,10 @@ export function patternCapabilityRoute(store: ComponentEditingStore = {}): {
     method: "GET",
     path: CAPABILITY_ROUTE_PATH,
     handler: async (_req, ctx) =>
-      Response.json(await readEditorCapability(ctx, store)),
+      Response.json({
+        ...(await readEditorCapability(ctx, store)),
+        mayCreateComponent: await mayCreateComponent(ctx, store),
+        mayUpdatePattern: await mayUpdatePattern(ctx),
+      } satisfies PatternCapabilityResponse),
   };
 }

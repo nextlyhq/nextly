@@ -41,8 +41,8 @@ import {
   type ComponentFactsResponse,
 } from "./library-contract";
 import {
-  asTheCaller,
   componentReadPermission,
+  readingAsUser,
   type ComponentStore,
 } from "./library-route";
 import type { UsageCount } from "./usage-count";
@@ -54,10 +54,11 @@ export interface ComponentFactsSources {
   /** How many documents place the component. */
   readonly countPlacements: (id: string) => Promise<UsageCount>;
   /**
-   * The ids the component has retired. A failure here fails the answer: the
-   * editor then waits rather than minting without them.
+   * The ids the component has retired, or `null` where they are not recorded.
+   * A failure here fails the answer: the editor then waits rather than minting
+   * without them.
    */
-  readonly readRetired: (id: string) => Promise<RetiredExposures>;
+  readonly readRetired: (id: string) => Promise<RetiredExposures | null>;
   /** The field of the row the definition lives in. */
   readonly field: string;
 }
@@ -109,7 +110,10 @@ export async function readComponentFacts(
   );
   return {
     live: liveIdsOf(row, sources.field),
-    retired: { properties: [...retired.properties], slots: [...retired.slots] },
+    retired:
+      retired === null
+        ? null
+        : { properties: [...retired.properties], slots: [...retired.slots] },
     reach:
       count === null
         ? null
@@ -158,6 +162,25 @@ export function factsQuery(url: string): {
   };
 }
 
+/**
+ * Whether the component store is localized, read from its own configuration
+ * as the request's user. Such a store records no retirements, since publishing
+ * there is per language. The service is named structurally, as the write hooks
+ * name it, for the one method read.
+ */
+export async function storeIsLocalized(
+  collections: {
+    getCollection(name: string, context: unknown): Promise<unknown>;
+  },
+  slug: string,
+  user: unknown
+): Promise<boolean> {
+  const store = await collections.getCollection(slug, {
+    user: user ?? undefined,
+  });
+  return (store as { localized?: unknown } | null)?.localized === true;
+}
+
 /** The live row, read as the caller; null when it is gone or not theirs. */
 function liveRowReader(
   ctx: Pick<PluginRouteContext, "caller">,
@@ -169,7 +192,7 @@ function liveRowReader(
       return await requireNextly().findByID({
         collection: slug,
         id,
-        ...(await asTheCaller(ctx)),
+        ...(await readingAsUser(ctx)),
         // The language being edited: a localized definition can expose
         // different fields in each.
         ...(locale === undefined ? {} : { locale }),
@@ -197,7 +220,7 @@ export function componentFactsRoute(args: {
   ) => (id: string) => Promise<UsageCount>;
   readRetired: (
     ctx: PluginRouteContext
-  ) => (id: string) => Promise<RetiredExposures>;
+  ) => (id: string) => Promise<RetiredExposures | null>;
 }): {
   method: "GET";
   path: string;

@@ -29,8 +29,11 @@ import {
 import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
-import { registerClassUsageMaintenance } from "./class-usage-hook";
-import { usageCountReader } from "./class-usage-runtime";
+import {
+  registerClassUsageMaintenance,
+  type CommittedWriteReconciler,
+} from "./class-usage-hook";
+import { ownIndexReader, usageCountReader } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
@@ -49,20 +52,42 @@ import {
 } from "./collections/components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
-import { pagesCollection } from "./collections/pages";
+import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import {
-  USAGE_BACKFILL_STATE_SLUG,
-  usageBackfillStateCollection,
-} from "./collections/usage-backfill-state";
-import { componentFactsRoute } from "./component-facts-route";
+import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
+import { componentActionRoutes } from "./component-actions-route";
+import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
+import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
-import type { CompositionSetup } from "./fields/blocks-composition";
+import {
+  defaultLayoutJob,
+  type EnsureDefaultDeps,
+} from "./default-layout/ensure-default";
+import {
+  installDefaultLayout,
+  seedDefaultLayoutAtStart,
+  type DefaultLayoutSetup,
+} from "./default-layout/install";
+import { makeDefaultRoute } from "./default-layout/make-default-route";
+import {
+  PAGE_BUILDER_SETTINGS_SLUG,
+  pageBuilderSettingsSingle,
+} from "./default-layout/settings-single";
+import { entriesRoute } from "./entries-route";
+import type {
+  CompositionSetup,
+  LayersLockUnjudged,
+} from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import {
+  layoutChoicesRoute,
+  pageCollectionRoute,
+} from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
+import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
   componentLibraryRoute,
@@ -71,10 +96,17 @@ import {
   type ComponentStore,
 } from "./library-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
+import { originStore, type OriginStore } from "./origin-store";
+import { pagesSearchRoute } from "./pages-search-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
+import {
+  pageBuilderSchema,
+  pageBuilderSchemaPlugin,
+} from "./schema/definition";
+import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
@@ -84,6 +116,7 @@ import {
   usageBackfillDeps,
   type BackfillHost,
 } from "./usage-backfill-wiring";
+import { usageBookkeeping } from "./usage-bookkeeping";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -724,19 +757,20 @@ function installContext(
     // reads them per call: an index derived under different ones records a
     // different document than the page serves.
     limits: () => opts.limits ?? DEFAULT_LIMITS,
-    // RESOLVED slugs, not the declared ones. An integrator may rename any of
-    // the three, and a pass holding a literal would write to a table that does
-    // not exist while reporting the scope backfilled.
+    // RESOLVED slugs, not the declared ones. An integrator may rename either,
+    // and a pass holding a literal would write to a table that does not exist
+    // while reporting the scope backfilled.
     slugs: () => ({
       classIndex:
         ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
       componentIndex:
         ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
         COMPONENT_USAGE_INDEX_SLUG,
-      backfillState:
-        ctx.self.collections[USAGE_BACKFILL_STATE_SLUG] ??
-        USAGE_BACKFILL_STATE_SLUG,
     }),
+    // The run, its progress and the dirty mark, in the plugin's own tables.
+    bookkeeping: () => usageBookkeeping(ctx.db, ctx.dialect),
+    ownIndexReader: indexCollection =>
+      ownIndexReader(ctx.services.ownCollections, indexCollection),
   };
 }
 
@@ -758,6 +792,32 @@ export const pageBuilder = (
    * and every pass resolves the API itself.
    */
   let installed: BackfillHost | null = null;
+
+  /**
+   * What the default-Layout repair needs from the installed plugin: the
+   * RESOLVED slugs and the log. Published by `init` for the same reason
+   * `installed` is — the repair job is contributed before `init` runs and
+   * handled long after it.
+   */
+  let defaultLayoutSetup: DefaultLayoutSetup | null = null;
+
+  /**
+   * The repair's deps for one run, the Direct API resolved at call time. A run
+   * before `init` refuses with a named reason and the sweep is re-queued,
+   * rather than writing to slugs the plugin has not resolved.
+   */
+  const defaultLayoutDeps = async (): Promise<EnsureDefaultDeps> => {
+    if (defaultLayoutSetup === null) {
+      throw new Error(
+        "[page-builder] the default Layout repair ran before the plugin was installed"
+      );
+    }
+    // The booted instance through the SDK, imported at call time for the
+    // reason the preview reader above gives: this entry reaches a browser
+    // bundle, and the Direct API graph has no place there.
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    return { ...defaultLayoutSetup, nextly: await getCachedNextly() };
+  };
 
   /**
    * How the blocks field judges composition, once the plugin is installed.
@@ -788,6 +848,12 @@ export const pageBuilder = (
   // `loadSiteStyle`, which reads per request.
   const configStyle = resolveSiteStyle(opts.siteStyle);
 
+  // The usage indexes' reconciler for a write made in a transaction the
+  // caller owns, which their hooks skip. Set by `init`, read per request.
+  const usage: {
+    reconcile?: CommittedWriteReconciler;
+    origins?: OriginStore;
+  } = {};
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -857,6 +923,10 @@ export const pageBuilder = (
         layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
       });
 
+      // The site's one default Layout: refuse deleting or unpublishing it, and
+      // queue the repair when a write gets past that.
+      defaultLayoutSetup = installDefaultLayout(ctx);
+
       // How a blocks value is judged as a reader would receive it: where
       // components live, the caps, who places a component, and where to say
       // so when some of those could not be judged. Set here because the
@@ -865,6 +935,19 @@ export const pageBuilder = (
       const componentIndex =
         ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
         COMPONENT_USAGE_INDEX_SLUG;
+      // What the server log says when the field's validation could not judge
+      // a write's Layers locks.
+      const warnLayersLockUnjudged = (found: LayersLockUnjudged) =>
+        ctx.logger.warn(
+          `[page-builder] a save was not checked against the blocks locked in Layers, because the stored value could not be read (${found.reason}); a locked block it changed was not protected`,
+          {
+            field: found.field,
+            kind: found.kind,
+            slug: found.slug,
+            id: found.id,
+            reason: found.reason,
+          }
+        );
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -926,6 +1009,7 @@ export const pageBuilder = (
               id: found.id,
             }
           ),
+        onLayersLockUnjudged: warnLayersLockUnjudged,
         onLockedExposures: found =>
           ctx.logger.warn(
             `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,
@@ -941,7 +1025,7 @@ export const pageBuilder = (
           ),
       };
 
-      registerClassUsageMaintenance({
+      usage.reconcile = registerClassUsageMaintenance({
         ctx,
         // The RESOLVED slug, not the declared one. An integrator may
         // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
@@ -973,8 +1057,21 @@ export const pageBuilder = (
         // raised bounds leave classes on the extra nodes unindexed, so a class
         // the page renders reads as unused.
         limits: () => opts.limits ?? DEFAULT_LIMITS,
+        // A failed write marks the index dirty, so health stops calling it
+        // whole until a full rebuild has walked the site again.
+        markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
       });
       registerReadinessNotice(ctx, opts);
+      // A page published naming a Layout that is not: it is served inside the
+      // site's default until its own is published, and the author is told.
+      registerLayoutReadinessNotice({
+        ctx,
+        pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+        layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+        settings:
+          ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+          PAGE_BUILDER_SETTINGS_SLUG,
+      });
       // A component's removed fields: recorded when the definition dropping
       // them is published, and their values stripped from every later write.
       // On the store pages are composed against, so a host that redirected it
@@ -982,6 +1079,14 @@ export const pageBuilder = (
       // Not where the host renders components from its own source: no
       // collection stands for it, and the plugin's store, holding retirements of
       // its own, would strip fields that source still exposes.
+      // Where a duplicated component came from, in the same bookkeeping
+      // table as the retired ids.
+      usage.origins = originStore({
+        nextly: () => requireInstalled().nextly(),
+        collection:
+          ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+          COMPONENT_RETIRED_SLUG,
+      });
       if (opts.componentReadiness !== false) {
         registerRetiredExposures({
           ctx,
@@ -1002,7 +1107,21 @@ export const pageBuilder = (
       // the form.
       warnNestedBlocksFields(ctx.config, message => ctx.logger.warn(message));
     },
+    // Seed the default Layout once the system is assembled, so a fresh site
+    // has one before its first page is drawn. Deliberately not awaited:
+    // `seedDefaultLayoutAtStart` says why, and catches every failure itself.
+    onReady: () => {
+      if (defaultLayoutSetup !== null) {
+        void seedDefaultLayoutAtStart(defaultLayoutSetup);
+      }
+    },
+    // Moves with every migration of the plugin's own tables below.
+    schemaVersion: pageBuilderSchemaPlugin.schemaVersion,
     contributes: {
+      // The usage indexes' bookkeeping: the current run, each scope's progress
+      // and the dirty mark. Tables rather than collections, so no admin
+      // screen, REST route or Direct API call reaches them.
+      schema: pageBuilderSchema,
       // The channel another plugin adds blocks through. Core carries no
       // `contributes.blocks` key — a plugin contributing blocks is contributing
       // to the page builder, not to Nextly — so the registry is offered here and
@@ -1029,9 +1148,13 @@ export const pageBuilder = (
         usageBackfillJob({
           scopes: async () => backfillScopes(requireInstalled()),
           state: () => usageBackfillDeps(requireInstalled()).state(),
-          rebuild: scope =>
-            usageBackfillDeps(requireInstalled()).rebuild(scope),
+          rebuild: (scope, walk) =>
+            usageBackfillDeps(requireInstalled()).rebuild(scope, walk),
         }),
+        // The default-Layout repair. A sweep, so the runner keeps one queued
+        // and every jobs pass confirms the site still has a published default,
+        // whatever path took it away; the guards also queue it directly.
+        defaultLayoutJob(defaultLayoutDeps),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -1056,11 +1179,10 @@ export const pageBuilder = (
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.
         componentRetiredCollection(),
-        // The backfill's progress. Contributed beside the indexes it fills,
-        // because an index whose write hooks only maintain it going FORWARD is
-        // empty for every document that already existed — and an empty index
-        // answers "used by nothing" for every component, which is the answer a
-        // delete acts on.
+        // The backfill's former progress collection. Nothing reads or writes
+        // it any more: progress lives in the plugin's own tables. Still
+        // declared so an existing site keeps its table and registry row as
+        // they are, rather than meeting a collection that disappeared.
         usageBackfillStateCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the
@@ -1084,6 +1206,10 @@ export const pageBuilder = (
           // render, and the node referencing it gets no rule at all.
           ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
         }),
+        // Where the site's default Layout is recorded. Contributed whether or
+        // not any Layout exists yet, because the repair writes it on a site
+        // that has none, and the make-default route writes it on every other.
+        pageBuilderSettingsSingle(),
       ],
       // One field type, where there were two. The other named the previous
       // editor's document — a shape this package defined itself, stored under a
@@ -1119,8 +1245,9 @@ export const pageBuilder = (
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
-        // What the editor may offer this caller: saving a pattern, and opening
-        // a component in its own view from the store definitions live in.
+        // What the editor may offer this caller: saving a pattern, making a
+        // component or updating a pattern from a selection, and opening a
+        // component in its own view from the store definitions live in.
         patternCapabilityRoute(componentStoreOf(opts)),
         // What the component editor needs beside the component's own
         // document: the ids its live definition uses, and the count of
@@ -1142,10 +1269,23 @@ export const pageBuilder = (
             });
           },
           // The ids a published removal retired, from the store the write
-          // hooks record them in; none where those hooks are not registered.
+          // hooks record them in. Where those hooks are not registered (the
+          // host renders components from a source of its own), nothing is
+          // recorded, so `null`, and the editor adds no field.
           readRetired: ctx => async id => {
-            if (opts.componentReadiness === false) {
-              return { properties: [], slots: [] };
+            if (opts.componentReadiness === false) return null;
+            // A localized store records no retirements (see the write hooks),
+            // so none can be reported: `null`, and the editor adds no field.
+            if (
+              await storeIsLocalized(
+                ctx.services.collections,
+                componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                ctx.user
+              )
+            ) {
+              return null;
             }
             const store = retiredStore({
               nextly: () => requireInstalled().nextly(),
@@ -1158,6 +1298,66 @@ export const pageBuilder = (
             );
           },
         }),
+        // Save a selection as a component, or convert it into one. Here
+        // rather than left to the collection API for the reason the pattern
+        // save is: the planner needs the server's block registry.
+        componentFromSelectionRoute({
+          store: componentStoreOf(opts),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+          // Read when a request arrives, after `init` has registered the
+          // usage hooks this hands back.
+          reconcile: () => usage.reconcile,
+        }),
+        // Detach, duplicate and update a pattern, each with a dry run.
+        ...componentActionRoutes({
+          store: componentStoreOf(opts),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+          reconcile: () => usage.reconcile,
+          origins: () => usage.origins,
+        }),
+        // The relation control's read: a collection's entries as `{ id, title }`,
+        // for the collections a registered block prop names as relation targets,
+        // read as the author asking.
+        entriesRoute(),
+        // The editor's page search: the site's pages (entries of collections
+        // with a Page Builder field, the composition stores left out), by
+        // title, read as the author asking.
+        pagesSearchRoute(componentStoreOf(opts)),
+        // The one write that chooses the site's default Layout. A route rather
+        // than an edit to the settings Single, because choosing a default has
+        // preconditions (the Layout is published, the caller may publish
+        // Layouts) that a plain Single write cannot state.
+        makeDefaultRoute(),
+        // The Layouts an author may choose for a page, with the published
+        // regions the editor draws around it, read as the author from the
+        // component store the editor's library reads, under the bounds the
+        // published renderer draws with.
+        layoutChoicesRoute(
+          componentStoreOf(opts),
+          () => opts.limits ?? DEFAULT_LIMITS
+        ),
+        // Which collection holds the pages, as renamed: the picker draws on
+        // that collection's forms and no other.
+        pageCollectionRoute(),
+        // Settings' Site tab: what the caller may change there, and the one
+        // way the site's breakpoints change.
+        siteSettingsRoute(configStyle),
+        siteBreakpointsRoute(),
+      ],
+      // The grant that lets a role change the site's settings in the editor's
+      // Settings: its breakpoints, through the one route that changes them,
+      // and with the Layout rights its default Layout, through make-default.
+      // A permission of its own rather than `update-site-style` or
+      // `update-page-builder-settings`: redefining the site's devices is not
+      // a style, and the second grant would name a Single nobody edits directly.
+      permissions: [
+        {
+          action: "manage",
+          resource: "page-builder-site",
+          label: "Manage page builder site settings",
+          description:
+            "Change the site's breakpoints, and choose its default Layout.",
+        },
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
@@ -1165,10 +1365,6 @@ export const pageBuilder = (
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
-      //
-      // The permission below is read by the `customCss` field rule in
-      // `pagesCollection()`, so granting and withholding it each change what a
-      // user can do.
       admin: {
         // The canvas needs the allowlist and runs in the browser, so it
         // travels with the rest of the admin metadata. `remotePatterns` is

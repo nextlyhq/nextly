@@ -21,7 +21,6 @@
  */
 
 import {
-  findNode,
   registryNestingSource,
   saveAsPatternRefusal,
   type ComponentLookup,
@@ -40,10 +39,14 @@ import {
   type MoveDirection,
   type MoveEffect,
 } from "./keyboard-move";
-import { layerLabel, pathTo } from "./layers";
-import { lockRefusalWording } from "./lock-refusal";
+import { pathTo } from "./layers";
+import { lockedBlockWording, lockRefusalWording } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
-import { nestingRefusalForMove, refusalAnnouncement } from "./move-refusal";
+import {
+  nestingRefusalForMove,
+  refusalAnnouncement,
+  unmovedAnnouncement,
+} from "./move-refusal";
 import type { BuilderOp } from "./ops";
 import {
   isRefusal,
@@ -52,8 +55,13 @@ import {
   selectionMove,
 } from "./selection-ops";
 import {
+  depthMoveActions,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
+  type ComponentVerbsOffer,
+  type DepthMoveAction,
+  type MoveJudge,
+  type MovePosition,
   type ToolbarAction,
   type ToolbarActionId,
 } from "./toolbar-actions";
@@ -195,6 +203,17 @@ export interface BlockActions {
    * Optional, so a host built before it keeps compiling.
    */
   readonly editComponent?: () => void;
+  /**
+   * Begin saving the selection as a component, or converting it into one.
+   * Like `saveAsPattern`, these hand the gesture to the host, which owns the
+   * form and the write. Absent where the host offers no components.
+   */
+  readonly saveAsComponent?: () => void;
+  readonly convertToComponent?: () => void;
+  /** Detach the selected placement, duplicate its component, update a pattern. */
+  readonly detachComponent?: () => void;
+  readonly duplicateComponent?: () => void;
+  readonly updatePattern?: () => void;
 }
 
 /**
@@ -265,6 +284,18 @@ function lockSentence(
 
 export function useSelectionActionsContext(): ToolbarAction[] | null {
   return React.useContext(SelectionActionsContext);
+}
+
+/**
+ * Move in and Move out for the current selection, judged by the provider with
+ * the position function its move verb runs, component definitions included.
+ * Empty outside a provider, where there is no verb to run them.
+ */
+const DepthMovesContext = React.createContext<readonly DepthMoveAction[]>([]);
+
+/** The provider's Move in and Move out, for the block menu. */
+export function useDepthMoveActions(): readonly DepthMoveAction[] {
+  return React.useContext(DepthMovesContext);
 }
 
 /**
@@ -398,6 +429,50 @@ export interface BlockKeyboardActionsOptions {
    * all, rather than one that presses and does nothing.
    */
   onEditText?: (nodeId: string) => boolean;
+  /**
+   * Making components from a selection, where the host has a component
+   * library: whether the author may, and the gestures that open the host's
+   * forms. Absent, neither verb is offered.
+   */
+  components?: ComponentVerbsHost;
+}
+
+/**
+ * The host's side of "Save as component" and "Convert to component".
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ComponentVerbsHost extends ComponentVerbsOffer {
+  readonly onSaveAsComponent: () => void;
+  readonly onConvertToComponent: () => void;
+  /** Detach the selected placement. Absent, with no definitions, Detach is not offered. */
+  readonly onDetachComponent?: () => void;
+  readonly onDuplicateComponent?: () => void;
+  /** Update a pattern. Absent, with no `mayUpdatePattern`, it is not offered. */
+  readonly onUpdatePattern?: () => void;
+}
+
+/** The verbs the host runs for the menu's component group. */
+type ComponentVerbId =
+  | "save-as-component"
+  | "convert-to-component"
+  | "detach-component"
+  | "duplicate-component"
+  | "update-pattern";
+
+/** The host's gesture for one component verb, if it offers it. */
+function componentVerbRunner(
+  host: ComponentVerbsHost,
+  id: ComponentVerbId
+): (() => void) | undefined {
+  const runners: Record<ComponentVerbId, (() => void) | undefined> = {
+    "save-as-component": host.onSaveAsComponent,
+    "convert-to-component": host.onConvertToComponent,
+    "detach-component": host.onDetachComponent,
+    "duplicate-component": host.onDuplicateComponent,
+    "update-pattern": host.onUpdatePattern,
+  };
+  return runners[id];
 }
 
 /** What the hook hands back: the region's text, and the verbs behind the keys. */
@@ -425,6 +500,11 @@ export interface BlockKeyboardActionsResult {
    * save would store.
    */
   readonly selectionActions: ToolbarAction[];
+  /**
+   * Move in and Move out, judged with the position function the move verb
+   * itself runs, so an item is offered exactly when pressing it would move.
+   */
+  readonly depthMoves: readonly DepthMoveAction[];
 }
 
 /**
@@ -450,6 +530,7 @@ export function useBlockKeyboardActions({
   definitions,
   onSaveAsPattern,
   onEditComponent,
+  components,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
@@ -613,6 +694,29 @@ export function useBlockKeyboardActions({
     [announce]
   );
 
+  /*
+   * Where a block's move goes, with the component definitions this provider
+   * was given. ONE function for the verb below and for the menu's Move in and
+   * Move out availability, so the menu never offers a move the verb, asked
+   * with other inputs, would find nowhere to make.
+   */
+  const movePosition = React.useCallback<MovePosition>(
+    (document, id, direction) =>
+      keyboardMovePosition(document.nodes, id, direction, definitions),
+    [definitions]
+  );
+
+  /*
+   * Whether the placement rule refuses a move, and its words: the one call
+   * the verb below refuses by and the menu's Move in and Move out are dimmed
+   * by, with the same rules and component definitions.
+   */
+  const placementRefusal = React.useCallback<MoveJudge>(
+    (document, id, to) =>
+      nestingRefusalForMove(document, id, to, nestingSource, definitions),
+    [nestingSource, definitions]
+  );
+
   const moveSelected = React.useCallback(
     (direction: MoveDirection) => {
       if (moveSet(direction)) return;
@@ -627,18 +731,15 @@ export function useBlockKeyboardActions({
       // whole section around it.
       const lockedNode = lockBlockingMove(editorNow.document, selectedId);
       if (lockedNode !== undefined) {
-        announce(`${layerLabel(lockedNode)} is locked. Unlock it to move it.`);
+        announce(
+          refusalAnnouncement(lockedBlockWording(lockedNode, selectedId))
+        );
         return;
       }
 
       // The component definitions go with it so an indent into a component
       // instance enters a slot the component exposes.
-      const move = keyboardMovePosition(
-        editorNow.document.nodes,
-        selectedId,
-        direction,
-        definitions
-      );
+      const move = movePosition(editorNow.document, selectedId, direction);
       // `null` is an ordinary answer: the first block cannot move up, and a
       // top-level block cannot outdent. Refusing quietly is right — a block
       // at the end of its container has nowhere to go, and saying so would
@@ -655,13 +756,7 @@ export function useBlockKeyboardActions({
        * disagree about where a block may go. A keyboard author who could not
        * be refused here would build documents a pointer author cannot.
        */
-      const refusal = nestingRefusalForMove(
-        editorNow.document,
-        selectedId,
-        move.to,
-        nestingSource,
-        definitions
-      );
+      const refusal = placementRefusal(editorNow.document, selectedId, move.to);
       if (refusal !== null) {
         announce(refusalAnnouncement(refusal));
         return;
@@ -700,14 +795,12 @@ export function useBlockKeyboardActions({
        * with nowhere to go and is correctly quiet; reaching HERE means a move
        * was attempted and did not happen, which a keyboard author cannot see.
        */
-      const moved = findNode(editorNow.document.nodes, selectedId);
-      const subject = moved === undefined ? "The block" : layerLabel(moved);
-      announce(`${subject} could not be moved.`);
+      announce(unmovedAnnouncement(editorNow.document, selectedId));
       // The selection deliberately does NOT change. The block that moved is
       // the block still selected, so a second press continues moving the
       // same block — which is what makes a run of presses walk it across the
     },
-    [announce, moveSet, nestingSource, definitions]
+    [announce, moveSet, movePosition, placementRefusal]
   );
 
   /**
@@ -720,10 +813,9 @@ export function useBlockKeyboardActions({
    */
   const selectParent = React.useCallback(() => {
     const editorNow = latest.current;
-    const path = pathTo(editorNow.document, editorNow.selectedId);
-    const parent = path[path.length - 2];
+    const parent = parentOf(editorNow.document, editorNow.selectedId);
     if (parent === undefined) return;
-    editorNow.select(parent.id);
+    editorNow.select(parent);
   }, []);
 
   const bindings = React.useMemo(
@@ -811,8 +903,11 @@ export function useBlockKeyboardActions({
         // edit touched.
         when: () => latest.current.canUndo,
         run: () => {
-          latest.current.undo();
-          announce("Undone");
+          // Said once the step has taken effect: a shared style change is
+          // undone by a write, which can be refused.
+          void Promise.resolve(latest.current.undo()).then(done => {
+            if (done) announce("Undone");
+          });
         },
       },
       {
@@ -827,8 +922,9 @@ export function useBlockKeyboardActions({
         whenTyping: false,
         when: () => latest.current.canRedo,
         run: () => {
-          latest.current.redo();
-          announce("Redone");
+          void Promise.resolve(latest.current.redo()).then(done => {
+            if (done) announce("Redone");
+          });
         },
       },
       {
@@ -837,8 +933,9 @@ export function useBlockKeyboardActions({
         whenTyping: false,
         when: () => latest.current.canRedo,
         run: () => {
-          latest.current.redo();
-          announce("Redone");
+          void Promise.resolve(latest.current.redo()).then(done => {
+            if (done) announce("Redone");
+          });
         },
       },
     ],
@@ -903,7 +1000,8 @@ export function useBlockKeyboardActions({
     [
       {
         keys: "Escape",
-        description: "Clear the block selection",
+        description:
+          "Select the block holding this one, or clear the selection",
         // The one case the editor declines. `when` rather than a branch in
         // `run`, because declining has to leave the key UNCONSUMED for the
         // dialog to receive it, and a binding that runs has already taken it.
@@ -916,9 +1014,13 @@ export function useBlockKeyboardActions({
           const outcome = escapeOutcome(
             typeof document === "undefined" ? undefined : document
           );
-          if (outcome !== "deselect") return;
+          if (outcome !== "navigate-selection") return;
           if (editorNow.selectedId === null) return;
-          editorNow.select(null);
+          // Up a level: the block holding the selection, the same answer
+          // "Select parent" gives, or nothing once the selection is at the top.
+          editorNow.select(
+            parentOf(editorNow.document, editorNow.selectedId) ?? null
+          );
         },
       },
     ],
@@ -976,6 +1078,58 @@ export function useBlockKeyboardActions({
   ]);
 
   /*
+   * The component verbs, refused in words before the host is asked: the
+   * toolbar keeps a dimmed verb focusable, so a press of one still lands here.
+   * The reason is the one the action list carries, so the two cannot differ.
+   */
+  const componentOffer = React.useMemo(
+    () =>
+      components === undefined
+        ? undefined
+        : {
+            mayCreate: components.mayCreate,
+            ...(components.definitions === undefined
+              ? {}
+              : { definitions: components.definitions }),
+            ...(components.mayUpdatePattern === undefined
+              ? {}
+              : { mayUpdatePattern: components.mayUpdatePattern }),
+          },
+    [components]
+  );
+  const runComponentVerb = React.useCallback(
+    (id: ComponentVerbId) => {
+      if (components === undefined) return;
+      const offered = toolbarActions(
+        editor.document,
+        editor.selectedId,
+        editor.selection.ids,
+        nestingSource,
+        mayCreatePattern,
+        editor.lockRefusalFor,
+        componentOffer
+      ).find(action => action.id === id);
+      if (offered === undefined) return;
+      if (!offered.enabled) {
+        if (offered.reason !== undefined) announce(offered.reason);
+        return;
+      }
+      componentVerbRunner(components, id)?.();
+    },
+    [
+      components,
+      componentOffer,
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids,
+      editor.lockRefusalFor,
+      nestingSource,
+      mayCreatePattern,
+      announce,
+    ]
+  );
+
+  /*
    * The verb list, computed ONCE for every surface below.
    *
    * See {@link SelectionActionsContext}: the save preflight builds the document
@@ -991,6 +1145,7 @@ export function useBlockKeyboardActions({
         nestingSource,
         mayCreatePattern,
         editor.lockRefusalFor,
+        componentOffer,
         onEditComponent !== undefined
       ),
     [
@@ -1001,6 +1156,7 @@ export function useBlockKeyboardActions({
       mayCreatePattern,
       editor.lockRefusalFor,
       onEditComponent,
+      componentOffer,
     ]
   );
   const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
@@ -1013,6 +1169,11 @@ export function useBlockKeyboardActions({
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
       editComponent: editSelectedComponent,
+      saveAsComponent: () => runComponentVerb("save-as-component"),
+      convertToComponent: () => runComponentVerb("convert-to-component"),
+      detachComponent: () => runComponentVerb("detach-component"),
+      duplicateComponent: () => runComponentVerb("duplicate-component"),
+      updatePattern: () => runComponentVerb("update-pattern"),
     }),
     [
       moveSelected,
@@ -1021,6 +1182,27 @@ export function useBlockKeyboardActions({
       selectParent,
       saveSelectionAsPattern,
       editSelectedComponent,
+      runComponentVerb,
+    ]
+  );
+
+  const depthMoves = React.useMemo(
+    () =>
+      depthMoveActions(
+        editor.document,
+        editor.selectedId,
+        editor.selection.ids,
+        editor.lockRefusalFor,
+        movePosition,
+        placementRefusal
+      ),
+    [
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids,
+      editor.lockRefusalFor,
+      movePosition,
+      placementRefusal,
     ]
   );
 
@@ -1029,6 +1211,7 @@ export function useBlockKeyboardActions({
     actions,
     nesting: nestingSource,
     selectionActions,
+    depthMoves,
   };
 }
 
@@ -1049,6 +1232,19 @@ function useEditComponentVerb(
     const componentId = placedComponentId(editor.document, nodeId);
     if (componentId !== undefined) onEditComponent(componentId, nodeId);
   }, [editor.document, editor.selection.ids, onEditComponent]);
+}
+
+/**
+ * The block holding `id`, read from the same trail the breadcrumb draws, or
+ * nothing for a top-level block or a selection the document no longer holds.
+ * "Select parent" and Escape both ask this, so they cannot name two parents.
+ */
+function parentOf(
+  document: EditorState["document"],
+  id: string | null
+): string | undefined {
+  const path = pathTo(document, id);
+  return path[path.length - 2]?.id;
 }
 
 /**
@@ -1076,6 +1272,7 @@ export function BlockKeyboardActions({
   onSaveAsPattern,
   mayCreatePattern,
   onEditComponent,
+  components,
   onShareVerbs,
   children,
 }: BlockKeyboardActionsOptions & {
@@ -1091,6 +1288,7 @@ export function BlockKeyboardActions({
     actions,
     nesting: rules,
     selectionActions: offered,
+    depthMoves,
   } = useBlockKeyboardActions({
     editor,
     enabled,
@@ -1100,6 +1298,7 @@ export function BlockKeyboardActions({
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
     ...(definitions === undefined ? {} : { definitions }),
+    ...(components === undefined ? {} : { components }),
   });
 
   /*
@@ -1148,12 +1347,14 @@ export function BlockKeyboardActions({
   return (
     <NestingContext.Provider value={rules}>
       <SelectionActionsContext.Provider value={offered}>
-        <BlockActionsContext.Provider value={actions}>
-          <p aria-live="polite" role="status" className="nx-sr-only">
-            {announcement}
-          </p>
-          {children}
-        </BlockActionsContext.Provider>
+        <DepthMovesContext.Provider value={depthMoves}>
+          <BlockActionsContext.Provider value={actions}>
+            <p aria-live="polite" role="status" className="nx-sr-only">
+              {announcement}
+            </p>
+            {children}
+          </BlockActionsContext.Provider>
+        </DepthMovesContext.Provider>
       </SelectionActionsContext.Provider>
     </NestingContext.Provider>
   );

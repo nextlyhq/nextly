@@ -557,8 +557,8 @@ function FaceList({
   if (emittable.length === 0) {
     return (
       <p className="nx-fonts__note">
-        This site loads no font files of its own. Tokens may still name generic
-        families, and any typeface a reader has installed.
+        This site loads no font files of its own. Variables may still name
+        generic families, and any typeface a reader has installed.
       </p>
     );
   }
@@ -931,7 +931,7 @@ export function FontsPanel({
 
       <section aria-labelledby="nx-fonts-tokens">
         <h3 className="nx-fonts__heading" id="nx-fonts-tokens">
-          Typeface tokens
+          Typefaces
         </h3>
         <p className="nx-fonts__note" role="status">
           {tokenSummary(rows, rowsNeedingAttention(rows))}

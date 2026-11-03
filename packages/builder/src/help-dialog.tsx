@@ -20,6 +20,7 @@ import {
 import * as React from "react";
 
 import { PAGE_BUILDER_DOCS } from "./docs-links";
+import { EDITOR_WORDS } from "./editor-words";
 import { helpShortcuts, type ShortcutRow } from "./help-shortcuts";
 import { useModalKeyboardHold } from "./modal-keyboard-hold";
 
@@ -108,7 +109,7 @@ export function HelpDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Help</DialogTitle>
+          <DialogTitle>{EDITOR_WORDS.help}</DialogTitle>
           <DialogDescription>
             Keyboard shortcuts for the Page Builder, and where to read more.
           </DialogDescription>

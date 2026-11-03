@@ -22,13 +22,18 @@ import {
   canvasContentPoint,
   canvasContentRect,
   canvasPointerPoints,
+  canvasScroller,
   clippedByAncestor,
   clippedByAncestorRect,
   frameInsetOf,
   canvasRootFrom,
+  containerEdges,
   hasScrollbarGutter,
+  hostPointInFrame,
+  visibleBandOf,
   overflowApplies,
   renderSkips,
+  scrollEventTarget,
   viewportPositioned,
 } from "./geometry-dom";
 
@@ -1131,5 +1136,204 @@ describe("whether the render skips an element", () => {
   it("reports NOT skipped when the runtime says the element is visible", () => {
     runtimeAnswering(true);
     expect(renderSkips(document.createElement("div"))).toBe(false);
+  });
+});
+
+describe("a point on the host page, in a frame's own coordinates", () => {
+  it("removes the frame's origin, its inset and its painted scale", () => {
+    // At (100, 150) with a 2px border and 4px padding, painted at half its
+    // layout size: the content starts 3 host pixels in, so (100 + 3, 150 + 3)
+    // is the frame's (0, 0), and every host pixel past it is two of the
+    // frame's. Leaving out any one of the three moves the answer.
+    const frame = frameWith({ border: { left: 2, top: 2 }, padding: "4px" });
+    frame.getBoundingClientRect = () =>
+      ({
+        x: 100,
+        y: 150,
+        left: 100,
+        top: 150,
+        width: 400,
+        height: 300,
+      }) as DOMRect;
+    Object.defineProperty(frame, "offsetWidth", { value: 800 });
+    Object.defineProperty(frame, "offsetHeight", { value: 600 });
+
+    expect(hostPointInFrame(frame, { x: 203, y: 253 })).toEqual({
+      x: 200,
+      y: 200,
+    });
+  });
+
+  it("is a plain translation for an unscaled frame with no inset", () => {
+    const frame = frameWith({ border: { left: 0, top: 0 }, padding: "0px" });
+    frame.getBoundingClientRect = () =>
+      ({ x: 40, y: 60, left: 40, top: 60, width: 300, height: 200 }) as DOMRect;
+    Object.defineProperty(frame, "offsetWidth", { value: 300 });
+    Object.defineProperty(frame, "offsetHeight", { value: 200 });
+
+    expect(hostPointInFrame(frame, { x: 50, y: 70 })).toEqual({ x: 10, y: 10 });
+  });
+});
+
+/**
+ * An iframe whose document is a second realm, as the canvas's frame is.
+ *
+ * jsdom does not implement `scrollingElement` — it reads `undefined` — so it
+ * is given the value a browser gives a standards-mode document, its root
+ * element. Left undefined, a function answering `undefined` for everything
+ * would match it and every case below would pass on nothing.
+ */
+function frameDocument(): Document {
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const inner = frame.contentDocument;
+  if (inner === null) throw new Error("no frame document");
+  expect(inner).not.toBe(document);
+  Object.defineProperty(inner, "scrollingElement", {
+    value: inner.documentElement,
+  });
+  return inner;
+}
+
+describe("what scrolls a canvas in a frame", () => {
+  it("is the frame's scrolling element, which no ancestor walk would find", () => {
+    const inner = frameDocument();
+    const root = inner.createElement("div");
+    inner.body.appendChild(root);
+    expect(canvasScroller(root, true)).toBe(inner.documentElement);
+    // The control: nothing above the root in the frame is styled to scroll,
+    // so the walk the editor's own document uses comes back empty.
+    expect(canvasScroller(root, false)).toBeNull();
+  });
+
+  it("is the ancestor styled to scroll while the canvas is not in a frame", () => {
+    const region = document.createElement("section");
+    region.style.overflowY = "auto";
+    const root = document.createElement("div");
+    region.appendChild(root);
+    document.body.appendChild(region);
+
+    expect(canvasScroller(root, false)).toBe(region);
+  });
+
+  it("measures a scrolling element's edges as the viewport's", () => {
+    // A document's own rectangle is the whole document, not the part on
+    // screen, so an edge band measured against it never holds the pointer.
+    const inner = frameDocument();
+    const scroller = inner.scrollingElement;
+    if (scroller === null) throw new Error("no scrolling element");
+    scroller.getBoundingClientRect = () =>
+      ({ top: -400, bottom: 2600, height: 3000 }) as DOMRect;
+    const view = inner.defaultView;
+    if (view === null) throw new Error("no frame window");
+    Object.defineProperty(view, "innerHeight", { value: 640 });
+    Object.defineProperty(view, "innerWidth", { value: 900 });
+
+    expect(containerEdges(scroller)).toEqual({
+      top: 0,
+      bottom: 640,
+      left: 0,
+      right: 900,
+    });
+  });
+
+  it("still measures an ordinary scroller by its own rectangle", () => {
+    const region = document.createElement("section");
+    region.getBoundingClientRect = () =>
+      ({ top: 56, bottom: 856, height: 800, left: 12, width: 300 }) as DOMRect;
+    document.body.appendChild(region);
+
+    expect(containerEdges(region)).toEqual({
+      top: 56,
+      bottom: 856,
+      left: 12,
+      right: 312,
+    });
+  });
+
+  it("hears a viewport's scroll on its document, and an element's on the element", () => {
+    const inner = frameDocument();
+    const scroller = inner.scrollingElement;
+    if (scroller === null) throw new Error("no scrolling element");
+    expect(scrollEventTarget(scroller)).toBe(inner);
+
+    const region = document.createElement("section");
+    document.body.appendChild(region);
+    expect(scrollEventTarget(region)).toBe(region);
+  });
+});
+
+describe("the part of a scroller on screen, in canvas content coordinates", () => {
+  it("is the frame's viewport for a frame's scrolling element", () => {
+    // The page is scrolled 1000 down a 600-tall viewport: the root's top is
+    // at -1000, so the viewport shows content 1000 to 1600. The document's own
+    // rectangle would claim the whole page.
+    const inner = frameDocument();
+    const view = inner.defaultView;
+    const scroller = inner.scrollingElement;
+    if (view === null || scroller === null) throw new Error("no frame realm");
+    Object.defineProperty(view, "innerWidth", { value: 800 });
+    Object.defineProperty(view, "innerHeight", { value: 600 });
+    scroller.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: -1000,
+        left: 0,
+        top: -1000,
+        width: 800,
+        height: 4000,
+        bottom: 3000,
+      }) as DOMRect;
+    const root = inner.createElement("div");
+    inner.body.appendChild(root);
+    root.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: -1000,
+        left: 0,
+        top: -1000,
+        width: 800,
+        height: 4000,
+      }) as DOMRect;
+
+    expect(visibleBandOf(scroller, root)).toEqual({
+      x: 0,
+      y: 1000,
+      width: 800,
+      height: 600,
+    });
+  });
+
+  it("is an ordinary scroller's own rectangle", () => {
+    const region = document.createElement("section");
+    region.getBoundingClientRect = () =>
+      ({
+        x: 40,
+        y: 56,
+        left: 40,
+        top: 56,
+        width: 900,
+        height: 800,
+        bottom: 856,
+      }) as DOMRect;
+    const root = document.createElement("div");
+    region.appendChild(root);
+    document.body.appendChild(region);
+    root.getBoundingClientRect = () =>
+      ({
+        x: 40,
+        y: -144,
+        left: 40,
+        top: -144,
+        width: 900,
+        height: 3000,
+      }) as DOMRect;
+
+    expect(visibleBandOf(region, root)).toEqual({
+      x: 0,
+      y: 200,
+      width: 900,
+      height: 800,
+    });
   });
 });

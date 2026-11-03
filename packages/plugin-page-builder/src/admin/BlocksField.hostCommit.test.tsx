@@ -197,9 +197,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   useDocumentIdentity: () => null,
   navigateTo: vi.fn(),
@@ -240,6 +244,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useBeforeDocumentAction: (handler: () => void) => {
     beforeStore = handler;
   },
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () =>
     React.useSyncExternalStore(
       listener => {

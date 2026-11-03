@@ -32,11 +32,16 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  CONTENT_CONTROL_TYPES,
+  hasContentControl,
+} from "./content-control-types";
 import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
 import { blockLabel } from "./inserter";
+import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
-import { isLocked } from "./locking";
+import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./ops";
 
@@ -49,14 +54,8 @@ import type { BuilderOp, NodePatch } from "./ops";
  * told the prop exists and is not editable here — because omitting it entirely
  * would present an incomplete block as a complete one.
  */
-export const SUPPORTED_PROP_TYPES = [
-  "text",
-  "textarea",
-  "url",
-  "number",
-  "checkbox",
-  "select",
-] as const;
+export const SUPPORTED_PROP_TYPES: typeof CONTENT_CONTROL_TYPES =
+  CONTENT_CONTROL_TYPES;
 
 export type SupportedPropType = (typeof SUPPORTED_PROP_TYPES)[number];
 
@@ -82,6 +81,12 @@ export interface EditableProp {
    * so the author sees the value and is told why it holds.
    */
   readonly readOnly: boolean;
+  /**
+   * What the block holds when the prop was never set: its `defaultProps`
+   * entry, or `undefined`. A switch or a choice shows it until a value is
+   * stored, since it is the value that applies.
+   */
+  readonly defaultValue?: unknown;
 }
 
 /**
@@ -239,6 +244,25 @@ export function fieldLabel(name: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
+/**
+ * What an author calls a prop: the label its block gives it, or its name,
+ * spaced and capitalised, when the block gives none.
+ */
+export function propLabel(name: string, schema: PropSchema): string {
+  const given = schema.label;
+  return typeof given === "string" && given.trim() !== ""
+    ? given
+    : fieldLabel(name);
+}
+
+/** What an author calls one of a select's options, or the option itself. */
+export function optionLabel(schema: PropSchema, option: string): string {
+  const named = schema.optionLabels;
+  if (typeof named !== "object" || named === null) return option;
+  const given = (named as Record<string, unknown>)[option];
+  return typeof given === "string" && given.trim() !== "" ? given : option;
+}
+
 /** Read a schema's `options`, which is untyped by construction. */
 function optionsOf(schema: PropSchema): readonly string[] {
   const declared = schema.options;
@@ -332,9 +356,10 @@ export function inspectSelection(
           name,
           schema,
           value: node.props[name],
-          supported: (SUPPORTED_PROP_TYPES as readonly string[]).includes(
-            schema.type
-          ),
+          defaultValue: (
+            definition.defaultProps as Record<string, unknown> | undefined
+          )?.[name],
+          supported: hasContentControl(schema.type),
           options: optionsOf(schema),
           readOnly: designLock !== undefined && !content.has(name),
         },
@@ -393,7 +418,7 @@ function inspectorOf(
 
 /**
  * Whether the block may not be changed from the inspector at all: locked in
- * Layers, or no longer in the document.
+ * Layers, itself or by a block it sits inside, or no longer in the document.
  *
  * Asked of the LIVE document at the moment a change is attempted, not of the
  * one a panel rendered with: a lock set in Layers after the panel drew must
@@ -401,7 +426,7 @@ function inspectorOf(
  */
 export function blockIsReadOnly(document: BlockDocument, id: string): boolean {
   const node = findNode(document.nodes, id);
-  return node === undefined || isLocked(node);
+  return node === undefined || lockBlockingEdit(document, id) !== undefined;
 }
 
 /**
@@ -491,7 +516,7 @@ export interface LockView {
 }
 
 /** The view's lock source, or the live registry the store defaults to. */
-function lockSourceOf(view: LockView | undefined): SlotDefaultSource {
+export function lockSourceOf(view: LockView | undefined): SlotDefaultSource {
   return view?.definitions ?? registryBlockSource();
 }
 
@@ -518,7 +543,13 @@ export function lockViewOf(
  *   declares that slot sets in code. Nothing on the page can lift it.
  */
 export interface BlockLockStatus {
+  /** Whether the block itself is locked in Layers. */
   readonly layers: boolean;
+  /**
+   * The name of the block locked in Layers that this one sits inside, when
+   * it is not locked itself: a lock covers everything inside the block.
+   */
+  readonly inheritedFrom?: string | undefined;
   /**
    * The lock of the slot the block sits in, and the label of the block that
    * sets it, or `undefined` where no slot lock applies.
@@ -573,11 +604,16 @@ export function lockStatusOf(
 ): BlockLockStatus {
   const node = findNode(document.nodes, id);
   const layers = node !== undefined && isLocked(node);
+  const around =
+    node === undefined || layers ? undefined : lockedAncestorOf(document, id);
+  const inherited =
+    around === undefined ? {} : { inheritedFrom: layerLabel(around) };
   const area = contentOnlyAreaOf(document, id, view);
   if (area !== undefined) {
     const held = designLockOf(document, id, view);
     return {
       layers,
+      ...inherited,
       slot: {
         lock: "contentOnly",
         holder: blockLabel(area.area.holderType),
@@ -599,13 +635,14 @@ export function lockStatusOf(
     .find(({ at }) => at?.lock !== undefined);
   const lock = found?.at?.lock;
   if (found === undefined || lock === undefined || lock === "contentOnly") {
-    return { layers, slot: undefined };
+    return { layers, ...inherited, slot: undefined };
   }
   const holderType = declaringAncestor(found.tree, id, source);
   const holder =
     holderType === undefined ? "The block it sits in" : blockLabel(holderType);
   return {
     layers,
+    ...inherited,
     slot: {
       lock,
       holder,
@@ -656,7 +693,12 @@ export function designReadOnlyReason(
   if (findNode(document.nodes, id) === undefined) {
     return "This block is no longer on the page.";
   }
-  if (lockStatusOf(document, id, view).layers) return LAYERS_LOCK_REASON;
+  const status = lockStatusOf(document, id, view);
+  if (status.layers) return LAYERS_LOCK_REASON;
+  // Inside a block locked in Layers: that block's lock covers this one.
+  if (status.inheritedFrom !== undefined) {
+    return `Locked by ${status.inheritedFrom}: this block is inside it, so it can't be moved, deleted or edited. Unlock ${status.inheritedFrom} to change it.`;
+  }
   // A `contentOnly` area's reason is the lock refusal's own wording, so the
   // inspector, a refused move and a refused save say one thing.
   const held = designLockOf(document, id, view);
@@ -744,6 +786,12 @@ export function propPatch(
   name: string,
   value: unknown
 ): NodePatch {
+  // `undefined` REMOVES the prop rather than storing it: a document holds no
+  // undefined values, and an absent prop is what "not set" already means.
+  if (value === undefined) {
+    const { [name]: _removed, ...rest } = node.props;
+    return { props: rest };
+  }
   return { props: { ...node.props, [name]: value } };
 }
 

@@ -3,6 +3,7 @@ import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   NextlyError,
   type PluginRouteContext,
+  type PluginRouteIdentity,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { requireNextly } from "nextly/runtime";
@@ -319,38 +320,6 @@ export const DEFAULT_COMPONENT_STORE: ComponentStore = {
   field: COMPONENT_DOCUMENT_FIELD,
 };
 
-/** Who a gated route's caller is, as the dispatcher resolved it. */
-type CallerIdentity = NonNullable<
-  Awaited<ReturnType<NonNullable<PluginRouteContext["caller"]>["identity"]>>
->;
-
-/**
- * The Direct API options that read AS THE CALLER, for every read of a
- * component this plugin makes on a caller's behalf. Why each part is needed:
- * see {@link directComponentReads}.
- *
- * Asked lazily: the caller resolves its own identity once per request, and a
- * route with nothing to read never asks. A public route has no caller; these
- * routes are gated, so the anonymous branch is the honest answer for a
- * context nothing authenticated.
- */
-export async function asTheCaller(
-  ctx: Pick<PluginRouteContext, "caller">
-): Promise<{
-  overrideAccess: false;
-  user: CallerIdentity["user"] | undefined;
-  actor?: NonNullable<CallerIdentity["authenticatedScope"]>;
-}> {
-  const identity = await ctx.caller?.identity();
-  return {
-    overrideAccess: false as const,
-    user: identity?.user,
-    ...(identity?.authenticatedScope === undefined
-      ? {}
-      : { actor: identity.authenticatedScope }),
-  };
-}
-
 /**
  * The component reads the route binds: the Direct API, AS THE USER.
  *
@@ -395,12 +364,44 @@ export async function asTheCaller(
  * `?locale=` is everywhere in the admin — and an unknown code resolves to the
  * default in the Direct API, so nothing here has to know the site's languages.
  */
+/**
+ * The Direct API options that make one read run AS THE CALLER of a plugin
+ * route: `overrideAccess: false`, and the identity the dispatcher resolved.
+ *
+ * ONE statement of it for every route in this package that reads as the user.
+ * Spelled at each call site, the routes would agree on the day they were
+ * written and drift the first time one of them learned something — and the
+ * direction a copy drifts in is the one that reads with more than the caller
+ * may see. See {@link directComponentReads} for why each half is needed.
+ *
+ * A public route has no caller; the routes using this are gated, so the
+ * anonymous branch is the honest answer for a context nothing authenticated.
+ */
+export async function readingAsUser(
+  ctx: Pick<PluginRouteContext, "caller">
+): Promise<{
+  overrideAccess: false;
+  user: PluginRouteIdentity["user"] | undefined;
+  actor?: NonNullable<PluginRouteIdentity["authenticatedScope"]>;
+}> {
+  const identity = await ctx.caller?.identity();
+  return {
+    overrideAccess: false as const,
+    user: identity?.user,
+    ...(identity?.authenticatedScope === undefined
+      ? {}
+      : { actor: identity.authenticatedScope }),
+  };
+}
+
 function directComponentReads(
   ctx: Pick<PluginRouteContext, "caller">,
   locale?: string
 ): ComponentReads {
   const inLocale = locale === undefined ? {} : { locale };
-  const asUser = () => asTheCaller(ctx);
+  // Resolved per read, and lazily: the caller resolves its own identity once
+  // per request, and a route with nothing to read never asks.
+  const asUser = () => readingAsUser(ctx);
   return {
     list: async (slug, at) => {
       const result = await requireNextly().find({

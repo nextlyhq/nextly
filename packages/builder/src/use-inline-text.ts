@@ -43,6 +43,11 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
+import {
+  composedTextAt,
+  exposedTextOp,
+  type ExposedTextTarget,
+} from "./exposed-inline";
 import { namedTarget } from "./inline-target";
 import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
 
@@ -53,6 +58,42 @@ export const EDITING_ATTRIBUTE = "data-nx-editing";
 export interface InlineTextEditing {
   readonly nodeId: string;
   readonly prop: string;
+  /**
+   * Set when the value is a component's exposed text: the node is composed,
+   * and the edit is stored on the placement under the exposure's id.
+   */
+  readonly exposure?: ExposedTextTarget;
+}
+
+/**
+ * The op a finished edit of exposed text writes, asked again of the editor as
+ * it stands: the component library may have changed while the caret was in
+ * the text, and a prop no longer fed by the same text exposure takes nothing.
+ */
+function exposedCommitOp(
+  editor: EditorState,
+  started: ExposedTextTarget,
+  next: string
+) {
+  const now = exposedTarget(editor, started.nodeId, started.prop);
+  if (now === undefined || now.exposureId !== started.exposureId) return null;
+  return exposedTextOp(editor.document, started, next);
+}
+
+/** A composed node's exposed text, when that is what this value is. */
+function exposedTarget(
+  editor: EditorState,
+  nodeId: string,
+  prop: string
+): ExposedTextTarget | undefined {
+  const answer = composedTextAt(
+    editor.document,
+    editor.composed(),
+    nodeId,
+    prop,
+    editor.lockDefinitions
+  );
+  return answer?.kind === "exposed" ? answer.target : undefined;
 }
 
 export interface UseInlineTextResult {
@@ -92,7 +133,7 @@ export interface UseInlineTextResult {
  * whatever leaf is under the pointer, and the element carrying the mark may be
  * an ancestor of it.
  */
-function editableFrom(target: EventTarget | null): {
+export function editableFrom(target: EventTarget | null): {
   element: HTMLElement;
   prop: string;
   nodeId: string;
@@ -204,12 +245,15 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     const next = element?.textContent ?? null;
     release();
     if (current === null || next === null) return null;
-    const op = inlineTextOp(
-      editorRef.current.document,
-      current.nodeId,
-      current.prop,
-      next
-    );
+    const op =
+      current.exposure === undefined
+        ? inlineTextOp(
+            editorRef.current.document,
+            current.nodeId,
+            current.prop,
+            next
+          )
+        : exposedCommitOp(editorRef.current, current.exposure, next);
     // `null` for an unchanged value and for one that stopped being editable
     // while the caret was in it — see `inlineTextOp`.
     return op === null ? null : editorRef.current.apply(op);
@@ -222,11 +266,9 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     // abandoned text stays on screen until something else re-renders the
     // canvas, and the author sees an edit they explicitly discarded.
     if (element !== null && current !== null) {
-      const target = inlineTarget(
-        editorRef.current.document,
-        current.nodeId,
-        current.prop
-      );
+      const target =
+        current.exposure ??
+        inlineTarget(editorRef.current.document, current.nodeId, current.prop);
       if (target !== null) element.textContent = target.value;
     }
     release();
@@ -237,8 +279,16 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
       inlineTargets(editorRef.current.document, nodeId),
       prop
     );
-    if (target === undefined) return false;
-    setEditing({ nodeId: target.nodeId, prop: target.prop });
+    if (target !== undefined) {
+      setEditing({ nodeId: target.nodeId, prop: target.prop });
+      return true;
+    }
+    // Not a node of the page: a component's exposed text, reached through
+    // its placement, when it is one.
+    if (prop === undefined) return false;
+    const exposure = exposedTarget(editorRef.current, nodeId, prop);
+    if (exposure === undefined) return false;
+    setEditing({ nodeId, prop, exposure });
     return true;
   }, []);
 
@@ -287,11 +337,9 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
         return;
       }
       if (event.key !== "Enter") return;
-      const target = inlineTarget(
-        editorRef.current.document,
-        editing.nodeId,
-        editing.prop
-      );
+      const target =
+        editing.exposure ??
+        inlineTarget(editorRef.current.document, editing.nodeId, editing.prop);
       // Enter belongs to the VALUE: a line break in a paragraph, and the way
       // out of a heading. The schema says which, so a block changing a field
       // from one type to the other changes this with it.

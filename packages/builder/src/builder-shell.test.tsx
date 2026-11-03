@@ -25,8 +25,11 @@ import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useShortcuts } from "@nextlyhq/ui";
+
 import { useNoticeQueue, useNoticeSink } from "./builder-notices";
-import { BuilderShell } from "./builder-shell";
+import { BuilderShell, type SettingsDialogState } from "./builder-shell";
+import { CanvasFrameProvider } from "./canvas-frame-context";
 import { CommandPalette } from "./command-palette";
 import {
   DEFAULT_PREFERENCES,
@@ -424,6 +427,67 @@ describe("Help", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     act(() => stubContainerFits(true));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("Settings, as the host's dialog", () => {
+  /** A host's Settings: a dialog while open, recording what it was handed. */
+  function settingsHost() {
+    const handed: SettingsDialogState[] = [];
+    const renderSettings = (dialog: SettingsDialogState) => {
+      handed.push(dialog);
+      return dialog.open ? (
+        <div role="dialog" aria-label="Settings">
+          <button type="button" onClick={() => dialog.onOpenChange(false)}>
+            Done
+          </button>
+        </div>
+      ) : null;
+    };
+    return { handed, renderSettings };
+  }
+
+  it("opens the host's dialog from the rail, shown pressed, and never as a panel", () => {
+    const { renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const item = within(rail).getByRole("button", { name: "Settings" });
+    expect(item.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(item);
+
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+    expect(item.getAttribute("aria-pressed")).toBe("true");
+    // No left panel opened for it: the dialog is the whole of Settings.
+    expect(item.getAttribute("data-rail-action")).toBe("settings");
+    expect(
+      within(rail).getAllByRole("button", { name: "Settings" })
+    ).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(item.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("hands the dialog the rail's item to return focus to", () => {
+    const { handed, renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    const item = screen.getByRole("button", { name: "Settings" });
+    fireEvent.click(item);
+    expect(handed.at(-1)?.returnFocus()).toBe(item);
+  });
+
+  it("closes when the editor gives way to its narrow-window notice", async () => {
+    const { renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    act(() => stubContainerFits(false));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+    );
   });
 });
 
@@ -1738,6 +1802,49 @@ describe("F6 from a focused drag handle", () => {
       (document.activeElement as HTMLElement | null)?.getAttribute("aria-label")
     ).toBeTruthy();
   });
+
+  it("recognises a separator built by another realm", () => {
+    // The same press, with the shell rendered into an iframe's document. Its
+    // separator carries that window's constructors, so a check made with this
+    // realm's `HTMLElement` declines it and the handle keeps F6 for itself.
+    stubContainerFits(true);
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    // Removed however the test ends: a frame left holding focus would be the
+    // active element for every case after this one.
+    try {
+      const inner = frame.contentDocument;
+      if (inner === null) throw new Error("the iframe has no document");
+      // The panel library builds its observer from the element's own window,
+      // which jsdom gives none; the same driven stub as this realm's.
+      Reflect.set(
+        frame.contentWindow ?? {},
+        "ResizeObserver",
+        DrivenResizeObserver
+      );
+      const container = inner.createElement("div");
+      inner.body.appendChild(container);
+      render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />, {
+        container,
+      });
+
+      const separator = within(container).getAllByRole("separator")[0];
+      expect(separator).toBeDefined();
+      if (separator === undefined) return;
+      // The control: the handle really is foreign to this realm.
+      expect(separator instanceof HTMLElement).toBe(false);
+      separator.focus();
+      // Identity as a boolean: a failing `toBe` cannot print another realm's node.
+      expect(inner.activeElement === separator).toBe(true);
+
+      fireEvent.keyDown(separator, { key: "F6" });
+
+      expect(inner.activeElement === separator).toBe(false);
+      expect(inner.activeElement?.getAttribute("aria-label")).toBeTruthy();
+    } finally {
+      frame.remove();
+    }
+  });
 });
 
 describe("telling the host which zoom the shell is holding", () => {
@@ -2282,6 +2389,49 @@ describe("the top bar's three columns", () => {
     expect(end?.querySelector('[aria-label="Inspector"]')).not.toBeNull();
   });
 
+  it("ends on the host's actions: the panel buttons come first, then a rule", () => {
+    // The accepted layout ends the bar on the action that leads, so the panel
+    // buttons sit before the document's controls rather than after them.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBarEnd={<button type="button">Publish</button>}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const end = document.querySelector<HTMLElement>('[data-topbar="end"]');
+    const names = Array.from(end?.querySelectorAll("button") ?? []).map(
+      button => button.getAttribute("aria-label") ?? button.textContent
+    );
+    expect(names).toEqual(["Left panel", "Inspector", "Publish"]);
+    const publish = screen.getByRole("button", { name: "Publish" });
+    expect(publish.previousElementSibling?.getAttribute("aria-hidden")).toBe(
+      "true"
+    );
+  });
+
+  it.each([
+    ["no end content", undefined],
+    ["an empty conditional slot", null],
+    ["a false condition", false],
+  ])("draws no rule for %s", (_name, topBarEnd) => {
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBarEnd={topBarEnd}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const end = document.querySelector<HTMLElement>('[data-topbar="end"]');
+    expect(end?.querySelector('[aria-hidden="true"].w-px')).toBeNull();
+  });
+
   it("truncates a long title rather than pushing the centre column", () => {
     stubContainerFits(true);
     render(
@@ -2298,5 +2448,49 @@ describe("the top bar's three columns", () => {
     expect(title.getAttribute("title")).toBe(
       "A page title long enough to run into the device buttons"
     );
+  });
+});
+
+describe("the shell's keys inside the canvas's frame", () => {
+  /** A binding registered from inside the shell, on the shell's own manager. */
+  function Binding({ onPress }: { onPress: () => void }): null {
+    useShortcuts(
+      [
+        {
+          keys: "mod+s",
+          description: "Save",
+          // Not prevented, so a listener installed twice would run it twice.
+          preventDefault: false,
+          run: () => onPress(),
+        },
+      ],
+      { name: "Test binding" }
+    );
+    return null;
+  }
+
+  it("hears a key pressed in the frame's document, through the one manager", () => {
+    // A key pressed with focus inside the frame is dispatched in the frame's
+    // document. The binding sits in a slot, so it is registered on whatever
+    // manager the shell provides: firing proves the SHELL's manager listens in
+    // the frame, rather than a second one built there.
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    expect(inner).not.toBe(document);
+    stubContainerFits(true);
+    const onPress = vi.fn();
+    render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <Binding onPress={onPress} />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    fireEvent.keyDown(inner, { key: "s", ctrlKey: true, metaKey: false });
+    fireEvent.keyDown(inner, { key: "s", metaKey: true, ctrlKey: false });
+    expect(onPress).toHaveBeenCalledTimes(1);
+    frame.remove();
   });
 });

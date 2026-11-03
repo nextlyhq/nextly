@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 import { refusalAnnouncement } from "./move-refusal";
-import { lockRefusalWording, repairStepSentence } from "./lock-refusal";
+import {
+  layersLockRefusalFor,
+  lockRefusalWording,
+  repairStepSentence,
+} from "./lock-refusal";
 
 const membership = (lock: "all" | "insert" | "contentOnly") =>
   lockRefusalWording({
@@ -139,5 +143,100 @@ describe("repairStepSentence", () => {
         document
       )
     ).toBe('Put Card\'s design back as it started: prop "align", styles.');
+  });
+});
+
+describe("a block locked in Layers, worded once for every surface", () => {
+  const facts = (relation: "self" | "inside" | "around" | "destination") =>
+    lockRefusalWording({
+      code: "layers-locked",
+      label: "Hero",
+      relation,
+      verb: "move",
+    });
+
+  it("says where the locked block sits relative to the one acted on", () => {
+    expect(facts("self")).toEqual({
+      headline: "Hero is locked.",
+      remedy: "Unlock it to move it.",
+    });
+    expect(facts("inside")).toEqual({
+      headline: "Hero inside this block is locked.",
+      remedy: "Unlock Hero to move this block.",
+    });
+    expect(facts("around")).toEqual({
+      headline: "This block is inside Hero, which is locked.",
+      remedy: "Unlock Hero to move this block.",
+    });
+    expect(facts("destination")).toEqual({
+      headline: "Hero is locked.",
+      remedy: "Unlock it to add blocks to it.",
+    });
+  });
+
+  it("says to save first for a lock the saved page still holds", () => {
+    expect(
+      refusalAnnouncement(
+        lockRefusalWording({
+          code: "layers-locked-when-saved",
+          label: "Hero",
+          relation: "inside",
+          verb: "delete",
+        })
+      )
+    ).toBe(
+      "Save first: Hero is still locked on the saved page. Save, then delete it."
+    );
+  });
+});
+
+describe("layersLockRefusalFor", () => {
+  const box = (id: string, extra: object = {}, children?: object[]) => ({
+    id,
+    type: "core/box",
+    version: 1,
+    props: {},
+    ...(children === undefined ? {} : { slots: { children } }),
+    ...extra,
+  });
+  const page = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [box("hero", { locked: true }, [box("title")]), box("loose")],
+  } as unknown as BlockDocument;
+
+  it("answers an insert into the locked block as the place being locked", () => {
+    expect(
+      layersLockRefusalFor(page, [
+        {
+          kind: "insert",
+          node: box("new") as never,
+          at: { parentId: "title", slot: "children", index: 0 },
+        },
+      ])
+    ).toEqual({
+      code: "layers-locked",
+      label: "Box",
+      relation: "destination",
+      verb: "add",
+    });
+  });
+
+  it("finds a lock a LATER op of a group breaks, on the page the earlier ones leave", () => {
+    expect(
+      layersLockRefusalFor(page, [
+        { kind: "update", id: "loose", patch: { name: "Moved" } },
+        {
+          kind: "move",
+          id: "loose",
+          to: { parentId: "hero", slot: "children", index: 0 },
+        },
+      ])
+    ).toMatchObject({ relation: "destination" });
+    expect(
+      layersLockRefusalFor(page, [
+        { kind: "update", id: "loose", patch: { name: "Free" } },
+      ])
+    ).toBeUndefined();
   });
 });

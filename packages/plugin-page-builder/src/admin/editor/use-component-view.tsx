@@ -7,7 +7,7 @@
  *
  * Gathered here so the editor asks one hook, and both halves read the same
  * answers: the author's grant, the component library and the component's
- * facts.
+ * facts, which the mount reads once and hands in.
  *
  * @module admin/editor/use-component-view
  */
@@ -23,7 +23,6 @@ import {
 import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useState, type JSX } from "react";
 
-import { useComponentFacts } from "../component-facts-client";
 import type { ComponentLibraryRead } from "../component-library-client";
 import { useComponentEditing } from "../pattern-capability-client";
 
@@ -49,15 +48,19 @@ export function useComponentView({
   editor,
   componentLibrary,
   fieldName,
+  componentFacts,
 }: {
   initialDocument: BlockDocument;
   editor: EditorState;
   componentLibrary: ComponentLibraryRead;
   /** The blocks field the editor is bound to. */
   fieldName: string | undefined;
-}): ComponentView & {
-  readonly componentFacts: ComponentFieldsHost | undefined;
-} {
+  /**
+   * What the component's live definition holds and how many documents place
+   * it, read by the mount for a component with a row; nothing for a page.
+   */
+  componentFacts: ComponentFieldsHost | undefined;
+}): ComponentView {
   const isSection = useCallback(
     (nodeId: string) => editor.document.nodes.some(node => node.id === nodeId),
     [editor.document]
@@ -65,12 +68,10 @@ export function useComponentView({
   const onEditComponent = useEditComponent(isSection);
 
   const identity = useDocumentIdentity();
-  // Asked only of a component with a row: what its live definition holds and
-  // how many documents place it, which its own document cannot say.
+  // The component's row, when the document is a component that has one.
   const componentId = isComponentDocument(initialDocument)
     ? identity?.documentId
     : undefined;
-  const componentFacts = useComponentFacts(componentId);
   // The banner speaks for a row of the component STORE only. Another
   // collection may declare a field of component documents, and its entry ids
   // name nothing in the store.
@@ -95,5 +96,5 @@ export function useComponentView({
         }
       />
     );
-  return { onEditComponent, banner, componentFacts };
+  return { onEditComponent, banner };
 }

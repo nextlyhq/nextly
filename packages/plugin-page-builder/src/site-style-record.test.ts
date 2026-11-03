@@ -45,6 +45,21 @@ describe("checkStoredTokens", () => {
     expect(result.value?.darkMode).toBe("media");
   });
 
+  it("keeps a variable's plain label, which the whitelist has to name", () => {
+    const result = checkStoredTokens({
+      tokens: [{ ...token("color.brand", "#111111"), label: "Brand" }],
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.value?.tokens[0]?.label).toBe("Brand");
+  });
+
+  it("refuses a label that cannot be shown", () => {
+    const result = checkStoredTokens({
+      tokens: [{ ...token("color.brand", "#111111"), label: "a\nb" }],
+    });
+    expect(result.issues.join(" ")).toMatch(/label/);
+  });
+
   it("carries both extension records through, because this shape is a WHITELIST", () => {
     /*
      * The narrowed token is rebuilt field by field, so a field this list omits

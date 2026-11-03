@@ -187,6 +187,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * REPLACES the module wholesale, so an export the subject imports and this
    * omits is a missing-export error rather than an unused stub.
    */
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -214,9 +216,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   // Nothing stored, read successfully — so the merged style is the host's
   // config alone and `status` is "ready". A pending read would disable the

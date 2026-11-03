@@ -151,8 +151,10 @@ export function useCanvasReading(
      * the admin window changing without the canvas changing cannot alter what a
      * rule inside it matched.
      */
-    const canObserveSize = typeof ResizeObserver === "function";
-    const sizes = canObserveSize ? new ResizeObserver(read) : undefined;
+    // From the canvas's own window: a canvas rendered in a frame is laid out
+    // by that frame, the realm its observer has to come from.
+    const Sizes = canvasRoot.ownerDocument.defaultView?.ResizeObserver;
+    const sizes = typeof Sizes === "function" ? new Sizes(read) : undefined;
     sizes?.observe(canvasRoot);
     return () => {
       stopTree?.();
