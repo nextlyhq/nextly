@@ -11,7 +11,17 @@
  */
 import { NextlyError } from "../../errors/nextly-error";
 
-const state = { enabled: false, chosen: false };
+// Stored on `globalThis`, as the webhook audit gate is: Next.js and Turbopack can evaluate this
+// module in more than one server module graph, and HMR evaluates it again, so a module-local value
+// lets the boot publish to one copy while a read or a reload asks another.
+const globalForStorage = globalThis as unknown as {
+  __nextly_perLanguageStorage?: { enabled: boolean; chosen: boolean };
+};
+globalForStorage.__nextly_perLanguageStorage ??= {
+  enabled: false,
+  chosen: false,
+};
+const state = globalForStorage.__nextly_perLanguageStorage;
 
 /** Publish, at boot, whether every translatable field is kept per language from the start. */
 export function setPerLanguageStorage(enabled: boolean): void {

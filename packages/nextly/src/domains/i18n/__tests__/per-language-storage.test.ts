@@ -11,6 +11,14 @@ import {
 
 afterEach(() => setPerLanguageStorage(false));
 
+/** A process that has not chosen yet: nothing pinned on `globalThis`, and a fresh module. */
+async function freshProcess() {
+  delete (globalThis as { __nextly_perLanguageStorage?: unknown })
+    .__nextly_perLanguageStorage;
+  vi.resetModules();
+  return import("../per-language-storage");
+}
+
 describe("per-language storage", () => {
   it("is off until a boot publishes it", () => {
     expect(perLanguageStorageEnabled()).toBe(false);
@@ -33,20 +41,28 @@ describe("per-language storage", () => {
   });
 
   it("adopts a config's choice in a process that has not chosen, and keeps a boot's choice", async () => {
-    // A fresh instance of the module: this file's other cases have already chosen.
-    vi.resetModules();
-    const fresh = await import("../per-language-storage");
+    // A fresh process: this file's other cases have already chosen.
+    const fresh = await freshProcess();
     fresh.adoptPerLanguageStorage(true);
     expect(fresh.perLanguageStorageEnabled()).toBe(true);
     // Once chosen, a later config read leaves it, as a running site's reload does.
     fresh.adoptPerLanguageStorage(false);
     expect(fresh.perLanguageStorageEnabled()).toBe(true);
 
-    vi.resetModules();
-    const booted = await import("../per-language-storage");
+    const booted = await freshProcess();
     booted.setPerLanguageStorage(false);
     booted.adoptPerLanguageStorage(true);
     expect(booted.perLanguageStorageEnabled()).toBe(false);
+  });
+
+  it("is one choice across every copy of the module a server loads", async () => {
+    // Next.js can load a module in more than one server graph, as a module reloaded by HMR is.
+    const booted = await freshProcess();
+    booted.setPerLanguageStorage(true);
+    vi.resetModules();
+    const another = await import("../per-language-storage");
+    expect(another.perLanguageStorageEnabled()).toBe(true);
+    expect(another.storesPerLanguage({ localized: false })).toBe(true);
   });
 
   it("publishes each language on its own only for a translatable entity with Draft/Published", () => {
