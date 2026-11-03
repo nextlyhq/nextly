@@ -63,21 +63,30 @@ test("Undo saves a changed variable back as it was, and Redo saves it again", as
       .getByRole("navigation", { name: "Editor panels" })
       .getByRole("button", { name: "Design", exact: true })
       .click();
-    const value = page.getByLabel(/^Value of color\.primary$/);
+    // The variable's row opens its editor beside the panel.
+    const row = page.getByRole("button", { name: /^Primary, light / });
+    await row.click();
+    const editor = page.getByRole("dialog", { name: "Edit Primary" });
+    const value = editor.getByLabel("Light", { exact: true });
     const saved = styleWrite(page);
     await value.fill(CHANGED);
-    await value.press("Tab");
+    await value.press("Enter");
     await saved;
     expect(JSON.stringify(await storedTokens(page))).toContain(CHANGED);
+    await page.keyboard.press("Escape");
 
     const undone = styleWrite(page);
     await page.getByRole("button", { name: "Undo", exact: true }).click();
     await undone;
     expect(await storedTokens(page)).toEqual(before);
     // The studio reads the section afresh rather than keeping the change.
-    await expect(page.getByLabel(/^Value of color\.primary$/)).not.toHaveValue(
-      CHANGED
-    );
+    await page.getByRole("button", { name: /^Primary, light / }).click();
+    await expect(
+      page
+        .getByRole("dialog", { name: "Edit Primary" })
+        .getByLabel("Light", { exact: true })
+    ).not.toHaveValue(CHANGED);
+    await page.keyboard.press("Escape");
 
     const redone = styleWrite(page);
     await page.getByRole("button", { name: "Redo", exact: true }).click();

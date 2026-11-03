@@ -50,6 +50,16 @@ export interface CommandVerbs {
    * phrase; when there is a second host it can be designed against that.
    */
   readonly saveAsPattern: () => void;
+  /** Begin saving the selection as a component; the host owns the form. */
+  readonly saveAsComponent?: () => void;
+  /** Begin converting the selection into a component placement. */
+  readonly convertToComponent?: () => void;
+  /** Begin detaching the selected placement from its component. */
+  readonly detachComponent?: () => void;
+  /** Begin duplicating the selected placement's component. */
+  readonly duplicateComponent?: () => void;
+  /** Begin replacing a pattern's content with the selection. */
+  readonly updatePattern?: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -110,6 +120,26 @@ const BLOCK_COMMAND_COPY: Record<
     // that before they can find it.
     keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
   },
+  "save-as-component": {
+    label: "Save as component",
+    keywords: ["save", "component", "library", "reuse", "symbol", "synced"],
+  },
+  "convert-to-component": {
+    label: "Convert to component",
+    keywords: ["convert", "component", "turn into", "symbol", "synced", "link"],
+  },
+  "detach-component": {
+    label: "Detach from component",
+    keywords: ["detach", "unlink", "component", "plain", "break"],
+  },
+  "duplicate-component": {
+    label: "Duplicate component",
+    keywords: ["duplicate", "copy", "component", "fork", "variant"],
+  },
+  "update-pattern": {
+    label: "Update a pattern from the selection",
+    keywords: ["update", "pattern", "replace", "overwrite", "save over"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -145,6 +175,11 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
+    "save-as-component": () => verbs.saveAsComponent?.(),
+    "convert-to-component": () => verbs.convertToComponent?.(),
+    "detach-component": () => verbs.detachComponent?.(),
+    "duplicate-component": () => verbs.duplicateComponent?.(),
+    "update-pattern": () => verbs.updatePattern?.(),
     delete: verbs.delete,
   };
 }

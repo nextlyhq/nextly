@@ -144,6 +144,17 @@ describe("the canvas's right-click menu", () => {
     expect(screen.getByRole("menu")).toBeTruthy();
   });
 
+  it("leaves the editor around it in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register();
+    const { container } = mount(editorSpy(pair(), "a"));
+    fireEvent.contextMenu(blockElement(container));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("offers the verbs the toolbar offers, in the toolbar's words", () => {
     /*
      * The palette deliberately says "Duplicate block", because a palette row is
@@ -394,7 +405,7 @@ describe("the canvas's right-click menu", () => {
     // VISIBLE, not a `title`. A disabled item has `pointer-events-none` and is
     // skipped by keyboard navigation, so a tooltip on it is unreachable by
     // either input — the reason has to be in the item's own content.
-    expect(remove.textContent).toContain("This block is locked.");
+    expect(remove.textContent).toContain("Leaf is locked.");
     expect(remove.getAttribute("title")).toBeNull();
   });
 

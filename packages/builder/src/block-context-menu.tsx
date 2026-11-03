@@ -141,6 +141,21 @@ const TRANSPARENT_WRAPPER: React.CSSProperties = { display: "contents" };
 /** Where the menu's own verbs end and the editor-wide ones would begin. */
 const DESTRUCTIVE: ReadonlySet<string> = new Set(["delete"]);
 
+/**
+ * Whether the verb at `index` opens the group of menu-only verbs (the
+ * component verbs), which sit apart from the structural ones above them.
+ */
+function startsMenuGroup(
+  actions: readonly { readonly inMenu?: true }[],
+  index: number
+): boolean {
+  return (
+    index > 0 &&
+    actions[index]?.inMenu === true &&
+    actions[index - 1]?.inMenu !== true
+  );
+}
+
 export interface BlockContextMenuProps {
   /** The editor whose selection the verbs act on. */
   editor: EditorState;
@@ -234,7 +249,10 @@ export function BlockContextMenu({
   );
 
   return (
-    <ContextMenu onOpenChange={opened}>
+    // Not modal: a modal menu marks the editor around it aria-hidden while its
+    // controls stay focusable (axe: aria-hidden-focus). Escape, a click
+    // outside and Tab still close it.
+    <ContextMenu modal={false} onOpenChange={opened}>
       <ContextMenuTrigger asChild>
         <div
           style={TRANSPARENT_WRAPPER}
@@ -252,9 +270,11 @@ export function BlockContextMenu({
       */}
       {selectedId === null ? null : (
         <ContextMenuContent aria-label="Block actions">
-          {entries.map(action => (
+          {entries.map((action, index) => (
             <React.Fragment key={action.id}>
-              {DESTRUCTIVE.has(action.id) ? <ContextMenuSeparator /> : null}
+              {DESTRUCTIVE.has(action.id) || startsMenuGroup(entries, index) ? (
+                <ContextMenuSeparator />
+              ) : null}
               <ContextMenuItem
                 disabled={!action.enabled}
                 // Stacked once there is a reason, so the explanation sits under

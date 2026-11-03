@@ -1385,89 +1385,85 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    // MySQL is left out: under its REPEATABLE READ a transaction's plain reads
-    // see the snapshot its first read took, so a row read after its lock can
-    // still be older than the lock there, whichever order the batch reads in.
-    it.skipIf(dialect === "mysql")(
-      "judges each document of a batch publish on what is stored once the batch has locked it",
-      async () => {
-        const relationships = t.getService(
-          "relationshipService"
-        ) as unknown as CollectionRelationshipService;
-        const junction = relationships.getJunctionTableName(
-          "stories",
-          "tags",
-          TAGS_FIELD as Parameters<
-            CollectionRelationshipService["getJunctionTableName"]
-          >[2]
+    it("judges each document of a batch publish on what is stored once the batch has locked it", async () => {
+      const relationships = t.getService(
+        "relationshipService"
+      ) as unknown as CollectionRelationshipService;
+      const junction = relationships.getJunctionTableName(
+        "stories",
+        "tags",
+        TAGS_FIELD as Parameters<
+          CollectionRelationshipService["getJunctionTableName"]
+        >[2]
+      );
+      const { sourceColumn } = junctionLinkColumns("stories", "tags");
+      // The other writer, which takes `raceB`'s tag away once the batch has
+      // locked `raceA` and read its relations, and before it reaches
+      // `raceB`. Begun here, before the batch opens its transaction, so its
+      // statement runs outside that transaction: on PostgreSQL and MySQL on
+      // a connection of its own, committed at once, while the batch holds
+      // `raceA`'s lock only. On MySQL this is after the batch's first read,
+      // which under REPEATABLE READ would fix what every later read sees.
+      // SQLite has one connection and one writer, so
+      // there the statement lands between the batch's two rows on that
+      // connection, which proves the order the batch reads in: what a
+      // document is judged on is read after the batch reaches it.
+      let letWriterRun = (): void => undefined;
+      const writerMayRun = new Promise<void>(resolve => {
+        letWriterRun = resolve;
+      });
+      const writer = (async () => {
+        await writerMayRun;
+        await t.adapter.executeQuery(
+          `DELETE FROM ${junction} WHERE ${sourceColumn} = '${ids.raceB}'`
         );
-        const { sourceColumn } = junctionLinkColumns("stories", "tags");
-        // The other writer, which takes `raceB`'s tag away once the batch has
-        // locked `raceA` and read its relations, and before it reaches
-        // `raceB`. Begun here, before the batch opens its transaction, so its
-        // statement runs outside that transaction: on PostgreSQL on a
-        // connection of its own, committed at once, while the batch holds
-        // `raceA`'s lock only. SQLite has one connection and one writer, so
-        // there the statement lands between the batch's two rows on that
-        // connection, which proves the order the batch reads in: what a
-        // document is judged on is read after the batch reaches it.
-        let letWriterRun = (): void => undefined;
-        const writerMayRun = new Promise<void>(resolve => {
-          letWriterRun = resolve;
+      })();
+      const read =
+        CollectionRelationshipService.prototype.fetchManyToManyTargetIdsOf;
+      let interleaved = false;
+      const spy = vi
+        .spyOn(
+          CollectionRelationshipService.prototype,
+          "fetchManyToManyTargetIdsOf"
+        )
+        .mockImplementation(async function (
+          this: CollectionRelationshipService,
+          ...args: Parameters<typeof read>
+        ) {
+          const targets = await read.apply(this, args);
+          if (!interleaved && args[1].includes(ids.raceA)) {
+            interleaved = true;
+            letWriterRun();
+            await writer;
+          }
+          return targets;
         });
-        const writer = (async () => {
-          await writerMayRun;
-          await t.adapter.executeQuery(
-            `DELETE FROM ${junction} WHERE ${sourceColumn} = '${ids.raceB}'`
-          );
-        })();
-        const read =
-          CollectionRelationshipService.prototype.fetchManyToManyTargetIdsOf;
-        let interleaved = false;
-        const spy = vi
-          .spyOn(
-            CollectionRelationshipService.prototype,
-            "fetchManyToManyTargetIdsOf"
-          )
-          .mockImplementation(async function (
-            this: CollectionRelationshipService,
-            ...args: Parameters<typeof read>
-          ) {
-            const targets = await read.apply(this, args);
-            if (!interleaved && args[1].includes(ids.raceA)) {
-              interleaved = true;
-              letWriterRun();
-              await writer;
-            }
-            return targets;
-          });
-        try {
-          const batch = await entriesOf(t).updateEntries(
-            { collectionName: "stories", overrideAccess: true },
-            [ids.raceA, ids.raceB].map(id => ({
-              id,
-              data: { status: "published" },
-            }))
-          );
-          expect(interleaved).toBe(true);
-          expect(batch).toMatchObject({ successful: 1, failed: 1 });
-        } finally {
-          spy.mockRestore();
-          letWriterRun();
-          await writer;
-        }
-        for (const [name, status] of [
-          ["raceA", "published"],
-          ["raceB", "draft"],
-        ] as const) {
-          const row = await t.adapter.selectOne<{ status?: string }>(
-            "dc_stories",
-            { where: { and: [{ column: "id", op: "=", value: ids[name] }] } }
-          );
-          expect(row?.status).toBe(status);
-        }
+      try {
+        const batch = await entriesOf(t).updateEntries(
+          { collectionName: "stories", overrideAccess: true },
+          [ids.raceA, ids.raceB].map(id => ({
+            id,
+            data: { status: "published" },
+          }))
+        );
+        expect(interleaved).toBe(true);
+        expect(batch).toMatchObject({ successful: 1, failed: 1 });
+      } finally {
+        spy.mockRestore();
+        letWriterRun();
+        await writer;
       }
-    );
+      for (const [name, status] of [
+        ["raceA", "published"],
+        ["raceB", "draft"],
+      ] as const) {
+        const row = await t.adapter.selectOne<{ status?: string }>(
+          "dc_stories",
+          { where: { and: [{ column: "id", op: "=", value: ids[name] }] } }
+        );
+        expect(row?.status).toBe(status);
+      }
+    });
 
     it("lets a pending change go live outside the default language where only a component is translated", async () => {
       const german = await publish(t, "noted", ids.notedGerman, {}, "de");

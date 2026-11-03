@@ -65,6 +65,7 @@ import {
   registryNestingSource,
   type ComponentLookup,
   type NestingSource,
+  type RegionArea,
 } from "@nextlyhq/blocks-engine";
 import {
   Input,
@@ -78,6 +79,7 @@ import * as React from "react";
 import { BlockIconMark } from "./block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
@@ -117,18 +119,64 @@ export interface LayersPanelProps {
    * instance is judged by what it draws, as its canvas drop is.
    */
   definitions?: ComponentLookup;
+  /**
+   * The regions of the page's Layout, shown as read-only rows: a header above
+   * the page's blocks, a footer below them.
+   *
+   * Outside the tree on purpose. They are not the page's blocks, so they take
+   * no part in its selection, its drag and drop, its locks or its visibility;
+   * each is one button an author reaches by Tab, and activating it shows the
+   * region on the canvas.
+   */
+  regions?: readonly LayersRegionRow[];
+}
+
+/** One region of the page's Layout, as a read-only row in Layers. */
+export interface LayersRegionRow {
+  readonly area: RegionArea;
+  /** The area's name, "Header". */
+  readonly name: string;
+  /** Where it comes from, "from Layout Main". */
+  readonly origin: string;
+  /** Show the region on the canvas. */
+  readonly onActivate: () => void;
+}
+
+/** A region of the page's Layout, as a row that is not one of the page's blocks. */
+function RegionRow({ row }: { row: LayersRegionRow }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="nx-layers-region"
+      data-nx-layers-region={row.area}
+      // Named whole, so it is announced as one sentence: what it is, where it
+      // comes from, and that it cannot be changed here.
+      aria-label={`${row.name}, ${row.origin}, locked`}
+      onClick={row.onActivate}
+    >
+      <Lock size={14} aria-hidden="true" />
+      <span className="nx-layers-region__name">{row.name}</span>
+      <span className="nx-layers-region__origin">{row.origin}</span>
+    </button>
+  );
 }
 
 /** One badge: an icon nobody has to see, and a word every reader gets. */
 function Badge({
   icon,
   text,
+  lock,
 }: {
   icon: React.ReactNode;
   text: string;
+  /** For a lock badge: the block's own lock, or one it is held by. */
+  lock?: "own" | "inherited";
 }): React.JSX.Element {
   return (
-    <span className="nx-layer-row__badge">
+    <span
+      className="nx-layer-row__badge"
+      {...(lock === undefined ? {} : { "data-lock": lock })}
+    >
       {/*
         The icon is decorative and the word is the fact. A title attribute would
         reach a pointer and nothing else, and an icon alone announces as an
@@ -186,7 +234,23 @@ function rowOf(
         <span className="nx-layer-row__label" data-nx-layer={node.id}>
           {node.label}
         </span>
-        {node.locked ? <Badge icon={<Lock size={12} />} text="Locked" /> : null}
+        {/* Both locks in the row's own ink, so each reads against the row in
+            every state it can be in. A lock held from a block around it is
+            quieter by weight, a thinner stroke, never by a fainter colour; both
+            say so in words, and the inherited one names the block to unlock. */}
+        {node.locked ? (
+          <Badge
+            icon={<Lock size={12} strokeWidth={2.5} />}
+            text="Locked"
+            lock="own"
+          />
+        ) : node.lockedBy === undefined ? null : (
+          <Badge
+            icon={<Lock size={12} strokeWidth={1.25} />}
+            text={`Locked by ${node.lockedBy}`}
+            lock="inherited"
+          />
+        )}
         {node.breakpointHidden ? (
           <Badge
             icon={<EyeOff size={12} />}
@@ -251,6 +315,7 @@ export function LayersPanel({
   moveHints = false,
   nesting,
   definitions,
+  regions,
 }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
@@ -379,10 +444,16 @@ export function LayersPanel({
         <Input
           value={query}
           onChange={event => setQuery(event.target.value)}
-          placeholder="Search layers"
-          aria-label="Search layers"
+          placeholder={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
+          aria-label={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
         />
       </div>
+
+      {regions
+        ?.filter(row => row.area === "header")
+        .map(row => (
+          <RegionRow key={row.area} row={row} />
+        ))}
 
       {tree.length === 0 ? (
         <p className="nx-layers-panel__note">
@@ -398,7 +469,7 @@ export function LayersPanel({
         >
           <TreeView
             className={LAYERS_TREE_CLASS}
-            aria-label="Layers"
+            aria-label={EDITOR_WORDS.layers}
             nodes={nodes}
             selectedId={editor.selectedId}
             // The panel shows what the canvas shows. Passing only the primary
@@ -425,6 +496,12 @@ export function LayersPanel({
           <LayersDropOverlay drawn={drag.drawn} />
         </div>
       )}
+
+      {regions
+        ?.filter(row => row.area === "footer")
+        .map(row => (
+          <RegionRow key={row.area} row={row} />
+        ))}
 
       {/*
         Why a drop under the pointer is refused, spoken. Present from the first

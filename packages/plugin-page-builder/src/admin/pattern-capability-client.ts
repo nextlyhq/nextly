@@ -55,3 +55,36 @@ export function useMayCreatePattern(): boolean {
   });
   return read.data?.mayCreate ?? true;
 }
+
+/**
+ * Whether this author may make a component from a selection: create and
+ * publish on the component store. Permissive while the answer is in flight,
+ * for the reason the pattern verb is: the route refuses a caller without the
+ * grants either way, and a verb dimmed on every mount would hide one the
+ * author holds.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export function useMayCreateComponent(): boolean {
+  const read = usePluginRoute<PatternCapabilityResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: CAPABILITY_ROUTE_PATH,
+    staleTime: 0,
+  });
+  return read.data === undefined ? true : read.data.mayCreateComponent === true;
+}
+
+/**
+ * Whether this author may replace a pattern's content from a selection.
+ * Permissive while in flight, for the reason the verbs above are.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export function useMayUpdatePattern(): boolean {
+  const read = usePluginRoute<PatternCapabilityResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: CAPABILITY_ROUTE_PATH,
+    staleTime: 0,
+  });
+  return read.data === undefined ? true : read.data.mayUpdatePattern === true;
+}

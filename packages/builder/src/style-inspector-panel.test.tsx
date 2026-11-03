@@ -3249,6 +3249,20 @@ describe("a read-only design", () => {
     ).toBeNull();
   });
 
+  it("leaves the editor around the More menu in the accessibility tree", async () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register({ effects: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "More effects properties" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("leaves every control editable on a block nothing locks", () => {
     // The positive control for the case above.
     register({ effects: true });
@@ -3303,5 +3317,27 @@ describe("which elements count as media for the fit controls", () => {
     // A `<picture>` only chooses a source; the image inside it is what fits.
     expect(fitShown("picture")).toBe(false);
     expect(fitShown("div")).toBe(false);
+  });
+});
+
+describe("a colour that does not follow light and dark", () => {
+  it("is marked on the control holding it", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: "#1d2b6b" } } }
+    );
+    expect(
+      fieldsOf("color").getByText(/Not adapted to dark mode/)
+    ).toBeDefined();
+  });
+
+  it("is not marked once a variable holds the colour", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: { $token: "color.text" } } } }
+    );
+    expect(
+      fieldsOf("color").queryByText(/Not adapted to dark mode/)
+    ).toBeNull();
   });
 });

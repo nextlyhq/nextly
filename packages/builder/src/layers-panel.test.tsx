@@ -23,7 +23,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
 import {
@@ -128,9 +128,11 @@ let editorRef: EditorState | null = null;
 function Host({
   document,
   keys = "bound",
+  regions,
 }: {
   document: BlockDocument;
   keys?: "bound" | "disabled" | "absent";
+  regions?: React.ComponentProps<typeof LayersPanel>["regions"];
 }): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
@@ -141,7 +143,13 @@ function Host({
    * render without one. A harness that always supplied a provider could not
    * tell that apart from a panel that requires one.
    */
-  return <LayersPanel editor={editor} moveHints={keys === "bound"} />;
+  return (
+    <LayersPanel
+      editor={editor}
+      moveHints={keys === "bound"}
+      regions={regions}
+    />
+  );
 }
 
 function renderPanel(
@@ -519,6 +527,47 @@ describe("LayersPanel", () => {
     );
   });
 
+  it("names a row inside a locked block as locked BY that block, quieter than its own", () => {
+    // A lock covers everything inside the block: each row inside says so in
+    // words, naming the block to unlock, and only the locked block's own row
+    // carries the stronger badge.
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("hero", "core/heading", {
+                locked: true,
+                name: "Hero",
+                slots: {
+                  children: [
+                    node("inner", "core/heading", {
+                      slots: { children: [node("deep", "core/heading")] },
+                    }),
+                  ],
+                },
+              }),
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    register();
+    fireEvent.keyDown(screen.getAllByRole("treeitem")[0]!, { key: "*" });
+
+    const [hero, inner] = screen.getAllByRole("treeitem");
+    expect(hero?.querySelector('[data-lock="own"]')?.textContent).toBe(
+      "Locked"
+    );
+    expect(inner?.textContent).toContain("Locked by Hero");
+    expect(inner?.querySelector('[data-lock="own"]')).toBeNull();
+    expect(inner?.querySelector('[data-lock="inherited"]')?.textContent).toBe(
+      "Locked by Hero"
+    );
+  });
+
   it("offers to open only the rows that hold something", () => {
     // A row that opens onto nothing would show a twisty that does nothing,
     // and announce itself as a closed branch to a screen reader.
@@ -557,5 +606,64 @@ describe("LayersPanel", () => {
     expect(screen.getByText(/no blocks yet/i).className).toContain(
       "nx-layers-panel__note"
     );
+  });
+});
+
+describe("the regions of the page's Layout in Layers", () => {
+  function renderWithRegions() {
+    register();
+    const header = vi.fn();
+    const footer = vi.fn();
+    render(
+      <Host
+        document={nestedDocument()}
+        regions={[
+          {
+            area: "footer",
+            name: "Footer",
+            origin: "from Layout Main",
+            onActivate: footer,
+          },
+          {
+            area: "header",
+            name: "Header",
+            origin: "from Layout Main",
+            onActivate: header,
+          },
+        ]}
+      />
+    );
+    return { header, footer };
+  }
+
+  it("shows the header above the page's blocks and the footer below them", () => {
+    renderWithRegions();
+    const header = screen.getByRole("button", {
+      name: "Header, from Layout Main, locked",
+    });
+    const footer = screen.getByRole("button", {
+      name: "Footer, from Layout Main, locked",
+    });
+    const tree = screen.getByRole("tree");
+    expect(
+      header.compareDocumentPosition(tree) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      footer.compareDocumentPosition(tree) & Node.DOCUMENT_POSITION_PRECEDING
+    ).toBeTruthy();
+  });
+
+  it("keeps them out of the tree: not rows that select, drag or lock", () => {
+    renderWithRegions();
+    expect(rows().some(row => row.includes("from Layout"))).toBe(false);
+    const header = screen.getByRole("button", { name: /^Header/ });
+    expect(header.closest("[role=tree]")).toBeNull();
+    expect(header.getAttribute("draggable")).not.toBe("true");
+  });
+
+  it("shows the region on the canvas when activated", () => {
+    const { header } = renderWithRegions();
+    fireEvent.click(screen.getByRole("button", { name: /^Header/ }));
+    expect(header).toHaveBeenCalledTimes(1);
   });
 });

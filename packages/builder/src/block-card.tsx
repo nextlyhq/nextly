@@ -44,7 +44,14 @@ import type { ToolbarActionId } from "./toolbar-actions";
 export type CardVerbs = SharedBlockVerbs;
 
 /** The verbs from the shared set that the card's menu offers, in order. */
-const CARD_VERBS: readonly ToolbarActionId[] = ["duplicate", "delete"];
+const CARD_VERBS: readonly ToolbarActionId[] = [
+  "duplicate",
+  "save-as-component",
+  "convert-to-component",
+  "detach-component",
+  "duplicate-component",
+  "delete",
+];
 
 export interface BlockCardProps {
   /** The block's icon concept, if it names one. */
@@ -209,7 +216,9 @@ function CardMenu({
     return null;
   }
   return (
-    <DropdownMenu>
+    // Not modal: a modal menu marks the editor around it aria-hidden while
+    // its controls stay focusable (axe: aria-hidden-focus).
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -316,21 +325,20 @@ function LockLines({
   /** The id the reason a held control points at takes. */
   reasonId?: string | undefined;
 }): React.JSX.Element | null {
-  if (!lock.layers && lock.slot === undefined) return null;
-  // The reason held controls point at: the Layers lock when it holds, which
-  // holds everything, and otherwise the slot's.
-  const layersId = lock.layers ? reasonId : undefined;
-  const slotId = lock.layers ? undefined : reasonId;
+  const inherited = lock.layers ? undefined : lock.inheritedFrom;
+  // The reason held controls point at: the Layers lock when it holds, its own
+  // or one around it, which holds everything, and otherwise the slot's.
+  const layersHold = lock.layers || inherited !== undefined;
+  if (!layersHold && lock.slot === undefined) return null;
+  const [layersId, slotId] = layersHold
+    ? [reasonId, undefined]
+    : [undefined, reasonId];
   return (
     <ul className="nx-block-card__status">
-      {lock.layers ? (
-        <li data-lock="layers">
-          <span id={layersId}>
-            <strong>Locked</strong>: it can&apos;t be moved, deleted or edited.
-          </span>
-          {layersLockChangeable(lock) ? " Unlock it from the menu." : null}
-        </li>
-      ) : null}
+      {lock.layers ? <OwnLockLine lock={lock} reasonId={layersId} /> : null}
+      {inherited === undefined ? null : (
+        <InheritedLockLine holder={inherited} reasonId={layersId} />
+      )}
       {lock.slot === undefined ? null : (
         <li data-lock={lock.slot.lock}>
           {/* Its own element, so the sentence a held control points at is
@@ -340,6 +348,46 @@ function LockLines({
         </li>
       )}
     </ul>
+  );
+}
+
+/** The line for a block locked in Layers itself, and where it is lifted. */
+function OwnLockLine({
+  lock,
+  reasonId,
+}: {
+  lock: BlockLockStatus;
+  reasonId: string | undefined;
+}): React.JSX.Element {
+  return (
+    <li data-lock="layers">
+      <span id={reasonId}>
+        <strong>Locked</strong>: it can&apos;t be moved, deleted or edited.
+      </span>
+      {layersLockChangeable(lock) ? " Unlock it from the menu." : null}
+    </li>
+  );
+}
+
+/**
+ * The line for a block inside one locked in Layers, which is locked with it:
+ * the sentence names the block that holds the lock, where it is lifted.
+ */
+function InheritedLockLine({
+  holder,
+  reasonId,
+}: {
+  holder: string;
+  reasonId: string | undefined;
+}): React.JSX.Element {
+  return (
+    <li data-lock="layers-inherited">
+      <span id={reasonId}>
+        <strong>Locked by {holder}</strong>: this block is inside it, so it
+        can&apos;t be moved, deleted or edited.
+      </span>{" "}
+      Unlock {holder} to change it.
+    </li>
   );
 }
 
@@ -370,7 +418,8 @@ export function SelectionCard({
     <div className="nx-block-card" data-block-card="many">
       <div className="nx-block-card__head">
         <h2 className="nx-block-card__title">{title}</h2>
-        <DropdownMenu>
+        {/* Not modal, as the single block's card menu above. */}
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <button
               type="button"

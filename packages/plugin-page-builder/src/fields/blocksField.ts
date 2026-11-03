@@ -24,6 +24,8 @@ import {
 import type {
   PluginFieldInstance,
   PluginFieldType,
+  PluginFieldValidateArgs,
+  PluginFieldValidationResult,
 } from "@nextlyhq/plugin-sdk";
 
 import { formsChangedBy } from "../component-cycle-guard";
@@ -36,8 +38,13 @@ import {
 } from "./blocks-composition";
 import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
-import { blocksOptionsOf } from "./blocks-options";
+import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
+import {
+  judgesLayersLocks,
+  layersLockIssues,
+  withLockIssues,
+} from "./layers-lock-judgement";
 import { readStoredForms } from "./lock-baselines";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
@@ -88,6 +95,85 @@ function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
 }
 
 /**
+ * A blocks value judged by the document's own rules: the engine's structure
+ * and placement rules, the field's policy, and the composed page.
+ *
+ * A placement or `contentOnly` break, or a variant name clash, the stored
+ * document already held is kept with a warning rather than refused, so the
+ * stored forms are read only once such a break is found.
+ */
+function judgedByRules(
+  value: unknown,
+  args: PluginFieldValidateArgs,
+  breakpoints: BreakpointSet | undefined,
+  composition: (() => CompositionSetup | undefined) | undefined
+): PluginFieldValidationResult | Promise<PluginFieldValidationResult> {
+  const judge = (stored?: readonly BlockDocument[]) =>
+    validateBlocksValue(
+      value,
+      args.path,
+      typeof args.field.label === "string" ? args.field.label : args.path,
+      policyOf(args.field),
+      // The set this factory was built with; the empty set otherwise,
+      // which the engine treats permissively (a breakpoint reference warns).
+      breakpoints ?? siteBreakpoints(),
+      stored
+    );
+  // Composed only once the document is well formed: the composition walks
+  // the tree the rules above vouched for, and a malformed one would report
+  // the shape problem a second time in the composition's words.
+  //
+  // Answered synchronously wherever there is nothing to compose — no store
+  // installed, or no entry write to read the library through — so a caller
+  // judging a value on its own gets the answer it always got.
+  const composed = () => {
+    const setup = composition?.();
+    if (setup === undefined || args.write === undefined) return true;
+    return compositionIssues(value, args, setup).then(found =>
+      found.length === 0 ? true : found
+    );
+  };
+  const issues = judge();
+  if (issues.length === 0) return composed();
+  // A contentOnly slot may keep what the document's stored version already
+  // holds, so a part a block's changed defaults left behind is not refused
+  // with nobody having changed it; and a placement break the stored page
+  // already held is kept with a warning rather than refused. Read only once
+  // such a break is found.
+  if (
+    !issues.some(
+      issue =>
+        issue.code === CONTENT_ONLY_BREAK || STORED_MAY_HOLD.has(issue.code)
+    )
+  ) {
+    return issues;
+  }
+  const status = (args.data as { status?: unknown } | undefined)?.status;
+  return readStoredForms(
+    args.write,
+    args.path,
+    formsChangedBy(typeof status === "string" ? status : undefined),
+    (args.field as { localized?: unknown }).localized === true
+  ).then(stored => {
+    const again = stored.forms.length === 0 ? issues : judge(stored.forms);
+    // A stored value this cannot read may already hold every placement
+    // break or name clash found, so none is refused; the server log says what
+    // was kept until the page can be judged against it.
+    const kept = stored.readable
+      ? again
+      : again.filter(issue => !STORED_MAY_HOLD.has(issue.code));
+    if (kept.length < again.length) {
+      composition?.()?.onPlacementUnjudged?.({
+        field: args.path,
+        ...documentOf(args.write),
+        breaks: again.length - kept.length,
+      });
+    }
+    return kept.length > 0 ? kept : composed();
+  });
+}
+
+/**
  * Build the field type against the site's breakpoints.
  *
  * A factory rather than only a constant, because the breakpoint set is the
@@ -115,6 +201,11 @@ export function blocksFieldType(
     category: "Structured",
     icon: "LayoutGrid",
 
+    // An emptied field is judged too: setting it to `null` or "" drops every
+    // block it holds, a locked one included, so the Layers lock is asked of
+    // that write as of any other, on the data every `before*` hook has left.
+    validateEmpty: true,
+
     /**
      * The document's own rules, run on every write.
      *
@@ -125,69 +216,29 @@ export function blocksFieldType(
      * document travels in the message.
      */
     validate: (value, args) => {
-      const judge = (stored?: readonly BlockDocument[]) =>
-        validateBlocksValue(
-          value,
-          args.path,
-          typeof args.field.label === "string" ? args.field.label : args.path,
-          policyOf(args.field),
-          // The set this factory was built with; the empty set otherwise,
-          // which the engine treats permissively (a breakpoint reference warns).
-          breakpoints ?? siteBreakpoints(),
-          stored
-        );
-      // Composed only once the document is well formed: the composition walks
-      // the tree the rules above vouched for, and a malformed one would report
-      // the shape problem a second time in the composition's words.
-      //
-      // Answered synchronously wherever there is nothing to compose — no store
-      // installed, or no entry write to read the library through — so a caller
-      // judging a value on its own gets the answer it always got.
-      const composed = () => {
-        const setup = composition?.();
-        if (setup === undefined || args.write === undefined) return true;
-        return compositionIssues(value, args, setup).then(found =>
-          found.length === 0 ? true : found
-        );
-      };
-      const issues = judge();
-      if (issues.length === 0) return composed();
-      // A contentOnly slot may keep what the document's stored version already
-      // holds, so a part a block's changed defaults left behind is not refused
-      // with nobody having changed it; and a placement break the stored page
-      // already held is kept with a warning rather than refused. Read only once
-      // such a break is found.
-      if (
-        !issues.some(
-          issue =>
-            issue.code === CONTENT_ONLY_BREAK || STORED_MAY_HOLD.has(issue.code)
-        )
-      ) {
-        return issues;
-      }
-      const status = (args.data as { status?: unknown } | undefined)?.status;
-      return readStoredForms(
-        args.write,
-        args.path,
-        formsChangedBy(typeof status === "string" ? status : undefined),
-        (args.field as { localized?: unknown }).localized === true
-      ).then(stored => {
-        const again = stored.forms.length === 0 ? issues : judge(stored.forms);
-        // A stored value this cannot read may already hold every placement
-        // break or name clash found, so none is refused; the server log says what was kept
-        // until the page can be judged against it.
-        const kept = stored.readable
-          ? again
-          : again.filter(issue => !STORED_MAY_HOLD.has(issue.code));
-        if (kept.length < again.length) {
-          composition?.()?.onPlacementUnjudged?.({
-            field: args.path,
-            ...documentOf(args.write),
-            breaks: again.length - kept.length,
-          });
-        }
-        return kept.length > 0 ? kept : composed();
-      });
+      // An empty value has no document to judge by the rules, only the locks
+      // of the one it would replace.
+      const emptied = value === null || value === undefined || value === "";
+      const verdict = emptied
+        ? true
+        : judgedByRules(value, args, breakpoints, composition);
+      // A value judged on its own, or a create, has no stored document to
+      // hold a lock, and keeps the answer it always got, synchronously where
+      // the rules gave one.
+      if (!judgesLayersLocks(args)) return verdict;
+      // And the Layers locks, judged against the stored document on every
+      // update, whatever the rules above answered: a write that breaks a lock
+      // and also breaks a rule is told about both, so one round fixes both.
+      const label =
+        typeof args.field.label === "string" ? args.field.label : args.path;
+      return Promise.resolve(verdict).then(answered =>
+        layersLockIssues(
+          emptied ? null : value,
+          args,
+          label,
+          composition?.()?.onLayersLockUnjudged
+        ).then(locks => withLockIssues(answered, locks, args.path))
+      );
     },
 
     /**
@@ -295,7 +346,8 @@ export function blocksFieldType(
        */
       zodSchema: field => {
         const kinds = policyOf(field).kinds;
-        const accepted = kinds ?? ["page"];
+        // The default from its one statement, which the validator reads too.
+        const accepted = kinds ?? DEFAULT_ACCEPTED_KINDS;
         const kindSchema = `z.enum([${accepted
           .map(kind => `"${String(kind).replace(/["\\]/g, "\\$&")}"`)
           .join(", ")}])`;

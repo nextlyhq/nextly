@@ -51,8 +51,11 @@ const SPACER_BASE_STYLES = {
 export const spacer: BlockDefinition<SpacerProps, PageContext> = defineBlock({
   name: "core/spacer",
   version: 1,
-  description:
-    "Deliberate empty space, sized by the style system so it can differ per breakpoint. Hidden from assistive technology.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: Deliberate empty space,
+  // sized by the style system so it can differ per breakpoint. Hidden from
+  // assistive technology.
+  description: "Empty space between blocks.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.

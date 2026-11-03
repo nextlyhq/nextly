@@ -91,10 +91,19 @@ const WRITERS: {
     writes: source => source.includes("playground-dev-server"),
   },
   {
+    lock: "siteDefaultLayout",
+    what: "changes the site's default Layout",
+    writes: source => source.includes("/make-default"),
+  },
+  {
     lock: "siteStyle",
     what: "writes the site style",
+    // The Single's own update, or the Settings route the site's breakpoints
+    // change through, which writes the same Single.
     writes: source =>
-      source.includes("singles/site-style") && /\.(patch|put)\(/.test(source),
+      (source.includes("singles/site-style") &&
+        /\.(patch|put)\(/.test(source)) ||
+      /\bstoreSiteBreakpoints\(/.test(source),
   },
 ];
 
@@ -214,6 +223,11 @@ test("recognises each kind of write it is there for", () => {
   expect(
     WRITERS.find(w => w.lock === "siteStyle")?.writes(
       'const SITE_STYLE = "/admin/api/singles/site-style";\nawait page.request.patch(SITE_STYLE, { data });'
+    )
+  ).toBe(true);
+  expect(
+    WRITERS.find(w => w.lock === "siteStyle")?.writes(
+      "await storeSiteBreakpoints(page.request, null);"
     )
   ).toBe(true);
   // Reading the site style is not writing it.

@@ -55,6 +55,7 @@ import * as React from "react";
 
 import { BlockCard, type CardVerbs } from "./block-card";
 import type { EditorState } from "./editor-state";
+import { markExposedParts } from "./exposed-outline";
 import { HeldByLock } from "./held-by-lock";
 import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {
@@ -143,6 +144,7 @@ export function InstanceInspectorPanel({
   editor,
   verbs,
   definition,
+  canvasRoot,
 }: {
   inspection: InstanceInspection;
   editor: EditorState;
@@ -150,6 +152,12 @@ export function InstanceInspectorPanel({
   verbs?: CardVerbs | undefined;
   /** The definition the placement resolves against, for its variant picker. */
   definition?: ComponentDocument | undefined;
+  /**
+   * The canvas's root, where the placement's exposed parts are marked; the
+   * page's document when the host names none. Scoped so a canvas drawn in a
+   * frame is reached, and another editor's marks are left alone.
+   */
+  canvasRoot?: HTMLElement | null | undefined;
 }): React.JSX.Element {
   // Read the node at commit time rather than closing over one. A field
   // committing on blur can fire after another edit has already replaced the
@@ -175,6 +183,15 @@ export function InstanceInspectorPanel({
   );
 
   const headingId = React.useId();
+  // The selected placement's editable parts, outlined on the canvas while it
+  // is selected: after every render, since the canvas redraws with the
+  // document this panel reads, and cleared when the selection moves on.
+  const composed = editor.composed();
+  React.useEffect(() => {
+    const root: ParentNode = canvasRoot ?? globalThis.document;
+    markExposedParts(root, inspection.nodeId, composed);
+    return () => markExposedParts(root, null, undefined);
+  }, [inspection.nodeId, composed, canvasRoot]);
   // The sentence every held row points to while the placement is locked in
   // Layers. Its own lock control stays live above, so it can be unlocked.
   const lockedReasonId = React.useId();
@@ -212,6 +229,18 @@ export function InstanceInspectorPanel({
         verbs={verbs}
       />
 
+      {/*
+        Said once, above everything the Layers lock holds: the rows and the
+        values no longer exposed. The card's menu, which holds Unlock, is not
+        held.
+      */}
+      {locked ? (
+        <p id={lockedReasonId} className="nx-inspector__note" role="status">
+          This component is locked, so its fields can&apos;t change. Unlock it
+          to edit them.
+        </p>
+      ) : null}
+
       <VariantPicker
         editor={editor}
         nodeId={inspection.nodeId}
@@ -246,12 +275,6 @@ export function InstanceInspectorPanel({
           <h3 id={headingId} className="nx-inspector__heading">
             Exposed properties
           </h3>
-          {locked ? (
-            <p id={lockedReasonId} className="nx-inspector__note" role="status">
-              This component is locked, so its fields can&apos;t change. Unlock
-              it to edit them.
-            </p>
-          ) : null}
           <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
             <div className="nx-inspector__fields">
               {inspection.rows.map(row => (
@@ -273,7 +296,11 @@ export function InstanceInspectorPanel({
       )}
 
       {inspection.orphaned.length > 0 ? (
-        <OrphanedOverrides orphaned={inspection.orphaned} onDiscard={reset} />
+        // Held by the same Layers lock as the rows: discarding a stored value
+        // is an edit of the placement too.
+        <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
+          <OrphanedOverrides orphaned={inspection.orphaned} onDiscard={reset} />
+        </HeldByLock>
       ) : null}
     </div>
   );

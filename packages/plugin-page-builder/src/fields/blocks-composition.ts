@@ -87,11 +87,13 @@ import {
 } from "../composition-reading";
 
 import { isForest } from "./blocks-document";
+import { LAYERS_LOCK_CHANGED, placedLockMessage } from "./layers-lock-wording";
 import {
   composedFormsRead,
   lockBaselines,
   readStoredForms,
 } from "./lock-baselines";
+import { placedLayersLocks } from "./placement-layers-locks";
 
 /** The issue shape core's validation envelope carries. */
 interface Issue {
@@ -180,6 +182,13 @@ export interface CompositionSetup {
    */
   readonly onPlacementUnjudged?: (found: PlacementUnjudged) => void;
   /**
+   * Told of a write whose Layers locks could not be judged, because the
+   * stored value they would be judged against could not be read (see
+   * `LayersLockUnjudged.reason`). Kept, not refused, so the server log is
+   * where an operator learns of it.
+   */
+  readonly onLayersLockUnjudged?: (found: LayersLockUnjudged) => void;
+  /**
    * Whether documents are composed against this store at all. `false` where
    * the renderer draws components from somewhere no collection can stand for
    * (a route's own `resolveComponents`): composing against this store would
@@ -202,6 +211,17 @@ export interface PlacementUnjudged extends WrittenTo {
   readonly field: string;
   /** How many breaks were kept. */
   readonly breaks: number;
+}
+
+/** A write whose Layers locks were not judged, for the server log. */
+export interface LayersLockUnjudged extends WrittenTo {
+  /** The blocks field written. */
+  readonly field: string;
+  /**
+   * Why its stored value could not be read: a translated field whose language
+   * store is not ready, or a field inside a group or a repeater.
+   */
+  readonly reason: "language-not-ready" | "nested-field";
 }
 
 /**
@@ -510,10 +530,27 @@ async function judgeOwnComposition(args: {
   for (const fault of faults) {
     report.add(fault.code, fault.message);
   }
+  // Every placement's definition, the ones a condition gates included: the
+  // composition never expanded those, and both checks below read them.
+  await readEveryPlacedDefinition(document, library, read, setup.limits);
+  // Past the reader's bound a definition reads as unreadable and its
+  // placement would go unjudged, so the save is refused as unchecked instead.
+  if (read.exhausted()) {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  await judgePlacedLocks({
+    document,
+    composed: composed.composition.document,
+    reading: { library, read, limits: setup.limits, work },
+    stored: args.stored,
+    report,
+    setup,
+    unjudged: { field: args.field ?? "", ...args.writtenTo },
+  });
   await judgePlacementValues({
     document,
     library,
-    read,
     limits: setup.limits,
     stored: args.stored,
     report,
@@ -525,6 +562,102 @@ async function judgeOwnComposition(args: {
     stored: args.stored,
     report,
   });
+}
+
+/**
+ * Refuse a placement's value or slot content that changes a block its
+ * component locks in Layers (`placedLayersLocks`), naming the block. Where the
+ * stored page cannot be read (a localized field whose language is not ready),
+ * the write is kept and the server log says so, as for the page's own locks.
+ */
+async function judgePlacedLocks(
+  args: Parameters<typeof placedLayersLocks>[0] & {
+    report: Report;
+    setup: CompositionSetup;
+    unjudged: Omit<LayersLockUnjudged, "reason">;
+  }
+): Promise<void> {
+  const answer = await placedLayersLocks(args);
+  if (answer.kind === "unchecked") {
+    args.report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  if (answer.kind === "unjudged") {
+    args.setup.onLayersLockUnjudged?.({
+      ...args.unjudged,
+      reason: "language-not-ready",
+    });
+    return;
+  }
+  for (const change of answer.changes) {
+    args.report.add(LAYERS_LOCK_CHANGED, placedLockMessage(change));
+  }
+}
+
+/**
+ * Read the definition of every component the document places into the library,
+ * and of every component those definitions place, as deep as composition goes.
+ *
+ * A placement the composition never expanded (one a condition gates) still
+ * stores its values, and is served with them once the condition lifts, so its
+ * component is read too; and a gated placement inside a definition is never
+ * expanded either, so the definitions held are surveyed the same way, level by
+ * level, to the composed depth. Stops asking once the reader's bound is spent,
+ * which the caller then refuses as unchecked.
+ */
+async function readEveryPlacedDefinition(
+  document: BlockDocument,
+  library: HeldLibrary,
+  read: BoundedReader,
+  limits: DocumentLimits
+): Promise<void> {
+  const surveyed = new Set<string>();
+  let level: readonly unknown[] = [document];
+  for (let depth = 0; depth <= MAX_COMPOSED_DEPTH; depth += 1) {
+    if (level.length === 0 || read.exhausted()) return;
+    level = await readPlacedBy(level, { library, read, limits, surveyed });
+  }
+}
+
+/**
+ * One level of {@link readEveryPlacedDefinition}: read what each document
+ * places that is not yet surveyed, and answer the definitions held for them,
+ * which are the next level down.
+ */
+async function readPlacedBy(
+  documents: readonly unknown[],
+  at: {
+    library: HeldLibrary;
+    read: BoundedReader;
+    limits: DocumentLimits;
+    surveyed: Set<string>;
+  }
+): Promise<unknown[]> {
+  const { library, surveyed } = at;
+  const next: unknown[] = [];
+  for (const placing of documents) {
+    if (!isForest(placing)) continue;
+    const nodes = (placing as BlockDocument).nodes;
+    for (const id of componentIdsIn(nodes, at.limits.maxNodes)) {
+      if (surveyed.has(id)) continue;
+      surveyed.add(id);
+      await readInto(library, at.read, id);
+      if (library.held.has(id)) next.push(library.held.get(id));
+    }
+  }
+  return next;
+}
+
+/** One definition into the library, unless it was already asked for. */
+async function readInto(
+  library: HeldLibrary,
+  read: BoundedReader,
+  id: string
+): Promise<void> {
+  if (library.held.has(id) || library.missing.has(id)) return;
+  const answer = await read(id);
+  if (answer.kind === "document") library.held.set(id, answer.document);
+  else library.missing.add(id);
 }
 
 /** The issue code for each way a placement's value is refused. */
@@ -551,27 +684,11 @@ const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
 async function judgePlacementValues(args: {
   document: BlockDocument;
   library: HeldLibrary;
-  read: BoundedReader;
   limits: DocumentLimits;
   stored: () => Promise<StoredRead>;
   report: Report;
 }): Promise<void> {
   const { document, library, limits, report } = args;
-  // A placement the composition never expanded (one a condition gates) still
-  // stores its values, and is served with them once the condition lifts, so
-  // its component is read too.
-  for (const id of componentIdsIn(document.nodes, limits.maxNodes)) {
-    if (library.held.has(id) || library.missing.has(id)) continue;
-    const answer = await args.read(id);
-    if (answer.kind === "document") library.held.set(id, answer.document);
-    else library.missing.add(id);
-  }
-  // Past the reader's bound a definition reads as unreadable and its
-  // placement would go unjudged, so the save is refused as unchecked instead.
-  if (args.read.exhausted()) {
-    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
-    return;
-  }
   const components = lookupOf(library);
   if (placementValueIssues(document, components, [], limits).length === 0) {
     return;

@@ -37,10 +37,26 @@
  * @module canvas-geometry-watch
  */
 
-import { nodeElements } from "./canvas";
 import { isElement } from "./dom-kind";
 import { canvasRootFrom } from "./geometry-dom";
+import { nodeElements, nodeElementsIn } from "./rendered-nodes";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
+
+/**
+ * Marks a layer the editor draws OVER the page — absolutely positioned and
+ * taking no part in layout — whose own redrawing can move no block.
+ *
+ * Every overlay's watch ignores what happens inside one, not only the caller's
+ * own: one overlay drawing would otherwise make every other re-measure, for a
+ * change that cannot have moved anything they measure.
+ */
+export const OVERLAY_OUTPUT_ATTRIBUTE = "data-nx-overlay-output";
+
+/** Whether a mutated node sits inside a layer marked as overlay output. */
+function insideOverlayOutput(target: Node): boolean {
+  const element = isElement(target) ? target : target.parentElement;
+  return element?.closest(`[${OVERLAY_OUTPUT_ATTRIBUTE}]`) != null;
+}
 
 /**
  * Everything an overlay drawn over this canvas has to re-measure for.
@@ -114,6 +130,31 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     sizes.observe(root);
     for (const node of nodeElements(root)) sizes.observe(node);
   }
+  /*
+   * And every node that arrives LATER, which the snapshot above cannot see: a
+   * block that resolves after a Suspense fallback, or one an edit inserts. Its
+   * insertion is heard as a mutation and measured then, but an image loading
+   * inside it afterwards resizes only that block — no ancestor need change —
+   * so unobserved, nothing would report it. A node leaving is released, so the
+   * observer does not hold elements the page no longer has.
+   */
+  const Arrivals = view?.MutationObserver;
+  const arrivals =
+    sizes === null || typeof Arrivals !== "function"
+      ? null
+      : new Arrivals(records => {
+          for (const record of records) {
+            record.addedNodes.forEach(added => {
+              if (!isElement(added)) return;
+              for (const node of nodeElementsIn(added)) sizes.observe(node);
+            });
+            record.removedNodes.forEach(removed => {
+              if (!isElement(removed)) return;
+              for (const node of nodeElementsIn(removed)) sizes.unobserve(node);
+            });
+          }
+        });
+  arrivals?.observe(root, { childList: true, subtree: true });
 
   /*
    * `overflow: auto` and `overflow: scroll` are catalog values, so a block can
@@ -149,6 +190,7 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
 
   return () => {
     sizes?.disconnect();
+    arrivals?.disconnect();
     root.removeEventListener("transitionend", settled);
     root.removeEventListener("transitioncancel", settled);
     root.removeEventListener("scroll", settled, true);
@@ -289,7 +331,9 @@ function watchCanvasStyleMutations(
      * layer's `childList` records and reports a change the caller caused.
      */
     const foreign = records.filter(
-      record => own === null || !own.contains(record.target)
+      record =>
+        (own === null || !own.contains(record.target)) &&
+        !insideOverlayOutput(record.target)
     );
     if (foreign.length > 0 && !changedNothing(foreign)) moved();
   });

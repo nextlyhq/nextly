@@ -11,11 +11,11 @@ Choosing a panel's item again closes it and gives the canvas the room back.
 
 The top bar runs across the editor in three parts.
 
-| Part   | What it holds                                                                                                                                        |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Left   | The way back to the entry, the page's title, whether it's a draft or published, and **Undo** and **Redo**.                                           |
-| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                         |
-| Right  | The buttons that hide or show the left panel and the inspector, whether your work is saved, **Preview** where the admin offers one, and **Publish**. |
+| Part   | What it holds                                                                                                                                                    |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Left   | The way back to the entry, the page's title, whether it's a draft or published, and **Undo** and **Redo**.                                                       |
+| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                                     |
+| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** where the admin offers one, and **Publish**. |
 
 **Publish** is the entry's own leading action: **Publish**, **Publish changes** or
 **Save**, as on the entry's page. Its arrow holds **Save draft**, **Schedule publish…**
@@ -41,24 +41,78 @@ the menu's button shows its name and width. The buttons never change places.
 
 When the bar is narrow, the device buttons drop their label first and keep their icons.
 
+## Search
+
+**Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a
+Mac), finds four kinds of thing as you type, each under its own heading:
+
+- **Add**: blocks and your components to add. Each says where it will go, as the Add panel
+  does ("Adding after Heading"), and choosing one adds it there.
+- **On this page**: the page's blocks, by the names Layers shows, with what each is and
+  what it sits in. Choosing one selects it and scrolls it into view.
+- **Pages**: the site's other pages you may open, by title, with **Draft** beside a page
+  not yet published. Choosing one opens it in the editor.
+- **Commands**: what you can do to the selected block, Undo and Redo, and closing the
+  editor.
+
+The bottom line says what <kbd>Enter</kbd> does to the highlighted result. Saved sections
+are added from the Add panel's **Sections** tab.
+
 ## The rail
 
 The rail shows only the panels that work in this editor. A panel that is not built yet
 has no item at all, so nothing on the rail opens an empty panel.
 
-| Item         | What it holds                                                                                                                                                                             |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected. |
-| **Layers**   | The page as a tree. Select, expand and move blocks here as on the canvas.                                                                                                                 |
-| **Design**   | The site's look, in three tabs: **Variables** (the design tokens), **Classes** and **Fonts**.                                                                                             |
-| **Settings** | The entry's other fields, such as its title, slug and SEO. It appears only when the entry has fields besides the page itself.                                                             |
-| **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                               |
+| Item         | What it holds                                                                                                                                                                                                                                                                                                              |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                  |
+| **Layers**   | The page as a tree. Select, expand and move blocks here as on the canvas.                                                                                                                                                                                                                                                  |
+| **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts**. A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. |
+| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                       |
+| **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                |
 
 Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
 
 The editor remembers the panel you left open, and on Design the tab you left on, the
 next time you open it. It remembers them for you, not for the browser, so two people
 who share a browser each find their own.
+
+## The bottom bar
+
+The bottom bar shows where you are: **Page**, then each block holding the selected
+one, ending with the selected block. Choose any of them to select it; choose **Page**
+to clear the selection.
+
+On its right, a hint names the keys that work from there, such as
+<kbd>Enter</kbd> to edit the selected block's text, <kbd>Escape</kbd> to go up to the
+block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a Mac)
+for the command palette.
+
+## Settings
+
+**Settings** at the bottom of the rail opens a dialog with two tabs.
+
+**This page** holds the entry's own fields, such as its title, address and SEO, as the
+entry's page draws them. They save with the page, from **Save** or **Publish** in the top
+bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
+It uses the SEO fields where the page has them, then the page's first heading, text and
+image, then its title. Your site's own metadata may differ. Pressing Enter in a field
+never saves the page.
+
+**Site** applies to the live site as soon as you change it. You see it only if your role
+may manage the page builder's site settings.
+
+- **Breakpoints** lists the site's devices, in the same words as the device buttons.
+  **Edit breakpoints** opens the editor in place. **Save breakpoints** stores the whole
+  set at once, after checking it, and **Cancel** leaves it as it was. If you close
+  Settings with an edit open, it asks before throwing the edit away.
+- **Default Layout** is the Layout pages without one of their own are shown in. Choosing
+  another saves it at once and says **Saved**, or **Not saved** with **Retry**. Changing
+  it also needs the rights to update and publish Layouts. Without them, you can see it
+  but not change it.
+
+The site's breakpoints change only here. A write to the site style that changes them
+any other way, through the API or the site style's own form, is refused.
 
 ## Moving blocks in Layers
 
@@ -70,9 +124,11 @@ leaves the block where it was. Press <kbd>Escape</kbd> to cancel a drag. Draggin
 while a search filters the list.
 
 Every move also works without dragging: select the block and press
-<kbd>Alt</kbd>+<kbd>↑</kbd>, <kbd>Alt</kbd>+<kbd>↓</kbd>, <kbd>Alt</kbd>+<kbd>→</kbd> or
-<kbd>Alt</kbd>+<kbd>←</kbd>, or right-click it on the canvas and choose **Move up**,
-**Move down**, **Move in** or **Move out**.
+
+<kbd>Alt</kbd>+<kbd>↑</kbd>, <kbd>Alt</kbd>+<kbd>↓</kbd>, <kbd>Alt</kbd>+
+<kbd>→</kbd> or
+<kbd>Alt</kbd>+<kbd>←</kbd>, or right-click it on the canvas and choose **Move
+up**, **Move down**, **Move in** or **Move out**.
 
 ## Help
 
@@ -94,10 +150,10 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                  | Duplicate the selected block                                                                                                      |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                     | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                              | Edit the selected block's text                                                                                                    |
-| <kbd>Escape</kbd>                                                             | Clear the block selection                                                                                                         |
+| <kbd>Escape</kbd>                                                             | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                     | Move the selected block up or down                                                                                                |
 | <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                     | Move the selected block into the container above it, or out of its container                                                      |
-| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open the command palette                                                                                                          |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open search: blocks to add, this page's blocks, other pages and commands                                                          |
 | <kbd>F6</kbd>                                                                 | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
 | <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                 | Hide both side panels, or show them again                                                                                         |
 | <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                  | Show the page at actual size                                                                                                      |

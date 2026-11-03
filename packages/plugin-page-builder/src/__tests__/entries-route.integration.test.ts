@@ -91,7 +91,15 @@ const declaring = definePlugin({
   version: "1.0.0",
   nextly: ">=0.0.0",
   contributes: {
-    declarations: { [PAGE_BUILDER_PLUGIN]: { blocks: [teaser] } },
+    declarations: {
+      [PAGE_BUILDER_PLUGIN]: {
+        blocks: [teaser],
+        // Named as the editor's module: the route reads only for relation
+        // props of blocks the editor can draw, and a declaration without an
+        // editor entry reaches the server alone.
+        editorEntry: "@test/relation-blocks/editor#blocks",
+      },
+    },
   },
 } as never);
 
@@ -395,6 +403,25 @@ describe.each(getConfiguredTestDialects())(
           reader
         );
         expect(answer.items[0]?.title).toBe("Alpha");
+      });
+
+      it("finds nothing by searching the title, rather than failing", async () => {
+        // Core refuses a filter on a field the caller may not read, as a
+        // validation error naming FIELD_NOT_FILTERABLE. For this caller the
+        // honest answer to a search on the title is no match.
+        const answer = await entries(
+          { collection: ARTICLES, search: "alp" },
+          titleBlind
+        );
+        expect(answer.items).toEqual([]);
+      });
+
+      it("CONTROL: the same search finds entries for a caller who may read the title", async () => {
+        const answer = await entries(
+          { collection: ARTICLES, search: "alp" },
+          reader
+        );
+        expect(answer.items.length).toBeGreaterThan(0);
       });
     });
   }

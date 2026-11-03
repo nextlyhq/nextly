@@ -71,7 +71,7 @@ export interface BreakpointSwitcherProps {
  * The glyph for a device, chosen by the width it applies at rather than by
  * its name, which is whatever the site called it.
  */
-function tierIcon(
+export function tierIcon(
   bound: number | undefined
 ): React.ComponentType<{ className?: string }> {
   if (bound === undefined) return Monitor;
@@ -80,7 +80,7 @@ function tierIcon(
   return Laptop;
 }
 
-interface DeviceOption {
+export interface DeviceOption {
   id: BreakpointId;
   label: string;
   /** The width the canvas lays this device out at. */
@@ -89,8 +89,14 @@ interface DeviceOption {
   range: string;
 }
 
-/** The devices, base first, then each breakpoint from the widest down. */
-function deviceOptions(breakpoints: BreakpointSet | undefined): DeviceOption[] {
+/**
+ * The devices, base first, then each breakpoint from the widest down. One
+ * answer for every surface that names them: these buttons, and Settings' list
+ * of the site's breakpoints.
+ */
+export function deviceOptions(
+  breakpoints: BreakpointSet | undefined
+): DeviceOption[] {
   const authored = authoredBreakpoints(
     breakpoints ?? { viewport: [], container: [] }
   ).viewport;
@@ -220,7 +226,9 @@ function MoreDevices({
    */
   const [open, setOpen] = React.useState(false);
   return (
-    <DropdownMenu open={open && ready} onOpenChange={setOpen}>
+    // Not modal, as the zoom menu: a modal menu hides the focusable editor
+    // around it from assistive technology (axe: aria-hidden-focus).
+    <DropdownMenu modal={false} open={open && ready} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         disabled={!ready}
         aria-label={trigger.name}
