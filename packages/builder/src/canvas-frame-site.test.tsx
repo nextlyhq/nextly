@@ -11,6 +11,7 @@
  *
  * @module canvas-frame-site.test
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -621,7 +622,7 @@ describe("the canvas frame on a page the site serves", () => {
 });
 
 describe("a click on the site's page around the canvas", () => {
-  const EMPTY = { formatVersion: 1, kind: "page", nodes: [] } as const;
+  const EMPTY: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
 
   it("clears the selection, as a click on the canvas's own ground does", async () => {
     const onSelect = vi.fn();
