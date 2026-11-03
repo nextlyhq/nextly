@@ -154,4 +154,17 @@ describe("IconChoiceField", () => {
       strip?.contains(screen.getByLabelText("More Justify content values"))
     ).toBe(true);
   });
+
+  it("lets the field's label point at a radio, so clicking it focuses the group", () => {
+    // A label's `for` reaches only a labelable element: the group's tab stop.
+    mount("end");
+
+    const target = document.getElementById("field");
+    expect(target?.getAttribute("role")).toBe("radio");
+    expect(target?.getAttribute("aria-label")).toBe("End");
+    // The group keeps its name from the label all the same.
+    expect(screen.getByRole("radiogroup").getAttribute("aria-labelledby")).toBe(
+      "label"
+    );
+  });
 });

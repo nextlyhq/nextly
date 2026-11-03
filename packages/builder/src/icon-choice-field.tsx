@@ -174,7 +174,6 @@ export function IconChoiceField({
         {/* One strip: the icons, then More as its last segment. */}
         <div className="nx-icon-choice__strip">
           <div
-            id={id}
             role="radiogroup"
             aria-labelledby={labelledBy}
             aria-describedby={describedBy}
@@ -182,6 +181,8 @@ export function IconChoiceField({
           >
             {options.map((option, index) => {
               const checked = index === chosen;
+              // The group's one tab stop: the chosen icon, else the first.
+              const stop = index === Math.max(chosen, 0);
               const Icon = ICONS[option.icon] ?? Circle;
               return (
                 <Tooltip key={option.value}>
@@ -191,12 +192,15 @@ export function IconChoiceField({
                         buttons.current[index] = button;
                       }}
                       type="button"
+                      // The field label's `for` lands here: a label reaches
+                      // only a labelable element, and this is the group's
+                      // way in.
+                      {...(stop ? { id } : {})}
                       role="radio"
                       aria-checked={checked}
                       aria-label={option.label}
                       aria-invalid={invalid}
-                      // One stop for the group: the chosen icon, else the first.
-                      tabIndex={index === Math.max(chosen, 0) ? 0 : -1}
+                      tabIndex={stop ? 0 : -1}
                       data-icon={option.icon}
                       className="nx-icon-choice__option"
                       onClick={() => onCommit(checked ? null : option.value)}

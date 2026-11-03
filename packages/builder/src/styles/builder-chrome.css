@@ -2074,7 +2074,7 @@
  * minimum target, where the browser's default button around a word of small
  * text is smaller.
  */
-.nx-style-inspector__select > button,
+.nx-style-inspector__select-clear,
 .nx-style-inspector__token button {
   min-block-size: 1.5rem;
   min-inline-size: 1.5rem;
@@ -2084,7 +2084,7 @@
   color: var(--nx-muted-foreground);
 }
 
-.nx-style-inspector__select > button:hover {
+.nx-style-inspector__select-clear:hover {
   color: var(--nx-foreground);
 }
 
@@ -3993,9 +3993,13 @@ fieldset.nx-inspector__fields {
   white-space: nowrap;
 }
 
-/* Narrow, a style field stacks like every other: the wider column above
-   outranks the shared narrow rule, so it is undone here, after it. */
-@container nx-inspector-fields (max-width: 18rem) {
+/*
+ * Narrow, a style field stacks like every other: the wider column above
+ * outranks the shared narrow rule, so it is undone here, after it. At 19rem
+ * rather than 18: a 7.5rem label beside a set Align items row (five icons,
+ * More and Clear) needs about 18.9rem.
+ */
+@container nx-inspector-fields (max-width: 19rem) {
   .nx-style-inspector .nx-inspector__field {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5763,6 +5767,8 @@ fieldset.nx-inspector__fields {
 
 .nx-icon-choice__strip {
   display: inline-flex;
+  /* Whole or stacked under its label, never clipped. */
+  flex: none;
   overflow: hidden;
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-sm);
@@ -5802,8 +5808,8 @@ fieldset.nx-inspector__fields {
   display: none;
 }
 
-.nx-icon-choice__option:hover,
-.nx-icon-choice .nx-icon-choice__more:hover {
+.nx-icon-choice__option:not(:disabled):hover,
+.nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
   color: var(--nx-foreground);
   background: var(--nx-muted);
 }
@@ -5819,6 +5825,14 @@ fieldset.nx-inspector__fields {
   z-index: 1;
   outline: 2px solid var(--nx-ring);
   outline-offset: -2px;
+}
+
+/* In a locked section the controls read as unavailable, as the toggles do. */
+.nx-icon-choice__option:disabled,
+.nx-icon-choice .nx-icon-choice__more:disabled,
+.nx-icon-choice__clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* An icon with no reversed twin, mirrored along the axis it reverses on. */
@@ -5845,7 +5859,7 @@ fieldset.nx-inspector__fields {
   color: var(--nx-muted-foreground);
 }
 
-.nx-icon-choice__clear:hover {
+.nx-icon-choice__clear:not(:disabled):hover {
   color: var(--nx-foreground);
   background: var(--nx-muted);
 }

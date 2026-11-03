@@ -1085,6 +1085,21 @@ describe("controls", () => {
     );
   });
 
+  it("focuses an icon group from its label without choosing anything", () => {
+    // A label's `for` would CLICK a radio button, choosing or clearing a value;
+    // this label only moves focus to the group's tab stop.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex", justifyContent: "end" } },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    fireEvent.click(screen.getByText("Justify content"));
+
+    expect(document.activeElement?.getAttribute("role")).toBe("radio");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("End");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
   it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
     // CSS requires a digit AFTER a decimal point, so `1.` is a number followed
     // by a stray delimiter rather than a number. `Number("1.")` answers 1

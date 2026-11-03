@@ -101,7 +101,12 @@ import type { InspectorSectionKey } from "./inspector-sections";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
-import { alignmentGroupFor, flowOf, type Flow } from "./style-alignment-icons";
+import {
+  alignmentGroupFor,
+  drawsIcons,
+  flowOf,
+  type Flow,
+} from "./style-alignment-icons";
 import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import {
   activeTokenMode,
@@ -1683,6 +1688,7 @@ function StyleFieldLabel({
   id,
   htmlFor,
   readOnly,
+  focusOnly,
   title,
   label,
   answer,
@@ -1699,6 +1705,12 @@ function StyleFieldLabel({
    * left saying what it wants drawn rather than how to draw it.
    */
   readOnly: boolean;
+  /**
+   * Whether the control is a group of buttons. A label's `for` would CLICK
+   * a button, choosing or clearing a value; this label only moves focus to
+   * the element the id names, the group's tab stop.
+   */
+  focusOnly: boolean;
   title: string | undefined;
   label: string;
   answer: ProvenanceAnswer | undefined;
@@ -1706,7 +1718,19 @@ function StyleFieldLabel({
   descendant: string | undefined;
 }): React.JSX.Element {
   return (
-    <Label id={id} htmlFor={readOnly ? undefined : htmlFor} title={title}>
+    <Label
+      id={id}
+      htmlFor={readOnly || focusOnly ? undefined : htmlFor}
+      title={title}
+      {...(focusOnly && !readOnly
+        ? {
+            onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
+              event.currentTarget.ownerDocument
+                .getElementById(htmlFor)
+                ?.focus(),
+          }
+        : {})}
+    >
       <span className="nx-style-inspector__field-label-text">{label}</span>
       <ProvenanceDot
         answer={answer}
@@ -1856,6 +1880,7 @@ function StyleControlField({
         id={labelId}
         htmlFor={id}
         readOnly={readOnly}
+        focusOnly={drawsIcons(control.leaf)}
         title={summary}
         label={label}
         answer={answer}
@@ -2678,6 +2703,7 @@ function SelectField({
       {current === "" ? null : (
         <button
           type="button"
+          className="nx-style-inspector__select-clear"
           onClick={() => onCommit(null)}
           aria-label={`Clear ${actionName}`}
           title="Clear"
@@ -2794,6 +2820,7 @@ function OptionSelect({
       {current === "" ? null : (
         <button
           type="button"
+          className="nx-style-inspector__select-clear"
           onClick={() => onCommit(null)}
           aria-label={`Clear ${actionName}`}
         >

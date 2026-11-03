@@ -191,7 +191,7 @@ describe("a field's Clear", () => {
     // WCAG 2.2's minimum target size: the browser's default button around a
     // word of small text is smaller, and axe reports it.
     const clear = ruleBody(
-      ".nx-style-inspector__select > button, .nx-style-inspector__token button"
+      ".nx-style-inspector__select-clear, .nx-style-inspector__token button"
     );
     expect(clear).toContain("min-block-size: 1.5rem");
     expect(clear).toContain("min-inline-size: 1.5rem");
@@ -206,8 +206,10 @@ describe("a style field in the narrow inspector", () => {
       ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr); }"
     );
     expect(style).toBeGreaterThan(-1);
+    // At 19rem, not the shared 18rem: a 7.5rem label and a set Align items
+    // row (five icons, More and Clear) need about 18.9rem side by side.
     const narrow = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 18rem)"
+      "@container nx-inspector-fields (max-width: 19rem)"
     ).filter(body =>
       body.includes(
         ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 1fr); }"
@@ -228,5 +230,32 @@ describe("an open style section", () => {
         '.nx-style-inspector [data-slot="accordion-content"][data-state="open"]'
       )
     ).toContain("overflow: visible");
+  });
+});
+
+describe("the icon strip", () => {
+  it("never shrinks to hide its last segment", () => {
+    expect(ruleBody(".nx-icon-choice__strip")).toContain("flex: none");
+  });
+
+  it("looks disabled, and ignores the pointer, in a locked section", () => {
+    const disabled = ruleBody(
+      ".nx-icon-choice__option:disabled, .nx-icon-choice .nx-icon-choice__more:disabled, .nx-icon-choice__clear:disabled"
+    );
+    expect(disabled).toContain("opacity: 0.5");
+    expect(disabled).toContain("cursor: not-allowed");
+    expect(FLAT).toContain(".nx-icon-choice__option:not(:disabled):hover");
+    expect(FLAT).not.toMatch(/\.nx-icon-choice__option:hover/);
+  });
+});
+
+describe("a list field's Clear", () => {
+  it("is styled by its own class, leaving the list's trigger alone", () => {
+    expect(FLAT).not.toMatch(/\.nx-style-inspector__select > button/);
+    expect(
+      ruleBody(
+        ".nx-style-inspector__select-clear, .nx-style-inspector__token button"
+      )
+    ).toContain("min-block-size: 1.5rem");
   });
 });

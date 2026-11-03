@@ -22,6 +22,7 @@
 import {
   BASE_BREAKPOINT,
   type NodeStyles,
+  type StyleLeaf,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
@@ -383,4 +384,18 @@ export function flowOf(
     flex: display === "flex" || display === "inline-flex",
     direction: measured?.flexDirection ?? at("flexDirection") ?? "row",
   };
+}
+
+/**
+ * Whether a leaf is drawn as icons in any flow: a keyword of one of the
+ * properties above. What a label asks to decide how to point at its control.
+ */
+export function drawsIcons(leaf: StyleLeaf): boolean {
+  if (leaf.kind !== "keyword") return false;
+  const property = leaf.cssProperty;
+  return (
+    property === "flex-direction" ||
+    property === "flex-wrap" ||
+    Object.hasOwn(GROUPS, property)
+  );
 }
