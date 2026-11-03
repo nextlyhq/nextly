@@ -1314,11 +1314,12 @@
  */
 .nx-inspector__field.nx-inspector__field--exposed {
   /*
-   * A rem wider than a Style row's label, since "From the component" sits
-   * under it; the control column may shrink, as a placement row holds fields,
-   * selects and checkboxes, never an icon strip.
+   * Wider than a Style row's label, since "From the component" and its icon
+   * sit under it on one line (about 128px at 12px); the control column may
+   * shrink, as a placement row holds fields, selects and checkboxes, never an
+   * icon strip.
    */
-  grid-template-columns: minmax(0, 8rem) minmax(0, 1fr) 1.5rem;
+  grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) 1.5rem;
   align-items: start;
 }
 
