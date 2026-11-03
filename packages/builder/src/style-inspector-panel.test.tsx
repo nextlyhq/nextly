@@ -1891,6 +1891,48 @@ describe("what the arrow keys do and do not claim", () => {
   });
 });
 
+describe("a length field's unit", () => {
+  it("commits a bare number in the unit beside it, px unless another is chosen", () => {
+    // "24" was refused as "not a length".
+    const editor = mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "24" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"24px"'
+    );
+  });
+
+  it("shows the unit menu while the field is empty, on px", () => {
+    mount({ dimensions: true });
+    const unit = fieldsOf("width").getByLabelText("Unit for Width");
+    expect(unit.textContent).toBe("px");
+  });
+
+  it("takes a unit chosen before a number is typed", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    // Nothing to write yet: the field is empty.
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "2" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"2rem"'
+    );
+  });
+
+  it("offers the property's keywords after its units", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "auto" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"auto"'
+    );
+  });
+});
+
 describe("a side or a corner, in plain words", () => {
   const LTR = { writingMode: "horizontal-tb", direction: "ltr" };
   /** The visible names of one property's controls, on an element whose axes are known or not. */

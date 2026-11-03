@@ -70,6 +70,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
   Tooltip,
@@ -159,6 +160,7 @@ import {
   toggleOptionsFor,
   toggleShows,
   unitChoicesFor,
+  withDefaultUnit,
   withUnit,
 } from "./style-numeric";
 import {
@@ -4696,7 +4698,14 @@ function NumericField({
   // has no menu to gain a unit from.
   // Not in the spacing box, whose sides take the unit as typed.
   const compact = React.useContext(CompactSides);
-  const showUnits = !compact && units.length > 0 && measurement !== undefined;
+  const unitMenu = useFieldUnit({
+    leaf: control.leaf,
+    draft,
+    setDraft,
+    onCommit,
+  });
+  const { unit, keywords } = unitMenu;
+  const showUnits = !compact && unitMenu.acts;
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
@@ -4719,7 +4728,8 @@ function NumericField({
         setDraft={setDraft}
         describedBy={describedBy}
         invalid={describedBy !== undefined}
-        onCommit={onCommit}
+        // A bare number takes the unit the field shows: "24" is 24px.
+        onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
         onStep={(draft, delta) => {
           const next = steppedValue(control.leaf, draft, delta);
           // `undefined` means this value cannot be stepped or the result would
@@ -4738,13 +4748,8 @@ function NumericField({
           // picked, so a unit added and then undone leaves the trigger still
           // displaying it while the draft has none. The draft is the only unit
           // state, and passing `undefined` would give it a second one.
-          value={measurement.unit}
-          onValueChange={unit => {
-            // Composed from the draft, which is what the author is looking at.
-            const next = withUnit(control.leaf, draft, unit);
-            if (next === undefined) return;
-            if (onCommit(next) !== "refused") setDraft(next);
-          }}
+          value={unitMenu.value}
+          onValueChange={unitMenu.choose}
         >
           <SelectTrigger
             className="nx-style-inspector__unit"
@@ -4764,9 +4769,15 @@ function NumericField({
             {extraUnit === null ? null : (
               <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
             )}
-            {units.map(unit => (
-              <SelectItem key={unit} value={unit}>
-                {unit}
+            {units.map(choice => (
+              <SelectItem key={choice} value={choice}>
+                {choice}
+              </SelectItem>
+            ))}
+            {keywords.length === 0 ? null : <SelectSeparator />}
+            {keywords.map(keyword => (
+              <SelectItem key={keyword} value={keyword}>
+                {keyword}
               </SelectItem>
             ))}
           </SelectContent>
@@ -4774,6 +4785,65 @@ function NumericField({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The unit a length field shows and a bare number takes: the one the draft
+ * already carries, else the one the author last chose, else the leaf's first
+ * (px). Its keywords, `auto` and the rest, are offered after the units.
+ *
+ * `acts` says whether a choice in the menu can do anything: an empty field,
+ * whose bare number will take the unit shown, one measurement, or one of the
+ * keywords. Over anything else — `calc()`, scientific notation — every choice
+ * would be a no-op, and a control that silently does nothing is worse than
+ * none.
+ */
+function useFieldUnit({
+  leaf,
+  draft,
+  setDraft,
+  onCommit,
+}: {
+  leaf: StyleLeaf;
+  draft: string;
+  setDraft: (value: string) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): {
+  unit: string;
+  keywords: readonly string[];
+  acts: boolean;
+  value: string;
+  choose: (choice: string) => void;
+} {
+  const [chosen, setChosen] = React.useState<string | undefined>(undefined);
+  const measurement = measurementOfText(draft);
+  const units = unitChoicesFor(leaf);
+  const keywords = leaf.kind === "dimension" ? (leaf.keywords ?? []) : [];
+  const written = measurement?.unit === "" ? undefined : measurement?.unit;
+  const unit = written ?? chosen ?? units[0] ?? "px";
+  const isKeyword = keywords.includes(draft);
+  const write = (value: string) => {
+    if (onCommit(value) !== "refused") setDraft(value);
+  };
+  return {
+    unit,
+    keywords,
+    acts:
+      units.length > 0 &&
+      (trimCssWhitespace(draft) === "" ||
+        measurement !== undefined ||
+        isKeyword),
+    value: isKeyword ? draft : unit,
+    choose: choice => {
+      // A keyword is a whole value, written as chosen.
+      if (keywords.includes(choice)) return write(choice);
+      setChosen(choice);
+      // Composed from the draft, which is what the author is looking at;
+      // with no number on screen yet, the unit waits for one.
+      const next = withUnit(leaf, draft, choice);
+      if (next !== undefined) write(next);
+    },
+  };
 }
 
 /**
