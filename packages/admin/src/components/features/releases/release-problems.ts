@@ -175,7 +175,7 @@ const HARD_WORDS: Record<
  * Who a problem is said to: the release page speaks of the person who added
  * the document; a dialog adding it speaks to the reader doing so.
  */
-export type ProblemViewpoint = "author" | "reader";
+type ProblemViewpoint = "author" | "reader";
 
 const WHO_MAY_NOT: Record<ProblemViewpoint, string> = {
   author: "The person who added it may no longer",

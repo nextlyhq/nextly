@@ -217,6 +217,7 @@ export interface ScheduleReleasePayload {
   timezone: string;
 }
 
+/** One document put into a release, going live or coming down at its moment. */
 export interface AddReleaseMemberPayload {
   scopeKind: "collection" | "single";
   scopeSlug: string;

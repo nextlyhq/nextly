@@ -14,7 +14,6 @@
 import { fetcher } from "../lib/api/fetcher";
 import type {
   AddedReleaseMember,
-  AddReleaseMemberPayload,
   AddReleaseMembersPayload,
   CreateReleasePayload,
   HiddenReleaseMembers,
@@ -199,16 +198,6 @@ export const createRelease = (
 ): Promise<ReleaseMutationResponse> =>
   fetcher<ReleaseMutationResponse>(
     "/releases",
-    { method: "POST", body: JSON.stringify(payload) },
-    true
-  );
-
-export const addReleaseMember = (
-  releaseId: string,
-  payload: AddReleaseMemberPayload
-): Promise<MemberMutationResponse> =>
-  fetcher<MemberMutationResponse>(
-    `/releases/${releaseId}/members`,
     { method: "POST", body: JSON.stringify(payload) },
     true
   );
