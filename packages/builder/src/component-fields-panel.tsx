@@ -2,7 +2,7 @@
 
 /**
  * The component's own view, in the inspector: the icon beside each property
- * that lets each placement change it, the same icon on a block's Shown row,
+ * that lets each page change it, the same icon on a block's Shown row,
  * the card naming the component over its list of fields, and the dialog that
  * confirms a removal.
  *
@@ -35,6 +35,10 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@nextlyhq/ui";
 import {
   AlignLeft,
@@ -207,7 +211,26 @@ const TYPE_ICON: Readonly<Record<ExposedProperty["type"], LucideIcon>> = {
 };
 
 /**
- * The icon beside a property that lets each placement change it: the
+ * What the icon beside a property says, in the author's words: "page" where
+ * the code says placement, and a one-line tooltip on what pressing it does.
+ */
+const TOGGLE_WORDS = {
+  prop: {
+    label: (property: string) => `Let each page change ${property}`,
+    off: (property: string) =>
+      `Turn this on to let each use of the component, on any page, set its own ${property.toLowerCase()}.`,
+    on: "Each use can change this. Turn off to use the component’s value everywhere.",
+  },
+  visibility: {
+    label: (block: string) => `Let each page hide ${block}`,
+    off: (block: string) =>
+      `Turn this on to let each use of the component, on any page, hide this ${block.toLowerCase()}.`,
+    on: "Each use can hide this. Turn off to show it everywhere.",
+  },
+} as const;
+
+/**
+ * The icon beside a property that lets each page change it: the
  * component mark, pressed while the property is exposed. A button with a
  * pressed state rather than a switch row under every property, as Figma and
  * Webflow bind a property, so a long list stays a list of properties.
@@ -228,28 +251,42 @@ function ExposeToggle({
   pressed: boolean;
   /** Why it cannot be pressed, or nothing when it can. */
   held: string | undefined;
-  /** What hovering it says. */
+  /** What its tooltip says, on hover and on focus. */
   title: string;
   onPress: () => void;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      className="nx-expose__toggle"
-      aria-label={label}
-      aria-pressed={pressed}
-      aria-disabled={held === undefined ? undefined : true}
-      title={held ?? title}
-      onClick={onPress}
-    >
-      <Component size={15} aria-hidden="true" />
-    </button>
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="nx-expose__toggle"
+            aria-label={label}
+            aria-pressed={pressed}
+            aria-disabled={held === undefined ? undefined : true}
+            onClick={onPress}
+          >
+            <Component size={15} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        {/* Below the icon, ending at its right edge: the row's own label stays
+            readable beside the icon, and the tip lies over the next row, which
+            the author isn't reading while pointing here. */}
+        <TooltipContent side="bottom" align="end" className="nx-expose__tip">
+          {held ?? title}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
+/** What the dashed row's "Field" label says on hover. */
+const FIELD_HINT = "The name each page’s editor shows for this field.";
+
 /**
  * Under a property, once it is exposed: the dashed row naming the field
- * placements set it through.
+ * each page sets it through.
  */
 function ExposedFieldName({
   binding,
@@ -262,17 +299,28 @@ function ExposedFieldName({
   label: string;
   inputRef?: React.Ref<HTMLInputElement>;
 }): React.JSX.Element {
+  // The hint is said with the name input as its description, so it reaches
+  // a keyboard or screen-reader user too; the title keeps it on hover.
+  const hintId = `${React.useId()}-hint`;
   return (
     <div className="nx-expose__field">
-      <span className="nx-expose__field-label" aria-hidden="true">
+      <span
+        className="nx-expose__field-label"
+        aria-hidden="true"
+        title={FIELD_HINT}
+      >
         <Component size={13} />
         Field
+      </span>
+      <span id={hintId} className="nx-sr-only">
+        {FIELD_HINT}
       </span>
       <FieldName
         inputRef={inputRef}
         binding={binding}
         field={field}
         label={label}
+        describedBy={hintId}
         className="nx-expose__name-input"
       />
     </div>
@@ -281,7 +329,7 @@ function ExposedFieldName({
 
 /**
  * Beside a prop's control while a component is edited: the icon that lets
- * each placement change it, and the field's name under it once it does.
+ * each page change it, and the field's name under it once it does.
  */
 export function PropExposeControl({
   binding,
@@ -335,13 +383,13 @@ export function PropExposeControl({
       aria-describedby={problem === undefined ? undefined : reasonId}
     >
       <ExposeToggle
-        label={`Let each placement change ${named}`}
+        label={TOGGLE_WORDS.prop.label(named)}
         pressed={field !== undefined}
         held={unavailable}
         title={
           field === undefined
-            ? `Let each placement change ${named}`
-            : `Each placement can change this, as “${field.label}”. Press to stop.`
+            ? TOGGLE_WORDS.prop.off(named)
+            : TOGGLE_WORDS.prop.on
         }
         onPress={press}
       />
@@ -350,7 +398,7 @@ export function PropExposeControl({
           inputRef={nameRef}
           binding={binding}
           field={field}
-          label={`Name of the field for ${named}`}
+          label={`Name pages see for ${named}`}
         />
       )}
       {problem === undefined ? null : (
@@ -364,7 +412,7 @@ export function PropExposeControl({
 
 /**
  * Above a block's props while a component is edited: its Shown row, with the
- * same icon, letting each placement hide the block.
+ * same icon, letting each page hide the block.
  */
 export function VisibilityExposeControl({
   binding,
@@ -403,19 +451,17 @@ export function VisibilityExposeControl({
         <p className="nx-expose__shown">
           <span className="nx-expose__shown-label">Shown</span>
           <span className="nx-expose__shown-value">
-            {field === undefined
-              ? "On every placement"
-              : "Each placement chooses"}
+            {field === undefined ? "On every page" : "Each use chooses"}
           </span>
         </p>
         <ExposeToggle
-          label={`Let each placement hide ${blockName}`}
+          label={TOGGLE_WORDS.visibility.label(blockName)}
           pressed={field !== undefined}
           held={undefined}
           title={
             field === undefined
-              ? `Let each placement hide ${blockName}`
-              : `Each placement can hide this, as “${field.label}”. Press to stop.`
+              ? TOGGLE_WORDS.visibility.off(blockName)
+              : TOGGLE_WORDS.visibility.on
           }
           onPress={press}
         />
@@ -423,7 +469,7 @@ export function VisibilityExposeControl({
           <ExposedFieldName
             binding={binding}
             field={field}
-            label={`Name of the field that hides ${blockName}`}
+            label={`Name pages see for hiding ${blockName}`}
           />
         )}
         {problem === undefined ? null : (
@@ -442,12 +488,15 @@ function FieldName({
   field,
   label,
   inputRef,
+  describedBy,
   className,
 }: {
   binding: ComponentFieldsBinding;
   field: ExposedProperty;
   label: string;
   inputRef?: React.Ref<HTMLInputElement>;
+  /** The id of text that says more about the name, read with the input. */
+  describedBy?: string;
   /** How the name is drawn: flat in the list, dashed under a property. */
   className: string;
 }): React.JSX.Element {
@@ -473,6 +522,7 @@ function FieldName({
         className={className}
         value={draft}
         aria-label={label}
+        aria-describedby={describedBy}
         onChange={event => setDraft(event.target.value)}
         onBlur={send}
         onKeyDown={event => {
@@ -548,7 +598,7 @@ function NoFieldsYet(): React.JSX.Element {
         >
           <Component size={13} aria-hidden="true" />
         </span>{" "}
-        beside a property to let each placement change it.
+        beside a property to let each page change it.
       </p>
     </div>
   );
@@ -718,8 +768,8 @@ function ExposedSlotRow({
       <span
         className="nx-component-field__type"
         role="img"
-        aria-label="Blocks each placement adds"
-        title="Blocks each placement adds"
+        aria-label="Blocks each use adds"
+        title="Blocks each use adds"
       >
         <SquareDashed size={15} aria-hidden="true" />
       </span>

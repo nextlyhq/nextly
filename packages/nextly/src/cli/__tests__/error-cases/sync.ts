@@ -14,6 +14,7 @@ import {
   promoteCollectionNotFound,
   restoreCollectionRequired,
   restoreEntityRefusal,
+  syncConfirmationRequired,
 } from "../../errors/areas/sync";
 
 import type { ErrorCases } from "./types";
@@ -51,6 +52,8 @@ function restoreRefusal(
 export const SYNC_CASES = {
   PROMOTE_COLLECTION_NOT_FOUND: () => promoteCollectionNotFound("posts"),
   DEMOTE_COLLECTION_NOT_FOUND: () => demoteCollectionNotFound("posts"),
+  SYNC_CONFIRMATION_REQUIRED: () =>
+    syncConfirmationRequired("--promote", "posts"),
   I18N_RESTORE_COLLECTION_REQUIRED: () => restoreCollectionRequired(),
   I18N_RESTORE_KIND_INVALID: () => restoreRefusal("hero", HERO, "page"),
   I18N_RESTORE_ENTITY_NOT_FOUND: () => restoreRefusal("heroes", []),

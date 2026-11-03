@@ -21,7 +21,6 @@ import {
 import {
   type UseBuilderChecklistResult,
   CHECKLIST_STORAGE_KEY,
-  ClassManagerPanel,
   ComponentsPanel,
   InsertPanel,
   LayersPanel,
@@ -64,7 +63,9 @@ import {
   offerableFaces,
   offerableTokens,
   renderedTokens,
+  SharedStylesStudio,
   TokensStudio,
+  VariablesTab,
 } from "./site-style-studios";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
@@ -93,7 +94,7 @@ function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
 
 /**
  * Every left panel the editor can fill today: Add, Layers, Pages, the site's
- * Components, and Design with the site's variables, classes and fonts.
+ * Components, and Design with the site's variables, shared styles and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
@@ -486,7 +487,7 @@ export function editorPanelRenderer({
   storedSiteStyle,
   unreadableStoredFonts,
   classes,
-  documentClasses,
+  pageClassBlocks,
   classSummaryContext,
   requestPanel,
   insertInside,
@@ -522,7 +523,7 @@ export function editorPanelRenderer({
   Pick<
     CanvasInputs,
     | "drag"
-    | "documentClasses"
+    | "pageClassBlocks"
     | "classSummaryContext"
     | "canvasRender"
     | "editedBreakpoint"
@@ -632,44 +633,36 @@ export function editorPanelRenderer({
       design: () => (
         <DesignPanel
           view={view}
+          // The studio surrounds every tab, so the header it draws stays the
+          // same whichever is open.
+          frame={designTabs => (
+            <TokensStudio
+              merged={offerableTokens(
+                canvasSiteStyle,
+                siteStylePending,
+                siteStyleError
+              )}
+              supplied={configSiteStyle?.tokens}
+              pending={siteStylePending}
+            >
+              {designTabs}
+            </TokensStudio>
+          )}
           tabs={{
-            variables: () => (
-              <TokensStudio
-                merged={offerableTokens(
+            variables: () => <VariablesTab />,
+            classes: () => (
+              <SharedStylesStudio
+                classes={classes}
+                pageBlocks={pageClassBlocks}
+                styleContext={classSummaryContext}
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+                // The same variables the Fonts tab reads, as the canvas draws.
+                tokens={renderedTokens(
                   canvasSiteStyle,
                   siteStylePending,
                   siteStyleError
-                )}
-                supplied={configSiteStyle?.tokens}
-                pending={siteStylePending}
-              />
-            ),
-            classes: () => (
-              <ClassManagerPanel
-                absence={classes.absence}
-                pendingSlugs={classes.pendingSlugs}
-                documentClassIds={documentClasses.ids}
-                /*
-                      Whether that walk reached the whole document. It stops at the
-                      node ceiling, and a class applied past it is missing from the
-                      list — which the panel must not read as "not on this page".
-                    */
-                documentScan={documentClasses.complete ? "complete" : "partial"}
-                library={classes.library}
-                styleContext={classSummaryContext}
-                onRename={classes.rename}
-                currentRenameAttempt={classes.currentRenameAttempt}
-                /*
-                      No `usage`, and no `onDelete`. The usage index is a
-                      collection and this surface has no read for one, so the panel
-                      reports that nothing was read rather than reporting an empty
-                      index — which would say every class is unused. Deleting needs
-                      that same reach plus a write stripping the class from every
-                      document holding it, so it is withheld entirely rather than
-                      offered as a control that cannot keep its promise.
-                    */
-                suppliedClassIds={configSiteStyle?.classes?.map(
-                  entry => entry.id
                 )}
               />
             ),

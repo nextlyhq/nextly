@@ -12,6 +12,10 @@
 import { Command, Option } from "commander";
 import pc from "picocolors";
 
+import {
+  setCancelEndsRun,
+  setNonInteractive,
+} from "../domains/schema/migrate/can-prompt";
 import { getCoreVersion } from "../plugins/core-version";
 
 import { registerAddCommand } from "./commands/add.command";
@@ -48,6 +52,7 @@ import { registerUpgradeCommand } from "./commands/upgrade.command";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command";
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
+import { addExitCodesHelp } from "./exit-codes";
 
 export {
   createContext,
@@ -120,6 +125,14 @@ export function createProgram(options: ProgramOptions = {}): Command {
         "Mode to run in, which picks the environment files (default: from NODE_ENV)"
       ).choices(CLI_MODES)
     )
+    // Every prompt asks `canPrompt`, which this turns off: a command that
+    // needs an answer then stops and names the flag that gives it.
+    .addOption(
+      new Option(
+        "--non-interactive",
+        "Never prompt; a command that needs an answer stops and names the flag"
+      ).default(false)
+    )
     .addOption(new Option("--no-color", "Disable colored output"))
     .configureHelp({
       sortSubcommands: true,
@@ -144,6 +157,9 @@ ${pc.bold("Documentation:")}
 
   // Register all commands
   registerCommands(program);
+  // Then end the program's help and every command's with what its exit
+  // status means: last, so the block follows any help text added before it.
+  addExitCodesHelp(program);
 
   // Telemetry preAction/postAction hooks. We capture command_started before
   // the action runs and command_completed after it returns. The telemetry
@@ -155,6 +171,12 @@ ${pc.bold("Documentation:")}
     // First, before anything a command loads: only an action reaches this
     // hook, so `--help`, `--version` and an unknown command never run it.
     await options.beforeAction?.(thisCommand);
+    // The run's `--non-interactive`, for every prompt the command may reach.
+    setNonInteractive(
+      thisCommand.opts<{ nonInteractive?: boolean }>().nonInteractive === true
+    );
+    // A cancel at any prompt a command reaches ends the run with exit 130.
+    setCancelEndsRun(true);
     // The mode line goes to stderr, so a command's `--json` output stays one
     // document, and `--quiet` keeps it to errors only.
     setModeLineWriter(
@@ -240,14 +262,32 @@ function registerCommands(program: Command): void {
   registerUpgradeCommand(program);
 
   // Permissions commands
-  program.addCommand(createPermissionsCleanupCommand());
-  program.addCommand(createMediaCommand());
+  attachCommand(program, createPermissionsCleanupCommand());
+  attachCommand(program, createMediaCommand());
 
   // Plugin introspection (D48) — `nextly plugins list` / `info`.
   registerPluginsCommand(program);
 
   // Telemetry sub-command (status/enable/disable/reset)
   registerTelemetryCommand(program);
+}
+
+/**
+ * Adds `command`, built on its own, as `.command()` would have built it: with
+ * the program's settings (the pointer to `--help` after an error, sorted help,
+ * the suggestion, the output and exit handling). `addCommand` copies none of
+ * them, so a command attached that way, and every subcommand under it, would
+ * answer an error or `--help` differently from the rest.
+ */
+function attachCommand(program: Command, command: Command): void {
+  program.addCommand(command);
+  inheritSettings(command, program);
+}
+
+/** Gives `command` its parent's settings, then each subcommand its own parent's. */
+function inheritSettings(command: Command, parent: Command): void {
+  command.copyInheritedSettings(parent);
+  for (const child of command.commands) inheritSettings(child, command);
 }
 
 // ============================================================================

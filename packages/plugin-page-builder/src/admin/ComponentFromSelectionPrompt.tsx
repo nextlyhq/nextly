@@ -147,7 +147,7 @@ export function ComponentFromSelectionPrompt(
 function warningSentences(result: ComponentFromSelectionResult): string[] {
   return result.warnings.map(
     warning =>
-      `A link elsewhere on this page points at “#${warning.domId}”, which will stop working: ids inside a component are made unique to each placement.`
+      `A link elsewhere on this page points at “#${warning.domId}”, which will stop working: ids inside a component are made unique each time it is used.`
   );
 }
 
@@ -362,7 +362,7 @@ function ComponentForm(
             <DialogTitle>{TITLE}</DialogTitle>
             <DialogDescription>
               {action === "convert"
-                ? `${asked.subject} will become one placement of a new component. Edit the component later and every placement follows.`
+                ? `${asked.subject} will become a new component. Edit the component later and every page that uses it follows.`
                 : `${asked.subject} will be saved as a new component. This page is not changed.`}
             </DialogDescription>
           </DialogHeader>
@@ -542,7 +542,7 @@ function FormNotes({
     <>
       {unnamed ? (
         <p className="text-xs text-destructive" role="status">
-          Give every value you picked a name placements will see.
+          Give every value you picked a name pages will see.
         </p>
       ) : null}
       {check.state === "checking" ? (
