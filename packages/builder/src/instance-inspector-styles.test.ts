@@ -67,7 +67,9 @@ describe("a placement's row on the inspector grid", () => {
     expect(
       ruleBody(".nx-inspector__field.nx-inspector__field--exposed")
     ).toContain(
-      "grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem"
+      // 8rem, a rem wider than a Style row's label: the name column also
+      // holds "From the component" under the label, which wrapped at 7rem.
+      "grid-template-columns: minmax(0, 8rem) minmax(min-content, 1fr) 1.5rem"
     );
     const name = ruleBody(
       ".nx-inspector__field--exposed > .nx-inspector__exposed-name"

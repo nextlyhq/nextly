@@ -1313,7 +1313,8 @@
  * does not move the name off the control it names.
  */
 .nx-inspector__field.nx-inspector__field--exposed {
-  grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem;
+  /* A rem wider than a Style row's label: "From the component" sits under it. */
+  grid-template-columns: minmax(0, 8rem) minmax(min-content, 1fr) 1.5rem;
   align-items: start;
 }
 
