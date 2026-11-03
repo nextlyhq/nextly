@@ -118,6 +118,16 @@ export interface ContentServices {
   readonly openPassages?: OpenPassages;
 }
 
+/**
+ * The host's content services for a surface below the inspector that is not
+ * a Content tab control, such as a component placement's exposed image, so
+ * it reaches the same media library without a prop threaded through every
+ * surface between.
+ */
+export const ContentServicesContext: React.Context<
+  ContentServices | undefined
+> = React.createContext<ContentServices | undefined>(undefined);
+
 /** What every content control is given. */
 export interface ContentControlProps {
   /** The id its field takes, which its label points at. Unique per mount. */
@@ -472,8 +482,13 @@ function MediaControl({
   );
 }
 
-/** The button that opens the host's media picker, and the picker while open. */
-function MediaChoice({
+/**
+ * The button that opens the host's media picker, and the picker while open.
+ * Shared with a component placement's exposed image, so both choose a file
+ * the same way.
+ */
+export function MediaChoice({
+  id,
   Picker,
   label,
   stored,
@@ -481,6 +496,8 @@ function MediaChoice({
   disabled,
   onChoose,
 }: {
+  /** The button's id, for a field label that names it. */
+  id?: string;
   Picker: React.ComponentType<MediaPickerProps>;
   label: string;
   stored: string | null;
@@ -492,6 +509,7 @@ function MediaChoice({
   return (
     <>
       <Button
+        {...(id === undefined ? {} : { id })}
         type="button"
         size="sm"
         variant="outline"

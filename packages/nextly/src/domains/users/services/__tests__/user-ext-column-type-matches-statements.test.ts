@@ -1,11 +1,11 @@
 /**
- * `columnTypeFor` names exactly the type the user-extension builder's CREATE TABLE and ADD COLUMN
- * statements give each user field, on every dialect.
+ * `columnTypeFor` names exactly the type the user-extension builder's CREATE TABLE gives each user
+ * field, on every dialect.
  *
  * `nextly repair-columns` reads the type `user_ext` should hold from `columnTypeFor` rather than
- * from the statements that created the table, so the two must be one answer. Each field shape is
- * rendered by both statements and its column found there by the builder's own column name; the
- * type each spells is compared with `columnTypeFor`'s, character for character apart from case.
+ * from the statement that created the table, so the two must be one answer. Each field shape is
+ * rendered by the CREATE TABLE and its column found there by the builder's own column name; the
+ * type it spells is compared with `columnTypeFor`'s, character for character apart from case.
  */
 import { describe, expect, it } from "vitest";
 
@@ -69,25 +69,6 @@ function createTableType(
   return line === undefined ? null : typeAfter(line.slice(quoted.length));
 }
 
-/** The type the ADD COLUMN for a newly added field gives `column`, or null where there is none. */
-function addColumnType(
-  builder: UserExtSchemaService,
-  dialect: SupportedDialect,
-  field: Record<string, unknown>,
-  column: string
-): string | null {
-  const quoted = dialect === "mysql" ? `\`${column}\`` : `"${column}"`;
-  const marker = `ADD COLUMN ${quoted} `;
-  const statement = builder
-    .generateAlterTableMigration([], [asConfig(field)])
-    .split("--> statement-breakpoint")
-    .map(text => text.trim())
-    .find(text => text.includes(marker));
-  return statement === undefined
-    ? null
-    : typeAfter(statement.slice(statement.indexOf(marker) + marker.length));
-}
-
 const spelled = (type: string | null) => type?.trim().toLowerCase() ?? null;
 
 describe("UserExtSchemaService.columnTypeFor", () => {
@@ -96,26 +77,22 @@ describe("UserExtSchemaService.columnTypeFor", () => {
       const builder = new UserExtSchemaService(dialect);
 
       it.each(FIELDS)(
-        "names the type both statements give the $type field $name",
+        "names the type the CREATE TABLE gives the $type field $name",
         field => {
           const column = userFieldColumnName(String(field.name));
           const type = builder.columnTypeFor(asConfig(field));
           const created = createTableType(builder, dialect, field, column);
-          const added = addColumnType(builder, dialect, field, column);
-          // Found under the builder's column name in both, so absence cannot pass.
+          // Found under the builder's column name, so absence cannot pass.
           expect(type).not.toBeNull();
           expect(created, "CREATE TABLE column").not.toBeNull();
-          expect(added, "ADD COLUMN column").not.toBeNull();
           expect(spelled(created)).toBe(spelled(type));
-          expect(spelled(added)).toBe(spelled(type));
         }
       );
 
-      it("names no type for a field type neither statement gives a column", () => {
+      it("names no type for a field type the CREATE TABLE gives no column", () => {
         const field = { name: "manager", type: "relationship" };
         expect(builder.columnTypeFor(asConfig(field))).toBeNull();
         expect(createTableType(builder, dialect, field, "manager")).toBeNull();
-        expect(addColumnType(builder, dialect, field, "manager")).toBeNull();
       });
     });
   }

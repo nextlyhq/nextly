@@ -66,7 +66,7 @@ has no item at all, so nothing on the rail opens an empty panel.
 | Item         | What it holds                                                                                                                                                                                                                                                                                                                                    |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                        |
-| **Layers**   | The page as a tree. Select, expand and move blocks here as on the canvas.                                                                                                                                                                                                                                                                        |
+| **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                   |
 | **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                       |
 | **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. |
 | **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                             |
@@ -240,6 +240,28 @@ Every move also works without dragging: select the block and press
 <kbd>Alt</kbd>+<kbd>←</kbd>, or right-click it on the canvas and choose **Move
 up**, **Move down**, **Move in** or **Move out**.
 
+## Working with a block's row in Layers
+
+- **Point at a row** and its block is outlined on the canvas. **Click a row** to select
+  its block; the canvas scrolls to it.
+- **Hide a block on one device.** Point at a row and click its eye: the block is hidden
+  on the device you are editing, on the canvas and on the published page. Every other
+  device keeps showing it. A hidden row is dimmed and says **Hidden**. Select a hidden
+  block in Layers and the canvas shows it while it is selected, tagged "Hidden on" the
+  device. **Visible on**, in the Content tab, shows each device and hides or shows the
+  block on any one of them.
+- **Lock a block** with the padlock on its row. A locked block can't be moved, changed or
+  deleted, nor can anything inside it, until it is unlocked.
+- **Rename a block** by double-clicking its row, pressing <kbd>F2</kbd>, or choosing
+  **Rename** from the row's menu. <kbd>Enter</kbd> keeps the name and <kbd>Escape</kbd>
+  keeps the old one. An empty name goes back to the block's type. The name is for you:
+  it never appears on the published page.
+- **Right-click a row** for its menu: Rename, hide or show on the device, Lock or
+  Unlock, and the block's other actions.
+- **Search** filters the rows, keeping the blocks around each match. Arrow keys move
+  through the rows, <kbd>→</kbd> and <kbd>←</kbd> open and close a block, and
+  <kbd>Home</kbd> and <kbd>End</kbd> go to the first and last row.
+
 ## Help
 
 Help lists the keyboard shortcuts the editor has right now, read from the same list the
@@ -268,6 +290,9 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                 | Hide both side panels, or show them again                                                                                         |
 | <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                  | Show the page at actual size                                                                                                      |
 | <kbd>Shift</kbd>+<kbd>1</kbd>                                                 | Fit the page to the canvas                                                                                                        |
+| <kbd>F2</kbd>                                                                 | In Layers, rename the focused row's block                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>                                 | In Layers, hide or show the focused row's block on the device you are editing                                                     |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>                                 | In Layers, lock or unlock the focused row's block                                                                                 |
 | <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key                               | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
 
 Help is the complete list for the editor you have open, including any shortcut the
