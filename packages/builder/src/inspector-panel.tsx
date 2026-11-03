@@ -57,6 +57,11 @@ import {
   VisibilityExposeControl,
   type ComponentFieldsBinding,
 } from "./component-fields-panel";
+import type { ComponentVariantsHost } from "./component-variants";
+import {
+  ComponentVariantsContext,
+  ComponentVariantsSection,
+} from "./component-variants-panel";
 import {
   contentControlFor,
   UnsupportedField,
@@ -96,6 +101,7 @@ import {
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
+import { placedDefinition } from "./variant-picker";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -285,6 +291,14 @@ export interface InspectorPanelProps {
    * @experimental Settles when the component editor ships.
    */
   componentFields?: ComponentFieldsHost;
+  /**
+   * What the host can tell the component's variants section: how many
+   * placements chose a variant, for the delete dialog. Omitted, the dialog
+   * says the placements fall back without a number.
+   *
+   * @experimental Settles when the component editor ships.
+   */
+  componentVariants?: ComponentVariantsHost;
 }
 
 /** What the inspector needs of the host's component read. */
@@ -418,6 +432,7 @@ function surfaceFor(
   inspection: BlockInspection | null,
   verbs: CardVerbs | undefined,
   fields: ComponentFieldsBinding | undefined,
+  definitions: ComponentLookup,
   /** The canvas's root, where the instance panel marks a placement's parts. */
   canvasRoot?: HTMLElement | null
 ):
@@ -454,6 +469,7 @@ function surfaceFor(
           inspection={instance}
           editor={editor}
           verbs={verbs}
+          definition={placedDefinition(definitions, instance.componentId)}
           canvasRoot={canvasRoot}
         />
       ),
@@ -469,14 +485,24 @@ function surfaceFor(
    * offer an author somewhere to click that can never show anything.
    *
    * In a component's own view, nothing selected means the component itself is
-   * what is being looked at, so its exposed fields are listed.
+   * what is being looked at, so its exposed fields are listed, and the
+   * variants that preset them under those.
    */
   if (
     inspection === null &&
     editor.selectedId === null &&
     fields !== undefined
   ) {
-    return { tabless: <ExposedFieldsList binding={fields} editor={editor} /> };
+    return {
+      tabless: (
+        <ExposedFieldsList binding={fields} editor={editor}>
+          <ComponentVariantsSection
+            editor={editor}
+            component={fields.context.component}
+          />
+        </ExposedFieldsList>
+      ),
+    };
   }
   if (inspection === null) {
     return {
@@ -497,11 +523,14 @@ function surfaceFor(
  */
 export function InspectorPanel({
   componentFields,
+  componentVariants,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
   return (
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
-      <SelectionInspector {...panel} />
+      <ComponentVariantsContext.Provider value={componentVariants}>
+        <SelectionInspector {...panel} />
+      </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
   );
 }
@@ -520,7 +549,10 @@ function SelectionInspector({
   contentServices,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
-}: Omit<InspectorPanelProps, "componentFields">): React.JSX.Element {
+}: Omit<
+  InspectorPanelProps,
+  "componentFields" | "componentVariants"
+>): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
   // the document and the values shown.
@@ -598,6 +630,7 @@ function SelectionInspector({
     inspection,
     verbs,
     fields,
+    (componentLibrary ?? NO_LIBRARY).definitions,
     canvasRoot
   );
   if ("tabless" in surface) return surface.tabless;

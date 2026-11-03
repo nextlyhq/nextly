@@ -992,6 +992,120 @@ describe("a placement locked in Layers", () => {
   });
 });
 
+describe("a row a lock the component sets holds", () => {
+  /** The heading is locked in the component; a second heading is free. */
+  const lockedHeader = () =>
+    header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/heading",
+          version: 1,
+          locked: true,
+          props: { text: "Site name" },
+        },
+        {
+          id: "h2",
+          type: "acme/heading",
+          version: 1,
+          props: { text: "Strap" },
+        },
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "h1",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "h2",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    } as Partial<ComponentDocument>);
+
+  it("draws the reason under the field with a lock, and the label beside its field as a free row's", () => {
+    const definition = lockedHeader();
+    const lookup: ComponentLookup = new Map([["header", definition]]);
+    const document = pageOf(instance());
+    const composed = resolveComponentInstances(document, lookup, {
+      exposures: true,
+    }).document;
+    render(
+      <InspectorPanel
+        editor={{ ...editorFor(document), composed: () => composed }}
+        componentLibrary={{
+          definitions: lookup,
+          components: [{ id: "header", title: "Header", document: definition }],
+        }}
+      />
+    );
+
+    const held = screen.getByRole("textbox", { name: "Title" });
+    const reason = screen.getByText(
+      "Set by the component Header. Change it where the component is edited."
+    ).parentElement;
+    expect(held.closest("fieldset")?.disabled).toBe(true);
+    // After the field, in document order, and marked with the lock.
+    expect(
+      held.compareDocumentPosition(reason!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(reason?.querySelector("svg.lucide-lock")).not.toBeNull();
+    // Each label leads its own row, as the free row's does: nothing is drawn
+    // between a label and its field.
+    const rowOf = (name: string) =>
+      screen.getByRole("textbox", { name }).closest(".nx-inspector__field");
+    const free = rowOf("Strap");
+    const heldRow = rowOf("Title");
+    expect(heldRow?.className).toBe(free?.className);
+    expect(heldRow?.firstElementChild?.tagName).toBe("LABEL");
+    // The cell beside it starts with the field, held or free, so the field
+    // stays level with its label and the reason follows it.
+    const leads = (row: Element | null | undefined, name: string) =>
+      row
+        ?.querySelector(".nx-inspector__exposed")
+        ?.firstElementChild?.contains(screen.getByRole("textbox", { name }));
+    expect(leads(heldRow, "Title")).toBe(true);
+    expect(leads(free, "Strap")).toBe(true);
+  });
+
+  it("keeps Reset for a value the page gave before the component locked the block", () => {
+    // The save keeps such a value and lets the page drop it, so the way back
+    // stays open while the field itself is held.
+    const definition = lockedHeader();
+    const lookup: ComponentLookup = new Map([["header", definition]]);
+    const document = pageOf(instance({ overrides: { title: "Older name" } }));
+    const composed = resolveComponentInstances(document, lookup, {
+      exposures: true,
+    }).document;
+    const editor = { ...editorFor(document), composed: () => composed };
+    render(
+      <InspectorPanel
+        editor={editor}
+        componentLibrary={{
+          definitions: lookup,
+          components: [{ id: "header", title: "Header", document: definition }],
+        }}
+      />
+    );
+
+    expect(
+      screen.getByRole("textbox", { name: "Title" }).closest("fieldset")
+        ?.disabled
+    ).toBe(true);
+    const reset = screen.getByRole("button", {
+      name: "Reset Title to inherited value",
+    });
+    expect(reset.closest("fieldset[disabled]")).toBeNull();
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 describe("a link the page could not draw", () => {
   it("is held in the field with the reason, not written", () => {
     const definition = header({

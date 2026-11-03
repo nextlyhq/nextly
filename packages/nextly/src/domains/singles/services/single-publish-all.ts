@@ -52,6 +52,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
+import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -1212,7 +1213,19 @@ export class SinglePublishAllService extends BaseService {
           values: companionValues,
         });
       }
-      await this.promoteComponents(tx, plan, components, draft.locale, access);
+      await this.promoteComponents(
+        tx,
+        plan,
+        components,
+        draft.locale,
+        access,
+        // The whole pending change, published: what the instances' validators
+        // are handed as the write.
+        {
+          ...((draft.snapshot ?? {}) as Record<string, unknown>),
+          status: "published",
+        }
+      );
     }
 
     await new VersionsRepository(tx).deleteAllWorkingDrafts(
@@ -1233,7 +1246,8 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     components: Record<string, unknown>,
     locale: string | null,
-    access: FieldGroupWriteAccess
+    access: FieldGroupWriteAccess,
+    payload: Record<string, unknown>
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(components).length === 0) {
       return;
@@ -1246,6 +1260,23 @@ export class SinglePublishAllService extends BaseService {
       locale: locale ?? undefined,
       req: access.user ? { user: access.user } : {},
       access,
+      // The Single's write, on its transaction, so a field inside an instance
+      // that reads the library judges it as the Single's own fields are.
+      // In the language published, and as a publish: the payload is the
+      // published document, so such a field judges the published form too.
+      write: {
+        ...entryWriteContext({
+          kind: "single",
+          slug: plan.slug,
+          ...(locale === null ? {} : { locale }),
+          connection: {
+            db: tx,
+            executor: tx.getDrizzle(),
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          },
+        }),
+        payload,
+      },
     });
   }
 

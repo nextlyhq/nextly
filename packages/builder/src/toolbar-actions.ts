@@ -52,6 +52,7 @@ import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
 import type { Rect } from "./geometry";
+import { placedComponentId } from "./instance-inspector";
 import {
   keyboardMovePosition,
   type KeyboardMove,
@@ -113,6 +114,7 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
+  | "edit-component"
   | "save-as-component"
   | "convert-to-component"
   | "detach-component"
@@ -700,7 +702,13 @@ export function toolbarActions(
    * What the host offers for making components, or nothing where it has no
    * component library: then neither verb appears.
    */
-  components?: ComponentVerbsOffer
+  components?: ComponentVerbsOffer,
+  /**
+   * Whether the host opens a placed component in its own view. Offered only
+   * for one selected placement, and only by a host that answers it; the host
+   * also withholds it from an author who may not update components.
+   */
+  offersEditComponent: boolean = false
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -761,6 +769,7 @@ export function toolbarActions(
       duplication?.ops
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...editComponentAction(document, selectedId, offersEditComponent),
     ...compositionActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined
       ? heldByLock(
@@ -783,6 +792,24 @@ export function toolbarActions(
           reason: lockedBy(deleteLock, selectedId, "delete"),
         },
   ];
+}
+
+/**
+ * "Edit component" for a selected placement, where the host offers it; nothing
+ * for any other block, so a bar over a heading does not grow a dimmed button
+ * that could never apply to it.
+ */
+function editComponentAction(
+  document: BlockDocument,
+  selectedId: string,
+  offered: boolean
+): ToolbarAction[] {
+  // Asked as the verb asks: a placement naming no component has nothing to
+  // open, so it is not offered a control that would do nothing.
+  if (!offered || placedComponentId(document, selectedId) === undefined) {
+    return [];
+  }
+  return [{ id: "edit-component", label: "Edit component", enabled: true }];
 }
 
 /**

@@ -496,6 +496,9 @@ export function editorPanelRenderer({
           moveHints
           definitions={offered.definitions}
           regions={layersRegions}
+          // Its titles come with the read, so a placement of a component
+          // the panel does not offer (the one being edited) is still named.
+          componentTitle={offered.titleOf}
         />
       ),
       design: () => (

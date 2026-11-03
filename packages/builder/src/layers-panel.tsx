@@ -83,7 +83,14 @@ import { EDITOR_WORDS } from "./editor-words";
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
-import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
+import {
+  ancestorIds,
+  filterLayers,
+  layersOf,
+  UNNAMED_COMPONENT,
+  type ComponentTitleOf,
+  type LayerNode,
+} from "./layers";
 import {
   type LayersDrag,
   LAYERS_TREE_CLASS,
@@ -129,6 +136,12 @@ export interface LayersPanelProps {
    * region on the canvas.
    */
   regions?: readonly LayersRegionRow[];
+  /**
+   * A component's title by id, so a placement's row reads as what the author
+   * placed, and a search for that title finds it. The library holds the
+   * titles, and the host read it.
+   */
+  componentTitle?: ComponentTitleOf;
 }
 
 /** One region of the page's Layout, as a read-only row in Layers. */
@@ -206,6 +219,27 @@ function iconsByType(): ReadonlyMap<string, string | undefined> {
   );
 }
 
+/**
+ * The mark a row draws: a placement's is the component mark whatever its
+ * type's own icon, so it reads as a component beside the blocks around it.
+ */
+function markOf(
+  node: LayerNode,
+  icons: ReadonlyMap<string, string | undefined>
+): string | undefined {
+  return node.component ? "component" : icons.get(node.type);
+}
+
+/**
+ * The word as well as the mark, for a placement its component's title names:
+ * the title alone would read as the block's own name. The fallback is already
+ * that word, so it is not said twice.
+ */
+function ComponentTag({ node }: { node: LayerNode }): React.JSX.Element | null {
+  if (!node.component || node.label === UNNAMED_COMPONENT) return null;
+  return <span className="nx-layer-row__tag">component</span>;
+}
+
 /** A layer as a row: its mark, its name, and what is true about it. */
 function rowOf(
   node: LayerNode,
@@ -222,11 +256,12 @@ function rowOf(
     label: (
       <span
         className="nx-layer-row"
+        {...(node.component ? { "data-component": "" } : {})}
         // The block in hand, faded where it sits as the canvas fades its own
         // drag source; the same attribute, so the two read as one gesture.
         {...(node.id === draggingId ? { [DRAG_SOURCE_ATTRIBUTE]: "" } : {})}
       >
-        <BlockIconMark icon={icons.get(node.type)} size={14} />
+        <BlockIconMark icon={markOf(node, icons)} size={14} />
         {/* `data-nx-layer` names the block a row stands for. Labels repeat —
             every paragraph is "Text" — so it is the one stable way to find a
             given block's row, the Layers counterpart of the canvas's
@@ -234,6 +269,7 @@ function rowOf(
         <span className="nx-layer-row__label" data-nx-layer={node.id}>
           {node.label}
         </span>
+        <ComponentTag node={node} />
         {/* Both locks in the row's own ink, so each reads against the row in
             every state it can be in. A lock held from a block around it is
             quieter by weight, a thinner stroke, never by a fainter colour; both
@@ -316,6 +352,7 @@ export function LayersPanel({
   nesting,
   definitions,
   regions,
+  componentTitle,
 }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
@@ -342,7 +379,7 @@ export function LayersPanel({
   // Recomputed each render rather than memoised. The tree is only valid against
   // the document it was read from, and every edit replaces that document — a
   // memo would need the document as its key and would therefore never hit.
-  const tree = layersOf(editor.document);
+  const tree = layersOf(editor.document, componentTitle);
   const search = filterLayers(tree, query);
 
   /*

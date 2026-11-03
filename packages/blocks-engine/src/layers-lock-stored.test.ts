@@ -246,14 +246,31 @@ describe("the order of a locked block among its siblings", () => {
   const tail = () => node("tail");
   const before = () => row([lead(), locked(), tail()]);
 
-  it("refuses swapping the locked block with a sibling that was already there", () => {
-    // Same parent, same slot, same subtree: only its place among the
-    // siblings changed, which is a move all the same.
-    expect(
-      layersLockChanges(row([lead(), tail(), locked()]), before())
-    ).toEqual([expect.objectContaining({ kind: "moved", id: "hero" })]);
+  it("accepts a sibling moved across it, however far, which is the sibling's move", () => {
+    // What the editor allows: moving an unlocked block past the locked one.
+    // Every other block keeps its order, so the hero has not moved.
     expect(
       layersLockChanges(row([locked(), lead(), tail()]), before())
+    ).toEqual([]);
+    expect(
+      layersLockChanges(row([lead(), tail(), locked()]), before())
+    ).toEqual([]);
+    const wide = () =>
+      row([lead(), node("mid"), locked(), tail(), node("end")]);
+    expect(
+      layersLockChanges(
+        row([locked(), node("mid"), tail(), node("end"), lead()]),
+        wide()
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses the locked block moved past more siblings than would move round it", () => {
+    // Keeping the hero still would take two blocks moved; moving it, one. The
+    // fewest-moves reading moves the hero, so it is refused as a move.
+    const wide = () => row([lead(), node("mid"), locked(), tail()]);
+    expect(
+      layersLockChanges(row([locked(), lead(), node("mid"), tail()]), wide())
     ).toEqual([expect.objectContaining({ kind: "moved", id: "hero" })]);
   });
 
@@ -288,11 +305,21 @@ describe("the order of an unlocked block that holds a locked one", () => {
   const aside = () => node("aside");
   const before = () => pageOf([container(), aside()]);
 
-  it("refuses reordering the container among the siblings stored beside it", () => {
+  it("refuses the container moved past more siblings than would move round it", () => {
     // The hero keeps its parent and its slot; the container it sits in is
     // what moved, and the lock holds where its block sits on the page.
+    const wide = () => pageOf([node("first"), node("second"), container()]);
+    expect(
+      layersLockChanges(
+        pageOf([container(), node("first"), node("second")]),
+        wide()
+      )
+    ).toEqual([expect.objectContaining({ kind: "moved", id: "hero" })]);
+  });
+
+  it("accepts a sibling moved across the container", () => {
     expect(layersLockChanges(pageOf([aside(), container()]), before())).toEqual(
-      [expect.objectContaining({ kind: "moved", id: "hero" })]
+      []
     );
   });
 

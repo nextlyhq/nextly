@@ -1196,6 +1196,42 @@
   min-width: 0;
 }
 
+/*
+ * An exposed row's label sits beside its CONTROL, not beside the whole cell:
+ * the cell stacks the control over its provenance and, for a held row, the
+ * reason, so a label centred on the cell drifts below the field it names.
+ * Top-aligned, and as tall as the control, so every row reads the same way.
+ */
+.nx-inspector__field.nx-inspector__field--exposed {
+  align-items: start;
+}
+
+.nx-inspector__field--exposed > label,
+.nx-inspector__field--exposed > .nx-inspector__field-name {
+  display: flex;
+  align-items: center;
+  min-height: 2.5rem;
+}
+
+/*
+ * Why a held row cannot change, under its field as helper text: the lock
+ * icon at the provenance badge's size, in the same muted tone.
+ */
+.nx-inspector__held-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+/* On the first line of a reason that wraps, not centred across all of it. */
+.nx-inspector__held-reason > .nx-inspector__source-icon {
+  margin-block-start: 0.1875rem;
+}
+
 .nx-inspector__provenance {
   display: flex;
   align-items: center;
@@ -1465,6 +1501,68 @@
 }
 
 /*
+ * The banner over a component's own view: Webflow's banner over a main
+ * component, in the component's hue from the accepted editor mock, so the
+ * author reads it as "this is the shared thing". A band rather than a toast,
+ * because it holds for the whole view. Drawn above the shell, outside the
+ * chrome's own tokens, so the hue falls back to the admin's purple there.
+ */
+.nx-component-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid
+    color-mix(
+      in oklch,
+      var(--nx-builder-component, var(--nx-code-keyword)) 35%,
+      transparent
+    );
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-component, var(--nx-code-keyword)) 8%,
+    var(--nx-background)
+  );
+  color: var(--nx-foreground);
+}
+
+.nx-component-banner__glyph {
+  flex: 0 0 auto;
+  color: var(--nx-builder-component, var(--nx-code-keyword));
+}
+
+.nx-component-banner__text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.nx-component-banner__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.nx-component-banner__reach {
+  color: var(--nx-muted-foreground);
+}
+
+/* The placement inspector's way into the component's own view. */
+.nx-inspector__edit-component {
+  align-self: flex-start;
+  gap: 0.375rem;
+}
+
+.nx-inspector__edit-component svg {
+  color: var(--nx-builder-component, var(--nx-code-keyword));
+}
+
+/*
  * A container, so a field can answer for the RAIL's width rather than the
  * window's. The rail is resizable, so the width that decides whether a label
  * fits beside its control is not a property of the viewport.
@@ -1568,6 +1666,12 @@
   .nx-inspector__field > *,
   .nx-inspector__field > label {
     grid-column: 1;
+  }
+
+  /* Stacked, the label sits above its control and needs no control height. */
+  .nx-inspector__field--exposed > label,
+  .nx-inspector__field--exposed > .nx-inspector__field-name {
+    min-height: 0;
   }
 }
 
@@ -2867,6 +2971,44 @@
  * row is drawn. The two locks differ by stroke weight, set on the icon.
  */
 .nx-layer-row__badge[data-lock] {
+  color: inherit;
+}
+
+/*
+ * A component placement's row: the component mark in the component colour, as
+ * its ring is on the canvas, and the muted word "component" after its name.
+ * On a selected row both take the row's own ink instead, since the selection
+ * surface is the theme's accent and only its foreground is meant to be read
+ * on it.
+ */
+.nx-layer-row[data-component] .nx-block-icon {
+  color: var(--nx-builder-component);
+}
+
+/*
+ * The word sits on the name's baseline, as the design sets it inline, rather
+ * than centred beside it: a smaller line centred on a larger one floats above
+ * it. Regular weight, so it stays quieter than a selected row's name.
+ */
+.nx-layer-row__label,
+.nx-layer-row__tag {
+  align-self: baseline;
+}
+
+.nx-layer-row__tag {
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row[data-component]
+  .nx-block-icon,
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row__tag {
   color: inherit;
 }
 
@@ -5364,6 +5506,209 @@ fieldset.nx-inspector__fields {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: start;
+}
+
+/*
+ * A component's variants, under its exposed fields in its own view: each a
+ * name to edit, how much it presets, and its values when opened. Bordered in
+ * the component accent's tint rather than its full strength, since a variant
+ * is a preset over the fields rather than a field itself.
+ */
+.nx-variants {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--nx-builder-border, var(--nx-border));
+}
+
+.nx-variants__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* The heading at the size the exposed fields' heading above it takes. */
+.nx-variants__header .nx-inspector__heading {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+}
+
+.nx-variants__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-variants__item {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md, 0.375rem);
+  background: var(--nx-background);
+}
+
+.nx-variants__item[data-open] {
+  border-color: color-mix(in oklch, var(--nx-primary) 45%, var(--nx-border));
+}
+
+.nx-variants__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.375rem 0.25rem;
+}
+
+/* The chevron turns to point down while the variant's values are open. */
+.nx-variants__chevron {
+  transition: transform 150ms ease;
+}
+
+.nx-variants__chevron[data-open] {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-variants__chevron {
+    transition: none;
+  }
+}
+
+.nx-variants__name {
+  flex: 1 1 9rem;
+  min-width: 0;
+}
+
+/*
+ * A refused name, said under the whole row rather than beside the input, so
+ * the sentence has the row's width to wrap in.
+ */
+.nx-variants__item > .nx-variants__problem {
+  padding: 0 0.5rem 0.5rem 2.25rem;
+}
+
+.nx-variants__summary {
+  flex: 0 0 auto;
+  margin-top: 0.4rem;
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+/* "(no changes)" is a state to notice, said in the muted tone, not the accent. */
+.nx-variants__summary[data-empty] {
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-variants__values {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-variants__value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-variants__value-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/*
+ * Whether the value is the variant's own or the component's default, as a
+ * badge in words: the two differ by label and weight, never by colour alone.
+ */
+.nx-variants__source {
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-variants__source[data-set] {
+  font-weight: 600;
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+.nx-variants__reset {
+  align-self: flex-start;
+}
+
+.nx-variants__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-xs, 0.75rem);
+}
+
+.nx-variants__problem {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+  color: var(--nx-destructive);
+}
+
+/* A placement's variant, under its title in the placement's inspector. */
+.nx-variant-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.nx-variant-picker .nx-inspector__heading {
+  margin: 0;
+}
+
+/*
+ * A placement whose variant was deleted: said with an icon and words, in the
+ * warning tone, with the way to let it go beside it.
+ */
+.nx-variant-picker__removed {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+  border: 1px solid color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  border-radius: var(--radius-md, 0.375rem);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, transparent);
+}
+
+.nx-variant-picker__removed svg {
+  flex: none;
+  color: var(--nx-warning);
+}
+
+.nx-variant-picker__removed span {
+  flex: 1 1 auto;
 }
 
 /*
