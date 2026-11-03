@@ -16,6 +16,9 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import { createAdapter } from "../database/factory";
@@ -317,6 +320,15 @@ export interface CreateTestNextlyOptions {
    * own roles meets no preset of the same slug.
    */
   seedPublic?: boolean;
+  /**
+   * The directory the instance writes generated files under, as
+   * `registerServices` takes it: the Builder's migrations go to
+   * `src/db/migrations/dynamic` below it. Used as given and left in place.
+   *
+   * Absent, the instance gets a new temporary directory of its own, removed
+   * by `destroy()`, so a test run writes nothing into the working directory.
+   */
+  basePath?: string;
 }
 
 export interface TestNextly {
@@ -338,6 +350,12 @@ export interface TestNextly {
   events: EventBus;
   /** The underlying adapter (raw DB inspection). */
   adapter: TestAdapter;
+  /**
+   * The directory this instance writes generated files under: the
+   * `basePath` option when one was given, otherwise the temporary directory
+   * made for it, which `destroy()` removes.
+   */
+  readonly basePath: string;
   /** Tear down: run plugin destroy (T9), disconnect, reset all singletons. */
   destroy(): Promise<void>;
 }
@@ -426,9 +444,46 @@ function secretForCallerAdapter(
  *
  * `provisioned` is set for a server-backed boot (its `release` restores the
  * environment itself); `restoreEnv` is set for a SQLite boot, which changes
- * the environment but provisions nothing.
+ * the environment but provisions nothing. `scratchDir` is the temporary
+ * directory made for an instance given no `basePath`.
  */
-let active: { provisioned?: ProvisionedDatabase; restoreEnv?: () => void } = {};
+let active: {
+  provisioned?: ProvisionedDatabase;
+  restoreEnv?: () => void;
+  scratchDir?: string;
+} = {};
+
+/**
+ * A temporary directory for an instance's generated files.
+ *
+ * `registerServices` falls back to `process.cwd()` for them, which under a
+ * test runner is the package being tested: a Builder save would write its
+ * migration into that package's `src/db/migrations/dynamic` and leave it
+ * there, and a later boot in that package reads the folder as the app's own.
+ */
+function makeScratchDir(): Promise<string> {
+  return mkdtemp(join(tmpdir(), "nextly-test-"));
+}
+
+/**
+ * Where an instance writes its generated files: the caller's directory as
+ * given, or a temporary one the instance owns (`scratchDir`) and removes.
+ */
+interface InstanceDirs {
+  basePath: string;
+  scratchDir?: string;
+}
+
+async function instanceDirs(given: string | undefined): Promise<InstanceDirs> {
+  if (given !== undefined) return { basePath: given };
+  const scratchDir = await makeScratchDir();
+  return { basePath: scratchDir, scratchDir };
+}
+
+/** Remove an instance's temporary directory; gone already counts as removed. */
+function removeScratchDir(dir: string | undefined): Promise<void> {
+  return dir ? rm(dir, { recursive: true, force: true }) : Promise.resolve();
+}
 
 /**
  * Finish the work an instance started and did not await.
@@ -477,6 +532,8 @@ async function releaseActiveDatabase(): Promise<(() => void) | undefined> {
   const previous = active;
   active = {};
   await previous.provisioned?.release().catch(() => {});
+  // The temporary directory goes with the database, on the same terms.
+  await removeScratchDir(previous.scratchDir).catch(() => {});
   return previous.restoreEnv;
 }
 
@@ -706,7 +763,18 @@ export async function createTestNextly(
   active = { provisioned, restoreEnv };
 
   try {
-    return await bootServices(adapter, logger, opts, provisioned, restoreEnv);
+    // Made inside the try, and recorded on `active` before the boot uses it,
+    // so a boot that fails removes it with the database below.
+    const dirs = await instanceDirs(opts.basePath);
+    active.scratchDir = dirs.scratchDir;
+    return await bootServices(
+      adapter,
+      logger,
+      opts,
+      provisioned,
+      restoreEnv,
+      dirs
+    );
   } catch (error) {
     // Two different failures reach here, and each needs a different half.
     //
@@ -785,13 +853,17 @@ async function bootServices(
   logger: Logger,
   opts: CreateTestNextlyOptions,
   provisioned: ProvisionedDatabase | undefined,
-  restoreEnv: (() => void) | undefined
+  restoreEnv: (() => void) | undefined,
+  dirs: InstanceDirs
 ): Promise<TestNextly> {
   // A consent refusal names the `pluginConsent` option to pass rather than
   // the `nextly.config.ts` line a test has no file to write.
   try {
     await registerServices({
       adapter,
+      // Every generated-file path (migrations, schemas) is derived from this;
+      // left out, it would be the working directory.
+      basePath: dirs.basePath,
       imageProcessor: getImageProcessor(),
       logger,
       // Wire the (freshly reset) global hook registry into the collection
@@ -858,6 +930,7 @@ async function bootServices(
     hooks: getHookRegistry(),
     events: getEventBus(),
     adapter,
+    basePath: dirs.basePath,
     async destroy() {
       // Everything the instance started but did not await has to finish while
       // the connection is still open.
@@ -894,6 +967,9 @@ async function bootServices(
       if (!opts.adapter) await adapter.disconnect().catch(() => {});
       await provisioned?.release();
       restoreEnv?.();
+      // Last, after nothing can write to it any more. A removal that throws
+      // leaves `active` set, so the next boot's recovery tries it again.
+      await removeScratchDir(dirs.scratchDir);
       active = {};
     },
   };

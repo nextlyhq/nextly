@@ -297,3 +297,122 @@ export function widthForBreakpoint(
    */
   return selectableTiers(set).find(tier => tier.id === id)?.maxWidth;
 }
+
+/**
+ * The narrowest the base breakpoint, Desktop, is previewed at.
+ *
+ * A fixed width rather than the region's: the region changes as panels open
+ * and close, and a preview that followed it would show a different layout for
+ * the same device. 1280 is the narrowest window the editor supports.
+ */
+export const DESKTOP_PREVIEW_WIDTH = 1280;
+
+/**
+ * The width the canvas lays a device out at, which the zoom then fits into
+ * the room the panels leave.
+ *
+ * A bounded breakpoint is shown at its own bound, the widest width at which
+ * it applies, rather than at some device's width: that is the width whose
+ * layout the author is styling. The base is shown at 1280, or one pixel past
+ * the widest bound on a site whose widest bound reaches 1280, so the base
+ * preview never sits inside a narrower breakpoint.
+ *
+ * `undefined` for an id the site does not define as a viewport breakpoint,
+ * and on a site with no viewport breakpoints at all, where there is nothing
+ * to simulate and the canvas fills its region.
+ */
+export function previewWidth(
+  set: BreakpointSet | undefined,
+  id: BreakpointId
+): number | undefined {
+  const tiers = offeredTiers(set);
+  if (tiers.length === 0) return undefined;
+  if (id === BASE_BREAKPOINT) {
+    return Math.max(DESKTOP_PREVIEW_WIDTH, (tiers[0]?.maxWidth ?? 0) + 1);
+  }
+  return tiers.find(tier => tier.id === id)?.maxWidth;
+}
+
+/**
+ * The breakpoint an edit goes to, from the device the author chose.
+ *
+ * The choice is stored as the author left it, so it can name a breakpoint the
+ * site has since removed, or a container breakpoint, which is not a device.
+ * Either way the edit goes to the base breakpoint: a value written under an
+ * id the site does not define as a device would never be drawn.
+ */
+export function editingBreakpointOf(
+  set: BreakpointSet | undefined,
+  chosen: string | null
+): BreakpointId {
+  if (chosen === null || chosen === BASE_BREAKPOINT) return BASE_BREAKPOINT;
+  return offeredTiers(set).some(tier => tier.id === chosen)
+    ? chosen
+    : BASE_BREAKPOINT;
+}
+
+/** A frame's preview height below 600px wide: a phone held upright. */
+const PHONE_PREVIEW_HEIGHT = 844;
+
+/** A frame's preview height from 600px up to below 1024px: a tablet. */
+const TABLET_PREVIEW_HEIGHT = 1024;
+
+/** A frame's preview height from 1024px up: a laptop screen. */
+const DESKTOP_PREVIEW_HEIGHT = 800;
+
+/**
+ * The height a frame previewing a device at this width is given.
+ *
+ * Decided by the WIDTH alone, in three bands, and never by the space the
+ * editor has. Opening a panel changes how much room is left for the frame;
+ * if the height followed that room, every `vh` length and every height media
+ * query on the page would change with the panels, and the author would be
+ * styling a viewport no visitor has. A height derived from the width is a
+ * fact about the device being previewed, so it changes only when the device
+ * does.
+ *
+ * Bands rather than one height per breakpoint, because a site can add its own
+ * breakpoints at any width and each still needs a height. The same three
+ * bands answer for those: a site-added 700px breakpoint is previewed at a
+ * tablet's height, like any other width in that band.
+ *
+ * @experimental
+ */
+export function previewHeight(width: number): number {
+  if (width < 600) return PHONE_PREVIEW_HEIGHT;
+  if (width < 1024) return TABLET_PREVIEW_HEIGHT;
+  return DESKTOP_PREVIEW_HEIGHT;
+}
+
+/** A width and a height, in CSS pixels. */
+export interface FrameSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The scale that fits a whole frame into the region around it.
+ *
+ * BOTH dimensions, because the frame has a height of its own: fitting only the
+ * width leaves a desktop frame taller than a short region, and the bottom of
+ * the previewed viewport is then off screen with nothing to say so. The
+ * smaller of the two ratios is the one at which the frame fits both ways.
+ *
+ * Never above 1, for the reason the width-only fit gives: a frame shown larger
+ * than life makes every measurement an author takes from the screen wrong in
+ * the flattering direction. `1` for a region not yet measured, or one of zero,
+ * because a ratio taken from either is infinite or `NaN` and would paint the
+ * frame nowhere.
+ *
+ * @experimental
+ */
+export function frameFitScale(
+  frame: FrameSize,
+  region: { readonly width?: number; readonly height?: number }
+): number {
+  const { width, height } = region;
+  if (width === undefined || height === undefined) return 1;
+  if (!(width > 0) || !(height > 0)) return 1;
+  if (!(frame.width > 0) || !(frame.height > 0)) return 1;
+  return Math.min(1, width / frame.width, height / frame.height);
+}

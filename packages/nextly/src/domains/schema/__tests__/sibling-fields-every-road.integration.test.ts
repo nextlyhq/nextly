@@ -216,6 +216,58 @@ const SPELLING_SHAPES: Shape[] = [
   },
 ];
 
+/**
+ * A system name under one exact spelling twice, at the top level: two
+ * column-less fields, and a text field beside a column-less one. Neither is the
+ * field `define*` adds standing aside, and both pairs share the document key.
+ */
+const SYSTEM_NAME_SHAPES: Shape[] = [
+  {
+    shape: "two column-less `slug` fields at the top level",
+    apply: fields => [
+      ...fields,
+      { name: "slug", type: "text", virtual: true },
+      { name: "slug", type: "text", virtual: true },
+    ],
+    message: kind =>
+      said(
+        kind,
+        "fields 'slug' and 'slug' at the top level have the same name."
+      ),
+  },
+  {
+    shape: "a text `slug` beside a column-less `slug` at the top level",
+    apply: fields => [
+      ...fields,
+      { name: "slug", type: "text" },
+      { name: "slug", type: "text", virtual: true },
+    ],
+    message: kind =>
+      said(
+        kind,
+        "fields 'slug' and 'slug' at the top level have the same name."
+      ),
+  },
+];
+
+/**
+ * For roads that take any spelling: a sent text `title` beside a sent column-less `Title`. Only
+ * `define*` adds a system field, so a road that writes what it is sent lets none stand aside.
+ */
+const SYSTEM_CASE_SHAPE: Shape = {
+  shape: "a text `title` beside a column-less `Title` at the top level",
+  apply: fields => [
+    ...fields,
+    { name: "title", type: "text" },
+    { name: "Title", type: "text", virtual: true },
+  ],
+  message: kind =>
+    said(
+      kind,
+      "fields 'title' and 'Title' at the top level differ only in letter case."
+    ),
+};
+
 /** For roads that hold names to the manifest's lowercase spelling: exact repeats. */
 const REPEAT_SHAPES: Shape[] = [
   {
@@ -461,6 +513,8 @@ const builderCreate: Record<Kind, (fields: Field[]) => Promise<unknown>> = {
 };
 
 interface Road {
+  /** Reaches the collection service's create or update (`userFieldsOf`). */
+  viaService?: boolean;
   road: string;
   kind: Kind;
   /** A create road starts from no entity; an update road from one the Builder created. */
@@ -484,6 +538,7 @@ const ROADS: Road[] = [
   // Collections.
   {
     road: "the Builder's collection create",
+    viaService: true,
     kind: "collection",
     creates: true,
     manifestNames: false,
@@ -491,6 +546,7 @@ const ROADS: Road[] = [
   },
   {
     road: "the Builder's collection update",
+    viaService: true,
     kind: "collection",
     creates: false,
     manifestNames: false,
@@ -504,6 +560,7 @@ const ROADS: Road[] = [
   },
   {
     road: "the root-exported CollectionService's create",
+    viaService: true,
     kind: "collection",
     creates: true,
     manifestNames: false,
@@ -515,6 +572,7 @@ const ROADS: Road[] = [
   },
   {
     road: "the root-exported CollectionService's update",
+    viaService: true,
     kind: "collection",
     creates: false,
     manifestNames: false,
@@ -527,6 +585,7 @@ const ROADS: Road[] = [
   },
   {
     road: "a plugin's ctx.services.collections create",
+    viaService: true,
     kind: "collection",
     creates: true,
     manifestNames: false,
@@ -538,6 +597,7 @@ const ROADS: Road[] = [
   },
   {
     road: "a plugin's ctx.services.collections update",
+    viaService: true,
     kind: "collection",
     creates: false,
     manifestNames: false,
@@ -763,6 +823,9 @@ for (const dialect of getConfiguredTestDialects()) {
       return createTestNextly({
         adapter: database.adapter as never,
         plugins: [PROBE_PLUGIN],
+        // The app under test's folder, which `projectFiles` reads: absent,
+        // the instance would write to a temporary folder of its own.
+        basePath: projectRoot,
       });
     }
 
@@ -783,7 +846,14 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     for (const road of ROADS) {
-      const shapes = road.manifestNames ? REPEAT_SHAPES : SPELLING_SHAPES;
+      // The collection service drops a system name (`title`, `slug`) from what it is sent before
+      // judging or storing anything, so on its roads such a pair never reaches the row.
+      const dropsSystemNames = road.kind === "collection" && road.viaService;
+      const shapes = [
+        ...(road.manifestNames ? REPEAT_SHAPES : SPELLING_SHAPES),
+        ...(dropsSystemNames ? [] : SYSTEM_NAME_SHAPES),
+        ...(dropsSystemNames || road.manifestNames ? [] : [SYSTEM_CASE_SHAPE]),
+      ];
       it(`${road.road} refuses a new pair of sibling fields and writes nothing`, async () => {
         const t = await boot();
         const adapter = t.adapter as unknown as DrizzleAdapter;

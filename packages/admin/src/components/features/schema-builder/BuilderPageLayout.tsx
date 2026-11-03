@@ -82,6 +82,7 @@ export function BuilderPageLayout({
         name={name}
         locked={locked}
         unsavedCount={unsavedCount}
+        onAddField={() => onActiveChange({ kind: "picker", position: {} })}
         onOpenSettings={() => onActiveChange({ kind: "settings" })}
         onSave={onSave}
       />
@@ -108,12 +109,6 @@ export function BuilderPageLayout({
             onEditField={fieldId => onActiveChange({ kind: "edit", fieldId })}
             onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
             onDuplicateField={onDuplicateField}
-            onAddInsideParent={parentId =>
-              onActiveChange({
-                kind: "picker",
-                position: { parentFieldId: parentId },
-              })
-            }
             onReorder={() => {
               // Reorder is driven by onRowDragEnd above; the field state lives
               // in useFieldBuilder, so there is nothing to notify here.

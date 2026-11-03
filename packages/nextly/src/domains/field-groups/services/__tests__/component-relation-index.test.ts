@@ -127,6 +127,16 @@ const SHAPES: Record<
     field: { type: "text", maxLength: 100, index: true, unique: true },
     expected: everywhere([UQ]),
   },
+  // A text with no `maxLength` is an unbounded TEXT column on MySQL, which it indexes only by a
+  // key prefix (`indexKeysOn` below holds the key itself).
+  "an indexed unbounded text": {
+    field: { type: "text", index: true },
+    expected: everywhere([IDX]),
+  },
+  "an indexed textarea": {
+    field: { type: "textarea", index: true },
+    expected: everywhere([IDX]),
+  },
   // MySQL cannot index a JSON column; the others can.
   "an indexed JSON field": {
     field: { type: "json", index: true },
@@ -150,11 +160,29 @@ function creatorIndexes(
     TABLE,
     fieldsWith(field) as unknown as FieldConfig[]
   );
-  const statement = new RegExp(
-    `CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?["\`]([^"\`]+)["\`] ON ["\`][^"\`]+["\`]\\(["\`]${COLUMN}["\`]\\)`,
+  return [...sql.matchAll(indexStatement())]
+    .map(match => match[1] ?? "")
+    .sort();
+}
+
+/** A CREATE INDEX on the `subject` column alone, its name and its key part captured. */
+function indexStatement(): RegExp {
+  return new RegExp(
+    `CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?["\`]([^"\`]+)["\`] ON ["\`][^"\`]+["\`] ?\\((["\`]${COLUMN}["\`](?:\\(\\d+\\))?)\\)`,
     "g"
   );
-  return [...sql.matchAll(statement)].map(match => match[1] ?? "").sort();
+}
+
+/** The key part each CREATE INDEX on the `subject` column names, as written. */
+function indexKeysOn(
+  dialect: Dialect,
+  field: Record<string, unknown>
+): string[] {
+  const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
+    TABLE,
+    fieldsWith(field) as unknown as FieldConfig[]
+  );
+  return [...sql.matchAll(indexStatement())].map(match => match[2] ?? "");
 }
 
 /** The index names the desired schema declares on the `subject` column, sorted. */
@@ -188,4 +216,36 @@ describe.each(DIALECTS)("a component column's indexes on %s", dialect => {
       );
     });
   });
+});
+
+// MySQL refuses a plain index on a TEXT column (error 1170), so the key is the column's first 191
+// characters, the longest prefix InnoDB keys under utf8mb4 on every row format: the shared rule the
+// collection and the schema pipeline index by. A bounded text is a VARCHAR, keyed whole; PostgreSQL
+// and SQLite index the whole value of every one.
+describe("the key an indexed text column is indexed by", () => {
+  const quote = (dialect: Dialect) => (dialect === "mysql" ? "`" : '"');
+  const whole = (dialect: Dialect) =>
+    `${quote(dialect)}${COLUMN}${quote(dialect)}`;
+
+  it.each([
+    ["an unbounded text", { type: "text", index: true }],
+    ["a textarea", { type: "textarea", index: true }],
+  ])("%s on MySQL is keyed by its first 191 characters", (_label, field) => {
+    expect(indexKeysOn("mysql", field)).toEqual(["`subject`(191)"]);
+  });
+
+  it("a bounded text on MySQL is keyed whole", () => {
+    expect(
+      indexKeysOn("mysql", { type: "text", maxLength: 100, index: true })
+    ).toEqual(["`subject`"]);
+  });
+
+  it.each(["postgresql", "sqlite"] as const)(
+    "an unbounded text on %s is keyed whole",
+    dialect => {
+      expect(indexKeysOn(dialect, { type: "text", index: true })).toEqual([
+        whole(dialect),
+      ]);
+    }
+  );
 });

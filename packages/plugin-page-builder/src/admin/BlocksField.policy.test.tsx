@@ -78,6 +78,8 @@ let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
     isPending: false,
     error: null,
   };
+/** What reached the plugin's routes, in order. */
+const routeWrites: unknown[] = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
@@ -110,13 +112,26 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       inspector,
       topBar,
+      topBarCenter,
+      topBarEnd,
       children,
       renderPanel,
+      renderSettings,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
-      renderPanel?: (panel: string) => React.ReactNode;
+      renderPanel?: (
+        panel: string,
+        view: { current: string | null; choose: (view: string) => void }
+      ) => React.ReactNode;
+      renderSettings?: (dialog: {
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        returnFocus: () => HTMLElement | null;
+      }) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
         {/*
@@ -124,15 +139,33 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          * breakpoint manager lives there, and a stub that dropped the slot
          * would leave its assertions passing on absence.
          */}
+        {/* The real shell renders the host's Settings on every pass, open
+            or not, which is where the breakpoint manager now lives. */}
+        {renderSettings?.({
+          open: false,
+          onOpenChange: () => {},
+          returnFocus: () => null,
+        })}
         {topBar}
+        {topBarCenter}
+        {topBarEnd}
         {inspector}
-        {shownPanel === null ? null : renderPanel?.(shownPanel)}
+        {shownPanel === null
+          ? null
+          : renderPanel?.("design", { current: shownPanel, choose: () => {} })}
         {children}
       </div>
     ),
-    BreakpointManager: record("breakpoints"),
+    BreakpointManager: nothing,
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    // Passed through: the canvas renders inside its frame, which jsdom never
+    // loads a page into.
+    CanvasFrame: ({
+      children,
+    }: {
+      children?: React.ReactNode;
+    }): React.JSX.Element => <>{children}</>,
     ClassManagerPanel: record("classes"),
     BlockKeyboardActions: passthrough,
     /*
@@ -146,6 +179,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
@@ -182,13 +216,33 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+// What the Settings dialog is told about the breakpoints is what its manager
+// is: recorded from the dialog, which the shell renders on every pass.
+vi.mock("./editor/settings-dialog", () => ({
+  SettingsDialog: (props: { breakpoints: Record<string, unknown> }): null => {
+    seen.breakpoints = props.breakpoints;
+    return null;
+  },
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   /*
    * Never awaited by these cases: the loader is reached only when an author
    * double-clicks a passage, and none of them do. Present because the mock
    * REPLACES the module wholesale, so an export the subject imports and this
    * omits is a missing-export error rather than an unused stub.
    */
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -216,17 +270,29 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
   // the top bar without putting a second subject in the assertions below.
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the
   // merge of stored over defaults is `site-style-client`'s own question and has
   // its own coverage. Standing a real query client up here would put a second
   // subject in every assertion below.
-  useSingleDocument: () => siteStyleRead,
+  useSingleDocument: () => ({ ...siteStyleRead, refetch: async () => ({}) }),
+  // The site's breakpoints are written through Settings' route.
+  writePluginRoute: async (write: unknown) => {
+    routeWrites.push(write);
+    return {};
+  },
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -742,12 +808,26 @@ describe("what the breakpoint manager is told", () => {
       next: unknown
     ) => Promise<string | undefined>;
 
+    routeWrites.length = 0;
     await expect(
       onSave({
         viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
         container: [],
       })
     ).resolves.toBeUndefined();
+    // Through Settings' route, the one write the site style lets change them.
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/breakpoints",
+        body: {
+          breakpoints: {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          },
+        },
+      },
+    ]);
   });
 
   it("is given the SAME breakpoints the canvas renders against", () => {

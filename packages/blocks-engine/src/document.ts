@@ -126,10 +126,21 @@ export interface BlockNode {
   /** Conditional and per-breakpoint visibility. */
   visibility?: NodeVisibility;
   /**
-   * Author lock. While true, the editor command layer must not let the author
-   * move or delete this node. It is an author-facing policy flag, not a
-   * data-layer guarantee: system transforms (migrations, overlays, restore)
-   * still operate on locked nodes, and the pure tree primitives do not read it.
+   * The Layers lock. While true, nothing changes this node or anything inside
+   * it: no update (renaming included), no move or removal of it or of a block
+   * holding it, no block moved out of it or put into it. Changing `locked`
+   * itself is the one edit it allows.
+   *
+   * Enforced at the data layer, not only in the editor: `applyOp` refuses an op
+   * that breaks it (`layers-lock`), and a blocks field's save refuses a write
+   * that changes, moves or removes a node locked in the stored document unless
+   * the same write unlocks that node (`layers-lock-stored`). A convenience that
+   * anyone who may edit the document can lift, never a permission: who may
+   * edit stays the collection's access rules' question.
+   *
+   * A system transform the site makes for a reason no author chose applies its
+   * ops with `{ layersLocks: "ignore" }`. The pure tree primitives in `tree.ts`
+   * do not read the flag; they sit below the rule.
    */
   locked?: boolean;
   /** Author-facing instance label, shown in the Layers panel. */
@@ -1061,7 +1072,10 @@ export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 export interface ComponentInstanceProps {
   /** The referenced component document's id. */
   componentId: string;
-  /** The selected variant name, when the component defines variants. */
+  /**
+   * The chosen variant's id: its key in the definition's `variants`, which a
+   * rename keeps. A key the definition no longer holds renders the defaults.
+   */
   variant?: string;
   /**
    * Per-instance values for the definition's exposed properties, keyed by
@@ -1337,7 +1351,10 @@ export interface ComponentDocument extends BlockDocument {
   exposed?: ExposedProperty[];
   /** Regions an instance may fill, keyed by slot id. Absent exposes none. */
   slots?: Record<string, ExposedSlot>;
-  /** Named override presets, keyed by variant name. */
+  /**
+   * Named override presets, keyed by each variant's stable id. The id is
+   * opaque and kept across renames; the name a picker shows is its `label`.
+   */
   variants?: Record<string, Variant>;
 }
 

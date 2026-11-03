@@ -7,6 +7,10 @@
  * measurement on every whole run.
  */
 
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,6 +21,7 @@ import {
   type GraphModule,
   HEAVY_MODULES,
   judge,
+  leftoverMigrations,
   measure,
   moduleWithKey,
   shortestPath,
@@ -275,5 +280,22 @@ describe("the dialect boundary", () => {
         "sqlite"
       )
     ).toEqual([]);
+  });
+});
+
+describe("leftoverMigrations", () => {
+  it("names a migrations folder left in the package, and passes a package without one", () => {
+    const root = mkdtempSync(join(tmpdir(), "nextly-budget-root-"));
+    try {
+      expect(leftoverMigrations(root)).toBeUndefined();
+      // Empty, as a run that wrote and then cleared its files leaves it: the
+      // boot asks only whether the folder exists.
+      mkdirSync(join(root, "src", "db", "migrations"), { recursive: true });
+      expect(leftoverMigrations(root)).toContain(
+        join(root, "src", "db", "migrations")
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

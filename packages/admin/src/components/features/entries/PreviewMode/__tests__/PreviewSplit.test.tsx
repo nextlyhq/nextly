@@ -253,3 +253,40 @@ describe("PreviewSplit on a phone", () => {
     expect(screen.getByTestId("editor")).toBeInTheDocument();
   });
 });
+
+describe("PreviewSplit closed, filling its container", () => {
+  /** The split's own root, which carries its open or closed state. */
+  function root(container: HTMLElement): HTMLElement {
+    const element = container.querySelector<HTMLElement>(
+      "[data-preview-split]"
+    );
+    if (!element) throw new Error("no split root");
+    return element;
+  }
+
+  it("passes its container's height on to what it holds when asked to fill", () => {
+    // A document view is a full-height screen inside the split: closed, the
+    // split's root is the one box between the page's content area and the
+    // view, and without a height of its own the view had nothing to fill.
+    const { container } = render(
+      <PreviewSplit open={false} fill label="Preview" preview={null}>
+        <p>view</p>
+      </PreviewSplit>
+    );
+
+    expect(root(container).className).toContain("h-full");
+    expect(root(container).className).toContain("min-h-0");
+  });
+
+  it("takes no box of its own when not asked to fill", () => {
+    // The form scrolls the page as it always has: a closed split around an
+    // ordinary edit form must not fix its height to the area's.
+    const { container } = render(
+      <PreviewSplit open={false} label="Preview" preview={null}>
+        <p>form</p>
+      </PreviewSplit>
+    );
+
+    expect(root(container).className).not.toContain("h-full");
+  });
+});

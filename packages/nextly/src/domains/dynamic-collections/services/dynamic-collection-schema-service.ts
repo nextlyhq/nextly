@@ -44,6 +44,7 @@ import type {
   ReferentialAction,
 } from "../../schema/pipeline/diff/types";
 import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
   addForeignKeySql,
   changeForeignKeyActionStatements,
@@ -487,6 +488,26 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * Each new field an ALTER may change the column of, with the definition it had: one that has a
+   * parent column and was there before. Toggling `required` on a many-to-many emitted ALTER COLUMN
+   * against a name the table does not have, and a storage move is handled by the add and remove
+   * passes, so altering its column would target one the table doesn't have yet, or no longer has.
+   */
+  private *alterableFields(
+    newFields: readonly FieldDefinition[],
+    previousDefinitionOf: (
+      field: FieldDefinition
+    ) => FieldDefinition | undefined
+  ): Generator<{ field: FieldDefinition; oldField: FieldDefinition }> {
+    for (const field of newFields) {
+      if (!fieldProducesColumn(field)) continue;
+      const oldField = previousDefinitionOf(field);
+      if (!oldField || this.storageClassChanged(oldField, field)) continue;
+      yield { field, oldField };
+    }
+  }
+
+  /**
    * The statement that makes a column unique, in the one spelling everything else expects.
    *
    * `uq_<table>_<column>` is what the desired schema declares for a unique field and what the
@@ -900,29 +921,28 @@ export class DynamicCollectionSchemaService {
   /**
    * `CREATE INDEX` for one column, in the spelling the dialect accepts.
    *
-   * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
-   * outright, so a text-backed column is indexed by prefix. 191 characters is the longest prefix
-   * that fits the 767-byte index limit under utf8mb4 on every InnoDB row format, including the
-   * compact ones where a longer prefix is refused. PostgreSQL and SQLite index the whole value.
+   * MySQL cannot index a `BLOB`/`TEXT` column of any size without a key length and rejects the
+   * statement outright, so a text-backed column is indexed by prefix. Rendered by the schema
+   * pipeline's own rule, so the prefix and the types it applies to are the ones a migration file
+   * and the dev push use. PostgreSQL and SQLite index the whole value.
    */
   private createIndexSql(
     tableName: string,
     column: string,
     columnType: string
   ): string | null {
-    const name = this.quoteIdentifier(indexNameForColumn(tableName, column));
-    const table = this.quoteIdentifier(tableName);
-    const quoted = this.quoteIdentifier(column);
     // Asked through the shared rule, which the desired schema reads too: an index only one of
     // them believes in is proposed by every diff and refused by every apply.
     if (!columnTypeIsIndexable(columnType, this.dialect)) return null;
-    if (this.dialect === "mysql") {
-      const target = /\b(text|blob)\b/i.test(columnType)
-        ? `${quoted}(191)`
-        : quoted;
-      return `CREATE INDEX ${name} ON ${table}(${target});`;
-    }
-    return `CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${quoted});`;
+    const sql = columnIndexSql(
+      tableName,
+      indexNameForColumn(tableName, column),
+      column,
+      columnType,
+      this.dialect,
+      name => this.quoteIdentifier(name)
+    );
+    return `${sql};`;
   }
 
   /**
@@ -1306,9 +1326,9 @@ ${allColumnDefs.join(",\n")}
    * - DROP COLUMN is supported (SQLite 3.35.0+)
    * - ALTER COLUMN (change type, nullability) is NOT supported
    *
-   * For complex schema changes in SQLite, a table rebuild is required,
-   * but for dynamic collections we keep it simple and only support
-   * adding/removing columns.
+   * For complex schema changes in SQLite, a table rebuild is required. A
+   * nullability change is handed to the caller (`onSqliteNullability`), which
+   * rebuilds the table; a type change is not made there.
    */
   generateAlterTableMigration(
     tableName: string,
@@ -1439,6 +1459,12 @@ ${allColumnDefs.join(",\n")}
         from: FieldDefinition;
         to: FieldDefinition;
       };
+      /**
+       * Told, on SQLite, of each kept column whose nullability this change moves, with whether it
+       * becomes NOT NULL. SQLite can't alter a column, so this renders no statement for it; a
+       * caller that can rebuild the table once these statements have run applies it there.
+       */
+      onSqliteNullability?: (column: string, required: boolean) => void;
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
@@ -1927,17 +1953,25 @@ ${allColumnDefs.join(",\n")}
     }
     statements.push(...fkActionsBeforeColumns);
 
-    // Note: SQLite doesn't support ALTER COLUMN - modifications require table rebuild
-    // For simplicity, we skip column modifications for SQLite
-    if (this.dialect !== "sqlite") {
-      for (const field of newFields) {
-        // A field with no parent column has nothing to alter. Toggling `required` on a
-        // many-to-many emitted ALTER COLUMN against a name the table does not have.
-        if (!fieldProducesColumn(field)) continue;
-        const oldField = previousDefinitionOf(field);
-        // A storage move is handled by the add and remove loops above; altering the column here
-        // would target one the table does not have yet, or no longer has.
-        if (oldField && this.storageClassChanged(oldField, field)) continue;
+    // SQLite can't alter a column. A nullability change goes to the caller, which rebuilds the
+    // table once these statements have run (`onSqliteNullability`); a type change is skipped there.
+    if (this.dialect === "sqlite") {
+      for (const { field, oldField } of this.alterableFields(
+        newFields,
+        previousDefinitionOf
+      )) {
+        if (field.required !== oldField.required) {
+          options?.onSqliteNullability?.(
+            toSnakeCase(field.name),
+            field.required === true
+          );
+        }
+      }
+    } else {
+      for (const { field, oldField } of this.alterableFields(
+        newFields,
+        previousDefinitionOf
+      )) {
         // Requiredness is asked SEPARATELY from `isFieldModified`, because for
         // one kind of field the two disagree. `getColumnDescriptor` reports a
         // relationship as nullable whatever its `required` says — the column
@@ -1954,12 +1988,8 @@ ${allColumnDefs.join(",\n")}
         // rewrite is still gated on `columnChanged` below, so a field that
         // arrives here only because its requiredness moved restates
         // nullability and nothing else.
-        const requirednessChanged =
-          oldField !== undefined && field.required !== oldField.required;
-        if (
-          oldField &&
-          (this.isFieldModified(oldField, field) || requirednessChanged)
-        ) {
+        const requirednessChanged = field.required !== oldField.required;
+        if (this.isFieldModified(oldField, field) || requirednessChanged) {
           const alterCol = toSnakeCase(field.name);
           // The descriptor decides the target column, the same answer the comparison above used to
           // decide there was a change at all. Asking a different renderer here is what let a field

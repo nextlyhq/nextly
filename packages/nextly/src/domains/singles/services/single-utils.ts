@@ -680,6 +680,16 @@ export function singleAbsentResult(slug: string): SingleResult {
   };
 }
 
+/**
+ * The answer for a registered Single that holds no stored document, when the
+ * caller asked not to create one (`createIfMissing: false`): a success with no
+ * `data`. Distinct from {@link singleAbsentResult}, which is a refusal; this
+ * is the read working as asked, and the Direct API turns it into `null`.
+ */
+export function singleWithoutDocumentResult(): SingleResult {
+  return { success: true, statusCode: 200 };
+}
+
 export function buildSingleErrorResult(
   error: unknown,
   defaultMessage: string

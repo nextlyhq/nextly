@@ -422,6 +422,70 @@ export function sharedStyleInputs(
   });
 }
 
+/**
+ * The context a page's OWN sheet is compiled under, given the route's compile
+ * context and the site's style inputs.
+ *
+ * One derivation, shared by this renderer and by a route drawing several
+ * documents on one page (a page and the regions around it). Only one of those
+ * documents may emit the site sheet, and the others are rendered with
+ * `siteStyles={false}`; handing them THIS context keeps their node rules
+ * compiled exactly as they would be beside the sheet, rather than losing the
+ * site's breakpoints, classes, block bases and prefix along with it.
+ */
+export function pageCompileContext(
+  styleContext: StyleCompileContext | undefined,
+  siteInput: SiteSheetInput | undefined,
+  shared: ReconciledStyleInputs = sharedStyleInputs(styleContext, siteInput)
+): StyleCompileContext | undefined {
+  // Present whenever the render knows this site's breakpoints, whether they came
+  // from a compile context or from `siteStyles`. Taking only the context leaves
+  // the documented normal path — a route that supplies a stored artifact and the
+  // site's styles, and compiles nothing itself — with no identity to compare a
+  // stamp against and no inputs to recompile from, so a stored sheet is reused
+  // however far the site's classes, prefix or breakpoints have moved since.
+  //
+  // Breakpoints are the condition because they are the one field a compile
+  // cannot proceed without, and because it is already the condition this render
+  // uses to decide whether a site sheet can be built at all. A render that knows
+  // them can compile both sheets; one that does not can compile neither, and
+  // there the stored artifact is all there is.
+  const pageBreakpoints = statedBreakpoints(shared.breakpoints);
+  if (styleContext !== undefined) {
+    return {
+      ...styleContext,
+      ...withoutStatedNulls(shared),
+      // Resolved rather than spread, so the normalised set replaces the null
+      // the reconciler may legitimately have stated.
+      breakpoints: pageBreakpoints ?? styleContext.breakpoints,
+    };
+  }
+  if (pageBreakpoints === undefined) return undefined;
+  return {
+    ...withoutStatedNulls(shared),
+    breakpoints: pageBreakpoints,
+    // The site's own fetch predicate, handed to the reconciler rather than
+    // reconciled here. `effectiveCompile` derives ONE predicate and gives it to
+    // both compiles — but only from what the context it is passed carries, and
+    // a synthesized context that omitted this would leave the site sheet
+    // judging a `url(...)` by the site's rules while the page sheet beside it
+    // judged the same value by the host's alone. The site sheet is emitted
+    // FIRST, so a page sheet cannot retract what it published.
+    //
+    // It carries no identity — `SiteSheetInput` has no `fetchPolicyId`, because
+    // the site artifact is addressed by the hash of its own bytes and needs
+    // none. So a page compiled under it is compiled under an ANONYMOUS
+    // predicate, and `effectiveCompile` already states what that means: no
+    // stored sheet can be judged against a predicate nothing can name, so every
+    // one of them is recompiled. That cost is the site opting into its own
+    // predicate, and it is the same answer a caller gets for passing one on the
+    // style context.
+    ...(siteInput?.mayFetchUrl === undefined
+      ? {}
+      : { mayFetchUrl: siteInput.mayFetchUrl }),
+  };
+}
+
 /** The first tier that stated this input, in the precedence its field has. */
 function firstStated<T>(...tiers: readonly (T | undefined)[]): T | undefined {
   return tiers.find(tier => tier !== undefined);
@@ -696,55 +760,7 @@ export function PageRenderer({
   // Every site-level input BOTH compiles read, resolved once. See
   // `sharedStyleInputs` for why one resolution rather than one per consumer.
   const shared = sharedStyleInputs(styleContext, siteInput);
-  const pageShared = shared;
-  // Present whenever the render knows this site's breakpoints, whether they came
-  // from a compile context or from `siteStyles`. Taking only the context leaves
-  // the documented normal path — a route that supplies a stored artifact and the
-  // site's styles, and compiles nothing itself — with no identity to compare a
-  // stamp against and no inputs to recompile from, so a stored sheet is reused
-  // however far the site's classes, prefix or breakpoints have moved since.
-  //
-  // Breakpoints are the condition because they are the one field a compile
-  // cannot proceed without, and because it is already the condition this render
-  // uses to decide whether a site sheet can be built at all. A render that knows
-  // them can compile both sheets; one that does not can compile neither, and
-  // there the stored artifact is all there is.
-  const pageBreakpoints = statedBreakpoints(pageShared.breakpoints);
-  const pageStyleContext: StyleCompileContext | undefined =
-    styleContext !== undefined
-      ? {
-          ...styleContext,
-          ...withoutStatedNulls(pageShared),
-          // Resolved rather than spread, so the normalised set replaces the
-          // null the reconciler may legitimately have stated.
-          breakpoints: pageBreakpoints ?? styleContext.breakpoints,
-        }
-      : pageBreakpoints === undefined
-        ? undefined
-        : {
-            ...withoutStatedNulls(pageShared),
-            breakpoints: pageBreakpoints,
-            // The site's own fetch predicate, handed to the reconciler rather
-            // than reconciled here. `effectiveCompile` derives ONE predicate and
-            // gives it to both compiles — but only from what the context it is
-            // passed carries, and a synthesized context that omitted this would
-            // leave the site sheet judging a `url(...)` by the site's rules
-            // while the page sheet beside it judged the same value by the host's
-            // alone. The site sheet is emitted FIRST, so a page sheet cannot
-            // retract what it published.
-            //
-            // It carries no identity — `SiteSheetInput` has no `fetchPolicyId`,
-            // because the site artifact is addressed by the hash of its own
-            // bytes and needs none. So a page compiled under it is compiled
-            // under an ANONYMOUS predicate, and `effectiveCompile` already
-            // states what that means: no stored sheet can be judged against a
-            // predicate nothing can name, so every one of them is recompiled.
-            // That cost is the site opting into its own predicate, and it is the
-            // same answer a caller gets for passing one on the style context.
-            ...(siteInput?.mayFetchUrl === undefined
-              ? {}
-              : { mayFetchUrl: siteInput.mayFetchUrl }),
-          };
+  const pageStyleContext = pageCompileContext(styleContext, siteInput, shared);
 
   const {
     context: compileContext,
