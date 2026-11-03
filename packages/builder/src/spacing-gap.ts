@@ -72,8 +72,12 @@ function spacesWithGap(display: string): boolean {
  * The name of the container whose gap this block's block-start margin is, or
  * `undefined` when the margin is the block's own (or there is none to name).
  *
- * `lookup` is the resolver the canvas renders with, so the container's
- * `childGap` is read from the same definition that drew the page.
+ * Whether the container HAS a gap is read from the compiled page alone: the
+ * marker its element wears and the probe below. The compiler marks a container
+ * for whichever source declared its gap, the block definition or the compile
+ * context, so asking the definition again here would miss a gap only the
+ * context declares. `lookup` is the resolver the canvas renders with, used
+ * only to name the container.
  */
 export function gapOwnerOf(
   block: Element,
@@ -94,7 +98,6 @@ export function gapOwnerOf(
   if (ownerId === null || ownerId === undefined) return undefined;
   const container = findNode(document.nodes, ownerId);
   if (container === undefined) return undefined;
-  if (lookup(container.type)?.childGap === undefined) return undefined;
   const view = block.ownerDocument.defaultView;
   if (view === null) return undefined;
   // A flex or grid holder spaces with `gap`, and its children's flow margin

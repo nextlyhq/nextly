@@ -773,8 +773,8 @@ export function SpacingOverlay({
     const layerBox = rootBox;
     /*
      * Whose space the block-start margin is. Asked once per measurement, after
-     * every reading above, because answering it takes the block's own classes
-     * away for one synchronous read.
+     * every reading above, because answering it takes the gap marker off the
+     * block's container for one synchronous read.
      */
     const gapFrom = gapOwnerOf(block, document, type => resolver.get(type));
     const gapSide = blockStartSide(style.writingMode);

@@ -1089,8 +1089,9 @@ describe("the space a container puts between its children", () => {
 
   it("names the container through the resolver the canvas renders with", () => {
     // A container only the canvas's own resolver knows: nothing registers it
-    // in the process registry, so asking that registry finds no `childGap`
-    // and would call the gap the child's own margin.
+    // in the process registry, so asking that registry finds no editor label
+    // and would name the owner after its type ("Private stack") instead of the
+    // label this resolver gives it.
     stubLayoutBoxes(true);
     registerStack();
     const resolver = createBlockResolver([
@@ -1099,7 +1100,7 @@ describe("the space a container puts between its children", () => {
         version: 1,
         description: "A stack only this canvas knows.",
         example: { props: {} },
-        editor: { label: "Private stack" },
+        editor: { label: "Hero band" },
         childGap: "1rem",
         slots: { children: {} },
         render: ({
@@ -1134,7 +1135,68 @@ describe("the space a container puts between its children", () => {
         overlay={<SpacingOverlay editor={editor} blocks={resolver} />}
       />
     );
-    expect(labels(container)).toEqual(["16 · Gap · from Private stack"]);
+    expect(labels(container)).toEqual(["16 · Gap · from Hero band"]);
+  });
+
+  it("names a container whose gap only the compile context declares", () => {
+    // A container whose definition declares no `childGap`: the gap comes from
+    // the compile context alone, which marks the container and writes the gap
+    // all the same. Reading ownership from the definition would find nothing
+    // there and call the gap the child's own margin.
+    stubLayoutBoxes(true);
+    registerStack();
+    const resolver = createBlockResolver([
+      {
+        name: "acme/plain-stack",
+        version: 1,
+        description: "A stack declaring no gap of its own.",
+        example: { props: {} },
+        editor: { label: "Plain stack" },
+        slots: { children: {} },
+        render: ({
+          className,
+          renderSlot,
+        }: {
+          className: string;
+          renderSlot: (name: string) => React.ReactNode;
+        }) => React.createElement("div", { className }, renderSlot("children")),
+      },
+      getBlock("acme/item"),
+    ] as never);
+    const document = {
+      ...STACKED,
+      nodes: [{ ...STACKED.nodes[0], type: "acme/plain-stack" }],
+    } as unknown as BlockDocument;
+    stubByElement((id, _own, gap) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: gap ? "16px" : "0px" }
+          : undefined
+    );
+    const editor = { ...editorOf("b"), document } as EditorState;
+    const { container } = render(
+      <Canvas
+        document={document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="b"
+        selectedIds={["b"]}
+        render={{
+          blocks: resolver,
+          styleContext: {
+            ...COMPILED,
+            childGaps: { "acme/plain-stack": "1rem" },
+          },
+        }}
+        overlay={<SpacingOverlay editor={editor} blocks={resolver} />}
+      />
+    );
+    // The marker is what the compiled gap rule is keyed on, so its presence
+    // shows the context's gap reached the canvas.
+    expect(
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="s"]`)?.classList
+    ).toContain(CHILD_GAP_CLASS);
+    expect(labels(container)).toEqual(["16 · Gap · from Plain stack"]);
   });
 
   it("calls an author's percentage margin its own, though the section's padding moves it", () => {
