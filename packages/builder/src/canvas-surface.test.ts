@@ -395,11 +395,18 @@ describe("the editing colours drawn on the page", () => {
         "outline-color"
       )
     ).toBe("var(--nx-builder-component)");
+    expect(
+      declared(
+        ruleFor(".nx-canvas [data-nx-exposed]:not([data-nx-selected])"),
+        "outline"
+      )
+    ).toBe("1px dashed var(--nx-builder-component)");
     const marks = [
       ".nx-canvas [data-nx-selected]",
       ".nx-drop-indicator",
       ".nx-drop-indicator::before",
       ".nx-canvas [data-nx-drop-parent]",
+      ".nx-canvas [data-nx-exposed]:not([data-nx-selected])",
       ".nx-spacing-handles__handle::before",
     ];
     for (const selector of marks) {
