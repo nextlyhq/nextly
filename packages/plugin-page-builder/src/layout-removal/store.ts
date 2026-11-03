@@ -257,7 +257,11 @@ export function layoutRemovalStore(
     return row === null ? null : toRemoval(row);
   };
 
-  /** Hand a row another request left to `input`, if it is still as read. */
+  /**
+   * Hand a row another request left to `input`, if it is still exactly as
+   * read: the same token, step and `updatedAt`, so a removal that renewed its
+   * lease after the read keeps its fence.
+   */
   const takeOver = async (
     held: LayoutRemoval,
     input: Parameters<LayoutRemovalStore["mark"]>[0]
@@ -277,7 +281,8 @@ export function layoutRemovalStore(
         both(
           eq(t().layoutId, input.layoutId),
           eq(t().token, held.token),
-          eq(t().step, held.step)
+          eq(t().step, held.step),
+          eq(t().updatedAt, held.updatedAt)
         )
       );
     return changed === 1;

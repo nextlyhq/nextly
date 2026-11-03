@@ -102,7 +102,7 @@ function told(answer: Answer): string {
  * page builder's tables through its own `ctx.db`: the test's way to read the
  * fence, and to write the rows a stopped request or a forger would leave.
  */
-function probePlugin(holder: { store?: LayoutRemovalStore }): PluginDefinition {
+function probePlugin(holder: Probe): PluginDefinition {
   return definePlugin({
     name: "@test/layout-removal-probe",
     version: "1.0.0",
@@ -110,6 +110,49 @@ function probePlugin(holder: { store?: LayoutRemovalStore }): PluginDefinition {
     dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
     init(ctx) {
       holder.store = layoutRemovalStore(ctx.db, ctx.dialect);
+      holder.raced = afterRead =>
+        layoutRemovalStore(readsThen(ctx.db, afterRead), ctx.dialect);
+    },
+  });
+}
+
+/** What the probe hands the tests. */
+interface Probe {
+  store?: LayoutRemovalStore;
+  /** A store whose every single-row read runs `afterRead` before it answers. */
+  raced?: (afterRead: () => Promise<void>) => LayoutRemovalStore;
+}
+
+/**
+ * `db`, with `afterRead` run after each single-row read and before its answer
+ * is handed back: how a test lands another request's write between a read and
+ * the compare-and-set that acts on it.
+ */
+function readsThen<T extends object>(db: T, afterRead: () => Promise<void>): T {
+  const chain = (builder: object): object =>
+    new Proxy(builder, {
+      get(target, key, receiver) {
+        const value: unknown = Reflect.get(target, key, receiver);
+        if (typeof value !== "function") return value;
+        if (key === "first") {
+          return async (...args: unknown[]) => {
+            const row: unknown = await Reflect.apply(value, target, args);
+            await afterRead();
+            return row;
+          };
+        }
+        return (...args: unknown[]) => {
+          const next: unknown = Reflect.apply(value, target, args);
+          return typeof next === "object" && next !== null ? chain(next) : next;
+        };
+      },
+    });
+  return new Proxy(db, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (key !== "select" || typeof value !== "function") return value;
+      return (...args: unknown[]) =>
+        chain(Reflect.apply(value, target, args) as object);
     },
   });
 }
@@ -162,12 +205,13 @@ describe.each(getConfiguredTestDialects())(
   "Remove Layout (%s)",
   (dialect: TestDialect) => {
     let current: TestNextly | undefined;
-    const probe: { store?: LayoutRemovalStore } = {};
+    const probe: Probe = {};
 
     afterEach(async () => {
       await current?.destroy();
       current = undefined;
       probe.store = undefined;
+      probe.raced = undefined;
     });
 
     function fence(): LayoutRemovalStore {
@@ -1397,6 +1441,38 @@ describe.each(getConfiguredTestDialects())(
         await sweep(t, fence());
 
         expect(await fence().removalOf(other)).toBeNull();
+      });
+
+      it("is not taken over by a later removal when its lease is renewed after that removal read it", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await leftAtChecked(other);
+        // Past a second, so the renewal moves `updatedAt` on every database.
+        await new Promise(resolve => setTimeout(resolve, 1100));
+        let renewed = false;
+        if (probe.raced === undefined)
+          throw new Error("the probe did not boot");
+        const later = probe.raced(async () => {
+          if (renewed) return;
+          renewed = true;
+          // The running removal renews its lease between the later removal's
+          // read of the row and its takeover.
+          await fence().renew(other, token, "checked");
+        });
+
+        const outcome = await later.mark({
+          layoutId: other,
+          action: "delete",
+          token: "later000-0000-4000-8000-000000000000",
+          startedBy: null,
+          now: past(),
+        });
+
+        expect(outcome.kind).toBe("busy");
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "checked",
+          token,
+        });
       });
 
       it("leaves a row that moved on after the sweep read it", async () => {
