@@ -26,6 +26,8 @@ test.describe.configure({ lock: [LOCK.homepage] });
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const BUILDER_URL = /\/admin\/singles\/homepage\/builder\?field=layout$/;
+/** The playground's canvas route, its `canvasPath`. */
+const CANVAS_ROUTE = "/page-builder-canvas";
 
 const NODES = [
   {
@@ -78,9 +80,11 @@ async function stayedOn(page: Page, id: string): Promise<void> {
   );
   await expect(page).toHaveURL(BUILDER_URL);
   // Nor did the FRAME go anywhere: a link followed inside it navigates the
-  // frame alone, leaving the editor's own address where it was.
+  // frame alone, leaving the editor's own address where it was. The frame
+  // holds the site's canvas route, which the playground serves.
   const frame = await page.locator(CANVAS_FRAME).elementHandle();
-  expect((await frame?.contentFrame())?.url()).toBe("about:srcdoc");
+  const at = (await frame?.contentFrame())?.url() ?? "";
+  expect(new URL(at).pathname).toBe(CANVAS_ROUTE);
 }
 
 test.describe("a link drawn on the canvas", () => {

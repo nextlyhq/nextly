@@ -63,6 +63,12 @@ export interface ComponentFactsSources {
   /** How many documents place the component. */
   readonly countPlacements: (id: string) => Promise<UsageCount>;
   /**
+   * How many pages a change to it reaches, through components and Layouts
+   * too. Optional, so a source with no Layouts or index to read answers
+   * `null` rather than a number it did not count.
+   */
+  readonly countPages?: (id: string) => Promise<UsageCount>;
+  /**
    * The ids the component has retired, or `null` where they are not recorded.
    * A failure here fails the answer: the editor then waits rather than minting
    * without them.
@@ -110,13 +116,22 @@ export async function readComponentFacts(
 ): Promise<ComponentFactsResponse> {
   const row = await sources.readLive(id);
   if (row === null || row === undefined) {
-    return { live: NONE, retired: NONE, reach: null };
+    return { live: NONE, retired: NONE, reach: null, pages: null };
   }
   const retired = await sources.readRetired(id);
   const count = await sources.countPlacements(id).then(
     found => found,
     () => null
   );
+  // Like the direct count, a page count that fails leaves its answer null
+  // rather than failing the live ids beside it.
+  const pages =
+    sources.countPages === undefined
+      ? null
+      : await sources.countPages(id).then(
+          found => found,
+          () => null
+        );
   return {
     live: liveIdsOf(row, sources.field),
     retired:
@@ -127,6 +142,10 @@ export async function readComponentFacts(
       count === null
         ? null
         : { count: count.documents, complete: count.complete },
+    pages:
+      pages === null
+        ? null
+        : { count: pages.documents, complete: pages.complete },
   };
 }
 
@@ -259,6 +278,8 @@ export function componentFactsRoute(args: {
   countPlacements: (
     ctx: PluginRouteContext
   ) => (id: string) => Promise<UsageCount>;
+  /** How many pages a change reaches, through components and Layouts too. */
+  countPages?: (ctx: PluginRouteContext) => (id: string) => Promise<UsageCount>;
   readRetired: (
     ctx: PluginRouteContext
   ) => (id: string) => Promise<RetiredExposures | null>;
@@ -282,6 +303,9 @@ export function componentFactsRoute(args: {
         await readComponentFacts(id, {
           readLive: liveRowReader(ctx, slug, locale),
           countPlacements: args.countPlacements(ctx),
+          ...(args.countPages === undefined
+            ? {}
+            : { countPages: args.countPages(ctx) }),
           readRetired: args.readRetired(ctx),
           field: args.store.field,
         })

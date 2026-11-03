@@ -35,6 +35,7 @@ import {
   userPreferenceStore,
   type BuilderShellProps,
   type ComponentVerbsHost,
+  type TurnIntoChoice,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
@@ -192,9 +193,11 @@ type MakeComponentVerb = {
   readonly request: {
     readonly action: ComposeAction;
     readonly document: BlockDocument;
+    /** For "Turn into component…": which ways are open. */
+    readonly choice?: TurnIntoChoice;
   } | null;
   readonly returnFocusTo: () => HTMLElement | null;
-  readonly open: (action: ComposeAction) => void;
+  readonly open: (action: ComposeAction, choice?: TurnIntoChoice) => void;
   readonly close: () => void;
   /** The verbs as the shared verb chain takes them, with the author's grant. */
   readonly verbs: ComponentVerbsHost;
@@ -216,18 +219,27 @@ function useMakeComponentVerb(
   definitions: DefinitionsById
 ): MakeComponentVerb {
   const gesture = useSavePatternVerb(editor, inline);
-  const [action, setAction] = useState<ComposeAction>("save-as");
+  const [action, setAction] = useState<{
+    readonly verb: ComposeAction;
+    readonly choice?: TurnIntoChoice;
+  }>({ verb: "convert" });
   const openGesture = gesture.open;
   const open = useCallback(
-    (next: ComposeAction) => {
-      setAction(next);
+    (next: ComposeAction, choice?: TurnIntoChoice) => {
+      setAction(choice === undefined ? { verb: next } : { verb: next, choice });
       openGesture();
     },
     [openGesture]
   );
   const request = useMemo(
     () =>
-      gesture.document === null ? null : { action, document: gesture.document },
+      gesture.document === null
+        ? null
+        : {
+            action: action.verb,
+            document: gesture.document,
+            ...(action.choice === undefined ? {} : { choice: action.choice }),
+          },
     [action, gesture.document]
   );
   const mayCreate = useMayCreateComponent();
@@ -237,8 +249,13 @@ function useMakeComponentVerb(
       mayCreate,
       mayUpdatePattern,
       definitions,
-      onSaveAsComponent: () => open("save-as"),
-      onConvertToComponent: () => open("convert"),
+      // One form for both ways, opening on replacing the blocks unless only
+      // keeping them is open.
+      onTurnIntoComponent: (choice: TurnIntoChoice) =>
+        open(
+          choice.replaceRefused === undefined ? "convert" : "save-as",
+          choice
+        ),
       onDetachComponent: () => open("detach"),
       onDuplicateComponent: () => open("duplicate"),
       onUpdatePattern: () => open("update-pattern"),
@@ -477,6 +494,7 @@ export function useEditorMount(
     makeComponent,
     componentVerbs: makeComponent.verbs,
     preferenceStore,
+    userId,
     componentFacts,
     componentVariants,
   };
@@ -502,6 +520,8 @@ export type EditorMount = {
   componentVerbs: ComponentVerbsHost;
   /** Where the shell keeps the signed-in author's preferences. */
   preferenceStore: NonNullable<BuilderShellProps["store"]>;
+  /** The signed-in author, whose recent pages the title switcher shows. */
+  userId: string | null;
   /** What the inspector is told about the component being edited, if any. */
   componentFacts: ComponentFieldsHost | undefined;
   /** What the variants section is told about the component, if any. */

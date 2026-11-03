@@ -11,22 +11,18 @@
  *
  * @module tests/builder-lock
  */
-import {
-  expect,
-  type Browser,
-  type BrowserContext,
-  type Page,
-} from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
-import {
-  createSignedInUser,
-  superAdminRoleId,
-  uniqueTag,
-} from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
-import { LOCK } from "./support/locks";
 import { canvasFrame } from "./support/canvas-frame";
+import { EVERY_DIALECT } from "./support/every-dialect";
+import { LOCK } from "./support/locks";
+import {
+  claimedBy,
+  secondEditor,
+  type LockedDocument,
+} from "./support/two-editors";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.usersRoles] });
@@ -42,26 +38,13 @@ function block(page: Page, id: string) {
   return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
-/**
- * A second super-admin, signed in in a context of its own (see
- * `support/accounts`), so the two pages are two lock holders. One person in two
- * tabs is one holder and would prove nothing.
- */
-async function secondEditor(
-  browser: Browser,
-  first: Page,
-  baseURL: string | undefined
-): Promise<{ context: BrowserContext; page: Page }> {
-  if (!baseURL) throw new Error("The suite configures no baseURL.");
-  const { storageState } = await createSignedInUser(first.request, baseURL, {
-    email: `second-editor-${uniqueTag()}@nextly.local`,
-    name: "Second Editor",
-    roleIds: [await superAdminRoleId(first.request)],
-  });
-  // A context from `browser` inherits none of the test's options, so it is
-  // given the address and the second editor's session.
-  const context = await browser.newContext({ baseURL, storageState });
-  return { context, page: await context.newPage() };
+/** The homepage, as the document-lock route names it. */
+async function homepage(page: Page): Promise<LockedDocument> {
+  const read = await page.request.get(HOMEPAGE_API);
+  expect(read.ok(), await read.text()).toBe(true);
+  // A Single's read is the bare document, not a mutation's `{ item }`.
+  const { id } = (await read.json()) as { id: string };
+  return { scopeKind: "single", slug: "homepage", entryId: id };
 }
 
 async function openBuilder(page: Page): Promise<void> {
@@ -79,7 +62,8 @@ async function arriveAtBuilder(page: Page): Promise<void> {
   await gotoAdmin(page, BUILDER_ADDRESS);
 }
 
-test.describe("two editors on one page", () => {
+// Run on every dialect: the lease the two editors share lives in the database.
+test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
   // Two sessions, and a lock heartbeat each side waits on: the holder learns
   // of a request, and the displaced author of a takeover, only at its next
   // beat, which the steps below allow 45 seconds for.
@@ -105,6 +89,9 @@ test.describe("two editors on one page", () => {
   }) => {
     await openBuilder(page);
     await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
+    // The canvas draws before the claim lands; a second editor arriving first
+    // would claim the page themself.
+    await claimedBy(page.request, await homepage(page));
 
     const other = await secondEditor(browser, page, baseURL);
     try {
@@ -139,6 +126,8 @@ test.describe("two editors on one page", () => {
     await block(page, "second").click();
     await page.keyboard.press("Delete");
     await expect(block(page, "second")).toHaveCount(0);
+    // As above: the second editor arrives once the first one's claim has.
+    await claimedBy(page.request, await homepage(page));
 
     const other = await secondEditor(browser, page, baseURL);
     try {

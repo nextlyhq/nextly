@@ -151,32 +151,23 @@ export async function runAdd(
   showWiring(pkg, context);
 }
 
-/** Register the `add` command with the program. */
-export function registerAddCommand(program: Command): void {
-  program
-    .command("add <package>")
-    .description("Install a Nextly plugin and show how to register it")
-    .option("-D, --dev", "Install as a dev dependency", false)
-    .option(
-      "--skip-install",
-      "Skip the package-manager install; just print the wiring snippet",
-      false
-    )
-    .action(
-      async (pkg: string, cmdOptions: AddCommandOptions, cmd: Command) => {
-        const globalOpts: GlobalOptions = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        const resolved: ResolvedAddOptions = {
-          ...cmdOptions,
-          cwd: globalOpts.cwd,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-        };
-        try {
-          await runAdd(pkg, resolved, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
-    );
+/** The action of `nextly add`, loaded when it runs. */
+export async function addAction(
+  pkg: string,
+  cmdOptions: AddCommandOptions,
+  cmd: Command
+) {
+  const globalOpts: GlobalOptions = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  const resolved: ResolvedAddOptions = {
+    ...cmdOptions,
+    cwd: globalOpts.cwd,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+  };
+  try {
+    await runAdd(pkg, resolved, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

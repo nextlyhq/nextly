@@ -110,7 +110,7 @@ describe("a component's variants in its own view", () => {
     expect(Object.values(variantsOf(editor()) ?? {})).toEqual([
       { label: "Variant 1", overrides: {} },
     ]);
-    expect(section().textContent).toContain("(no changes)");
+    expect(section().textContent).toContain("No changes yet");
     expect(editor().undoDepth).toBe(1);
 
     fireEvent.change(name, { target: { value: "Featured" } });
@@ -137,8 +137,27 @@ describe("a component's variants in its own view", () => {
     expect(variantsOf(editor())).toEqual({
       a: { label: "Night", overrides: { headline: "Late edition" } },
     });
-    expect(section().textContent).toContain("Set by variant");
-    expect(section().textContent).toContain("1 value");
+    // A dot in the component's hue marks a value the variant sets.
+    expect(
+      within(section()).getByRole("img", { name: "Set by this variant" })
+    ).toBeTruthy();
+    expect(section().textContent).toContain("1 change");
+    // The inspector's own row grid, the placement panel's, not a copy.
+    const row = value.closest(".nx-variants__value");
+    expect(row?.classList.contains("nx-inspector__field")).toBe(true);
+    // The dot sits with the label, in the label's cell.
+    expect(
+      row
+        ?.querySelector(".nx-variants__value-label")
+        ?.querySelector(".nx-variants__dot")
+    ).not.toBeNull();
+    // Reset is an icon, named for its row.
+    const reset = within(section()).getByRole("button", {
+      name: "Reset Headline to the component’s default in Night",
+    });
+    expect(reset.textContent).toBe("");
+    fireEvent.click(reset);
+    expect(variantsOf(editor())?.a?.overrides).toEqual({});
   });
 
   it("sets a choice and hides a part on the open variant", () => {
@@ -175,7 +194,8 @@ describe("a component's variants in its own view", () => {
     );
     fireEvent.click(within(section()).getByRole("combobox", { name: "Tone" }));
     fireEvent.click(screen.getByRole("option", { name: "Dark" }));
-    fireEvent.click(within(section()).getByRole("switch", { name: "Shown" }));
+    // The placements' own checkbox, not a switch.
+    fireEvent.click(within(section()).getByRole("checkbox", { name: "Shown" }));
 
     expect(variantsOf(editor())?.a?.overrides).toEqual({
       tone: "dark",
@@ -300,7 +320,7 @@ describe("a component's variants in its own view", () => {
         variants: { a: { label: "Night", overrides: {} } },
       })
     );
-    expect(section().textContent).toContain("Expose a field first");
+    expect(section().textContent).toContain("Add a field first");
     expect(
       within(section()).getByRole("button", { name: "Add variant" })
     ).toHaveProperty("disabled", true);
@@ -341,8 +361,49 @@ describe("a component's variants in its own view", () => {
         name: "Show the values of Night",
       })
     );
-    const toggle = within(section()).getByRole("switch", { name: "Shown" });
+    const toggle = within(section()).getByRole("checkbox", { name: "Shown" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(section().textContent).toContain("Hidden");
+  });
+
+  it("opens a variant through the host, so the canvas can preview it", () => {
+    const opened: (string | undefined)[] = [];
+    function Host() {
+      const editor = useEditorState({
+        initialDocument: component({
+          variants: { a: { label: "Night", overrides: {} } },
+        }),
+      });
+      const [open, setOpen] = React.useState<string | undefined>(undefined);
+      return (
+        <InspectorPanel
+          editor={editor}
+          componentVariants={{
+            preview: {
+              open,
+              onOpen: id => {
+                opened.push(id);
+                setOpen(id);
+              },
+            },
+          }}
+        />
+      );
+    }
+    render(<Host />);
+    const toggle = within(section()).getByRole("button", {
+      name: "Show the values of Night",
+    });
+    fireEvent.click(toggle);
+    expect(opened).toEqual(["a"]);
+    expect(
+      within(section()).getByRole("textbox", { name: "Headline" })
+    ).toBeTruthy();
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Hide the values of Night",
+      })
+    );
+    expect(opened).toEqual(["a", undefined]);
   });
 });

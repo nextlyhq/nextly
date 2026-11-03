@@ -188,6 +188,19 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
@@ -245,7 +258,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // Nothing stored, read successfully — so the merged style is the host's
   // config alone and `status` is "ready". A pending read would disable the
   // switcher, which is a different test's subject.
-  useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -390,10 +402,14 @@ describe("the sheet the canvas is compiled with", () => {
 });
 
 describe("the top bar's title", () => {
-  it("shows the document's title as the form holds it", async () => {
+  it("shows the document's title as the form holds it, as the page switcher", async () => {
     const { screen } = await import("@testing-library/react");
     openEditor();
-    expect(screen.getByTestId("shell-title").textContent).toBe("About us");
+    expect(
+      screen.getByRole("button", { name: "About us: switch page" }).textContent
+    ).toBe("About us");
+    // The shell's own read-only title is not drawn beside it.
+    expect(screen.getByTestId("shell-title").textContent).toBe("");
   });
 });
 

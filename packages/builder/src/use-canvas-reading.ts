@@ -92,7 +92,10 @@ function same(a: CanvasReading, b: CanvasReading): boolean {
   return (
     a.tag === b.tag &&
     a.orientation?.writingMode === b.orientation?.writingMode &&
-    a.orientation?.direction === b.orientation?.direction
+    a.orientation?.direction === b.orientation?.direction &&
+    // The layout too: alignment icons follow it, and it can change alone.
+    a.orientation?.display === b.orientation?.display &&
+    a.orientation?.flexDirection === b.orientation?.flexDirection
   );
 }
 

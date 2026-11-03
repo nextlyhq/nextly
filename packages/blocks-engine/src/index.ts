@@ -361,6 +361,9 @@ export {
   // own value. Two implementations of that order agree until a variant rule
   // changes in one of them.
   instanceExposure,
+  // A component's own tree as one of its variants draws it, ids kept, for
+  // the editor's canvas to preview the variant open in the component's view.
+  variantPreview,
   // What a supplied definition has to be before the resolver inlines it.
   // Published because the editor's inspector draws from the same lookup the
   // canvas resolves against, and must refuse exactly what the canvas refuses.
@@ -608,6 +611,20 @@ export { isPlainRecord } from "./plain-record";
  */
 export { authoredText, isAuthoredText } from "./authored-text";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
+// Per-device visibility as an author works with it: each device's resolved
+// state, a hide that stays on one device, and the stored values carried across
+// a change of the site's breakpoints. Public because the editor writes the eye
+// and the breakpoint flows rewrite documents, and both must resolve devices as
+// the compiler does.
+export {
+  carryDeviceVisibility,
+  carryDocumentDeviceVisibility,
+  deviceVisibility,
+  hiddenOnDevice,
+  revealDeviceHidden,
+  setDeviceVisibility,
+} from "./device-visibility";
+export type { CarriedVisibility, DeviceVisibility } from "./device-visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
   BlockTypeLookup,
@@ -964,6 +981,8 @@ export {
   // the later entry, which is four separate rules to get right by hand.
   usableNamedClasses,
   usableNamedClassPositions,
+  // The part of a library the compiler reads, before those rules run.
+  namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";

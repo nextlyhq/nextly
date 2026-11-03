@@ -49,7 +49,7 @@ import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
 import { dataLossRefusal, exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   getDialectDisplayName,
@@ -66,6 +66,7 @@ import {
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
 
+import { commandRun } from "./command-run";
 import { runMigrate } from "./migrate";
 
 // ============================================================================
@@ -579,43 +580,27 @@ async function confirmDestructiveAction(prompt: string): Promise<boolean> {
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
 /**
- * Register the migrate:fresh command with the program
- *
- * @param program - Commander program instance
+ * The action of `nextly migrate:fresh`, loaded when it runs.
  */
-export function registerMigrateFreshCommand(program: Command): void {
-  program
-    .command("migrate:fresh")
-    .description("Drop all tables and re-run all migrations")
-    .option(
-      "--accept-data-loss [targets]",
-      "Consent to deleting every table, for a run with no terminal; takes no targets. Same as NEXTLY_ACCEPT_DATA_LOSS=1."
-    )
-    .option("-f, --force", "Deprecated: use --accept-data-loss", false)
-    .option("--seed", "Run seeders after migrations", false)
-    .action(async (cmdOptions: MigrateFreshCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+export async function migrateFreshAction(
+  cmdOptions: MigrateFreshCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateFreshOptions = options;
 
-      const resolvedOptions: ResolvedMigrateFreshOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-
-      try {
-        await runMigrateFresh(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runMigrateFresh(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateFreshCommand } from "./migrate-fresh.command";
 
 // ============================================================================
 // Seeding

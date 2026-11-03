@@ -114,28 +114,19 @@ export async function runWebhooksPruneCommand(
   }
 }
 
-/** Register the `nextly webhooks:prune` command. */
-export function registerWebhooksPruneCommand(program: Command): void {
-  program
-    .command("webhooks:prune")
-    .description(
-      "Run a webhook retention pass: prune aged events and terminal deliveries"
-    )
-    .option(
-      "--dry-run",
-      "Report what a pass would remove without deleting anything",
-      false
-    )
-    .action(async (cmdOptions: { dryRun?: boolean }, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runWebhooksPruneCommand(
-          { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/** The action of `nextly webhooks:prune`, loaded when it runs. */
+export async function webhooksPruneAction(
+  cmdOptions: { dryRun?: boolean },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runWebhooksPruneCommand(
+      { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

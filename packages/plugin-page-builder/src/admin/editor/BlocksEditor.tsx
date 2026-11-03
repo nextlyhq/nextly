@@ -33,7 +33,11 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  VariantPreviewTag,
+  type ComponentFieldsHost,
+  type ComponentVariantsHost,
   type OpenPassages,
+  type VariantPreviewState,
 } from "@nextlyhq/builder/shell";
 import {
   DocumentPrimaryAction,
@@ -69,6 +73,7 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { SettingsDialog } from "./settings-dialog";
 import {
@@ -76,6 +81,7 @@ import {
   type SharePreview,
   type ShareSeoFields,
 } from "./share-preview";
+import { SiteLayoutNote } from "./site-canvas";
 import {
   ConnectStyleHistoryContext,
   RemountOnStyleReplay,
@@ -112,6 +118,8 @@ type EditorView = EditorMount &
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** The variant open in a component's view, which the canvas previews. */
+    preview: ComponentView["preview"];
   };
 
 /**
@@ -234,7 +242,11 @@ const COMPONENT_READ_NOTES: Readonly<
  * history and state at the start, the devices in the centre, and Preview and
  * the document's actions at the end.
  */
-function editorTopBar(view: EditorView): {
+function editorTopBar(
+  view: EditorView,
+  /** The page's title as the form has it now, and the field being edited. */
+  page: { title: string | undefined; field: string }
+): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
   topBarEnd: React.JSX.Element;
@@ -252,8 +264,24 @@ function editorTopBar(view: EditorView): {
   return {
     topBar: (
       <>
-        <HistoryButtons editor={editor} inline={inline} />
+        {/* As the agreed bar has it: the title as a switcher, the status,
+            then undo and redo. */}
+        <PageTitleSwitcher
+          title={page.title ?? ""}
+          current={
+            view.pages.currentPage === null
+              ? null
+              : {
+                  ...view.pages.currentPage,
+                  field: page.field,
+                  title: page.title ?? "",
+                }
+          }
+          userId={view.userId}
+          onAllPages={() => view.requestPanel("pages")}
+        />
         <DocumentStatusPill isDirty={documentDirty} />
+        <HistoryButtons editor={editor} inline={inline} />
       </>
     ),
     topBarCenter: (
@@ -288,7 +316,7 @@ function editorTopBar(view: EditorView): {
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
+        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
           document's leading action with its other ways to publish on its
@@ -462,12 +490,31 @@ function editorInspector(
         onManageFonts: () => requestPanel("design", "fonts"),
       }}
       // In a component's own view: the ids its live definition holds, which a
-      // new field must never reuse, and how far a removal reaches.
-      componentFields={componentFacts}
-      // And how many placements chose a variant, for its delete dialog.
-      componentVariants={componentVariants}
+      // new field must never reuse, how far a removal reaches, and its name
+      // for the card heading the view, which is the open document's title.
+      componentFields={namedFacts(componentFacts, view.pageTitle)}
+      // And how many placements chose a variant, for its delete dialog, and
+      // the open variant, which the canvas previews.
+      componentVariants={previewingHost(componentVariants, view.preview)}
     />
   );
+}
+
+/** The variants host, holding the open variant for the canvas to preview. */
+function previewingHost(
+  host: ComponentVariantsHost | undefined,
+  preview: VariantPreviewState
+): ComponentVariantsHost {
+  return { ...host, preview: preview.binding };
+}
+
+/** The component facts with the component's name, or nothing for a page. */
+function namedFacts(
+  facts: ComponentFieldsHost | undefined,
+  title: string | undefined
+): ComponentFieldsHost | undefined {
+  if (facts === undefined || title === undefined || title === "") return facts;
+  return { ...facts, name: title };
 }
 
 /** The canvas, or what stands in its place while a read it needs is out. */
@@ -477,7 +524,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     siteStylePending,
     siteStyleError,
     editor,
-    inline,
     zoom,
     setAppliedScale,
     frameWidth,
@@ -495,6 +541,10 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     showEmptyElements,
     openInsertPanel,
     locale,
+    canvasSource,
+    canvasFallback,
+    onCanvasFallback,
+    canvasDir,
   } = view;
   return (
     <>
@@ -533,6 +583,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
         and confirm.
       */}
       <RepairNotice editor={editor} />
+      {/*
+        Whether the page is drawn inside the site's own layout, and why not
+        when it is not: without the site's stylesheets the canvas can differ
+        from the published page.
+      */}
+      <SiteLayoutNote fallback={canvasFallback} />
       {siteStylePending ||
       siteStyleError !== null ||
       componentLibrary.state === "pending" ? (
@@ -556,11 +612,18 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             zoom={zoom}
             onScale={setAppliedScale}
             title={pageTitle}
-            // The language being edited, for a screen reader in the frame.
+            // The language being edited, for a screen reader in the frame, and
+            // the way it is written.
             lang={locale}
+            dir={canvasDir}
+            // The site's canvas route, where the site serves one, so the page
+            // is drawn inside the site's own layout and stylesheets.
+            source={canvasSource}
+            onSourceFallback={onCanvasFallback}
             showEmptyElements={showEmptyElements}
             overlay={
               <>
+                <VariantPreviewTag name={view.preview.previewing} />
                 <CanvasMarks />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
@@ -612,7 +675,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             }
           >
             <Canvas
-              document={editor.document}
+              // The document as the open variant draws it, in a component's
+              // view; the document itself otherwise.
+              document={view.preview.document}
               rootRef={canvasRoot}
               onRoot={setCanvasElement}
               forcedState={shownStyleState}
@@ -636,7 +701,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The pointer route into typing a block's text. Its keyboard
               // counterpart is the Enter binding, registered in the same
               // place so a surface cannot gain one without the other.
-              onDoubleClick={inline.onDoubleClick}
+              onDoubleClick={view.preview.onDoubleClick}
             />
           </CanvasFrame>
         </BlockContextMenu>
@@ -860,6 +925,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentLibrary: mount.componentLibrary,
     fieldName: name,
     componentFacts: mount.componentFacts,
+    // Said by the banner's Back in the view a placement here opens.
+    here: page.title,
+    inline,
   });
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
@@ -875,6 +943,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     documentDirty,
     pageTitle,
     componentView,
+    preview: componentView.preview,
   };
   useOpenAtSection({
     sectionId: openAt,
@@ -905,7 +974,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     <EditorFrame banner={componentView.banner}>
       <BuilderShell
         notices={notices}
-        onExit={done}
+        onExit={shellExit(componentView, done)}
         // The signed-in author's own preferences, not the browser's.
         store={mount.preferenceStore}
         availablePanels={availablePanels}
@@ -927,10 +996,9 @@ function EditorBody<TFieldValues extends FieldValues>({
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
-        {...editorTopBar(view)}
-        // The document's title, read-only, as the author has it in the form
-        // right now. Nothing for a document with no title field.
-        title={page.title}
+        // The title is the top bar's switcher, so the shell draws none.
+        {...editorTopBar(view, { title: page.title, field: name })}
+        openSettingsRequest={view.pages.settingsRequest}
         renderSettings={editorSettings(view, page)}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
@@ -976,7 +1044,7 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
         <BlockKeyboardActions
           editor={editor}
-          onEditText={inline.begin}
+          onEditText={componentView.preview.onEditText}
           onSaveAsPattern={savePattern.open}
           /*
             The same map the canvas draws with, so a keyboard move of an
@@ -1054,6 +1122,18 @@ function EditorBody<TFieldValues extends FieldValues>({
       </BuilderShell>
     </EditorFrame>
   );
+}
+
+/**
+ * The shell's exit arrow: withheld while the component banner offers its
+ * Back, so the view has one way back rather than two arrows going to two
+ * places. Leaving through search still commits, as the exit always did.
+ */
+function shellExit(
+  view: Pick<ComponentView, "offersBack">,
+  done: () => void
+): (() => void) | undefined {
+  return view.offersBack ? undefined : done;
 }
 
 /**

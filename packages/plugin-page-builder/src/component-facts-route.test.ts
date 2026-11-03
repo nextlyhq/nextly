@@ -80,7 +80,34 @@ describe("the answer", () => {
       live: { properties: ["title", "cta"], slots: ["body"] },
       retired: NO_RETIRED,
       reach: { count: 3, complete: false },
+      pages: null,
     });
+  });
+
+  it("carries the pages a change reaches beside the direct count", async () => {
+    const facts = await readComponentFacts("hero", {
+      readLive: async () => row,
+      countPlacements: async () => ({ documents: 1, complete: true }),
+      countPages: async () => ({ documents: 4, complete: true }),
+      field: "content",
+      readRetired: async () => NO_RETIRED,
+    });
+    expect(facts.reach).toEqual({ count: 1, complete: true });
+    expect(facts.pages).toEqual({ count: 4, complete: true });
+  });
+
+  it("keeps the rest of the answer when the page count fails", async () => {
+    const facts = await readComponentFacts("hero", {
+      readLive: async () => row,
+      countPlacements: async () => ({ documents: 1, complete: true }),
+      countPages: async () => {
+        throw new Error("the Layouts are unavailable");
+      },
+      field: "content",
+      readRetired: async () => NO_RETIRED,
+    });
+    expect(facts.pages).toBeNull();
+    expect(facts.reach).toEqual({ count: 1, complete: true });
   });
 
   it("keeps the live ids when the count fails", async () => {
@@ -120,6 +147,10 @@ describe("a component the caller may not read", () => {
         counted += 1;
         return { documents: 40, complete: true };
       },
+      countPages: async () => {
+        counted += 1;
+        return { documents: 40, complete: true };
+      },
       field: "content",
       readRetired: async () => NO_RETIRED,
     });
@@ -127,6 +158,7 @@ describe("a component the caller may not read", () => {
       live: NO_RETIRED,
       retired: NO_RETIRED,
       reach: null,
+      pages: null,
     });
     expect(counted).toBe(0);
   });

@@ -70,7 +70,7 @@ async function openComponent(page: Page, id: string): Promise<void> {
   });
 }
 
-/** The expose control under one prop's row, in the inspector. */
+/** The expose control of one prop's row, in the inspector. */
 function exposeRow(page: Page, prop: string): Locator {
   return page.locator(`[data-expose-prop="${prop}"]`);
 }
@@ -86,7 +86,10 @@ async function select(page: Page, id: string): Promise<void> {
 /** Expose one prop of the selected block, and name the field. */
 async function expose(page: Page, prop: string, name: string): Promise<void> {
   const row = exposeRow(page, prop);
-  await row.getByRole("switch").click();
+  // The component mark beside the property, a button that stays pressed.
+  const toggle = row.getByRole("button", { name: /^Let each placement/ });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
   const field = row.getByRole("textbox");
   await expect(field).toBeFocused();
   await field.fill(name);
@@ -95,7 +98,7 @@ async function expose(page: Page, prop: string, name: string): Promise<void> {
 }
 
 function fieldsList(page: Page): Locator {
-  return page.getByRole("region", { name: "Exposed fields" });
+  return page.getByRole("region", { name: "Fields" });
 }
 
 test.describe("a component's exposed fields", () => {
@@ -112,7 +115,7 @@ test.describe("a component's exposed fields", () => {
     await expose(page, "text", "Headline");
     await expose(page, "level", "Heading level");
     await page
-      .getByRole("switch", { name: "Let placements hide this" })
+      .getByRole("button", { name: "Let each placement hide Heading" })
       .click();
 
     await select(page, "cf-body");
@@ -153,7 +156,8 @@ test.describe("a component's exposed fields", () => {
         has: page.getByRole("textbox", { name: `Name of the field ${name}` }),
       });
       await expect(item).toHaveCount(1);
-      await expect(item.locator(".nx-exposed-fields__type")).toHaveText(type);
+      // The type is the row's icon, named for a screen reader.
+      await expect(item.getByRole("img", { name: type })).toBeVisible();
     }
 
     // And on a prop row: the heading's text shows the field it is exposed as.
@@ -208,7 +212,7 @@ test.describe("a component's exposed fields", () => {
     await dialog.getByRole("button", { name: "Remove field" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(list.getByRole("listitem")).toHaveCount(0);
-    await expect(list).toContainText("Placements can’t change anything");
+    await expect(list).toContainText("No fields yet");
   });
 
   test("never gives a new field the id of one a published removal retired", async ({

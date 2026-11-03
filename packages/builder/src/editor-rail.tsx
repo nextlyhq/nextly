@@ -13,7 +13,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import {
   CircleHelp,
   Component,
-  FileText,
+  Files,
   Layers,
   Palette,
   Plus,
@@ -31,7 +31,7 @@ const PANEL_CHROME: Record<
 > = {
   add: { label: EDITOR_WORDS.add, Icon: Plus },
   layers: { label: EDITOR_WORDS.layers, Icon: Layers },
-  pages: { label: EDITOR_WORDS.pages, Icon: FileText },
+  pages: { label: EDITOR_WORDS.pages, Icon: Files },
   components: { label: EDITOR_WORDS.components, Icon: Component },
   design: { label: EDITOR_WORDS.design, Icon: Palette },
   settings: { label: EDITOR_WORDS.settings, Icon: Settings },
@@ -45,8 +45,10 @@ export function panelLabel(panel: LeftPanel): string {
 // The ring sits off the item by a gap of the rail's own surface: on the open
 // panel's item, filled with the accent, a ring drawn against the fill is the
 // same colour as it and does not show.
+// The label a size under the bar's, with room at each side, so the longest
+// ("Components") sits inside its pill rather than touching both edges.
 const ITEM_CLASS =
-  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md py-1.5 text-xs leading-tight focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
+  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md px-1 py-1.5 text-[11px] leading-tight focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
 function RailItem({
   label,
