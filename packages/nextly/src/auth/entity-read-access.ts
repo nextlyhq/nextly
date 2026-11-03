@@ -14,6 +14,7 @@
  */
 
 import { NextlyError } from "../errors/nextly-error";
+import { rethrowIfAnyRuleCouldNotRun } from "../errors/rule-could-not-run";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { isSuperAdmin } from "./access/actor";
@@ -360,6 +361,9 @@ export async function readableEntities(
     const settled = await Promise.allSettled(
       group.map(slug => canReadEntity(slug, caller))
     );
+    // A rule that could not run never answered: the request ends with that,
+    // not with its entity left out of the set as though refused.
+    rethrowIfAnyRuleCouldNotRun(settled);
     group.forEach((slug, index) => {
       const outcome = settled[index];
       if (outcome.status === "fulfilled" && outcome.value) allowed.add(slug);

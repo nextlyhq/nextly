@@ -2,6 +2,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
@@ -1415,6 +1416,9 @@ export class FieldGroupQueryService extends BaseService {
 
       return expanded;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the component's relationships left unexpanded.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.debug("Could not expand relationships in component data", {
         componentSlug,
         error: error instanceof Error ? error.message : String(error),

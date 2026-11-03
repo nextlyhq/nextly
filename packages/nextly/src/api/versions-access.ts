@@ -57,7 +57,12 @@ import {
 } from "../domains/versions/version-views";
 import type { VersionRef } from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
+import {
+  errorFromServiceEnvelope,
+  type ServiceErrorEnvelope,
+} from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
 import { getCachedNextly } from "../init";
 import type {
   ResolvedVersionsConfig,
@@ -544,7 +549,7 @@ async function canReadLiveDocument(
     // The read rules and hooks are handed this language's values.
     ...(locale === undefined ? {} : { locale }),
   });
-  if (!interpretReadResult(result.success, result.statusCode)) return false;
+  if (!interpretReadResult(result)) return false;
   // The read must be of the document asked about. A `beforeOperation` hook may
   // rewrite the id a read resolves, and a read that passed on another document
   // would authorize this one's history by that document's rules. The id is the
@@ -604,11 +609,19 @@ export { resolveSingleDocumentId };
 
 /**
  * Collapse a live-read result into "may the caller see this document".
- * Only 403/404 mean no; anything else non-successful is a genuine fault.
+ * Only 403/404 mean no; anything else non-successful is a genuine fault,
+ * except a rule that could not run, which ends the request with its own
+ * answer rather than an internal error.
  */
-function interpretReadResult(success: boolean, statusCode: number): boolean {
-  if (success) return true;
+function interpretReadResult(
+  result: ServiceErrorEnvelope & { success: boolean; statusCode: number }
+): boolean {
+  if (result.success) return true;
+  const { statusCode } = result;
   if (statusCode === 403 || statusCode === 404) return false;
+  if (result.code === "RULE_COULD_NOT_RUN") {
+    throw errorFromServiceEnvelope(result);
+  }
   throw NextlyError.internal({
     logContext: {
       reason: "version-live-read-failed",
@@ -702,6 +715,9 @@ export async function redactSnapshotForUser(
     });
     await applyComponentReadAccess(entry, fields, componentFields, caller);
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with every field carrying a read rule withheld.
+    rethrowIfRuleCouldNotRun(error);
     // Rules that could not be evaluated decide nothing, so nothing they guard
     // is shown: every field carrying a read rule is withheld, and named.
     for (const key of fieldsCarryingReadRules(

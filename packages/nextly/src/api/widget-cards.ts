@@ -53,6 +53,7 @@ import {
 import { withSiteOverride } from "../domains/widgets/site-rules";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
 import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
@@ -365,6 +366,9 @@ async function refusedAccess(
     try {
       return (await access({ user: batch.caller.user })) !== true;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the card refused.
+      rethrowIfRuleCouldNotRun(error);
       logPluginFailure(declared, "widget-access-threw", error);
       return true;
     }
@@ -382,7 +386,10 @@ async function refusedAccess(
           source: `collection:${renamedCollection(collection, declared.collections)}`,
           op: "count",
         });
-      } catch {
+      } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the card refused.
+        rethrowIfRuleCouldNotRun(error);
         return true;
       }
     }
@@ -454,6 +461,9 @@ async function ownCode<T>(
   try {
     return await run();
   } catch (error) {
+    // A core rule the plugin's read asked that could not run never answered:
+    // the request ends with that answer, not with the plugin's code failing.
+    rethrowIfRuleCouldNotRun(error);
     // 🔴 Whatever it throws is the plugin's, a NextlyError included: one imported from the SDK
     // carries the plugin's own public message and log context, which can hold the data it was
     // reading. Core's own errors never pass through here: the card's budget and a batch given up
@@ -680,6 +690,9 @@ export async function cardShownTo(
       ? "shown"
       : "hidden";
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the card drawn as failed with nothing saying why.
+    rethrowIfRuleCouldNotRun(error);
     // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
     if (!asked.signal.aborted) logNotJudged(declared, error);
     return "failed";
@@ -724,6 +737,9 @@ export async function cardAnswersEmpty(
     // display's own rule, as the card itself would draw it.
     return "empty" in answer && cardAnswerIsEmpty(answer);
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the card judged as having an answer.
+    rethrowIfRuleCouldNotRun(error);
     // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
     if (!asked.signal.aborted) logNotJudged(declared, error);
     return false;

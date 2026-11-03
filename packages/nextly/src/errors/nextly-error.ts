@@ -654,6 +654,32 @@ export class NextlyError extends Error {
   }
 
   /**
+   * An access or field rule the request needs could not run, because its own
+   * database query waited out the bound for a connection. Not a refusal: the
+   * rule never answered. Names the collection or Single whose rule it is, and
+   * the field for a field's rule, and says when to retry.
+   */
+  static ruleCouldNotRun(opts: {
+    subject: string;
+    field?: string;
+    cause?: Error;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "RULE_COULD_NOT_RUN",
+      statusCode: NEXTLY_ERROR_STATUS.RULE_COULD_NOT_RUN,
+      publicMessage: genericPublicMessage("RULE_COULD_NOT_RUN"),
+      publicData: {
+        subject: opts.subject,
+        ...(opts.field !== undefined ? { field: opts.field } : {}),
+        retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS,
+      },
+      cause: opts.cause,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
    * What a request boundary answers with for a thrown value that is not a
    * NextlyError: "database busy" when the request waited out its bound for a
    * connection, which is retryable and no fault of the server's code, and an

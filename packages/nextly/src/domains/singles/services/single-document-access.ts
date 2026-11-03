@@ -35,6 +35,10 @@ import {
 } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getService } from "../../../di";
+import {
+  errorFromServiceEnvelope,
+  type ServiceErrorEnvelope,
+} from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { UserContext } from "../types";
 
@@ -80,12 +84,16 @@ export interface SingleAccessSubject {
  * Anything else is the read FAILING rather than refusing, and returning `false`
  * for it would turn an outage into a permission denial that looks deliberate.
  */
-function readVerdict(result: {
-  success: boolean;
-  statusCode: number;
-}): boolean {
+function readVerdict(
+  result: ServiceErrorEnvelope & { success: boolean; statusCode: number }
+): boolean {
   if (result.success) return true;
   if (result.statusCode === 403 || result.statusCode === 404) return false;
+  // A rule that could not run never answered: the request ends with that,
+  // not with an internal error.
+  if (result.code === "RULE_COULD_NOT_RUN") {
+    throw errorFromServiceEnvelope(result);
+  }
   throw NextlyError.internal({
     logContext: {
       reason: "single-access-probe-failed",
@@ -226,6 +234,11 @@ async function storedSingleDocumentAllows(
             : registeredWriteAsNamedLanguagesFor(locale),
           ask
         );
+  // A rule that could not run never answered: the request ends with that,
+  // not with the Single read as one the caller may not touch.
+  if (denied?.code === "RULE_COULD_NOT_RUN") {
+    throw errorFromServiceEnvelope(denied);
+  }
   return denied === null;
 }
 

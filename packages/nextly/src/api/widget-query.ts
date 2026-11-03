@@ -444,6 +444,8 @@ async function checkPrepared(
     const query = await checkedAgainst(entry, mayRead);
     return { index, query, executable: entry.executable };
   } catch (error) {
+    // A read decision whose rule could not run keeps that code on the slot
+    // (`failedSlot`), never read as a source the caller may not read.
     return failedSlot(error);
   }
 }

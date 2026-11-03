@@ -17,6 +17,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
@@ -1982,16 +1983,26 @@ export class CollectionRelationshipService extends BaseService {
    * The verdict this expansion already holds for the target, or `decide`'s,
    * kept for the rest of the expansion. Pending verdicts are kept too, so
    * fields fetched concurrently share one question rather than each asking.
+   * A verdict that fails is not kept, so the next ask decides again rather
+   * than repeating the failure for the rest of the expansion.
    */
   private memoizedVerdict(
     access: RelatedRowAccess,
     targetCollection: string,
     decide: () => Promise<FilteredRead>
   ): Promise<FilteredRead> {
-    const cached = access.targetVerdicts?.get(targetCollection);
+    const verdicts = access.targetVerdicts;
+    const cached = verdicts?.get(targetCollection);
     if (cached) return cached;
     const pending = decide();
-    access.targetVerdicts?.set(targetCollection, pending);
+    if (verdicts) {
+      verdicts.set(targetCollection, pending);
+      pending.catch(() => {
+        if (verdicts.get(targetCollection) === pending) {
+          verdicts.delete(targetCollection);
+        }
+      });
+    }
     return pending;
   }
 
@@ -2629,6 +2640,9 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with related entries missing from the map.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error(
         `Failed to batch fetch entries for ${targetCollection}`,
         { error: error }
@@ -2721,6 +2735,9 @@ export class CollectionRelationshipService extends BaseService {
         );
       }
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with every source relating to nothing.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to batch fetch manyToMany relations", {
         error: error,
       });
@@ -2994,6 +3011,9 @@ export class CollectionRelationshipService extends BaseService {
           }
         }
       } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the relation left unexpanded.
+        rethrowIfRuleCouldNotRun(error);
         // If expansion fails, keep the original value
         this.logger.error(`Failed to expand relation ${field.name}`, {
           error: error,
@@ -4266,7 +4286,10 @@ export class CollectionRelationshipService extends BaseService {
       // not refuse the whole parent read, and the caller learns no more than a
       // reference pointing at nothing would tell them.
       return readable ?? null;
-    } catch {
+    } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a reference that reads as pointing at nothing.
+      rethrowIfRuleCouldNotRun(error);
       return null;
     }
   }
@@ -4466,6 +4489,9 @@ export class CollectionRelationshipService extends BaseService {
         access
       );
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a relationship that reads as empty.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to fetch many-to-many relations", {
         error: error,
       });

@@ -30,6 +30,7 @@ import {
   SYSTEM_WRITE_POLICY,
 } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import { consoleLogger } from "../../shared/types";
 import type {
   CheckAccessArgs,
@@ -429,6 +430,9 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
           ctx.rbacAccessControlService
         );
       } catch (error) {
+        // A rule that could not run never answered: the call ends with that,
+        // not with a refusal.
+        rethrowIfRuleCouldNotRun(error);
         // A lookup the answer needs that fails is refused rather than failed,
         // since the answer is a boolean: a grant lookup, or a role lookup
         // wherever a rule would be asked, so a rule is never asked with a role
