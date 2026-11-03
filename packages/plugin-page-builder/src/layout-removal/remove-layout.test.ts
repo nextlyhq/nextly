@@ -801,7 +801,7 @@ describe("the scan", () => {
       budget: 3,
     });
 
-    expect(scan).toEqual({ references: [], complete: true });
+    expect(scan).toEqual({ references: [], complete: true, unread: [] });
   });
 
   it("is incomplete when the budget runs out with a page left", async () => {
@@ -844,6 +844,7 @@ describe("the scan", () => {
     expect(scan).toEqual({
       references: [{ id: "p1", title: "A", place: "draft" }],
       complete: true,
+      unread: [],
     });
   });
 });
@@ -882,6 +883,187 @@ describe("a long scan under the fence", () => {
       token: "token-1",
       step: "checked",
     });
+  });
+});
+
+describe("a page deleted while the scan reads it", () => {
+  /** The Direct API over `s`, with `gone` deleted after it was listed. */
+  function deletedAfterListing(s: Site, gone: string) {
+    const api = directApi(s);
+    const findByID = api.findByID.bind(api);
+    return Object.assign(Object.create(api) as object, {
+      findByID: async (args: Parameters<typeof api.findByID>[0]) => {
+        if (args.id === gone) {
+          s.pages = s.pages.filter(page => page.id !== gone);
+          throw NextlyError.notFound();
+        }
+        return findByID(args);
+      },
+    }) as typeof api;
+  }
+
+  /**
+   * The Direct API over `s`, where reading `page` by id answers not found
+   * though the page is still there, as a read hook about something it relates
+   * to can.
+   */
+  function unreadable(s: Site, page: string) {
+    const api = directApi(s);
+    const findByID = api.findByID.bind(api);
+    return Object.assign(Object.create(api) as object, {
+      findByID: async (args: Parameters<typeof api.findByID>[0]) => {
+        if (args.id === page) throw NextlyError.notFound();
+        return findByID(args);
+      },
+    }) as typeof api;
+  }
+
+  it("says the scan is incomplete when a page still there can't be read", async () => {
+    const s = site();
+    s.pages.push(
+      { id: "p1", title: "Unreadable", status: "published", layout: null },
+      { id: "p2", title: "Kept", status: "published", layout: null }
+    );
+    s.pageDrafts.set("p1", { id: "p1", layout: "landing" });
+
+    const scan = await scanLayoutReferences({
+      nextly: unreadable(s, "p1"),
+      pages: "pages",
+      layoutId: "landing",
+    });
+
+    expect(scan.complete).toBe(false);
+  });
+
+  it("reads on past it, still finding a later page's working draft", async () => {
+    const s = site();
+    s.pages.push(
+      { id: "p1", title: "Gone", status: "published", layout: null },
+      { id: "p2", title: "Kept", status: "published", layout: null }
+    );
+    s.pageDrafts.set("p2", { id: "p2", layout: "landing" });
+
+    const scan = await scanLayoutReferences({
+      nextly: deletedAfterListing(s, "p1"),
+      pages: "pages",
+      layoutId: "landing",
+    });
+
+    expect(scan).toEqual({
+      references: [{ id: "p2", title: "Kept", place: "draft" }],
+      complete: true,
+      unread: [],
+    });
+  });
+
+  it("lets the removal through when the only page naming the Layout is deleted after it was listed", async () => {
+    const s = site();
+    s.pages.push({
+      id: "p1",
+      title: "Gone",
+      status: "draft",
+      layout: "landing",
+    });
+    const d = deps(s);
+    const api = d.nextly;
+    const find = api.find.bind(api);
+    // The page is deleted right after the scan lists the rows naming the
+    // Layout, once.
+    let deleted = false;
+    const nextly = Object.assign(Object.create(api) as object, {
+      find: async (args: Parameters<typeof find>[0]) => {
+        const answered = await find(args);
+        const where = args.where as { layout?: unknown } | undefined;
+        if (!deleted && where?.layout !== undefined) {
+          deleted = true;
+          s.pages = s.pages.filter(page => page.id !== "p1");
+        }
+        return answered;
+      },
+    }) as typeof api;
+
+    const answer = await removeLayout(
+      { ...d, nextly },
+      { layoutId: "landing", action: "delete", dryRun: false }
+    );
+
+    expect(deleted).toBe(true);
+    expect(answer.message).toBe("The Layout was deleted.");
+    expect(s.layouts.has("landing")).toBe(false);
+  });
+
+  it("keeps a removal to retry when the scan after its write can't read a page still there", async () => {
+    const s = site();
+    s.layouts.delete("landing");
+    s.pages.push({
+      id: "p1",
+      title: "Unreadable",
+      status: "published",
+      layout: null,
+    });
+    s.pageDrafts.set("p1", { id: "p1", layout: "landing" });
+    const logged: { message: string; meta?: Record<string, unknown> }[] = [];
+    const d = {
+      ...deps(s),
+      warn: (message: string, meta?: Record<string, unknown>) => {
+        logged.push({ message, ...(meta === undefined ? {} : { meta }) });
+      },
+    };
+    await d.store.mark({
+      layoutId: "landing",
+      action: "delete",
+      token: "stopped",
+      startedBy: null,
+      now: new Date(),
+    });
+    const removal = d.store.rows.get("landing");
+    if (removal === undefined) throw new Error("no row");
+    const copy = { live: { id: "landing", title: "Landing" }, draft: null };
+    d.store.rows.set("landing", { ...removal, step: "removed", copy });
+
+    await settleLayoutRemovals({
+      ...d,
+      nextly: unreadable(s, "p1"),
+      now: () => new Date(Date.now() + REMOVAL_LEASE_MS + 60_000),
+    });
+
+    expect(d.store.rows.get("landing")).toMatchObject({
+      step: "removed",
+      settledAt: null,
+      copy,
+    });
+    expect(logged).toContainEqual({
+      message: expect.stringContaining("could not read every page"),
+      meta: expect.objectContaining({ layoutId: "landing", unread: ["p1"] }),
+    });
+  });
+
+  it("still clears the other pages a removal left on the Layout", async () => {
+    const s = site();
+    s.layouts.delete("landing");
+    s.pages.push(
+      { id: "p1", title: "Gone", status: "draft", layout: "landing" },
+      { id: "p2", title: "Kept", status: "draft", layout: "landing" }
+    );
+    const d = deps(s);
+    await d.store.mark({
+      layoutId: "landing",
+      action: "delete",
+      token: "stopped",
+      startedBy: null,
+      now: new Date(),
+    });
+    const removal = d.store.rows.get("landing");
+    if (removal === undefined) throw new Error("no row");
+    d.store.rows.set("landing", { ...removal, step: "removed" });
+
+    await settleLayoutRemovals({
+      ...d,
+      nextly: deletedAfterListing(s, "p1"),
+      now: () => new Date(Date.now() + REMOVAL_LEASE_MS + 60_000),
+    });
+
+    expect(s.pages.find(page => page.id === "p2")?.layout).toBeNull();
   });
 });
 
@@ -925,6 +1107,7 @@ describe("the scan's cursor", () => {
     expect(scan).toEqual({
       references: [{ id: "p100", title: "Page 100", place: "draft" }],
       complete: true,
+      unread: [],
     });
   });
 });

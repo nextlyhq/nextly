@@ -163,7 +163,7 @@ describe("the media control", () => {
       />
     );
     expect(await screen.findByText("hero.png")).toBeDefined();
-    expect(screen.getByText("Alt text: A hero")).toBeDefined();
+    expect(screen.getByText("Library alt text: A hero")).toBeDefined();
     const thumbnail = document.querySelector(".nx-inspector__media-thumb");
     expect(thumbnail?.getAttribute("src")).toBe("/t/m-42.png");
     expect(screen.queryByText(/A file from the media library/)).toBeNull();

@@ -168,10 +168,11 @@ describe("a length field's unit", () => {
 
 describe("the Font control in a style row", () => {
   it("is as tall as the lists and fields beside it", () => {
-    // The shared list trigger and text field are 40px (2.5rem); the font
-    // picker was 28px, the one short control in Typography.
+    // The shared list trigger and text field take the control-height token,
+    // the density's 28px in the inspector; the picker takes the same token, so
+    // it is never the one control of another height in Typography.
     expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
-      "height: 2.5rem"
+      "height: var(--nx-control-height)"
     );
   });
 });
@@ -550,6 +551,76 @@ describe("a section opening and closing", () => {
     // a lighter selector lost to them and the section still moved.
     expect(FLAT).toContain(
       '@media (prefers-reduced-motion: reduce) { .nx-inspector [data-slot="accordion-content"][data-state] { animation: none; } }'
+    );
+  });
+});
+
+describe("the inspector at the editor's density", () => {
+  it("sizes every control to the density's height and its text to 12px", () => {
+    // The shared controls size from these tokens, so pointing them at the
+    // density's one height reaches every field, select and button at once.
+    // On both roots: a host may draw the Style panel on its own, with no
+    // inspector around it.
+    const root = ruleBody(":is(.nx-inspector, .nx-style-inspector)");
+    expect(root).toContain(
+      "--nx-control-height: var(--nx-builder-control-height)"
+    );
+    expect(root).toContain(
+      "--nx-control-height-sm: var(--nx-builder-control-height)"
+    );
+    expect(root).toContain("font-size: var(--nx-builder-font-size)");
+    expect(root).toContain("line-height: var(--nx-builder-line-height)");
+    expect(
+      ruleBody(
+        ':is(.nx-inspector, .nx-style-inspector) :is(input, textarea, button, label, [data-slot="select-trigger"])'
+      )
+    ).toContain("font-size: var(--nx-builder-font-size)");
+  });
+
+  it("titles a style section at 12px semibold", () => {
+    const title = ruleBody(".nx-style-inspector__section-label");
+    expect(title).toContain("font-size: var(--nx-builder-title-size)");
+    expect(title).toContain("font-weight: var(--nx-builder-title-weight)");
+  });
+
+  it("sizes the controls that set their own size to the density too", () => {
+    // A row's name that is not a <label>, the Advanced toggle and the font
+    // picker each kept their own size beside the 28px, 12px rows.
+    expect(ruleBody(".nx-inspector__field-name")).toContain(
+      "font-size: var(--nx-builder-font-size)"
+    );
+    const advanced = ruleBody(".nx-inspector__advanced > summary");
+    expect(advanced).toContain("font-size: var(--nx-builder-title-size)");
+    expect(advanced).toContain("font-weight: var(--nx-builder-title-weight)");
+    expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
+      "height: var(--nx-control-height)"
+    );
+  });
+
+  it("keeps a field's text inside its 28px, and every control at that height", () => {
+    // The shared input's 10px vertical padding left about 6px for a 16px line
+    // at 28px; a placement row kept a 40px floor; a segmented button came out
+    // at 26px from its own padding.
+    const input = ruleBody(
+      ':is(.nx-inspector, .nx-style-inspector) input[data-slot="input"]'
+    );
+    expect(input).toContain("padding-block: 0");
+    expect(input).toContain("line-height: var(--nx-builder-line-height)");
+    // Exact text: the selector also appears inside a narrow-rail query.
+    expect(FLAT).toContain(
+      ".nx-inspector__field--exposed > label, .nx-inspector__field--exposed > .nx-inspector__field-name { display: flex; align-items: center; min-height: var(--nx-control-height); }"
+    );
+    const segment = ruleBody(".nx-style-inspector__toggle > button");
+    expect(segment).toContain("height: var(--nx-control-height)");
+    expect(segment).toContain("padding: 0 0.5rem");
+  });
+
+  it("sets notes at the density's text size and rows its gap apart", () => {
+    expect(ruleBody(".nx-inspector__note")).toContain(
+      "font-size: var(--nx-builder-font-size)"
+    );
+    expect(ruleBody(".nx-inspector__fields")).toContain(
+      "gap: var(--nx-builder-row-gap)"
     );
   });
 });

@@ -745,7 +745,7 @@ describe("an exposed image", () => {
           : null,
     });
     expect(await screen.findByText("team.jpg")).toBeDefined();
-    expect(screen.getByText("Alt text: The team")).toBeDefined();
+    expect(screen.getByText("Library alt text: The team")).toBeDefined();
     expect(
       document.querySelector(".nx-inspector__media-thumb")?.getAttribute("src")
     ).toBe("/t/m2.jpg");

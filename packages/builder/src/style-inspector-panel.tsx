@@ -1513,8 +1513,11 @@ function StylePropertyFields({
       {above.map(toggle)}
       {property.offered ? null : (
         <p className="nx-inspector__note" data-not-offered={property.property}>
-          This block no longer offers {property.label}. The value is still on
-          the page and can be cleared.
+          {/* Not "no longer": a value written through the API is stored on
+              blocks that never offered the property. Said plainly so the
+              author knows clearing it changes the page. */}
+          This block doesn&apos;t offer {property.label}. The value set here
+          still applies; clearing it removes it.
         </p>
       )}
       {/* The container's flow, which alignment icons are drawn in. */}
