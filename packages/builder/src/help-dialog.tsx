@@ -100,10 +100,24 @@ function listedShortcuts(
   panelKeys: PanelKeysSetting | undefined
 ): readonly ActiveShortcut[] {
   if (panelKeys === undefined) return active;
-  return [
-    ...active.filter(shortcut => shortcut.layer !== panelKeys.layer),
-    ...(panelKeys.on ? panelKeys.shortcuts : []),
-  ];
+  const others = active.filter(shortcut => shortcut.layer !== panelKeys.layer);
+  const own = panelKeys.on ? panelKeys.shortcuts : [];
+  // In the panel keys' own place in the manager's order, so a binding below
+  // them never takes their row; last where none is registered.
+  const at = active.findIndex(shortcut => shortcut.layer === panelKeys.layer);
+  return at === -1
+    ? [...others, ...own]
+    : [...others.slice(0, at), ...own, ...others.slice(at)];
+}
+
+/** What the switch's hint says: the keys this editor offers, by name. */
+function panelKeysHint(shortcuts: readonly ActiveShortcut[]): string {
+  const letters = new Intl.ListFormat("en", { type: "conjunction" }).format(
+    shortcuts.map(shortcut => shortcut.keys.toUpperCase())
+  );
+  const what =
+    letters === "" ? "Single letters open panels" : `${letters} open panels`;
+  return `${what}. Turn them off if you use speech input or press them by accident.`;
 }
 
 /**
@@ -123,8 +137,7 @@ function PanelKeysSwitch({
       <div className="space-y-0.5">
         <Label htmlFor={id}>Single-letter shortcuts</Label>
         <p id={hintId} className="text-xs text-muted-foreground">
-          A, L, P, C and D open panels. Turn them off if you use speech input or
-          press them by accident.
+          {panelKeysHint(setting.shortcuts)}
         </p>
       </div>
       <Switch

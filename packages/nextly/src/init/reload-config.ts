@@ -998,6 +998,33 @@ function stageConfigHooks(newConfig: {
   };
 }
 
+/** Whether the reload is a change before any entity's diff is judged (see its call). */
+function startsAsChange(
+  extensionSchemaChanged: boolean,
+  leaving: readonly unknown[]
+): boolean {
+  return extensionSchemaChanged || leaving.length > 0;
+}
+
+/**
+ * The companion pass before the apply (`ensureLocalizedCompanionsForReload`), unless a field leaving
+ * translation was refused: then nothing runs, and the refused entities stop the reload as a copy
+ * that could not complete does, before anything changes.
+ */
+async function unlessLeavingRefused(
+  refused: readonly string[],
+  pass: () => ReturnType<typeof ensureLocalizedCompanionsForReload>
+): ReturnType<typeof ensureLocalizedCompanionsForReload> {
+  if (refused.length > 0) {
+    return {
+      preservationFailed: [...refused],
+      restoreFailed: [],
+      schemaChanged: false,
+    };
+  }
+  return pass();
+}
+
 /**
  * Create, and bring into step, the `_locales` companion of every localized collection, single
  * and field group in the reloaded config.
@@ -2115,6 +2142,21 @@ async function applyReloadHolding(
   // wipe any stale entry from a previous apply before we start this one.
   clearLiveSnapshots();
 
+  // Fields this reload makes shared on an entity that stays translated, recorded translated before
+  // it (`prepareFieldsLeavingOnReload`). Found before the per-entity gate below, which judges their
+  // entities with the Required and Unique settings held back, the shape the apply pushes first, so a
+  // move an earlier reload stopped after adding the main column is finished rather than deferred.
+  // Read with the live schema below, so a read that fails abandons the reload as that one does.
+  const {
+    prepareFieldsLeavingOnReload,
+    stoppedBeforeApply,
+    heldFields,
+    withLeavingSettingsHeld,
+    moveFieldsLeavingOnReload,
+    translationStaysOn,
+  } = await import("../domains/i18n/runtime/fields-leaving-on-reload");
+  let leaving: Awaited<ReturnType<typeof prepareFieldsLeavingOnReload>>;
+
   // ONE batched introspect for every managed table the config knows about
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
@@ -2136,6 +2178,12 @@ async function applyReloadHolding(
   try {
     liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
     identifierCase = await readIdentifierCaseRules(adapter);
+    leaving = await prepareFieldsLeavingOnReload(
+      adapter as unknown as DrizzleAdapter,
+      newConfig,
+      fieldGroupTables,
+      message => logger?.error(message)
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -2164,10 +2212,13 @@ async function applyReloadHolding(
   // into the new (e.g. single_*) tables — the false-positive rename prompt
   // the user sees on a first-install where collections are synced before
   // singles.
+
   // An extension-only edit produces no entity diff, so it starts the reload
   // off as a change: the pipeline apply below is what merges the recompiled
-  // extension tables into the desired schema and creates or alters them.
-  let hasChanges = extensionSchemaChanged;
+  // extension tables into the desired schema and creates or alters them. So does
+  // a field leaving translation whose main column an earlier reload added
+  // before it stopped: the move below is what finishes it.
+  let hasChanges = startsAsChange(extensionSchemaChanged, leaving.entries);
   // True when a real schema diff existed but was NOT applied this cycle (an
   // unsafe change needing review, or a diff that threw). In that state the
   // registry's `fields` would disagree with the physical table, so the no-DDL
@@ -2206,7 +2257,18 @@ async function applyReloadHolding(
       // gate asks about exactly the table the apply will push. An entry
       // states no `builderOwned`, which reads as code-first: these branches
       // apply a CONFIG edit, so the table is the pipeline's.
-      const desiredTable = desiredCollectionTable(entry, dialect);
+      const desiredTable = desiredCollectionTable(
+        {
+          ...entry,
+          fields: heldFields(
+            leaving.entries,
+            "collection",
+            target.slug,
+            entry.fields
+          ),
+        },
+        dialect
+      );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
       if (operations.length === 0) {
@@ -2255,7 +2317,7 @@ async function applyReloadHolding(
         : { tables: [] };
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
-        target.fields,
+        heldFields(leaving.entries, "single", target.slug, target.fields),
         dialect,
         {
           // These branches apply a CONFIG edit, so the table is the pipeline's.
@@ -2310,7 +2372,7 @@ async function applyReloadHolding(
         : { tables: [] };
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
-        target.fields,
+        heldFields(leaving.entries, "fieldGroup", target.slug, target.fields),
         dialect,
         { builtBy: "codeFirst" as const, localized: target.localized === true }
       );
@@ -2653,12 +2715,21 @@ async function applyReloadHolding(
   // Before the apply, so an entity gaining localization has its existing content copied into the
   // companion while the main table still carries it. The apply's DROP of those columns is then a
   // cleanup rather than a loss, and it no longer matters whether the operator confirms it.
-  const preservation = await ensureLocalizedCompanionsForReload(
-    adapter,
-    newConfig,
-    fieldGroupTables,
-    deferredEntities,
-    "beforeApply"
+  //
+  // A field leaving translation that was refused stops the reload here too, before this pass
+  // changes anything (`unlessLeavingRefused`).
+  const preservation = await unlessLeavingRefused(
+    stoppedBeforeApply(leaving, deferredEntities, message =>
+      logger.error(message)
+    ),
+    () =>
+      ensureLocalizedCompanionsForReload(
+        adapter,
+        newConfig,
+        fieldGroupTables,
+        deferredEntities,
+        "beforeApply"
+      )
   );
 
   // The apply is what removes the translatable columns from the main table. Running it after a
@@ -2670,9 +2741,9 @@ async function applyReloadHolding(
   if (preservation.preservationFailed.length > 0) {
     const names = preservation.preservationFailed.join(", ");
     logger.error(
-      `[nextly] Schema changes were not applied: existing content could not be copied into the ` +
-        `translations table for ${names}. Applying now would drop the columns holding that ` +
-        `content. Fix the error above and save again.`
+      `[nextly] Schema changes were not applied: the content of ${names} could not be made ready ` +
+        `for this change (see above), and applying now could lose it. Fix the error above and ` +
+        `save again.`
     );
     // The schema and metadata never landed, so the previous config is still the
     // one describing the database, and the work applied ahead of the schema
@@ -2688,9 +2759,13 @@ async function applyReloadHolding(
   // and only in the cycle where a transition actually happened.
   if (preservation.schemaChanged) clearLiveSnapshots();
 
-  const applyResult = await apply(desired, "code", {
-    promptChannel: "terminal",
-  });
+  // A field leaving translation gets its main column without its Required or Unique setting, so the
+  // apply asks nothing about rows it has no value for yet; the setting follows the values below.
+  const applyResult = await apply(
+    withLeavingSettingsHeld(desired, leaving.entries),
+    "code",
+    { promptChannel: "terminal" }
+  );
 
   if (applyResult.success) {
     // Create the `_locales` companion of every localized entity, now that the apply
@@ -2714,12 +2789,28 @@ async function applyReloadHolding(
     // successful retry copy the companion's older values over those edits. The registry keeps
     // describing the entity as localized until the copy succeeds, so reads keep resolving through
     // the companion that still holds the content.
-    if (postApply.restoreFailed.length > 0) {
-      logger.error(
-        `[nextly] Localization stays on for ${postApply.restoreFailed.join(", ")}: their content ` +
-          `could not be copied back out of the translations table. Fix the error above and save ` +
-          `again — the content is intact where it is.`
-      );
+    //
+    // The same holds for a field leaving translation whose move did not finish
+    // (`moveFieldsLeavingOnReload`): its translations column keeps every language until a save
+    // finishes it, and the settings follow the values through a second apply of the whole config.
+    const stopped = [
+      ...postApply.restoreFailed,
+      ...(await moveFieldsLeavingOnReload({
+        adapter: adapter as unknown as DrizzleAdapter,
+        entries: leaving.entries,
+        deferred: deferredEntities,
+        config: newConfig,
+        blockedBy: postApply.restoreFailed,
+        // The live snapshot the pipeline reuses predates the first apply, so it is dropped first.
+        push: () => {
+          clearLiveSnapshots();
+          return apply(desired, "code", { promptChannel: "terminal" });
+        },
+        report: message => logger.error(message),
+      })),
+    ];
+    if (stopped.length > 0) {
+      logger.error(translationStaysOn(stopped));
       // Deliberately publishes NOTHING. The DDL landed, so the previous field
       // types are not restored either -- they describe tables that now exist.
       // But this returns ahead of the metadata sync and the runtime-schema
