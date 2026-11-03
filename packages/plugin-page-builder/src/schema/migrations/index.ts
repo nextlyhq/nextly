@@ -7,5 +7,10 @@ import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 import migration0 from "./20261102_183408_943_create_usage_bookkeeping";
 import migration1 from "./20261103_024902_454_create_layout_removals";
+import migration2 from "./20261103_170026_736_create_site_options";
 
-export const migrations: PluginMigration[] = [migration0, migration1];
+export const migrations: PluginMigration[] = [
+  migration0,
+  migration1,
+  migration2,
+];

@@ -18,7 +18,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style-storage
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import { isPlainRecord, type SpacingMode } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
@@ -33,6 +33,10 @@ import {
   type SectionCheck,
   type SectionPolicy,
 } from "./site-style-record";
+import {
+  bootedSpacingModeReader,
+  spacingModeReaderOf,
+} from "./spacing-mode-reader";
 import { readStoredJson } from "./stored-json";
 
 /** The single the stored tier lives in. One document per site, by design. */
@@ -365,14 +369,25 @@ export interface SiteStyleReader {
     slug: string;
     overrideAccess?: boolean;
   }): Promise<unknown>;
+  /**
+   * The plugin services the Direct API offers, where the site's spacing model
+   * is read (it lives in the plugin's own table, not in the Single). Optional:
+   * a reader without it reads no model, and the engine's default applies.
+   */
+  readonly plugins?: Readonly<
+    Record<string, Readonly<Record<string, unknown>> | undefined>
+  >;
 }
 
 /**
  * The stored document's four sections exactly as stored, each `null` where
  * nothing is stored, and nothing else the row carries (its id, timestamps or
- * any field a host added).
+ * any field a host added), with the site's recorded spacing model beside them.
  */
-function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
+function storedSiteStyleOf(
+  doc: unknown,
+  spacingMode: SpacingMode | null
+): StoredSiteStyle {
   const record =
     typeof doc === "object" && doc !== null
       ? (doc as Record<string, unknown>)
@@ -382,6 +397,7 @@ function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
     fonts: record.fonts ?? null,
     classes: record.classes ?? null,
     breakpoints: record.breakpoints ?? null,
+    spacingMode,
   };
 }
 
@@ -403,12 +419,19 @@ export async function readStoredSiteStyle(args: {
   /** Read past the Single's own read permission. */
   overrideAccess?: true;
 }): Promise<StoredSiteStyle> {
-  return storedSiteStyleOf(
-    await args.nextly.findSingle({
+  // Read beside the Single, so every reader of the stored style, the
+  // published render and the editor's route alike, compiles under the model
+  // the site recorded.
+  const spacing =
+    spacingModeReaderOf(args.nextly) ?? (await bootedSpacingModeReader());
+  const [doc, spacingMode] = await Promise.all([
+    args.nextly.findSingle({
       slug: args.slug ?? SITE_STYLE_SLUG,
       ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
-    })
-  );
+    }),
+    spacing === undefined ? null : spacing.read(),
+  ]);
+  return storedSiteStyleOf(doc, spacingMode);
 }
 
 /**

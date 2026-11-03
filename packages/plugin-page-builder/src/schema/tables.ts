@@ -1,6 +1,6 @@
 /**
- * The page builder's own tables: the usage indexes' bookkeeping, and the
- * fence a Layout's removal puts up.
+ * The page builder's own tables: the usage indexes' bookkeeping, the fence a
+ * Layout's removal puts up, and the site-wide options only this plugin writes.
  *
  * Kept in tables this plugin declares, reached only through its own `ctx.db`,
  * rather than in collections. A collection has an admin screen, a REST route
@@ -30,7 +30,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -174,9 +174,44 @@ export const layoutRemovals: TableDefinition<
   { indexes: [{ columns: ["layoutId"], unique: true }] }
 );
 
+/** The columns of {@link siteOptions}, as `defineTable` checks and publishes them. */
+type SiteOptionsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly value: ColumnBuilder<string, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per site-wide option this plugin keeps outside the Site Style
+ * document: `name` says which, `value` holds it.
+ *
+ * A table rather than a field on a Single, because a row can be written only
+ * if absent: one conflict-safe insert both records a choice and refuses to
+ * replace one already made, which a Single's read-merge-write cannot promise.
+ * See `spacing-mode-store` for the one option it holds today.
+ */
+export const siteOptions: TableDefinition<"site_options", SiteOptionsColumns> =
+  defineTable<"site_options", SiteOptionsColumns>(
+    "site_options",
+    {
+      id: col.id(),
+      name: col.varchar(64),
+      value: col.varchar(255),
+      ...col.timestamps(),
+    },
+    // One row per option, so two writers inserting the same option at once
+    // cannot both succeed.
+    { indexes: [{ columns: ["name"], unique: true }] }
+  );
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
   typeof usageProgress,
   typeof layoutRemovals,
-] = [usageRuns, usageProgress, layoutRemovals];
+  typeof siteOptions,
+] = [usageRuns, usageProgress, layoutRemovals, siteOptions];
