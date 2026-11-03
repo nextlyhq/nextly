@@ -2771,6 +2771,20 @@ describe("naming the place a value came from", () => {
       );
     });
 
+    it("names no breakpoint after defaults, which no breakpoint edits", () => {
+      // "From H2 defaults · Desktop" sends an author to a tier where the value
+      // is not, since defaults are no tier's to edit.
+      expect(
+        sourceFor({ kind: "element", tag: "h2" }, at({ breakpoint: "md" }))
+      ).toBe("From H2 defaults");
+      expect(
+        sourceFor(
+          { kind: "blockType", type: "acme/box" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From block defaults");
+    });
+
     it("names the control a descendant rule came from by its label alone", () => {
       expect(
         sourceFor(
@@ -2902,12 +2916,11 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(label).toContain("Color");
     /*
      * The tier a reset falls back to is NAMED, not left to be guessed. The
-     * unconditional tier has no authored definition to take a label from, so it
-     * is called by its id here — the same name every other sentence in this
-     * panel gives it, which is the point: one naming, not a second one invented
-     * for this button.
+     * unconditional tier is called what the device switcher calls it — the
+     * same name every other sentence in this panel gives it, which is the
+     * point: one naming, not a second one invented for this button.
      */
-    expect(label).toContain("from base");
+    expect(label).toContain("from Desktop");
   });
 
   it("names the action by its PROPERTY, not by the leaf alone", () => {

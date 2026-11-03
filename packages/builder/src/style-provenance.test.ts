@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   breakpointBadge,
+  breakpointSource,
   styleProvenance,
   type BreakpointBadge,
   type StyleProvenanceQuery,
@@ -42,6 +43,22 @@ function query(
     ...over,
   };
 }
+
+describe("the base tier's name", () => {
+  it("is Desktop, as the device switcher calls it, whatever the settings label it", () => {
+    // A value from it read "From Base" beside a switcher showing "Desktop",
+    // two names for one tier on one screen.
+    const set = {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+      ],
+      container: [],
+    } as unknown as BreakpointSet;
+    expect(breakpointSource("base", set)?.label).toBe("Desktop");
+    expect(breakpointSource("tablet", set)?.label).toBe("Tablet");
+  });
+});
 
 describe("a property nothing wrote", () => {
   it("is unset, which is a real answer rather than a failure", () => {

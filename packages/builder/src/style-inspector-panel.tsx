@@ -3228,7 +3228,10 @@ function originBrief(
   const control = sourceControl(entry, controlDescendant);
   const ownBlock = origin.kind === "node" && origin.id === editing.nodeId;
   const parts = [ownBlock ? control : briefSubject(origin, editing)];
-  if (entry.breakpoint !== editing.breakpoint) {
+  // Defaults are no breakpoint's to edit, so naming one after them would send
+  // an author to a tier where the value is not.
+  const defaults = origin.kind === "element" || origin.kind === "blockType";
+  if (!defaults && entry.breakpoint !== editing.breakpoint) {
     parts.push(editing.labelOf(entry.breakpoint));
   }
   if (entry.state !== editing.state) parts.push(stateLabel(entry.state));

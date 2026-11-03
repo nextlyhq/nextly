@@ -27,6 +27,7 @@ import {
   shapeLeaves,
   STYLE_CATALOG,
   styleOrigin,
+  BASE_BREAKPOINT,
   breakpointContexts,
   outranksEntry,
   type BreakpointAxis,
@@ -38,7 +39,7 @@ import {
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
-import { isUsableWidth } from "./breakpoints";
+import { BASE_DEVICE_LABEL, isUsableWidth } from "./breakpoints";
 import { offeredTiers } from "./canvas-width";
 
 /** What a control's dot reports. */
@@ -518,7 +519,11 @@ export function breakpointSource(
   );
   return {
     breakpoint,
-    label: named?.label ?? breakpoint,
+    // The base viewport tier by the device switcher's name for it.
+    label:
+      context.axis === "viewport" && breakpoint === BASE_BREAKPOINT
+        ? BASE_DEVICE_LABEL
+        : (named?.label ?? breakpoint),
     axis: context.axis,
     /*
      * Unbounded is the unconditional tier and always reachable. A bounded tier
