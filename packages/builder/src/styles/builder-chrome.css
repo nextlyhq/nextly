@@ -2957,14 +2957,15 @@
 }
 
 /*
- * The tag on the fixed dark ink the block toolbar uses, at the ring's top
- * left corner inside it, so it reads on any section of the page.
+ * The tag on the fixed dark ink the block toolbar uses, so it reads on any
+ * section of the page. Just outside the ring's bottom right corner: inside,
+ * it would cover the block it describes, and the toolbar owns the top left.
  */
 .nx-canvas-mark[data-mark="selected"][data-hidden]::after {
   content: attr(data-label);
   position: absolute;
-  top: 4px;
-  left: 4px;
+  top: calc(100% + 4px);
+  right: 0;
   padding: 1px 6px;
   border-radius: 4px;
   background: var(--nx-builder-ink);
