@@ -98,6 +98,34 @@ function Item({
   );
 }
 
+/**
+ * A group of the shared block verbs, after a separator, each held with the
+ * reason the toolbar gives. Nothing at all for an empty group.
+ */
+function SharedItems({
+  actions,
+  verbs,
+}: {
+  actions: SharedBlockVerbs["actions"];
+  verbs: SharedBlockVerbs | undefined;
+}): React.JSX.Element | null {
+  if (actions.length === 0) return null;
+  return (
+    <>
+      <ContextMenuSeparator />
+      {actions.map(action => (
+        <Item
+          key={action.id}
+          label={action.label}
+          reason={action.enabled ? undefined : (action.reason ?? "")}
+          shortcut={null}
+          onSelect={() => verbs?.run(action.id)}
+        />
+      ))}
+    </>
+  );
+}
+
 /** The row's own verbs, read when the menu's content is drawn. */
 function OwnItems({
   items,
@@ -174,26 +202,8 @@ export function LayerRowMenu({
       </ContextMenuTrigger>
       <ContextMenuContent aria-label="Layer actions">
         <OwnItems items={items} hint={hint} />
-        {others.length === 0 ? null : <ContextMenuSeparator />}
-        {others.map(action => (
-          <Item
-            key={action.id}
-            label={action.label}
-            reason={action.enabled ? undefined : (action.reason ?? "")}
-            shortcut={null}
-            onSelect={() => verbs?.run(action.id)}
-          />
-        ))}
-        {deletion.length === 0 ? null : <ContextMenuSeparator />}
-        {deletion.map(action => (
-          <Item
-            key={action.id}
-            label={action.label}
-            reason={action.enabled ? undefined : (action.reason ?? "")}
-            shortcut={null}
-            onSelect={() => verbs?.run(action.id)}
-          />
-        ))}
+        <SharedItems actions={others} verbs={verbs} />
+        <SharedItems actions={deletion} verbs={verbs} />
       </ContextMenuContent>
     </ContextMenu>
   );

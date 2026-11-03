@@ -405,8 +405,6 @@ function RowAction({
 
 /** A layer as a row: its mark, its name, and what is true about it. */
 function rowOf(node: LayerNode, view: RowView): TreeNode {
-  const { icons, draggingId, renamingId, deviceName } = view;
-  const held = node.locked || node.lockedBy !== undefined;
   return {
     id: node.id,
     // `textValue` carries the NAME alone even though the label renders badges
@@ -414,98 +412,7 @@ function rowOf(node: LayerNode, view: RowView): TreeNode {
     // searchable text included "Locked" would be reachable by typing a word
     // that is not its name.
     textValue: node.label,
-    label: (
-      <span
-        className="nx-layer-row"
-        {...(node.component ? { "data-component": "" } : {})}
-        // Dimmed where the canvas shows nothing of it, with the word beside.
-        {...(node.hiddenHere ? { "data-hidden": "" } : {})}
-        // The block in hand, faded where it sits as the canvas fades its own
-        // drag source; the same attribute, so the two read as one gesture.
-        {...(node.id === draggingId ? { [DRAG_SOURCE_ATTRIBUTE]: "" } : {})}
-      >
-        <BlockIconMark icon={markOf(node, icons)} size={14} />
-        {node.id === renamingId ? (
-          <RenameField
-            id={node.id}
-            label={node.label}
-            onDone={name => view.onRenamed(node.id, name)}
-          />
-        ) : (
-          /* `data-nx-layer` names the block a row stands for. Labels repeat —
-            every paragraph is "Text" — so it is the one stable way to find a
-            given block's row, the Layers counterpart of the canvas's
-            `data-nx-node`. */
-          <span className="nx-layer-row__label" data-nx-layer={node.id}>
-            {node.label}
-          </span>
-        )}
-        <ComponentTag node={node} />
-        {node.hiddenHere ? (
-          // A word, on screen and read out: hidden on the device shown.
-          <span className="nx-layer-row__hidden">Hidden</span>
-        ) : null}
-        {/* Both locks in the row's own ink, so each reads against the row in
-            every state it can be in. A lock held from a block around it is
-            quieter by weight, a thinner stroke, never by a fainter colour; both
-            say so in words, and the inherited one names the block to unlock. */}
-        {node.locked ? (
-          // The word, read out; the padlock pinned at the row's end is what
-          // the eye sees, at the stronger stroke.
-          <span className="nx-sr-only" data-lock="own">
-            Locked
-          </span>
-        ) : node.lockedBy === undefined ? null : (
-          <Badge
-            icon={<Lock size={12} strokeWidth={1.25} />}
-            text={`Locked by ${node.lockedBy}`}
-            lock="inherited"
-          />
-        )}
-        {node.breakpointHidden && !node.hiddenHere ? (
-          <Badge
-            icon={<EyeOff size={12} />}
-            text="Hidden at some screen sizes"
-          />
-        ) : null}
-        {node.conditional ? (
-          <Badge
-            icon={<SlidersHorizontal size={12} />}
-            text="Shown conditionally"
-          />
-        ) : null}
-        <span className="nx-layer-row__actions">
-          {/* No eye on a block a lock holds: the lock refuses the change. */}
-          {deviceName === undefined || held ? null : (
-            <RowAction
-              id={node.id}
-              action="toggle-hidden"
-              title={`${node.hiddenHere ? "Show" : "Hide"} on ${deviceName}`}
-              pinned={node.hiddenHere}
-              onAct={view.onAct}
-            >
-              {node.hiddenHere ? <EyeOff size={14} /> : <Eye size={14} />}
-            </RowAction>
-          )}
-          {/* The block's own lock; one held from around it is lifted there. */}
-          {node.lockedBy !== undefined ? null : (
-            <RowAction
-              id={node.id}
-              action="toggle-lock"
-              title={node.locked ? "Unlock" : "Lock"}
-              pinned={node.locked}
-              onAct={view.onAct}
-            >
-              {node.locked ? (
-                <Lock size={14} strokeWidth={2.5} />
-              ) : (
-                <LockOpen size={14} />
-              )}
-            </RowAction>
-          )}
-        </span>
-      </span>
-    ),
+    label: <LayerRow node={node} view={view} />,
     // Omitted for a block that holds nothing: the tree draws a twisty and an
     // open/closed state for any row given a children list, empty or not, and
     // a twisty that opens onto nothing is a control that does nothing.
@@ -515,6 +422,131 @@ function rowOf(node: LayerNode, view: RowView): TreeNode {
           children: node.children.map(child => rowOf(child, view)),
         }),
   };
+}
+
+/** A row's contents: its mark, its name or the field renaming it, and facts. */
+function LayerRow({
+  node,
+  view,
+}: {
+  node: LayerNode;
+  view: RowView;
+}): React.JSX.Element {
+  return (
+    <span
+      className="nx-layer-row"
+      {...(node.component ? { "data-component": "" } : {})}
+      // Dimmed where the canvas shows nothing of it, with the word beside.
+      {...(node.hiddenHere ? { "data-hidden": "" } : {})}
+      // The block in hand, faded where it sits as the canvas fades its own
+      // drag source; the same attribute, so the two read as one gesture.
+      {...(node.id === view.draggingId ? { [DRAG_SOURCE_ATTRIBUTE]: "" } : {})}
+    >
+      <BlockIconMark icon={markOf(node, view.icons)} size={14} />
+      {node.id === view.renamingId ? (
+        <RenameField
+          id={node.id}
+          label={node.label}
+          onDone={name => view.onRenamed(node.id, name)}
+        />
+      ) : (
+        /* `data-nx-layer` names the block a row stands for. Labels repeat —
+          every paragraph is "Text" — so it is the one stable way to find a
+          given block's row, the Layers counterpart of the canvas's
+          `data-nx-node`. */
+        <span className="nx-layer-row__label" data-nx-layer={node.id}>
+          {node.label}
+        </span>
+      )}
+      <ComponentTag node={node} />
+      <RowFacts node={node} />
+      <RowActions node={node} view={view} />
+    </span>
+  );
+}
+
+/** What is true about a block, each in words a screen reader reads. */
+function RowFacts({ node }: { node: LayerNode }): React.JSX.Element {
+  return (
+    <>
+      {node.hiddenHere ? (
+        // A word, on screen and read out: hidden on the device shown.
+        <span className="nx-layer-row__hidden">Hidden</span>
+      ) : null}
+      {/* Both locks in the row's own ink, so each reads against the row in
+          every state it can be in. A lock held from a block around it is
+          quieter by weight, a thinner stroke, never by a fainter colour; both
+          say so in words, and the inherited one names the block to unlock. */}
+      {node.locked ? (
+        // The word, read out; the padlock pinned at the row's end is what
+        // the eye sees, at the stronger stroke.
+        <span className="nx-sr-only" data-lock="own">
+          Locked
+        </span>
+      ) : node.lockedBy === undefined ? null : (
+        <Badge
+          icon={<Lock size={12} strokeWidth={1.25} />}
+          text={`Locked by ${node.lockedBy}`}
+          lock="inherited"
+        />
+      )}
+      {node.breakpointHidden && !node.hiddenHere ? (
+        <Badge icon={<EyeOff size={12} />} text="Hidden at some screen sizes" />
+      ) : null}
+      {node.conditional ? (
+        <Badge
+          icon={<SlidersHorizontal size={12} />}
+          text="Shown conditionally"
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** The row's eye and padlock, at its right edge. */
+function RowActions({
+  node,
+  view,
+}: {
+  node: LayerNode;
+  view: RowView;
+}): React.JSX.Element {
+  // No eye on a block a lock holds: the lock refuses the change.
+  const eye =
+    view.deviceName !== undefined &&
+    !node.locked &&
+    node.lockedBy === undefined;
+  return (
+    <span className="nx-layer-row__actions">
+      {eye ? (
+        <RowAction
+          id={node.id}
+          action="toggle-hidden"
+          title={`${node.hiddenHere ? "Show" : "Hide"} on ${view.deviceName ?? ""}`}
+          pinned={node.hiddenHere}
+          onAct={view.onAct}
+        >
+          {node.hiddenHere ? <EyeOff size={14} /> : <Eye size={14} />}
+        </RowAction>
+      ) : null}
+      {/* The block's own lock; one held from around it is lifted there. */}
+      {node.lockedBy !== undefined ? null : (
+        <RowAction
+          id={node.id}
+          action="toggle-lock"
+          title={node.locked ? "Unlock" : "Lock"}
+          pinned={node.locked}
+          onAct={view.onAct}
+        >
+          {node.locked ? (
+            <Lock size={14} strokeWidth={2.5} />
+          ) : (
+            <LockOpen size={14} />
+          )}
+        </RowAction>
+      )}
+    </span>
+  );
 }
 
 /**
@@ -561,6 +593,41 @@ function rowIdOf(target: EventTarget | null): string | null {
   );
 }
 
+/**
+ * The handlers the element around the tree carries for the rows: the row
+ * under the pointer outlines its block on the canvas, the row's verbs by
+ * keyboard for the row that has focus (the eye's and the lock's icons are
+ * for the pointer alone), and a double-click renames.
+ */
+function rowBodyHandlers({
+  hover,
+  apple,
+  act,
+}: {
+  hover: (id: string | null) => void;
+  apple: boolean;
+  act: (id: string, action: RowKeyAction) => void;
+}): Pick<
+  React.HTMLAttributes<HTMLDivElement>,
+  "onPointerOver" | "onPointerLeave" | "onKeyDown" | "onDoubleClick"
+> {
+  return {
+    onPointerOver: event => hover(rowIdOf(event.target)),
+    onPointerLeave: () => hover(null),
+    onKeyDown: event => {
+      const action = rowKeyAction(event, apple);
+      const id = action === null ? null : rowIdOf(event.target);
+      if (action === null || id === null) return;
+      event.preventDefault();
+      act(id, action);
+    },
+    onDoubleClick: event => {
+      const id = rowIdOf(event.target);
+      if (id !== null) act(id, "rename");
+    },
+  };
+}
+
 /** Whether the block is hidden on the device being edited. */
 function hiddenHere(
   editor: EditorState,
@@ -572,6 +639,32 @@ function hiddenHere(
     node !== undefined &&
     hiddenOnDevice(node.visibility, device.breakpoints, device.id)
   );
+}
+
+/**
+ * Flip a block's visibility on the device being edited, answering what to
+ * say, or `null` when nothing changed.
+ */
+function toggleHidden(
+  editor: EditorState,
+  id: string,
+  device: LayersPanelProps["device"]
+): string | null {
+  if (device === undefined) return null;
+  const wasHidden = hiddenHere(editor, id, device);
+  const op = toggleOnDeviceOp(editor.document, id, device);
+  if (op === null || editor.apply(op) === null) return null;
+  const name = deviceLabel(device.breakpoints, device.id) ?? device.id;
+  return wasHidden ? `Shown on ${name}.` : `Hidden on ${name}.`;
+}
+
+/** Lock or unlock a block, answering what to say, or `null` when nothing changed. */
+function toggleLock(editor: EditorState, id: string): string | null {
+  const node = findNode(editor.document.nodes, id);
+  if (node === undefined) return null;
+  const locking = node.locked !== true;
+  if (editor.apply(lockOp(id, locking)) === null) return null;
+  return locking ? "Locked." : "Unlocked.";
 }
 
 /** Put focus back on a block's row, once a rename has ended. */
@@ -653,26 +746,17 @@ function useRowVerbs(
         setNotice(reason);
         return;
       }
-      const { editor: now, device: on } = latest.current;
       setNotice("");
       if (action === "rename") {
         setRenamingId(id);
         return;
       }
-      if (action === "toggle-hidden") {
-        if (on === undefined) return;
-        const wasHidden = hiddenHere(now, id, on);
-        const op = toggleOnDeviceOp(now.document, id, on);
-        if (op === null || now.apply(op) === null) return;
-        const name = deviceLabel(on.breakpoints, on.id) ?? on.id;
-        setNotice(wasHidden ? `Shown on ${name}.` : `Hidden on ${name}.`);
-        return;
-      }
-      const node = findNode(now.document.nodes, id);
-      if (node === undefined) return;
-      const locking = node.locked !== true;
-      if (now.apply(lockOp(id, locking)) === null) return;
-      setNotice(locking ? "Locked." : "Unlocked.");
+      const { editor: now, device: on } = latest.current;
+      const said =
+        action === "toggle-hidden"
+          ? toggleHidden(now, id, on)
+          : toggleLock(now, id);
+      if (said !== null) setNotice(said);
     },
     [reasonFor]
   );
@@ -939,27 +1023,13 @@ export function LayersPanel({
             className="nx-layers-panel__body"
             data-nx-dragging={draggingState(drag)}
             {...drag.handlers}
-            // The row under the pointer outlines its block on the canvas; not
-            // during a drag, whose own marks say where the block will land.
-            onPointerOver={event =>
-              setHovered(
-                drag.draggingId === null ? rowIdOf(event.target) : null
-              )
-            }
-            onPointerLeave={() => setHovered(null)}
-            // The row's verbs by keyboard, for the row that has focus: the
-            // eye's and the lock's icons are for the pointer alone.
-            onKeyDown={event => {
-              const action = rowKeyAction(event, apple ?? false);
-              const id = action === null ? null : rowIdOf(event.target);
-              if (action === null || id === null) return;
-              event.preventDefault();
-              act(id, action);
-            }}
-            onDoubleClick={event => {
-              const id = rowIdOf(event.target);
-              if (id !== null) act(id, "rename");
-            }}
+            {...rowBodyHandlers({
+              hover: id =>
+                // Not during a drag, whose own marks say where it will land.
+                setHovered(drag.draggingId === null ? id : null),
+              apple: apple ?? false,
+              act,
+            })}
           >
             <TreeView
               className={LAYERS_TREE_CLASS}
