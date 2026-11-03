@@ -277,15 +277,13 @@ export interface PageCollection {
 }
 
 /**
- * The collections a search reads, from the registry's records, each slug once:
- * the plugin's own Pages (`primary`) first, then the others by the name their
- * heading shows. The order a search by collection lists them in; a search by
- * title does not depend on it.
+ * The page collections among the registry's records, each slug once, in
+ * registry order. Both the search and the Pages panel's writes read them; only
+ * the search orders them, through {@link inListingOrder}.
  */
 function pageCollections(
   records: readonly unknown[],
-  stores: ReadonlySet<string>,
-  primary: string
+  stores: ReadonlySet<string>
 ): PageCollection[] {
   const found = new Map<string, PageCollection>();
   for (const value of records) {
@@ -294,8 +292,20 @@ function pageCollections(
       found.set(source.slug, source);
     }
   }
+  return [...found.values()];
+}
+
+/**
+ * Page collections in the order a search by collection lists them: the
+ * plugin's own Pages (`primary`) first, then the others by the name their
+ * heading shows. A search by title does not depend on it.
+ */
+function inListingOrder(
+  sources: readonly PageCollection[],
+  primary: string
+): PageCollection[] {
   const shown = (source: PageCollection) => source.pluralLabel ?? source.label;
-  return [...found.values()].sort(
+  return [...sources].sort(
     (a, b) =>
       Number(b.slug === primary) - Number(a.slug === primary) ||
       shown(a).localeCompare(shown(b), "en", { sensitivity: "base" }) ||
@@ -569,9 +579,8 @@ export async function readPagesSearch(
   request: PagesSearchRequest,
   reads: PagesSearchReads
 ): Promise<PagesSearchResponse> {
-  const sources = pageCollections(
-    await reads.collections(),
-    reads.stores(),
+  const sources = inListingOrder(
+    pageCollections(await reads.collections(), reads.stores()),
     reads.pagesCollection()
   );
   const hits = await inTurns(sources, READS_AT_ONCE, source =>
