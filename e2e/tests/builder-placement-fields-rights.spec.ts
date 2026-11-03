@@ -2,8 +2,8 @@
  * An author who may edit pages and only read components changes a placed
  * header's exposed fields, and nothing else of it.
  *
- * The author holds a role with read and update on pages, read on components
- * and read on the site's styles, and no more. They edit the header's exposed headline on the
+ * The author holds a role with read and update on pages and read on
+ * components, and no more. They edit the header's exposed headline on the
  * canvas and save it to the page. They are offered no way into the header's
  * own design: no "Edit component", no Style tab for the placement, and the
  * component's own builder opens read-only, while the write it would make is
@@ -240,9 +240,6 @@ test.beforeAll(async ({ browser, playwright }, testInfo) => {
     "read-pages",
     "update-pages",
     "read-components",
-    // The canvas draws only once the site's styles are read; reading them
-    // changes nothing.
-    "read-site-style",
   ]);
   seeded = await seed(admin);
   page = await author.context.newPage();
