@@ -29,18 +29,6 @@
 "@nextlyhq/ui": patch
 ---
 
-The Page Builder's rail now has a Components panel.
-
-It lists the site's components you may read, by name, with a search, and
-says so plainly when there are none. Choosing one places it where the Add
-panel would place a block, after the selected block or at the end of the
-page, and the panel names that place first. A component can be placed by
-click, by keyboard (the arrow keys move from the search into the list, and
-Enter in the search places the first match) or by dragging it onto the
-canvas. Authors who may update components also get an Edit button on each
-row, which opens the component alone and returns to the page afterwards.
-
-The panel reads the same component library as the Add panel and the
-editor's search, and places through the Add panel's own path, so the two
-panels never offer or place a component differently. Components in the Add
-panel can now be dragged onto the canvas too, as blocks already could.
+The Page Builder's rail has a Components panel: search the site's components,
+place one by click, keyboard or drag where the Add panel would, and open it
+alone with Edit. Components in the Add panel can now be dragged too.
