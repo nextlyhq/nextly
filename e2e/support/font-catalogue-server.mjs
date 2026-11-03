@@ -112,6 +112,20 @@ function answer(req, res) {
     else json(res, metadata(family));
     return;
   }
+  // Static and variable packages are released apart, as Fontsource's are,
+  // so a variable add that pinned the static release would ask for a file
+  // this stand-in does not have.
+  const versions = /^\/v1\/version\/([a-z0-9-]+)$/.exec(url.pathname);
+  if (versions !== null) {
+    const family = FAMILIES.find(each => each.id === versions[1]);
+    if (family === undefined) res.writeHead(404).end();
+    else
+      json(res, {
+        latest: "5.0.0",
+        ...(family.variable ? { latestVariable: "5.0.1" } : {}),
+      });
+    return;
+  }
   if (
     /^\/fontsource\/fonts\/[a-z0-9:@.-]+\/[a-z0-9-]+\.woff2$/.test(url.pathname)
   ) {

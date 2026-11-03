@@ -4447,7 +4447,7 @@ fieldset.nx-inspector__fields {
    `--nx-*` property, so light and dark need nothing more. */
 
 .nx-fonts__lead {
-  font-size: 14px;
+  font-size: var(--text-sm);
 }
 
 /* A font variable row with nowhere to send the author: drawn, not pressed. */
@@ -4481,13 +4481,13 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-fonts__title {
-  font-size: 16px;
+  font-size: var(--text-base);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
 .nx-fonts__title--large {
-  font-size: 20px;
+  font-size: var(--text-xl);
 }
 
 .nx-fonts__sample {
@@ -4650,16 +4650,6 @@ fieldset.nx-inspector__fields {
   width: 35%;
 }
 
-/* Upload: the native picker stays out of sight; the admin's button opens it. */
-.nx-fonts-upload__input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 .nx-fonts-upload__file {
   display: flex;
   align-items: center;
@@ -4739,7 +4729,7 @@ fieldset.nx-inspector__fields {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 16px;
+  font-size: var(--text-base);
   line-height: 1.35;
 }
 
@@ -5206,7 +5196,10 @@ fieldset.nx-inspector__fields {
  * mounted with the message; `clip-path` keeps it out of the picture without
  * `display: none`, which would take it out of the accessibility tree too.
  */
-.nx-spacing-handles__status {
+.nx-spacing-handles__status,
+/* The font upload's native picker, likewise out of sight but still in the
+   tree; the admin's button opens it. */
+.nx-fonts-upload__input {
   position: absolute;
   width: 1px;
   height: 1px;

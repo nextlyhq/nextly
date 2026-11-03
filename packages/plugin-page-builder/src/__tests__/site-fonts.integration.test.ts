@@ -377,6 +377,34 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("downloads a variable family from the variable package's own release", async () => {
+      const t = await boot();
+      const cookie = await designer(t);
+      // The static and variable packages are released separately, so the
+      // family's `npmVersion` names no variable file.
+      catalogue.json("/v1/fonts/inter", {
+        ...LORA,
+        id: "inter",
+        family: "Inter",
+        weights: [100, 200, 300, 400, 500, 600, 700, 800, 900],
+        variable: true,
+      });
+      catalogue.json("/v1/version/inter", {
+        latest: "5.2.1",
+        latestVariable: "5.2.6",
+      });
+      const file = "/fontsource/fonts/inter:vf@5.2.6/latin-wght-normal.woff2";
+      catalogue.font(file);
+      const answer = await add(cookie, {
+        id: "inter",
+        weights: "variable",
+        styles: ["normal"],
+        subsets: ["latin"],
+      });
+      expect(answer.status).toBe(200);
+      expect(catalogue.asked).toContain(file);
+    });
+
     it("refuses a role without the site-design permission before asking the catalogue anything", async () => {
       const t = await boot();
       const cookie = await holding(t, "read-site-style");

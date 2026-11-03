@@ -32,6 +32,8 @@ describe("resolveFontOptions", () => {
     ["a query", "https://fonts.example.com?x=1"],
     ["a name and password", "https://me:pw@fonts.example.com"],
     ["no scheme", "fonts.example.com"],
+    ["a fragment", "https://fonts.example.com#x"],
+    ["an empty query", "https://fonts.example.com/?"],
   ])("refuses a host given as %s", (_case, api) => {
     expect(() => resolveFontOptions({ catalogue: { api } })).toThrow(
       "Server configuration error."

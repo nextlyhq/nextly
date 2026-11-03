@@ -458,8 +458,14 @@ describe("adding a family", () => {
       styles: ["italic"],
       subsets: ["latin"],
     };
-    view(catalogue({ add }, [molle]));
+    const previewUrl = vi.fn(
+      (family: CatalogueFamilyView) => `https://cdn.example/${family.id}.woff2`
+    );
+    view(catalogue({ add, previewUrl }, [molle]));
     const editor = await openAdd(/^Molle/);
+    // Previewed from the file it has, not a regular it lacks.
+    expect(previewUrl).toHaveBeenCalledWith(molle, 400, "italic");
+    expect(previewUrl).not.toHaveBeenCalledWith(molle, 400, "normal");
     // Nothing to choose: its one style is the only one it has.
     expect(
       within(editor).queryByRole("checkbox", { name: "Include italics" })

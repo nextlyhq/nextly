@@ -321,7 +321,7 @@ export interface SiteFamily {
    * editor cannot change; otherwise where the stored faces say they came from.
    */
   readonly origin: FamilyOrigin;
-  /** Whether Remove is offered: only for a family the site stored. */
+  /** Whether Remove is offered: when the site stored any of the faces. */
   readonly removable: boolean;
   /** The styles in a few characters: `3 styles`, or a variable `100–900`. */
   readonly styles: string;
@@ -417,7 +417,9 @@ export function siteFamilies(
       family: spelled.get(key) ?? key,
       faces: members,
       origin: fromConfig ? "code" : (source?.kind ?? "upload"),
-      removable: !fromConfig,
+      // Remove takes only the stored faces, so a family the site's code also
+      // supplies can still lose the cuts added beside it.
+      removable: members.some(face => !coded.has(faceIdentity(face))),
       styles: styleSummary(members),
       ...(licence === undefined ? {} : { licence }),
       ...(source?.category === undefined ? {} : { category: source.category }),

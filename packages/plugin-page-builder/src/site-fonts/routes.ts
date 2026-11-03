@@ -31,7 +31,11 @@ import type { SiteSettingsRouteContext } from "../site-settings";
 import { checkStoredFonts, unreadableStoredFonts } from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 
-import { parseCatalogue, parseFontMetadata } from "./catalogue";
+import {
+  parseCatalogue,
+  parseFontMetadata,
+  parseVariableVersion,
+} from "./catalogue";
 import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
   SITE_FONTS_ROUTE_PATH,
@@ -283,12 +287,15 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
       )
     );
     if (meta === undefined) throw notInCatalogue();
+    const pinned = meta.variable
+      ? { ...meta, version: await variableVersion(fetch, request.id, signal) }
+      : meta;
     const api = await nextly();
     const slug = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
     const stored = await storedFonts(api, slug);
     const plan = planFontAdd(
       request,
-      meta,
+      pinned,
       { filesBase: fonts.files.origin, maxFiles: fonts.limits.filesPerAdd },
       stored.faces
     );
@@ -304,6 +311,36 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
       `${meta.family} was added to this site.`,
       { added, skipped: plan.skipped }
     );
+  };
+
+  /**
+   * The release a variable family's files are pinned to: the variable
+   * package's own, which the catalogue versions apart from the static one.
+   */
+  const variableVersion = async (
+    fetch: CatalogueFetch,
+    id: string,
+    signal: AbortSignal
+  ): Promise<string> => {
+    const version = parseVariableVersion(
+      JSON.parse(
+        new TextDecoder().decode(
+          await fetchFromCatalogue(
+            fetch,
+            new URL(`/v1/version/${id}`, fonts.api).href,
+            rules({
+              expect: "json",
+              maxBytes: METADATA_MAX_BYTES,
+              messages: ADD_MESSAGES,
+              signal,
+              notFound: notInCatalogue,
+            })
+          )
+        )
+      )
+    );
+    if (version === undefined) throw notInCatalogue();
+    return version;
   };
 
   /** Every planned file, one at a time, under the per-add byte cap. */

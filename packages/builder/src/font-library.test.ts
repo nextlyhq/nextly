@@ -408,6 +408,15 @@ describe("the site's families", () => {
       ["code", false],
     ]);
     expect(families[0]?.licence).toBe("SIL Open Font License");
+    // A cut stored beside the code's own can be removed; the code's stays.
+    const geistBold: FontFaceDef = {
+      family: "Geist",
+      src: file("g"),
+      weight: "700",
+      source: { kind: "upload" },
+    };
+    const [mixed] = siteFamilies([geist, geistBold], [geist]);
+    expect([mixed?.origin, mixed?.removable]).toEqual(["code", true]);
   });
 
   it("describes a family in words for its row's name", () => {

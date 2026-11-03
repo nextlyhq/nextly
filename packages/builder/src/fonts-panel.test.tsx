@@ -239,6 +239,30 @@ describe("the site's fonts", () => {
     ).toBeNull();
   });
 
+  it("removes the cuts added to a family from the site's code, and says the code's stay", async () => {
+    const onRemoveFamily = vi.fn(async (_family: SiteFamily) => undefined);
+    const bold: FontFaceDef = {
+      family: "Geist",
+      src: [{ url: "/api/media/geist-bold/raw", format: "woff2" }],
+      weight: "700",
+      source: { kind: "upload" },
+    };
+    panel({ faces: [...INTER, BRAND, GEIST, bold], onRemoveFamily });
+    fireEvent.click(row(/^Geist,/));
+    const details = await screen.findByRole("dialog", { name: "Geist" });
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    const confirm = within(details).getByRole("group", {
+      name: "Remove Geist",
+    });
+    expect(confirm.textContent).toContain(
+      "Remove the Geist styles you added here? Styles from your site\u2019s code stay."
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove Geist" }));
+    });
+    expect(onRemoveFamily).toHaveBeenCalledTimes(1);
+  });
+
   it("removes a family only once the author confirms, keeping the files", async () => {
     const onRemoveFamily = vi.fn(async (_family: SiteFamily) => undefined);
     panel({ onRemoveFamily });

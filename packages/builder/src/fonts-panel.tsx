@@ -567,7 +567,11 @@ function FamilyDetails({
       </div>
       <p className="nx-fonts__meta">{sourceLine(family)}</p>
       {onRemove === undefined ? null : (
-        <RemoveFamily family={family.family} onRemove={onRemove} />
+        <RemoveFamily
+          family={family.family}
+          keepsCode={family.origin === "code"}
+          onRemove={onRemove}
+        />
       )}
     </div>
   );
@@ -576,9 +580,12 @@ function FamilyDetails({
 /** Remove, behind a confirmation naming what happens to the text and files. */
 function RemoveFamily({
   family,
+  keepsCode,
   onRemove,
 }: {
   family: string;
+  /** Whether the site's code supplies some of its styles, which stay. */
+  keepsCode: boolean;
   onRemove: () => Promise<string | undefined>;
 }): React.JSX.Element {
   const [confirming, setConfirming] = React.useState(false);
@@ -607,10 +614,18 @@ function RemoveFamily({
           role="group"
           aria-label={`Remove ${family}`}
         >
-          <p>
-            Remove <strong>{family}</strong>? Text set in it falls back to the
-            next font in its list. The files stay in your media library.
-          </p>
+          {keepsCode ? (
+            <p>
+              Remove the <strong>{family}</strong> styles you added here? Styles
+              from your site&rsquo;s code stay. The files stay in your media
+              library.
+            </p>
+          ) : (
+            <p>
+              Remove <strong>{family}</strong>? Text set in it falls back to the
+              next font in its list. The files stay in your media library.
+            </p>
+          )}
           <div className="nx-vars-editor__actions">
             <Button
               type="button"

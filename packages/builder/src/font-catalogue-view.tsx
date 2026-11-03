@@ -362,7 +362,7 @@ function CatalogueRow({
   const loaded = usePreview(
     element,
     family.id,
-    catalogue.previewUrl(family, previewWeight(family), "normal")
+    catalogue.previewUrl(family, previewWeight(family), startingStyle(family))
   );
   const meta = metaLine(family);
   return (
@@ -417,6 +417,11 @@ function CatalogueRow({
   );
 }
 
+/** The style a family starts from: its regular, or its italic when that's all it has. */
+function startingStyle(family: CatalogueFamilyView): "normal" | "italic" {
+  return family.styles.includes("normal") ? "normal" : "italic";
+}
+
 /** The weights to start with: Regular and Bold where offered, else the first. */
 function startingWeights(family: CatalogueFamilyView): Set<number> {
   const both = family.weights.filter(
@@ -467,6 +472,61 @@ function addLabel(
     : { label: `Add ${name} \u00b7 ${styles(chosen)}`, ready: true };
 }
 
+/**
+ * What an add asks for, from the editor's choices and the faces the site
+ * has: the styles, the scripts, the weights (held ones included), whether a
+ * cut is already on the site in every chosen script, and the button.
+ */
+function addSelection(
+  family: CatalogueFamilyView,
+  present: ReadonlySet<string>,
+  choices: {
+    weights: ReadonlySet<number>;
+    italics: boolean;
+    subsets: ReadonlySet<string>;
+  }
+): {
+  base: "normal" | "italic";
+  offersBoth: boolean;
+  styles: Array<"normal" | "italic">;
+  chosenSubsets: string[];
+  held: (cut: number | "variable", style: string) => boolean;
+  cuts: Array<number | "variable">;
+  label: string;
+  ready: boolean;
+} {
+  // A family that comes only in italic starts from its italic; italics are a
+  // choice only where it has both.
+  const base = startingStyle(family);
+  const offersBoth = base === "normal" && family.styles.includes("italic");
+  const styles: Array<"normal" | "italic"> =
+    choices.italics && offersBoth ? [base, "italic"] : [base];
+  const chosenSubsets = family.subsets.filter(subset =>
+    choices.subsets.has(subset)
+  );
+  /** Whether the site has a cut in every script chosen. */
+  const held = (cut: number | "variable", style: string): boolean =>
+    chosenSubsets.length > 0 &&
+    chosenSubsets.every(subset =>
+      present.has(`${String(cut)}|${style}|${subset}`)
+    );
+  const cuts: Array<number | "variable"> = family.variable
+    ? ["variable"]
+    : family.weights.filter(
+        weight => choices.weights.has(weight) || held(weight, base)
+      );
+  const combos = cuts.flatMap(cut => styles.map(style => ({ cut, style })));
+  // A style counts as new when any chosen script of it is missing.
+  const fresh = combos.filter(combo => !held(combo.cut, combo.style)).length;
+  const { label, ready } = addLabel(
+    family.family,
+    combos.length,
+    fresh,
+    present.size > 0
+  );
+  return { base, offersBoth, styles, chosenSubsets, held, cuts, label, ready };
+}
+
 /** The editor that adds one family: weights, italics, scripts, licence. */
 function AddEditor({
   family,
@@ -493,37 +553,8 @@ function AddEditor({
   const [busy, setBusy] = React.useState(false);
   const [issue, setIssue] = React.useState<string | null>(null);
 
-  // A family that comes only in italic starts from its italic; italics are a
-  // choice only where it has both.
-  const base: "normal" | "italic" = family.styles.includes("normal")
-    ? "normal"
-    : "italic";
-  const offersBoth = base === "normal" && family.styles.includes("italic");
-  const styles: Array<"normal" | "italic"> = [
-    base,
-    ...(italics && offersBoth ? (["italic"] as const) : []),
-  ];
-  const chosenSubsets = family.subsets.filter(subset => subsets.has(subset));
-  /** Whether the site has a cut in every script chosen. */
-  const held = (cut: number | "variable", style: string): boolean =>
-    chosenSubsets.length > 0 &&
-    chosenSubsets.every(subset =>
-      present.has(`${String(cut)}|${style}|${subset}`)
-    );
-  const cuts: Array<number | "variable"> = family.variable
-    ? ["variable"]
-    : family.weights.filter(
-        weight => weights.has(weight) || held(weight, base)
-      );
-  const combos = cuts.flatMap(cut => styles.map(style => ({ cut, style })));
-  // A style counts as new when any chosen script of it is missing.
-  const fresh = combos.filter(combo => !held(combo.cut, combo.style)).length;
-  const { label, ready } = addLabel(
-    family.family,
-    combos.length,
-    fresh,
-    present.size > 0
-  );
+  const { base, offersBoth, styles, chosenSubsets, held, cuts, label, ready } =
+    addSelection(family, present, { weights, italics, subsets });
 
   const toggle = <T,>(set: Set<T>, value: T): Set<T> => {
     const next = new Set(set);

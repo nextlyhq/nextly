@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCatalogue, parseFontMetadata } from "./catalogue";
+import {
+  parseCatalogue,
+  parseFontMetadata,
+  parseVariableVersion,
+} from "./catalogue";
 
 /** Entries as Fontsource's list answers them, trimmed to three. */
 const LIST = [
@@ -146,5 +150,21 @@ describe("parseFontMetadata", () => {
         unicodeRange: { latin: "U+0000-00FF;}body{color:red" },
       })
     ).toBe(undefined);
+  });
+});
+
+describe("parseVariableVersion", () => {
+  it("reads the variable package's own release, which may differ from the static one", () => {
+    expect(
+      parseVariableVersion({ latest: "5.2.1", latestVariable: "5.2.6" })
+    ).toBe("5.2.6");
+  });
+
+  it("reads nothing when there is no variable package, or its version is not a plain release", () => {
+    expect(parseVariableVersion({ latest: "5.2.1" })).toBeUndefined();
+    expect(
+      parseVariableVersion({ latestVariable: "../5.2.6" })
+    ).toBeUndefined();
+    expect(parseVariableVersion("5.2.6")).toBeUndefined();
   });
 });

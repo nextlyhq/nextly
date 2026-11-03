@@ -168,3 +168,16 @@ export function parseFontMetadata(raw: unknown): FontMetadata | undefined {
     unicodeRange: parsed.data.unicodeRange,
   };
 }
+
+const Versions = z.object({ latestVariable: z.string().regex(RELEASE) });
+
+/**
+ * The variable package's own latest release, from the catalogue's version
+ * answer. Static and variable packages are released separately, so a variable
+ * file is pinned to this rather than to the family's `npmVersion`. Nothing
+ * when there is no variable package or its version cannot be trusted.
+ */
+export function parseVariableVersion(raw: unknown): string | undefined {
+  const parsed = Versions.safeParse(raw);
+  return parsed.success ? parsed.data.latestVariable : undefined;
+}
