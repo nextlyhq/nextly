@@ -22,6 +22,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { getDialectTables } from "../../../database/index";
 import { asRepositoryDb } from "../events/repository-db";
 import { runStatement } from "../pipeline/_internal/run-statement";
@@ -51,6 +52,9 @@ async function contentTables(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<string[]> {
+  // Loaded here: `nextly migrate` can reach this before anything else has
+  // read this dialect's registry tables.
+  await loadDialectTables(dialect);
   const tables = getDialectTables(dialect);
   const repo = asRepositoryDb(db);
   const names = new Set<string>();

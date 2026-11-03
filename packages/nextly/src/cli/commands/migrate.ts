@@ -741,6 +741,11 @@ export interface MigrateCoreDeps {
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
   /**
+   * Seam for tests; defaults to adding the per-document columns each content table lacks
+   * (`addDocumentColumns`).
+   */
+  documentColumnsFn?: (deps: MigrateCoreDeps) => Promise<void>;
+  /**
    * Runs inside the lock once the migration files have applied and before their metadata is
    * recorded (Phase 3). A throw stops the run there: the files that ran stay applied and in the
    * ledger, and the registry keeps the definitions it had, so the next run judges the same change
@@ -1768,7 +1773,7 @@ export async function migrateCore(
       // Before the app's files as well as after them: a file written after
       // these columns existed may rebuild a SQLite table, copying them from
       // the live one, and a file written before them creates tables without.
-      await addDocumentColumnsFor(deps);
+      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
       await recordAppTableOwners(deps);
       ({ pluginModulesApplied, applied } = await runMigrationStreams(
         deps,
@@ -1782,7 +1787,7 @@ export async function migrateCore(
       // longer holds it. Each stream's reconcile ignores elements it does not
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
-      await addDocumentColumnsFor(deps);
+      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
 
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();

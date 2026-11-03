@@ -28,6 +28,7 @@ function deps(over: Record<string, unknown> = {}) {
     refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
     assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
+    documentColumnsFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
       singlesRegistered: 0,
@@ -263,6 +264,41 @@ describe("migrateCore", () => {
     await migrateCore(d as never);
 
     expect(order).toEqual(["files", "precondition", "metadata"]);
+  });
+
+  // Before the files, because a file written once the per-document columns existed may name
+  // them (a SQLite table rebuild copies every column); after them, because a file written before
+  // them creates tables without.
+  it("adds the per-document columns before the files and again after them", async () => {
+    const order: string[] = [];
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 1;
+      }),
+      documentColumnsFn: vi.fn(async () => {
+        order.push("document columns");
+      }),
+      reconcileMetadataFn: vi.fn(async () => {
+        order.push("metadata");
+        return {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          marked: 0,
+          stillPending: 0,
+          unreadable: [],
+        };
+      }),
+    });
+
+    await migrateCore(d as never);
+
+    expect(order).toEqual([
+      "document columns",
+      "files",
+      "document columns",
+      "metadata",
+    ]);
   });
 
   // Refused there, the registry keeps the definitions it had, and the next run judges the same

@@ -19,7 +19,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type { FreshDatabase } from "../../../__tests__/helpers/fresh-database";
 import {
@@ -61,17 +69,15 @@ afterAll(remove);
 
 // The Schema Builder runs the migration that creates a collection's tables
 // only in development; elsewhere it records a pending one.
-let previousNodeEnv: string | undefined;
 beforeEach(() => {
-  previousNodeEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = "development";
+  vi.stubEnv("NODE_ENV", "development");
 });
 
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
-  process.env.NODE_ENV = previousNodeEnv;
+  vi.unstubAllEnvs();
 });
 
 /** Every content table this site holds, by kind. */

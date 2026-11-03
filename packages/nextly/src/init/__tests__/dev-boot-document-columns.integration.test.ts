@@ -52,17 +52,15 @@ const TABLES = [
 
 // The boot applies only in development, and the Schema Builder creates its
 // tables only there.
-let previousNodeEnv: string | undefined;
 beforeEach(() => {
-  previousNodeEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = "development";
+  vi.stubEnv("NODE_ENV", "development");
 });
 
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
-  process.env.NODE_ENV = previousNodeEnv;
+  vi.unstubAllEnvs();
 });
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
