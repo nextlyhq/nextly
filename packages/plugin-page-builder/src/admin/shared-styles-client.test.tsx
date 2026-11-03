@@ -76,7 +76,7 @@ describe("reading how widely shared styles are used", () => {
     // Parsed from JSON, as the transport parses it, so `__proto__` arrives
     // as an own key: an id naming a prototype key is still a style.
     readAnswer = JSON.parse(
-      `{"whole":false,"mayLock":true,"styles":{"c-card":${JSON.stringify(reach(2))},"__proto__":${JSON.stringify(reach(1))}}}`
+      `{"whole":false,"counting":true,"mayLock":true,"styles":{"c-card":${JSON.stringify(reach(2))},"__proto__":${JSON.stringify(reach(1))}}}`
     );
     const { result } = renderHook(() => useSharedStylesClient());
     const usage = await result.current.usage(["c-card", "__proto__"], signal);
@@ -85,6 +85,8 @@ describe("reading how widely shared styles are used", () => {
       { path: sharedStyleUsagePath(["c-card", "__proto__"]) },
     ]);
     expect(usage.whole).toBe(false);
+    // Whether a floor may still become whole travels with the answer.
+    expect(usage.counting).toBe(true);
     expect(usage.mayLock).toBe(true);
     expect(usage.styles.get("c-card")?.documents).toBe(2);
     expect(usage.styles.get("__proto__")?.documents).toBe(1);

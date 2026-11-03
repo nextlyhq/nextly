@@ -45,6 +45,12 @@ export interface SharedStyleReach {
 export interface SharedStylesUsage {
   /** Whether every page has been counted, so counts can be exact. */
   readonly whole: boolean;
+  /**
+   * Whether counts that are not whole may still become whole, so they are
+   * worth asking for again. False when something the index cannot reach
+   * keeps them floors for good.
+   */
+  readonly counting: boolean;
   /** Whether this author may lock and unlock shared styles. */
   readonly mayLock: boolean;
   /** Each style asked about, by id. */
@@ -384,25 +390,28 @@ export function isUnused(
   reach: SharedStyleReach
 ): boolean {
   return (
-    sharedStyleUse(blocks, reach) === "unused" &&
     blocks !== undefined &&
     blocks.complete &&
-    reach.complete
+    blocks.count === 0 &&
+    reach.complete &&
+    reach.documents === 0
   );
 }
 
 /**
- * Whether any use of a style has been counted: on a block of the open page or
- * on a document in the index. "unused" says only that none has been counted;
- * it is certain once every count is ({@link isUnused}). Undefined while the
- * style's usage has not been read.
+ * Where a style stands for the Used and Unused filters: "used" once any use
+ * has been counted, on a block of the open page or a document in the index,
+ * complete or not; "unused" only when it certainly is ({@link isUnused}, the
+ * one rule removal also reads). Undefined otherwise: not read yet, or a zero
+ * while some count is incomplete, which is "none counted yet", not unused.
  */
 export function sharedStyleUse(
   blocks: BlocksOnThisPage | undefined,
   reach: SharedStyleReach | undefined
 ): "used" | "unused" | undefined {
   if (reach === undefined) return undefined;
-  return (blocks?.count ?? 0) > 0 || reach.documents > 0 ? "used" : "unused";
+  if ((blocks?.count ?? 0) > 0 || reach.documents > 0) return "used";
+  return isUnused(blocks, reach) ? "unused" : undefined;
 }
 
 /** Which styles the tab lists: every one, or those used, unused or locked. */
@@ -457,6 +466,10 @@ export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
  */
 export const SHARED_STYLE_RENAME_PENDING =
   "Wait until the name change is saved.";
+
+/** What the Unused filter says in place of rows while counts are floors. */
+export const SHARED_STYLE_UNUSED_WHILE_COUNTING =
+  "Some pages are still being counted, so no style can be called unused yet.";
 
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =

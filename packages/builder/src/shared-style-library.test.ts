@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isUnused,
+  sharedStyleUse,
   renameSharedStyle,
   searchSharedStyles,
   sharedStyleDeclares,
@@ -269,6 +270,17 @@ describe("removing one style", () => {
         .kind
     ).toBe("refused");
     expect(isUnused({ count: 0, complete: false }, reachOf({}))).toBe(false);
+  });
+
+  it("calls a zero unused only once both counts are complete", () => {
+    // A zero while counting is "none counted yet", under neither filter.
+    expect(sharedStyleUse(clear, reachOf({}, false))).toBeUndefined();
+    expect(
+      sharedStyleUse({ count: 0, complete: false }, reachOf({}))
+    ).toBeUndefined();
+    expect(sharedStyleUse(clear, reachOf({}))).toBe("unused");
+    // A counted use is a use however incomplete the rest is.
+    expect(sharedStyleUse(clear, reachOf({ pages: 1 }, false))).toBe("used");
   });
 
   it("says nothing of its own for a locked style or one in code", () => {

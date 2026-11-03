@@ -42,7 +42,12 @@ function usageFromResponse(
   // Own entries only, into a Map, so an id such as `__proto__` is a style
   // like any other rather than a key of the object's prototype.
   const styles = new Map<string, SharedStyleReach>(Object.entries(body.styles));
-  return { whole: body.whole, mayLock: body.mayLock, styles };
+  return {
+    whole: body.whole,
+    counting: body.counting,
+    mayLock: body.mayLock,
+    styles,
+  };
 }
 
 /** The list envelope the where-used route answers with. */

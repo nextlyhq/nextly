@@ -67,6 +67,7 @@ import {
   SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   SHARED_STYLE_RENAME_PENDING,
+  SHARED_STYLE_UNUSED_WHILE_COUNTING,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
   type SharedStyleFilter,
@@ -243,6 +244,7 @@ export function SharedStylesPanel({
   // Every style's usage is read, so each filter can be counted: the rows the
   // search puts first, then the rest, fifty to a read.
   const usage = useUsage(access, usageOrder(rows, found, pages));
+  const exact = countsExact(usage, pageBlocks, rows);
   const usageOf = (row: SharedStyleRow) =>
     sharedStyleUse(pageBlocksOf(pageBlocks, row.id), usage.styles.get(row.id));
   const filtered = found.filter(row =>
@@ -288,7 +290,7 @@ export function SharedStylesPanel({
             setPages(1);
           }}
           usageOf={usageOf}
-          exact={countsExact(usage, pageBlocks, rows)}
+          exact={exact}
         />
       )}
       <div className="nx-vars__body">
@@ -315,6 +317,7 @@ export function SharedStylesPanel({
             found={filtered}
             filter={filter}
             query={query.trim()}
+            exact={exact}
           >
             {shown.map(row => (
               <StyleRow
@@ -551,6 +554,7 @@ function StyleList({
   found,
   filter,
   query,
+  exact,
   children,
 }: {
   rows: readonly SharedStyleRow[];
@@ -558,8 +562,17 @@ function StyleList({
   found: readonly SharedStyleRow[];
   filter: SharedStyleFilter;
   query: string;
+  /** Whether every count is exact, so a zero means unused. */
+  exact: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
+  // While counts are floors no style is certainly unused, so Unused says why
+  // rather than listing what has merely not been counted yet.
+  if (filter === "unused" && !exact && rows.length > 0) {
+    return (
+      <p className="nx-vars__empty">{SHARED_STYLE_UNUSED_WHILE_COUNTING}</p>
+    );
+  }
   if (rows.length === 0) {
     return (
       <p className="nx-vars__empty">
@@ -614,11 +627,24 @@ interface UsageState {
   readonly failed: boolean;
 }
 
+/** Whether the rows on screen are due another read on the recount timer. */
+function recountDue(
+  access: SharedStylesAccess | undefined,
+  whole: boolean | undefined,
+  reads: UsageReads
+): boolean {
+  return (
+    access !== undefined && whole === false && reads.counting && !reads.failed
+  );
+}
+
 /** What the reads kept: each style's usage, and the health it was read under. */
 interface UsageReads {
   readonly styles: ReadonlyMap<string, SharedStyleReach>;
   /** Per style, whether the read that counted it saw a whole index. */
   readonly readWhole: ReadonlyMap<string, boolean>;
+  /** The last read's word on whether floors may still become whole. */
+  readonly counting: boolean;
   readonly mayLock: boolean;
   readonly failed: boolean;
 }
@@ -668,6 +694,7 @@ function useUsage(
   const [state, setState] = React.useState<UsageReads>({
     styles: new Map(),
     readWhole: new Map(),
+    counting: false,
     mayLock: false,
     failed: false,
   });
@@ -678,13 +705,15 @@ function useUsage(
   const [recount, setRecount] = React.useState(0);
   const recounted = React.useRef(recount);
   React.useEffect(() => {
-    if (access === undefined || whole !== false || state.failed) return;
+    // Only while the site is still being counted: floors that nothing will
+    // make whole (content the index cannot reach) are not asked for again.
+    if (!recountDue(access, whole, state)) return;
     const timer = setTimeout(
       () => setRecount(count => count + 1),
       USAGE_RECOUNT_MS
     );
     return () => clearTimeout(timer);
-  }, [access, whole, state.failed, state.styles, recount]);
+  }, [access, whole, state, recount]);
   React.useEffect(() => {
     if (access === undefined) return;
     // A recount asks for every row on screen; otherwise only the rows that
@@ -704,6 +733,7 @@ function useUsage(
           ...current.readWhole,
           ...[...read.styles.keys()].map(id => [id, read.whole] as const),
         ]),
+        counting: read.counting,
         mayLock: read.mayLock,
         failed: false,
       }))

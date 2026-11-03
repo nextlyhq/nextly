@@ -74,6 +74,7 @@ function reach(
 /** Usage the access answers with, by id; unknown ids read as unused. */
 function accessOf({
   whole = true,
+  counting = !whole,
   mayLock = false,
   styles = {},
   uses,
@@ -81,6 +82,8 @@ function accessOf({
   lock = async () => undefined,
 }: {
   whole?: boolean;
+  /** Whether a count that is not whole may still become whole. */
+  counting?: boolean;
   mayLock?: boolean;
   styles?: Record<string, SharedStyleReach>;
   uses?: (id: string, page: number) => SharedStyleUsesPage;
@@ -93,6 +96,7 @@ function accessOf({
       usageReads.push(ids);
       return {
         whole,
+        counting,
         mayLock,
         styles: new Map(
           ids.map(id => [
@@ -298,6 +302,7 @@ describe("counts", () => {
         const whole = reads > 1;
         return {
           whole,
+          counting: !whole,
           mayLock: false,
           styles: new Map(ids.map(id => [id, reach({}, whole)])),
         };
@@ -334,6 +339,31 @@ describe("counts", () => {
     );
   });
 
+  it("asks nothing more when the count cannot become whole", async () => {
+    // A blocks-backed Single, say: floors for good, so no timer.
+    const { access, usageReads } = accessOf({ whole: false, counting: false });
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      const reads = usageReads.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS * 3);
+      });
+      expect(usageReads).toHaveLength(reads);
+    } finally {
+      vi.useRealTimers();
+    }
+    // The floor note still says the numbers are minimums.
+    expect(
+      screen.getByText(
+        "Some pages are still being counted, so these numbers are minimums."
+      )
+    ).toBeTruthy();
+  });
+
   it("asks again while counting, and shows the whole count once it is done", async () => {
     let counted = false;
     const base = accessOf().access;
@@ -341,6 +371,7 @@ describe("counts", () => {
       ...base,
       usage: vi.fn(async (ids: readonly string[]) => ({
         whole: counted,
+        counting: !counted,
         mayLock: false,
         styles: new Map(ids.map(id => [id, reach({ pages: 4 }, counted)])),
       })),
@@ -468,6 +499,36 @@ describe("the filters", () => {
       .getAllByRole("button")
       .map(button => button.getAttribute("aria-label"));
     expect(names).toEqual(["All 3", "Used", "Unused", "Locked 1"]);
+  });
+
+  it("lists under Unused only styles certainly unused, saying why while counting", async () => {
+    const { access } = accessOf({
+      whole: false,
+      styles: { "c-card": reach({ pages: 4 }, false) },
+    });
+    await panel({ library: [CARD, HERO, OLD], access });
+    pick(/^Unused/);
+    // HERO and OLD count zero so far, which is not unused yet.
+    expect(shownRows()).toEqual([]);
+    expect(
+      screen.getByText(
+        "Some pages are still being counted, so no style can be called unused yet."
+      )
+    ).toBeTruthy();
+    // A counted use is a use, counted in full or not.
+    pick(/^Used/);
+    expect(shownRows()).toEqual(["c-card"]);
+  });
+
+  it("keeps a zero on a page not read in full out of Unused", async () => {
+    const { access } = accessOf();
+    await panel({
+      library: [HERO],
+      access,
+      pageBlocks: { counts: new Map(), complete: false },
+    });
+    pick(/^Unused/);
+    expect(shownRows()).toEqual([]);
   });
 
   it("says when a filter holds nothing, and when the search finds nothing in it", async () => {
