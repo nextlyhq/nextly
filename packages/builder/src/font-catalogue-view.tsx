@@ -377,9 +377,12 @@ function CatalogueRow({
             data-catalogue-family={family.id}
           >
             <span className="nx-fonts-catalogue__text">
+              {/* The name whole on hover: cut when long, or drawn over by
+                  the preview text. */}
               <span
                 className="nx-fonts-catalogue__preview"
                 style={previewStyle(family, loaded)}
+                title={family.family}
               >
                 {sample.trim() === "" ? family.family : sample}
               </span>
@@ -394,7 +397,7 @@ function CatalogueRow({
           side="right"
           align="start"
           sideOffset={12}
-          className="nx-vars-editor"
+          className="nx-vars-editor nx-fonts-add"
           aria-label={`Add ${family.family}`}
         >
           <AddEditor

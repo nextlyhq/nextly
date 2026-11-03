@@ -258,8 +258,10 @@ export function FontFamilyField({
             <ChevronDown aria-hidden="true" size={14} />
           </button>
         </PopoverTrigger>
+        {/* Aligned to the control's right edge: the list may be wider than
+            the control, and the inspector sits at the window's right edge. */}
         <PopoverContent
-          align="start"
+          align="end"
           sideOffset={4}
           className="nx-font-pick__popover"
           onOpenAutoFocus={event => event.preventDefault()}
@@ -434,6 +436,8 @@ function FontList({
                         choice.key === current?.key ? "" : undefined
                       }
                       className="nx-font-pick__option"
+                      // Cut with an ellipsis when long: whole on hover.
+                      title={choice.label}
                       style={
                         choice.drawn === undefined
                           ? undefined

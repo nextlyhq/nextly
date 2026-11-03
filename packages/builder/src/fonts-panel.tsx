@@ -493,7 +493,10 @@ function FamilyRow({
             >
               Aa
             </span>
-            <span className="nx-vars__name">{family.family}</span>
+            {/* Cut with an ellipsis when long, so the name is whole on hover. */}
+            <span className="nx-vars__name" title={family.family}>
+              {family.family}
+            </span>
             <span className="nx-vars__chip" aria-hidden="true">
               {family.styles}
             </span>
@@ -714,7 +717,9 @@ function VariableRow({
       >
         Aa
       </span>
-      <span className="nx-vars__name">{label}</span>
+      <span className="nx-vars__name" title={label}>
+        {label}
+      </span>
       <span className="nx-vars__chip" aria-hidden="true">
         {first}
       </span>

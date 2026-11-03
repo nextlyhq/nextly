@@ -146,10 +146,12 @@ describe("the site's fonts", () => {
       "Inter, 3 styles: Regular 400, Bold 700, Italic 400, from Google Fonts"
     );
     expect(within(inter).getByText("Aa").style.fontFamily).toBe('"Inter"');
-    expect(
-      within(inter).getByText("400 \u00b7 700 \u00b7 Italic")
-    ).toBeTruthy();
+    expect(within(inter).getByText("3 styles")).toBeTruthy();
     expect(within(row(/^Brand,/)).getByText("100\u2013900")).toBeTruthy();
+    // The name is cut with an ellipsis when long, so it carries itself whole.
+    expect(within(inter).getByText("Inter").getAttribute("title")).toBe(
+      "Inter"
+    );
   });
 
   it("says where the fonts live, in the research's words", () => {

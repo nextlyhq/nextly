@@ -323,7 +323,7 @@ export interface SiteFamily {
   readonly origin: FamilyOrigin;
   /** Whether Remove is offered: only for a family the site stored. */
   readonly removable: boolean;
-  /** The styles in a few characters: `400 · 700 · Italic`, `100–900`. */
+  /** The styles in a few characters: `3 styles`, or a variable `100–900`. */
   readonly styles: string;
   /** The licence in words, when the faces name one. */
   readonly licence?: string;
@@ -372,20 +372,21 @@ function weightNumbers(weight: string | undefined): number[] {
     .filter(Number.isFinite);
 }
 
-/** The weights in a few characters: up to three listed, a range, or a count. */
-function weightSummary(faces: readonly FontFaceDef[]): string {
-  const ranges = faces
+/** A row's styles in a few characters: a variable range, else a count. */
+function styleSummary(faces: readonly FontFaceDef[]): string {
+  const range = faces
     .map(face => weightNumbers(face.weight))
-    .filter(numbers => numbers.length === 2);
-  const range = ranges[0];
+    .find(numbers => numbers.length === 2);
   if (range !== undefined) {
     return `${String(range[0])}\u2013${String(range[1])}`;
   }
-  const weights = [
-    ...new Set(faces.flatMap(face => weightNumbers(face.weight))),
-  ].sort((a, b) => a - b);
-  if (weights.length <= 3) return weights.join(" \u00b7 ");
-  return `${String(weights.length)} weights`;
+  return styleCount(faces);
+}
+
+/** How many cuts the faces draw: `1 style`, `3 styles`. */
+function styleCount(faces: readonly FontFaceDef[]): string {
+  const cuts = new Set(faces.map(face => cutName(face.weight, face.style)));
+  return cuts.size === 1 ? "1 style" : `${String(cuts.size)} styles`;
 }
 
 /**
@@ -410,7 +411,6 @@ export function siteFamilies(
   return [...groups].map(([key, members]) => {
     const fromConfig = members.some(face => coded.has(faceIdentity(face)));
     const source = members.find(face => face.source !== undefined)?.source;
-    const italic = members.some(face => slanted(face.style));
     const licence = licenceName(source?.licence);
     return {
       key,
@@ -418,7 +418,7 @@ export function siteFamilies(
       faces: members,
       origin: fromConfig ? "code" : (source?.kind ?? "upload"),
       removable: !fromConfig,
-      styles: `${weightSummary(members)}${italic ? " \u00b7 Italic" : ""}`,
+      styles: styleSummary(members),
       ...(licence === undefined ? {} : { licence }),
       ...(source?.category === undefined ? {} : { category: source.category }),
     };
@@ -475,11 +475,10 @@ function originWords(origin: FamilyOrigin): string {
 
 /** A family in words, for its row's accessible name. */
 export function familyDescription(family: SiteFamily): string {
-  const cuts = family.faces.map(face => cutName(face.weight, face.style));
-  const unique = [...new Set(cuts)];
-  const count =
-    unique.length === 1 ? "1 style" : `${String(unique.length)} styles`;
-  return `${family.family}, ${count}: ${unique.join(", ")}, ${originWords(family.origin)}`;
+  const cuts = [
+    ...new Set(family.faces.map(face => cutName(face.weight, face.style))),
+  ];
+  return `${family.family}, ${styleCount(family.faces)}: ${cuts.join(", ")}, ${originWords(family.origin)}`;
 }
 
 /** The stored faces without one family's, matched as CSS matches a family. */

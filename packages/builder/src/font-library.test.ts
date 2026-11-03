@@ -382,13 +382,22 @@ describe("the site's families", () => {
     ]);
   });
 
-  it("summarises a family's styles for its row", () => {
+  it("summarises a family's styles for its row in a few characters", () => {
+    const brandItalic: FontFaceDef = {
+      ...brand,
+      src: file("e"),
+      style: "italic",
+    };
     const [inter, uploaded] = siteFamilies(
-      [interRegular, interBold, interItalic, brand],
+      [interRegular, interBold, interItalic, brand, brandItalic],
       []
     );
-    expect(inter?.styles).toBe("400 · 700 · Italic");
+    // A static family counts its cuts, as the catalogue does; a variable one
+    // gives its range. Either fits the row's chip whole, italics or not.
+    expect(inter?.styles).toBe("3 styles");
     expect(uploaded?.styles).toBe("100–900");
+    const [single] = siteFamilies([interBold], []);
+    expect(single?.styles).toBe("1 style");
   });
 
   it("names a family's source, and only a stored family can be removed", () => {

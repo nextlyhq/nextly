@@ -214,6 +214,13 @@ describe("browsing", () => {
       target: { value: "Hamburgefonstiv" },
     });
     expect(screen.getAllByText("Hamburgefonstiv")).toHaveLength(2);
+    // With the name drawn over, and when a long name is cut, it is still
+    // there whole on hover.
+    expect(
+      within(await row(/^Inter/))
+        .getByText("Hamburgefonstiv")
+        .getAttribute("title")
+    ).toBe("Inter");
   });
 
   it("shows thirty at a time", async () => {

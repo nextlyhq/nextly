@@ -127,6 +127,8 @@ describe("FontFamilyField", () => {
     const list = open();
     const inter = within(list).getByRole("option", { name: "Inter" });
     expect(inter.style.fontFamily).toContain("Inter");
+    // A long name is cut with an ellipsis, so it is whole on hover.
+    expect(inter.getAttribute("title")).toBe("Inter");
   });
 
   it("stores a variable as a reference to it", () => {
