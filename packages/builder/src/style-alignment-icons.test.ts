@@ -121,6 +121,23 @@ describe("alignmentGroupFor", () => {
     ]);
   });
 
+  it("ignores a stored reversed direction once the element is not flex", () => {
+    // A block or grid keeps a stored column-reverse it no longer lays out by:
+    // its axes come from the writing mode, so reversing the main one drew a
+    // hybrid of the old layout and the new.
+    const values = ["nowrap", "wrap", "wrap-reverse"];
+    const matrices = (at: Flow) =>
+      alignmentGroupFor("flex-wrap", values, at)?.options.map(option =>
+        option.matrix === undefined ? "same" : option.matrix.join(",")
+      );
+    expect(
+      matrices(flow({ flex: false, direction: "column-reverse" }))
+    ).toEqual(matrices(ROW));
+    expect(matrices(flow({ flex: false, direction: "row-reverse" }))).toEqual(
+      matrices(ROW)
+    );
+  });
+
   it("ignores a flex direction the element does not lay out by", () => {
     // A grid keeps a stored column direction it no longer uses: justify runs
     // along the inline axis, as in a row.

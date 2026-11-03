@@ -290,9 +290,12 @@ const TOWARD: Readonly<Record<Edge, readonly [number, number]>> = {
  */
 function wrapOptions(values: readonly string[], flow: Flow): AlignmentOption[] {
   const { main, cross } = axesOf(flow);
-  const mainStart = flow.direction.endsWith("-reverse")
-    ? OPPOSITE[main.start]
-    : main.start;
+  // Reversed only where the flex direction chose the axes: a block or grid
+  // keeps a stored direction it no longer lays out by.
+  const mainStart =
+    flow.flex && flow.direction.endsWith("-reverse")
+      ? OPPOSITE[main.start]
+      : main.start;
   const runs = TOWARD[OPPOSITE[mainStart]];
   const matrixFor = (advanceToward: Edge) => {
     const advances = TOWARD[advanceToward];
