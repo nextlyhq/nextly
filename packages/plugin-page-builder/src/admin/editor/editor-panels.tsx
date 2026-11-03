@@ -19,6 +19,7 @@ import {
 import {
   type UseBuilderChecklistResult,
   ClassManagerPanel,
+  ComponentsPanel,
   InsertPanel,
   LayersPanel,
   useBuilderChecklist,
@@ -62,19 +63,26 @@ import {
   renderedTokens,
   TokensStudio,
 } from "./site-style-studios";
+import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
 /**
- * Every left panel the editor can fill today: Add, Layers, Pages, and Design
- * with the site's variables, classes and fonts. Components is not built.
+ * Every left panel the editor can fill today: Add, Layers, Pages, the site's
+ * Components, and Design with the site's variables, classes and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
  * would reserve space and shrink the canvas to show it, which is why this
  * grows one entry at a time rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["add", "layers", "pages", "design"] as const;
+const AVAILABLE_PANELS = [
+  "add",
+  "layers",
+  "pages",
+  "components",
+  "design",
+] as const;
 
 /**
  * The insert panel, with this site's saved patterns.
@@ -430,6 +438,9 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  componentLibrary,
+  componentVerbs,
+  componentView,
   layersRegions,
   drag,
   offered,
@@ -446,9 +457,11 @@ export function editorPanelRenderer({
   requestPanel,
   insertInside,
   pages,
-}: Pick<EditorMount, "editor"> & {
+}: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
+  /** "Edit component", which the Components panel offers on each row. */
+  componentView: Pick<ComponentView, "onEditComponent">;
 } & Pick<
     SiteStyleInputs,
     | "canvasSiteStyle"
@@ -484,6 +497,38 @@ export function editorPanelRenderer({
           offerablePatterns={offerablePatterns}
           // Inside the container a "+" chose, while it is the selection.
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+        />
+      ),
+      /*
+              The site's components, from the SAME offered read Add's
+              "Your components" group and the editor's search are handed, so
+              a component this author may not read is offered nowhere, and
+              placed through Add's own path, so the two panels cannot place
+              differently. The rows the read holds and the panel does not
+              offer are the ones this document cannot contain: the
+              component being edited, and those that place it.
+            */
+      components: () => (
+        <ComponentsPanel
+          editor={editor}
+          components={offered.components}
+          componentDefinitions={offered.definitions}
+          loading={offered.state === "pending"}
+          library={{
+            components: tierStateOf(offered),
+            retry: offered.retry,
+          }}
+          withheld={
+            componentLibrary.components.length - offered.components.length
+          }
+          beginInsertDrag={drag.beginInsertDrag}
+          {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // From the panel there is no placement, so Back returns to the
+          // editor as the author left it.
+          {...(componentView.onEditComponent === undefined
+            ? {}
+            : { onEditComponent: componentView.onEditComponent })}
+          mayCreate={componentVerbs.mayCreate}
         />
       ),
       /*
