@@ -13,7 +13,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import {
   Blocks,
   CircleHelp,
-  FileText,
+  Files,
   Layers,
   Palette,
   Plus,
@@ -31,7 +31,7 @@ const PANEL_CHROME: Record<
 > = {
   add: { label: EDITOR_WORDS.add, Icon: Plus },
   layers: { label: EDITOR_WORDS.layers, Icon: Layers },
-  pages: { label: EDITOR_WORDS.pages, Icon: FileText },
+  pages: { label: EDITOR_WORDS.pages, Icon: Files },
   components: { label: EDITOR_WORDS.components, Icon: Blocks },
   design: { label: EDITOR_WORDS.design, Icon: Palette },
   settings: { label: EDITOR_WORDS.settings, Icon: Settings },

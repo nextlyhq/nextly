@@ -477,6 +477,37 @@ describe("Settings, as the host's dialog", () => {
     expect(handed.at(-1)?.returnFocus()).toBe(item);
   });
 
+  it("opens from a host's request once per count, and not again on a re-render", () => {
+    const { renderSettings } = settingsHost();
+    const { rerender } = renderShell({
+      renderSettings,
+      openSettingsRequest: { count: 1 },
+    });
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    // The same request again is not a new one: closed stays closed.
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 1 }}
+      />
+    );
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 2 }}
+      />
+    );
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+  });
+
   it("closes when the editor gives way to its narrow-window notice", async () => {
     const { renderSettings } = settingsHost();
     renderShell({ renderSettings });

@@ -121,6 +121,14 @@ export interface BuilderShellProps {
    */
   renderSettings?: (dialog: SettingsDialogState) => React.ReactNode;
   /**
+   * Opens the host's Settings dialog from outside the rail, as
+   * `openPanelRequest` opens a panel: a page's "Settings" in a list the host
+   * draws, say. Applied once per `count`, so a host re-rendering with the same
+   * request does not reopen a dialog the author has closed. Ignored without
+   * `renderSettings`.
+   */
+  openSettingsRequest?: { readonly count: number };
+  /**
    * The host's notice queue, when the host raises notices of its own.
    *
    * The shell owns a queue and renders the region for it, and provides its
@@ -888,6 +896,10 @@ function RailAndDialogs({
 }): React.JSX.Element {
   const help = useRailDialog(active);
   const settings = useRailDialog(active);
+  useSettingsRequest(
+    React.useContext(SettingsRequestContext),
+    settings.setOpen
+  );
   return (
     <>
       <EditorRail
@@ -930,6 +942,31 @@ function HostSettings({
  * button it would then keep out of reach. Closed rather than hidden, so
  * widening the window again does not bring back a dialog nobody reopened.
  */
+/**
+ * The host's open-Settings request, handed from the shell's props to the rail
+ * that owns the dialog. A context rather than a prop through the regions in
+ * between, which only pass it along.
+ */
+const SettingsRequestContext =
+  React.createContext<BuilderShellProps["openSettingsRequest"]>(undefined);
+
+/**
+ * Opens Settings once for each new `count` a host sends. A ref, not state,
+ * holds the count last applied, so the request is applied at most once and a
+ * re-render does not reopen a dialog the author closed.
+ */
+function useSettingsRequest(
+  request: BuilderShellProps["openSettingsRequest"],
+  setOpen: (open: boolean) => void
+): void {
+  const handled = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (request === undefined || handled.current === request.count) return;
+    handled.current = request.count;
+    setOpen(true);
+  }, [request, setOpen]);
+}
+
 function useRailDialog(active: boolean): {
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -2061,22 +2098,26 @@ export function BuilderShell({
                     become descendants of this provider by being RENDERED here,
                     wherever the host created them. */}
                 <NoticeSinkProvider raise={notices.raise}>
-                  <ShellRegions
-                    appliedScale={appliedScale}
-                    onZoomPick={onZoomPick}
-                    {...props}
-                    preferences={preferences}
-                    update={update}
-                    active={shellFits}
-                    loadCount={loadCount}
-                    /*
-                     * The caller's `className` stops here: the measuring wrapper
-                     * above carries it. Passing it on would apply the host's grid
-                     * area, height or border a second time, on a box nested inside
-                     * the one already carrying it.
-                     */
-                    className={undefined}
-                  />
+                  <SettingsRequestContext.Provider
+                    value={props.openSettingsRequest}
+                  >
+                    <ShellRegions
+                      appliedScale={appliedScale}
+                      onZoomPick={onZoomPick}
+                      {...props}
+                      preferences={preferences}
+                      update={update}
+                      active={shellFits}
+                      loadCount={loadCount}
+                      /*
+                       * The caller's `className` stops here: the measuring wrapper
+                       * above carries it. Passing it on would apply the host's grid
+                       * area, height or border a second time, on a box nested inside
+                       * the one already carrying it.
+                       */
+                      className={undefined}
+                    />
+                  </SettingsRequestContext.Provider>
                 </NoticeSinkProvider>
               </PortalProvider>
             </ShellActiveContext.Provider>
