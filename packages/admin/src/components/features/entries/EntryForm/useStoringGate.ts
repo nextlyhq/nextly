@@ -90,6 +90,22 @@ function reportedAfterMove(
   return { ...outcome, reported: true };
 }
 
+/** What an action comes to when a before-action handler called it off. */
+const BEFORE_CANCELLED: DocumentActionOutcome = {
+  ok: false,
+  reason: "cancelled",
+  message: "Cancelled.",
+};
+
+/** Whether `error` is an `AbortError`, however it was raised. */
+function isAbort(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
 export function useStoringGate(scope: string): StoringGate {
   const beforeActions = useRef(new Set<BeforeDocumentAction>());
   const registerBeforeAction = useCallback((handler: BeforeDocumentAction) => {
@@ -147,6 +163,11 @@ export function useStoringGate(scope: string): StoringGate {
     try {
       for (const before of [...beforeActions.current]) await before(action);
     } catch (error) {
+      // A handler that asked the author a question and was told no: the
+      // action is cancelled, not failed, so the save state is left as it was
+      // and nothing is announced. `AbortError` is the platform's own name for
+      // an operation its caller called off.
+      if (isAbort(error)) return BEFORE_CANCELLED;
       return {
         ok: false,
         reason: "failed",

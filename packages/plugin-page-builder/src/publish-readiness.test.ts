@@ -1,0 +1,181 @@
+/**
+ * Which components and Layout a publish would leave unpublished.
+ *
+ * Asserted through `planPublishReadiness` over an in-memory store, so each
+ * case names exactly which definitions are live, which exist only as drafts
+ * and which are gone.
+ */
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+import { describe, expect, it } from "vitest";
+
+import { planPublishReadiness, type ReadinessReads } from "./publish-readiness";
+
+const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 2_097_152 };
+
+const placements = (ids: readonly string[]) =>
+  ids.map((componentId, i) => ({
+    id: `i-${componentId}-${String(i)}`,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId },
+  }));
+
+const page = (ids: readonly string[]): BlockDocument => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: placements(ids),
+});
+
+/** A component definition placing `ids`, or plain content when none. */
+const component = (ids: readonly string[] = []): BlockDocument => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes:
+    ids.length === 0
+      ? [{ id: "text", type: "core/text", version: 1, props: {} }]
+      : placements(ids),
+});
+
+/**
+ * A store: each component's definition, and whether it is live. A component
+ * absent from `components` does not exist.
+ */
+function reads(store: {
+  components: Record<string, { live: boolean; places?: string[] }>;
+  layouts?: Record<string, { live: boolean; areas: string[] }>;
+}): ReadinessReads & { storedAsked: string[][] } {
+  const storedAsked: string[][] = [];
+  return {
+    storedAsked,
+    published: async ids => {
+      const found = new Map<string, BlockDocument>();
+      for (const id of ids) {
+        const entry = store.components[id];
+        if (entry?.live === true) found.set(id, component(entry.places));
+      }
+      return found;
+    },
+    stored: async ids => {
+      storedAsked.push([...ids]);
+      const found = new Map<string, unknown>();
+      for (const id of ids) {
+        const entry = store.components[id];
+        if (entry !== undefined) found.set(id, component(entry.places));
+      }
+      return found;
+    },
+    layout: async id => {
+      const entry = store.layouts?.[id];
+      return entry === undefined
+        ? null
+        : { published: entry.live, components: entry.areas };
+    },
+    limits: LIMITS,
+  };
+}
+
+describe("what a publish would leave unpublished", () => {
+  it("names nothing when everything the page places is live", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page(["hero"])], layout: null },
+      reads({ components: { hero: { live: true } } })
+    );
+    expect(plan).toEqual({ components: [], layout: null, missing: 0 });
+  });
+
+  it("names a placed component that is not published", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page(["hero", "card"])], layout: null },
+      reads({
+        components: { hero: { live: true }, card: { live: false } },
+      })
+    );
+    expect(plan.components).toEqual(["card"]);
+  });
+
+  it("names a component that a live component places", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page(["hero"])], layout: null },
+      reads({
+        components: {
+          hero: { live: true, places: ["badge"] },
+          badge: { live: false },
+        },
+      })
+    );
+    expect(plan.components).toEqual(["badge"]);
+  });
+
+  it("names what an unpublished component places, deepest first", async () => {
+    // The first round can only see `card`: an unpublished definition is never
+    // read by the render, so what it places shows only once it is supplied.
+    const store = reads({
+      components: {
+        card: { live: false, places: ["badge"] },
+        badge: { live: false, places: ["icon"] },
+        icon: { live: false },
+      },
+    });
+    const plan = await planPublishReadiness(
+      { documents: [page(["card"])], layout: null },
+      store
+    );
+    expect(plan.components).toEqual(["icon", "badge", "card"]);
+    // One read of each level's stored form, never a component twice.
+    expect(store.storedAsked).toEqual([["card"], ["badge"], ["icon"]]);
+  });
+
+  it("counts a placed component that no longer exists, and offers nothing for it", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page(["gone", "card"])], layout: null },
+      reads({ components: { card: { live: false } } })
+    );
+    expect(plan).toEqual({ components: ["card"], layout: null, missing: 1 });
+  });
+
+  it("names an unpublished Layout and the components its areas place", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page([])], layout: "landing" },
+      reads({
+        components: { header: { live: false }, footer: { live: true } },
+        layouts: { landing: { live: false, areas: ["header", "footer"] } },
+      })
+    );
+    expect(plan).toEqual({
+      components: ["header"],
+      layout: "landing",
+      missing: 0,
+    });
+  });
+
+  it("names the components a live Layout's areas place, and not the Layout", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [], layout: "landing" },
+      reads({
+        components: { header: { live: false } },
+        layouts: { landing: { live: true, areas: ["header"] } },
+      })
+    );
+    expect(plan).toEqual({ components: ["header"], layout: null, missing: 0 });
+  });
+
+  it("says nothing about a Layout that no longer exists", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page([])], layout: "gone" },
+      reads({ components: {} })
+    );
+    expect(plan).toEqual({ components: [], layout: null, missing: 0 });
+  });
+
+  it("names a component placed in two documents once", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page(["card"]), page(["card"])], layout: null },
+      reads({ components: { card: { live: false } } })
+    );
+    expect(plan.components).toEqual(["card"]);
+  });
+});

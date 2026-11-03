@@ -174,7 +174,8 @@ export { useReportUnsavedWork } from "@nextlyhq/admin";
  * - `useBeforeDocumentAction(handler)` runs `handler` before every action that
  *   stores the editor's work, from any control, the shortcut or `run`, while
  *   the caller is mounted: commit work held outside the form there. Throwing
- *   refuses the action.
+ *   refuses the action; throwing an `AbortError` cancels it instead, for a
+ *   handler that asked the author and was told no.
  * - `useTrackedWrite()` counts a write the document depends on but does not
  *   contain. Storing actions wait for it and are refused, naming it, while its
  *   latest attempt has failed.

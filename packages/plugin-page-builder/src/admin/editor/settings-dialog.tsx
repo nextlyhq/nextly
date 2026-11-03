@@ -68,6 +68,14 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
+import type { PublishReadinessResponse } from "../../publish-readiness-contract";
+import {
+  askReadiness,
+  publishChosen,
+  PublishOfferDialog,
+  reportLeftUnpublished,
+  type PublishChoice,
+} from "../publish-offer";
 
 import type { SharePreview } from "./share-preview";
 
@@ -464,7 +472,54 @@ function DefaultLayout({
   useEffect(() => {
     if (chosen !== null && read.defaultLayout === chosen) setChosen(null);
   }, [chosen, read.defaultLayout]);
+  // A Layout about to wrap every page that names none, asked about first:
+  // the components its areas place that are not live, with the offer to
+  // publish them before it becomes the default. Never a refusal.
+  const [offer, setOffer] = useState<{
+    id: string;
+    readiness: PublishReadinessResponse;
+  } | null>(null);
   const choose = (id: string): void => {
+    setSave({ kind: "saving" });
+    void askReadiness({ documents: [], layout: id }).then(readiness => {
+      if (
+        readiness === null ||
+        (readiness.dependencies.length === 0 && readiness.missing === 0)
+      ) {
+        makeDefault(id);
+        return;
+      }
+      setSave({ kind: "idle" });
+      setOffer({ id, readiness });
+    });
+  };
+  const answer = (choice: PublishChoice): void => {
+    const asked = offer;
+    setOffer(null);
+    if (asked === null || choice.kind === "cancel") return;
+    if (choice.kind === "only") {
+      makeDefault(asked.id);
+      return;
+    }
+    setSave({ kind: "saving" });
+    publishChosen(choice.dependencies).then(
+      result => {
+        reportLeftUnpublished(result, asked.readiness, "Layout");
+        makeDefault(asked.id);
+      },
+      (reason: unknown) => {
+        setSave({
+          kind: "failed",
+          message:
+            reason instanceof Error
+              ? reason.message
+              : "The components could not be published.",
+          retry: () => choose(asked.id),
+        });
+      }
+    );
+  };
+  const makeDefault = (id: string): void => {
     setSave({ kind: "saving" });
     writePluginRoute({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -516,6 +571,17 @@ function DefaultLayout({
         </Select>
         <SaveWords save={save} />
       </div>
+      <PublishOfferDialog
+        readiness={offer?.readiness ?? null}
+        subject="Layout"
+        onAnswer={answer}
+        onlyLabel="Make default anyway"
+        withLabel={count =>
+          count === 1
+            ? "Publish it, then make default"
+            : `Publish ${String(count)}, then make default`
+        }
+      />
       {read.mayChooseDefaultLayout ? null : (
         <p className="text-xs text-muted-foreground">
           {current === undefined ? "" : `${current.title}. `}You can see the

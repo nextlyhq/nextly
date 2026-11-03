@@ -213,6 +213,10 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+// The question before a publish registers a before-action of its own, which
+// this harness would take for the host commit's; it has its own tests.
+vi.mock("./publish-offer", () => ({ usePublishOffer: () => null }));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,

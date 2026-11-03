@@ -183,6 +183,22 @@ describe("before a storing action", () => {
     expect(onSaveDraft).not.toHaveBeenCalled();
   });
 
+  it("cancels, storing nothing, when an editor's question is answered no", async () => {
+    // An AbortError is a "no" to a question the editor asked, not a failure,
+    // so the outcome is the one a dismissed confirmation has.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const probe = renderHost({ onPublish }, () => {
+      throw new DOMException("Publishing was cancelled.", "AbortError");
+    });
+
+    await expect(runAction(probe, "publish")).resolves.toEqual({
+      ok: false,
+      reason: "cancelled",
+      message: "Cancelled.",
+    });
+    expect(onPublish).not.toHaveBeenCalled();
+  });
+
   it("no longer asks an editor that has closed", async () => {
     const before = vi.fn();
     const probe = renderHost(
