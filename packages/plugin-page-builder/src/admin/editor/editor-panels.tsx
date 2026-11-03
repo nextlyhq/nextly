@@ -552,6 +552,7 @@ export function editorPanelRenderer({
                   siteStylePending,
                   siteStyleError
                 )}
+                codeFaces={configSiteStyle?.fonts}
                 tokens={renderedTokens(
                   canvasSiteStyle,
                   siteStylePending,

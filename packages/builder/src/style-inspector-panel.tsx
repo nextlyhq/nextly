@@ -38,6 +38,7 @@ import {
   type BreakpointId,
   type BreakpointSet,
   type ContrastResult,
+  type FontFaceDef,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
@@ -82,6 +83,12 @@ import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
+import {
+  FontChoicesContext,
+  FontFamilyField,
+  fontFamilyShowable,
+  type FontChoices,
+} from "./font-family-field";
 import {
   designIsWritable,
   designReadOnlyReason,
@@ -352,6 +359,12 @@ export interface StyleInspectorPanelProps {
    * to the selected node, which this panel already writes through the editor.
    */
   onCreateClass?: ClassSelectorProps["onCreateClass"];
+  /**
+   * The site's fonts, for the Font control. It lists only what the site can
+   * draw: its font variables, the families it has files for, and the system
+   * families. Absent, it lists the variables and the system families.
+   */
+  fonts?: FontChoices;
 }
 
 /**
@@ -458,6 +471,20 @@ function styleUnavailable(
 }
 
 /**
+ * The Style tab. The site's fonts reach the Font control through a context, so
+ * they are not handed down every section and row between here and there.
+ */
+export function StyleInspectorPanel(
+  props: StyleInspectorPanelProps
+): React.JSX.Element {
+  return (
+    <FontChoicesContext.Provider value={props.fonts}>
+      <StyleInspectorBody {...props} />
+    </FontChoicesContext.Provider>
+  );
+}
+
+/**
  * The class surface for the selected block, or nothing.
  *
  * Its own component rather than a conditional in the panel body: the panel is
@@ -524,7 +551,7 @@ function SelectedNodeClasses({
   );
 }
 
-export function StyleInspectorPanel({
+function StyleInspectorBody({
   editor,
   renderedTag,
   sideOrientation,
@@ -1565,7 +1592,7 @@ function StyleControlField({
         editing={editing}
         descendant={control.leaf.descendant}
       />
-      <ControlValue
+      <ControlOrFont
         id={id}
         labelledBy={labelId}
         control={control}
@@ -2017,6 +2044,65 @@ function JumpAction({
     >
       Go to {where}
     </button>
+  );
+}
+
+/** No faces, as one value, so the Font control's list is not rebuilt each render. */
+const NO_FACES: readonly FontFaceDef[] = Object.freeze([]);
+
+/**
+ * The Font control where the leaf is `font-family`, chosen from what the site
+ * can draw before any other surface (a stored variable shows as the choice it
+ * is); every other value as {@link ControlValue} draws it. A value that can
+ * only be cleared stays that way.
+ */
+function ControlOrFont(
+  props: Parameters<typeof ControlValue>[0]
+): React.JSX.Element {
+  const fonts = React.useContext(FontChoicesContext);
+  const font = props.clearOnly ? null : fontControl({ ...props, fonts });
+  return font ?? <ControlValue {...props} />;
+}
+
+/**
+ * The Font control, for the `font-family` leaf: CHOSEN from what the site can
+ * draw rather than typed, since a typed family the site has no file for
+ * renders in whatever the reader's device has. `null` for any other leaf, or
+ * a stored value the picker cannot show.
+ */
+function fontControl({
+  id,
+  labelledBy,
+  control,
+  stored,
+  tokens,
+  fonts,
+  onCommit,
+}: {
+  id: string;
+  labelledBy: string;
+  control: Parameters<typeof ControlValue>[0]["control"];
+  stored: Parameters<typeof ControlValue>[0]["stored"];
+  tokens: Parameters<typeof ControlValue>[0]["tokens"];
+  fonts: FontChoices | undefined;
+  onCommit: Parameters<typeof ControlValue>[0]["onCommit"];
+}): React.JSX.Element | null {
+  const isFontFamily =
+    control.leaf.kind === "cssValue" &&
+    control.leaf.cssProperty === "font-family";
+  if (!isFontFamily || !fontFamilyShowable(stored)) return null;
+  const manage = fonts?.onManageFonts;
+  return (
+    <FontFamilyField
+      id={id}
+      labelledBy={labelledBy}
+      stored={stored}
+      tokens={tokens}
+      faces={fonts?.faces}
+      fromCode={fonts?.fromCode ?? NO_FACES}
+      onCommit={onCommit}
+      {...(manage === undefined ? {} : { onManageFonts: manage })}
+    />
   );
 }
 

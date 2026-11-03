@@ -155,6 +155,11 @@ export interface InspectorPanelProps {
   /** Create a class and apply it to the selected block. Opts the surface in. */
   onCreateClass?: StyleInspectorPanelProps["onCreateClass"];
   /**
+   * The site's fonts, carried to the Style tab's Font control. See
+   * {@link StyleInspectorPanelProps.fonts}.
+   */
+  fonts?: StyleInspectorPanelProps["fonts"];
+  /**
    * The editor whose selected block this edits.
    *
    * The whole state rather than a document and an `apply` separately: a patch is
@@ -839,6 +844,7 @@ function StyleTab({
   classLibrary,
   classLibraryAbsence,
   onCreateClass,
+  fonts,
 }: Pick<
   InspectorPanelProps,
   | "editor"
@@ -854,6 +860,7 @@ function StyleTab({
   | "classLibrary"
   | "classLibraryAbsence"
   | "onCreateClass"
+  | "fonts"
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
@@ -897,6 +904,7 @@ function StyleTab({
         classLibrary={classLibrary}
         classLibraryAbsence={classLibraryAbsence}
         onCreateClass={onCreateClass}
+        fonts={fonts}
       />
     </>
   );

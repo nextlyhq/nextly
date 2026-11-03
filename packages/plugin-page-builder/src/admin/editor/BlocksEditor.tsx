@@ -82,7 +82,11 @@ import {
   StyleRevisionContext,
   useSiteStyleHistory,
 } from "./site-style-history";
-import { offerableTokens, siteStyleStatus } from "./site-style-studios";
+import {
+  offerableFaces,
+  offerableTokens,
+  siteStyleStatus,
+} from "./site-style-studios";
 import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -391,8 +395,10 @@ function editorInspector(
     editedBreakpoint,
     liveBreakpoints,
     canvasSiteStyle,
+    configSiteStyle,
     siteStylePending,
     siteStyleError,
+    requestPanel,
     componentFacts,
     componentVariants,
   } = view;
@@ -443,6 +449,18 @@ function editorInspector(
         siteStylePending,
         siteStyleError
       )}
+      // The Font control lists only what the site can draw: the faces the
+      // canvas loads, of which those from the site's code cannot be removed,
+      // and a way to Design's fonts to add one.
+      fonts={{
+        faces: offerableFaces(
+          canvasSiteStyle,
+          siteStylePending,
+          siteStyleError
+        ),
+        fromCode: configSiteStyle.fonts ?? [],
+        onManageFonts: () => requestPanel("design", "fonts"),
+      }}
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, and how far a removal reaches.
       componentFields={componentFacts}

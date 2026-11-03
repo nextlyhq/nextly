@@ -3341,3 +3341,56 @@ describe("a colour that does not follow light and dark", () => {
     ).toBeNull();
   });
 });
+
+describe("the Font control", () => {
+  const INTER = {
+    family: "Inter",
+    src: [{ url: "/api/media/a/raw", format: "woff2" }],
+    weight: "100 900",
+    source: { kind: "google" as const, id: "inter", category: "sans-serif" },
+  };
+
+  function mountFonts(onManageFonts?: () => void) {
+    register({ typography: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        fonts={{ faces: [INTER], fromCode: [], onManageFonts }}
+      />
+    );
+    return editor;
+  }
+
+  it("is a list of the site's fonts, with no box to type a family into", () => {
+    mountFonts();
+    const field = fieldsOf("fontFamily");
+    expect(field.queryByRole("textbox")).toBeNull();
+    const control = field.getByRole("button", { name: /^Font, / });
+    expect(control.getAttribute("aria-haspopup")).toBe("listbox");
+  });
+
+  it("writes the family picked, with its generic after it", () => {
+    const editor = mountFonts();
+    fireEvent.click(
+      fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Inter" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '\\"Inter\\", sans-serif'
+    );
+  });
+
+  it("hands Design's fonts to the author who asks", () => {
+    const onManageFonts = vi.fn();
+    mountFonts(onManageFonts);
+    fireEvent.click(
+      fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add or manage fonts…" })
+    );
+    expect(onManageFonts).toHaveBeenCalledTimes(1);
+  });
+});
