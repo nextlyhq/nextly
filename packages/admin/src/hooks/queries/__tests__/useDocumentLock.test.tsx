@@ -16,6 +16,8 @@ import {
   DOCUMENT_LOCK_LOSS_AFTER_MS,
 } from "nextly/document-lock";
 
+import { parseApiError } from "@admin/lib/api/parseApiError";
+
 import { useDocumentLock } from "../useDocumentLock";
 
 const ref = {
@@ -1738,5 +1740,57 @@ describe("useDocumentLock: gaining a document this editor was kept out of", () =
     next.released();
     await beat();
     await waitFor(() => expect(result.current.gains).toBe(2));
+  });
+});
+
+describe("useDocumentLock: a claim refused because its row vanished", () => {
+  // The server refuses a claim whose row a release removed while it was being
+  // written, as when a page reloads or React mounts an effect twice, and says
+  // the caller may retry. Waiting for the next beat leaves the document held by
+  // nobody for up to a beat, and a colleague opening it then takes it.
+  const vanished = () =>
+    parseApiError(
+      {
+        error: {
+          code: "CONFLICT",
+          message: "Could not start editing just now. Please try again.",
+          requestId: "r1",
+        },
+      },
+      409
+    );
+
+  it("claims again at once, and holds the document", async () => {
+    post.mockRejectedValueOnce(vanished());
+    const { result } = renderHook(() => useDocumentLock(ref));
+
+    // No beat has passed: the second claim followed the refusal directly.
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1]).toEqual(post.mock.calls[0]);
+  });
+
+  it("reports a second refusal as before, and asks no third time", async () => {
+    post.mockRejectedValueOnce(vanished()).mockRejectedValueOnce(vanished());
+    const { result } = renderHook(() => useDocumentLock(ref));
+
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a claim that could not be sent at all", async () => {
+    // A server that is down is asked again on the next beat, not at once.
+    post.mockRejectedValueOnce(new Error("offline"));
+    const { result } = renderHook(() => useDocumentLock(ref));
+
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+    expect(post).toHaveBeenCalledTimes(1);
   });
 });

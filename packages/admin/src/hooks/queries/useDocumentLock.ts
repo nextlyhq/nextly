@@ -102,6 +102,7 @@ import {
 } from "nextly/document-lock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { MutationResponse } from "@admin/lib/api/response-types";
 
@@ -179,6 +180,31 @@ function documentKey(
   entryId: string
 ): string {
   return `${scopeKind}:${slug}:${entryId}`;
+}
+
+/**
+ * Send one claim, and send it once more at once if the server refuses it as a
+ * conflict.
+ *
+ * A claim's only conflict is the row it was writing vanishing under it, which
+ * the server reports as one the caller may retry: a release landing while the
+ * same editor claims again, as when a page reloads, or React mounts an effect
+ * twice in development. Left to the next beat, nobody would hold the document
+ * for up to a beat, and a colleague opening it then would take it. One retry,
+ * so a second refusal is reported as before rather than looped on.
+ */
+async function sendClaim(body: object): Promise<AcquireDocumentLockOutcome> {
+  const send = () =>
+    protectedApi.post<MutationResponse<AcquireDocumentLockOutcome>>(
+      "/document-lock",
+      body
+    );
+  try {
+    return (await send()).item;
+  } catch (refusal) {
+    if (!isApiError(refusal) || refusal.code !== "CONFLICT") throw refusal;
+  }
+  return (await send()).item;
 }
 
 export function useDocumentLock({
@@ -500,9 +526,7 @@ export function useDocumentLock({
       // never mentioned it.
       const asked = requesting;
       try {
-        ({ item } = await protectedApi.post<
-          MutationResponse<AcquireDocumentLockOutcome>
-        >("/document-lock", { ...ref, takeover, requestAccess: asked }));
+        item = await sendClaim({ ...ref, takeover, requestAccess: asked });
       } catch {
         clearTimeout(slotExpiry);
         failClaim(seq, intent);
