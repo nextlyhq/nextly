@@ -180,6 +180,11 @@ export async function mayReadSiteStyle(
   const mayUpdate = async (slug: string): Promise<boolean> => {
     if (asked.has(slug)) return false;
     asked.add(slug);
+    // A type-level question: may this caller edit this kind of document at
+    // all? `can` answers a row-filtered update rule as "no", having no entry
+    // to apply the filter to, so an author whose only update right is
+    // row-filtered is not admitted here and needs `read-site-style`. A probe
+    // that answers "yes" for such a rule, without applying it, belongs here.
     return caller.can("update", slug);
   };
   for (const slug of known) if (await mayUpdate(slug)) return true;
