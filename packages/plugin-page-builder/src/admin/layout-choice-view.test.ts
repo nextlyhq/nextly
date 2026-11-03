@@ -52,6 +52,7 @@ function ready(
         layoutsCollection: "layouts",
         canUpdateLayouts: true,
         more: false,
+        matched: [],
         defaultUnreadable: false,
         regionComponents: {},
         regionDefinitions: {},

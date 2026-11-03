@@ -383,6 +383,7 @@ export type {
   InstanceExposure,
   OverriddenBy,
   ResolveComponentOptions,
+  PropExposure,
   ResolvedBlockNode,
   ResolvedComposition,
   ResolvedDocument,
@@ -515,6 +516,17 @@ export type {
 // the editor that consumes them ships.
 export { lockBreaksIn, lockRefusal } from "./lock-breaks";
 export type { LocatedLockBreak, LockSources } from "./lock-breaks";
+// Turning every copy of a component in one document into plain blocks, and
+// asking whether a document still references it, for deleting a component that
+// is in use. `@experimental` until the delete that consumes them ships.
+export { inlineComponentInstances, stillReferences } from "./component-inline";
+export type {
+  InlinedDocument,
+  InlineProblem,
+  InlineRefusal,
+  InlineResult,
+  ReferenceAnswer,
+} from "./component-inline";
 export { lockRepairRule, planRepair } from "./repair-plan";
 // The placement rule's repair, appended after the lock rule when planning, so
 // a page holding blocks where the placement rule refuses them is offered a

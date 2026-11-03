@@ -307,7 +307,7 @@ function tabOf(entry: InsertEntry): PanelTab {
  * One entry as the panel offers it at the current place: where a click puts
  * it, or why it cannot go there.
  */
-type EntryOffer =
+export type EntryOffer =
   | {
       readonly entry: InsertEntry;
       readonly place: InsertionCandidate;
@@ -349,6 +349,8 @@ const GRID_COLUMNS = 3;
  * rebuild the catalogue on every keystroke of the filter.
  */
 const NO_DEFINITIONS: ComponentLookup = new Map();
+/** No offers, while they are not being looked at. */
+const NO_OFFERS: ReadonlyMap<string, EntryOffer> = new Map();
 
 /**
  * That a tier of the library was cut, or could not be read, said where an
@@ -769,7 +771,7 @@ function placeParts(
 }
 
 /** "Adding after Heading", say, with the block's name in bold. */
-function placementWords(
+export function placementWords(
   lead: string,
   document: BlockDocument,
   candidate: InsertionCandidate
@@ -850,49 +852,60 @@ function movesTheHighlight(event: React.KeyboardEvent): boolean {
   return event.ctrlKey && ["n", "j", "p", "k"].includes(event.key);
 }
 
-export function InsertPanel({
+/** What {@link useInsertOffers} reads: the panel's own sources of blocks. */
+export type InsertOffersInputs = Pick<
+  InsertPanelProps,
+  | "editor"
+  | "definitions"
+  | "patterns"
+  | "components"
+  | "componentDefinitions"
+  | "nesting"
+  | "inside"
+  | "onInsert"
+> & {
+  /**
+   * Whether to judge the offers at all. The editor's search keeps this hook
+   * mounted while it is closed, and judging every entry against every place on
+   * each edit is work nobody is looking at. `true` when absent.
+   */
+  enabled?: boolean;
+};
+
+/** What can be added, where each would go, and the act of adding one. */
+export interface InsertOffers {
+  /** Blocks, then saved patterns and components, in one list. */
+  readonly catalog: readonly InsertEntry[];
+  /** The places a click may use, in the order they are tried. */
+  readonly candidates: readonly InsertionCandidate[];
+  /** Each entry's offer, by entry id: its place, or why it has none. */
+  readonly offers: ReadonlyMap<string, EntryOffer>;
+  /** The definitions an insert builds a block's children from. */
+  readonly blockSource: Parameters<typeof nodeForEntry>[1];
+  /** Add an entry where its offer says, or nothing when it was refused. */
+  readonly insert: (offer: EntryOffer | undefined) => void;
+}
+
+/**
+ * The Add panel's offers and its insert, as a hook.
+ *
+ * The panel and the editor's search both call this, so a search row says the
+ * place a tile would and adds there by the same path: one answer to "what can
+ * be added here, and where does it go".
+ *
+ * @experimental
+ */
+export function useInsertOffers({
   editor,
   definitions,
   patterns,
   components,
   componentDefinitions,
-  library,
   nesting,
-  categoryOrder,
-  blockOrder,
-  onInsert,
-  beginInsertDrag,
   inside,
-  renderPreview,
-}: InsertPanelProps): React.JSX.Element {
-  const [query, setQuery] = React.useState("");
-  // Blocks first: what an author adds most. Sections holds the patterns.
-  const [tab, setTab] = React.useState<PanelTab>("blocks");
-  /*
-   * Whether the author has moved through the tiles, and with what.
-   *
-   * The primitives mark their first item as current the moment the list
-   * draws, so the panel paints that mark — and opens the popover — only once
-   * an arrow key or a pointer has moved it. Which of the two is kept because
-   * a pointer that leaves the list returns the panel to rest, while the
-   * keyboard's highlight stays where the author left it.
-   */
-  const [moved, setMoved] = React.useState<"pointer" | "keyboard" | null>(null);
-  /*
-   * Whether a TOUCH has pressed a tile in this panel yet.
-   *
-   * Set from the pointer that was actually used rather than read from a media
-   * query, because `(pointer: coarse)` describes the device's PRIMARY pointer:
-   * a touchscreen laptop driven by its trackpad reports `fine`, and the
-   * guidance would be hidden from an author the moment they reach up and touch
-   * the screen. It also appears exactly when it is relevant — after the first
-   * press, which is when the question arises — and never for a pointer that
-   * reads a tile by hovering it.
-   */
-  const [touchPressed, setTouchPressed] = React.useState(false);
-  // The panel's own element, which the popover anchors inside and treats as
-  // "not outside".
-  const root = React.useRef<HTMLDivElement | null>(null);
+  onInsert,
+  enabled = true,
+}: InsertOffersInputs): InsertOffers {
   // ONE snapshot, taken per mount, that both the catalog and the default
   // expansion below read. The panel documents its palette as read once per
   // mount rather than subscribed to, and a second reading of the registry
@@ -947,84 +960,17 @@ export function InsertPanel({
   // keystroke asks no rule anything: judging a pattern walks its forest and a
   // component composes its definition, once per entry and place.
   const offerCache = React.useRef<OfferCache | undefined>(undefined);
-  const offers = cachedOffers(offerCache, {
-    document: editor.document,
-    candidates,
-    catalog,
-    source,
-    components: componentDefinitions,
-    expansion: { definitions: blockSource, nesting },
-    editor,
-  });
-  // The tab's share of the catalog, then the query. Refused entries stay, so
-  // an empty list means the query matched nothing, or the tab holds nothing.
-  const groups = paletteGroups(
-    filterEntries(
-      catalog.filter(entry => tabOf(entry) === tab),
-      query
-    ),
-    categoryOrder,
-    blockOrder
-  );
-
-  /*
-   * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
-   * needs a string: the command value, and the id `aria-describedby` points at.
-   *
-   * Opaque rather than the entry's own id, and that is load-bearing twice over.
-   *
-   * The command primitives TRIM the value they report, so two variation names
-   * differing only in trailing space — both valid, since nothing validates a
-   * variation name — collapse to one value. Pointing at the second would then
-   * describe and insert the first, silently. A token cannot collapse because
-   * it carries no author-supplied text at all.
-   *
-   * `aria-describedby` is a space-separated list of id REFERENCES, so an id
-   * built from `block#wide card` names two ids that do not exist and the tile
-   * is announced with no description — also silently, since a reference that
-   * resolves to nothing is not an error.
-   *
-   * Prefixed from `useId` because two inserters can be mounted at once — a
-   * panel and a palette, or two editors side by side — and duplicate ids would
-   * have every tile in one describe itself with the other's sentence.
-   *
-   * Built from the CATALOG rather than the filtered groups, so a token belongs
-   * to an entry for the life of the mount instead of changing as an author
-   * types.
-   */
-  const idPrefix = React.useId();
-  /*
-   * Allocated ONCE per entry and never reused, rather than taken from the
-   * entry's position.
-   *
-   * A host may replace `definitions` while the panel is mounted, and inserting
-   * one definition shifts the position of every entry after it. Positional
-   * tokens would then be reassigned underneath a highlight the palette is
-   * still holding: the same string would name a different block, so the
-   * popover would describe it and Enter would insert it.
-   *
-   * The allocation lives in a ref because it must survive re-renders without
-   * being one — it is DOM identity, not state, and nothing renders differently
-   * because a token was issued. Handing out a token for an id already in the
-   * store is what makes this idempotent, so a repeated call cannot renumber
-   * anything.
-   */
-  const issued = React.useRef({ next: 0, byEntry: new Map<string, string>() });
-  const tokens = React.useMemo(() => {
-    const store = issued.current;
-    const byEntry = new Map<string, string>();
-    for (const entry of catalog) {
-      const existing = store.byEntry.get(entry.id);
-      const token = existing ?? `${idPrefix}-b${store.next}`;
-      if (existing === undefined) {
-        store.next += 1;
-        store.byEntry.set(entry.id, token);
-      }
-      byEntry.set(entry.id, token);
-    }
-    return byEntry;
-  }, [catalog, idPrefix]);
-
+  const offers = !enabled
+    ? NO_OFFERS
+    : cachedOffers(offerCache, {
+        document: editor.document,
+        candidates,
+        catalog,
+        source,
+        components: componentDefinitions,
+        expansion: { definitions: blockSource, nesting },
+        editor,
+      });
   /*
    * Add an entry where its offer says, or nothing when it was refused.
    *
@@ -1123,6 +1069,133 @@ export function InsertPanel({
     editor.select(first.node.id);
     onInsert?.(first.node);
   };
+
+  return { catalog, candidates, offers, blockSource, insert };
+}
+
+export function InsertPanel({
+  editor,
+  definitions,
+  patterns,
+  components,
+  componentDefinitions,
+  library,
+  nesting,
+  categoryOrder,
+  blockOrder,
+  onInsert,
+  beginInsertDrag,
+  inside,
+  renderPreview,
+}: InsertPanelProps): React.JSX.Element {
+  const [query, setQuery] = React.useState("");
+  // Blocks first: what an author adds most. Sections holds the patterns.
+  const [tab, setTab] = React.useState<PanelTab>("blocks");
+  /*
+   * Whether the author has moved through the tiles, and with what.
+   *
+   * The primitives mark their first item as current the moment the list
+   * draws, so the panel paints that mark — and opens the popover — only once
+   * an arrow key or a pointer has moved it. Which of the two is kept because
+   * a pointer that leaves the list returns the panel to rest, while the
+   * keyboard's highlight stays where the author left it.
+   */
+  const [moved, setMoved] = React.useState<"pointer" | "keyboard" | null>(null);
+  /*
+   * Whether a TOUCH has pressed a tile in this panel yet.
+   *
+   * Set from the pointer that was actually used rather than read from a media
+   * query, because `(pointer: coarse)` describes the device's PRIMARY pointer:
+   * a touchscreen laptop driven by its trackpad reports `fine`, and the
+   * guidance would be hidden from an author the moment they reach up and touch
+   * the screen. It also appears exactly when it is relevant — after the first
+   * press, which is when the question arises — and never for a pointer that
+   * reads a tile by hovering it.
+   */
+  const [touchPressed, setTouchPressed] = React.useState(false);
+  // The panel's own element, which the popover anchors inside and treats as
+  // "not outside".
+  const root = React.useRef<HTMLDivElement | null>(null);
+  // What can be added, where, and the act of adding it: shared with the
+  // editor's search, so a row there and a tile here are one answer.
+  const { catalog, candidates, offers, blockSource, insert } = useInsertOffers({
+    editor,
+    definitions,
+    patterns,
+    components,
+    componentDefinitions,
+    nesting,
+    inside,
+    onInsert,
+  });
+  // The tab's share of the catalog, then the query. Refused entries stay, so
+  // an empty list means the query matched nothing, or the tab holds nothing.
+  const groups = paletteGroups(
+    filterEntries(
+      catalog.filter(entry => tabOf(entry) === tab),
+      query
+    ),
+    categoryOrder,
+    blockOrder
+  );
+
+  /*
+   * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
+   * needs a string: the command value, and the id `aria-describedby` points at.
+   *
+   * Opaque rather than the entry's own id, and that is load-bearing twice over.
+   *
+   * The command primitives TRIM the value they report, so two variation names
+   * differing only in trailing space — both valid, since nothing validates a
+   * variation name — collapse to one value. Pointing at the second would then
+   * describe and insert the first, silently. A token cannot collapse because
+   * it carries no author-supplied text at all.
+   *
+   * `aria-describedby` is a space-separated list of id REFERENCES, so an id
+   * built from `block#wide card` names two ids that do not exist and the tile
+   * is announced with no description — also silently, since a reference that
+   * resolves to nothing is not an error.
+   *
+   * Prefixed from `useId` because two inserters can be mounted at once — a
+   * panel and a palette, or two editors side by side — and duplicate ids would
+   * have every tile in one describe itself with the other's sentence.
+   *
+   * Built from the CATALOG rather than the filtered groups, so a token belongs
+   * to an entry for the life of the mount instead of changing as an author
+   * types.
+   */
+  const idPrefix = React.useId();
+  /*
+   * Allocated ONCE per entry and never reused, rather than taken from the
+   * entry's position.
+   *
+   * A host may replace `definitions` while the panel is mounted, and inserting
+   * one definition shifts the position of every entry after it. Positional
+   * tokens would then be reassigned underneath a highlight the palette is
+   * still holding: the same string would name a different block, so the
+   * popover would describe it and Enter would insert it.
+   *
+   * The allocation lives in a ref because it must survive re-renders without
+   * being one — it is DOM identity, not state, and nothing renders differently
+   * because a token was issued. Handing out a token for an id already in the
+   * store is what makes this idempotent, so a repeated call cannot renumber
+   * anything.
+   */
+  const issued = React.useRef({ next: 0, byEntry: new Map<string, string>() });
+  const tokens = React.useMemo(() => {
+    const store = issued.current;
+    const byEntry = new Map<string, string>();
+    for (const entry of catalog) {
+      const existing = store.byEntry.get(entry.id);
+      const token = existing ?? `${idPrefix}-b${store.next}`;
+      if (existing === undefined) {
+        store.next += 1;
+        store.byEntry.set(entry.id, token);
+      }
+      byEntry.set(entry.id, token);
+    }
+    return byEntry;
+  }, [catalog, idPrefix]);
 
   const header = <h2 className="nx-insert-panel__title">{EDITOR_WORDS.add}</h2>;
   const firstPlace = candidates[0];

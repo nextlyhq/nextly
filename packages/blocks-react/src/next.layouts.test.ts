@@ -319,7 +319,14 @@ describe("a page drawn inside its Layout", () => {
     expect(html).toContain("rgb(1, 2, 3)");
   });
 
-  it("keeps each document's rules to its own root when the page and a region hold the same node id", async () => {
+  /**
+   * Draw a page and a header holding the same node id, styled differently,
+   * and hold each colour to its own part's scope. `extra` is the route's own
+   * style inputs.
+   */
+  async function expectEachRuleUnderItsOwnPart(
+    extra: Record<string, unknown> = {}
+  ): Promise<void> {
     // A node id is unique within a document, not across documents. The
     // header's node is drawn under the id composition gives it, so the page
     // here holds a node with exactly that id, styled differently: unscoped,
@@ -339,17 +346,20 @@ describe("a page drawn inside its Layout", () => {
     ).document;
     const sharedId = composed.nodes[0]!.id;
 
-    const { html } = await render({
-      page: {
-        content: doc([
-          {
-            ...heading(sharedId, "Page A"),
-            styles: { base: { base: { color: "rgb(2, 2, 2)" } } },
-          },
-        ]),
+    const { html } = await render(
+      {
+        page: {
+          content: doc([
+            {
+              ...heading(sharedId, "Page A"),
+              styles: { base: { base: { color: "rgb(2, 2, 2)" } } },
+            },
+          ]),
+        },
+        components: { ...COMPONENTS, "main-header": headerDefinition },
       },
-      components: { ...COMPONENTS, "main-header": headerDefinition },
-    });
+      { extra }
+    );
 
     // The positive control: the two headings really do share one class.
     const classOf = (text: string) => {
@@ -377,6 +387,20 @@ describe("a page drawn inside its Layout", () => {
     expect(ruleFor("rgb(1, 1, 1)")).not.toContain("nx-pb-part-page");
     expect(ruleFor("rgb(2, 2, 2)")).toContain("nx-pb-part-page");
     expect(ruleFor("rgb(2, 2, 2)")).not.toContain("nx-pb-part-header");
+  }
+
+  it("keeps each document's rules to its own root when the page and a region hold the same node id", async () => {
+    await expectEachRuleUnderItsOwnPart();
+  });
+
+  it("keeps them apart when the route states only the site's styles", async () => {
+    // A route serving a stored artifact names its breakpoints through
+    // `siteStyles` and states no compile context: the part drawn first, which
+    // emits the site sheet, is still compiled under its own scope.
+    await expectEachRuleUnderItsOwnPart({
+      styleContext: undefined,
+      siteStyles: { breakpoints: BREAKPOINTS },
+    });
   });
 
   it("draws neither region for a page that switches them off, and reads nothing", async () => {

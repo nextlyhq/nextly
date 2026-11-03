@@ -96,6 +96,7 @@ import {
 } from "./library-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
+import { pagesSearchRoute } from "./pages-search-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
@@ -1287,6 +1288,10 @@ export const pageBuilder = (
         // for the collections a registered block prop names as relation targets,
         // read as the author asking.
         entriesRoute(),
+        // The editor's page search: the site's pages (entries of collections
+        // with a Page Builder field, the composition stores left out), by
+        // title, read as the author asking.
+        pagesSearchRoute(componentStoreOf(opts)),
         // The one write that chooses the site's default Layout. A route rather
         // than an edit to the settings Single, because choosing a default has
         // preconditions (the Layout is published, the caller may publish
