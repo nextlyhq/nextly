@@ -290,8 +290,11 @@ function SelectControl({
   const stored = typeof shown === "string" ? shown : undefined;
   // A stored value outside the options is shown by the menu, which can say
   // what it is; a row of buttons would show none chosen and replace it.
-  // A block can ask for a menu, so one prop reads the same on every block
-  // whatever options each offers.
+  // A block can ask for a menu with `display: "menu"`, so one prop reads the
+  // same on every block whatever options each offers. Read through the
+  // schema's open option keys rather than a declared field, so a block
+  // already using `display` for something of its own keeps type-checking;
+  // only the value "menu" means anything here.
   const segmented =
     prop.schema.display !== "menu" &&
     fitsSideBySide(labels, CONTENT_ROW) &&

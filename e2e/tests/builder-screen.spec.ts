@@ -156,5 +156,12 @@ test.describe("the Page Builder's own screen", () => {
 
     await expect(block(page, "goes")).toHaveCount(0);
     await expect(block(page, "stays")).toBeVisible();
+
+    // Restored as one edit the author can undo: Undo brings the stored page
+    // back, rather than being disabled by a fresh editor.
+    const undo = page.getByRole("button", { name: "Undo" });
+    await expect(undo).toBeEnabled();
+    await undo.click();
+    await expect(block(page, "goes")).toBeVisible();
   });
 });

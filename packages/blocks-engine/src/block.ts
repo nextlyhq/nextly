@@ -90,14 +90,6 @@ export interface PropSchema {
    */
   optionLabels?: Readonly<Record<string, string>>;
   /**
-   * For a `select` prop, `"menu"` draws it as a menu however few and short
-   * its options are. Left out, the editor draws a set that fits side by side
-   * as a row of buttons and anything longer as a menu. Set it on a prop every
-   * block should show the same way whatever options it offers, such as the
-   * element a block renders as.
-   */
-  display?: "menu";
-  /**
    * For a `media` prop, the kinds of file the picker offers, as an `accept`
    * list (`image/*`), so an image is never given a PDF to draw.
    */

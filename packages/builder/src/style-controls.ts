@@ -183,9 +183,10 @@ export interface StyleControlVariants {
   /**
    * Each arm in plain words, in the catalog's order: what the toggle offering
    * the choice says. Derived from the arms here, once, so nothing else names
-   * a form its own way.
+   * a form its own way. Optional, so a variant built to the earlier shape
+   * stays valid; read it through {@link formNamesOf}.
    */
-  readonly names: readonly string[];
+  readonly names?: readonly string[];
 }
 
 /**
@@ -500,13 +501,32 @@ function formName(arm: StyleShape, arms: readonly StyleShape[]): string {
     const word = arm.values[0] ?? "";
     return word.charAt(0).toUpperCase() + word.slice(1);
   }
+  return kindName(
+    arm.kind,
+    arms.map(other => other.kind)
+  );
+}
+
+/** A form's name from its kind and its siblings' kinds alone. */
+function kindName(
+  kind: StyleShape["kind"],
+  kinds: readonly StyleShape["kind"][]
+): string {
   if (
-    arm.kind === "dimension" &&
-    arms.some(
-      other => other.kind === "logicalCorners" || other.kind === "logicalSides"
-    )
+    kind === "dimension" &&
+    kinds.some(other => other === "logicalCorners" || other === "logicalSides")
   ) {
     return "All";
   }
-  return FORM_NAME[arm.kind] ?? arm.kind;
+  return FORM_NAME[kind] ?? kind;
+}
+
+/**
+ * Each form of a variant in plain words: its own names, or, for a variant
+ * built without them, names read from the forms' kinds.
+ */
+export function formNamesOf(variant: StyleControlVariants): readonly string[] {
+  return (
+    variant.names ?? variant.kinds.map(kind => kindName(kind, variant.kinds))
+  );
 }

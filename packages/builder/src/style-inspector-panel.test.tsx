@@ -642,12 +642,14 @@ describe("controls", () => {
     mount({ spacing: true }, styles);
 
     expect(
-      (fieldsOf("padding").getByLabelText("Top") as HTMLInputElement).value
+      (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
+        .value
     ).toBe("12px");
     // The same side of a DIFFERENT property is empty, which is what says the
     // read is addressed rather than by leaf name.
     expect(
-      (fieldsOf("margin").getByLabelText("Top") as HTMLInputElement).value
+      (fieldsOf("margin").getByLabelText("Block start") as HTMLInputElement)
+        .value
     ).toBe("");
   });
 
@@ -672,7 +674,7 @@ describe("controls", () => {
      * this before, which is how the handler came to be refactored unguarded.
      */
     const editor = mount({ spacing: true });
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "12px" } });
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -690,7 +692,7 @@ describe("controls", () => {
 
   it("writes through the store on blur, not on every keystroke", () => {
     const editor = mount({ spacing: true });
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "12px" } });
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -716,7 +718,7 @@ describe("controls", () => {
       base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
     } as NodeStyles;
     const editor = mount({ spacing: true }, styles);
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "" } });
     fireEvent.blur(field);
@@ -763,7 +765,7 @@ describe("controls", () => {
 
   it("shows the catalog's own refusal and applies nothing", () => {
     const editor = mount({ spacing: true });
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "12 furlongs" } });
     fireEvent.blur(field);
@@ -783,7 +785,7 @@ describe("controls", () => {
     const editor = editorFor(documentOf());
     const { rerender } = render(<StyleInspectorPanel editor={editor} />);
 
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
     fireEvent.change(field, { target: { value: "12 furlongs" } });
     fireEvent.blur(field);
     expect(screen.getByRole("alert")).toBeDefined();
@@ -797,7 +799,8 @@ describe("controls", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(
-      (fieldsOf("padding").getByLabelText("Top") as HTMLInputElement).value
+      (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
+        .value
     ).toBe("4px");
   });
 
@@ -821,7 +824,9 @@ describe("controls", () => {
 
     fireEvent.click(within(forms).getByRole("radio", { name: "Corners" }));
 
-    expect(fieldsOf("borderRadius").getByLabelText("Top left")).toBeDefined();
+    expect(
+      fieldsOf("borderRadius").getByLabelText("Start start")
+    ).toBeDefined();
   });
 
   it("clears the stored value when the form changes under it", () => {
@@ -912,7 +917,7 @@ describe("controls", () => {
     editor.applyAll.mockReturnValue(null);
     render(<StyleInspectorPanel editor={editor} />);
 
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
     fireEvent.change(field, { target: { value: "12px" } });
     fireEvent.blur(field);
 
@@ -937,7 +942,7 @@ describe("controls", () => {
     expect(
       screen.getByText("2 blocks selected. Select one to style it.")
     ).toBeDefined();
-    expect(screen.queryByLabelText("Top")).toBeNull();
+    expect(screen.queryByLabelText("Block start")).toBeNull();
   });
 
   it("stores only the numeric grammar CSS accepts, leaving other spellings alone", () => {
@@ -997,7 +1002,9 @@ describe("controls", () => {
 
     fireEvent.keyDown(all, { key: "ArrowRight" });
 
-    expect(fieldsOf("borderRadius").getByLabelText("Top left")).toBeDefined();
+    expect(
+      fieldsOf("borderRadius").getByLabelText("Start start")
+    ).toBeDefined();
   });
 
   it("draws a nested form's toggle just above its own control", () => {
@@ -1209,7 +1216,7 @@ describe("controls", () => {
     // element's role prohibits a name — which a bare paragraph's does — so it
     // would have reported this association as working while it was dropped.
     expect(
-      fieldsOf("padding").getByRole("group", { name: "Top" })
+      fieldsOf("padding").getByRole("group", { name: "Block start" })
     ).toBeDefined();
   });
 
@@ -1230,10 +1237,10 @@ describe("controls", () => {
     // `margin` both have a block start, so a name built from the side alone
     // says the same thing twice.
     expect(
-      screen.getByRole("button", { name: "Clear Padding top" })
+      screen.getByRole("button", { name: "Clear Padding block start" })
     ).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Clear Margin top" })
+      screen.getByRole("button", { name: "Clear Margin block start" })
     ).toBeDefined();
   });
 
@@ -1262,7 +1269,7 @@ describe("controls", () => {
       base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
     } as NodeStyles;
     const editor = mount({ spacing: true }, styles);
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "\u00a0" } });
     fireEvent.blur(field);
@@ -1294,7 +1301,7 @@ describe("controls", () => {
     const editor = editorFor(documentOf());
     const { rerender } = render(<StyleInspectorPanel editor={editor} />);
 
-    fireEvent.change(fieldsOf("padding").getByLabelText("Top"), {
+    fireEvent.change(fieldsOf("padding").getByLabelText("Block start"), {
       target: { value: "99px" },
     });
 
@@ -1302,7 +1309,8 @@ describe("controls", () => {
 
     // A fresh field for the new address, not the base breakpoint's draft.
     expect(
-      (fieldsOf("padding").getByLabelText("Top") as HTMLInputElement).value
+      (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
+        .value
     ).toBe("");
   });
 
@@ -1311,7 +1319,7 @@ describe("controls", () => {
     // being stated, a screen-reader user returning to the field — or meeting
     // several rejected controls — cannot tell which message belongs to which.
     const editor = mount({ spacing: true });
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "12 furlongs" } });
     fireEvent.blur(field);
@@ -1340,7 +1348,9 @@ describe("controls", () => {
     expect(padding.getByText("space.4")).toBeDefined();
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
-    fireEvent.click(padding.getByRole("button", { name: "Clear Padding top" }));
+    fireEvent.click(
+      padding.getByRole("button", { name: "Clear Padding block start" })
+    );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
@@ -1445,7 +1455,9 @@ describe("a value the panel shows and could not remove", () => {
     // a NEW value through a block that no longer exists is the opposite error.
     expect(padding.queryByDisplayValue("12px")).toBeNull();
 
-    fireEvent.click(padding.getByRole("button", { name: "Clear Padding top" }));
+    fireEvent.click(
+      padding.getByRole("button", { name: "Clear Padding block start" })
+    );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
@@ -1627,7 +1639,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
   it("steps a measurement with the arrow keys, keeping its unit", () => {
     const editor = mount({ spacing: true }, withPadding("12px"));
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.keyDown(field, { key: "ArrowUp" });
 
@@ -1644,7 +1656,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
   it("steps by ten with Shift, which is what every comparable editor does", () => {
     const editor = mount({ spacing: true }, withPadding("12px"));
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
 
@@ -1666,7 +1678,7 @@ describe("the numeric affordances a simple measurement earns", () => {
       { spacing: true },
       withPadding("clamp(1rem, 2vw, 3rem)")
     );
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.keyDown(field, { key: "ArrowUp" });
     fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
@@ -1684,7 +1696,7 @@ describe("the numeric affordances a simple measurement earns", () => {
     // the step never happened — the author gets a key that quietly does
     // nothing, not an error for a value they never typed.
     const editor = mount({ spacing: true }, withPadding("0px"));
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.keyDown(field, { key: "ArrowDown" });
 
@@ -1696,7 +1708,7 @@ describe("the numeric affordances a simple measurement earns", () => {
   it("offers a unit menu only where the value is one measurement", () => {
     mount({ spacing: true }, withPadding("12px"));
     expect(
-      fieldsOf("padding").getByLabelText("Unit for Padding top")
+      fieldsOf("padding").getByLabelText("Unit for Padding block start")
     ).toBeDefined();
 
     cleanup();
@@ -1705,7 +1717,7 @@ describe("the numeric affordances a simple measurement earns", () => {
     // A menu rendered over `auto` could only offer no-ops, and a control that
     // silently does nothing is worse than one that is not drawn.
     expect(
-      fieldsOf("padding").queryByLabelText("Unit for Padding top")
+      fieldsOf("padding").queryByLabelText("Unit for Padding block start")
     ).toBeNull();
   });
 
@@ -1723,8 +1735,10 @@ describe("the numeric affordances a simple measurement earns", () => {
     } as NodeStyles);
     const padding = fieldsOf("padding");
 
-    expect(padding.getByLabelText("Unit for Padding top")).toBeDefined();
-    expect(padding.getByLabelText("Unit for Padding bottom")).toBeDefined();
+    expect(
+      padding.getByLabelText("Unit for Padding block start")
+    ).toBeDefined();
+    expect(padding.getByLabelText("Unit for Padding block end")).toBeDefined();
   });
 
   it("keeps a stored unit the menu does not offer, rather than showing an empty one", () => {
@@ -1734,7 +1748,7 @@ describe("the numeric affordances a simple measurement earns", () => {
     mount({ spacing: true }, withPadding("12ch"));
 
     expect(
-      fieldsOf("padding").getByLabelText("Unit for Padding top")
+      fieldsOf("padding").getByLabelText("Unit for Padding block start")
     ).toHaveProperty("textContent", "ch");
   });
 
@@ -1743,14 +1757,14 @@ describe("the numeric affordances a simple measurement earns", () => {
     // and survives a step: composing one back rounds it to `0`. Declining is
     // what keeps it intact, so neither affordance is offered.
     const editor = mount({ spacing: true }, withPadding("1e-3rem"));
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.keyDown(field, { key: "ArrowUp" });
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field).toHaveProperty("value", "1e-3rem");
     expect(
-      fieldsOf("padding").queryByLabelText("Unit for Padding top")
+      fieldsOf("padding").queryByLabelText("Unit for Padding block start")
     ).toBeNull();
   });
 });
@@ -1767,7 +1781,7 @@ describe("what the arrow keys do and do not claim", () => {
     // `stored` instead would step from a value the author has already moved on
     // from, discarding what they typed.
     const editor = mount({ spacing: true }, withPadding("12px"));
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "20px" } });
     fireEvent.keyDown(field, { key: "ArrowUp" });
@@ -1789,7 +1803,7 @@ describe("what the arrow keys do and do not claim", () => {
     // there edits the style AND suppresses the candidate move, so the author
     // loses the keystroke twice over. The shortcut manager states the same rule.
     const editor = mount({ spacing: true }, withPadding("12px"));
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.keyDown(field, { key: "ArrowUp", isComposing: true });
 
@@ -1803,7 +1817,7 @@ describe("what the arrow keys do and do not claim", () => {
       // Claiming one mutates a style and adds an undo entry from a keystroke
       // the author aimed somewhere else entirely.
       const editor = mount({ spacing: true }, withPadding("12px"));
-      const field = fieldsOf("padding").getByLabelText("Top");
+      const field = fieldsOf("padding").getByLabelText("Block start");
 
       fireEvent.keyDown(field, { key: "ArrowUp", [modifier]: true });
 
@@ -1819,11 +1833,11 @@ describe("what the arrow keys do and do not claim", () => {
     // is exactly why the stale value was still there to be composed from.
     const editor = mount({ spacing: true }, withPadding("12px"));
     const padding = fieldsOf("padding");
-    const field = padding.getByLabelText("Top");
+    const field = padding.getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "20" } });
     fireEvent.blur(field);
-    fireEvent.click(padding.getByLabelText("Unit for Padding top"));
+    fireEvent.click(padding.getByLabelText("Unit for Padding block start"));
     fireEvent.click(screen.getByRole("option", { name: "rem" }));
 
     const written = editor.applyAll.mock.calls.at(-1)?.[0]?.[0] as {
@@ -1847,7 +1861,7 @@ describe("what the arrow keys do and do not claim", () => {
     // legitimately, so it could not carry a description at all.
     mount({ spacing: true }, withPadding("12px"));
     const padding = fieldsOf("padding");
-    const field = padding.getByLabelText("Top");
+    const field = padding.getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "-5px" } });
     fireEvent.blur(field);
@@ -1856,7 +1870,7 @@ describe("what the arrow keys do and do not claim", () => {
     // pass in the world where it is absent — which is the world the assertion
     // is supposed to rule out — so the menu is required first and described
     // second.
-    const unit = padding.getByLabelText("Unit for Padding top");
+    const unit = padding.getByLabelText("Unit for Padding block start");
     const description = field.getAttribute("aria-describedby");
     expect(description).not.toBeNull();
     expect(unit.getAttribute("aria-describedby")).toBe(description);
@@ -1870,7 +1884,7 @@ describe("what the arrow keys do and do not claim", () => {
       { spacing: true },
       withPadding(`0.${"1".repeat(101)}px`)
     );
-    const field = fieldsOf("padding").getByLabelText("Top");
+    const field = fieldsOf("padding").getByLabelText("Block start");
 
     expect(() => fireEvent.keyDown(field, { key: "ArrowUp" })).not.toThrow();
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -1878,17 +1892,58 @@ describe("what the arrow keys do and do not claim", () => {
 });
 
 describe("a side or a corner, in plain words", () => {
+  const LTR = { writingMode: "horizontal-tb", direction: "ltr" };
+  /** The visible names of one property's controls, on an element whose axes are known or not. */
+  function sideLabels(
+    property: string,
+    supports: Record<string, boolean | Record<string, boolean>>,
+    orientation: { writingMode: string; direction: string } | undefined,
+    styles?: NodeStyles
+  ): (string | null)[] {
+    register(supports);
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        {...(orientation === undefined ? {} : { sideOrientation: orientation })}
+      />
+    );
+    return Array.from(
+      document.querySelectorAll(
+        `[data-property="${property}"] .nx-style-inspector__field-label-text`
+      )
+    ).map(label => label.textContent);
+  }
+
   it("names a border's sides Top, Bottom, Left and Right", () => {
     // "Top" and "Right" are CSS's logical words, not an
     // author's. Named for a left-to-right horizontal element unless the
     // canvas says otherwise.
-    mount({ border: true });
-    const labels = Array.from(
-      document.querySelectorAll(
-        '[data-property="border"] .nx-style-inspector__field-label-text'
-      )
-    ).map(label => label.textContent);
+    const labels = sideLabels("border", { border: true }, LTR);
     expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Left", "Right"]);
+  });
+
+  it("names them from the element's direction, Right first on a right-to-left page", () => {
+    const labels = sideLabels(
+      "border",
+      { border: true },
+      {
+        writingMode: "horizontal-tb",
+        direction: "rtl",
+      }
+    );
+    expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Right", "Left"]);
+  });
+
+  it("keeps the logical words until the canvas has said which way the element runs", () => {
+    // A guessed "Left" is wrong on a right-to-left or vertical page; the
+    // logical word is true on every page.
+    const labels = sideLabels("border", { border: true }, undefined);
+    expect(labels.slice(0, 4)).toEqual([
+      "Block start",
+      "Block end",
+      "Inline start",
+      "Inline end",
+    ]);
   });
 
   it("hints at a border's width as a border is drawn, not as a length in general", () => {
@@ -1913,12 +1968,12 @@ describe("a side or a corner, in plain words", () => {
         },
       },
     } as NodeStyles;
-    mount({ border: { radius: true } }, styles);
-    const labels = Array.from(
-      document.querySelectorAll(
-        '[data-property="borderRadius"] .nx-style-inspector__field-label-text'
-      )
-    ).map(label => label.textContent);
+    const labels = sideLabels(
+      "borderRadius",
+      { border: { radius: true } },
+      LTR,
+      styles
+    );
     expect(labels).toEqual([
       "Top left",
       "Top right",
@@ -2064,6 +2119,8 @@ describe("where a control's value came from", () => {
     // From the fallback, a small adjustment committed an unrelated colour.
     mountCarded([fromCard({ value: "#336699" })], { color: true });
     fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
+    // The raw picker sits under Custom colour, after the site's variables.
+    fireEvent.click(screen.getByRole("button", { name: "Custom colour" }));
     const picker = document.querySelector<HTMLElement>(
       ".nx-style-inspector__picker"
     );
@@ -2362,6 +2419,13 @@ describe("where a control's value came from", () => {
     );
     expect(source?.textContent).toBe("From .card");
     expect(source?.getAttribute("aria-hidden")).toBe("true");
+    // And the whole sentence in text for a keyboard user, as for "Set here":
+    // the caption is brief and may be cut short.
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
+    expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
+    expect(text?.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("puts 'Set here' in TEXT too, revealed when the field has focus", () => {
@@ -3198,7 +3262,7 @@ describe("the action a control's breakpoint provenance earns", () => {
   it("names the action by its PROPERTY, not by the leaf alone", () => {
     /*
      * `margin` and `padding` both have a block start, so a button named from
-     * the leaf alone reads "Reset Top" on both and a screen-reader user
+     * the leaf alone reads "Reset Block start" on both and a screen-reader user
      * cannot tell which style each removes. The panel already computes an
      * action name for exactly this — `Clear` on a token value uses it — and a
      * simple property like `color` cannot show the difference, because there
@@ -3846,8 +3910,12 @@ describe("a per-side property is drawn as a box", () => {
     expect(box?.querySelectorAll("[data-side]").length).toBe(0);
     // The sides are still all there and still named — the fallback is a layout
     // change, never a control that goes missing.
-    expect(within(box as HTMLElement).getByLabelText("Top")).toBeDefined();
-    expect(within(box as HTMLElement).getByLabelText("Left")).toBeDefined();
+    expect(
+      within(box as HTMLElement).getByLabelText("Block start")
+    ).toBeDefined();
+    expect(
+      within(box as HTMLElement).getByLabelText("Inline start")
+    ).toBeDefined();
   });
 
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
@@ -3980,7 +4048,7 @@ describe("a read-only design", () => {
     const document = documentOf();
     const editor = editorFor(document);
     render(<StyleInspectorPanel editor={editor} />);
-    const input = fieldsOf("margin").getByLabelText("Top");
+    const input = fieldsOf("margin").getByLabelText("Block start");
     fireEvent.change(input, { target: { value: "8px" } });
 
     editor.document = {

@@ -225,6 +225,15 @@ vi.mock("./editor/settings-dialog", () => ({
   },
 }));
 
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * whenever the classes manager is, and it asks whether the variables may be
+ * changed.
+ */
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 /** Asking the stored style again, as the editor does after a save. */
 const refetchStoredStyle = async () => ({ isError: false });
 // The stored site style arrives through the editor's one read, the plugin's
@@ -290,6 +299,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the
   // merge of stored over defaults is `site-style-client`'s own question and has
