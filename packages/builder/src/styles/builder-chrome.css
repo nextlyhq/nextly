@@ -4833,9 +4833,10 @@ fieldset.nx-inspector__fields {
 .nx-spacing-box .nx-style-inspector__token > button {
   position: absolute;
   z-index: 2;
+  /* Flush with the side, no gap: a pointer moving down to Clear stays over
+     the field the whole way, so its hover holds and Clear stays shown. */
   inset-block-start: 100%;
   inset-inline-start: 0;
-  margin-block-start: 0.25rem;
   opacity: 0;
   pointer-events: none;
   background: var(--nx-popover);

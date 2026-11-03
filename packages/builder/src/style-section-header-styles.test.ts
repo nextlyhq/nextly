@@ -132,18 +132,44 @@ describe("the spacing box", () => {
     // A token's name and Clear button are wider than a side: in the box the
     // name is cut to the side's width and Clear shows over the box while the
     // side is pointed at or focused, as its other actions do.
-    expect(
-      ruleBody(".nx-spacing-box .nx-style-inspector__token > span")
-    ).toContain("text-overflow: ellipsis");
+    // All three, or nothing is cut: the ellipsis needs the clip and the
+    // single line.
+    const name = ruleBody(".nx-spacing-box .nx-style-inspector__token > span");
+    expect(name).toContain("text-overflow: ellipsis");
+    expect(name).toContain("overflow: hidden");
+    expect(name).toContain("white-space: nowrap");
     const clear = ruleBody(
       ".nx-spacing-box .nx-style-inspector__token > button"
     );
     expect(clear).toContain("position: absolute");
     expect(clear).toContain("opacity: 0");
+    // Flush with the side: a gap between them is where a pointer moving to
+    // Clear leaves the side's hover, and Clear fades before it is reached.
+    expect(clear).not.toMatch(/margin-block-start: (?!0[;\s])/);
     expect(
       ruleBody(
         ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button, .nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button"
       )
     ).toContain("opacity: 1");
+  });
+});
+
+describe("a token side in the narrow inspector", () => {
+  it("puts Clear back in the row's flow, always shown", () => {
+    const rows = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 18rem)"
+    ).find(body =>
+      body.includes(".nx-spacing-box__caption { position: static; }")
+    );
+    const clear =
+      ".nx-spacing-box .nx-inspector__field .nx-style-inspector__token > button {";
+    expect(rows).toContain(clear);
+    const body = rows?.slice(
+      rows.indexOf(clear),
+      rows.indexOf("}", rows.indexOf(clear))
+    );
+    expect(body).toContain("position: static");
+    expect(body).toContain("opacity: 1");
+    expect(body).toContain("pointer-events: auto");
   });
 });
