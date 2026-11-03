@@ -207,8 +207,9 @@ export function InstanceInspectorPanel({
     markExposedParts(root, inspection.nodeId, composed);
     return () => markExposedParts(root, null, undefined);
   }, [inspection.nodeId, composed, canvasRoot]);
-  // The sentence every held row points to while the placement is locked in
-  // Layers. Its own lock control stays live above, so it can be unlocked.
+  // The card's lock line, which every held row points to while the placement
+  // is locked in Layers. Its own lock control stays live above, so it can be
+  // unlocked.
   const lockedReasonId = React.useId();
   const locked = inspection.identity.locked;
 
@@ -242,20 +243,12 @@ export function InstanceInspectorPanel({
         onRename={name => editor.apply(renameOp(inspection.nodeId, name))}
         onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
         verbs={verbs}
+        // The lock is said once, by the card's own line, and the rows and the
+        // values no longer exposed point at it; a second sentence below said
+        // the same thing again.
+        reasonId={lockedReasonId}
       />
       <EditComponentButton verbs={verbs} />
-
-      {/*
-        Said once, above everything the Layers lock holds: the rows and the
-        values no longer exposed. The card's menu, which holds Unlock, is not
-        held.
-      */}
-      {locked ? (
-        <p id={lockedReasonId} className="nx-inspector__note" role="status">
-          This component is locked, so its fields can&apos;t change. Unlock it
-          to edit them.
-        </p>
-      ) : null}
 
       <VariantPicker
         editor={editor}
@@ -754,7 +747,7 @@ function ExposedVisibilityField({
 }): React.JSX.Element {
   const shown = row.value !== false && !row.cleared;
   return (
-    <div className="nx-inspector__field--inline">
+    <div className="nx-inspector__check">
       <Checkbox
         id={id}
         checked={shown}

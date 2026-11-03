@@ -515,6 +515,14 @@ describe("a link and a visibility exposure", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("sets the visibility box apart from its words", () => {
+    // The box sat against "Shown on this page": the row's spacing rule needed
+    // a class the row did not carry.
+    mount(instance(), linked());
+    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    expect(box.parentElement?.className).toBe("nx-inspector__check");
+  });
+
   it("shows an inherited visibility row as shown, and hides it by writing false", () => {
     // Inherited is the component's own rule, which is shown unless the
     // definition gates the node itself; the resolver reads `false` as hidden
@@ -677,6 +685,17 @@ describe("two options the control once spelled alike", () => {
 });
 
 describe("the panel's words", () => {
+  it("gives the card's name, cut short on screen, whole in its tooltip", () => {
+    mount({
+      ...instance(),
+      name: "A placement named at some considerable length",
+    });
+    const title = screen.getByRole("heading", { level: 2 });
+    expect(title.getAttribute("title")).toBe(
+      "A placement named at some considerable length · Header"
+    );
+  });
+
   it("calls the rows Fields, where it said Exposed properties", () => {
     mount(instance());
     expect(screen.getByRole("heading", { name: "Fields" })).toBeDefined();
@@ -1052,9 +1071,15 @@ describe("a placement locked in Layers", () => {
     };
     const editor = mount(locked);
 
-    expect(screen.getByText(/This component is locked/)).toBeDefined();
     const field = screen.getByRole("textbox", { name: "Title" });
     expect(field.closest("fieldset")?.disabled).toBe(true);
+    // Said once, by the card's lock line, which the held rows point at; the
+    // panel no longer repeats it in a sentence of its own.
+    const reason = document.getElementById(
+      field.closest("fieldset")?.getAttribute("aria-describedby") ?? ""
+    );
+    expect(reason?.textContent).toMatch(/^Locked: it can.t be moved/);
+    expect(screen.getAllByText(/locked/i)).toHaveLength(1);
     const reset = screen.getByRole("button", {
       name: "Reset Title",
     });

@@ -46,7 +46,7 @@ import {
   MediaPickerDialog,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useState, type ComponentProps, type JSX } from "react";
+import { useEffect, useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
   useWatch,
@@ -930,6 +930,11 @@ function EditorBody<TFieldValues extends FieldValues>({
     here: page.title,
     inline,
   });
+  // The "Part of" toast offers the same Edit component the panel does.
+  useOfferedEditComponent(
+    mount.offerEditComponent,
+    componentView.onEditComponent
+  );
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
@@ -1157,4 +1162,17 @@ function EditorFrame({
       <div className="min-h-0 flex-1">{children}</div>
     </div>
   );
+}
+
+/**
+ * Hand the "Part of" toast the component opener the view built, so its Edit
+ * component action opens what the panel's button does.
+ */
+function useOfferedEditComponent(
+  offer: EditorMount["offerEditComponent"],
+  open: ComponentView["onEditComponent"]
+): void {
+  useEffect(() => {
+    offer(open);
+  }, [offer, open]);
 }

@@ -1052,6 +1052,15 @@
   color: var(--nx-accent-foreground);
 }
 
+/*
+ * A placement's mark in the component colour, as Layers draws a placement, so
+ * the card reads as a component's before its description is.
+ */
+.nx-inspector[data-instance] .nx-block-card__icon {
+  background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent);
+  color: var(--nx-builder-component);
+}
+
 /* The name over its one-line description, taking the room between the
    tile and the menu. */
 .nx-block-card__text {
@@ -6350,16 +6359,19 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   pointer-events: none;
 }
 
-/* A placement's variant, under its title in the placement's inspector. */
+/*
+ * A placement's variant, under its title in the placement's inspector: one
+ * field row, laid out by the fields' own rules, set off from the fields below.
+ */
 .nx-variant-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
   margin-bottom: 1rem;
 }
 
-.nx-variant-picker .nx-inspector__heading {
-  margin: 0;
+/* A checkbox beside the words it names, kept apart from them. */
+.nx-inspector__check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 /*

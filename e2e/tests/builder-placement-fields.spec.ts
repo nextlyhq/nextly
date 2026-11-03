@@ -377,10 +377,12 @@ test.describe("a placement's exposed fields", () => {
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
 
-    await expect(page.getByText(/This component is locked/)).toBeVisible();
+    // Said once, by the card's lock line, which the held fields point at.
+    const headlineField = page.getByRole("textbox", { name: "Headline" });
+    await expect(headlineField).toBeDisabled();
     await expect(
-      page.getByRole("textbox", { name: "Headline" })
-    ).toBeDisabled();
+      page.locator("fieldset[disabled]").first()
+    ).toHaveAccessibleDescription(/^Locked: it can.t be moved/);
     await expect(
       page.getByRole("textbox", { name: "Button link" })
     ).toBeDisabled();

@@ -1,6 +1,6 @@
 /**
  * The placement panel's stylesheet rules, read from the sheet itself: the
- * badge that says where a row's value comes from.
+ * line that says where a row's value comes from, and the header's mark.
  *
  * @module instance-inspector-styles.test
  */
@@ -33,5 +33,25 @@ describe("where a placement's value comes from", () => {
     expect(source).toContain("font-size: var(--text-xs)");
     expect(source).not.toContain("text-transform: uppercase");
     expect(source).toContain("background: transparent");
+  });
+});
+
+describe("the placement's header", () => {
+  it("draws its mark in the component colour, as Layers draws a placement", () => {
+    // Grey, the mark read as any block's; the component colour says this is
+    // a placement of a component before the description is read.
+    const mark = ruleBody(".nx-inspector[data-instance] .nx-block-card__icon");
+    expect(mark).toContain("color: var(--nx-builder-component)");
+    expect(mark).toContain(
+      "background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent)"
+    );
+  });
+});
+
+describe("a placement's visibility row", () => {
+  it("keeps the box apart from its words", () => {
+    const row = ruleBody(".nx-inspector__check");
+    expect(row).toContain("display: flex");
+    expect(row).toContain("gap: 0.5rem");
   });
 });
