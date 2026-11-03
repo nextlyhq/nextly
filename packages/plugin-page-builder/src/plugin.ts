@@ -33,7 +33,11 @@ import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
-import { ownIndexReader } from "./class-usage-runtime";
+import {
+  classUsageDocumentRowReader,
+  ownIndexReader,
+  usageCountReader,
+} from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
@@ -56,10 +60,11 @@ import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
+import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
-import { componentUsageIndex } from "./component-usage";
+import { componentUsageCount, componentUsageIndex } from "./component-usage";
 import {
   defaultLayoutJob,
   type EnsureDefaultDeps,
@@ -120,6 +125,7 @@ import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
+import { variantUseRoute } from "./variant-use-route";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -1244,7 +1250,80 @@ export const pageBuilder = (
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
+        // What the editor may offer this caller: saving a pattern, making a
+        // component or updating a pattern from a selection, and opening a
+        // component in its own view from the store definitions live in.
         patternCapabilityRoute(componentStoreOf(opts)),
+        // What the component editor needs beside the component's own
+        // document: the ids its live definition uses, and the count of
+        // documents placing it, read from the usage index the installed host
+        // maintains.
+        componentFactsRoute({
+          store: componentStoreOf(opts),
+          countPlacements: ctx => async id => {
+            const index =
+              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+              COMPONENT_USAGE_INDEX_SLUG;
+            return componentUsageCount({
+              read: usageCountReader(await requireInstalled().nextly(), index),
+              componentId: id,
+              health: await usageHealthService(requireInstalled).read(
+                componentUsageIndex,
+                index
+              ),
+            });
+          },
+          // The ids a published removal retired, from the store the write
+          // hooks record them in. Where those hooks are not registered (the
+          // host renders components from a source of its own), nothing is
+          // recorded, so `null`, and the editor adds no field.
+          readRetired: ctx => async id => {
+            if (opts.componentReadiness === false) return null;
+            // A localized store records no retirements (see the write hooks),
+            // so none can be reported: `null`, and the editor adds no field.
+            if (
+              await storeIsLocalized(
+                ctx.services.collections,
+                componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                ctx.user
+              )
+            ) {
+              return null;
+            }
+            const store = retiredStore({
+              nextly: () => requireInstalled().nextly(),
+              collection:
+                ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+                COMPONENT_RETIRED_SLUG,
+            });
+            return (
+              (await store.of([id])).get(id) ?? { properties: [], slots: [] }
+            );
+          },
+        }),
+        // How many placements chose one of a component's variants, for the
+        // dialog that confirms deleting it: the usage index lists the hosts,
+        // and each host's stored forms are walked as the system.
+        variantUseRoute({
+          store: componentStoreOf(opts),
+          hosts: () => composition?.hostsOf,
+          readForm: async (host, form) => {
+            const row = await classUsageDocumentRowReader(
+              await requireInstalled().nextly()
+            )({
+              entity: host.slug,
+              entityKey: host.id,
+              locale: "",
+              variant: form,
+            });
+            return row !== null && typeof row === "object"
+              ? (row as Record<string, unknown>)[host.field]
+              : undefined;
+          },
+          limits: opts.limits ?? DEFAULT_LIMITS,
+        }),
         // Save a selection as a component, or convert it into one. Here
         // rather than left to the collection API for the reason the pattern
         // save is: the planner needs the server's block registry.

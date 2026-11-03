@@ -35,6 +35,7 @@ import {
   isUnsetOverride,
   neededFor,
   richTextToPlainText,
+  type ComponentDocument,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -48,7 +49,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { CircleSlash, Layers, Link2, PenLine } from "lucide-react";
+import {
+  CircleSlash,
+  Layers,
+  Link2,
+  Lock,
+  PenLine,
+  SquarePen,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
@@ -66,6 +74,7 @@ import {
 } from "./instance-inspector";
 import { refusalAnnouncement } from "./move-refusal";
 import { useStoredDraft } from "./stored-draft";
+import { VariantPicker } from "./variant-picker";
 
 /**
  * What the row's badge says for each source.
@@ -141,12 +150,15 @@ export function InstanceInspectorPanel({
   inspection,
   editor,
   verbs,
+  definition,
   canvasRoot,
 }: {
   inspection: InstanceInspection;
   editor: EditorState;
   /** The shared block verbs for the card's menu, as a block's card gets. */
   verbs?: CardVerbs | undefined;
+  /** The definition the placement resolves against, for its variant picker. */
+  definition?: ComponentDocument | undefined;
   /**
    * The canvas's root, where the placement's exposed parts are marked; the
    * page's document when the host names none. Scoped so a canvas drawn in a
@@ -223,6 +235,7 @@ export function InstanceInspectorPanel({
         onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
         verbs={verbs}
       />
+      <EditComponentButton verbs={verbs} />
 
       {/*
         Said once, above everything the Layers lock holds: the rows and the
@@ -235,6 +248,13 @@ export function InstanceInspectorPanel({
           to edit them.
         </p>
       ) : null}
+
+      <VariantPicker
+        editor={editor}
+        nodeId={inspection.nodeId}
+        definition={definition}
+        disabled={inspection.identity.locked}
+      />
 
       {!inspection.definitionFound ? (
         /*
@@ -296,14 +316,12 @@ export function InstanceInspectorPanel({
 
 /**
  * The variant this placement uses, as a phrase after "Component", or nothing.
- * A variant the component no longer offers is said to be gone, since the
- * placement then shows the component's own values.
+ * A variant the component no longer offers is said once, by the variant
+ * picker's notice beside its Clear, rather than here as well.
  */
 function variantPhrase(variant: InstanceInspection["variant"]): string {
-  if (variant === undefined) return "";
-  return variant.label === undefined
-    ? " · variant removed, showing defaults"
-    : ` · ${variant.label} variant`;
+  if (variant?.label === undefined) return "";
+  return ` · ${variant.label} variant`;
 }
 
 /**
@@ -342,42 +360,53 @@ function ExposedField({
     >
       <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
       <div className="nx-inspector__exposed">
-        {row.heldBy === undefined ? null : (
-          <p id={reasonId} className="nx-inspector__note">
-            {refusalAnnouncement(row.heldBy)}
-          </p>
-        )}
+        {/*
+          Only the value is held. Reset stays live: a value the page gave
+          before the component locked the block is one the save keeps and
+          lets the page drop, so the way back is never closed.
+        */}
         <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
           <ExposedControl id={id} row={row} onSet={onSet} />
-          <div className="nx-inspector__provenance">
-            {/*
+        </HeldByLock>
+        <div className="nx-inspector__provenance">
+          {/*
             The badge is VISIBLE, and it is a badge rather than the label's
             styling: "Overridden" beside a value is what tells an author the
             reset below undoes their own edit rather than the component's
             design.
           */}
-            <span className="nx-inspector__source" data-source={state}>
-              <Icon aria-hidden="true" className="nx-inspector__source-icon" />
-              {sourceBadgeLabel(row)}
-            </span>
-            {overridden ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                // Named for the row, because six rows each offering "Reset"
-                // are six identical controls to a screen reader. "Inherited"
-                // rather than "the component's", because under a variant the
-                // value a reset returns to is the variant's.
-                aria-label={`Reset ${row.label} to inherited value`}
-                title="Reset to inherited value"
-                onClick={() => onReset(row.id)}
-              >
-                Reset
-              </Button>
-            ) : null}
-          </div>
-        </HeldByLock>
+          <span className="nx-inspector__source" data-source={state}>
+            <Icon aria-hidden="true" className="nx-inspector__source-icon" />
+            {sourceBadgeLabel(row)}
+          </span>
+          {overridden ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              // Named for the row, because six rows each offering "Reset"
+              // are six identical controls to a screen reader. "Inherited"
+              // rather than "the component's", because under a variant the
+              // value a reset returns to is the variant's.
+              aria-label={`Reset ${row.label} to inherited value`}
+              title="Reset to inherited value"
+              onClick={() => onReset(row.id)}
+            >
+              Reset
+            </Button>
+          ) : null}
+        </div>
+        {/*
+          Why the row is held, UNDER the field as its helper text, as the
+          provenance note is: the field keeps its place beside its label, and
+          the reason reads as a fact about the value above it.
+        */}
+        {row.heldBy === undefined ? null : (
+          <p id={reasonId} className="nx-inspector__held-reason">
+            <Lock aria-hidden="true" className="nx-inspector__source-icon" />
+            <span>{refusalAnnouncement(row.heldBy)}</span>
+          </p>
+        )}
       </div>
     </div>
   );
@@ -695,5 +724,34 @@ function OrphanedOverrides({
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * "Edit component", where the host offers it for this placement: the verb the
+ * toolbar and the palette run, drawn here as the panel's first action because
+ * an author looking at a placement's fields is the one most likely to want the
+ * component's own design next.
+ */
+function EditComponentButton({
+  verbs,
+}: {
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element | null {
+  const offered = verbs?.actions.some(
+    action => action.id === "edit-component" && action.enabled
+  );
+  if (verbs === undefined || offered !== true) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="nx-inspector__edit-component"
+      onClick={() => verbs.run("edit-component")}
+    >
+      <SquarePen size={14} aria-hidden="true" />
+      Edit component
+    </Button>
   );
 }

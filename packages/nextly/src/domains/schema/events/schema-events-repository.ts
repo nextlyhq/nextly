@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { schemaEventsTables } from "../../../schemas/schema-events";
@@ -23,8 +23,16 @@ import type {
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
 
+import { pluginOfLedgerRow } from "./ledger-scope";
 import { standingOf } from "./migration-state";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
+
+/**
+ * Ids deleted per statement. Each binds one parameter, and SQLite's default
+ * SQLITE_MAX_VARIABLE_NUMBER of 999 is the lowest across the supported
+ * dialects; the same run the versions repository deletes in.
+ */
+const DELETE_CHUNK_SIZE = 500;
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -415,6 +423,35 @@ export class SchemaEventsRepository {
       await this.db.delete(this.table).where(sql`id = ${id}`);
     }
     return prunable;
+  }
+
+  /**
+   * Delete every migration row a plugin's modules recorded, whatever the
+   * event (applies, rollbacks, failures) and whichever modules are still
+   * applied: a resumed uninstall no longer lists the modules it already
+   * undid, and their rows must go too, so a later install applies every
+   * module from the first. Matched by the ledger's own scope rule
+   * (`pluginOfLedgerRow`), never by a prefix a longer plugin name could
+   * share. `plugin_lifecycle` rows are never matched, so the record the boot
+   * reads stays.
+   */
+  async deletePluginModuleRows(pluginName: string): Promise<void> {
+    const rows = (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`event_type <> 'plugin_lifecycle' AND filename LIKE 'plugin:%'`
+      )) as unknown as SchemaEventRow[];
+    const ids = rows
+      .filter(row => pluginOfLedgerRow(row.filename) === pluginName)
+      .map(row => row.id);
+    // In runs: each id binds one parameter, and a plugin's rows can number
+    // more than one statement may bind.
+    for (let at = 0; at < ids.length; at += DELETE_CHUNK_SIZE) {
+      await this.db
+        .delete(this.table)
+        .where(inArray(this.table.id, ids.slice(at, at + DELETE_CHUNK_SIZE)));
+    }
   }
 
   /**

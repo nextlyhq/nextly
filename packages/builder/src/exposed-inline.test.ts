@@ -263,7 +263,7 @@ describe("exposed text inside an area locked to its content", () => {
     ).toBe("exposed");
     expect(
       composedTextAt(document, composed, idOf("acme/tagline"), "motto")
-    ).toEqual({ kind: "part-of", placementId: "p1" });
+    ).toEqual({ kind: "part-of", placementId: "p1", heldExposureId: "motto" });
   });
 });
 
@@ -365,5 +365,52 @@ describe("exposedTextOp", () => {
     const answer = composedTextAt(document, composed, headingOf("p1"), "text");
     if (answer?.kind !== "exposed") throw new Error("expected exposed text");
     expect(exposedTextOp(document, answer.target, "Site name")).toBe(null);
+  });
+});
+
+describe("exposed text of a block the component locks in Layers", () => {
+  it("answers it as held, by the exposure the panel holds, and leaves the free text editable", () => {
+    const locked: ComponentDocument = {
+      ...HEADER,
+      nodes: [
+        { ...HEADER.nodes[0]!, locked: true, name: "Hero" },
+        {
+          id: "k",
+          type: "acme/heading",
+          version: 1,
+          props: { text: "Free" },
+        },
+      ],
+      exposed: [
+        ...(HEADER.exposed ?? []),
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "k",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [placed("p1")],
+    };
+    const composed = resolveComponentInstances(
+      document,
+      new Map([["header", locked as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    const [hero, free] = composed.nodes as ResolvedBlockNode[];
+
+    expect(composedTextAt(document, composed, hero!.id, "text")).toEqual({
+      kind: "part-of",
+      placementId: "p1",
+      heldExposureId: "title",
+    });
+    expect(composedTextAt(document, composed, free!.id, "text")?.kind).toBe(
+      "exposed"
+    );
   });
 });

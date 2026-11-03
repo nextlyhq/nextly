@@ -34,19 +34,18 @@
  * @module exposure-planners
  */
 import type { PropSchema } from "./block";
+import { editableComponent, editVerdict } from "./component-edit";
 import { nodeLocks } from "./content-only-exposures";
-import {
-  isComponentDocument,
-  type BlockDocument,
-  type ComponentDocument,
-  type ExposedProperty,
+import type {
+  BlockDocument,
+  ComponentDocument,
+  ExposedProperty,
 } from "./document";
 import {
   DEFAULT_LIMITS,
   MAX_ENVELOPE_ENTRIES,
   type DocumentLimits,
 } from "./limits";
-import { surveyDocument } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import { exposureTypeForProp } from "./prop-exposure";
 import type { RetiredExposures } from "./retired-exposures";
@@ -354,48 +353,16 @@ export function planRemoveExposedSlot(
 
 const NOTHING_RETIRED: RetiredExposures = { properties: [], slots: [] };
 
-/**
- * A copy of the definition to edit, or why it cannot be edited.
- *
- * Copied whole so no edit reaches the caller's document, a stored row or an
- * editor's state. A row that cannot be copied is not plain data, and nothing
- * stored by a save is anything else.
- *
- * The envelope's SHAPE is asked before any planner walks it: a stored or
- * imported component whose `exposed` is not a list, or whose `slots` or
- * `variants` is not a record, would otherwise throw from the first spread or
- * iteration, where every planner promises a refusal. The envelope check names
- * what is wrong.
- */
+/** A copy of the definition to edit, or why it cannot be edited. */
 function editable(
   definition: BlockDocument
 ): ComponentDocument | ExposureEditRefusal {
-  if (!isPlainRecord(definition) || !isComponentDocument(definition)) {
-    return { problem: "not-a-component" };
+  const draft = editableComponent(definition);
+  if (draft === "not-a-component") return { problem: "not-a-component" };
+  if ("issues" in draft) {
+    return { problem: "invalid-exposure", issues: draft.issues };
   }
-  if (!Array.isArray(definition.nodes)) return { problem: "not-a-component" };
-  let draft: ComponentDocument;
-  try {
-    draft = structuredClone(definition);
-  } catch {
-    return { problem: "not-a-component" };
-  }
-  // Read as unknown: the declared types describe a well-formed envelope, and
-  // this is the check that establishes one.
-  const {
-    exposed,
-    slots,
-    variants,
-  }: { exposed?: unknown; slots?: unknown; variants?: unknown } = draft;
-  const shaped =
-    (exposed === undefined || Array.isArray(exposed)) &&
-    (slots === undefined || isPlainRecord(slots)) &&
-    (variants === undefined || isPlainRecord(variants));
-  if (shaped) return draft;
-  return {
-    problem: "invalid-exposure",
-    issues: componentEnvelopeIssues(draft).filter(isErrorIssue),
-  };
+  return draft;
 }
 
 /**
@@ -634,16 +601,12 @@ function finished(
   prunedVariants: PrunedVariant[],
   limits: DocumentLimits
 ): ExposureEditResult {
-  // Whether it still fits, through the survey the save's own gate uses: an
-  // exposure or a longer label only ever makes the definition bigger.
-  const survey = surveyDocument(document, limits);
-  if (survey.tooLarge || survey.tooDeep || survey.tooManyNodes) {
-    return { problem: "exceeds-limits" };
+  // An exposure or a longer label only ever makes the definition bigger, so
+  // whether it still fits is asked as the save asks it.
+  const judged = editVerdict(document, limits);
+  if (judged.verdict === "exceeds-limits") return { problem: "exceeds-limits" };
+  if (judged.verdict === "refused") {
+    return { problem: "invalid-exposure", issues: judged.errors };
   }
-  // Under the host's limits, as its save judges the definition.
-  const issues = componentEnvelopeIssues(document, limits);
-  if (issues.some(isErrorIssue)) {
-    return { problem: "invalid-exposure", issues: issues.filter(isErrorIssue) };
-  }
-  return { document, id, retired, prunedVariants, warnings: issues };
+  return { document, id, retired, prunedVariants, warnings: judged.warnings };
 }

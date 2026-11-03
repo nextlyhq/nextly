@@ -79,6 +79,7 @@ import {
   useSiteStyleHistory,
 } from "./site-style-history";
 import { offerableTokens, siteStyleStatus } from "./site-style-studios";
+import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
   hasUnsavedWork,
@@ -98,7 +99,11 @@ import {
 type EditorView = EditorMount &
   SiteStyleInputs &
   CanvasInputs &
-  EditorPanels & { documentDirty: boolean };
+  EditorPanels & {
+    documentDirty: boolean;
+    /** "Edit component", and the banner over a component's own view. */
+    componentView: ComponentView;
+  };
 
 /**
  * Whether the empty-container appender should be suppressed right now.
@@ -347,6 +352,22 @@ function servicesFor(
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
 type CardVerbs = ComponentProps<typeof InspectorPanel>["verbs"];
 
+/**
+ * The onboarding checklist, rendered only while it has somewhere to go:
+ * passing an element the shell would position and then hide leaves an empty
+ * positioner over the canvas.
+ */
+function editorChecklist({
+  checklist,
+}: EditorView): React.JSX.Element | undefined {
+  return checklist.visible ? (
+    <OnboardingChecklist
+      steps={checklist.steps}
+      onDismiss={checklist.dismiss}
+    />
+  ) : undefined;
+}
+
 /** The inspector, given the same readings the canvas draws with. */
 function editorInspector(
   view: EditorView,
@@ -368,6 +389,8 @@ function editorInspector(
     canvasSiteStyle,
     siteStylePending,
     siteStyleError,
+    componentFacts,
+    componentVariants,
   } = view;
   return (
     <InspectorPanel
@@ -427,6 +450,11 @@ function editorInspector(
         siteStylePending,
         siteStyleError
       )}
+      // In a component's own view: the ids its live definition holds, which a
+      // new field must never reuse, and how far a removal reaches.
+      componentFields={componentFacts}
+      // And how many placements chose a variant, for its delete dialog.
+      componentVariants={componentVariants}
     />
   );
 }
@@ -815,6 +843,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
 
   const page = usePageFacts(control);
+  // A component's own view, and the way into one from a placement: its
+  // banner, which says how far a change reaches, and "Edit component".
+  const componentView = useComponentView({
+    initialDocument: mount.initialDocument,
+    editor,
+    componentLibrary: mount.componentLibrary,
+    fieldName: name,
+    componentFacts: mount.componentFacts,
+  });
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
@@ -825,6 +862,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...canvas,
     ...panels,
     documentDirty,
+    componentView,
   };
   useOpenAtSection({
     sectionId: openAt,
@@ -839,7 +877,6 @@ function EditorBody<TFieldValues extends FieldValues>({
     mayCreatePattern,
     makeComponent,
     componentVerbs,
-    checklist,
     availablePanels,
     openPanelRequest,
     setShowEmptyElements,
@@ -851,8 +888,9 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   return (
     // Fills the view's area, under the admin's lock and recovery notices for
-    // this document, rather than covering the window over them.
-    <div className="h-full bg-background">
+    // this document, rather than covering the window over them. A component's
+    // own view carries its banner above the editor.
+    <EditorFrame banner={componentView.banner}>
       <BuilderShell
         notices={notices}
         onExit={done}
@@ -912,19 +950,10 @@ function EditorBody<TFieldValues extends FieldValues>({
           <SelectionBreadcrumb
             editor={editor}
             hints={{ editText: true, goUp: true, commandPalette: true }}
+            componentTitle={componentLibrary.titleOf}
           />
         }
-        // Rendered only while it has somewhere to go: passing an element the
-        // shell would position and then hide leaves an empty positioner over
-        // the canvas.
-        checklist={
-          checklist.visible ? (
-            <OnboardingChecklist
-              steps={checklist.steps}
-              onDismiss={checklist.dismiss}
-            />
-          ) : undefined
-        }
+        checklist={editorChecklist(view)}
         renderPanel={editorPanelRenderer(view)}
       >
         {/*
@@ -954,6 +983,10 @@ function EditorBody<TFieldValues extends FieldValues>({
           */
           mayCreatePattern={mayCreatePattern}
           components={componentVerbs}
+          // Opening a placed component in its own view: the host's, since it
+          // knows the view's address and whether this author may update
+          // components. Absent, no surface offers it.
+          onEditComponent={componentView.onEditComponent}
           onShareVerbs={setCardVerbs}
         >
           {/*
@@ -972,6 +1005,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             canvas={canvas.canvasElement}
             // The Add panel's own sources, so search offers what it offers.
             insert={searchInsertSources(panels)}
+            componentTitle={componentLibrary.titleOf}
             open={panels.search.open}
             onOpenChange={panels.search.setOpen}
           />
@@ -1006,6 +1040,28 @@ function EditorBody<TFieldValues extends FieldValues>({
           />
         </BlockKeyboardActions>
       </BuilderShell>
+    </EditorFrame>
+  );
+}
+
+/**
+ * The editor's area: the whole of it for a page, and under the banner for a
+ * component's own view, so the banner takes its height and the shell the rest.
+ */
+function EditorFrame({
+  banner,
+  children,
+}: {
+  banner: React.ReactNode;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (banner === null) {
+    return <div className="h-full bg-background">{children}</div>;
+  }
+  return (
+    <div className="flex h-full flex-col bg-background">
+      {banner}
+      <div className="min-h-0 flex-1">{children}</div>
     </div>
   );
 }

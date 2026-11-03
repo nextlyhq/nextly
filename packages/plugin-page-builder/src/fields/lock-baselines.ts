@@ -13,8 +13,7 @@
  * @module lock-baselines
  */
 import {
-  COMPONENT_INSTANCE_TYPE,
-  walkNodes,
+  placementsAsComponentsHoldThem,
   type BlockDocument,
   type DocumentLimits,
   type WorkAllowance,
@@ -209,29 +208,4 @@ export async function composedFormsRead(args: {
     forms.push(composed.composition.document);
   }
   return { forms, complete };
-}
-
-/**
- * The document with each placement's own values and slot content removed, so
- * composing it draws every component as the component holds it.
- */
-export function placementsAsComponentsHoldThem(
-  document: BlockDocument,
-  limits: DocumentLimits
-): BlockDocument {
-  const copy = structuredClone(document);
-  walkNodes(
-    copy.nodes,
-    node => {
-      if (node.type !== COMPONENT_INSTANCE_TYPE) return;
-      const own = node as unknown as Record<string, unknown>;
-      const props = own.props;
-      if (typeof props === "object" && props !== null) {
-        delete (props as Record<string, unknown>).overrides;
-      }
-      delete own.slots;
-    },
-    { maxNodes: limits.maxNodes }
-  );
-  return copy;
 }

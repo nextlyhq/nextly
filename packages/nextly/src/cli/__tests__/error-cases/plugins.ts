@@ -188,6 +188,16 @@ export const PLUGIN_CASES = {
         tables: ["seo_redirects"],
       },
     }),
+  PLUGIN_DOWN_LEFT_ELEMENTS: () =>
+    new NextlyError({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      publicMessage: `${PLUGIN}'s DOWN migrations ran but left index "seo_idx_slug" on pages in place, so it was not recorded as uninstalled and its records were kept. Drop it, then run the uninstall again to record it.`,
+      logContext: {
+        plugin: PLUGIN,
+        reason: "elements-left-by-down",
+        elements: [{ table: "pages", kind: "index", name: "seo_idx_slug" }],
+      },
+    }),
   PLUGIN_TABLE_IDENTITY_UNREADABLE: () =>
     new NextlyError({
       code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
@@ -225,6 +235,21 @@ export const PLUGIN_CASES = {
           enabled: [
             { name: PLUGIN, dependsOn: [] },
             { name: "@acme/sitemap", dependsOn: [PLUGIN] },
+          ],
+        })
+      )
+    ),
+  PLUGIN_UNINSTALL_WOULD_DROP_OTHERS: () =>
+    thrown(() =>
+      planUninstall(
+        uninstall({
+          dependents: [
+            {
+              kind: "index",
+              name: "app_idx_on_notes",
+              table: "notes__items",
+              owner: "the app",
+            },
           ],
         })
       )
