@@ -1521,6 +1521,20 @@ describe("a value the panel shows and could not remove", () => {
     ).toBeNull();
   });
 
+  it("says a stored value the block does not offer still applies, without claiming it once did", () => {
+    // "No longer offers" read as a capability taken away, for a value written
+    // through the API on a block that never had it, and left the author
+    // guessing whether clearing it would change anything.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { borderRadius: "4px" } },
+    } as NodeStyles;
+    mount({ border: { line: true } }, styles);
+    const notice = document.querySelector('[data-not-offered="borderRadius"]');
+    expect(notice?.textContent).toBe(
+      "This block doesn't offer Border radius. The value set here still applies; clearing it removes it."
+    );
+  });
+
   it("offers the form selector while the property IS still supported", () => {
     // The positive control for the test above. Without it, a panel that had
     // simply stopped rendering form selectors altogether would pass.
@@ -2063,6 +2077,113 @@ describe("a length field's unit", () => {
       /^Width/
     ) as HTMLInputElement;
     expect(width.placeholder).not.toContain("px");
+  });
+
+  /** Type into Width, then move focus to its unit menu, as a click does. */
+  function typeThenFocusUnit(text: string) {
+    const width = fieldsOf("width").getByLabelText(/^Width/);
+    const trigger = fieldsOf("width").getByLabelText("Unit for Width");
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: text } });
+    fireEvent.blur(width, { relatedTarget: trigger });
+    return trigger;
+  }
+
+  it("writes one step when a number is typed and then a unit chosen", () => {
+    // Committing on the way to the menu wrote "20px" and then "20rem": two
+    // undo steps for one gesture, the first a value nobody asked for.
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20rem"'
+    );
+  });
+
+  it("still writes the typed number when the menu closes with no choice", () => {
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("still writes the typed number when focus moves past the menu", () => {
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("keeps a unit while it is being typed", () => {
+    // "2c" on the way to "2ch" was cut to "2", so no letter unit could be
+    // typed at all.
+    const editor = mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "2c" } });
+    expect(width.value).toBe("2c");
+    fireEvent.change(width, { target: { value: "2ch" } });
+    expect(width.value).toBe("2ch");
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"2ch"'
+    );
+  });
+
+  it("shows a unit being typed once, in the field, not again beside it", () => {
+    // "2ch" in the field beside a "ch" suffix read as "2ch ch".
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    const trigger = fieldsOf("width").getByLabelText("Unit for Width");
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "2ch" } });
+    expect(width.value).toBe("2ch");
+    expect(trigger.textContent).toBe("");
+    fireEvent.blur(width);
+    expect(width.value).toBe("2");
+    expect(trigger.textContent).toBe("ch");
+  });
+
+  it("writes a held number when the field goes away with its menu open", () => {
+    // Selecting another block unmounts the field with no close from the menu.
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    cleanup();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("drops a held number once the stored value moves under it", () => {
+    // An undo while the menu is open must not be reversed when it closes.
+    register({ dimensions: true });
+    const before = editorFor(documentOf());
+    const view = render(<StyleInspectorPanel editor={before} />);
+    const trigger = typeThenFocusUnit("20");
+    const after = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { width: "50px" } },
+      } as NodeStyles)
+    );
+    view.rerender(<StyleInspectorPanel editor={after} />);
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    expect(before.applyAll).not.toHaveBeenCalled();
+    expect(after.applyAll).not.toHaveBeenCalled();
   });
 
   it("offers the property's keywords after its units", () => {

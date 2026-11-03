@@ -28,6 +28,7 @@ import type {
 import {
   SharedStylesPanel,
   USAGE_RECOUNT_MS,
+  USAGE_RECOUNT_UNKNOWN_MAX,
   type SharedStylesAccess,
   type SharedStylesPanelProps,
 } from "./shared-styles-panel";
@@ -74,17 +75,22 @@ function reach(
 /** Usage the access answers with, by id; unknown ids read as unused. */
 function accessOf({
   whole = true,
+  counting = !whole,
   mayLock = false,
   styles = {},
   uses,
   remove = async () => undefined,
+  removeWithReason,
   lock = async () => undefined,
 }: {
   whole?: boolean;
+  /** Whether a count that is not whole may still become whole. */
+  counting?: boolean;
   mayLock?: boolean;
   styles?: Record<string, SharedStyleReach>;
   uses?: (id: string, page: number) => SharedStyleUsesPage;
   remove?: SharedStylesAccess["remove"];
+  removeWithReason?: SharedStylesAccess["removeWithReason"];
   lock?: SharedStylesAccess["lock"];
 } = {}) {
   const usageReads: (readonly string[])[] = [];
@@ -93,6 +99,7 @@ function accessOf({
       usageReads.push(ids);
       return {
         whole,
+        counting,
         mayLock,
         styles: new Map(
           ids.map(id => [
@@ -116,6 +123,9 @@ function accessOf({
     ),
     lock: vi.fn(lock),
     remove: vi.fn(remove),
+    ...(removeWithReason === undefined
+      ? {}
+      : { removeWithReason: vi.fn(removeWithReason) }),
   };
   return { access, usageReads };
 }
@@ -209,6 +219,97 @@ describe("the row's preview", () => {
     expect(specimen?.style.color).toBe("rgb(17, 34, 51)");
   });
 
+  describe("in dark mode", () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const prefersDark = () =>
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("dark"),
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }));
+    const LIGHT_TEXT: NamedClass = {
+      id: "c-light",
+      slug: "light-text",
+      label: "Light text",
+      orderIndex: 3,
+      styles: { base: { [BASE_BREAKPOINT]: { color: "#e5e7eb" } } },
+    };
+
+    it("draws a style unreadable on the dark page on the light one, and says so", async () => {
+      prefersDark();
+      await panel({ tokens: { tokens: [] }, library: [CARD, LIGHT_TEXT] });
+      const card = row(/^Card, \.nx-c-card/);
+      expect(card.getAttribute("aria-label")).toContain(
+        "Hard to read in dark mode"
+      );
+      const tile = card.querySelector<HTMLElement>(".nx-shared-styles__tile");
+      expect(tile?.style.backgroundColor).toBe("rgb(255, 255, 255)");
+      // Said where keyboard and touch users meet it too: the row's tooltip,
+      // shown when the row takes focus, not a title on a hidden element.
+      expect(tile?.hasAttribute("title")).toBe(false);
+      await act(async () => {
+        card.focus();
+      });
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Hard to read in dark mode"
+      );
+      // The tooltip leaves the row the one control it was: it still opens.
+      fireEvent.click(card);
+      const opened = await screen.findByRole("dialog", { name: "Card" });
+      fireEvent.keyDown(opened, { key: "Escape" });
+      // CONTROL: a style that reads on the dark page keeps it, unmarked.
+      const light = row(/^Light text, \.nx-c-light-text/);
+      expect(light.getAttribute("aria-label")).not.toContain("dark mode");
+      expect(
+        light.querySelector<HTMLElement>(".nx-shared-styles__tile")?.style
+          .backgroundColor
+      ).toBe("rgb(11, 15, 25)");
+    });
+
+    it("gives a white style with no text colour readable text", async () => {
+      prefersDark();
+      const field: NamedClass = {
+        id: "c-field",
+        slug: "form-field",
+        label: "Form field",
+        orderIndex: 0,
+        styles: {
+          base: { [BASE_BREAKPOINT]: { backgroundColor: "#ffffff" } },
+        },
+      };
+      await panel({ tokens: { tokens: [] }, library: [field] });
+      const specimen =
+        row(/^Form field/).querySelector<HTMLElement>(".nx-vars__specimen");
+      expect(specimen?.style.backgroundColor).toBe("rgb(255, 255, 255)");
+      expect(specimen?.style.color).toBe("rgb(17, 24, 39)");
+    });
+  });
+
+  it('outlines the "Aa" on a background it cannot measure', async () => {
+    const navy: NamedClass = {
+      id: "c-navy",
+      slug: "navy-band",
+      label: "Navy band",
+      orderIndex: 0,
+      styles: { base: { [BASE_BREAKPOINT]: { backgroundColor: "navy" } } },
+    };
+    await panel({ tokens: { tokens: [] }, library: [navy, CARD] });
+    const specimen = (name: RegExp) =>
+      row(name).querySelector<HTMLElement>(".nx-vars__specimen");
+    expect(
+      specimen(/^Navy band/)?.classList.contains(
+        "nx-shared-styles__lead--outlined"
+      )
+    ).toBe(true);
+    // CONTROL: a style shown to read draws with no outline.
+    expect(
+      specimen(/^Card, \.nx-c-card/)?.classList.contains(
+        "nx-shared-styles__lead--outlined"
+      )
+    ).toBe(false);
+  });
+
   it("keeps the neutral tile when the site's variables are not to hand", async () => {
     await panel();
     const tile = row(/^Card, \.nx-c-card/).querySelector<HTMLElement>(
@@ -298,6 +399,7 @@ describe("counts", () => {
         const whole = reads > 1;
         return {
           whole,
+          counting: !whole,
           mayLock: false,
           styles: new Map(ids.map(id => [id, reach({}, whole)])),
         };
@@ -334,6 +436,131 @@ describe("counts", () => {
     );
   });
 
+  it("keeps asking while an earlier batch was read before the count finished", async () => {
+    // Sixty styles in two batches: the first read while still counting, the
+    // second once counting is done and nothing pending.
+    const many: NamedClass[] = Array.from({ length: 60 }, (_, n) => ({
+      id: `c-${n}`,
+      slug: `s-${n}`,
+      orderIndex: n,
+      styles: {},
+    }));
+    let reads = 0;
+    const asked: (readonly string[])[] = [];
+    const base = accessOf().access;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        asked.push(ids);
+        const whole = reads > 1;
+        return {
+          whole,
+          counting: !whole,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({}, whole)])),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ library: many, access });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(reads).toBe(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    // The first batch's floors were asked about again: a read after the
+    // timer names a style from it, not only the already-whole second batch.
+    expect(asked.slice(2).some(ids => ids.includes("c-0"))).toBe(true);
+  });
+
+  it("re-reads a host that does not say whether it is counting, a bounded number of times", async () => {
+    // A host built before `counting` existed: absent means unknown.
+    const base = accessOf().access;
+    let reads = 0;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        return {
+          whole: false,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({}, false)])),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      const first = reads;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+      });
+      // Still asked again while it may be counting...
+      expect(reads).toBe(first + 1);
+      for (let tick = 0; tick < USAGE_RECOUNT_UNKNOWN_MAX + 5; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    // ...but not for ever.
+    expect(reads).toBe(1 + USAGE_RECOUNT_UNKNOWN_MAX);
+  });
+
+  it("asks nothing more when the count cannot become whole", async () => {
+    // A blocks-backed Single, say: floors for good, so no timer.
+    const { access, usageReads } = accessOf({ whole: false, counting: false });
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      const reads = usageReads.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS * 3);
+      });
+      expect(usageReads).toHaveLength(reads);
+    } finally {
+      vi.useRealTimers();
+    }
+    // The floor note says the numbers are minimums, promising no wait.
+    expect(
+      screen.getByText(
+        "Some pages can't be counted, so these numbers are minimums."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/still being counted/)).toBeNull();
+  });
+
+  it("says once, without a wait, why Unused holds rows back when the count cannot finish", async () => {
+    const { access } = accessOf({ whole: false, counting: false });
+    await panel({ library: [CARD, HERO, OLD], access });
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Show" })).getByRole("button", {
+        name: /^Unused/,
+      })
+    );
+    expect(
+      screen.getAllByText(/^Some pages/).map(note => note.textContent)
+    ).toEqual(["Some pages can't be counted, so these numbers are minimums."]);
+  });
+
   it("asks again while counting, and shows the whole count once it is done", async () => {
     let counted = false;
     const base = accessOf().access;
@@ -341,6 +568,7 @@ describe("counts", () => {
       ...base,
       usage: vi.fn(async (ids: readonly string[]) => ({
         whole: counted,
+        counting: !counted,
         mayLock: false,
         styles: new Map(ids.map(id => [id, reach({ pages: 4 }, counted)])),
       })),
@@ -468,6 +696,71 @@ describe("the filters", () => {
       .getAllByRole("button")
       .map(button => button.getAttribute("aria-label"));
     expect(names).toEqual(["All 3", "Used", "Unused", "Locked 1"]);
+  });
+
+  it("lists under Unused only styles certainly unused, saying why while counting", async () => {
+    const { access } = accessOf({
+      whole: false,
+      styles: { "c-card": reach({ pages: 4 }, false) },
+    });
+    await panel({ library: [CARD, HERO, OLD], access });
+    pick(/^Unused/);
+    // HERO and OLD count zero so far, which is not unused yet.
+    expect(shownRows()).toEqual([]);
+    // One note for the whole state, not one per thing it holds back.
+    const notes = screen
+      .getAllByText(/^Some pages are still being counted/)
+      .map(note => note.textContent);
+    expect(notes).toEqual([
+      "Some pages are still being counted, so the numbers are minimums and no style can be called unused or removed yet.",
+    ]);
+    // Remove unused still says why it waits, by pointing at that note.
+    const removeUnused = screen.getByRole("button", { name: "Remove unused…" });
+    const describedBy = removeUnused.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toBe(notes[0]);
+    // A counted use is a use, counted in full or not.
+    pick(/^Used/);
+    expect(shownRows()).toEqual(["c-card"]);
+  });
+
+  it("lists proven-unused styles while an unrelated count is cut short", async () => {
+    // Every page counted, but Card's count stopped at its cap and Hero's
+    // zero is not complete: only Old note is certainly unused.
+    const { access } = accessOf({
+      styles: {
+        "c-card": reach({ pages: 9 }, false),
+        "c-hero": reach({}, false),
+        "c-old": reach({}),
+      },
+    });
+    await panel({ library: [CARD, HERO, OLD], access });
+    pick(/^Unused/);
+    expect(shownRows()).toEqual(["c-old"]);
+    // Hero is held back, but every page is counted: no note says otherwise
+    // over the proven row listed.
+    expect(screen.queryByText(/can be called unused/)).toBeNull();
+    expect(screen.queryByText(/^Some pages/)).toBeNull();
+  });
+
+  it("says nothing about counting when no row under Unused is held back", async () => {
+    const { access } = accessOf({
+      styles: { "c-card": reach({ pages: 9 }, false) },
+    });
+    await panel({ library: [CARD, HERO, OLD], access });
+    pick(/^Unused/);
+    expect(shownRows()).toEqual(["c-hero", "c-old"]);
+    expect(screen.queryByText(/no style can be called unused yet/)).toBeNull();
+  });
+
+  it("keeps a zero on a page not read in full out of Unused", async () => {
+    const { access } = accessOf();
+    await panel({
+      library: [HERO],
+      access,
+      pageBlocks: { counts: new Map(), complete: false },
+    });
+    pick(/^Unused/);
+    expect(shownRows()).toEqual([]);
   });
 
   it("says when a filter holds nothing, and when the search finds nothing in it", async () => {
@@ -747,6 +1040,89 @@ describe("removing one style", () => {
       );
     });
     expect(access.remove).toHaveBeenCalledWith(["c-old"]);
+  });
+
+  it("drops the confirmation on a refusal, says why, and reads the style's usage again", async () => {
+    const refusal =
+      "Still used on Home and 2 more. Remove it from those pages first.";
+    const styles: Record<string, SharedStyleReach> = {};
+    const { access, usageReads } = accessOf({
+      styles,
+      removeWithReason: async () => ({ reason: refusal, inUse: true }),
+    });
+    await panel({ access });
+    const details = await open(/^Old note/, "Old note");
+    // By the time it is read again, the index has caught up with the page.
+    styles["c-old"] = reach({ pages: 1 });
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    usageReads.length = 0;
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    expect(within(details).getByRole("alert").textContent).toBe(refusal);
+    // No confirmation left saying nothing uses it, and nothing to press.
+    expect(within(details).queryByText(/Nothing uses it/)).toBeNull();
+    expect(
+      within(details).queryByRole("button", { name: /^Remove/ })
+    ).toBeNull();
+    expect(usageReads).toEqual([["c-old"]]);
+    // The read again, not the refusal, says the row is used now.
+    fireEvent.keyDown(details, { key: "Escape" });
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Show" })).getByRole("button", {
+        name: /^Unused/,
+      })
+    );
+    expect(screen.queryByRole("button", { name: /^Old note/ })).toBeNull();
+  });
+
+  it('does not say the index\'s "Not used anywhere" over a refusal that says it is used', async () => {
+    const refusal =
+      "Still used on Home and 2 more. Remove it from those pages first.";
+    // The route's explicit in-use refusal, as the host reports it.
+    const { access } = accessOf({
+      removeWithReason: async () => ({ reason: refusal, inUse: true }),
+    });
+    await panel({ access });
+    const details = await open(/^Old note/, "Old note");
+    // CONTROL: before the refusal the index's sentence is there.
+    expect(within(details).getByText("Not used anywhere")).toBeTruthy();
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    expect(within(details).getByRole("alert").textContent).toBe(refusal);
+    expect(within(details).queryByText("Not used anywhere")).toBeNull();
+  });
+
+  it("lets the read again decide a style refused for another reason, such as a lock", async () => {
+    const refusal = "Nothing was removed. Old note is locked.";
+    const { access, usageReads } = accessOf({ remove: async () => refusal });
+    await panel({ access });
+    const details = await open(/^Old note/, "Old note");
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    usageReads.length = 0;
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    expect(within(details).getByRole("alert").textContent).toBe(refusal);
+    expect(usageReads).toEqual([["c-old"]]);
+    // A lock says nothing of use, so the index's sentence stays.
+    expect(within(details).getByText("Not used anywhere")).toBeTruthy();
+    // Read again, it is still used by nothing, so it stays under Unused.
+    fireEvent.keyDown(details, { key: "Escape" });
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Show" })).getByRole("button", {
+        name: /^Unused/,
+      })
+    );
+    expect(screen.getByRole("button", { name: /^Old note/ })).toBeTruthy();
   });
 
   it("offers no Remove for a style in use, and says why", async () => {

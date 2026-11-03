@@ -1008,9 +1008,43 @@
   background: var(--nx-builder-surface, var(--nx-background));
 }
 
+/*
+ * The editor's density, as the top bar takes it: the shared controls size
+ * from these tokens, so every field, select and button in the panel is the
+ * one 28px height, and its text the density's 12px on a 16px line. On both
+ * roots, since a host may draw the Style panel alone, with no inspector
+ * around it.
+ */
+:is(.nx-inspector, .nx-style-inspector) {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+/*
+ * The shared controls set their own text size (`text-sm`); in the panel they
+ * take the density's 12px. Unlayered, so this outranks the utility class.
+ */
+:is(.nx-inspector, .nx-style-inspector)
+  :is(input, textarea, button, label, [data-slot="select-trigger"]) {
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * The shared input pads 10px above and below its text, which a 28px height
+ * leaves about 6px of: its text is centred by the line instead.
+ */
+:is(.nx-inspector, .nx-style-inspector) input[data-slot="input"] {
+  padding-block: 0;
+  line-height: var(--nx-builder-line-height);
+}
+
 .nx-inspector__note {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: var(--nx-builder-font-size);
   line-height: 1.5;
   color: var(--nx-muted-foreground);
 }
@@ -1050,6 +1084,19 @@
   border-radius: var(--radius-md);
   background: var(--nx-accent);
   color: var(--nx-accent-foreground);
+}
+
+/*
+ * A placement's mark in the component colour, as Layers draws a placement, so
+ * the card reads as a component's before its description is.
+ */
+.nx-inspector[data-instance] .nx-block-card__icon {
+  background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent);
+}
+
+/* On the icon itself, past its own muted colour, as Layers does. */
+.nx-inspector[data-instance] .nx-block-card__icon .nx-block-icon {
+  color: var(--nx-builder-component);
 }
 
 /* The name over its one-line description, taking the room between the
@@ -1199,8 +1246,8 @@
   gap: 0.375rem;
   list-style: none;
   cursor: pointer;
-  font-size: var(--text-sm);
-  font-weight: 500;
+  font-size: var(--nx-builder-title-size);
+  font-weight: var(--nx-builder-title-weight);
 }
 
 .nx-inspector__advanced > summary::-webkit-details-marker {
@@ -1252,11 +1299,12 @@
   align-items: start;
 }
 
+/* As tall as the control beside it, so a label centres on its row. */
 .nx-inspector__field--exposed > label,
 .nx-inspector__field--exposed > .nx-inspector__field-name {
   display: flex;
   align-items: center;
-  min-height: 2.5rem;
+  min-height: var(--nx-control-height);
 }
 
 /*
@@ -1287,30 +1335,29 @@
 }
 
 /*
- * Where a row's value came from, as a badge the author reads beside it. Quiet
- * for an inherited value, which is the ordinary state; the accent for an
- * override, because that is the row whose reset undoes THEIR edit; and a
- * dashed outline for a cleared one, which is a value deliberately absent
- * rather than one nobody set.
+ * Where a row's value came from, as a quiet line under the field ("From the
+ * component", "Set on this page") in sentence case at the panel's small size,
+ * where a 10px capitalised tag read as an internal term. Muted for the
+ * ordinary state; the accent for a value set on this page, the row whose
+ * reset undoes the author's own edit; and a dashed outline for a cleared one,
+ * a value deliberately absent rather than one nobody set.
  */
 .nx-inspector__source {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0 0.375rem;
+  padding: 0;
   border-radius: 999px;
-  font-size: 0.625rem;
-  font-weight: 500;
-  line-height: 1.6;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
+  background: transparent;
 }
 
 .nx-inspector__source-icon {
-  width: 0.6875rem;
-  height: 0.6875rem;
+  width: 0.75rem;
+  height: 0.75rem;
   flex: none;
 }
 
@@ -1322,16 +1369,14 @@
   color: var(--nx-destructive);
 }
 
-.nx-inspector__source[data-source="instance"] {
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
-}
-
+/*
+ * Set or cleared on this page: the accent, in the same quiet line. A cleared
+ * value is told from an inherited one by its words and its icon, not by
+ * colour or an outline.
+ */
+.nx-inspector__source[data-source="instance"],
 .nx-inspector__source[data-source="cleared"] {
   color: var(--nx-primary);
-  background: transparent;
-  outline: 1px dashed color-mix(in oklch, var(--nx-primary) 50%, transparent);
-  outline-offset: -1px;
 }
 
 /*
@@ -1908,7 +1953,7 @@
 .nx-inspector__fields {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--nx-builder-row-gap);
   container-type: inline-size;
   container-name: nx-inspector-fields;
 }
@@ -1975,7 +2020,7 @@
   grid-column: 1;
   grid-row: 1;
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--nx-builder-font-size);
   font-weight: 500;
 }
 
@@ -2366,7 +2411,9 @@
    * to be about where the label reads best rather than about what fits.
    */
   min-width: 0;
-  padding: 0.25rem 0.5rem;
+  /* The control's height, not its padding, sets its size: 28px like its neighbours. */
+  height: var(--nx-control-height);
+  padding: 0 0.5rem;
   border: 1px solid var(--nx-border);
   /* Given up here and taken back by the first button, so a seam is one border. */
   border-inline-start-width: 0;
@@ -2512,8 +2559,8 @@
   align-items: center;
   gap: 0.4375rem;
   text-align: start;
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: var(--nx-builder-title-size);
+  font-weight: var(--nx-builder-title-weight);
 }
 
 .nx-style-inspector__section-dot {
@@ -2529,6 +2576,77 @@
  * chevron with a utility in a cascade layer; these rules sit outside the
  * layers, so they win without raising specificity.
  */
+/*
+ * A Style section opening and closing (a plugin's own inspector in the
+ * Content tab keeps the shared accordion's motion): 150ms, its height and
+ * its opacity eased out together, where the shared accordion's 300ms in-out
+ * curve read as slow in a panel opened and closed all day and its height
+ * alone made the fields pop in at the end. Unlayered, so it outranks the
+ * utility classes the shared component sets.
+ */
+.nx-style-inspector
+  [data-section]
+  > [data-slot="accordion-content"][data-state="open"] {
+  animation: nx-section-open 150ms ease-out;
+}
+
+.nx-style-inspector
+  [data-section]
+  > [data-slot="accordion-content"][data-state="closed"] {
+  animation: nx-section-close 150ms ease-out;
+}
+
+/*
+ * Clipped for exactly the animation: an open section shows its overflow (a
+ * field's focus tooltip above its first row), and left visible while it
+ * moved, its fields drew over the headings below. `overflow` animates
+ * discretely, so the open rule's `visible` returns as the animation ends.
+ */
+@keyframes nx-section-open {
+  from {
+    height: 0;
+    opacity: 0;
+    overflow: hidden;
+  }
+
+  to {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+    overflow: hidden;
+  }
+}
+
+@keyframes nx-section-close {
+  from {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+    overflow: hidden;
+  }
+
+  to {
+    height: 0;
+    opacity: 0;
+    overflow: hidden;
+  }
+}
+
+/*
+ * An author who asks for less motion gets the section at once. As weighty as
+ * the open and closed rules above, and after them, so it wins over both. The
+ * chevron is stilled too, which the shared trigger turns with a transition.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nx-style-inspector
+    [data-section]
+    > [data-slot="accordion-content"][data-state] {
+    animation: none;
+  }
+
+  .nx-style-inspector .nx-style-inspector__section-trigger > svg {
+    transition: none;
+  }
+}
+
 .nx-style-inspector__section-trigger {
   padding-block: 0.5625rem;
 }
@@ -2957,14 +3075,15 @@
 }
 
 /*
- * The tag on the fixed dark ink the block toolbar uses, at the ring's top
- * left corner inside it, so it reads on any section of the page.
+ * The tag on the fixed dark ink the block toolbar uses, so it reads on any
+ * section of the page. Just outside the ring's bottom right corner: inside,
+ * it would cover the block it describes, and the toolbar owns the top left.
  */
 .nx-canvas-mark[data-mark="selected"][data-hidden]::after {
   content: attr(data-label);
   position: absolute;
-  top: 4px;
-  left: 4px;
+  top: calc(100% + 4px);
+  right: var(--nx-tag-inset-side, 0);
   padding: 1px 6px;
   border-radius: 4px;
   background: var(--nx-builder-ink);
@@ -2973,6 +3092,34 @@
     500 11px/16px var(--font-sans, system-ui),
     sans-serif;
   white-space: nowrap;
+}
+
+/* Above the ring when it ends at the bottom of what is on screen, where a
+   tag below would be cut off. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="above"]::after {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+/* Lined up with the ring's left edge, running right, when there is no room
+   on screen for it to run left from the ring's right edge. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag-edge="left"]::after {
+  right: auto;
+  left: var(--nx-tag-inset-side, 0);
+}
+
+/* Inside the ring, at its bottom corner, when neither side has room on
+   screen, as on a block that fills it. The insets keep the corner on screen
+   where the ring runs past it; the marks set them. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"]::after {
+  top: auto;
+  bottom: var(--nx-tag-inset-bottom, 4px);
+  right: var(--nx-tag-inset-side, 4px);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"][data-tag-edge="left"]::after {
+  right: auto;
+  left: var(--nx-tag-inset-side, 4px);
 }
 
 /*
@@ -5135,21 +5282,34 @@ label[data-named-above] .nx-style-inspector__field-label-text {
    neutral page with a border. The style's own colours are drawn on it, so a
    dark text or a white background shows as it would on a page. */
 .nx-shared-styles__tile {
+  position: relative;
   display: inline-flex;
   width: 22px;
   height: 22px;
-  overflow: hidden;
+  /* Visible, so the dark-mode flag can sit outside the corner, off the
+     glyph; the preview inside keeps to the rounded tile on its own. */
+  overflow: visible;
   color: var(--nx-foreground);
   background: var(--nx-page-background);
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
 }
 
+/* An "Aa" not shown to read on its background: an outline painted under its
+   fill, so it shows on any colour. The site's page colour overrides this
+   inline where the tab has it. */
+.nx-shared-styles__lead--outlined {
+  -webkit-text-stroke: 2px var(--nx-background);
+  paint-order: stroke fill;
+}
+
 .nx-shared-styles__lead {
   align-items: center;
   width: 100%;
   height: 100%;
+  overflow: hidden;
   font-size: var(--text-sm);
+  border-radius: calc(var(--radius-sm) - 1px);
 }
 
 /* The filters close the search block, so the search row keeps no rule of
@@ -5278,6 +5438,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   overflow-y: auto;
 }
 
+/* A rule under the pinned name, so rows scrolling up stop at a line rather
+   than running into the class name. Always drawn: telling a scrolled body
+   from one at its top would need a listener for one hairline. */
 .nx-shared-styles__details-head {
   position: sticky;
   top: 0;
@@ -5285,7 +5448,32 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  padding-bottom: 0.5rem;
   background: var(--nx-popover);
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/* "Show N more" and the tab's other text links get a 24px target here. The
+   class is the Variables and Fonts tabs' too, so it is raised in this tab
+   and its portalled editor only. */
+.nx-shared-styles .nx-vars__link,
+.nx-shared-styles__editor .nx-vars__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+/* The dark-mode flag on a tile drawn on the light page: a small moon over the
+   tile's top corner, outside the "Aa" so it covers no letter; the row's
+   tooltip says why. */
+.nx-shared-styles__dark-flag {
+  position: absolute;
+  inset-block-start: -5px;
+  inset-inline-end: -5px;
+  padding: 1px;
+  color: var(--nx-foreground);
+  background: var(--nx-background);
+  border-radius: 9999px;
 }
 
 /* Remove unused names each style over its class, wrapped rather than cut, so
@@ -5612,7 +5800,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 /* In a style row, as tall as the lists and fields beside it. */
 .nx-style-inspector .nx-font-pick__trigger {
-  height: 2.5rem;
+  height: var(--nx-control-height);
 }
 
 .nx-font-pick__trigger:focus-visible,
@@ -6617,16 +6805,52 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   pointer-events: none;
 }
 
-/* A placement's variant, under its title in the placement's inspector. */
+/*
+ * A placement's variant, under its title in the placement's inspector: one
+ * field row, laid out by the fields' own rules, set off from the fields below.
+ */
 .nx-variant-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
   margin-bottom: 1rem;
 }
 
-.nx-variant-picker .nx-inspector__heading {
+/*
+ * A chosen media item: a small picture beside its name, the name cut short
+ * on one line with the whole of it in its tooltip, and its alt text below.
+ */
+.nx-inspector__media-chosen {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.nx-inspector__media-thumb {
+  flex: none;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+.nx-inspector__media-text {
+  min-inline-size: 0;
+}
+
+.nx-inspector__media-name {
   margin: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A checkbox beside the words it names, kept apart from them. */
+.nx-inspector__check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 /*
