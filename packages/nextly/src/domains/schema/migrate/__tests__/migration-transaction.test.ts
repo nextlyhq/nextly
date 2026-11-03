@@ -9,13 +9,34 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type Database from "better-sqlite3";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   executeTransaction,
   runMigrationStatements,
 } from "../migration-transaction";
+
+// The count of rows in a required column's way, real unless a test makes it fail: a database
+// that answers the table's shape but not the count is not one SQLite can be made into.
+const countFailure = vi.hoisted(() => ({
+  cause: undefined as Error | undefined,
+}));
+vi.mock("../../pipeline/classifier/count-helpers", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../pipeline/classifier/count-helpers")
+    >();
+  return {
+    ...actual,
+    countRowsBreakingNotNull: (
+      ...args: Parameters<typeof actual.countRowsBreakingNotNull>
+    ) =>
+      countFailure.cause === undefined
+        ? actual.countRowsBreakingNotNull(...args)
+        : Promise.reject(countFailure.cause),
+  };
+});
 
 let adapter: ReturnType<typeof createSqliteAdapter>;
 let sqlite: Database.Database;
@@ -260,6 +281,57 @@ describe("a unit run outside a transaction refused at a column made required", (
       sqlite.prepare(`SELECT label FROM parent WHERE id = 'p2'`).get()
     ).toEqual({ label: "two" });
     expect(count("parent")).toBe(3);
+  });
+
+  // A count that fails at the statement comes after the write before it committed, so its
+  // refusal names what ran and that it stayed, as a counted one does; it never says nothing ran.
+  it("a count that fails there is refused naming the statements that ran and that they stayed", async () => {
+    sqlite.exec(`INSERT INTO parent VALUES ('p2', NULL)`);
+    const cause = new Error("connection lost");
+    countFailure.cause = cause;
+    const thrown = await runMigrationStatements(
+      adapter,
+      [
+        "UPDATE parent SET label = 'two' WHERE id = 'p2'",
+        "CREATE TABLE __new_parent (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
+        "INSERT INTO __new_parent (id, label) SELECT id, label FROM parent",
+        "DROP TABLE parent",
+        "ALTER TABLE __new_parent RENAME TO parent",
+      ],
+      { source: "0002_label.sql", transaction: false }
+    )
+      .then(
+        () => undefined,
+        (caught: unknown) => caught
+      )
+      .finally(() => {
+        countFailure.cause = undefined;
+      });
+    expect(NextlyError.is(thrown)).toBe(true);
+    const error = thrown as NextlyError;
+    expect(error.publicData).toEqual({
+      errors: [
+        {
+          path: "fields.label",
+          code: "REQUIRED_COLUMN_UNCOUNTED",
+          message:
+            "Table 'parent': the rows that would break making 'label' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.",
+        },
+      ],
+    });
+    expect(error.publicMessage).toBe(
+      // A rebuild is counted at its copy, the statement that would fill the NOT NULL table.
+      "0002_label.sql was refused at its statement 3. INSERT INTO __new_parent (of 5): Table 'parent': the rows that would break making 'label' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again. The statements that ran before it: 1. UPDATE parent SET label =; 2. CREATE TABLE __new_parent. They ran outside a transaction, and stayed applied."
+    );
+    expect(error.logContext).toMatchObject({
+      source: "0002_label.sql",
+      phase: "at-statement",
+      statement: 3,
+    });
+    expect(error.cause).toBe(cause);
+    expect(
+      sqlite.prepare(`SELECT label FROM parent WHERE id = 'p2'`).get()
+    ).toEqual({ label: "two" });
   });
 });
 

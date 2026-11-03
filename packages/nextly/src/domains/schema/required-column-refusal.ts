@@ -132,7 +132,7 @@ export function requiredColumnUncountedError(args: {
       {
         path: `fields.${args.field}`,
         code: "REQUIRED_COLUMN_UNCOUNTED",
-        message: `Table '${args.table}': the rows that would break making '${args.field}' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.`,
+        message: `Table '${args.table}': the rows that would break making '${args.field}' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.`,
       },
     ],
     ...(args.cause instanceof Error ? { cause: args.cause } : {}),

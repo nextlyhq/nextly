@@ -28,13 +28,14 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { migrateCore } from "../../../../cli/commands/migrate";
+import { migrateCore, runPluginPhase } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../../field-groups/services/field-group-schema-service";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
 import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { formatMigrationFile } from "../../migrate-create/format-file";
 import {
@@ -47,6 +48,11 @@ import {
   type LockWorld,
 } from "../../pipeline/__tests__/helpers/schema-lock-world";
 import { sqliteTableRebuildStatements } from "../../pipeline/sql-templates/sqlite-rebuild";
+import {
+  migrationChecksum,
+  type MigrationContent,
+} from "../plugin/plugin-migration";
+import { refuseRequiredColumnsOverNulls } from "../required-column-guard";
 import { splitStatements } from "../../pipeline/sql-statement-utils";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 
@@ -350,6 +356,108 @@ describe.each(LOCK_DIALECTS)(
       expect(await nullable(notes, "label")).toBe(true);
       expect(await ledger()).toEqual([]);
     }, 120_000);
+
+    // A plugin's module runs through the same runner as an app file but reaches it by its own
+    // phase, so it is judged before its first statement too: on MySQL a schema change ahead of the
+    // NOT NULL would otherwise commit before the database refused the nulls.
+    it("refuses a plugin's module before its first statement, naming the table; nothing applied or recorded", async () => {
+      const notes = "plugin_notes_required";
+      await run([
+        `CREATE TABLE ${q(notes)} (${q("id")} varchar(36) PRIMARY KEY, ${q("label")} text)`,
+        `INSERT INTO ${q(notes)} (${q("id")}, ${q("label")}) VALUES ('n1', NULL)`,
+      ]);
+      // The plugin's own table, as its earlier module recorded it: a plugin may change only what
+      // it owns.
+      await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert([
+        {
+          tableName: notes,
+          ownerKind: "plugin",
+          ownerId: "rcx",
+          migratedBy: "plugin:rcx",
+          ownerVersion: "1.0.0",
+          schemaVersion: 1,
+          state: "active",
+        },
+      ]);
+      const up = [
+        ...(dialect === "sqlite"
+          ? []
+          : [`ALTER TABLE ${q(notes)} ADD COLUMN ${q("extra")} varchar(255)`]),
+        ...(await makeRequired(notes, "label")),
+      ];
+      const none = { tables: [] };
+      const sides = { postgresql: none, mysql: none, sqlite: none };
+      const content: MigrationContent = {
+        name: "20261103_000001_require_label",
+        schemaVersion: 1,
+        dialects: {
+          postgresql: { up, down: [] },
+          mysql: { up, down: [] },
+          sqlite: { up, down: [] },
+        },
+        snapshot: sides,
+        before: sides,
+      };
+      const error = await runPluginPhase({
+        extensionSchema: undefined,
+        dialect,
+        db: adapter.getDrizzle(),
+        adapter: adapter as never,
+        migrationsDir,
+        logger,
+        pluginMigrationSets: [
+          {
+            pluginName: "rcx",
+            pluginVersion: "1.0.0",
+            migrations: [{ ...content, checksum: migrationChecksum(content) }],
+          },
+        ],
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+      expect(NextlyError.is(error)).toBe(true);
+      expect(issues(error as NextlyError)).toEqual([
+        "Table 'plugin_notes_required': column 'label' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the column nullable.",
+      ]);
+      expect((error as NextlyError).logContext?.phase).toBe(
+        "before-any-statement"
+      );
+      expect(await nullable(notes, "label")).toBe(true);
+      expect(await hasColumn(notes, "extra")).toBe(false);
+      const attempts = await new SchemaEventsRepository(
+        adapter.getDrizzle(),
+        dialect
+      ).listFileApplies();
+      expect(attempts.filter(row => row.filename.includes("rcx"))).toEqual([]);
+    }, 120_000);
+
+    // PostgreSQL keeps a quoted name's case, while a statement is read lower-cased: the guard
+    // finds, counts and names the table by the spelling the database has. Called directly: in a
+    // full run the drop guard refuses a statement on such a table before this guard is reached.
+    it.runIf(dialect === "postgresql")(
+      "refuses a quoted mixed-case table, naming it as the database spells it",
+      async () => {
+        await run([
+          `CREATE TABLE "Orders" ("id" varchar(36) PRIMARY KEY, "label" text)`,
+          `INSERT INTO "Orders" ("id", "label") VALUES ('o1', NULL)`,
+        ]);
+        const error = await refuseRequiredColumnsOverNulls(
+          adapter.getDrizzle(),
+          dialect,
+          [`ALTER TABLE "Orders" ALTER COLUMN "label" SET NOT NULL`],
+          FILE
+        ).then(
+          () => undefined,
+          (thrown: unknown) => thrown
+        );
+        expect(NextlyError.is(error)).toBe(true);
+        expect(issues(error as NextlyError)).toEqual([
+          "Table 'Orders': column 'label' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the column nullable.",
+        ]);
+      },
+      120_000
+    );
 
     it("refuses a Single's field, naming the Single", async () => {
       writeFile(await makeRequired(SETTINGS, "tagline"));

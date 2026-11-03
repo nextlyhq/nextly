@@ -52,6 +52,8 @@ const OWNERS: Record<
 const NOT_NULL = new Set(["dc_posts.id"]);
 /** Columns not on the live table: those a file adds. */
 const ABSENT = new Set(["single_settings.tagline"]);
+/** Tables the database spells otherwise than the lower-cased name a statement is read as. */
+const SPELLED: Record<string, string> = { orders: "Orders" };
 
 function facts(
   counts: Record<string, RowsBreakingNotNull | Error>
@@ -79,7 +81,10 @@ function facts(
     live: (table, column) =>
       column === "missing" || ABSENT.has(`${table}.${String(column)}`)
         ? undefined
-        : { nullable: !NOT_NULL.has(`${table}.${String(column)}`) },
+        : {
+            nullable: !NOT_NULL.has(`${table}.${String(column)}`),
+            ...(SPELLED[table] === undefined ? {} : { table: SPELLED[table] }),
+          },
     count: target => {
       const key = `${target.table}.${String(target.column)}`;
       counted.push(`${key}${target.byParent ? " by parent" : ""}`);
@@ -187,6 +192,67 @@ describe("judgeRequiredColumnTargets", () => {
     expect(f.counted).toEqual([]);
   });
 
+  // `ADD COLUMN IF NOT EXISTS c` then a NOT NULL on c: c's null rows when it is there, every row
+  // when the ADD makes it.
+  it("a column added IF NOT EXISTS is counted as it is live, or as added when it is not", async () => {
+    const f = facts({
+      "dc_pages.body": rows(2),
+      "dc_posts.null": rows(5),
+    });
+    expect(
+      await judgeRequiredColumnTargets(
+        [
+          {
+            table: "dc_pages",
+            column: "body",
+            required: "body",
+            addedIfMissing: true,
+          },
+          {
+            table: "dc_posts",
+            column: "missing",
+            required: "missing",
+            addedIfMissing: true,
+          },
+        ],
+        f
+      )
+    ).toEqual([
+      {
+        entity: { kind: "collection", slug: "pages" },
+        field: "body",
+        count: 2,
+        added: false,
+      },
+      {
+        entity: { kind: "collection", slug: "posts" },
+        field: "missing",
+        count: 5,
+        added: true,
+      },
+    ]);
+    expect(f.counted).toEqual(["dc_pages.body", "dc_posts.null"]);
+  });
+
+  // A quoted mixed-case name is read lower-cased from the statement; the table is counted and
+  // named as the database spells it.
+  it("counts and names a table by its live spelling", async () => {
+    const f = facts({ "Orders.label": rows(1) });
+    expect(
+      await judgeRequiredColumnTargets(
+        [{ table: "orders", column: "label", required: "label" }],
+        f
+      )
+    ).toEqual([
+      {
+        entity: { kind: "table", slug: "Orders" },
+        field: "label",
+        count: 1,
+        added: false,
+      },
+    ]);
+  });
+
   // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
   // judged as well, and named by its table and column.
   it("judges a table the registry does not name, naming its table and column", async () => {
@@ -225,7 +291,7 @@ describe("judgeRequiredColumnTargets", () => {
           path: "fields.sub_title",
           code: "REQUIRED_COLUMN_UNCOUNTED",
           message:
-            "Table 'dc_posts': the rows that would break making 'sub_title' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.",
+            "Table 'dc_posts': the rows that would break making 'sub_title' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.",
         },
       ],
     });
@@ -369,7 +435,7 @@ describe("previewRequiredColumns", () => {
       sqlite.close();
     }
     expect(lines).toEqual([
-      "    ✖ a real run would refuse it: Table 'dc_posts': the rows that would break making 'slug' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.",
+      "    ✖ a real run would refuse it: Table 'dc_posts': the rows that would break making 'slug' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.",
     ]);
   });
 });

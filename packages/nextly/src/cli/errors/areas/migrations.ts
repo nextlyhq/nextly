@@ -99,6 +99,25 @@ const RUN_AGAIN =
  * The refusal of a command whose lock was released before its work ran: "The migrate lock was
  * released without …. Nothing was written; retry once no other schema operation is running."
  */
+/**
+ * A `nextly migrate` refusal over a required column, read from its message: the file and where
+ * it was refused as the What (the file in backticks), the reason and what ran as the Why.
+ */
+function migrationRefusalParts(
+  error: NextlyError,
+  next: string
+): CliErrorParts {
+  const source = String(error.logContext?.source);
+  const message = error.publicMessage;
+  const split = message.indexOf(": ", message.indexOf(" was refused "));
+  const what = split === -1 ? message : message.slice(0, split);
+  return {
+    what: `${what.startsWith(source) ? `\`${source}\`${what.slice(source.length)}` : what}.`,
+    why: split === -1 ? message : message.slice(split + 2),
+    next,
+  };
+}
+
 function lockReleasedParts(error: NextlyError): CliErrorParts {
   const [what, rest] = splitFirst(error.publicMessage);
   const semi = rest.indexOf("; ");
@@ -483,24 +502,30 @@ export const MIGRATION_CODES = defineCodes({
         code: "VALIDATION_ERROR",
         issue: "REQUIRED_COLUMN_HAS_NULLS",
         when: error => typeof error.logContext?.source === "string",
-        describe: error => {
-          const source = String(error.logContext?.source);
-          const message = error.publicMessage;
-          const split = message.indexOf(": ", message.indexOf(" was refused "));
-          const what = split === -1 ? message : message.slice(0, split);
-          return {
-            what: `${what.startsWith(source) ? `\`${source}\`${what.slice(source.length)}` : what}.`,
-            why: split === -1 ? message : message.slice(split + 2),
-            next: "Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again.",
-          };
-        },
+        describe: error =>
+          migrationRefusalParts(
+            error,
+            "Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again."
+          ),
       },
     ],
   },
   REQUIRED_COLUMN_UNCOUNTED: {
     cause:
-      "The rows in the way of a column becoming required could not be counted, so the change was refused before anything ran.",
+      "The rows in the way of a column becoming required could not be counted, so that change was refused before it ran.",
     from: [
+      {
+        // Counted at a statement of `nextly migrate`, after earlier statements ran: the refusal
+        // names its file and what of it ran and stayed, which the reading keeps.
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_UNCOUNTED",
+        when: error => typeof error.logContext?.source === "string",
+        describe: error =>
+          migrationRefusalParts(
+            error,
+            "Check the database connection and that the table can be read, and what the statements that ran before it left, then run the command again."
+          ),
+      },
       {
         code: "VALIDATION_ERROR",
         issue: "REQUIRED_COLUMN_UNCOUNTED",

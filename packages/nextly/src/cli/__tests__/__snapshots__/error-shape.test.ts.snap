@@ -379,6 +379,13 @@ exports[`each cause a documented code covers, as a command ends with it > PLUGIN
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-resolution-error  (PLUGIN_RESOLUTION_ERROR)"
 `;
 
+exports[`each cause a documented code covers, as a command ends with it > REQUIRED_COLUMN_UNCOUNTED_AT_A_STATEMENT 1`] = `
+"✗ \`20261103_101500_posts.sql\` was refused at its statement 2. ALTER TABLE \`dc_posts\` MODIFY COLUMN \`subtitle\` text NOT NU… (of 2).
+  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again. The statements that ran before it: 1. UPDATE \`dc_posts\` SET \`subtitle\` =. They ran outside a transaction, and stayed applied.
+  Next: Check the database connection and that the table can be read, and what the statements that ran before it left, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
+`;
+
 exports[`each cause a documented code covers, as a command ends with it > SQLITE_FOREIGN_KEYS_STILL_ON 1`] = `
 "✗ Foreign-key enforcement could not be switched off for this migration.
   Why:  Another transaction was open on the connection. Nothing was applied.
@@ -1526,7 +1533,7 @@ exports[`each code, as a command ends with it > REQUIRED_COLUMN_HAS_NULLS 1`] = 
 
 exports[`each code, as a command ends with it > REQUIRED_COLUMN_UNCOUNTED 1`] = `
 "✗ A column could not be made required, because the rows in its way could not be counted.
-  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.
+  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.
   Next: Check the database connection and that the table can be read, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
 `;

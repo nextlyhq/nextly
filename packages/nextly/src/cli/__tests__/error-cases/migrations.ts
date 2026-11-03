@@ -37,7 +37,10 @@ import { builderMigrationRemedy } from "../../utils/migration-discovery";
 
 import { PROJECT, type ErrorCase, type ErrorCases } from "./types";
 import { assertRunnableStatements } from "../../../domains/schema/migrate/split-sql";
-import { requiredColumnMigrationRefusal } from "../../../domains/schema/migrate/required-column-guard";
+import {
+  requiredColumnMigrationRefusal,
+  uncountedAtStatement,
+} from "../../../domains/schema/migrate/required-column-guard";
 import { requiredColumnUncountedError } from "../../../domains/schema/required-column-refusal";
 
 /** A fixed clock, so the holder's start and lapse times read the same in every run. */
@@ -407,6 +410,29 @@ export const MIGRATION_MERGED_CASES: Record<
   string,
   { code: CliErrorCode; make: ErrorCase }
 > = {
+  // Not a former code: the reading the code has when the count fails part-way through a file,
+  // after statements before it ran.
+  REQUIRED_COLUMN_UNCOUNTED_AT_A_STATEMENT: {
+    code: "REQUIRED_COLUMN_UNCOUNTED",
+    make: () =>
+      uncountedAtStatement(
+        requiredColumnUncountedError({
+          table: "dc_posts",
+          field: "subtitle",
+          cause: new Error("connection reset"),
+        }),
+        "20261103_101500_posts.sql",
+        "mysql",
+        {
+          index: 1,
+          statements: [
+            "UPDATE `dc_posts` SET `subtitle` = '' WHERE `id` = 'p2'",
+            "ALTER TABLE `dc_posts` MODIFY COLUMN `subtitle` text NOT NULL",
+          ],
+          transaction: false,
+        }
+      ),
+  },
   MIGRATION_ATTEMPT_UNFINISHED: {
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
     make: () =>

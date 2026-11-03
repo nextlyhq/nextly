@@ -151,6 +151,16 @@ export interface RunPluginMigrationsDeps {
     statements: readonly string[]
   ) => Promise<ReadonlyMap<string, string>>;
   /**
+   * Refuses a module whose statements make a column required over rows that would break it,
+   * counted just before that module runs and before the ledger records an attempt
+   * (`refuseRequiredColumnsOverNulls`, as an app file is judged). `source` is the module's
+   * qualified name. Absent, such a change is left to the per-statement count and the database.
+   */
+  refuseRequiredColumns?: (
+    statements: readonly string[],
+    source: string
+  ) => Promise<void>;
+  /**
    * At most this many modules are applied or adopted, across every plugin,
    * in run order. Absent, or not a positive number, every pending module is.
    *
@@ -1061,6 +1071,13 @@ async function applyModule(
   }
 
   await assertModuleRunnable(set, migration, earlier, deps);
+  // Counted here, right before this module runs, rather than in `assertModuleRunnable`: a
+  // fast-forward judges its whole range before any module of it runs, and a count then would
+  // refuse a module over rows an earlier module of the range fills.
+  await deps.refuseRequiredColumns?.(
+    pluginModuleStatements(migration, deps.dialect, "up"),
+    filename
+  );
 
   const { live, sides } = await reconcileSides(
     set,

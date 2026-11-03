@@ -55,8 +55,14 @@ export interface NotNullChange {
   /**
    * The table and the column as named before the unit's first statement; `column` is `null` for
    * an added column. `null` when the unit itself created the table or the column.
+   * `addedIfMissing`: the unit added the column `IF NOT EXISTS` and empty, so it is the column
+   * already there, or, when there is none, one every row breaks.
    */
-  before: { table: string; column: string | null } | null;
+  before: {
+    table: string;
+    column: string | null;
+    addedIfMissing?: true;
+  } | null;
   /** An earlier statement of the unit wrote rows of this table, or may have. */
   writtenEarlier: boolean;
 }
@@ -72,6 +78,8 @@ interface TableState {
    * every one of those rows holds null in the column.
    */
   addedEmpty: Set<string>;
+  /** Columns the unit added `IF NOT EXISTS`, which may be the ones already there. */
+  ifMissing: Set<string>;
   written: boolean;
 }
 
@@ -157,8 +165,9 @@ function rebuildCopyColumns(
   if (from === -1) return undefined;
   const items = itemsOf(query.slice(1, from));
   const source = new StatementCursor(query.slice(from + 1));
-  if (source.name() !== table) return undefined;
-  if (source.isWord(",") || source.isWord("JOIN")) return undefined;
+  // Only a copy of every row of t alone: a filter, a join or a second table copies rows no count
+  // of t stands for.
+  if (source.name() !== table || !source.done()) return undefined;
   const everyColumn =
     items.length === 1 && items[0].length === 1 && items[0][0] === "*";
   return new Map(
@@ -169,15 +178,39 @@ function rebuildCopyColumns(
   );
 }
 
-/** A multi-table UPDATE (`UPDATE a JOIN b`, `UPDATE a, b`) writes tables its first name is not. */
-function updatesSeveralTables(rest: readonly StatementToken[]): boolean {
-  const set = rest.indexOf("SET");
-  const head = set === -1 ? rest : rest.slice(0, set);
-  return head.includes("JOIN") || head.includes(",");
+/**
+ * A row write that may reach tables its first name is not: MySQL's multi-table UPDATE
+ * (`UPDATE a JOIN b`, `UPDATE a, b`) and DELETE (`DELETE FROM a, b USING ...`), and a
+ * `DELETE ... USING` on either dialect, read as reaching every table it names.
+ */
+function writesSeveralTables(
+  word: string,
+  rest: readonly StatementToken[]
+): boolean {
+  if (word !== "UPDATE" && word !== "DELETE") return false;
+  const end = rest.indexOf(word === "UPDATE" ? "SET" : "WHERE");
+  const head = end === -1 ? rest : rest.slice(0, end);
+  return (
+    head.includes("JOIN") ||
+    head.includes(",") ||
+    (word === "DELETE" && head.includes("USING"))
+  );
 }
+
+/** What a `RENAME` clause may rename that leaves the table and its columns as they were. */
+const RENAME_KEEPS_COLUMNS = ["INDEX", "KEY", "CONSTRAINT"];
 
 /** The rebuild twin SQLite copies a table into (`sqliteTableRebuildStatements`). */
 const REBUILD_PREFIX = "__new_";
+
+/** The word before a row write's table, by its first word; a DELETE without it is not read. */
+const TABLE_LEADS: Readonly<Record<string, string>> = {
+  INSERT: "INTO",
+  REPLACE: "INTO",
+  MERGE: "INTO",
+  DELETE: "FROM",
+  TRUNCATE: "TABLE",
+};
 
 /** Modifiers between a row statement's first word and its table, skipped where they stand. */
 const ROW_MODIFIERS = [
@@ -215,30 +248,52 @@ function plainName(item: readonly StatementToken[]): string | undefined {
   return name !== undefined && cursor.peek() === undefined ? name : undefined;
 }
 
+/** A word of a column definition outside any parentheses, with the token after it. */
+interface DefinitionWord {
+  word: string;
+  next: StatementToken | undefined;
+  /** The definition's first token: its type. */
+  first: boolean;
+}
+
+/** The words of a definition outside any parentheses, so a CHECK's `IS NOT NULL` is not one. */
+function topLevelWords(rest: readonly StatementToken[]): DefinitionWord[] {
+  const words: DefinitionWord[] = [];
+  let depth = 0;
+  rest.forEach((token, i) => {
+    if (token === "(") depth += 1;
+    else if (token === ")") depth -= 1;
+    else if (depth === 0 && typeof token === "string") {
+      words.push({ word: token, next: rest[i + 1], first: i === 0 });
+    }
+  });
+  return words;
+}
+
 /**
- * What a column definition's tokens after its name say: NOT NULL outside any parentheses (so a
- * CHECK's `IS NOT NULL` is not read as one), and a value no row has to write.
+ * Whether a word gives the column a value no row has to write: a default other than NULL (which
+ * leaves every row null), a generated value, a sequence-backed type.
  */
+function givesValue({ word, next, first }: DefinitionWord): boolean {
+  if (word === "DEFAULT") return next !== "NULL";
+  return VALUE_WORDS.has(word) || (first && SERIAL_TYPES.has(word));
+}
+
+/** What a column definition's tokens after its name say: NOT NULL, and a value of its own. */
 function readDefinition(
   name: string,
   rest: readonly StatementToken[]
 ): ColumnDefinition {
-  let depth = 0;
-  let notNull = false;
-  let hasValue = false;
-  let primaryKey = false;
-  rest.forEach((token, i) => {
-    if (token === "(") depth += 1;
-    if (token === ")") depth -= 1;
-    if (depth !== 0 || typeof token !== "string") return;
-    if (token === "NOT" && rest[i + 1] === "NULL") notNull = true;
-    if (VALUE_WORDS.has(token)) hasValue = true;
-    if (i === 0 && SERIAL_TYPES.has(token)) hasValue = true;
-    if (token === "PRIMARY" && rest[i + 1] === "KEY") primaryKey = true;
-  });
+  const words = topLevelWords(rest);
+  const pair = (word: string, next: string) =>
+    words.some(w => w.word === word && w.next === next);
   // SQLite's `INTEGER PRIMARY KEY` is the rowid, which every row gets.
-  if (primaryKey && rest[0] === "INTEGER") hasValue = true;
-  return { name, notNull, hasValue };
+  const rowid = rest[0] === "INTEGER" && pair("PRIMARY", "KEY");
+  return {
+    name,
+    notNull: pair("NOT", "NULL"),
+    hasValue: rowid || words.some(givesValue),
+  };
 }
 
 /** The column definitions of a `CREATE TABLE` body, table constraints left out. */
@@ -279,6 +334,7 @@ class UnitReader {
         origin: table,
         columns: new Map(),
         addedEmpty: new Set(),
+        ifMissing: new Set(),
         written: false,
       };
       this.tables.set(table, state);
@@ -301,27 +357,37 @@ class UnitReader {
     required: string
   ): void {
     const state = this.state(table);
-    const columnBefore =
-      column === null ? null : this.columnOrigin(state, column);
-    // A column the unit added empty to a table that had rows breaks every one of them, as a
-    // column added NOT NULL without a default does; one it added with a value, or to a table it
-    // created, breaks none the unit did not put there.
-    const before =
-      state.origin === null
-        ? null
-        : column !== null && columnBefore === null
-          ? state.addedEmpty.has(column)
-            ? { table: state.origin, column: null }
-            : null
-          : { table: state.origin, column: columnBefore };
     this.changes.push({
       statement,
       table,
       column,
       required,
-      before,
+      before: this.beforeOf(state, column),
       writtenEarlier: state.written || this.anyWritten,
     });
+  }
+
+  /**
+   * What a change breaks, by the names before the unit ran. A column the unit added empty to a
+   * table that had rows breaks every one of them, as a column added NOT NULL without a default
+   * does; one it added with a value, or to a table it created, breaks none the unit did not put
+   * there. One it added `IF NOT EXISTS` and empty may be the one already there.
+   */
+  private beforeOf(
+    state: TableState,
+    column: string | null
+  ): NotNullChange["before"] {
+    if (state.origin === null) return null;
+    if (column === null) return { table: state.origin, column: null };
+    const columnBefore = this.columnOrigin(state, column);
+    if (columnBefore === null) {
+      return state.addedEmpty.has(column)
+        ? { table: state.origin, column: null }
+        : null;
+    }
+    return state.ifMissing.has(column) && state.addedEmpty.has(column)
+      ? { table: state.origin, column: columnBefore, addedIfMissing: true }
+      : { table: state.origin, column: columnBefore };
   }
 
   read(statement: string, index: number): void {
@@ -368,7 +434,7 @@ class UnitReader {
       return;
     }
     const rest = cursor.rest();
-    if (word === "UPDATE" && updatesSeveralTables(rest)) this.anyWritten = true;
+    if (writesSeveralTables(word, rest)) this.anyWritten = true;
     if (word === "INSERT") this.readRebuildCopy(rest, target, index);
   }
 
@@ -384,13 +450,9 @@ class UnitReader {
     if (cursor.isWord("OR") && typeof resolution === "string") {
       cursor.accept("OR", resolution);
     }
-    if (word === "INSERT" || word === "REPLACE" || word === "MERGE") {
-      cursor.accept("INTO");
-    } else if (word === "DELETE" && !cursor.accept("FROM")) {
-      return false;
-    } else if (word === "TRUNCATE") {
-      cursor.accept("TABLE");
-    }
+    const lead = TABLE_LEADS[word];
+    const led = lead === undefined || cursor.accept(lead);
+    if (word === "DELETE" && !led) return false;
     // PostgreSQL's `DELETE FROM ONLY t` / `TRUNCATE ONLY t`.
     cursor.accept("ONLY");
     return true;
@@ -444,6 +506,7 @@ class UnitReader {
       origin: null,
       columns: new Map(),
       addedEmpty: new Set(),
+      ifMissing: new Set(),
       // `CREATE TABLE t AS SELECT ...` writes the rows it creates.
       written: rest.includes("SELECT"),
     });
@@ -544,7 +607,9 @@ class UnitReader {
       this.change(index, table, null, column);
     }
     const state = this.state(table);
-    state.columns.set(column, null);
+    // `IF NOT EXISTS` adds nothing over a column already there, which keeps its name and rows.
+    if (clause.conditional) state.ifMissing.add(column);
+    else state.columns.set(column, null);
     if (definition.hasValue) state.addedEmpty.delete(column);
     else state.addedEmpty.add(column);
   }
@@ -600,6 +665,7 @@ class UnitReader {
     const state = this.state(table);
     state.columns.set(column, null);
     state.addedEmpty.delete(column);
+    state.ifMissing.delete(column);
   }
 
   /**
@@ -611,39 +677,44 @@ class UnitReader {
     table: string,
     state: TableState
   ): string | undefined {
-    if (
-      clause.isWord("INDEX") ||
-      clause.isWord("KEY") ||
-      clause.isWord("CONSTRAINT")
-    ) {
+    if (RENAME_KEEPS_COLUMNS.some(word => clause.isWord(word))) {
       return undefined;
     }
     if (clause.accept("COLUMN")) {
-      const from = clause.name();
-      if (from === undefined || !clause.accept("TO")) return undefined;
-      const to = clause.name();
-      if (to !== undefined) this.renameColumn(state, from, to);
+      this.readColumnRenameTo(clause, state, clause.name());
       return undefined;
     }
     if (!clause.accept("TO")) clause.accept("AS");
     const to = clause.name();
     if (to === undefined) return undefined;
-    // `RENAME a TO b` without COLUMN is a column rename on PostgreSQL and SQLite.
-    if (clause.accept("TO")) {
-      const column = clause.name();
-      if (column !== undefined) this.renameColumn(state, to, column);
+    // `RENAME a TO b` without COLUMN is a column rename on PostgreSQL and SQLite: `a` was a column.
+    if (clause.isWord("TO")) {
+      this.readColumnRenameTo(clause, state, to);
       return undefined;
     }
     this.renameTable(table, to);
     return to;
   }
 
+  /** `TO b` after a column's name `from`: the column renamed. */
+  private readColumnRenameTo(
+    clause: StatementCursor,
+    state: TableState,
+    from: string | undefined
+  ): void {
+    if (from === undefined || !clause.accept("TO")) return;
+    const to = clause.name();
+    if (to !== undefined) this.renameColumn(state, from, to);
+  }
+
   private renameColumn(state: TableState, from: string, to: string): void {
     if (from === to) return;
     state.columns.set(to, this.columnOrigin(state, from));
     state.columns.set(from, null);
-    // A column added empty stays empty under its new name.
+    // A column added empty stays empty under its new name, and one added IF NOT EXISTS may still
+    // be the one already there.
     if (state.addedEmpty.delete(from)) state.addedEmpty.add(to);
+    if (state.ifMissing.delete(from)) state.ifMissing.add(to);
   }
 }
 

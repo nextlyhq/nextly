@@ -105,6 +105,21 @@ describe("readNotNullChanges: the forms that make a column NOT NULL", () => {
     expect(changes.every(c => c.before?.table === "dc_posts")).toBe(true);
     expect(changes.every(c => !c.writtenEarlier)).toBe(true);
   });
+
+  // `DEFAULT NULL` leaves every existing row null, so it is no value for a NOT NULL column.
+  it("ADD ... NOT NULL with DEFAULT NULL breaks every row, as one without a default does", () => {
+    for (const [dialect, sql] of [
+      [
+        "postgresql",
+        `ALTER TABLE "dc_posts" ADD COLUMN "code" text DEFAULT NULL NOT NULL`,
+      ],
+      ["mysql", "ALTER TABLE `dc_posts` ADD `code` text NOT NULL DEFAULT NULL"],
+    ] as const) {
+      expect(read(dialect, sql)).toMatchObject([
+        { column: null, required: "code" },
+      ]);
+    }
+  });
 });
 
 describe("readNotNullChanges: statements that make nothing NOT NULL", () => {
@@ -140,6 +155,12 @@ describe("readNotNullChanges: statements that make nothing NOT NULL", () => {
       `ALTER TABLE "dc_posts" ADD CONSTRAINT "c" CHECK ("x" IS NOT NULL)`,
     ],
     ["postgresql", `CREATE TABLE "dc_new" ("id" text NOT NULL)`],
+    // A filtered copy keeps only some rows of t, which no count of t's rows can stand for.
+    [
+      "sqlite",
+      `CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY NOT NULL, "subtitle" text NOT NULL)`,
+      `INSERT INTO "__new_dc_posts" ("id", "subtitle") SELECT "id", "subtitle" FROM "dc_posts" WHERE "subtitle" IS NOT NULL`,
+    ],
     [
       "postgresql",
       `UPDATE "dc_posts" SET "subtitle" = 'ALTER TABLE x ALTER COLUMN y SET NOT NULL'`,
@@ -148,8 +169,8 @@ describe("readNotNullChanges: statements that make nothing NOT NULL", () => {
       "postgresql",
       `-- ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL\nSELECT 1`,
     ],
-  ] as const)("%s: %s", (dialect, sql) => {
-    expect(read(dialect, sql)).toEqual([]);
+  ] as const)("%s: %s", (dialect, ...statements) => {
+    expect(read(dialect, ...statements)).toEqual([]);
   });
 });
 
@@ -223,6 +244,54 @@ describe("readNotNullChanges: what the statements before a change did", () => {
       `UPDATE "dc_posts" SET "subtitle" = ''`
     );
     expect(changes.map(c => c.writtenEarlier)).toEqual([false]);
+  });
+
+  // MySQL's `DELETE FROM a, b USING ...` deletes from every table it lists, not only the first.
+  it("a DELETE from several tables counts a later change on any of them at its statement", () => {
+    for (const write of [
+      "DELETE FROM `dc_pages`, `dc_posts` USING `dc_pages` JOIN `dc_posts` ON `dc_pages`.`id` = `dc_posts`.`id`",
+      "DELETE FROM `dc_pages` USING `dc_pages` JOIN `dc_posts` ON `dc_pages`.`id` = `dc_posts`.`id`",
+    ]) {
+      const [change] = read(
+        "mysql",
+        write,
+        "ALTER TABLE `dc_posts` MODIFY `subtitle` text NOT NULL"
+      );
+      expect(change).toMatchObject({ statement: 1, writtenEarlier: true });
+    }
+  });
+
+  // `ADD COLUMN IF NOT EXISTS` adds nothing over a column already there, so a later NOT NULL
+  // breaks that column's null rows; over none, every row, as an empty ADD does.
+  it("a column added IF NOT EXISTS, then made NOT NULL, may be the one already there", () => {
+    expect(
+      read(
+        "postgresql",
+        `ALTER TABLE "dc_posts" ADD COLUMN IF NOT EXISTS "subtitle" text`,
+        `ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
+      )
+    ).toEqual([
+      {
+        statement: 1,
+        table: "dc_posts",
+        column: "subtitle",
+        required: "subtitle",
+        before: {
+          table: "dc_posts",
+          column: "subtitle",
+          addedIfMissing: true,
+        },
+        writtenEarlier: false,
+      },
+    ]);
+    // With a value, a column it adds breaks no row; one already there breaks its null rows.
+    expect(
+      read(
+        "postgresql",
+        `ALTER TABLE "dc_posts" ADD COLUMN IF NOT EXISTS "subtitle" text DEFAULT ''`,
+        `ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
+      )
+    ).toMatchObject([{ before: { table: "dc_posts", column: "subtitle" } }]);
   });
 
   it("a statement whose reach is not read counts every later change at its statement", () => {

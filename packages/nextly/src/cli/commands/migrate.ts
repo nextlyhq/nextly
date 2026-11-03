@@ -1326,6 +1326,10 @@ export async function runPluginPhase(
       readLiveTables(deps.db, deps.dialect, [statements]),
     liveIndexTables: statements =>
       readLiveIndexTables(deps.db, deps.dialect, [statements]),
+    // The same before-run count an app file gets: a plugin's module reaches the shared runner
+    // through this phase, not through `runFileMigrations`.
+    refuseRequiredColumns: (statements, source) =>
+      refuseRequiredColumnsOverNulls(deps.db, deps.dialect, statements, source),
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single

@@ -60,6 +60,11 @@ export interface RequiredColumnTarget {
   column: string | null;
   /** The column the change leaves required, which a field maps to. */
   required: string;
+  /**
+   * The column was added `IF NOT EXISTS` and empty: counted as it is when it is there, and as an
+   * added column, which every row breaks, when it is not.
+   */
+  addedIfMissing?: boolean;
 }
 
 /** A table the registry names, with the entity it belongs to. */
@@ -85,13 +90,14 @@ export interface RequiredColumnFacts {
   owners: RequiredColumnOwners;
   /**
    * The live column, by the owner's table name and the column name lower-cased: undefined when
-   * the table or the column is not there. `null` column asks for the table alone. `name` is the
-   * column's name as the database spells it, which the count uses.
+   * the table or the column is not there. `null` column asks for the table alone. `name` and
+   * `table` are the column's and the table's names as the database spells them, which the count
+   * uses: a quoted mixed-case name is read lower-cased from a statement.
    */
   live(
     table: string,
     column: string | null
-  ): { nullable: boolean; name?: string } | undefined;
+  ): { nullable: boolean; name?: string; table?: string } | undefined;
   count(target: {
     table: string;
     column: string | null;
@@ -126,72 +132,102 @@ async function judgeTarget(
   // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
   // judged too, and named by its table and column.
   const owner = facts.owners.owner(target.table);
-  const table = owner?.table ?? target.table;
-  const live = facts.live(table, target.column);
-  if (live === undefined || breaksNoRow(target, table, live, facts)) {
-    return undefined;
-  }
-  const rows = await countTarget(target, table, live, owner, facts);
+  const live = liveTarget(target, owner?.table ?? target.table, facts);
+  if (live === undefined) return undefined;
+  const rows = await countTarget(live, owner, facts);
   if (rows.total === 0) return undefined;
-  const added = target.column === null;
   if (owner === undefined) {
     return {
-      entity: { kind: "table", slug: table },
+      entity: { kind: "table", slug: live.table },
       field: target.required,
       count: rows.total,
-      added,
+      added: live.column === null,
     };
   }
-  const field =
-    owner.fieldsByColumn.get(target.required) ??
-    (target.column === null
-      ? undefined
-      : owner.fieldsByColumn.get(target.column)) ??
-    target.required;
   return {
     entity: owner.entity,
-    field,
+    field: fieldOf(owner, target),
     count: rows.total,
-    added,
+    added: live.column === null,
     ...(owner.fieldGroup ? { users: usersOf(rows, facts) } : {}),
   };
 }
 
+/** A target as the database stands: what is counted, under the names the database spells. */
+interface LiveTarget {
+  table: string;
+  /** The live column whose null rows break it, or `null` for an added one, which every row breaks. */
+  column: string | null;
+  required: string;
+}
+
 /**
- * Whether the change cannot break a row whatever the table holds: a column added NOT NULL that
- * the table already has (`ADD COLUMN IF NOT EXISTS`, which the database then skips; without IF
- * NOT EXISTS the statement fails on its own), or a column already NOT NULL.
+ * What a target counts as the database stands, or undefined when the change can break no row
+ * whatever the table holds: a table or column not there (a statement on a column that is not
+ * there fails on its own), a column already NOT NULL, or a column added NOT NULL that the table
+ * already has (`ADD COLUMN IF NOT EXISTS`, which the database then skips). A column added
+ * `IF NOT EXISTS` and empty is counted as it is, or as added when it is not there.
  */
-function breaksNoRow(
+function liveTarget(
   target: RequiredColumnTarget,
   table: string,
-  live: { nullable: boolean },
   facts: RequiredColumnFacts
-): boolean {
+): LiveTarget | undefined {
   if (target.column === null) {
-    return facts.live(table, target.required) !== undefined;
+    const live = facts.live(table, null);
+    if (
+      live === undefined ||
+      facts.live(table, target.required) !== undefined
+    ) {
+      return undefined;
+    }
+    return {
+      table: live.table ?? table,
+      column: null,
+      required: target.required,
+    };
   }
-  return !live.nullable;
+  const live = facts.live(table, target.column);
+  if (live === undefined) {
+    return target.addedIfMissing === true
+      ? liveTarget({ ...target, column: null }, table, facts)
+      : undefined;
+  }
+  if (!live.nullable) return undefined;
+  return {
+    table: live.table ?? table,
+    column: live.name ?? target.column,
+    required: target.required,
+  };
+}
+
+/** The field a registered table's column belongs to, by the name it leaves or had. */
+function fieldOf(owner: TableOwner, target: RequiredColumnTarget): string {
+  return (
+    owner.fieldsByColumn.get(target.required) ??
+    (target.column === null
+      ? undefined
+      : owner.fieldsByColumn.get(target.column)) ??
+    target.required
+  );
 }
 
 /** The rows in the way, counted; a count that fails refuses, naming the table. */
 async function countTarget(
-  target: RequiredColumnTarget,
-  table: string,
-  live: { name?: string },
+  live: LiveTarget,
   owner: TableOwner | undefined,
   facts: RequiredColumnFacts
 ): Promise<RowsBreakingNotNull> {
   try {
     return await facts.count({
-      table,
-      column: target.column === null ? null : (live.name ?? target.column),
+      table: live.table,
+      column: live.column,
       byParent: owner?.fieldGroup === true,
     });
   } catch (cause) {
     throw requiredColumnUncountedError({
-      table,
-      field: target.required,
+      table: live.table,
+      field: live.required,
       cause,
     });
   }
@@ -285,26 +321,43 @@ async function readFacts(
   const tables = [
     ...new Set(targets.map(t => owners.owner(t.table)?.table ?? t.table)),
   ];
-  const snapshot = await introspectLiveColumns(db, dialect, tables);
-  const columns = new Map(
-    snapshot.tables.map(table => [
-      table.name.toLowerCase(),
-      new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
-    ])
-  );
+  // Read under the database's own spelling: a quoted mixed-case name is read lower-cased from a
+  // statement, and a PostgreSQL catalog read by that name would find no table.
+  const spelled = await introspectTableNames(db, dialect, tables);
+  const snapshot = await introspectLiveColumns(db, dialect, spelled);
+  const byName = new Map<
+    string,
+    { table: string; columns: Map<string, { name: string; nullable: boolean }> }
+  >();
+  for (const table of snapshot.tables) {
+    const key = table.name.toLowerCase();
+    // Two tables differing only in case: the one spelled as the statement reads it wins.
+    if (byName.get(key)?.table === key) continue;
+    byName.set(key, {
+      table: table.name,
+      columns: new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
+    });
+  }
   return {
     owners,
     live: (table, column) => {
-      const live = columns.get(table.toLowerCase());
+      const live = byName.get(table.toLowerCase());
       if (live === undefined) return undefined;
-      if (column === null) return { nullable: true };
-      const found = live.get(column.toLowerCase());
+      if (column === null) return { nullable: true, table: live.table };
+      const found = live.columns.get(column.toLowerCase());
       return found === undefined
         ? undefined
-        : { nullable: found.nullable, name: found.name };
+        : { nullable: found.nullable, name: found.name, table: live.table };
     },
     count: target => countRowsBreakingNotNull(db, dialect, target),
   };
+}
+
+/** The statement a run stopped at, the file's statements, and whether they ran in a transaction. */
+export interface StatementPosition {
+  index: number;
+  statements: readonly string[];
+  transaction: boolean;
 }
 
 /**
@@ -317,42 +370,74 @@ export function requiredColumnMigrationRefusal(
   where: {
     source: string;
     dialect: SupportedDialect;
-    at?: {
-      index: number;
-      statements: readonly string[];
-      transaction: boolean;
-    };
+    at?: StatementPosition;
   }
 ): NextlyError {
   const base = requiredColumnOverNullsError(breaks, { source: where.source });
   const sentences = breaks.map(requiredColumnBreakMessage).join(" ");
   const { at } = where;
-  let message: string;
-  if (at === undefined) {
-    message = `${where.source} was refused before any of its statements ran, and nothing of it was applied: ${sentences}`;
-  } else {
-    const label = (i: number) =>
-      `${String(i + 1)}. ${labelOf(at.statements[i], where.dialect)}`;
-    const ran = at.statements.slice(0, at.index).map((_, i) => label(i));
-    // What stayed of the statements that ran: a transaction undoes them where the dialect can
-    // undo a schema change; MySQL commits each schema change as it runs, and with it any rows
-    // written before it.
-    const kept = !at.transaction
-      ? "They ran outside a transaction, and stayed applied."
-      : where.dialect === "mysql"
-        ? "MySQL commits a schema change as it runs, so a schema change among them stayed applied, with any rows written before it; the rest was rolled back."
-        : "The file's transaction was rolled back, so none of them stayed applied.";
-    message = `${where.source} was refused at its statement ${label(at.index)} (of ${String(at.statements.length)}): ${sentences} The statements that ran before it: ${ran.join("; ")}. ${kept}`;
-  }
   return new NextlyError({
     code: base.code,
-    publicMessage: message,
+    publicMessage:
+      at === undefined
+        ? `${where.source} was refused before any of its statements ran, and nothing of it was applied: ${sentences}`
+        : refusedAtStatement(where.source, where.dialect, at, sentences),
     publicData: base.publicData,
     logContext: {
       ...base.logContext,
       ...(at === undefined
         ? { phase: "before-any-statement" }
         : { phase: "at-statement", statement: at.index + 1 }),
+    },
+  });
+}
+
+/**
+ * Where a refusal at a statement stopped the file, after `sentences` saying why: the statements
+ * that ran before it, and what stayed of them. A transaction undoes them where the dialect can
+ * undo a schema change; MySQL commits each schema change as it runs, and with it any rows
+ * written before it.
+ */
+function refusedAtStatement(
+  source: string,
+  dialect: SupportedDialect,
+  at: StatementPosition,
+  sentences: string
+): string {
+  const label = (i: number) =>
+    `${String(i + 1)}. ${labelOf(at.statements[i], dialect)}`;
+  const ran = at.statements.slice(0, at.index).map((_, i) => label(i));
+  const kept = !at.transaction
+    ? "They ran outside a transaction, and stayed applied."
+    : dialect === "mysql"
+      ? "MySQL commits a schema change as it runs, so a schema change among them stayed applied, with any rows written before it; the rest was rolled back."
+      : "The file's transaction was rolled back, so none of them stayed applied.";
+  return `${source} was refused at its statement ${label(at.index)} (of ${String(at.statements.length)}): ${sentences} The statements that ran before it: ${ran.join("; ")}. ${kept}`;
+}
+
+/**
+ * A count that failed at a statement, refused as a counted one is there: named with the
+ * statements that ran before it and what stayed of them, since by then they have run. Any other
+ * error is returned as it is.
+ */
+export function uncountedAtStatement(
+  error: unknown,
+  source: string,
+  dialect: SupportedDialect,
+  at: StatementPosition
+): unknown {
+  const issue = uncountedIssue(error);
+  if (issue === undefined || !NextlyError.is(error)) return error;
+  return new NextlyError({
+    code: error.code,
+    publicMessage: refusedAtStatement(source, dialect, at, issue),
+    publicData: error.publicData,
+    ...(error.cause === undefined ? {} : { cause: error.cause }),
+    logContext: {
+      ...error.logContext,
+      source,
+      phase: "at-statement",
+      statement: at.index + 1,
     },
   });
 }
@@ -375,6 +460,9 @@ async function requiredColumnBreaksBeforeRun(
             table: change.before.table,
             column: change.before.column,
             required: change.required,
+            ...(change.before.addedIfMissing === true
+              ? { addedIfMissing: true }
+              : {}),
           },
         ]
   );
@@ -468,15 +556,19 @@ export function requiredColumnCheckpoint(
   return async (db, index) => {
     const targets = byStatement.get(index);
     if (targets === undefined) return;
+    const at = { index, statements, transaction: unit.transaction };
     const breaks = await judgeRequiredColumnTargets(
       targets,
       await readFacts(db, dialect, targets)
-    );
+    ).catch((error: unknown) => {
+      // The statements before this one have run by now, so a count that fails here says so.
+      throw uncountedAtStatement(error, unit.source, dialect, at);
+    });
     if (breaks.length === 0) return;
     throw requiredColumnMigrationRefusal(breaks, {
       source: unit.source,
       dialect,
-      at: { index, statements, transaction: unit.transaction },
+      at,
     });
   };
 }

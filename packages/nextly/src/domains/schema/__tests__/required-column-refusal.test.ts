@@ -170,7 +170,7 @@ describe("requiredColumnUncountedError", () => {
           path: "fields.subtitle",
           code: "REQUIRED_COLUMN_UNCOUNTED",
           message:
-            "Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.",
+            "Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.",
         },
       ],
     });
