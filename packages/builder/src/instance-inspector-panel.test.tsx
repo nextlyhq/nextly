@@ -711,6 +711,23 @@ describe("the panel's words", () => {
 });
 
 describe("an exposed image", () => {
+  it("shows the placement's file by its thumbnail, name and alt text", async () => {
+    // Every placement read "An image from the media library.", so six
+    // placements of one card looked the same.
+    mountWithServices(instance({ overrides: { picture: "m2" } }), {
+      MediaPicker: OnePick,
+      readMedia: async id =>
+        id === "m2"
+          ? { name: "team.jpg", thumbnail: "/t/m2.jpg", alt: "The team" }
+          : null,
+    });
+    expect(await screen.findByText("team.jpg")).toBeDefined();
+    expect(screen.getByText("Alt text: The team")).toBeDefined();
+    expect(
+      document.querySelector(".nx-inspector__media-thumb")?.getAttribute("src")
+    ).toBe("/t/m2.jpg");
+  });
+
   it("is chosen from the media library, as the Content tab's image is", () => {
     // "Not editable here yet (image)" left a placement's picture fixed to
     // the component's.

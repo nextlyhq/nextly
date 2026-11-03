@@ -63,6 +63,7 @@ import * as React from "react";
 
 import { BlockCard, type CardVerbs } from "./block-card";
 import {
+  ChosenMedia,
   ContentServicesContext,
   MediaChoice,
   type PickedMedia,
@@ -582,7 +583,8 @@ function ExposedImageField({
   row: ExposedRow;
   onSet: (id: string, value: OverrideValue) => void;
 }): React.JSX.Element {
-  const Picker = React.useContext(ContentServicesContext)?.MediaPicker;
+  const services = React.useContext(ContentServicesContext);
+  const Picker = services?.MediaPicker;
   // What the last pick was called, for this session; a stored id shows as set.
   const [picked, setPicked] = React.useState<PickedMedia | null>(null);
   const stored =
@@ -597,11 +599,12 @@ function ExposedImageField({
       role="group"
       aria-label={row.label}
     >
-      <p className="nx-inspector__note">
-        {stored === null
-          ? "Nothing chosen."
-          : (name ?? "An image from the media library.")}
-      </p>
+      <ChosenMedia
+        mediaId={stored}
+        read={services?.readMedia}
+        pickedName={name}
+        fallback="An image from the media library."
+      />
       {Picker === undefined ? (
         <p className="nx-inspector__note">
           The media library is not available here.

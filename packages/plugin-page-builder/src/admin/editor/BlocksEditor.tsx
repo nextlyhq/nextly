@@ -73,6 +73,10 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import {
+  useMediaSummaryReader,
+  type ReadMediaSummary,
+} from "./media-summary-reader";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { useReveal, type Reveal } from "./reveal-hidden";
@@ -123,6 +127,8 @@ type EditorView = EditorMount &
     layerVerbs: CardVerbs;
     /** What the canvas draws: the document, with selected hidden blocks shown. */
     reveal: Reveal;
+    /** A stored media id's name, picture and alt text, for the image fields. */
+    readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
   };
@@ -371,7 +377,8 @@ const servicesByPassages = new WeakMap<
 
 function servicesFor(
   passages: OpenPassages,
-  locale: string | undefined
+  locale: string | undefined,
+  readMedia: ReadMediaSummary
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -384,6 +391,7 @@ function servicesFor(
     services = {
       ...borrowedServices(),
       openPassages: passages,
+      readMedia,
       findEntries: query =>
         findEntries(locale === undefined ? query : { ...query, locale }),
     };
@@ -457,7 +465,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(view.passages, view.locale)}
+      contentServices={servicesFor(view.passages, view.locale, view.readMedia)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -966,6 +974,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas.canvasRender.styleContext.breakpoints,
     canvas.editedBreakpoint
   );
+  // A stored image's name and picture in the inspector, read as the canvas
+  // reads it.
+  const readMedia = useMediaSummaryReader();
   const view: EditorView = {
     ...mount,
     ...style,
@@ -976,6 +987,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentView,
     layerVerbs: cardVerbs,
     reveal,
+    readMedia,
     preview: componentView.preview,
   };
   useOpenAtSection({

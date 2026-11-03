@@ -39,3 +39,4 @@ The page builder's placement panel reads in plain words:
 - The header's mark is in the component colour, and a long name is whole in its tooltip.
 - The "Part of" notice after a double-click offers Edit component.
 - The detach and duplicate dialogs speak of the page.
+- A chosen image shows its thumbnail, its file name and its alt text, in the Content tab and on a placement.
