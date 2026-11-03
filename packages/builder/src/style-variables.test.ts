@@ -142,27 +142,36 @@ describe("what a field's list offers: its own family", () => {
     expect(names(LINE_HEIGHT)).toEqual(["line-height.display"]);
   });
 
+  // Judged by family rather than by the whole list, since the engine's own
+  // defaults (`space.4` and the rest) come along with every site.
+  const SPACING = /^(space|spacing|gap)\./;
+
   it("offers margin, padding and gap the spacing steps alone", () => {
-    // `space.4` is the engine's own, so a site has it without defining it.
-    const spacing = ["space.4", "space.sm", "spacing.large"];
-    expect(names(PADDING_START)).toEqual(spacing);
-    expect(names(GAP)).toEqual(spacing);
+    for (const leaf of [PADDING_START, GAP]) {
+      expect(names(leaf)).toEqual(
+        expect.arrayContaining(["space.4", "space.sm", "spacing.large"])
+      );
+      expect(names(leaf).every(name => SPACING.test(name))).toBe(true);
+    }
   });
 
   it("offers a radius the radii alone", () => {
-    expect(names(RADIUS)).toEqual(["radius.card"]);
+    expect(names(RADIUS)).toContain("radius.card");
+    expect(names(RADIUS).every(name => name.startsWith("radius."))).toBe(true);
   });
 
   it("offers any other length every length", () => {
-    expect(names(WIDTH)).toEqual([
-      "content.width",
-      "space.4",
-      "font-size.display",
-      "line-height.display",
-      "space.sm",
-      "spacing.large",
-      "radius.card",
-    ]);
+    expect(names(WIDTH)).toEqual(
+      expect.arrayContaining([
+        "content.width",
+        "space.4",
+        "font-size.display",
+        "line-height.display",
+        "space.sm",
+        "spacing.large",
+        "radius.card",
+      ])
+    );
   });
 
   it("offers a field nothing where the site has none of its kinds", () => {

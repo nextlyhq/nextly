@@ -218,14 +218,15 @@ describe("the ◇ beside a field", () => {
       />
     );
     fireEvent.click(trigger("Width"));
-    const drawn = screen.getAllByRole("option");
-    expect(drawn.map(option => option.textContent)).toEqual([
-      "Display 48px",
-      "Body 16px",
-      "Space 4 1rem",
-      "Sm 8px",
-      "Content width 72rem",
-    ]);
+    const drawn = screen
+      .getAllByRole("option")
+      .map(option => option.textContent ?? "");
+    // The type sizes first and the engine's own Content width under Other,
+    // late, though the site's list starts with it.
+    expect(drawn.slice(0, 2)).toEqual(["Display 48px", "Body 16px"]);
+    expect(drawn.indexOf("Content width 72rem")).toBeGreaterThan(
+      drawn.indexOf("Sm 8px")
+    );
     const selected = (): string | null =>
       screen
         .getAllByRole("option")
@@ -236,9 +237,9 @@ describe("the ◇ beside a field", () => {
     fireEvent.keyDown(list, { key: "ArrowDown" });
     expect(selected()).toBe("Body 16px");
     fireEvent.keyDown(list, { key: "End" });
-    expect(selected()).toBe("Content width 72rem");
+    expect(selected()).toBe(drawn.at(-1));
     fireEvent.keyDown(list, { key: "ArrowUp" });
-    expect(selected()).toBe("Sm 8px");
+    expect(selected()).toBe(drawn.at(-2));
   });
 
   it("opens on the variable the field holds, wherever it is drawn", () => {

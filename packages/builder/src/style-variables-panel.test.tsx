@@ -69,7 +69,7 @@ const TOKENS: SiteTokenSet = {
       values: { light: "56px" },
     },
     { name: "space.sm", kind: "dimension", values: { light: "8px" } },
-    { name: "radius.card", kind: "dimension", values: { light: "12px" } },
+    { name: "radius.pill", kind: "dimension", values: { light: "12px" } },
     { name: "color.ink", kind: "color", values: { light: "#111111" } },
   ],
 };
@@ -258,7 +258,7 @@ describe("a field whose property takes a variable", () => {
       .getAllByRole("option")
       .map(option => option.textContent);
     expect(spacing).toContain("Sm 8px");
-    expect(spacing.some(text => text?.startsWith("Card"))).toBe(false);
+    expect(spacing.some(text => text?.startsWith("Pill"))).toBe(false);
   });
 
   it("offers a radius the radii, not the spacing steps", () => {
@@ -268,7 +268,7 @@ describe("a field whose property takes a variable", () => {
     );
     expect(
       screen.getAllByRole("option").map(option => option.textContent)
-    ).toEqual(["Card 12px"]);
+    ).toEqual(["Pill 12px"]);
   });
 });
 
