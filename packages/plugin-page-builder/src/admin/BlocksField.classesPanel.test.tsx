@@ -142,6 +142,14 @@ function usageAnswer(path: string): unknown {
   };
 }
 
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({ ...storedRead, refetch: refetchStoredStyle }),
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The shared-style routes, recorded: the usage read answers every page
   // counted and nothing used, and the where-used read an empty list.
@@ -208,8 +216,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
    * that must still refuse when the transport could not describe why.
    */
   validationIssues: () => [],
-  // A read again after a route write answers what is already held.
-  useSingleDocument: () => ({ ...storedRead, refetch: async () => ({}) }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async (value: Record<string, unknown>) => {
       saved.push(value);

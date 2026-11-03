@@ -16,11 +16,7 @@ import type {
   SharedStylesUsage,
   SharedStyleUsesPage,
 } from "@nextlyhq/builder/shell";
-import {
-  readPluginRoute,
-  useSingleDocument,
-  writePluginRoute,
-} from "@nextlyhq/plugin-sdk/admin";
+import { readPluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useMemo } from "react";
 
 import {
@@ -34,9 +30,9 @@ import {
   type SharedStylesUsageResponse,
   type SharedStyleUseItem,
 } from "../library-contract";
-import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 import { refusalWords } from "./site-style-client";
+import { useStoredSiteStyle } from "./site-style-read";
 
 /** The usage answer as the tab reads it: each style's usage by id. */
 function usageFromResponse(
@@ -87,7 +83,7 @@ function usesFromResponse(
  * what was stored.
  */
 export function useSharedStylesClient(): SharedStylesAccess {
-  const { refetch } = useSingleDocument(SITE_STYLE_SLUG);
+  const { refetch } = useStoredSiteStyle();
 
   const usage = useCallback(
     async (ids: readonly string[], signal: AbortSignal) =>

@@ -683,16 +683,21 @@ export class CollectionBulkService extends BaseService {
       // its own (key-scoped) access. `overrideAccess` stays as passed (false
       // for route/untrusted callers), so a create-only caller without read is
       // correctly denied rather than silently duplicating a row it can't see.
-      // Draft visibility is limited to trusted (overrideAccess) callers: route
-      // auth attested create, not the right to read unpublished rows, so a
-      // route/untrusted duplicate keeps the default published-only visibility.
-      // Scoped to the SOURCE ROW, not to what it points at. A bounded caller
-      // must not have this reach expansion: `expansionStatusScope` cannot tell
-      // a manufactured `"all"` from one the caller asked for, and would carry
-      // it into every rejected target — whose drafts would then be COPIED into
-      // the new row, outliving the refusal as data.
+      // The source is read as the editor's own read of it is (`status: "all"`),
+      // so a never-published draft the caller may read can be copied. Which
+      // lifecycle states that reaches is still the read path's decision: a
+      // visitor sees published rows only, and a draft the caller's read rule
+      // excludes answers 404 exactly as a missing id does. Route auth attested
+      // the create only, which is why the read is checked here and never
+      // marked route-authorized. The live row is copied, not a pending working
+      // draft of a published entry: no `includeWorkingDraft`.
+      // A bounded trusted caller keeps the status-less read it always had.
+      // `expansionStatusScope` cannot tell a manufactured `"all"` from one
+      // the caller asked for, and would carry it into every rejected target —
+      // whose drafts would then be COPIED into the new row, outliving the
+      // refusal as data.
       const sourceStatus =
-        params.overrideAccess && !narrows(params.trusted) ? "all" : undefined;
+        params.overrideAccess && narrows(params.trusted) ? undefined : "all";
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,

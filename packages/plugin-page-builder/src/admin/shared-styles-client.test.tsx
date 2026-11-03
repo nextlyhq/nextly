@@ -34,20 +34,24 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     writes.push({ path: write.path, body: write.body });
     return writeBehaviour();
   },
-  useSingleDocument: () => ({
-    data: undefined,
-    isPending: false,
-    error: null,
-    refetch: async () => {
-      refetches += 1;
-      return {};
-    },
-  }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({}),
     isPending: false,
   }),
   validationIssues: () => [],
+}));
+
+// The editor's one read of the stored style; a write asks it again.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: async () => {
+      refetches += 1;
+      return { isError: false };
+    },
+  }),
 }));
 
 const { useSharedStylesClient } = await import("./shared-styles-client");
