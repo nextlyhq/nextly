@@ -74,18 +74,28 @@ const request = (query: string) =>
 describe("the pages search reads AS THE CALLER", () => {
   beforeEach(() => {
     nextly.find.mockReset();
-    nextly.find.mockResolvedValue({
-      // `content` comes back (empty), as for a caller who may read the field.
-      items: [{ id: "p1", title: "About", status: "published", content: null }],
-      meta: {
-        total: 1,
-        page: 1,
-        limit: 5,
-        totalPages: 1,
-        hasNext: false,
-        hasPrev: false,
-      },
-    });
+    const meta = {
+      total: 1,
+      page: 1,
+      limit: 5,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    };
+    // The search read answers the page; the publishing-state reads (by core's
+    // reserved workflow keys) find nothing waiting on it.
+    nextly.find.mockImplementation(async (args: { where?: object }) =>
+      Object.hasOwn(args.where ?? {}, "_pendingChange") ||
+      Object.hasOwn(args.where ?? {}, "_inRelease")
+        ? { items: [], meta: { ...meta, total: 0 } }
+        : {
+            // `content` comes back (empty), as for a caller who may read the field.
+            items: [
+              { id: "p1", title: "About", status: "published", content: null },
+            ],
+            meta,
+          }
+    );
   });
 
   it("says overrideAccess: false, with the identity the caller resolved, for every status", async () => {
@@ -93,9 +103,10 @@ describe("the pages search reads AS THE CALLER", () => {
 
     await pagesSearchRoute().handler(request("q=abo"), contextAs(identity));
 
-    // One read: the renamed component store is left out though it holds a
-    // blocks field, because the route resolves the plugin's own slug.
-    expect(nextly.find).toHaveBeenCalledTimes(1);
+    // One search read: the renamed component store is left out though it
+    // holds a blocks field, because the route resolves the plugin's own slug.
+    // Then the two publishing-state reads of the page it found.
+    expect(nextly.find).toHaveBeenCalledTimes(3);
     const args = nextly.find.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(args).toMatchObject({
       collection: "pages",
@@ -107,6 +118,17 @@ describe("the pages search reads AS THE CALLER", () => {
       limit: 5,
     });
     expect(args.user).toBe(identity.user);
+    // The state reads are the caller's too: which pages hold a working draft
+    // or wait on a release is core's to answer for this caller.
+    for (const call of nextly.find.mock.calls.slice(1)) {
+      const state = call[0] as Record<string, unknown>;
+      expect(state).toMatchObject({
+        collection: "pages",
+        overrideAccess: false,
+        select: { id: true },
+      });
+      expect(state.user).toBe(identity.user);
+    }
   });
 
   it("answers the canonical list envelope", async () => {
