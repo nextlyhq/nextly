@@ -24,7 +24,6 @@
  * ```
  */
 
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -83,7 +82,7 @@ import {
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatCount } from "../utils/logger";
 import {
-  migrationFilesInRunOrder,
+  readableMigrationFiles,
   oldBuilderFileLine,
   readMigrationFolder,
 } from "../utils/migration-discovery";
@@ -347,16 +346,14 @@ export async function runMigrateStatus(
       options.plugin,
       migrationsDir
     );
-    const ignoredOldBuilderFiles =
-      options.plugin === undefined
-        ? await nameOldBuilderFiles({
-            migrationsDir,
-            dialect,
-            changed: ledger.changedOldBuilderFiles ?? [],
-            json: options.json === true,
-            logger,
-          })
-        : [];
+    const ignoredOldBuilderFiles = await nameOldBuilderFiles({
+      plugin: options.plugin,
+      migrationsDir,
+      dialect,
+      changed: ledger.changedOldBuilderFiles,
+      json: options.json,
+      logger,
+    });
     const appliedMigrations = ledger.applied;
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
@@ -433,22 +430,25 @@ export async function runMigrateStatus(
  * Names the old Schema Builder files every reader ignores, and the marked
  * ones that changed since, each with a line: on standard error under
  * `--json`, so standard output holds only the document. Returns the ignored
- * files, for the document's `ignoredOldBuilderFiles`.
+ * files, for the document's `ignoredOldBuilderFiles`; none for a plugin's
+ * modules, which are no files of the folder.
  */
 async function nameOldBuilderFiles(args: {
+  plugin: string | undefined;
   migrationsDir: string;
   dialect: SupportedDialect;
-  changed: readonly ChangedOldBuilderFile[];
-  json: boolean;
+  changed: readonly ChangedOldBuilderFile[] | undefined;
+  json: boolean | undefined;
   logger: CommandContext["logger"];
 }): Promise<string[]> {
+  if (args.plugin !== undefined) return [];
   const folder = await readMigrationFolder(args.migrationsDir, args.dialect);
   const lines = [
     ...folder.oldBuilderFiles.map(oldBuilderFileLine),
-    ...args.changed.map(changedOldBuilderFileLine),
+    ...(args.changed ?? []).map(changedOldBuilderFileLine),
   ];
   for (const line of lines) {
-    if (args.json) process.stderr.write(`${line}\n`);
+    if (args.json === true) process.stderr.write(`${line}\n`);
     else args.logger.info(line);
   }
   return folder.oldBuilderFiles.map(f => f.file);
@@ -479,20 +479,10 @@ async function discoverMigrations(
   migrationsDir: string,
   dialect: SupportedDialect
 ): Promise<ParsedMigration[]> {
-  const migrations: ParsedMigration[] = [];
-  for (const { baseName, filePath } of await migrationFilesInRunOrder(
-    migrationsDir,
-    dialect
-  )) {
-    if (filePath === undefined) continue;
-    try {
-      const content = await readFile(filePath, "utf-8");
-      const parsed = parseMigrationFile(baseName, filePath, content);
-      migrations.push(parsed);
-    } catch {
-      // Skip files that can't be read
-    }
-  }
+  const migrations = (await readableMigrationFiles(migrationsDir, dialect)).map(
+    ({ baseName, filePath, content }) =>
+      parseMigrationFile(baseName, filePath, content)
+  );
 
   return migrations;
 }

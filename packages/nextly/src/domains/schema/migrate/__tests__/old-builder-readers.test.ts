@@ -12,23 +12,23 @@ const SRC = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 /** A product file listing the folder: through the shared reading, or by its own `readdir`. */
 const READS_THE_FOLDER =
-  /\b(?:discoverMigrationGroups|readMigrationFolder|migrationFilesInRunOrder)\(|readdir\(\s*migrationsDir\b/;
+  /\b(?:discoverMigrationGroups|readMigrationFolder|migrationFilesInRunOrder|readableMigrationFiles)\(|readdir\(\s*migrationsDir\b/;
 
 /** Each reader, with how it leaves old Builder files out. */
 const READERS: Record<string, string> = {
   "cli/utils/migration-discovery.ts":
-    "the shared reading: `readMigrationFolder` takes them out, `discoverMigrationGroups` and `migrationFilesInRunOrder` derive from it",
+    "the shared reading: `readMigrationFolder` takes them out, `discoverMigrationGroups`, `migrationFilesInRunOrder` and `readableMigrationFiles` derive from it",
   "cli/commands/migrate.ts":
     "`nextly migrate`, the boot step and the dry run read through `migrationFilesInRunOrder` and name them",
   "cli/commands/migrate-check.ts":
     "drops them from its own listing by `readMigrationFolder`, and names them",
   "cli/commands/migrate-status.ts":
-    "reads through `migrationFilesInRunOrder`, lists them in `ignoredOldBuilderFiles`",
+    "reads through `readableMigrationFiles`, lists them in `ignoredOldBuilderFiles`",
   "cli/commands/migrate-baseline.ts":
     "drops them from its own listing by `readMigrationFolder`; their rows are no history",
   "cli/commands/migrate-resolve.ts":
     "finds the file it records through `discoverMigrationGroups`",
-  "cli/commands/build.ts": "reads through `migrationFilesInRunOrder`",
+  "cli/commands/build.ts": "reads through `readableMigrationFiles`",
   "domains/schema/migrate/pending-entities.ts":
     "reads through `discoverMigrationGroups`",
   "domains/schema/migrate/old-builder-ledger.ts":

@@ -202,6 +202,35 @@ export async function migrationFilesInRunOrder(
   });
 }
 
+/**
+ * Each migration's file `dialect` runs, in run order, with its text: a
+ * migration with no such file, or one that cannot be read, is left out. For
+ * a reader that only lists or compares the files and has nothing to say
+ * about one it cannot read.
+ */
+export async function readableMigrationFiles(
+  migrationsDir: string,
+  dialect: SupportedDialect
+): Promise<{ baseName: string; filePath: string; content: string }[]> {
+  const files: { baseName: string; filePath: string; content: string }[] = [];
+  for (const { baseName, filePath } of await migrationFilesInRunOrder(
+    migrationsDir,
+    dialect
+  )) {
+    if (filePath === undefined) continue;
+    try {
+      files.push({
+        baseName,
+        filePath,
+        content: await readFile(filePath, "utf-8"),
+      });
+    } catch {
+      // Unreadable: left out, as the readers this serves always have.
+    }
+  }
+  return files;
+}
+
 /** `files` grouped by base name, each group with its dialect variants. */
 function groupMigrationFiles(
   files: readonly string[]

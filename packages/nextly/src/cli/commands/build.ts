@@ -28,7 +28,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -71,7 +71,7 @@ import { loadConfigOrExit } from "../utils/command-prerequisites";
 import type { LoadConfigResult } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
-import { migrationFilesInRunOrder } from "../utils/migration-discovery";
+import { readableMigrationFiles } from "../utils/migration-discovery";
 import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
 import {
@@ -921,22 +921,13 @@ async function discoverMigrations(
   migrationsDir: string,
   dialect: SupportedDialect
 ): Promise<ParsedMigration[]> {
-  const migrations: ParsedMigration[] = [];
-  for (const { baseName, filePath } of await migrationFilesInRunOrder(
-    migrationsDir,
-    dialect
-  )) {
-    if (filePath === undefined) continue;
-    try {
-      const content = await readFile(filePath, "utf-8");
-      const checksum = createHash("sha256").update(content).digest("hex");
-      migrations.push({ name: baseName, filePath, checksum });
-    } catch {
-      // Skip files that can't be read
-    }
-  }
-
-  return migrations;
+  return (await readableMigrationFiles(migrationsDir, dialect)).map(
+    ({ baseName, filePath, content }) => ({
+      name: baseName,
+      filePath,
+      checksum: createHash("sha256").update(content).digest("hex"),
+    })
+  );
 }
 
 /**
