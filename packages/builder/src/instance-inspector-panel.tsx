@@ -61,6 +61,11 @@ import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
 import { BlockCard, type CardVerbs } from "./block-card";
+import {
+  ContentServicesContext,
+  MediaChoice,
+  type PickedMedia,
+} from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { markExposedParts } from "./exposed-outline";
 import { HeldByLock } from "./held-by-lock";
@@ -457,6 +462,9 @@ function ExposedControl({
   if (row.type === "visibility") {
     return <ExposedVisibilityField id={id} row={row} onSet={onSet} />;
   }
+  if (row.type === "image") {
+    return <ExposedImageField id={id} row={row} onSet={onSet} />;
+  }
   if (row.type === "select") {
     return (
       <Select
@@ -550,7 +558,75 @@ function representable(row: ExposedRow): boolean {
   if (row.type === "visibility" || row.type === "select") return true;
   const { value } = row;
   if (value === undefined || value === null) return true;
+  // An image row shows a cleared override as nothing chosen.
+  if (row.type === "image" && isUnsetOverride(value)) return true;
   return typeof value !== "object";
+}
+
+/**
+ * An image exposure, chosen from the host's media library as the Content
+ * tab's image is: Choose or Replace opens it, and Remove clears this
+ * placement's image, which reads as Cleared rather than falling back to the
+ * component's. Where the host offers no library, it says so rather than
+ * offering a button that does nothing.
+ */
+function ExposedImageField({
+  id,
+  row,
+  onSet,
+}: {
+  id: string;
+  row: ExposedRow;
+  onSet: (id: string, value: OverrideValue) => void;
+}): React.JSX.Element {
+  const Picker = React.useContext(ContentServicesContext)?.MediaPicker;
+  // What the last pick was called, for this session; a stored id shows as set.
+  const [picked, setPicked] = React.useState<PickedMedia | null>(null);
+  const stored =
+    typeof row.value === "string" && row.value !== "" ? row.value : null;
+  const name = picked?.id === stored ? picked?.filename : undefined;
+  return (
+    <div
+      id={id}
+      className="nx-inspector__media"
+      role="group"
+      aria-label={row.label}
+    >
+      <p className="nx-inspector__note">
+        {stored === null
+          ? "Nothing chosen."
+          : (name ?? "An image from the media library.")}
+      </p>
+      {Picker === undefined ? (
+        <p className="nx-inspector__note">
+          The media library is not available here.
+        </p>
+      ) : (
+        <MediaChoice
+          Picker={Picker}
+          label={row.label}
+          stored={stored}
+          accept="image/*"
+          disabled={false}
+          onChoose={first => {
+            setPicked(first);
+            onSet(row.id, first.id);
+          }}
+        />
+      )}
+      {stored === null ? null : (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label={`Remove ${row.label}`}
+          onClick={() => onSet(row.id, { $unset: true })}
+        >
+          Remove
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** A value as editable text, or empty when it is not representable. */
