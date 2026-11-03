@@ -65,7 +65,7 @@ function usageOf(
         ids.map(id => [
           id,
           {
-            collections: uses[id] ?? [],
+            collections: Object.hasOwn(uses, id) ? (uses[id] ?? []) : [],
             complete: complete && health.coversExistingDocuments,
           },
         ])
@@ -278,6 +278,29 @@ describe("how widely shared styles are used", () => {
     );
     expect(batches).toEqual([many]);
     expect(Object.keys(answer.styles)).toHaveLength(50);
+  });
+
+  it("answers for an id named like an object's own machinery", async () => {
+    // A class id is any bounded string, so `__proto__` is one an author could
+    // store; a plain object would swallow it as its prototype.
+    const { source } = usageOf(
+      WHOLE,
+      Object.fromEntries([
+        ["__proto__", [{ collection: "pages", documents: ["p1"] }]],
+      ])
+    );
+    const answer = await readSharedStyleUsage(
+      usageRequest("__proto__", "constructor"),
+      caller(false),
+      source
+    );
+    expect(Object.keys(answer.styles).sort()).toEqual([
+      "__proto__",
+      "constructor",
+    ]);
+    expect(JSON.parse(JSON.stringify(answer)).styles.__proto__).toMatchObject({
+      documents: 1,
+    });
   });
 
   it("refuses more than one page of rows, and none", async () => {

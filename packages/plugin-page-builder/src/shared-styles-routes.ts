@@ -255,12 +255,16 @@ export async function readSharedStyleUsage(
   const health = await usage.health();
   // One read for the whole page of styles, not one per style.
   const found = await usage.documentsUsingEach(ids, health);
-  const styles: Record<string, SharedStyleUsage> = {};
-  for (const id of ids) {
-    styles[id] = usageOf(found.get(id) ?? NOTHING_FOUND, collection =>
-      usage.kindOf(collection)
-    );
-  }
+  // Built from entries, so every id is an own key: an id like `__proto__`,
+  // assigned to a plain object, would set its prototype and be lost.
+  const styles: Record<string, SharedStyleUsage> = Object.fromEntries(
+    ids.map(id => [
+      id,
+      usageOf(found.get(id) ?? NOTHING_FOUND, collection =>
+        usage.kindOf(collection)
+      ),
+    ])
+  );
   const mayLock =
     (await ctx.caller?.can(
       LOCK_SHARED_STYLES.action,
