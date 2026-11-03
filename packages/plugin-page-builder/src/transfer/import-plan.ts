@@ -156,7 +156,28 @@ export function renamedSlugs(slug: string): string[] {
   for (let n = 2; n <= RENAME_CANDIDATES + 1; n += 1) {
     candidates.push(`${slug}-${String(n)}`);
   }
+  // Past the numbered ones, a suffix derived from the name, so a preview and
+  // the import that applies it rename alike. Listed here so the site's reads
+  // check these too.
+  const fixed = `${slug}-${stableSuffix(slug)}`;
+  candidates.push(fixed);
+  for (let n = 2; n <= 10; n += 1) candidates.push(`${fixed}-${String(n)}`);
   return candidates;
+}
+
+/**
+ * The first free rename of a name held in a set known whole (the site's
+ * shared styles, variables and breakpoints): past the listed candidates the
+ * fixed suffix is counted on until one is free.
+ */
+function renameIn(name: string, free: (candidate: string) => boolean): string {
+  const listed = renamedSlugs(name).find(free);
+  if (listed !== undefined) return listed;
+  const fixed = `${name}-${stableSuffix(name)}`;
+  for (let n = 11; ; n += 1) {
+    const candidate = `${fixed}-${String(n)}`;
+    if (free(candidate)) return candidate;
+  }
 }
 
 /** What the plan says so far, shared by the steps that settle each kind. */
@@ -239,12 +260,7 @@ export function planImport(
     missingBlockTypes,
     problems: ledger.problems,
     ready: missingBlockTypes.length === 0 && ledger.problems.length === 0,
-    fingerprint: fingerprintOf(
-      site,
-      ledger.conflicts,
-      ledger.reused,
-      missingBlockTypes
-    ),
+    fingerprint: fingerprintOf(site, ledger, missingBlockTypes),
   };
   return {
     preview,
@@ -281,9 +297,14 @@ function planItems(
       ledger.added.push({ kind, fileId: item.id, name: item.title });
       continue;
     }
-    const slug =
-      renamedSlugs(item.slug).find(free) ??
-      `${item.slug}-${stableSuffix(item.slug)}`;
+    const slug = renamedSlugs(item.slug).find(free);
+    if (slug === undefined) {
+      ledger.problems.push({
+        code: "NAME_UNAVAILABLE",
+        message: `"${item.title}" can't be added: its name and every rename of it are taken on this site. Rename the item on this site, or in the file, and try again.`,
+      });
+      continue;
+    }
     const title = `${item.title} (${slug.slice(item.slug.length + 1)})`;
     if (clash === undefined) {
       // A slug taken by a row the file's own items already claimed.
@@ -355,10 +376,7 @@ function planClasses(
       continue;
     }
     const free = (slug: string) => !slugs.has(slug);
-    const slug = free(entry.slug)
-      ? entry.slug
-      : (renamedSlugs(entry.slug).find(free) ??
-        `${entry.slug}-${stableSuffix(entry.slug)}`);
+    const slug = free(entry.slug) ? entry.slug : renameIn(entry.slug, free);
     if (named !== undefined) {
       const existing = { id: named.id, name: named.slug };
       if (
@@ -373,7 +391,7 @@ function planClasses(
     }
     // An id this site already uses for another style is never shared.
     const id = ids.has(entry.id)
-      ? `${entry.id}-${stableSuffix(entry.id)}`
+      ? renameIn(entry.id, candidate => !ids.has(candidate))
       : entry.id;
     slugs.add(slug);
     ids.add(id);
@@ -417,9 +435,7 @@ function planTokens(
       continue;
     }
     const free = (name: string) => !identities.has(name);
-    const renamed =
-      renamedSlugs(identity).find(free) ??
-      `${identity}-${stableSuffix(identity)}`;
+    const renamed = renameIn(identity, free);
     const existing = { id: identity, name: clash.name };
     if (
       settle(ledger, "token", identity, token.name, existing, renamed) ===
@@ -574,7 +590,9 @@ function componentOrder(
   const byId = new Map(file.components.map(item => [item.id, item]));
   const placed = (id: string): string[] => {
     const item = byId.get(id);
-    if (item === undefined) return [];
+    // A component pointed at one already here is not written, so what the
+    // file's copy of it places is no part of what the import makes.
+    if (item === undefined || fates.get(id)?.action !== "create") return [];
     const ids: string[] = [];
     walkNodes(item.content.nodes, node => {
       if (node.type !== COMPONENT_INSTANCE_TYPE) return;
@@ -718,10 +736,7 @@ function breakpointProblem(
 /** `wanted` when it is free, else its first free renamed form. */
 function freeId(wanted: string, taken: ReadonlySet<string>): string {
   if (!taken.has(wanted)) return wanted;
-  return (
-    renamedSlugs(wanted).find(candidate => !taken.has(candidate)) ??
-    `${wanted}-${stableSuffix(wanted)}`
-  );
+  return renameIn(wanted, candidate => !taken.has(candidate));
 }
 
 function describe(entry: TransferBreakpoint) {
@@ -743,19 +758,21 @@ function renamedFilename(filename: string): string {
 
 /**
  * What the preview was judged against, as one digest: the site's breakpoints,
- * what clashes with what, what is reused and which block types are missing.
+ * what is added under which name, what clashes with what, what is reused and
+ * which block types are missing.
  * An apply judged against a different answer is not the import that was
  * confirmed.
  */
 function fingerprintOf(
   site: ImportSite,
-  conflicts: readonly ImportConflict[],
-  reused: readonly ImportReuse[],
+  ledger: Pick<Ledger, "added" | "conflicts" | "reused">,
   missing: readonly string[]
 ): string {
+  const { added, conflicts, reused } = ledger;
   const judged = {
     breakpoints: site.breakpoints,
     mayAddBreakpoints: site.mayAddBreakpoints,
+    added: added.map(entry => [entry.kind, entry.fileId, entry.name]),
     conflicts: conflicts.map(entry => [
       entry.key,
       entry.existing.id,

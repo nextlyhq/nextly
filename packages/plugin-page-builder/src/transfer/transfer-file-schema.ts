@@ -44,7 +44,8 @@ const itemBase = {
   id,
   title: text,
   slug: id,
-  description: z.string().max(10_000).optional(),
+  // As long as the collections store it: a textarea declares no maximum.
+  description: z.string().optional(),
   status: z.enum(["published", "draft"]),
 };
 
@@ -62,8 +63,8 @@ const media = z.strictObject({
   size: z.number().int().nonnegative().max(MAX_TRANSFER_MEDIA_BYTES),
   width: z.number().optional(),
   height: z.number().optional(),
-  altText: z.string().max(10_000).optional(),
-  caption: z.string().max(10_000).optional(),
+  altText: z.string().optional(),
+  caption: z.string().optional(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   data: z.base64(),
 });
@@ -90,7 +91,7 @@ const TransferFileSchema = z
         z.strictObject({
           ...itemBase,
           category: text.optional(),
-          keywords: z.string().max(10_000).optional(),
+          keywords: z.string().optional(),
           granularity: id,
           content: documentOf("pattern"),
         })

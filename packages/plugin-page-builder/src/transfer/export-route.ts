@@ -91,6 +91,11 @@ export interface ExportReads {
     collection: string,
     id: string
   ) => Promise<Record<string, unknown> | null>;
+  /** Many rows at once, by id, each as `row` reads it; an unreadable one is absent. */
+  readonly rows: (
+    collection: string,
+    ids: readonly string[]
+  ) => Promise<Map<string, Record<string, unknown>>>;
   readonly siteStyle: () => Promise<SiteStyleData>;
   readonly media: (id: string) => Promise<StoredMediaRecord | null>;
   /** A media file's bytes, or `null` when its object is gone. */
@@ -214,29 +219,34 @@ async function placedClosure(
   slugs: Record<TransferKind, string> & { field: string }
 ): Promise<Map<string, TransferComponent>> {
   const components = new Map(root.components.map(item => [item.id, item]));
-  const pending = [
+  let layer = [
     ...root.places,
     ...root.components.flatMap(item => placedIn(item.content)),
   ];
-  while (pending.length > 0) {
-    const next = pending.shift() ?? "";
-    if (components.has(next)) continue;
-    if (components.size >= MAX_TRANSFER_COMPONENTS) {
+  // One read per layer of the closure, not one per component.
+  while (layer.length > 0) {
+    const next = [...new Set(layer)].filter(id => !components.has(id));
+    if (next.length === 0) break;
+    if (components.size + next.length > MAX_TRANSFER_COMPONENTS) {
       throw refusal(
         `It places more than ${String(MAX_TRANSFER_COMPONENTS)} components, more than one file carries.`,
         "transfer-export-too-many-components"
       );
     }
-    const row = await reads.row(slugs.component, next);
-    if (row === null) {
-      throw refusal(
-        `It places a component (${next}) that is missing or that you may not read, so the file would be incomplete.`,
-        "transfer-export-component-unreadable"
-      );
+    const rows = await reads.rows(slugs.component, next);
+    layer = [];
+    for (const id of next) {
+      const row = rows.get(id);
+      if (row === undefined) {
+        throw refusal(
+          `It places a component (${id}) that is missing or that you may not read, so the file would be incomplete.`,
+          "transfer-export-component-unreadable"
+        );
+      }
+      const item = componentItem(id, row, slugs.field);
+      components.set(id, item);
+      layer.push(...placedIn(item.content));
     }
-    const item = componentItem(next, row, slugs.field);
-    components.set(next, item);
-    pending.push(...placedIn(item.content));
   }
   return components;
 }
@@ -517,6 +527,29 @@ function directReads(ctx: ExportContext, setup: ExportRouteSetup): ExportReads {
       return typeof row === "object" && row !== null
         ? (row as Record<string, unknown>)
         : null;
+    },
+    rows: async (collection, ids) => {
+      const found = new Map<string, Record<string, unknown>>();
+      for (let at = 0; at < ids.length; at += 100) {
+        const chunk = ids.slice(at, at + 100);
+        const page = await readOrNull(async () =>
+          requireNextly().find({
+            collection,
+            where: { id: { in: [...chunk] } },
+            ...(await readingAsUser(ctx)),
+            status: "all",
+            depth: 0,
+            limit: chunk.length,
+          })
+        );
+        const items = (page as { items?: unknown[] } | null)?.items ?? [];
+        for (const row of items) {
+          if (typeof row !== "object" || row === null) continue;
+          const record = row as Record<string, unknown>;
+          found.set(String(record.id), record);
+        }
+      }
+      return found;
     },
     siteStyle: async () =>
       loadSiteStyle({

@@ -267,6 +267,23 @@ describe("TransferImport", () => {
     expect(navigated).toEqual([]);
   });
 
+  it("refuses a file with the export's marker but not its lists, without asking the server", async () => {
+    render(<TransferImport />);
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("no file input");
+    const damaged = { ...FILE, components: "not a list" };
+    await userEvent.upload(
+      input,
+      new File([JSON.stringify(damaged)], "damaged.json", {
+        type: "application/json",
+      })
+    );
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sent).toEqual([]);
+  });
+
   it("refuses a file that is not an export without asking the server", async () => {
     render(<TransferImport />);
     const input =

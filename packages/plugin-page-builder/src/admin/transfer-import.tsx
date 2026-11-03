@@ -105,14 +105,14 @@ export function TransferImport(): React.JSX.Element {
 
   const read = async (chosen: File) => {
     try {
-      const parsed = JSON.parse(await chosen.text()) as Partial<TransferFile>;
-      if (parsed.format !== TRANSFER_FORMAT) {
+      const parsed: unknown = JSON.parse(await chosen.text());
+      if (!looksExported(parsed)) {
         toast.error(
           `"${chosen.name}" is not a page builder export. Choose a file exported from a Components, Patterns or Layouts list.`
         );
         return;
       }
-      setFile(parsed as TransferFile);
+      setFile(parsed);
     } catch {
       toast.error(
         `"${chosen.name}" could not be read as a page builder export.`
@@ -159,6 +159,27 @@ export function TransferImport(): React.JSX.Element {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Whether a parsed file has the shape the dialog reads before the server has
+ * judged it: the format marker, a root, and lists of items. Everything past
+ * that is the import route's to check.
+ */
+function looksExported(value: unknown): value is TransferFile {
+  if (typeof value !== "object" || value === null) return false;
+  const file = value as Record<string, unknown>;
+  const items = (list: unknown) =>
+    Array.isArray(list) &&
+    list.every(item => typeof item === "object" && item !== null);
+  return (
+    file.format === TRANSFER_FORMAT &&
+    typeof file.root === "object" &&
+    file.root !== null &&
+    items(file.components) &&
+    items(file.patterns) &&
+    items(file.layouts)
   );
 }
 

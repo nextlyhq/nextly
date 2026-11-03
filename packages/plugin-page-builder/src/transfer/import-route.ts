@@ -41,6 +41,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   type BlockDocument,
   type BreakpointSet,
+  type NamedClass,
   type SiteToken,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -67,6 +68,7 @@ import {
 } from "../composition-route-kit";
 import { readingAsUser, type ComponentStore } from "../library-route";
 import type { SiteStyleData } from "../site-style";
+import { checkStoredClasses, checkStoredTokens } from "../site-style-record";
 import {
   loadSiteStyle,
   SITE_SETTINGS_WRITE_CONTEXT,
@@ -163,6 +165,9 @@ async function importFile(
     body.choices ?? {}
   );
   plan = withProblems(plan, await grantProblems(ctx, file, plan, slugs));
+  if (plan.preview.ready) {
+    plan = withProblems(plan, await styleProblems(plan, slugs.siteStyle));
+  }
   if (plan.preview.ready) {
     plan = withProblems(plan, await judgeWrites(ctx, file, plan, slugs));
   }
@@ -273,7 +278,9 @@ async function readSite(
       viewport: [...(style.breakpoints?.viewport ?? [])],
       container: [...(style.breakpoints?.container ?? [])],
     },
-    media: (await can("read", "media")) ? await existingMedia(file) : new Map(),
+    media: (await can("read", "media"))
+      ? await existingMedia(ctx, file)
+      : new Map(),
     isRegistered: type => type === COMPONENT_INSTANCE_TYPE || hasBlock(type),
     mayAddBreakpoints: await can("manage", "page-builder-site"),
   };
@@ -363,25 +370,28 @@ function heldSlug(
  * still matches; one renamed is uploaded again.
  */
 async function existingMedia(
+  ctx: ImportContext,
   file: TransferFile
 ): Promise<Map<string, ExistingMedia>> {
   const met = new Map<string, ExistingMedia>();
   for (const entry of file.media) {
-    met.set(entry.id, await metMedia(entry));
+    met.set(entry.id, await metMedia(ctx, entry));
   }
   return met;
 }
 
 /** What one media file meets here, as {@link existingMedia} describes. */
 async function metMedia(
+  ctx: ImportContext,
   entry: TransferFile["media"][number]
 ): Promise<ExistingMedia> {
   const dot = entry.filename.lastIndexOf(".");
   const stem = dot > 0 ? entry.filename.slice(0, dot) : entry.filename;
+  // As the caller: a file it may not read is neither reused nor offered.
   const found = await requireNextly().media.find({
     search: stem,
     limit: 50,
-    overrideAccess: true,
+    ...(await readingAsUser(ctx)),
   });
   let sameName: ExistingMedia["sameName"];
   for (const candidate of found.items as unknown as StoredMediaRecord[]) {
@@ -700,7 +710,7 @@ async function applyPlan(
   const uploaded = new Map<string, string>();
   // Known before anything is written, so a failure partway through the
   // site-style writes still takes back the part that landed.
-  const style = styleUndo(plan, slugs, setup.defaults);
+  const style = styleUndo(slugs, setup.defaults);
   let written: Written;
   try {
     await uploadMedia(ctx, file, plan, uploaded);
@@ -795,26 +805,30 @@ async function uploadMedia(
   }
 }
 
-/** What the site-style write added, so a failed import can take it back. */
+/**
+ * What this request's site-style writes added, so a failed import takes back
+ * exactly that. Filled as each write lands, and only with what was absent
+ * just before it: an entry another request added under the same id is that
+ * request's, and is neither written again nor taken back here.
+ */
 interface StyleUndo {
-  readonly classIds: ReadonlySet<string>;
-  readonly tokenNames: ReadonlySet<string>;
-  readonly breakpointIds: ReadonlySet<string>;
+  readonly classIds: Set<string>;
+  readonly tokenNames: Set<string>;
+  readonly breakpointIds: Set<string>;
   readonly slug: string;
   /** The configured site style, which the stored breakpoints sit over. */
   readonly defaults: SiteStyleData | undefined;
 }
 
-/** What the plan's site-style writes add, by the ids they add it under. */
+/** An empty record of what the site-style writes will add. */
 function styleUndo(
-  plan: ImportPlan,
   slugs: Collections,
   defaults: SiteStyleData | undefined
 ): StyleUndo {
   return {
-    classIds: new Set(plan.classes.create.map(entry => entry.id)),
-    tokenNames: new Set(plan.tokens.create.map(token => token.name)),
-    breakpointIds: new Set(plan.addBreakpoints.map(entry => entry.id)),
+    classIds: new Set(),
+    tokenNames: new Set(),
+    breakpointIds: new Set(),
     slug: slugs.siteStyle,
     defaults,
   };
@@ -826,72 +840,150 @@ async function writeSiteStyle(
   plan: ImportPlan,
   undo: StyleUndo
 ): Promise<void> {
-  const slugs = { siteStyle: undo.slug };
-  const defaults = undo.defaults;
-  const nextly = requireNextly();
   if (plan.classes.create.length > 0 || plan.tokens.create.length > 0) {
-    const stored = await nextly.findSingle({
-      slug: slugs.siteStyle,
-      overrideAccess: true,
-    });
-    const storedClasses = arrayOf(
-      (stored as Record<string, unknown> | null)?.classes
-    );
-    const storedTokens = recordOf(
-      (stored as Record<string, unknown> | null)?.tokens
-    );
-    const lastIndex = storedClasses.reduce<number>((most, entry) => {
-      const index = (entry as { orderIndex?: unknown }).orderIndex;
-      return typeof index === "number" && index > most ? index : most;
-    }, -1);
-    const maps: ReferenceMaps = {
-      components: new Map(),
-      classes: plan.classes.map,
-      tokens: plan.tokens.map,
-      breakpoints: plan.breakpoints,
-      media: new Map(),
-    };
-    const classes = plan.classes.create.map((entry, at) =>
-      rewriteClass(entry.from, entry.id, entry.slug, lastIndex + 1 + at, maps)
-    );
-    const tokens: SiteToken[] = [
-      ...(arrayOf(storedTokens.tokens) as SiteToken[]),
-      ...plan.tokens.create,
-    ];
-    await nextly.updateSingle({
-      slug: slugs.siteStyle,
-      data: {
-        ...(classes.length > 0
-          ? { classes: [...storedClasses, ...classes] }
-          : {}),
-        ...(plan.tokens.create.length > 0
-          ? { tokens: { ...storedTokens, tokens } }
-          : {}),
-      },
-      ...(await readingAsUser(ctx)),
-    });
+    await appendStylesAndVariables(ctx, plan, undo);
   }
   if (plan.addBreakpoints.length > 0) {
-    // The set the site draws with, the configured one included, so writing
-    // it back with the additions drops none of the configured breakpoints.
-    const style = await loadSiteStyle({
-      nextly,
-      slug: slugs.siteStyle,
-      ...(defaults === undefined ? {} : { defaults }),
-    });
-    const set: BreakpointSet = {
-      viewport: [...(style.breakpoints?.viewport ?? [])],
-      container: [...(style.breakpoints?.container ?? [])],
-    };
-    for (const entry of plan.addBreakpoints) {
-      set[entry.axis].push({
-        id: entry.id,
-        label: entry.label,
-        maxWidth: entry.maxWidth,
-      });
-    }
-    await writeBreakpoints(ctx, slugs.siteStyle, set);
+    await appendBreakpoints(ctx, plan, undo);
   }
+}
+
+/** The site style's stored classes and variables with the plan's new ones appended. */
+interface PlannedStyle {
+  readonly storedClasses: unknown[];
+  readonly storedTokens: Record<string, unknown>;
+  /** The new classes and variables, those another request already added left out. */
+  readonly classes: NamedClass[];
+  readonly tokens: SiteToken[];
+}
+
+async function plannedStyle(
+  plan: ImportPlan,
+  slug: string
+): Promise<PlannedStyle> {
+  const stored = (await requireNextly().findSingle({
+    slug,
+    overrideAccess: true,
+  })) as Record<string, unknown> | null;
+  const storedClasses = arrayOf(stored?.classes);
+  const storedTokens = recordOf(stored?.tokens);
+  const heldIds = new Set(
+    storedClasses.map(entry => String((entry as { id?: unknown }).id))
+  );
+  const heldNames = new Set(
+    arrayOf(storedTokens.tokens).map(token =>
+      String((token as { name?: unknown }).name)
+    )
+  );
+  const lastIndex = storedClasses.reduce<number>((most, entry) => {
+    const index = (entry as { orderIndex?: unknown }).orderIndex;
+    return typeof index === "number" && index > most ? index : most;
+  }, -1);
+  const maps: ReferenceMaps = {
+    components: new Map(),
+    classes: plan.classes.map,
+    tokens: plan.tokens.map,
+    breakpoints: plan.breakpoints,
+    media: new Map(),
+  };
+  return {
+    storedClasses,
+    storedTokens,
+    classes: plan.classes.create
+      .filter(entry => !heldIds.has(entry.id))
+      .map((entry, at) =>
+        rewriteClass(entry.from, entry.id, entry.slug, lastIndex + 1 + at, maps)
+      ),
+    tokens: plan.tokens.create.filter(token => !heldNames.has(token.name)),
+  };
+}
+
+/** The stored sections a planned style would write, as the Single takes them. */
+function styleSections(planned: PlannedStyle): Record<string, unknown> {
+  const { storedClasses, storedTokens, classes, tokens } = planned;
+  return {
+    ...(classes.length > 0 ? { classes: [...storedClasses, ...classes] } : {}),
+    ...(tokens.length > 0
+      ? {
+          tokens: {
+            ...storedTokens,
+            tokens: [
+              ...(arrayOf(storedTokens.tokens) as SiteToken[]),
+              ...tokens,
+            ],
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Whether the site style would take the plan's new classes and variables, by
+ * the Single's own checks, so a preview never promises a write it refuses.
+ */
+async function styleProblems(
+  plan: ImportPlan,
+  slug: string
+): Promise<ImportProblem[]> {
+  if (plan.classes.create.length === 0 && plan.tokens.create.length === 0) {
+    return [];
+  }
+  const sections = styleSections(await plannedStyle(plan, slug));
+  const issues = [
+    ...(sections.classes === undefined
+      ? []
+      : checkStoredClasses(sections.classes).issues),
+    ...(sections.tokens === undefined
+      ? []
+      : checkStoredTokens(sections.tokens).issues),
+  ];
+  return issues.map(message => ({ code: "REFUSED_BY_SITE", message }));
+}
+
+async function appendStylesAndVariables(
+  ctx: ImportContext,
+  plan: ImportPlan,
+  undo: StyleUndo
+): Promise<void> {
+  const planned = await plannedStyle(plan, undo.slug);
+  if (planned.classes.length === 0 && planned.tokens.length === 0) return;
+  await requireNextly().updateSingle({
+    slug: undo.slug,
+    data: styleSections(planned),
+    ...(await readingAsUser(ctx)),
+  });
+  for (const entry of planned.classes) undo.classIds.add(entry.id);
+  for (const token of planned.tokens) undo.tokenNames.add(token.name);
+}
+
+async function appendBreakpoints(
+  ctx: ImportContext,
+  plan: ImportPlan,
+  undo: StyleUndo
+): Promise<void> {
+  // The set the site draws with, the configured one included, so writing it
+  // back with the additions drops none of the configured breakpoints.
+  const style = await loadSiteStyle({
+    nextly: requireNextly(),
+    slug: undo.slug,
+    ...(undo.defaults === undefined ? {} : { defaults: undo.defaults }),
+  });
+  const set: BreakpointSet = {
+    viewport: [...(style.breakpoints?.viewport ?? [])],
+    container: [...(style.breakpoints?.container ?? [])],
+  };
+  const held = new Set([...set.viewport, ...set.container].map(def => def.id));
+  const added = plan.addBreakpoints.filter(entry => !held.has(entry.id));
+  if (added.length === 0) return;
+  for (const entry of added) {
+    set[entry.axis].push({
+      id: entry.id,
+      label: entry.label,
+      maxWidth: entry.maxWidth,
+    });
+  }
+  await writeBreakpoints(ctx, undo.slug, set);
+  for (const entry of added) undo.breakpointIds.add(entry.id);
 }
 
 /** The checked breakpoint write, as Settings' route makes it. */
@@ -961,16 +1053,10 @@ async function takeBack(
         (now.breakpoints?.[axis] ?? []).filter(
           def => !style.breakpointIds.has(def.id)
         );
-      const kept = {
+      await writeBreakpoints(ctx, style.slug, {
         viewport: without("viewport"),
         container: without("container"),
-      };
-      // Written back only when the import's breakpoints landed: a write that
-      // failed added none, and there is nothing to take back.
-      const landed =
-        kept.viewport.length !== (now.breakpoints?.viewport ?? []).length ||
-        kept.container.length !== (now.breakpoints?.container ?? []).length;
-      if (landed) await writeBreakpoints(ctx, style.slug, kept);
+      });
     }
   } catch (error) {
     ctx.logger?.warn(

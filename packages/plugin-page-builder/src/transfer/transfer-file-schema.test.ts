@@ -54,6 +54,20 @@ describe("readTransferFile", () => {
     expect(messages(file())).toEqual([]);
   });
 
+  it("accepts a description as long as the collections store", () => {
+    const long = "x".repeat(20_000);
+    const base = file();
+    expect(
+      messages({
+        ...base,
+        components: base.components.map(item => ({
+          ...item,
+          description: long,
+        })),
+      })
+    ).toEqual([]);
+  });
+
   it("refuses another format, a missing root and damaged media", () => {
     expect(messages({ ...file(), format: "something-else" })).not.toEqual([]);
     expect(messages(file({ root: { kind: "pattern", id: "a" } }))).toEqual([

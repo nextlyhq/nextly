@@ -4,7 +4,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { planImport, type ImportSite } from "./import-plan";
+import { planImport, renamedSlugs, type ImportSite } from "./import-plan";
 import type { TransferFile } from "./transfer-contract";
 
 function site(overrides: Partial<ImportSite> = {}): ImportSite {
@@ -266,6 +266,66 @@ describe("planImport", () => {
     expect(
       taken.has((first.items.component.get("a") as { slug: string }).slug)
     ).toBe(false);
+  });
+
+  it("refuses an item whose name and every rename are taken, rather than guess one", () => {
+    const taken = new Set(["slug-a", ...renamedSlugs("slug-a")]);
+    const plan = planImport(
+      file(),
+      site({
+        items: {
+          component: { bySlug: new Map(), taken },
+          pattern: { bySlug: new Map(), taken: new Set() },
+          layout: { bySlug: new Map(), taken: new Set() },
+        },
+      })
+    );
+    expect(plan.preview.problems.map(problem => problem.code)).toEqual([
+      "NAME_UNAVAILABLE",
+    ]);
+    expect(plan.items.component.has("a")).toBe(false);
+  });
+
+  it("judges a site where a name became taken since the preview as a different preview", () => {
+    const free = planImport(file(), site()).preview.fingerprint;
+    const taken = planImport(
+      file(),
+      site({
+        items: {
+          component: { bySlug: new Map(), taken: new Set(["slug-a"]) },
+          pattern: { bySlug: new Map(), taken: new Set() },
+          layout: { bySlug: new Map(), taken: new Set() },
+        },
+      })
+    ).preview.fingerprint;
+    expect(taken).not.toBe(free);
+  });
+
+  it("does not follow a loop through a component pointed at one already here", () => {
+    const clashing = site({
+      items: {
+        component: {
+          bySlug: new Map([
+            ["slug-b", { id: "mine", title: "Mine", slug: "slug-b" }],
+          ]),
+          taken: new Set(["slug-b"]),
+        },
+        pattern: { bySlug: new Map(), taken: new Set() },
+        layout: { bySlug: new Map(), taken: new Set() },
+      },
+    });
+    const plan = planImport(
+      file({
+        components: [
+          component("a", [placing("b")]),
+          component("b", [placing("a")]),
+        ],
+      }),
+      clashing,
+      { conflicts: { "component:b": "existing" } }
+    );
+    expect(plan.preview.problems).toEqual([]);
+    expect(plan.componentOrder).toEqual(["a"]);
   });
 
   it("refuses a file showing media it does not carry", () => {

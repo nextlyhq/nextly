@@ -309,6 +309,7 @@ export interface ImportProblem {
     | "NOT_GRANTED"
     | "BREAKPOINT_UNDECIDED"
     | "BREAKPOINT_NOT_ADDABLE"
+    | "NAME_UNAVAILABLE"
     | "REFUSED_BY_SITE";
   readonly message: string;
 }

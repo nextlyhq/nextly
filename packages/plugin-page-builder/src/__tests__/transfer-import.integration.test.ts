@@ -1017,6 +1017,29 @@ describe.each(getConfiguredTestDialects())(
       expect(unchanged(await snapshot(t))).toEqual(unchanged(before));
     });
 
+    it("refuses in the preview a variable the site style would refuse", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, WRITES_EVERYTHING);
+      const file = fileOf([{ id: "v", nodes: [heading("h")] }], {
+        tokens: [
+          {
+            name: "color.odd",
+            kind: "not-a-kind" as never,
+            values: { light: "#000000" },
+          },
+        ],
+      });
+      const before = await snapshot(t);
+
+      const seen = await preview(cookie, file);
+
+      expect(seen.ready).toBe(false);
+      expect(seen.problems.map(problem => problem.code)).toEqual([
+        "REFUSED_BY_SITE",
+      ]);
+      expect(await snapshot(t)).toBe(before);
+    });
+
     it("tells the hooks a write is judged, and commits without saying so", async () => {
       const t = await boot();
       const { cookie } = await holding(t, WRITES_EVERYTHING);
