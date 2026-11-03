@@ -391,6 +391,57 @@ describe("useAutosaveRecovery", () => {
     expect(moving.result.current.recovery.offer).toBeNull();
   });
 
+  it("keeps a Not now pressed before the account is known across a reload", async () => {
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    // Reloaded before the account answered.
+    first.unmount();
+
+    signedIn.id = "author-1";
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps every Not now pressed before the account is known, not only the last", async () => {
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    for (const scope of [SCOPE, OTHER]) {
+      const one = renderRecovery(scope);
+      await waitFor(() =>
+        expect(one.result.current.recovery.offer).not.toBeNull()
+      );
+      act(() => one.result.current.recovery.dismiss());
+      one.unmount();
+    }
+
+    signedIn.id = "author-1";
+    for (const scope of [SCOPE, OTHER]) {
+      const back = renderRecovery(scope);
+      await waitFor(() =>
+        expect(back.result.current.recovery.isResolved).toBe(true)
+      );
+      expect(back.result.current.recovery.offer).toBeNull();
+      back.unmount();
+    }
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },

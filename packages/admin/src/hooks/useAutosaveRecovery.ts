@@ -34,11 +34,56 @@ function putOffKey(documentKey: string): string {
   return `nextly:recovery-not-now:${documentKey}`;
 }
 
+/** Where "Not now" waits while the signed-in account is not yet known. */
+const PENDING_PUT_OFF_KEY = "nextly:recovery-not-now:pending";
+
+/** A put-off waiting for the account: the document and the point. */
+interface PendingPutOff {
+  documentKey: string;
+  identity: string;
+}
+
+/** The put-offs waiting for the account; none where storage refuses. */
+function pendingPutOffs(): PendingPutOff[] {
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_PUT_OFF_KEY);
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is PendingPutOff =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as PendingPutOff).documentKey === "string" &&
+            typeof (item as PendingPutOff).identity === "string"
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Replace the waiting put-offs, ignoring storage that refuses. */
+function writePendingPutOffs(pending: readonly PendingPutOff[]): void {
+  try {
+    if (pending.length === 0) {
+      window.sessionStorage.removeItem(PENDING_PUT_OFF_KEY);
+    } else {
+      window.sessionStorage.setItem(
+        PENDING_PUT_OFF_KEY,
+        JSON.stringify(pending)
+      );
+    }
+  } catch {
+    // Storage refused: "Not now" lasts for this editor, as it did before.
+  }
+}
+
 /**
  * "Not now", kept for the signed-in author. Pressed before the account is
- * known (the recovery read can answer first), it is held until it is, then
- * stored under that account: stored under no one, the next load, by then
- * knowing the account, would miss it and offer the point again.
+ * known (the recovery read can answer first), it waits in the tab's session
+ * storage, every one of them and across a reload, and answers for its own
+ * document until the account is known; then each is stored for that account.
+ * Stored under no one, a later load knowing the account would miss it.
  */
 function usePutOff(
   author: string | null,
@@ -47,35 +92,39 @@ function usePutOff(
   putOff: (identity: string) => void;
   isPutOff: (identity: string) => boolean;
 } {
-  // The document it was pressed for, held with it: the editor can move to
-  // another document before the account is known, and the put-off belongs to
-  // the first.
-  const [held, setHeld] = useState<{
-    documentKey: string;
-    identity: string;
-  } | null>(null);
   useEffect(() => {
-    if (author === null || held === null) return;
-    rememberPutOff(`${author}|${held.documentKey}`, held.identity);
-    setHeld(null);
-  }, [author, held]);
+    if (author === null) return;
+    const pending = pendingPutOffs();
+    if (pending.length === 0) return;
+    for (const one of pending) {
+      rememberPutOff(`${author}|${one.documentKey}`, one.identity);
+    }
+    writePendingPutOffs([]);
+  }, [author]);
   const key = `${author ?? ""}|${documentKey}`;
   return {
     putOff: useCallback(
-      (identity: string) =>
-        author === null
-          ? setHeld({ documentKey, identity })
-          : rememberPutOff(key, identity),
+      (identity: string) => {
+        if (author !== null) {
+          rememberPutOff(key, identity);
+          return;
+        }
+        const others = pendingPutOffs().filter(
+          one => one.documentKey !== documentKey
+        );
+        writePendingPutOffs([...others, { documentKey, identity }]);
+      },
       [author, documentKey, key]
     ),
-    // While the account is unknown, the put-off held for this document still
-    // counts: moving away and back must not offer the point again.
     isPutOff: useCallback(
       (identity: string) =>
         author === null
-          ? held?.documentKey === documentKey && held.identity === identity
+          ? pendingPutOffs().some(
+              one =>
+                one.documentKey === documentKey && one.identity === identity
+            )
           : wasPutOff(key, identity),
-      [author, held, documentKey, key]
+      [author, documentKey, key]
     ),
   };
 }
