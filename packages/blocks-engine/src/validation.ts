@@ -9,6 +9,13 @@
  * supplied context (breakpoints, mode, and an optional block-type lookup); it
  * never touches storage or a framework.
  */
+import { BINDING_ISSUE_CODES, type BindingIssueCode } from "./binding-issues";
+import {
+  checkBinding,
+  isBindPath,
+  type BindingSchemaRef,
+  type BindingSchemaSource,
+} from "./binding-rules";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
   BINDING_SOURCES,
@@ -218,14 +225,24 @@ export interface ValidationContext {
    * every locked slot is then measured against its starting children alone.
    */
   stored?: readonly BlockDocument[];
+  /**
+   * The field shapes of the sources a binding may read, for checking each
+   * binding's path, field and format against them: one relation at most, no
+   * list on the way, a field the source has, a type and a format that fit the
+   * prop.
+   *
+   * Absent means bindings are checked for their shape only, on the same terms
+   * as nesting: a caller that cannot answer for the schema gets no schema
+   * issues. Whether a binding fits its PROP is judged only when
+   * {@link definitions} is given too, since that is where a block's props are.
+   */
+  bindingSchema?: BindingSchemaSource;
+  /** Which source an `entry` binding reads, for {@link bindingSchema}. */
+  bindingEntry?: BindingSchemaRef;
 }
 
-/**
- * The stable issue-code vocabulary, each with a one-line description. Tests
- * assert that every code emitted appears here and vice versa, so the emitted
- * vocabulary cannot drift silently.
- */
-export const ISSUE_CODES = {
+/** The validator's own codes, before the binding codes are added. */
+const DOCUMENT_ISSUE_CODES = {
   "invalid-format-version":
     "The document formatVersion is not the supported version.",
   "invalid-kind": "The document kind is not one of the known kinds.",
@@ -345,7 +362,21 @@ export const ISSUE_CODES = {
 } as const;
 
 /** A stable validation issue code. */
-export type IssueCode = keyof typeof ISSUE_CODES;
+export type IssueCode = keyof typeof DOCUMENT_ISSUE_CODES | BindingIssueCode;
+
+/**
+ * The stable issue-code vocabulary, each with a one-line description. Tests
+ * assert that every code emitted appears here and vice versa, so the emitted
+ * vocabulary cannot drift silently.
+ *
+ * The binding codes are the ones the renderer reports for the same breaks,
+ * spread in from their own table, so an author sees one name for one problem
+ * wherever it was found.
+ */
+export const ISSUE_CODES: { readonly [Code in IssueCode]: string } = {
+  ...DOCUMENT_ISSUE_CODES,
+  ...BINDING_ISSUE_CODES,
+};
 
 /**
  * Whether a value is a well-formed node type, independent of any registry.
@@ -1728,7 +1759,7 @@ function validateNode(
   validateAttributes(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
-  validateBindings(node, path, issues);
+  validateBindings(node, path, issues, state.ctx);
   validateComponentInstance(node, path, issues);
   validateDomIds(node, path, state, hidden);
 }
@@ -2683,7 +2714,7 @@ function checkExposedPointer(
   // exposure of any prop whose value comes from the block's default, since a
   // defaulted prop is absent from the stored node.
   const propPath = raw.propPath;
-  if (typeof propPath !== "string" || !BIND_PATH_RE.test(propPath)) {
+  if (!isBindPath(propPath)) {
     issues.push({
       path: pointer(path, "propPath"),
       code: "exposed-path-invalid",
@@ -3084,17 +3115,17 @@ function checkVariantTargets(
   }
 }
 /**
- * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
- * "author.name". This rejects expression-like or otherwise malformed strings so
- * nothing evaluable is ever stored. The one-hop RELATION limit is semantic and
- * needs the schema, so it is enforced where bindings are resolved, not here.
+ * A binding's shape: an object keyed by prop, each a dot-joined path of field
+ * identifiers (`isBindPath`, so nothing evaluable is stored) with a known
+ * source and the key a Single needs. The rules that need the schema, the one
+ * relation a path may follow among them, are checked here only when the
+ * context carries one, and always where bindings are resolved.
  */
-const BIND_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
-
 function validateBindings(
   node: BlockNode,
   path: string,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  ctx: ValidationContext
 ): void {
   if (node.bindings === undefined) return;
   if (!isPlainRecord(node.bindings)) {
@@ -3130,7 +3161,7 @@ function validateBindings(
       });
       continue;
     }
-    if (!BIND_PATH_RE.test(bindPath)) {
+    if (!isBindPath(bindPath)) {
       issues.push({
         path: pointer(bPath, "$bind"),
         code: "invalid-binding",
@@ -3172,6 +3203,46 @@ function validateBindings(
         message: 'sourceKey is only allowed when source is "single".',
       });
     }
+    validateBindingAgainstSchema(node, prop, binding, bPath, issues, ctx);
+  }
+}
+
+/**
+ * The schema-aware checks for one binding, when the context carries a schema.
+ *
+ * The same `checkBinding` the renderer runs, so what a save refuses and what a
+ * page falls back on are one rule. A binding whose shape is malformed was
+ * reported above, and is not reported twice.
+ */
+function validateBindingAgainstSchema(
+  node: BlockNode,
+  prop: string,
+  binding: unknown,
+  bPath: string,
+  issues: ValidationIssue[],
+  ctx: ValidationContext
+): void {
+  const schema = ctx.bindingSchema;
+  if (schema === undefined) return;
+  const props = ctx.definitions?.get(node.type)?.props;
+  const check = checkBinding({
+    nodeId: node.id,
+    prop,
+    binding,
+    ...(props === undefined ? {} : { props }),
+    schema,
+    ...(ctx.bindingEntry === undefined
+      ? {}
+      : { refs: { entry: ctx.bindingEntry } }),
+  });
+  for (const issue of check.issues) {
+    if (issue.code === "binding-malformed") continue;
+    issues.push({
+      path: bPath,
+      code: issue.code,
+      severity: "error",
+      message: issue.message,
+    });
   }
 }
 

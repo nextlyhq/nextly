@@ -432,6 +432,7 @@ describe("the root entry", () => {
       // the scope each part compiles under.
       "layoutPartSheets",
       "migrationSourceFor",
+      "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
       "prepareDocumentForRead",

@@ -12,6 +12,7 @@
 import type { ContentModel } from "./content-model";
 import type { BlockNode, BlockPart, NodeStyles } from "./document";
 import type { MigrationMap } from "./migration";
+import type { BoundValue } from "./resolve-bindings";
 
 /** Why a block needs JavaScript in the browser. */
 export interface BlockIsland {
@@ -403,6 +404,23 @@ export interface BlockRenderArgs<P, C = unknown> {
    * the convenience of an editor-only component.
    */
   markProp?: (name: string) => Record<string, string>;
+  /**
+   * What each bound prop's value is, by prop name, for a block that wants
+   * more than the value in `props`.
+   *
+   * A bound date reaches a text prop as text, formatted for the reader; its
+   * entry here is `{ kind: "date", datetime }`, the machine-readable value a
+   * block can put in `<time datetime>`. A prop filled from its binding's
+   * fallback says so. A prop showing its own value has no entry, and a block
+   * with no bound prop receives no `bound` at all.
+   *
+   * An argument rather than a field of `ctx`, so it comes from the renderer
+   * that filled the props and cannot be supplied by a block rebuilding the
+   * context its children see.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  bound?: Readonly<Record<string, BoundValue>>;
   /**
    * Render one of this block's slots, optionally under a different context.
    *

@@ -31,7 +31,12 @@
  *    withheld, so anything derived from it publishes what was withheld.
  * 6. **Address repair**, which drops later duplicates of a repeated id — so a
  *    duplicate that never renders cannot speak for the page.
- * 7. **Known placeholders**, whose subtrees the renderer replaces wholesale. A
+ * 7. **Bindings**, when the reader supplies what they read. Each binding is
+ *    checked and filled into its prop, so what blocks render and what
+ *    metadata says come from the same values. After gating, so a withheld
+ *    node is never read or reported; after address repair, so each filled
+ *    node has one id. A list item's bindings wait for the list to draw it.
+ * 8. **Known placeholders**, whose subtrees the renderer replaces wholesale. A
  *    node whose migration failed, whose type nothing registered, or whose
  *    stored version is ahead of its definition emits a placeholder and none of
  *    its content.
@@ -47,7 +52,9 @@
  * @module prepare-document
  */
 import {
+  bindDocument,
   COMPONENT_INSTANCE_TYPE,
+  createBindingRun,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   isPlainRecord,
@@ -55,7 +62,12 @@ import {
   resolveComponentInstances,
 } from "@nextlyhq/blocks-engine";
 import type {
+  BindingFieldShape,
+  BindingIssue,
+  BindingRun,
+  BindingSchemaSource,
   BlockDocument,
+  BoundValues,
   ComponentLookup,
   DefinitionsById,
   DocumentLimits,
@@ -66,6 +78,7 @@ import type {
   UnresolvedInstance,
 } from "@nextlyhq/blocks-engine";
 
+import type { BlocksSiteSettings, PageBindings } from "./context";
 import type { BlockResolver } from "./resolver";
 import { migrationSourceFor } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
@@ -91,6 +104,61 @@ export interface PrepareDocumentArgs {
    * is returned unchanged.
    */
   definitions?: DefinitionsById;
+  /**
+   * The render's binding pass, from {@link pageBindingRun}. Absent, no binding
+   * is read or filled: every prop shows its own value, as it always has, and
+   * the bound stage is the stage before it.
+   */
+  bindings?: BindingRun;
+}
+
+/**
+ * The type of each site setting a page may bind, keyed by the setting, so a
+ * setting added to the allowlist cannot be left without a shape.
+ */
+const SITE_FIELD_TYPES: { readonly [K in keyof BlocksSiteSettings]: string } = {
+  applicationName: "text",
+  siteUrl: "url",
+  logoUrl: "url",
+  timezone: "text",
+};
+
+/** The site settings' field shapes, derived from the table above. */
+const SITE_FIELD_SHAPES: readonly BindingFieldShape[] = Object.entries(
+  SITE_FIELD_TYPES
+).map(([name, type]) => ({ name, type }));
+
+/**
+ * One render's binding pass over a page's bindings, in the page's language.
+ *
+ * Shared by every reader of one page, the renderer and the metadata alike,
+ * so the two fill the same props with the same values.
+ */
+export function pageBindingRun(
+  bindings: PageBindings,
+  locale: string | undefined,
+  resolver: BlockResolver
+): BindingRun {
+  const shapes = bindings.fieldShapes;
+  const schema: BindingSchemaSource = {
+    fieldsOf: ref =>
+      "site" in ref ? SITE_FIELD_SHAPES : shapes?.fieldsOf(ref),
+  };
+  return createBindingRun({
+    sources: {
+      ...(bindings.entry === undefined ? {} : { entry: bindings.entry }),
+      ...(bindings.singles === undefined ? {} : { singles: bindings.singles }),
+      // Copied into a plain record: the settings are read by field name.
+      ...(bindings.site === undefined
+        ? {}
+        : { site: bindings.site === null ? null : { ...bindings.site } }),
+    },
+    ...(bindings.entryRef === undefined ? {} : { entryRef: bindings.entryRef }),
+    schema,
+    ...(locale === undefined ? {} : { locale }),
+    ...(bindings.timeZone === undefined ? {} : { timeZone: bindings.timeZone }),
+    props: resolver,
+  });
 }
 
 /**
@@ -279,6 +347,16 @@ export interface DocumentReadStages {
   gated: BlockDocument;
   /** After addresses are made unique over what will render. */
   deduped: BlockDocument;
+  /**
+   * After the page's bindings are filled into props. The same reference as
+   * {@link deduped} when the reader supplied no bindings or none filled
+   * anything. Bindings change props only, never ids, slots or styles.
+   */
+  bound: BlockDocument;
+  /** What each filled prop holds, by node id: a bound date's machine value. */
+  boundValues: ReadonlyMap<string, BoundValues>;
+  /** Every binding the page's pass could not use as stored. */
+  bindingIssues: readonly BindingIssue[];
   /** After known placeholders are dropped. The document to read. */
   prepared: BlockDocument;
 }
@@ -335,7 +413,12 @@ export function prepareDocumentReadStages(
   const visible = dedupeNodeIds(gated, node =>
     rendersOwnMarkup(node, args.resolver)
   );
-  const prepared = pruneKnownPlaceholders(visible, args.resolver);
+  const binding =
+    args.bindings === undefined
+      ? undefined
+      : bindDocument(visible, args.bindings);
+  const bound = binding?.document ?? visible;
+  const prepared = pruneKnownPlaceholders(bound, args.resolver);
   // A document whose nodes were ALL placeholders presents nothing but
   // placeholders, which is the case `null` names. Returning the empty document
   // instead would report "a page with no content" for a page that has content
@@ -359,6 +442,9 @@ export function prepareDocumentReadStages(
     rewritten,
     gated,
     deduped: visible,
+    bound,
+    boundValues: binding?.bound ?? NO_BOUND_VALUES,
+    bindingIssues: binding?.issues ?? [],
     prepared,
   };
 }
@@ -494,6 +580,9 @@ function isReadableEnvelope(definition: unknown): definition is BlockDocument {
   );
 }
 
+/** Shared so a page with no bindings allocates no map at all. */
+const NO_BOUND_VALUES: ReadonlyMap<string, BoundValues> = new Map();
+
 /** Shared so a page with no components allocates no map at all. */
 const EMPTY_DEFINITIONS: DefinitionsById = new Map<string, BlockDocument>();
 
@@ -545,8 +634,8 @@ export function prepareDocumentForRead(
 }
 
 /**
- * The tree the renderer WALKS: the reading pipeline up to and including address
- * repair, with the nodes it draws as placeholders still in place.
+ * The tree the renderer WALKS: the reading pipeline up to and including the
+ * page's bindings, with the nodes it draws as placeholders still in place.
  *
  * For a surface that lists a page's parts beside a picture of the page, such
  * as an editor's outline under a preview. A block the renderer cannot draw —
@@ -564,5 +653,5 @@ export function prepareDocumentAsDrawn(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): BlockDocument | null {
-  return prepareDocumentReadStages(document, args)?.deduped ?? null;
+  return prepareDocumentReadStages(document, args)?.bound ?? null;
 }

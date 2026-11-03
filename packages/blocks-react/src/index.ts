@@ -14,8 +14,12 @@
  * @module index
  */
 export type {
+  BindingIssuesHandler,
   BlockHostPolicy,
   BlockRenderArgs,
+  BlocksFieldShapeRef,
+  BlocksFieldShapes,
+  BlocksSiteSettings,
   BlocksDataProvider,
   BlocksDataProviderFactory,
   BlocksFilter,
@@ -24,6 +28,7 @@ export type {
   BlocksQuery,
   BlocksResult,
   DefaultDataProviderOptions,
+  PageBindings,
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
@@ -124,7 +129,32 @@ export {
 // The render-safe attribute rule, public so an editor asks it instead of
 // keeping a second copy that would accept names the renderer drops.
 export { isAllowedAttribute } from "./block-boundary";
-export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
+export type {
+  BlockBoundaryProps,
+  BlockListProps,
+  BoundaryBindings,
+} from "./block-boundary";
+// The binding pass's own types, which the props above and a block's `bound`
+// argument name. A consumer passing bindings or reading a bound value has no
+// other path to them: the engine is this package's dependency, not theirs.
+export type {
+  BindablePropKind,
+  BindingFieldShape,
+  BindingFormatter,
+  BindingIssue,
+  BindingIssueCode,
+  BindingRun,
+  BindingSchemaRef,
+  BindingSchemaSource,
+  BindingSources,
+  BlockPropsLookup,
+  BoundValue,
+  BoundValues,
+  CheckedFormat,
+  FormatEnv,
+  FormatResult,
+  FormattedValue,
+} from "@nextlyhq/blocks-engine";
 
 /**
  * Draw stored rich text as React.
@@ -193,7 +223,11 @@ export type {
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
-export { prepareDocumentForRead, rendersOwnMarkup } from "./prepare-document";
+export {
+  pageBindingRun,
+  prepareDocumentForRead,
+  rendersOwnMarkup,
+} from "./prepare-document";
 /**
  * @experimental The tree the renderer walks, placeholders included, for a
  * surface listing a page's parts beside a picture of it.
