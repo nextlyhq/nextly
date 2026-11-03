@@ -190,9 +190,7 @@ describe("a field's Clear", () => {
   it("is a target at least 24px square, beside a list or a token", () => {
     // WCAG 2.2's minimum target size: the browser's default button around a
     // word of small text is smaller, and axe reports it.
-    const clear = ruleBody(
-      ".nx-style-inspector__select-clear, .nx-style-inspector__token button"
-    );
+    const clear = ruleBody(".nx-style-inspector__token button");
     expect(clear).toContain("min-block-size: 1.5rem");
     expect(clear).toContain("min-inline-size: 1.5rem");
   });
@@ -203,7 +201,7 @@ describe("a style field in the narrow inspector", () => {
     // The Style tab's wider label column outranks the shared narrow rule by
     // specificity, so it has its own narrow rule after it.
     const style = FLAT.indexOf(
-      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr); }"
+      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr) auto; }"
     );
     expect(style).toBeGreaterThan(-1);
     // At 19rem, not the shared 18rem: a 7.5rem label and a set Align items
@@ -212,7 +210,7 @@ describe("a style field in the narrow inspector", () => {
       "@container nx-inspector-fields (max-width: 19rem)"
     ).filter(body =>
       body.includes(
-        ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 1fr); }"
+        ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 1fr) auto; }"
       )
     );
     expect(narrow).toHaveLength(1);
@@ -240,7 +238,7 @@ describe("the icon strip", () => {
 
   it("looks disabled, and ignores the pointer, in a locked section", () => {
     const disabled = ruleBody(
-      ".nx-icon-choice__option:disabled, .nx-icon-choice .nx-icon-choice__more:disabled, .nx-icon-choice__clear:disabled"
+      ".nx-icon-choice__option:disabled, .nx-icon-choice .nx-icon-choice__more:disabled"
     );
     expect(disabled).toContain("opacity: 0.5");
     expect(disabled).toContain("cursor: not-allowed");
@@ -252,10 +250,40 @@ describe("the icon strip", () => {
 describe("a list field's Clear", () => {
   it("is styled by its own class, leaving the list's trigger alone", () => {
     expect(FLAT).not.toMatch(/\.nx-style-inspector__select > button/);
+    expect(ruleBody(".nx-style-inspector__token button")).toContain(
+      "min-block-size: 1.5rem"
+    );
+  });
+});
+
+describe("a style row's reset", () => {
+  it("sits at the row's end, an icon in the control's row, not a line under it", () => {
+    const reset = ruleBody(
+      '.nx-style-inspector .nx-inspector__field > [data-action="reset"]'
+    );
+    expect(reset).toContain("grid-column: 3");
+    expect(reset).toContain("grid-row: 1");
+    expect(reset).toContain("inline-size: 1.5rem");
+    // A jump or a refusal still reads under the control, across the row.
     expect(
       ruleBody(
-        ".nx-style-inspector__select-clear, .nx-style-inspector__token button"
+        '.nx-style-inspector .nx-inspector__field > [data-action="jump"], .nx-style-inspector .nx-inspector__field > .nx-inspector__error'
       )
-    ).toContain("min-block-size: 1.5rem");
+    ).toContain("grid-column: 2 / -1");
+  });
+
+  it("follows its control onto the second row when the narrow inspector stacks", () => {
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 19rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field > .nx-style-inspector__breakpoint-action[data-action="reset"] { grid-column: 2; grid-row: 2; }'
+    );
+  });
+
+  it("no longer draws the words beside it, which made each set control two rows", () => {
+    expect(FLAT).not.toContain(".nx-style-inspector__breakpoint-reveals");
+    expect(FLAT).not.toContain(".nx-icon-choice__clear");
+    expect(FLAT).not.toContain(".nx-style-inspector__select-clear");
   });
 });

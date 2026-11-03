@@ -73,8 +73,12 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@nextlyhq/ui";
-import { X } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
@@ -1907,6 +1911,8 @@ function StyleControlField({
         editing={editing}
         fieldId={id}
         onReset={() => commit(null)}
+        stored={stored}
+        readOnly={readOnly}
       />
       {issue === null ? null : (
         <p className="nx-inspector__error" id={errorId} role="alert">
@@ -2082,6 +2088,8 @@ function BreakpointAction({
   editing,
   fieldId,
   onReset,
+  stored,
+  readOnly,
 }: {
   answer: ProvenanceAnswer | undefined;
   /**
@@ -2098,10 +2106,31 @@ function BreakpointAction({
   /** The field this control's actions write, passed on to {@link ResetAction}. */
   fieldId: string;
   onReset: () => void;
+  /** What this address stores: with no cascade, reset while it holds anything. */
+  stored: StyleValue | undefined;
+  /** A field drawn as a retained value, whose own Clear already resets it. */
+  readOnly: boolean;
 }): React.JSX.Element | null {
-  const badge = answer?.badge;
-  // `none` is also refused below, by having no handler bound for it — this is
-  // the readable exit rather than the load-bearing one.
+  /*
+   * The row's one way back, so a list or an icon group needs no Clear of its
+   * own. With a cascade it follows the cascade's answer: a value authored at
+   * this tier is reset, revealing whatever shows through, and one arriving
+   * from another tier is a jump there. With none, a value stored here is
+   * reset, unless the field is a retained value with a Clear of its own.
+   */
+  if (answer === undefined) {
+    if (stored === undefined || readOnly) return null;
+    return (
+      <ResetAction
+        revealed={undefined}
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  }
+  const badge = answer.badge;
   if (badge === undefined || badge.kind === "none") return null;
   if (badge.kind === "authored") {
     return (
@@ -2114,7 +2143,7 @@ function BreakpointAction({
       />
     );
   }
-  if (answer?.jump === undefined) return null;
+  if (answer.jump === undefined) return null;
   return (
     <JumpAction source={badge.source} label={label} onJump={answer.jump} />
   );
@@ -2275,40 +2304,30 @@ function ResetAction({
       ? "leaving it unset"
       : `showing the value from ${sourceLabel(revealed)}`;
   return (
-    <button
-      type="button"
-      className="nx-style-inspector__breakpoint-action"
-      data-action="reset"
-      /*
-       * This press writes THIS field's value, which a picker mid-gesture on it
-       * needs to know.
-       *
-       * The colour picker commits its draft when the popover closes, and
-       * pressing anything outside it closes the popover first — so without this
-       * one Reset gesture writes twice: the draft the author was discarding,
-       * then the clear. The first undo would then restore the very colour they
-       * pressed Reset to be rid of.
-       *
-       * Declared on the element rather than held as a ref by each picker,
-       * because the rule is about what a CONTROL does, not about which specific
-       * button a particular field happens to know.
-       */
-      {...commitsFor(fieldId)}
-      onClick={onReset}
-      aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
-    >
-      Reset
-      {/*
-       * `aria-hidden`, because the accessible name above already carries this
-       * sentence: read out twice it is a stutter rather than emphasis.
-       */}
-      <span
-        className="nx-style-inspector__breakpoint-reveals"
-        aria-hidden="true"
-      >
-        {revealed === undefined ? "to unset" : `to ${sourceLabel(revealed)}`}
-      </span>
-    </button>
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="nx-style-inspector__breakpoint-action"
+            data-action="reset"
+            {...commitsFor(fieldId)}
+            onClick={onReset}
+            aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
+          >
+            {/* An icon at the row's end, where a "Reset to unset" line under
+                every set control made each one two rows. The words are its
+                tooltip and, in full, its name. */}
+            <RotateCcw size={14} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {revealed === undefined
+            ? "Reset to unset"
+            : `Reset to ${sourceLabel(revealed)}`}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -2652,14 +2671,12 @@ function SelectField({
   id,
   control,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl & { leaf: Extract<StyleLeaf, { kind: "keyword" }> };
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2694,25 +2711,6 @@ function SelectField({
           ))}
         </SelectContent>
       </Select>
-      {/*
-          A select cannot offer "unset" as an item: an empty value is not a
-          choice the list can carry, and a sentinel standing for it would mean
-          two things at once. A button beside it clears, which is the same act
-          an emptied text field performs.
-        */}
-      {current === "" ? null : (
-        <button
-          type="button"
-          className="nx-style-inspector__select-clear"
-          onClick={() => onCommit(null)}
-          aria-label={`Clear ${actionName}`}
-          title="Clear"
-        >
-          {/* An icon, not the word: beside a list in a narrow column, the
-              word ran to the panel's edge. */}
-          <X size={14} aria-hidden="true" />
-        </button>
-      )}
     </div>
   );
 }
@@ -2741,14 +2739,12 @@ function FoldedField({
   id,
   fold,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   fold: Fold;
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2767,7 +2763,6 @@ function FoldedField({
       id={id}
       options={fontWeightOptions(stored)}
       stored={stored}
-      actionName={actionName}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -2779,14 +2774,12 @@ function OptionSelect({
   id,
   options,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2815,18 +2808,6 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
-      {/* Cleared beside the list, as a keyword select is: an empty choice is
-          not one the list can carry. */}
-      {current === "" ? null : (
-        <button
-          type="button"
-          className="nx-style-inspector__select-clear"
-          onClick={() => onCommit(null)}
-          aria-label={`Clear ${actionName}`}
-        >
-          Clear
-        </button>
-      )}
     </div>
   );
 }
@@ -4065,7 +4046,6 @@ function ValueField({
         id={id}
         fold={fold}
         stored={stored}
-        actionName={actionName}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -4106,7 +4086,6 @@ function ValueField({
         id={id}
         control={{ ...control, leaf: control.leaf }}
         stored={stored}
-        actionName={actionName}
         describedBy={describedBy}
         onCommit={onCommit}
       />

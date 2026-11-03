@@ -59,7 +59,6 @@ import {
   StretchHorizontal,
   StretchVertical,
   WrapText,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -231,23 +230,6 @@ export function IconChoiceField({
             />
           )}
         </div>
-        {/* Clearing at the row's end while a value is set: an icon still
-            chosen can be pressed again, a value in More cannot. */}
-        {current === undefined ? null : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className="nx-icon-choice__clear"
-                aria-label={`Clear ${actionName}`}
-                onClick={() => onCommit(null)}
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Clear</TooltipContent>
-          </Tooltip>
-        )}
       </div>
     </TooltipProvider>
   );
