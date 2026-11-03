@@ -224,6 +224,24 @@ describe("a copy the editor cannot load", () => {
   });
 });
 
+describe("the dialogs' words", () => {
+  it("speak of this page, never of a placement", async () => {
+    // "Placement" is the engine's word; an author placed a component on a
+    // page, and the dialogs say what happens on that page.
+    routes.detach.mockResolvedValue(detachAnswer());
+    mount("detach");
+    const detach = await screen.findByRole("dialog");
+    expect(detach.textContent).toMatch(/plain blocks/);
+    expect(detach.textContent).not.toMatch(/placement/i);
+    cleanup();
+
+    mount("duplicate");
+    const duplicate = await screen.findByRole("dialog");
+    expect(duplicate.textContent).toMatch(/this page uses it/);
+    expect(duplicate.textContent).not.toMatch(/placement/i);
+  });
+});
+
 describe("updating a pattern from the editor", () => {
   it("is held until a pattern is chosen, and says earlier inserts keep their copies", () => {
     mount("update-pattern");

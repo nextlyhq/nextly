@@ -271,7 +271,7 @@ function DetachForm({
   return (
     <ActionDialog
       title="Detach from component"
-      description={`The placement becomes plain blocks that look exactly as they do now. Edits to ${name} will no longer reach them.`}
+      description={`On this page, it becomes plain blocks that look exactly as they do now. Edits to ${name} will no longer reach them.`}
       busy={false}
       onClose={onClose}
       returnFocusTo={returnFocusTo}
@@ -303,7 +303,7 @@ function DetachForm({
       <Problem
         text={
           plan === null
-            ? (detach.error ?? "This placement could not be detached.")
+            ? (detach.error ?? "It could not be detached from the component.")
             : undefined
         }
       />
@@ -344,7 +344,7 @@ function DuplicateForm({
     if (pending === null) return;
     const unused = (why: string) => {
       toast.error(
-        `The copy was created, but ${why}. It is in your library, unused, and this placement is unchanged.`
+        `The copy was created, but ${why}. It is in your library, unused, and this page is unchanged.`
       );
       onClose();
     };
@@ -356,7 +356,7 @@ function DuplicateForm({
       return () => window.clearTimeout(timer);
     }
     if (applyAll(pending.ops) === null) {
-      unused("this placement could not be pointed at it");
+      unused("this page could not be switched to it");
       return;
     }
     toast.success("Component duplicated");
@@ -383,7 +383,7 @@ function DuplicateForm({
   return (
     <ActionDialog
       title="Duplicate component"
-      description={`A copy of ${source?.title ?? "this component"} is made, and this placement uses it, keeping its own values. Other placements keep the original.`}
+      description={`A copy of ${source?.title ?? "this component"} is made, and this page uses it, keeping its own values. Everywhere else keeps the original.`}
       busy={busy}
       onClose={onClose}
       returnFocusTo={returnFocusTo}
