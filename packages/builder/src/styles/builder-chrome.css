@@ -3912,243 +3912,410 @@ fieldset.nx-inspector__fields {
   outline-offset: 2px;
 }
 
-/* --- fonts panel ----------------------------------------------------------
-   Token-driven throughout, per the admin styling rule: every colour here is an
-   `--nx-*` custom property so the panel works in both modes without a second
-   palette. */
+/* --- Fonts: the Design panel's Fonts tab, its catalogue, and the
+   inspector's Font control ------------------------------------------------
+   Built on the Variables tab's `.nx-vars*` rows, groups and 240px editor;
+   these rules add only what is particular to fonts. Every colour is an
+   `--nx-*` property, so light and dark need nothing more. */
 
-/* One stacking rule for every column in the panel, varying only the gap. Four
-   near-identical flex blocks is the duplication the CSS audit names, and the
-   copies drift: a spacing change made in three of them looks done. */
-.nx-fonts,
-.nx-fonts__faces,
-.nx-fonts__tokens,
-.nx-fonts__face,
-.nx-fonts__token,
-.nx-fonts__families,
-.nx-fonts__family-group,
-.nx-fonts__family-faces {
+.nx-fonts__lead {
+  font-size: 14px;
+}
+
+/* A font variable row with nowhere to send the author: drawn, not pressed. */
+.nx-fonts__static-row {
+  cursor: default;
+}
+
+.nx-fonts__static-row:hover {
+  background: transparent;
+}
+
+.nx-fonts__attention {
+  margin: 0;
+  padding: 4px 0 6px 0.5rem;
+  border-inline-start: 2px solid var(--nx-warning);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__privacy {
+  padding-top: 0.25rem;
+}
+
+/* The details and the add editor: the family in itself, then its sample. */
+.nx-fonts__heading {
   display: flex;
   flex-direction: column;
-}
-
-.nx-fonts {
-  gap: 1rem;
-}
-
-.nx-fonts__faces,
-.nx-fonts__tokens {
-  gap: 0.5rem;
-}
-
-/* The bordered blocks the panel is built from. A family group is one of them:
-   same inset, same boundary, so the three read as one kind of card rather than
-   as three that happen to look alike. */
-.nx-fonts__face,
-.nx-fonts__token,
-.nx-fonts__family-group {
   gap: 0.25rem;
-  border: 1px solid var(--nx-border);
-  border-radius: 0.375rem;
-  padding: 0.5rem;
+  min-width: 0;
 }
 
-.nx-fonts__families {
-  gap: 0.125rem;
+.nx-fonts__title {
+  font-size: 16px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
-/* A family's cuts, grouped under the name they share so the block reads as one
-   typeface rather than as repeated rows. Its stacking, list reset and boundary
-   all come from the rules above; only the inner spacing is its own. */
-.nx-fonts__family-faces {
-  gap: 0.375rem;
+.nx-fonts__title--large {
+  font-size: 20px;
 }
 
-/* Which cut a row is. Quieter than the family name above it, because the name
-   is what an author scans for and the cut is what they confirm. */
-.nx-fonts__face-cut {
-  font-size: var(--text-xs);
-  color: var(--nx-muted-foreground);
-  font-variant-numeric: tabular-nums;
+.nx-fonts__sample {
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-/* --- adding a font file ---------------------------------------------------
-   A labelled column rather than a grid: the panel is a narrow rail, and a
-   two-column form there collapses to unreadable field widths at the sizes this
-   surface is actually used at. */
-.nx-fonts__add {
+.nx-fonts__editor-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.nx-fonts__styles {
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
-  margin-top: 0.5rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--nx-border);
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
 }
 
-/* The group's own name. A `role="group"` needs one to be announced as a group
-   at all, and the visible heading and the accessible name are then the same
-   string rather than a caption and a hidden label that can disagree. */
-.nx-fonts__add-heading {
-  margin: 0 0 0.125rem;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--nx-foreground);
-}
-
-.nx-fonts__add-label {
-  font-size: var(--text-xs);
-  font-weight: 500;
+.nx-fonts__meta,
+.nx-fonts__hint,
+.nx-fonts__live {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
 }
 
-/* One rule for every control, so the file input, the text fields and the select
-   share a boundary and a height instead of falling back to three different
-   platform presentations. */
-.nx-fonts__add-file,
-.nx-fonts__add-text {
-  width: 100%;
+.nx-fonts__live:empty {
+  display: none;
+}
+
+.nx-fonts__fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
   min-width: 0;
-  box-sizing: border-box;
-  padding: 0.375rem 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.nx-fonts__weights {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem 0.5rem;
+}
+
+.nx-fonts__check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem;
   font-size: var(--text-xs);
-  font-family: inherit;
-  color: var(--nx-foreground);
+}
+
+.nx-fonts__check > label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* The add button spans the editor's actions row, so its count is never cut. */
+.nx-fonts__add-button {
+  flex: 1;
+  gap: 0.375rem;
+}
+
+/* A select drawn as a button: Weight and Category here, and the inspector's
+   Font control below. */
+.nx-fonts__choice,
+.nx-font-pick__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 28px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
   background: var(--nx-background);
-  border: 1px solid var(--nx-border);
-  border-radius: 0.375rem;
-}
-
-.nx-fonts__add-file::file-selector-button {
-  margin-right: 0.5rem;
-  padding: 0.125rem 0.5rem;
-  font-size: var(--text-xs);
-  font-family: inherit;
   color: var(--nx-foreground);
-  background: var(--nx-muted);
-  border: 1px solid var(--nx-border);
-  border-radius: 0.25rem;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
-.nx-fonts__add-file:focus-visible,
-.nx-fonts__add-text:focus-visible,
-.nx-fonts__add-submit:focus-visible {
-  outline: 2px solid var(--nx-ring);
-  outline-offset: 2px;
-}
-
-.nx-fonts__add-submit {
-  margin-top: 0.125rem;
-  padding: 0.375rem 0.75rem;
+.nx-fonts__choice {
+  width: 100%;
   font-size: var(--text-xs);
-  font-weight: 500;
-  font-family: inherit;
-  color: var(--nx-primary-foreground);
-  background: var(--nx-primary);
-  border: 1px solid transparent;
-  border-radius: 0.375rem;
-  cursor: pointer;
 }
 
-/* Disabled is a STATE, not a colour: an author reads why from the fields above,
-   so this only has to stop reading as pressable. */
-.nx-fonts__add-submit:disabled {
-  opacity: 0.5;
+.nx-fonts__choice:hover,
+.nx-fonts__choice[data-state="open"],
+.nx-font-pick__trigger:hover,
+.nx-font-pick__trigger[data-state="open"] {
+  background: var(--nx-muted);
+}
+
+.nx-fonts__choice:disabled,
+.nx-font-pick__trigger:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
-/* The refusal sits under the control that produced it and uses the destructive
-   token, so it carries the same meaning in both modes as every other error in
-   this chrome. */
-.nx-fonts__add-error {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--nx-destructive);
+.nx-fonts__choice > svg,
+.nx-font-pick__trigger > svg {
+  flex: none;
+  color: var(--nx-muted-foreground);
 }
 
-.nx-fonts__faces,
-.nx-fonts__tokens,
-.nx-fonts__families,
-.nx-fonts__family-faces {
+.nx-fonts__choice-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-fonts__choice:focus-visible,
+.nx-fonts-catalogue__row:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* Placeholder rows while the catalogue loads: still bars, no shimmer. */
+.nx-fonts__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--nx-border);
+}
+
+.nx-fonts__skeleton > span {
+  height: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+}
+
+.nx-fonts__skeleton > span:first-child {
+  width: 55%;
+  height: 14px;
+}
+
+.nx-fonts__skeleton > span:last-child {
+  width: 35%;
+}
+
+/* Upload: the native picker stays out of sight; the admin's button opens it. */
+.nx-fonts-upload__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.nx-fonts-upload__file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-fonts-upload__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-fonts-upload__range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.25rem;
+}
+
+.nx-fonts-upload__range input {
+  height: 28px;
+  font-size: var(--text-xs);
+}
+
+/* The catalogue, in the tab's place. */
+.nx-fonts-catalogue__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.nx-fonts-catalogue__back {
+  gap: 0.25rem;
+  height: 1.75rem;
+  padding-inline: 0.375rem;
+  font-size: var(--text-xs);
+}
+
+.nx-fonts-catalogue__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.nx-fonts-catalogue__filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--nx-border);
+}
+
+.nx-fonts-catalogue__filters input {
+  height: 28px;
+  font-size: var(--text-xs);
+}
+
+.nx-fonts-catalogue__row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 44px;
+  padding-inline: 4px;
+}
+
+.nx-fonts-catalogue__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nx-fonts-catalogue__preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.nx-fonts-catalogue__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-fonts-catalogue__failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+/* The inspector's Font control: a select-like trigger and its list. */
+.nx-font-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-font-pick__trigger {
+  flex: 1;
+  font-size: var(--text-sm);
+}
+
+.nx-font-pick__trigger:focus-visible,
+.nx-font-pick__list:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-font-pick__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-font-pick__value[data-placeholder],
+.nx-font-pick[data-unknown] .nx-font-pick__value {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-font-pick__clear {
+  flex: none;
+}
+
+/* Two classes, to outrank the popover's own width and padding. */
+[data-slot="popover-content"].nx-font-pick__popover {
+  width: var(--radix-popover-trigger-width);
+  min-width: 200px;
+  padding: 0;
+}
+
+.nx-font-pick__body {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+}
+
+.nx-font-pick__list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0.25rem;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.nx-font-pick__heading {
+  display: block;
+  padding: 0.375rem 0.375rem 0.125rem;
+}
+
+.nx-font-pick__group {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.nx-fonts__heading {
-  margin: 0 0 0.375rem;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--nx-muted-foreground);
-}
-
-.nx-fonts__face-name,
-.nx-fonts__token-name,
-.nx-fonts__family-name {
-  font-family: var(--font-mono, monospace);
-}
-
-.nx-fonts__face-name,
-.nx-fonts__token-name {
-  font-size: var(--text-xs);
-  color: var(--nx-muted-foreground);
-}
-
-/* The specimen is the affordance, so it is given room and never wraps into the
-   chrome around it. `clip` rather than `ellipsis`: a truncated typeface still
-   shows its letterforms, and an ellipsis would sit in the panel's font rather
-   than the specimen's, which is the one place a substitution must not appear. */
-.nx-fonts__specimen {
-  display: block;
-  font-size: var(--text-lg);
-  line-height: 1.4;
-  white-space: nowrap;
+.nx-font-pick__option {
+  padding: 0.3125rem 0.5rem;
   overflow: hidden;
-  text-overflow: clip;
+  border-radius: calc(var(--radius-sm) - 2px);
   color: var(--nx-foreground);
-}
-
-.nx-fonts__family {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
-.nx-fonts__family,
-.nx-fonts__family-note,
-.nx-fonts__note {
-  font-size: var(--text-xs);
-}
-
-.nx-fonts__family-note,
-.nx-fonts__note {
-  color: var(--nx-muted-foreground);
-  margin: 0;
-}
-
-/* Attention is carried by a border and the foreground colour rather than by
-   colour alone, so it survives a reader who cannot separate the two. */
-.nx-fonts__note--attention {
-  border-inline-start: 2px solid var(--nx-ring);
-  padding-inline-start: 0.5rem;
-  color: var(--nx-foreground);
-}
-
-.nx-fonts__jump {
-  border: 0;
-  padding: 0;
-  background: none;
-  color: var(--nx-ring);
-  font: inherit;
-  text-decoration: underline;
+  font-size: 13px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.nx-fonts__jump:focus-visible {
-  outline: 2px solid var(--nx-ring);
-  outline-offset: 2px;
+.nx-font-pick__option[aria-selected="true"] {
+  background: var(--nx-muted);
+}
+
+.nx-font-pick__option[data-current] {
+  box-shadow: inset 2px 0 0 var(--nx-foreground);
+}
+
+.nx-font-pick__none {
+  padding: 0.5rem;
+}
+
+.nx-font-pick__footer {
+  padding: 0.375rem 0.5rem;
+  border-top: 1px solid var(--nx-border);
 }
 
 /*
