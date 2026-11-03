@@ -33,6 +33,7 @@ import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
+import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
 import {
   keyboardMovePosition,
@@ -1178,6 +1179,9 @@ export function useBlockKeyboardActions({
     [sharedLibrary, sharedMayChange]
   );
 
+  // What the lock view is read from, so the list below depends on them alone.
+  const { composed, lockDefinitions } = editor;
+
   /*
    * The verb list, computed ONCE for every surface below.
    *
@@ -1196,7 +1200,14 @@ export function useBlockKeyboardActions({
         editor.lockRefusalFor,
         componentOffer,
         onEditComponent !== undefined,
-        sharedOffer
+        // With the editor's lock view, the source the save dialog judges by,
+        // so an area locked to its content dims the verb here too.
+        sharedOffer === undefined
+          ? undefined
+          : {
+              ...sharedOffer,
+              view: lockViewOf({ composed, lockDefinitions }),
+            }
       ),
     [
       editor.document,
@@ -1208,6 +1219,8 @@ export function useBlockKeyboardActions({
       onEditComponent,
       componentOffer,
       sharedOffer,
+      composed,
+      lockDefinitions,
     ]
   );
   /*

@@ -19,6 +19,7 @@
  */
 
 import type {
+  BreakpointSet,
   NamedClass,
   NodeStyles,
   StyleState,
@@ -278,8 +279,8 @@ export interface StyleTargetBarProps {
   /** The shared block verbs, for "Save as shared style…". */
   readonly verbs: CardVerbs | undefined;
   readonly device: string;
-  /** The breakpoint tier the value is stored under. */
-  readonly tier?: string;
+  /** The site's breakpoints, so Detach weighs a later style's narrower values. */
+  readonly breakpoints?: BreakpointSet;
   readonly state: StyleState;
   readonly stateControl?: React.ReactNode;
 }
@@ -311,7 +312,8 @@ function chipActions(
   editor: EditorState,
   nodeId: string | null,
   worn: readonly SharedStyleRow[],
-  report: (reason: string) => void
+  report: (reason: string) => void,
+  breakpoints: BreakpointSet | undefined
 ): {
   onRemove?: (id: string) => void;
   onDetach?: (id: string) => void;
@@ -335,7 +337,8 @@ function chipActions(
           nodeId,
           style,
           worn,
-          lockViewOf(editor)
+          lockViewOf(editor),
+          breakpoints
         ),
         `${style.name} could not be detached from this block: the page could not take the change.`,
         report
@@ -359,7 +362,7 @@ export function StyleTargetBar({
   host,
   verbs,
   device,
-  tier,
+  breakpoints,
   state,
   stateControl,
 }: StyleTargetBarProps): React.JSX.Element {
@@ -387,7 +390,7 @@ export function StyleTargetBar({
         locked: row.locked,
       }))}
       onTargetChange={host === undefined ? undefined : onChoose}
-      {...chipActions(editor, nodeId, worn, report)}
+      {...chipActions(editor, nodeId, worn, report, breakpoints)}
       chipActionsHeld={held}
       sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
       actions={
@@ -402,7 +405,6 @@ export function StyleTargetBar({
         )
       }
       device={device}
-      tier={tier}
       state={state}
       stateControl={stateControl}
     />

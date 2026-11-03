@@ -77,10 +77,8 @@ export interface EditingBarProps {
   readonly actions?: React.ReactNode;
   /** Why a shared target's values can't be changed, when they can't. */
   readonly sharedReadOnly?: string;
-  /** The device being edited, by name: "Desktop", "Tablet". */
+  /** The devices the edit reaches, in words: "All devices", "Tablet and smaller". */
   readonly device: string;
-  /** The breakpoint tier the edit is stored under, as the site names it: "base". */
-  readonly tier?: string;
   /** The state being edited. */
   readonly state: StyleState;
   /**
@@ -107,7 +105,6 @@ export function EditingBar({
   actions,
   sharedReadOnly,
   device,
-  tier,
   state,
   stateControl,
 }: EditingBarProps): React.JSX.Element {
@@ -188,12 +185,7 @@ export function EditingBar({
           }
         />
       ) : null}
-      <BarContext
-        device={device}
-        tier={tier}
-        state={state}
-        stateControl={stateControl}
-      />
+      <BarContext device={device} state={state} stateControl={stateControl} />
       <p className="nx-sr-only" role="status">
         {announced}
       </p>
@@ -218,28 +210,21 @@ function useSwitchAnnouncement(target: EditTarget): string {
 }
 
 /**
- * The bar's second line: the device, the breakpoint tier and the state, from
- * the canvas, with the State menu when the host can act on a choice.
+ * The bar's second line: the devices the edit reaches and the state, from the
+ * canvas, with the State menu when the host can act on a choice.
  */
 function BarContext({
   device,
-  tier,
   state,
   stateControl,
 }: Pick<
   EditingBarProps,
-  "device" | "tier" | "state" | "stateControl"
+  "device" | "state" | "stateControl"
 >): React.JSX.Element {
   return (
     <div className="nx-editing-bar__context">
       <Monitor aria-hidden="true" size={14} />
       <span data-edit-device="">{device}</span>
-      {tier === undefined ? null : (
-        <>
-          <span aria-hidden="true">·</span>
-          <span data-edit-tier="">{tier}</span>
-        </>
-      )}
       <span aria-hidden="true">·</span>
       <span className="nx-editing-bar__state-label" aria-hidden="true">
         State
@@ -330,6 +315,8 @@ function TargetChip({
       // looking for it, whichever chip it is.
       data-edit-target={active ? (id === null ? "block" : "shared") : undefined}
       aria-pressed={active}
+      // A locked style's chip says so in its name, as one phrase.
+      aria-label={locked ? `${name}, locked` : undefined}
       // One tab stop for the group: the target. The arrows reach the rest.
       tabIndex={active ? 0 : -1}
       disabled={onSelect === undefined && !active}
@@ -343,12 +330,8 @@ function TargetChip({
       }}
     >
       {name}
-      {locked ? (
-        <>
-          <Lock aria-hidden="true" size={11} />
-          <span className="nx-sr-only">, locked</span>
-        </>
-      ) : null}
+      {/* The lock in words is in the chip's name, said as one phrase. */}
+      {locked ? <Lock aria-hidden="true" size={11} /> : null}
     </button>
   );
 }

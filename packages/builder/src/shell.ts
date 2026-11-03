@@ -576,6 +576,7 @@ export type {
   SharedStyleChange,
   SharedStyleOffer,
 } from "./shared-style-target";
+export { sharedStyleNameTaken } from "./shared-style-target";
 /*
  * The notice QUEUE is published; the region is not.
  *

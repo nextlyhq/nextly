@@ -439,16 +439,16 @@ export function appliedClasses(
 }
 
 /**
- * The classes a node could still be given, narrowed by what the author typed.
+ * The classes a node could still be given, narrowed to those `matches` keeps.
  *
- * Matched against the SLUG rather than the emitted class name, because the
- * prefix every emitted name carries is identical on all of them and would make
- * an author's first keystrokes match everything.
+ * The match is the caller's: the picker asks the Shared styles tab's own
+ * search (name, class name, property or value), so a style is found the same
+ * way in both places.
  */
 export function applicableClasses(
   library: readonly NamedClass[],
   nodeClassIds: readonly string[],
-  query: string
+  matches: (choice: ClassChoice) => boolean
 ): ClassChoice[] {
   /*
    * The WHOLE stored array, deliberately not the readable prefix that
@@ -458,10 +458,9 @@ export function applicableClasses(
    * offering it would append a second copy of an id the node already holds.
    */
   const applied = new Set(nodeClassIds);
-  const needle = query.trim().toLowerCase();
   return siteClasses(library)
     .filter(choice => !applied.has(choice.id))
-    .filter(choice => needle === "" || choice.slug.includes(needle));
+    .filter(matches);
 }
 
 /**
@@ -486,13 +485,13 @@ export interface SelectorOptions {
   readonly hidden: number;
 }
 
-/** What the selector offers for a query: the matching styles, capped. */
+/** What the selector offers: the styles `matches` keeps, capped. */
 export function selectorOptions(
   library: readonly NamedClass[],
   nodeClassIds: readonly string[],
-  query: string
+  matches: (choice: ClassChoice) => boolean
 ): SelectorOptions {
-  const applicable = applicableClasses(library, nodeClassIds, query);
+  const applicable = applicableClasses(library, nodeClassIds, matches);
   const shown = applicable.slice(0, MAX_SELECTOR_OPTIONS);
   const options: ClassOption[] = shown.map(choice => ({
     kind: "apply",

@@ -1250,6 +1250,7 @@
 .nx-editing-bar__chip-menu {
   display: inline-flex;
   align-items: center;
+  gap: 0.25rem;
   max-inline-size: 11rem;
   padding: 1px 0.4375rem;
   overflow: hidden;
@@ -1295,8 +1296,19 @@
   border-end-start-radius: 0;
 }
 
+/* A ring that follows the chip's rounded corners, as an outline may not. */
 .nx-editing-bar__chip:focus-visible,
-.nx-editing-bar__chip-menu:focus-visible,
+.nx-editing-bar__chip-menu:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--nx-ring);
+}
+
+.nx-editing-bar__chip[aria-pressed="true"]:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px currentColor,
+    0 0 0 2px var(--nx-ring);
+}
+
 .nx-editing-bar__leave:focus-visible,
 .nx-editing-bar__action:focus-visible {
   outline: 2px solid var(--nx-ring);
@@ -1378,6 +1390,25 @@
 .nx-state-menu:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
+}
+
+/* The chosen state's tick, in a slot every item keeps so the words align. */
+.nx-state-menu__tick {
+  display: inline-flex;
+  width: 0.875rem;
+  margin-inline-end: 0.375rem;
+}
+
+/* How many other states hold values, in words beside the trigger. */
+.nx-state-menu__elsewhere {
+  color: var(--nx-muted-foreground);
+}
+
+/* The save dialog's hint, the size and tone of the Design editors' hints. */
+.nx-shared-style-save__hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
 }
 
 /* A state with values: a dot in the colour of the words beside it. */
@@ -5317,12 +5348,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   white-space: nowrap;
 }
 
+/* The name keeps its own width while the row has room; the class name gives
+   way first, then the name. */
 .nx-classes__option-name {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
 }
 
 .nx-classes__option-class {
-  flex: 0 1 auto;
+  flex: 1 1 0;
 }
 
 /*

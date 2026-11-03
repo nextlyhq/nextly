@@ -589,6 +589,31 @@ describe("the shared style target", () => {
     ]);
   });
 
+  it("keeps a new value the author gives the same control while Move to is on its way", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const { withStyles } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    // The author sets the same control again on the block meanwhile.
+    const later = withStyles({ base: { [BASE_BREAKPOINT]: { opacity: 0.7 } } });
+
+    await act(async () => {
+      store(undefined);
+    });
+
+    // 0.2 went to Card; 0.7 is the block's new value and is not cleared.
+    expect(later.applyAll).not.toHaveBeenCalled();
+  });
+
   it("says through the shell when Detach could not be applied to the page", () => {
     const raise = vi.fn();
     const { editor } = mountTarget({ classes: ["c-card"], raise });
@@ -715,8 +740,9 @@ describe("the shared style target", () => {
     const words = line?.querySelector("[data-shared-line-text]");
     // The separator is held to the words on both sides, so a wrap falls
     // between other words; the action sits on its own line, after them.
+    // The style's name is held to "overrides" too, so it never wraps alone.
     expect(words?.textContent).toBe(
-      "Set on this block\u00a0·\u00a0overrides Card"
+      "Set on this block\u00a0·\u00a0overrides\u00a0Card"
     );
     const reset = within(line as HTMLElement).getByRole("button", {
       name: /^Reset Opacity on this block/,

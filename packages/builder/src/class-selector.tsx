@@ -26,6 +26,11 @@ import {
   withClassApplied,
   type ClassOption,
 } from "./class-library";
+import {
+  searchSharedStyles,
+  sharedStyleRows,
+  sharedStyleSearchText,
+} from "./shared-style-library";
 
 /**
  * Why the last application did not land.
@@ -115,6 +120,7 @@ export function ClassSelector({
     readonly issue: SelectorFailure;
   } | null>(null);
   const listId = React.useId();
+  const matches = useStyleSearch(library, query);
 
   // Cleared, not merely hidden, once it stops describing the node: React's
   // adjust-state-during-render, which converges once the state is null.
@@ -134,7 +140,7 @@ export function ClassSelector({
     );
   }
 
-  const { options, hidden } = selectorOptions(library, nodeClassIds, query);
+  const { options, hidden } = selectorOptions(library, nodeClassIds, matches);
   const unapplied = unappliedNodeClassCount(nodeClassIds);
   const shown = liveFailure(failure, nodeId, nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps
@@ -266,6 +272,35 @@ function SelectorNotes({
     </>
   );
 }
+
+/**
+ * Which styles a query finds, by the Shared styles tab's own search: the name
+ * as written and the class name, and any property or value, with case,
+ * spaces and dashes aside. One rule, so a style is found the same way in the
+ * tab and here. The searchable text is built once per library.
+ */
+function useStyleSearch(
+  library: readonly NamedClass[] | undefined,
+  query: string
+): (choice: { id: string }) => boolean {
+  const rows = React.useMemo(
+    () => (library === undefined ? [] : sharedStyleRows(library, NO_IDS)),
+    [library]
+  );
+  const texts = React.useMemo(
+    () => new Map(rows.map(row => [row.id, sharedStyleSearchText(row)])),
+    [rows]
+  );
+  const found = new Set(
+    searchSharedStyles(rows, query, row => texts.get(row.id) ?? "").map(
+      row => row.id
+    )
+  );
+  return choice => found.has(choice.id);
+}
+
+/** No code-supplied ids: the picker lists what may be applied, from anywhere. */
+const NO_IDS: ReadonlySet<string> = new Set();
 
 /** The DOM id of one option row, for `aria-activedescendant`. */
 function optionDomId(listId: string, index: number): string {

@@ -378,6 +378,15 @@ describe("which states report that they carry values", () => {
 });
 
 describe("choosing a state", () => {
+  it("marks the chosen state with a tick, not the dot that means values", () => {
+    render(<StateSwitcher state="hover" onSelect={vi.fn()} />);
+    open();
+    const chosen = screen.getByRole("menuitemradio", { checked: true });
+    expect(chosen.textContent).toBe("Hover");
+    expect(chosen.querySelector(".nx-state-menu__tick svg")).not.toBeNull();
+    expect(chosen.querySelector("[data-nx-state-marked]")).toBeNull();
+  });
+
   it("switches to the state the author picks from the menu", () => {
     const onSelect = vi.fn();
     render(<StateSwitcher state="base" onSelect={onSelect} />);

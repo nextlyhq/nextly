@@ -178,7 +178,7 @@ export function SaveSharedStyleDialog({
             >
               {slug === "" ? " " : `.${namedClassName(slug)}`}
             </p>
-            <p className="nx-inspector__note" id={hintId}>
+            <p className="nx-shared-style-save__hint" id={hintId}>
               Name it for what it is, like Card or Primary button.
             </p>
           </div>

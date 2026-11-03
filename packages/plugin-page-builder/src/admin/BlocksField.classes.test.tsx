@@ -462,6 +462,28 @@ describe("adding a shared style made from a block", () => {
     ]);
   });
 
+  it("refuses a name the queue's library already has, though the dialog's read did not", async () => {
+    // A rename to "card" stored after the dialog read the library: the queue
+    // holds it, so the add is judged against the queue, not the dialog's read.
+    storedRead = {
+      data: {
+        classes: [
+          { id: "id-renamed", slug: "card", orderIndex: 0, styles: {} },
+        ],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+
+    const refused = await addStyle({ ...MADE, slug: "card", label: "Card" });
+
+    expect(refused).toBe(
+      "“Card” is already a shared style. Choose another name."
+    );
+    expect(saved).toHaveLength(0);
+  });
+
   it("stores only what differs from the site's own config classes", async () => {
     clientConfig = {
       siteStyle: {

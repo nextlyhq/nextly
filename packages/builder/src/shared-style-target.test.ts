@@ -386,6 +386,43 @@ describe("detaching and removing a block's style", () => {
     });
   });
 
+  it("leaves a later style's narrower breakpoint winning, since the block's own values come after every style", () => {
+    const earlier = {
+      id: "c-early",
+      styles: {
+        base: { base: { color: "#aa0000", opacity: 0.5 } },
+      } as NodeStyles,
+    };
+    // Later in library order, and set only at the tablet width.
+    const later = {
+      id: "c-late",
+      styles: { base: { md: { color: "#0000aa" } } } as NodeStyles,
+    };
+    const plan = planDetachSharedStyle(
+      page({ classes: ["c-early", "c-late"] }),
+      "a",
+      earlier,
+      [earlier, later],
+      undefined,
+      BREAKPOINTS
+    );
+    expect(plan).toEqual({
+      ok: true,
+      ops: [
+        {
+          kind: "update",
+          id: "a",
+          // The base colour would beat the later style's tablet colour from
+          // the block's own tier, so it is not copied; the opacity is.
+          patch: {
+            styles: { base: { base: { opacity: 0.5 } } },
+            classes: ["c-late"],
+          },
+        },
+      ],
+    });
+  });
+
   it("refuses on a block whose design is locked", () => {
     expect(
       planDetachSharedStyle(
@@ -456,7 +493,8 @@ describe("Move to", () => {
             base: { base: { color: "#000001", margin: "4px", padding: "2px" } },
           },
         },
-        address
+        address,
+        "#000001"
       )
     ).toEqual([
       {

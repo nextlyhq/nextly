@@ -13,12 +13,14 @@
  * @module shared-style-target
  */
 import {
+  breakpointContexts,
   findNode,
   isPlainRecord,
   isTokenRef,
   newId,
   type BlockDocument,
   type BlockNode,
+  type BreakpointSet,
   type NamedClass,
   type NodeStyles,
   type StyleState,
@@ -32,7 +34,7 @@ import {
   withClassRemoved,
 } from "./class-library";
 import { designReadOnlyReason, type LockView } from "./inspector";
-import type { BuilderOp } from "./ops";
+import { sameStyleValue, type BuilderOp } from "./ops";
 import {
   renameSharedStyle,
   sharedStyleRows,
@@ -92,6 +94,12 @@ export interface SharedStyleOffer {
   readonly library: readonly NamedClass[] | undefined;
   /** Whether the author may change the site's design (`update-site-style`). */
   readonly mayChange: boolean;
+  /**
+   * The editor's lock view (`lockViewOf`), so a block inside an area locked
+   * to its content is refused here as the dialog refuses it. The registry's
+   * locks alone when omitted.
+   */
+  readonly view?: LockView;
 }
 
 /**
@@ -109,7 +117,7 @@ export function saveAsSharedStyleRefusal(
   const node = findNode(document.nodes, nodeId);
   // The Layers lock's own words, the ones the inspector shows for it; they
   // also cover a block that is no longer on the page.
-  const locked = designReadOnlyReason(document, nodeId, view);
+  const locked = designReadOnlyReason(document, nodeId, view ?? offer.view);
   if (node === undefined || locked !== undefined) {
     return locked ?? "This block is no longer on the page.";
   }
@@ -144,6 +152,23 @@ export type SharedStylePlan<T> =
   | ({ readonly ok: true } & T)
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * Why a new style's name can't be used because another style already has its
+ * class name, in words naming it as the author typed it, or `undefined`. One
+ * rule for the dialog, which asks it of the library it read, and for the host,
+ * which asks it again of the library its queue holds just before it stores.
+ */
+export function sharedStyleNameTaken(
+  name: string,
+  slug: string,
+  library: readonly Pick<NamedClass, "slug">[]
+): string | undefined {
+  if (slug === "" || !library.some(entry => entry.slug === slug)) {
+    return undefined;
+  }
+  return `“${name}” is already a shared style. Choose another name.`;
+}
+
 /** The name typed in the save dialog, checked: the label and class name, or why not. */
 export function newSharedStyleName(
   name: string,
@@ -152,13 +177,8 @@ export function newSharedStyleName(
   // A name whose class name another style has is refused naming it as the
   // author typed it, which is the name they will look for.
   const typed = name.trim();
-  const slug = sharedStyleSlug(typed);
-  if (slug !== "" && library.some(entry => entry.slug === slug)) {
-    return {
-      ok: false,
-      reason: `“${typed}” is already a shared style. Choose another name.`,
-    };
-  }
+  const taken = sharedStyleNameTaken(typed, sharedStyleSlug(typed), library);
+  if (taken !== undefined) return { ok: false, reason: taken };
   // Otherwise the rename rule with no style excluded: one rule for a name, so
   // a name refused on rename is refused here in the same words.
   const named = renameSharedStyle(name, "", library);
@@ -484,19 +504,36 @@ function uncoveredValues(
 }
 
 /**
- * An envelope with every value another envelope sets at the same state,
- * breakpoint and property taken out: what `under` still shows once `over`,
- * coming after it, has applied.
+ * Whether a value `over` sets at one breakpoint covers what `under` sets at
+ * another. By default only the same breakpoint does.
  */
-function uncoveredStyles(under: NodeStyles, over: NodeStyles): NodeStyles {
+type Covers = (at: string, by: string) => boolean;
+
+const SAME_BREAKPOINT: Covers = (at, by) => at === by;
+
+/**
+ * An envelope with every value another envelope sets at the same state and
+ * property, at a breakpoint that covers it, taken out: what `under` still
+ * shows once `over`, coming after it, has applied.
+ */
+function uncoveredStyles(
+  under: NodeStyles,
+  over: NodeStyles,
+  covers: Covers = SAME_BREAKPOINT
+): NodeStyles {
   let left: Record<string, Record<string, Record<string, StyleValue>>> = {};
   for (const [state, byBreakpoint] of ownEntries<object>(under)) {
     const overBreakpoints = ownRecord<Record<string, StyleValue>>(over, state);
     for (const [breakpoint, values] of ownEntries<object>(byBreakpoint)) {
-      const set = uncoveredValues(
-        values,
-        ownRecord<StyleValue>(overBreakpoints, breakpoint)
-      );
+      // Every value `over` sets at a breakpoint covering this one, laid
+      // together, is what this breakpoint's values lose to.
+      const covering = ownEntries<object>(overBreakpoints)
+        .filter(([by]) => covers(breakpoint, by))
+        .reduce<Record<string, StyleValue>>(
+          (laid, [, set]) => overlaidValues(laid, set),
+          {}
+        );
+      const set = uncoveredValues(values, covering);
       if (Object.keys(set).length === 0) continue;
       left = withKey(
         left,
@@ -509,11 +546,29 @@ function uncoveredStyles(under: NodeStyles, over: NodeStyles): NodeStyles {
 }
 
 /**
+ * Which later values a detached value must give way to, by breakpoint. The
+ * block's own values are emitted after every shared style, so a value copied
+ * onto the block at one breakpoint beats a later style's value at that
+ * breakpoint AND at every narrower one, where that style wins today. So a
+ * later style's value at the same or a narrower breakpoint covers it. Widths
+ * are ranked in the engine's own order (`breakpointContexts`: the base, then
+ * each axis widest first); one the site does not define ranks as narrowest.
+ */
+function widthCovers(breakpoints: BreakpointSet | undefined): Covers {
+  const rank = new Map(
+    breakpointContexts(breakpoints).map((context, index) => [context.id, index])
+  );
+  const rankOf = (id: string): number => rank.get(id) ?? Infinity;
+  return (at, by) => at === by || rankOf(by) >= rankOf(at);
+}
+
+/**
  * "Detach": keep the look on this block only. The style is taken off the
  * block, and the values it gives the block today are copied onto it, under
  * the block's own. A value a style later in library order sets at the same
- * place is not the detached style's to give (that style wins it now), so it is
- * left out, and the block looks the same after. A page edit, so a locked style
+ * place, or at a narrower breakpoint, is not the detached style's to give
+ * there (that style wins it now, and the block's own value would beat it), so
+ * it is left out. A page edit, so a locked style
  * may be detached; the block's own lock refuses.
  *
  * @param worn - every shared style the block wears, in library order
@@ -523,14 +578,16 @@ export function planDetachSharedStyle(
   nodeId: string,
   style: Pick<NamedClass, "id" | "styles">,
   worn: readonly Pick<NamedClass, "id" | "styles">[],
-  view?: LockView
+  view?: LockView,
+  breakpoints?: BreakpointSet
 ): SharedStylePlan<{ ops: BuilderOp[] }> {
   const held = editableNode(document, nodeId, view);
   if (!held.ok) return held;
   const node = held.node;
   const later = worn.slice(worn.findIndex(row => row.id === style.id) + 1);
+  const covers = widthCovers(breakpoints);
   const winning = later.reduce(
-    (left, row) => uncoveredStyles(left, row.styles),
+    (left, row) => uncoveredStyles(left, row.styles, covers),
     style.styles
   );
   return {
@@ -635,7 +692,7 @@ export function planMoveToSharedStyle(
   style: Pick<NamedClass, "styles">,
   address: StyleAddress,
   policy?: StylePolicy
-): SharedStylePlan<{ change: SharedStyleChange }> {
+): SharedStylePlan<{ change: SharedStyleChange; moved: StyleValue }> {
   const value = readStyleValue(node.styles, address);
   if (value === undefined) {
     return { ok: false, reason: "This block sets no value here to move." };
@@ -645,21 +702,26 @@ export function planMoveToSharedStyle(
   // is refused before anything is stored.
   const write = change(style.styles);
   if (write.kind === "refused") return { ok: false, reason: write.reason };
-  return { ok: true, change };
+  return { ok: true, change, moved: value };
 }
 
 /**
  * Move to's page half: the block's value cleared at one address, built from
  * the block as it stands when the style has taken the value, so an edit made
- * to the block meanwhile is kept. Nothing for a block that is gone or holds
- * nothing there any more.
+ * to the block meanwhile is kept, at another address or at this one. Nothing
+ * for a block that is gone or no longer holds the moved value there.
  */
 export function moveToSharedStyleClear(
   node: Pick<BlockNode, "id" | "styles"> | undefined,
   address: StyleAddress,
+  moved: StyleValue,
   policy?: StylePolicy
 ): BuilderOp[] {
   if (node === undefined) return [];
+  // Only the value that was moved: one the author has set here since, while
+  // the style's write was on its way, is the block's new value and stays.
+  const now = readStyleValue(node.styles, address);
+  if (now === undefined || !sameStyleValue(now, moved)) return [];
   const cleared = styleClearOp(node.id, node.styles, address, policy);
   return cleared.ok && cleared.op !== null ? [cleared.op] : [];
 }

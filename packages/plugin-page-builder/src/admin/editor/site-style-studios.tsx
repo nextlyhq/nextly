@@ -23,6 +23,7 @@ import {
   authoredBreakpoints,
   FontsPanel,
   SharedStylesPanel,
+  sharedStyleNameTaken,
   TokensPanel,
   withoutFamily,
   type ClassRenameOutcome,
@@ -652,6 +653,18 @@ function useAddClass(
               "This site's shared styles could not be read, so none can be added.",
           };
         }
+        /*
+         * Judged again against the library the queue holds, just before it
+         * stores: a rename that landed after the dialog read the library can
+         * have taken this class name, and two styles with one class name would
+         * write one selector.
+         */
+        const taken = sharedStyleNameTaken(
+          entry.label ?? entry.slug,
+          entry.slug,
+          existing
+        );
+        if (taken !== undefined) return { result: taken };
         const next: NamedClass[] = [...existing, entry];
         /*
          * Only what DIFFERS from the site's own config classes. The base is the

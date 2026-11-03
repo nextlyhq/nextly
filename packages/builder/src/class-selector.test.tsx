@@ -94,6 +94,19 @@ describe("what it lists", () => {
     ).toBe(".nx-c-card");
   });
 
+  it("finds a style by its name as written, spaces and case aside, as the Shared styles tab does", () => {
+    draw({
+      library: [...LIBRARY, cls("id-promo", "promo-card", 3, "Promo Card")],
+    });
+    type("promo card");
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
+      "Promo Card.nx-c-promo-card",
+    ]);
+    // In any case, as the tab's search is.
+    type("PROMO");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+  });
+
   it("never offers to make a new, empty style from what is typed", () => {
     draw();
     type("brand-new");

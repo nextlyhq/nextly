@@ -3383,6 +3383,7 @@ function moveToSharedStyle({
     const ops = moveToSharedStyleClear(
       findNode(now.document.nodes, nodeId),
       address,
+      plan.moved,
       policy
     );
     if (ops.length > 0 && now.applyAll(ops) === null) {
@@ -3450,7 +3451,7 @@ function SharedValueLine({
        * so a wrap falls between other words and never leaves it ending a line.
        */}
       <span data-shared-line-text="">
-        {`Set on this block\u00a0·\u00a0overrides ${under.name}`}
+        {`Set on this block\u00a0·\u00a0overrides\u00a0${under.name}`}
       </span>
       <button
         type="button"

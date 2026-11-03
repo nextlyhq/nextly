@@ -33,11 +33,10 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { stateHasOwnValues } from "./style-values";
@@ -132,33 +131,29 @@ export function StateSwitcher({
     ...elsewhere.map(option => `${STATE_LABELS[option]} has values`),
   ].join(", ");
   return (
-    // Not modal, as the editor's other menus are not: a modal menu hides the
-    // editor around it while its controls stay focusable.
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="nx-state-menu"
-          aria-label={triggerName}
-          title={`${STATE_LABELS[state]}: ${STATE_HINTS[state]}`}
-        >
-          <span aria-hidden="true">{STATE_LABELS[state]}</span>
-          {elsewhere.length > 0 ? <StateDot /> : null}
-          <ChevronDown aria-hidden="true" size={12} />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" collisionPadding={8}>
-        <DropdownMenuRadioGroup
-          value={state}
-          onValueChange={value => {
-            const chosen = STYLE_STATES.find(option => option === value);
-            if (chosen !== undefined) onSelect(chosen);
-          }}
-        >
+    <>
+      {/* Not modal, as the editor's other menus are not: a modal menu hides
+          the editor around it while its controls stay focusable. */}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="nx-state-menu"
+            aria-label={triggerName}
+            title={`${STATE_LABELS[state]}: ${STATE_HINTS[state]}`}
+          >
+            <span aria-hidden="true">{STATE_LABELS[state]}</span>
+            <ChevronDown aria-hidden="true" size={12} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" collisionPadding={8}>
           {STYLE_STATES.map(option => (
-            <DropdownMenuRadioItem
+            <DropdownMenuItem
               key={option}
-              value={option}
+              // One choice of four: a radio item, its choice marked with a
+              // tick, which cannot be mistaken for the "has values" dot.
+              role="menuitemradio"
+              aria-checked={option === state}
               /*
                * The marker is in the ACCESSIBLE NAME, not only in the dot: it
                * is the one piece of information this control adds beyond its
@@ -170,14 +165,28 @@ export function StateSwitcher({
                   : STATE_LABELS[option]
               }
               title={STATE_HINTS[option]}
+              onSelect={() => onSelect(option)}
             >
+              <span className="nx-state-menu__tick" aria-hidden="true">
+                {option === state ? <Check size={12} /> : null}
+              </span>
               {STATE_LABELS[option]}
               {marked(option) ? <StateDot /> : null}
-            </DropdownMenuRadioItem>
+            </DropdownMenuItem>
           ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {/*
+       * The states with values the canvas is not showing, in words beside the
+       * trigger rather than as a dot on it, where a dot would read as the
+       * shown state having values. The trigger's name already says which.
+       */}
+      {elsewhere.length > 0 ? (
+        <span className="nx-state-menu__elsewhere" aria-hidden="true">
+          {`· ${elsewhere.length} more set`}
+        </span>
+      ) : null}
+    </>
   );
 }
 

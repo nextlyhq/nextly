@@ -25,6 +25,7 @@
 
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   findNode,
   type BlockDocument,
   type BlockInspectorProps,
@@ -49,7 +50,6 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
-import { deviceLabel } from "./breakpoint-switcher";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
   ComponentFieldsContext,
@@ -885,15 +885,14 @@ function ContentTab({
 }
 
 /**
- * Where an edit lands, as the bar's second line says it: the device and the
- * breakpoint tier the value is stored under.
+ * Where an edit lands, as the bar's second line says it: the devices the
+ * value reaches, in words rather than as a breakpoint's id.
  */
 function barPlace(
   breakpoints: BreakpointSet | undefined,
   breakpoint: BreakpointId | undefined
-): { device: string; tier: string } {
-  const tier = breakpoint ?? BASE_BREAKPOINT;
-  return { device: editedDevice(breakpoints, tier), tier };
+): { device: string } {
+  return { device: editReach(breakpoints, breakpoint ?? BASE_BREAKPOINT) };
 }
 
 /**
@@ -985,6 +984,7 @@ function StyleTab({
         host={shared.sharedStyles}
         verbs={shared.verbs}
         {...barPlace(breakpoints, breakpoint)}
+        breakpoints={breakpoints}
         state={state}
         stateControl={stateControlFor(
           state,
@@ -1404,13 +1404,25 @@ function ManyBlocksPanel({
 }
 
 /**
- * The device the Style tab edits, named as the device switcher names it, so
- * the bar and the switcher beside it agree. A tier the switcher does not offer
- * (a container tier) is named by its own definition.
+ * The devices an edit at one tier reaches: the unconditional tier reaches
+ * "All devices"; a narrower one reaches itself and every narrower one on its
+ * axis ("Tablet and smaller"), or only itself when it is the narrowest
+ * ("Mobile"). Read from the site's own breakpoints in the engine's order
+ * (`breakpointContexts`: each axis widest first), named by each definition's
+ * own label, so a site with its own breakpoints is described in its words.
  */
-function editedDevice(
+function editReach(
   breakpoints: BreakpointSet | undefined,
   id: BreakpointId
 ): string {
-  return deviceLabel(breakpoints, id) ?? breakpointLabel(breakpoints, id);
+  if (id === BASE_BREAKPOINT) return "All devices";
+  const contexts = breakpointContexts(breakpoints);
+  const at = contexts.findIndex(context => context.id === id);
+  const label = breakpointLabel(breakpoints, id);
+  if (at === -1) return label;
+  const axis = contexts[at]?.axis;
+  const narrower = contexts
+    .slice(at + 1)
+    .some(context => context.axis === axis);
+  return narrower ? `${label} and smaller` : label;
 }
