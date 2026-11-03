@@ -1476,6 +1476,7 @@ interface EntryValidationArgs {
    * language's value; absent means the app's default language.
    */
   writeLocale?: string;
+  /**
    * Whether the document merges stored values the request did not carry (a
    * go-live merge, a promoted draft). The whole-number rule binds values a
    * caller writes, so it skips such a document — see the option's comment on
