@@ -524,6 +524,60 @@ describe("InspectorPanel block card", () => {
     });
   });
 
+  it("says a block inside a locked one is locked by it, withholds Rename, and offers Lock", () => {
+    // The lock covers everything inside the block: the selected heading is
+    // not locked itself, so the card names the block that holds the lock,
+    // where it is lifted, and withholds a rename. Its own Lock stays offered,
+    // as the multi-selection card offers it: a change to the lock alone is
+    // always allowed, so the action does not depend on how it was selected.
+    register();
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "hero",
+          type: "acme/heading",
+          version: 1,
+          props: {},
+          locked: true,
+          name: "Hero",
+          slots: {
+            children: [
+              {
+                id: "a",
+                type: "acme/heading",
+                version: 1,
+                props: { text: "Hi" },
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const editor = editorFor(document);
+    render(<InspectorPanel editor={editor} />);
+
+    expect(
+      document_().querySelector('[data-lock="layers-inherited"]')?.textContent
+    ).toBe(
+      "Locked by Hero: this block is inside it, so it can't be moved, deleted or edited. Unlock Hero to change it."
+    );
+    expect((screen.getByLabelText("Text") as HTMLInputElement).disabled).toBe(
+      true
+    );
+    openCardMenu("Heading");
+    expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+    const lock = screen.getByRole("menuitem", { name: "Lock" });
+    expect(lock.getAttribute("data-disabled")).toBeNull();
+    choose("Lock");
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { locked: true },
+    });
+  });
+
   it("keeps every control editable on a block nothing locks", () => {
     // The control for the case above.
     mount({ props: { text: "Hi" } });
@@ -2154,3 +2208,8 @@ describe("a block inside an area locked to its content", () => {
     ).toBeNull();
   });
 });
+
+/** The test document, named apart from the page fixtures called `document`. */
+function document_(): Document {
+  return globalThis.document;
+}

@@ -226,7 +226,9 @@ function MoreDevices({
    */
   const [open, setOpen] = React.useState(false);
   return (
-    <DropdownMenu open={open && ready} onOpenChange={setOpen}>
+    // Not modal, as the zoom menu: a modal menu hides the focusable editor
+    // around it from assistive technology (axe: aria-hidden-focus).
+    <DropdownMenu modal={false} open={open && ready} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         disabled={!ready}
         aria-label={trigger.name}

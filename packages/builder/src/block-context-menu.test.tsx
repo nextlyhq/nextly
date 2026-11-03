@@ -405,7 +405,7 @@ describe("the canvas's right-click menu", () => {
     // VISIBLE, not a `title`. A disabled item has `pointer-events-none` and is
     // skipped by keyboard navigation, so a tooltip on it is unreachable by
     // either input — the reason has to be in the item's own content.
-    expect(remove.textContent).toContain("This block is locked.");
+    expect(remove.textContent).toContain("Leaf is locked.");
     expect(remove.getAttribute("title")).toBeNull();
   });
 

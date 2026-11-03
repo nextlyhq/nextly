@@ -322,6 +322,23 @@ export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";
 
 /**
+ * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block
+ * declares, or a block an author locked in Layers. The answer is a union, and
+ * `isLayersLockFacts` tells the two apart: a Layers lock names the locked
+ * block (`label`, `relation`, `verb`), a slot lock names its holder
+ * (`holderType`, `lock`). `lockRefusalWording` words either.
+ */
+export {
+  isLayersLockFacts,
+  lockRefusalWording,
+  type LayersLockRefusalFacts,
+  type LockedRelation,
+  type LockedVerb,
+  type LockRefusalFacts,
+  type SlotLockRefusalFacts,
+} from "./lock-refusal";
+
+/**
  * Dragging blocks on the canvas, behind the same client banner: the hook holds
  * a gesture and the indicator draws its answer.
  *
@@ -465,6 +482,12 @@ export { TokensPanel } from "./tokens-panel";
 export type { TokensPanelProps } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The editor's words, spelled once, for every surface a host draws beside the
+ * shell's own: a panel it mounts names its places with these.
+ */
+export { EDITOR_WORDS } from "./editor-words";
+export type { EditorWord } from "./editor-words";
 /*
  * The two class surfaces, and the rules both answer from.
  *
