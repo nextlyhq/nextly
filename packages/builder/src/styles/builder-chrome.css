@@ -2618,6 +2618,77 @@
  * chevron with a utility in a cascade layer; these rules sit outside the
  * layers, so they win without raising specificity.
  */
+/*
+ * A Style section opening and closing (a plugin's own inspector in the
+ * Content tab keeps the shared accordion's motion): 150ms, its height and
+ * its opacity eased out together, where the shared accordion's 300ms in-out
+ * curve read as slow in a panel opened and closed all day and its height
+ * alone made the fields pop in at the end. Unlayered, so it outranks the
+ * utility classes the shared component sets.
+ */
+.nx-style-inspector
+  [data-section]
+  > [data-slot="accordion-content"][data-state="open"] {
+  animation: nx-section-open 150ms ease-out;
+}
+
+.nx-style-inspector
+  [data-section]
+  > [data-slot="accordion-content"][data-state="closed"] {
+  animation: nx-section-close 150ms ease-out;
+}
+
+/*
+ * Clipped for exactly the animation: an open section shows its overflow (a
+ * field's focus tooltip above its first row), and left visible while it
+ * moved, its fields drew over the headings below. `overflow` animates
+ * discretely, so the open rule's `visible` returns as the animation ends.
+ */
+@keyframes nx-section-open {
+  from {
+    height: 0;
+    opacity: 0;
+    overflow: hidden;
+  }
+
+  to {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+    overflow: hidden;
+  }
+}
+
+@keyframes nx-section-close {
+  from {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+    overflow: hidden;
+  }
+
+  to {
+    height: 0;
+    opacity: 0;
+    overflow: hidden;
+  }
+}
+
+/*
+ * An author who asks for less motion gets the section at once. As weighty as
+ * the open and closed rules above, and after them, so it wins over both. The
+ * chevron is stilled too, which the shared trigger turns with a transition.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nx-style-inspector
+    [data-section]
+    > [data-slot="accordion-content"][data-state] {
+    animation: none;
+  }
+
+  .nx-style-inspector .nx-style-inspector__section-trigger > svg {
+    transition: none;
+  }
+}
+
 .nx-style-inspector__section-trigger {
   padding-block: 0.5625rem;
 }

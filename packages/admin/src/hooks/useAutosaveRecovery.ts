@@ -11,7 +11,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
@@ -32,6 +32,101 @@ import {
  */
 function putOffKey(documentKey: string): string {
   return `nextly:recovery-not-now:${documentKey}`;
+}
+
+/** Where "Not now" waits while the signed-in account is not yet known. */
+const PENDING_PUT_OFF_KEY = "nextly:recovery-not-now:pending";
+
+/** A put-off waiting for the account: the document and the point. */
+interface PendingPutOff {
+  documentKey: string;
+  identity: string;
+}
+
+/** The put-offs waiting for the account; none where storage refuses. */
+function pendingPutOffs(): PendingPutOff[] {
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_PUT_OFF_KEY);
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is PendingPutOff =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as PendingPutOff).documentKey === "string" &&
+            typeof (item as PendingPutOff).identity === "string"
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Replace the waiting put-offs, ignoring storage that refuses. */
+function writePendingPutOffs(pending: readonly PendingPutOff[]): void {
+  try {
+    if (pending.length === 0) {
+      window.sessionStorage.removeItem(PENDING_PUT_OFF_KEY);
+    } else {
+      window.sessionStorage.setItem(
+        PENDING_PUT_OFF_KEY,
+        JSON.stringify(pending)
+      );
+    }
+  } catch {
+    // Storage refused: "Not now" lasts for this editor, as it did before.
+  }
+}
+
+/**
+ * "Not now", kept for the signed-in author. Pressed before the account is
+ * known (the recovery read can answer first), it waits in the tab's session
+ * storage, every one of them and across a reload, and answers for its own
+ * document until the account is known; then each is stored for that account.
+ * Stored under no one, a later load knowing the account would miss it.
+ */
+function usePutOff(
+  author: string | null,
+  documentKey: string
+): {
+  putOff: (identity: string) => void;
+  isPutOff: (identity: string) => boolean;
+} {
+  useEffect(() => {
+    if (author === null) return;
+    const pending = pendingPutOffs();
+    if (pending.length === 0) return;
+    for (const one of pending) {
+      rememberPutOff(`${author}|${one.documentKey}`, one.identity);
+    }
+    writePendingPutOffs([]);
+  }, [author]);
+  const key = `${author ?? ""}|${documentKey}`;
+  return {
+    putOff: useCallback(
+      (identity: string) => {
+        if (author !== null) {
+          rememberPutOff(key, identity);
+          return;
+        }
+        const others = pendingPutOffs().filter(
+          one => one.documentKey !== documentKey
+        );
+        writePendingPutOffs([...others, { documentKey, identity }]);
+      },
+      [author, documentKey, key]
+    ),
+    isPutOff: useCallback(
+      (identity: string) =>
+        author === null
+          ? pendingPutOffs().some(
+              one =>
+                one.documentKey === documentKey && one.identity === identity
+            )
+          : wasPutOff(key, identity),
+      [author, documentKey, key]
+    ),
+  };
 }
 
 /**
@@ -220,11 +315,11 @@ export function useAutosaveRecovery({
     staleTime: Infinity,
   });
 
+  const { putOff, isPutOff } = usePutOff(author, documentKey);
   const dismiss = useCallback(() => {
     setDismissed(true);
-    if (data)
-      rememberPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data));
-  }, [data, documentKey, author]);
+    if (data) putOff(pointIdentity(data));
+  }, [data, putOff]);
 
   // The document as stored, which the form was loaded with.
   const stored = form.formState.defaultValues;
@@ -252,14 +347,13 @@ export function useAutosaveRecovery({
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
     // Put off in this tab already: see `dismiss`.
-    if (wasPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data)))
-      return null;
+    if (isPutOff(pointIdentity(data))) return null;
     // A recovery point holding what the document already stores is no unsaved
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
     if (holdsStored(data, stored, locale)) return null;
     return { savedAt, snapshot: data.snapshot };
-  }, [dismissed, data, documentKey, stored, locale, author]);
+  }, [dismissed, data, stored, locale, isPutOff]);
 
   const restore = useCallback(() => {
     if (!offer) return;
