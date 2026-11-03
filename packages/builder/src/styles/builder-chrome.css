@@ -291,6 +291,26 @@
  * the accent mixed into transparency, so it is a tint of whichever accent the
  * theme gives, in either mode, rather than a second colour to keep in step.
  */
+/*
+ * The top bar at the editor's density. The shared buttons size themselves
+ * from the control-height tokens, so pointing those at the density's one
+ * height puts every control in the bar (Preview, the Publish menu, search,
+ * the devices, the zoom, undo and redo) at 28px without restyling each; their
+ * text takes the density's 12px.
+ */
+.nx-builder-topbar {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-builder-topbar :where(button, input) {
+  font-size: var(--nx-builder-font-size);
+}
+
 /* No background: the shell's panel region is the one surface panels sit on. */
 .nx-insert-panel {
   display: flex;
@@ -4844,12 +4864,15 @@ fieldset.nx-inspector__fields {
   align-items: center;
   justify-content: center;
   min-width: 3.5rem;
-  padding: 0.25rem 0.5rem;
+  /* The editor's control height, as every control in the top bar is, with
+     the scale's values as fallbacks for the control drawn on its own. */
+  height: var(--nx-builder-control-height, 1.75rem);
+  padding: 0 var(--nx-builder-control-padding-x, 0.5rem);
   border: 1px solid var(--nx-border);
   border-radius: 0.375rem;
   background: var(--nx-background);
   color: var(--nx-foreground);
-  font-size: var(--text-xs);
+  font-size: var(--nx-builder-font-size, 0.75rem);
   /* The digits change as the canvas resizes, and a proportional face makes the
      control shift width while an author is reading it. */
   font-variant-numeric: tabular-nums;
