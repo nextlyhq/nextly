@@ -151,9 +151,9 @@ describe("what InspectorPanel forwards to the style tab", () => {
     ).toBeDefined();
   });
 
-  it("draws Content and Style as a segmented control", () => {
-    // Named for the stylesheet's segmented rules, which replace the shared
-    // underline tabs in the inspector only.
+  it("names Content and Style for the inspector's own tab rules", () => {
+    // Named for the stylesheet's compact underlined tab rules, which apply
+    // to the inspector's tabs only.
     register();
     render(<InspectorPanel editor={editorFor(documentOf({}))} />);
     const style = screen.getByRole("tab", { name: "Style" });
