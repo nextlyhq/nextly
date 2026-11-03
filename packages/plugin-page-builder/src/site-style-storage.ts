@@ -197,7 +197,7 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
         validate: refusing(raw => checkStoredClasses(raw, policy)),
         admin: {
           description:
-            "Reusable style presets: [{ id, slug, orderIndex, styles }]. Documents reference a class by id; a later orderIndex overrides an earlier one.",
+            "Reusable style presets: [{ id, slug, label?, orderIndex, styles, locked? }]. Documents reference a class by id; a later orderIndex overrides an earlier one. `label` is the name authors see; `locked: true` holds the class as it is until it is unlocked.",
         },
       }),
       json({

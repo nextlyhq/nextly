@@ -638,6 +638,44 @@ function renderedIds(library: readonly NamedClass[]): Set<string> {
 }
 
 /**
+ * A class entry with its shared-style marks checked: the name an author gave
+ * it and its lock. Each mark that cannot be used adds an issue, which refuses
+ * a write, and is left out of the entry a read keeps.
+ */
+function withUsableMarks(
+  entry: NamedClass,
+  index: number,
+  issues: string[]
+): NamedClass {
+  const record: Readonly<Record<string, unknown>> = entry;
+  // The name is display text, judged by the engine's one rule for a label, so
+  // a shared style's name and a variable's are held to the same line.
+  const labelIssue = tokenLabelIssue(record.label);
+  // Present or absent, never `false`: one spelling for "unlocked", so a lock
+  // comparison cannot read `false` and absent as a change.
+  const lockUsable = record.locked === undefined || record.locked === true;
+  if (labelIssue !== undefined) {
+    issues.push(
+      `classes[${index}] has a name that cannot be used. ${labelIssue}`
+    );
+  }
+  if (!lockUsable) {
+    issues.push(
+      `classes[${index}] has a lock that cannot be read: it is true while the class is locked, and absent otherwise.`
+    );
+  }
+  if (labelIssue === undefined && lockUsable) return entry;
+  // A read keeps the class and drops only the mark it cannot use; the write
+  // was refused by the issues above.
+  const { label, locked, ...rest } = entry;
+  return {
+    ...rest,
+    ...(labelIssue === undefined && label !== undefined ? { label } : {}),
+    ...(lockUsable && locked !== undefined ? { locked } : {}),
+  };
+}
+
+/**
  * The stored class library.
  *
  * Usability per entry is the engine's `isUsableNamedClass` — the same
@@ -697,7 +735,7 @@ export function checkStoredClasses(
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
-    classes.push(entry);
+    classes.push(withUsableMarks(entry, index, issues));
   });
   issues.push(...mergedLibraryIssues(classes, policy));
   return { value: classes, issues };

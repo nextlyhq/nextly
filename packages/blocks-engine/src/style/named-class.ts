@@ -63,6 +63,17 @@ export interface NamedClass {
   orderIndex: number;
   /** The styles this class applies, in the same envelope a node uses. */
   styles: NodeStyles;
+  /**
+   * The name an author gave the class, shown where the slug would read as code. Display text
+   * only: nothing compiled reads it, and an entry without one is named by its slug.
+   */
+  label?: string;
+  /**
+   * Set while the class is locked: its styles, name and slug may not change and it may not be
+   * removed until someone allowed to lock classes unlocks it. Absent, never `false`, when
+   * unlocked. Nothing compiled reads it.
+   */
+  locked?: true;
 }
 
 /**

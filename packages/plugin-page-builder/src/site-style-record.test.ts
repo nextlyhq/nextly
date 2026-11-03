@@ -342,6 +342,35 @@ describe("checkStoredClasses", () => {
     expect(result.issues).toHaveLength(1);
   });
 
+  it("keeps a shared style's name and lock through the check", () => {
+    const named = { ...usable, label: "Card", locked: true };
+    const result = checkStoredClasses([named]);
+    expect(result.issues).toEqual([]);
+    expect(result.value).toEqual([named]);
+  });
+
+  it("refuses a name that is not one line of bounded text", () => {
+    for (const label of [42, "", "Two\nlines", "x".repeat(200)]) {
+      const result = checkStoredClasses([{ ...usable, label }]);
+      expect(result.issues.join(" ")).toContain("classes[0] has a name");
+    }
+  });
+
+  it("refuses a lock that is anything but true", () => {
+    for (const locked of [false, "yes", 1, null]) {
+      const result = checkStoredClasses([{ ...usable, locked }]);
+      expect(result.issues.join(" ")).toContain("classes[0] has a lock");
+    }
+  });
+
+  it("reads a class past an unusable name or lock, without them", () => {
+    // A read keeps the class the compiler can still apply, and drops only the
+    // key it cannot use: a refused write never stored one, so this is a row
+    // written around the gate.
+    const result = checkStoredClasses([{ ...usable, label: 7, locked: "yes" }]);
+    expect(result.value).toEqual([usable]);
+  });
+
   // A named class is emitted VERBATIM into the sheet of every public page, so
   // a url() stored in one is a request every visitor makes. Unlike a token,
   // which reaches the page as a var() substitution, there is no later
