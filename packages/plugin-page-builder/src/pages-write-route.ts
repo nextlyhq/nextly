@@ -164,9 +164,23 @@ async function pageSource(
   return source;
 }
 
-/** The title field's name, where the collection's pages are titled by text. */
+/** Title field types that take any words an author types. */
+const FREE_TEXT_TITLE_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+]);
+
+/**
+ * The title field's name, where a page's title is free text. A title field of
+ * a constrained kind (an email, a URL, a slug) is searched as text but would
+ * refuse "About us", so a write leaves it alone.
+ */
 function textTitleOf(source: PageCollection): string | undefined {
-  return source.title?.kind === "text" ? source.title.name : undefined;
+  const title = source.title;
+  if (title === undefined || title.kind !== "text") return undefined;
+  return title.type === undefined || FREE_TEXT_TITLE_TYPES.has(title.type)
+    ? title.name
+    : undefined;
 }
 
 /**

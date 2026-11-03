@@ -111,9 +111,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/** Whether the document being edited is a page; a component's is not. */
+let editingPage = true;
+
 /** The editor's mount of the panel, and what it asks of Settings. */
 function Harness() {
-  const mount = usePagesPanel();
+  const mount = usePagesPanel(editingPage);
   return (
     <>
       <output aria-label="Settings request">
@@ -158,6 +161,7 @@ beforeEach(() => {
   navigateTo.mockReset();
   for (const write of Object.values(client)) write.mockReset();
   identity = { kind: "collection", slug: "pages", documentId: "current" };
+  editingPage = true;
   window.history.replaceState({}, "", "/");
 });
 afterEach(cleanup);
@@ -254,6 +258,31 @@ describe("the list", () => {
     expect(screen.getByRole("button", { name: "Prix fixe" })).toBeTruthy();
   });
 
+  it("retires the last search's rows the moment the search changes", async () => {
+    await mount([item("a", "Home"), item("b", "About")]);
+    // The next answer never lands, so what shows is only what typing left.
+    answer = () => new Promise(() => {});
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Search pages" }),
+      "x"
+    );
+    expect(screen.queryByRole("button", { name: "Home" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "More for About" })).toBeNull();
+  });
+
+  it("offers more, rather than saying none, when an empty page has more after it", async () => {
+    answer = async () => listing([], "cursor-1");
+    render(<Harness />);
+    await screen.findByRole("button", { name: "Show more pages" });
+    expect(screen.queryByText("No pages yet.")).toBeNull();
+  });
+
+  it("marks no row as being edited in a component's editor", async () => {
+    editingPage = false;
+    await mount([item("current", "Home")]);
+    expect(within(row("Home")).queryByText("Editing")).toBeNull();
+  });
+
   it("shows more pages from where the last answer stopped", async () => {
     answer = async read =>
       param(read, "before") === "cursor-1"
@@ -317,6 +346,43 @@ describe("a row's actions", () => {
     );
   });
 
+  it("adds new pages to the page being edited's collection, whatever a search ranks first", async () => {
+    await mount([
+      item("a", "Home"),
+      item("p", "Post", { collection: "posts" }),
+    ]);
+    answer = async () =>
+      listing([
+        item("p", "Post", { collection: "posts", collectionLabel: "Posts" }),
+      ]);
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Search pages" }),
+      "post"
+    );
+    await screen.findByRole("button", { name: "Post" });
+    client.createPage.mockResolvedValue(item("new", "Fresh"));
+    await userEvent.click(screen.getByRole("button", { name: "New page" }));
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Page title" }),
+      "Fresh{Enter}"
+    );
+    expect(client.createPage).toHaveBeenCalledWith({
+      collection: "pages",
+      title: "Fresh",
+    });
+  });
+
+  it("keeps New page when a search matches nothing", async () => {
+    await mount([item("a", "Home")]);
+    answer = async () => listing([]);
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Search pages" }),
+      "zzz"
+    );
+    await screen.findByText('No pages match "zzz".');
+    expect(screen.getByRole("button", { name: "New page" })).toBeTruthy();
+  });
+
   it("duplicates a published page and opens the copy", async () => {
     const home = item("a", "Home", { status: "published" });
     await mount([home]);
@@ -328,6 +394,18 @@ describe("a row's actions", () => {
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith(address("copy"))
     );
+  });
+
+  it("cannot duplicate a page with unpublished changes either", async () => {
+    // The copy is made from the published page, not the changes on screen.
+    await mount([item("a", "Home", { status: "published", state: "changed" })]);
+    await userEvent.click(
+      screen.getByRole("button", { name: "More for Home" })
+    );
+    const duplicate = await screen.findByRole("menuitem", {
+      name: "Duplicate",
+    });
+    expect(duplicate.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("cannot duplicate a draft, and says why", async () => {
@@ -430,34 +508,22 @@ describe("a row's actions", () => {
     expect(navigateTo).not.toHaveBeenCalled();
   });
 
-  it("deleting the page being edited opens the next one listed", async () => {
+  it("offers no Delete on the page being edited, and says why", async () => {
+    // Deleting it under the editor would leave the author on a page that is
+    // gone, or, when unsaved work asks first, delete one they chose to keep.
     identity = { kind: "collection", slug: "pages", documentId: "a" };
-    const home = item("a", "Home");
-    await mount([home, item("b", "About")]);
-    client.deletePage.mockResolvedValue(home);
-    await choose("Home", "Delete…");
+    await mount([item("a", "Home"), item("b", "About")]);
     await userEvent.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "Delete page",
-      })
+      screen.getByRole("button", { name: "More for Home" })
     );
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(address("b")));
-  });
-
-  it("deleting the last page leaves for the collection's list", async () => {
-    identity = { kind: "collection", slug: "pages", documentId: "a" };
-    const home = item("a", "Home");
-    await mount([home]);
-    client.deletePage.mockResolvedValue(home);
-    await choose("Home", "Delete…");
-    await userEvent.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "Delete page",
-      })
+    const remove = await screen.findByRole("menuitem", { name: "Delete…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(remove.getAttribute("title")).toBe(
+      "Open another page to delete this one."
     );
-    await waitFor(() =>
-      expect(navigateTo).toHaveBeenCalledWith("/admin/collections/pages")
-    );
+    await userEvent.click(remove);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(client.deletePage).not.toHaveBeenCalled();
   });
 
   it("says plainly when an action is refused", async () => {

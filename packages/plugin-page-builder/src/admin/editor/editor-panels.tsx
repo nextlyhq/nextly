@@ -383,7 +383,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
   // The Pages panel, and the request its rows send to open Settings.
-  const pages = usePagesPanel();
+  const pages = usePagesPanel(mount.initialDocument.kind === "page");
   return {
     entryFields,
     search: { open: searchOpen, setOpen: setSearchOpen },

@@ -80,10 +80,15 @@ export interface PagesPanelMount {
  * row's "Settings" sends. A page opened from another page's "Settings" arrives
  * with `settings=1` in its address, and opens with Settings up.
  */
-export function usePagesPanel(): PagesPanelMount {
+export function usePagesPanel(
+  /** Whether the document being edited is a page, not a component or pattern. */
+  editingPage: boolean
+): PagesPanelMount {
   const identity = useDocumentIdentity();
   const currentPage: PageReference | null =
-    identity?.kind === "collection" && identity.documentId !== undefined
+    editingPage &&
+    identity?.kind === "collection" &&
+    identity.documentId !== undefined
       ? { collection: identity.slug, id: identity.documentId }
       : null;
   const [settingsRequest, setSettingsRequest] = React.useState<
@@ -93,19 +98,11 @@ export function usePagesPanel(): PagesPanelMount {
     () => setSettingsRequest(earlier => ({ count: (earlier?.count ?? 0) + 1 })),
     []
   );
-  const slug = identity?.slug;
   return {
     currentPage,
     settingsRequest,
     renderPagesPanel: () => (
-      <PagesPanel
-        current={currentPage}
-        onOpenSettings={openSettings}
-        onLeave={() => {
-          // No page is left to carry on with: back to the list of them.
-          if (slug !== undefined) navigateTo(`/admin/collections/${slug}`);
-        }}
-      />
+      <PagesPanel current={currentPage} onOpenSettings={openSettings} />
     ),
   };
 }
@@ -121,14 +118,11 @@ interface PagesPanelProps {
   current: PageReference | null;
   /** Opens this page's Settings dialog. */
   onOpenSettings: () => void;
-  /** Where to go when the page being edited is deleted and no other is left. */
-  onLeave: () => void;
 }
 
 function PagesPanel({
   current,
   onOpenSettings,
-  onLeave,
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const list = usePagesList(query);
@@ -139,7 +133,6 @@ function PagesPanel({
     current,
     list,
     onOpenSettings,
-    onLeave,
     report: setProblem,
   });
 
@@ -148,7 +141,10 @@ function PagesPanel({
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Pages</h2>
         <NewPageButton
-          collection={list.items[0]?.collection}
+          // The page being edited's own collection, else the first one the
+          // unfiltered list showed: never whatever a search happens to rank
+          // first, which would move where a new page goes as the author types.
+          collection={current?.collection ?? list.firstCollection}
           onCreate={act.create}
         />
       </div>
@@ -193,6 +189,8 @@ function PagesPanel({
 /** Where the list stands, and the ways to change it. */
 interface PagesList {
   items: readonly PageItem[];
+  /** The collection of the first page the unfiltered list showed. */
+  firstCollection: string | undefined;
   state: "loading" | "ready" | "failed";
   hasMore: boolean;
   loadMore: () => void;
@@ -209,6 +207,9 @@ function usePagesList(query: string): PagesList {
   const [state, setState] = React.useState<PagesList["state"]>("loading");
   const [next, setNext] = React.useState<string | undefined>(undefined);
   const [generation, setGeneration] = React.useState(0);
+  const [firstCollection, setFirstCollection] = React.useState<
+    string | undefined
+  >(undefined);
   const reading = React.useRef<AbortController | null>(null);
 
   const read = React.useCallback(
@@ -239,6 +240,10 @@ function usePagesList(query: string): PagesList {
           );
           setNext(body.meta.nextBefore ?? undefined);
           setState("ready");
+          // Only an unfiltered answer names the site's first page collection.
+          if (query.trim() === "" && body.items[0] !== undefined) {
+            setFirstCollection(earlier => earlier ?? body.items[0]?.collection);
+          }
         })
         .catch(() => {
           if (!controller.signal.aborted) setState("failed");
@@ -247,16 +252,26 @@ function usePagesList(query: string): PagesList {
     [query]
   );
 
+  // Rows for another search are retired the moment the search changes, not
+  // when the new answer lands: until then they would be acted on under it.
+  const shownFor = React.useRef(query);
   React.useEffect(() => {
+    if (shownFor.current !== query) {
+      shownFor.current = query;
+      setItems([]);
+      setNext(undefined);
+      setState("loading");
+    }
     const timer = setTimeout(() => read(undefined, false), SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       reading.current?.abort();
     };
-  }, [read, generation]);
+  }, [read, generation, query]);
 
   return {
     items,
+    firstCollection,
     state,
     hasMore: next !== undefined,
     loadMore: () => read(next, true),
@@ -278,13 +293,11 @@ function useActions({
   current,
   list,
   onOpenSettings,
-  onLeave,
   report,
 }: {
   current: PageReference | null;
   list: PagesList;
   onOpenSettings: () => void;
-  onLeave: () => void;
   report: (problem: string | null) => void;
 }): Omit<RowActions, "remove"> & {
   create: (collection: string, title: string) => Promise<void>;
@@ -320,14 +333,7 @@ function useActions({
     remove: page =>
       attempt(`delete "${page.title}"`, async () => {
         await deletePage(page);
-        if (!isCurrent(page, current)) {
-          list.reload();
-          return;
-        }
-        // The page being edited is gone: carry on with the next one.
-        const next = list.items.find(other => !isCurrent(other, current));
-        if (next === undefined) onLeave();
-        else openPage(next);
+        list.reload();
       }),
   };
 }
@@ -383,7 +389,9 @@ function PageList({
       </div>
     );
   }
-  if (list.state === "ready" && list.items.length === 0) {
+  // Empty AND nothing more: an empty first page can still have pages after
+  // it (rows the author may not open, skipped), reached with Show more.
+  if (list.state === "ready" && list.items.length === 0 && !list.hasMore) {
     return (
       <p className="text-sm text-muted-foreground">
         {query.trim() === ""
@@ -536,8 +544,10 @@ function RowMenu({
   actions: RowActions;
   onRename: () => void;
 }): React.JSX.Element {
-  // A draft cannot be copied yet: the copy reads the published page.
-  const draft = page.status === "draft";
+  // A copy is made from the PUBLISHED page, so it cannot yet copy a draft,
+  // nor the unpublished changes of a changed page: it would copy something
+  // other than what the author sees.
+  const unpublished = page.status === "draft" || page.state === "changed";
   // Rename starts once the menu has CLOSED. Started while it closes, the
   // menu's focus return pulls focus out of the new field, whose blur then
   // ends the rename before anything was typed.
@@ -575,8 +585,8 @@ function RowMenu({
           Rename
         </DropdownMenuItem>
         <DropdownMenuItem
-          disabled={draft}
-          title={draft ? "Publish it first to duplicate it." : undefined}
+          disabled={unpublished}
+          title={unpublished ? "Publish it first to duplicate it." : undefined}
           onSelect={() => void actions.duplicate(page)}
         >
           Duplicate
@@ -587,6 +597,11 @@ function RowMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
+          // Not the page being edited: deleting it under the editor would
+          // either leave the author on a page that no longer exists or, when
+          // its unsaved work asks first, delete a page they chose to keep.
+          disabled={editing}
+          title={editing ? "Open another page to delete this one." : undefined}
           onSelect={() => actions.remove(page)}
         >
           Delete…

@@ -900,7 +900,8 @@ function RailAndDialogs({
   const settings = useRailDialog(active);
   useSettingsRequest(
     React.useContext(SettingsRequestContext),
-    settings.setOpen
+    settings.setOpen,
+    active
   );
   return (
     <>
@@ -959,14 +960,19 @@ const SettingsRequestContext =
  */
 function useSettingsRequest(
   request: BuilderShellProps["openSettingsRequest"],
-  setOpen: (open: boolean) => void
+  setOpen: (open: boolean) => void,
+  active: boolean
 ): void {
   const handled = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
+    // Not while the shell has given way to its narrow-window notice: a dialog
+    // there would trap focus over the notice's way out. The request waits,
+    // unconsumed, and opens Settings once the shell is in use again.
+    if (!active) return;
     if (request === undefined || handled.current === request.count) return;
     handled.current = request.count;
     setOpen(true);
-  }, [request, setOpen]);
+  }, [request, setOpen, active]);
 }
 
 function useRailDialog(active: boolean): {

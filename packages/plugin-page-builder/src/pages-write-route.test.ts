@@ -372,6 +372,32 @@ describe("renaming a page", () => {
     expect(item).toMatchObject({ id: "p1", title: "New name" });
   });
 
+  it("leaves a constrained title alone: an email title takes no page title", async () => {
+    // Searched as text, but "A" is no email address, and core would refuse it.
+    const writes = writesOver([
+      { ...PAGES, title: { name: "contact", kind: "text", type: "email" } },
+    ]);
+
+    const error = await refused(() =>
+      renamePage({ collection: "pages", id: "p1" }, "A", writes)
+    );
+    expect(error.code).toBe("VALIDATION_ERROR");
+    expect(writes.update).not.toHaveBeenCalled();
+
+    await createPage({ collection: "pages", title: "About" }, writes);
+    expect(writes.create.mock.calls[0]?.[1]).not.toHaveProperty("contact");
+  });
+
+  it("writes a free-text title of either kind", async () => {
+    const writes = writesOver([
+      { ...PAGES, title: { name: "title", kind: "text", type: "textarea" } },
+    ]);
+    await renamePage({ collection: "pages", id: "p1" }, "New name", writes);
+    expect(writes.update).toHaveBeenCalledWith("pages", "p1", {
+      title: "New name",
+    });
+  });
+
   it("is refused for a collection whose pages have no text title", async () => {
     const writes = writesOver([
       { ...PAGES, title: { name: "n", kind: "number" } },
