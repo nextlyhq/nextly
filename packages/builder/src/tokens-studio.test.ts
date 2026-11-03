@@ -34,6 +34,8 @@ import {
   setTokenValue,
   tokenNameIssue,
   tokenRowsFor,
+  writeTokenValue,
+  LINE_HEIGHT_MIXED,
 } from "./tokens-studio";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
@@ -603,7 +605,12 @@ describe("variables, grouped as the Design panel shows them", () => {
     const type = variableGroups(made.tokens).find(g => g.group === "type");
     expect(type?.entries).toHaveLength(1);
     expect(type?.entries[0]?.row.value).toBe("16px");
-    expect(type?.entries[0]?.lineHeight?.value).toBe("24px");
+    // Unitless, so it scales with whatever size the author gives the step,
+    // and held as a number so the engine reports nothing about it.
+    expect(type?.entries[0]?.lineHeight?.value).toBe("1.25");
+    const line = made.tokens.tokens.find(t => t.name.startsWith("line-"));
+    expect(line?.kind).toBe("number");
+    expect(emitTokenBlocks(made.tokens, ":root").issues).toEqual([]);
   });
 
   it("adds spacing, radius and shadow to their shared group", () => {
@@ -646,6 +653,38 @@ describe("a type size's name", () => {
     expect(variableLabelIssue(PAIR, 0, "Body copy")).toBeUndefined();
     expect(variableLabelIssue(PAIR, 2, "Body")).toMatch(
       /already called "Body"/
+    );
+  });
+});
+
+describe("a line height's two modes", () => {
+  it("are one kind, so a length beside a number is refused in words", () => {
+    // A token has one kind: written as given, the dark length would be a
+    // value the number token reports, and the save would be refused for it.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "line-height.body", kind: "number", values: { light: "1.4" } },
+      ],
+    };
+    const dark = writeTokenValue(set, 0, "dark", "24px");
+    expect(dark).toEqual({ issue: LINE_HEIGHT_MIXED });
+    const same = writeTokenValue(set, 0, "dark", "1.6");
+    expect("tokens" in same && same.tokens.tokens[0]).toEqual({
+      name: "line-height.body",
+      kind: "number",
+      values: { light: "1.4", dark: "1.6" },
+    });
+  });
+
+  it("leaves every other variable's kind as it is", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      ],
+    };
+    const written = writeTokenValue(set, 0, "light", "2");
+    expect("tokens" in written && written.tokens.tokens[0]?.kind).toBe(
+      "dimension"
     );
   });
 });

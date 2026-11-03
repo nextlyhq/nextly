@@ -50,7 +50,10 @@ import {
   type SiteTokenSet,
   type TokenKind,
   type TokenMode,
+  validateStyleValues,
 } from "@nextlyhq/blocks-engine";
+
+import { lineHeightFromText } from "./style-folded";
 
 /**
  * What each kind is called in the interface.
@@ -442,6 +445,88 @@ export function setTokenValue(
   });
 }
 
+/** What a line height that cannot be stored is told, in words. */
+const LINE_HEIGHT_REFUSAL =
+  "A line height is a number like 1.4, or a length like 24px.";
+
+/**
+ * What a line height is told when its two modes would need two kinds. A token
+ * has one kind, and a number token refuses a length as surely as a length
+ * token refuses a number.
+ */
+export const LINE_HEIGHT_MIXED =
+  "Light and dark line heights are both numbers, like 1.4, or both lengths, like 24px. Use the light value first to change which.";
+
+/** Whether a variable is a line height of the type scale, by its code name. */
+function isLineHeightToken(token: { name: string }): boolean {
+  return token.name.startsWith(LINE_HEIGHT_PREFIX);
+}
+
+/**
+ * The kind a line height is held as for a value: a plain number (`1.4`, a
+ * multiple of the font size, which is what scales with it) is a `number`
+ * token, and anything else (`24px`, `150%`, `calc()`) a `dimension`. Read
+ * with the inspector's own rule for a typed line height, so the two agree on
+ * what a plain number is.
+ */
+function lineHeightKindOf(value: string): TokenKind {
+  return typeof lineHeightFromText(value) === "number" ? "number" : "dimension";
+}
+
+/**
+ * Why a value cannot be a line height, or nothing. Judged by the catalogue's
+ * rule for a block's line height, the value a token here is read into, rather
+ * than by a second list of what a line height may be.
+ */
+function lineHeightValueIssue(value: string): string | undefined {
+  const typed = lineHeightFromText(value);
+  if (typed === null) return LINE_HEIGHT_REFUSAL;
+  const issues = validateStyleValues({ lineHeight: typed }, "", "strict");
+  return issues.some(issue => issue.severity === "error")
+    ? LINE_HEIGHT_REFUSAL
+    : undefined;
+}
+
+/** What writing a variable's value comes to: the new set, or why not. */
+export type TokenValueWrite =
+  | { readonly tokens: SiteTokenSet }
+  | { readonly issue: string };
+
+/**
+ * The set with one variable's value changed for one mode, or why it cannot be.
+ *
+ * Every variable but one is {@link setTokenValue}. A line height is the one
+ * value that is right as a plain number or as a length, so its KIND follows
+ * what is written: held as a `dimension`, `1.4` is a number where a length
+ * belongs, and the save is refused for it. A value no line height can be is
+ * refused here, in words, rather than stored for the page to drop.
+ */
+export function writeTokenValue(
+  tokens: SiteTokenSet,
+  at: number,
+  mode: TokenMode,
+  value: string
+): TokenValueWrite {
+  const token = tokens.tokens[at];
+  if (token === undefined || !isLineHeightToken(token)) {
+    return { tokens: setTokenValue(tokens, at, mode, value) };
+  }
+  const issue = lineHeightValueIssue(value);
+  if (issue !== undefined) return { issue };
+  const kind = lineHeightKindOf(value);
+  const other = token.values[mode === "light" ? "dark" : "light"];
+  if (other !== undefined && lineHeightKindOf(other) !== kind) {
+    return { issue: LINE_HEIGHT_MIXED };
+  }
+  return {
+    tokens: withToken(tokens, at, {
+      ...token,
+      kind,
+      values: { ...token.values, [mode]: value },
+    }),
+  };
+}
+
 /**
  * The set with one token's dark value REMOVED, so it follows light again.
  *
@@ -766,8 +851,14 @@ const NEW_VARIABLES: Readonly<
   custom: { prefix: "custom", kind: "custom", value: "0" },
 };
 
-/** The line height a new type size starts with. */
-const NEW_LINE_HEIGHT = "24px";
+/**
+ * The line height a new type size starts with: unitless, so it is a multiple
+ * of the size and follows it when the size changes, where a fixed length is
+ * right for one size only. 1.25 sits between the tighter leading a heading
+ * wants and the looser one body text wants, since a new size starts at 16px
+ * and is usually given a heading's size next.
+ */
+const NEW_LINE_HEIGHT = "1.25";
 
 /** The words a new variable's code name is made from, before it is named. */
 const NEW_WORDS: Readonly<Record<NewVariable, string>> = {
@@ -813,7 +904,9 @@ export function addVariable(
   if (what === "type size") {
     added.push({
       name: `${LINE_HEIGHT_PREFIX}${words}`,
-      kind: "dimension",
+      // A plain number, so a number token: as a `dimension` it would be a
+      // value the engine reports as not a length.
+      kind: "number",
       values: { light: NEW_LINE_HEIGHT },
     });
   }

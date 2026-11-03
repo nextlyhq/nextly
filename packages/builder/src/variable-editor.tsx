@@ -5,10 +5,15 @@
  * Drawn inside the row's popover, so it is a dialog of its own: Name takes
  * focus when it opens, Tab stays inside, and Escape closes it back to the row.
  * Every field commits on blur or Enter rather than per keystroke, because a
- * variable is read by the whole site and each commit is a save.
+ * variable is read by the whole site and each commit is handed to the host to
+ * store; the host may wait for the author to pause before it does.
  *
  * Read-only fields stay fields (`readOnly`, never `disabled`), so a value can
  * still be selected and copied by someone who may not change it.
+ *
+ * A value the variable cannot hold is refused here, said in words under the
+ * fields, and left in its field to be corrected, rather than written for the
+ * save to refuse and the field to go back to what it held.
  *
  * @module variable-editor
  */
@@ -16,6 +21,7 @@ import {
   sameSiteToken,
   type SiteToken,
   type SiteTokenSet,
+  type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
@@ -28,6 +34,7 @@ import {
   removeToken,
   setTokenValue,
   variableLabelIssue,
+  writeTokenValue,
   type VariableEntry,
 } from "./tokens-studio";
 import { swatchStyle } from "./variable-swatch";
@@ -59,6 +66,9 @@ export function VariableEditor({
   const token = tokens.tokens[row.at];
   const [nameIssue, setNameIssue] = React.useState<string | undefined>();
   const [name, setName] = useDraft(entry.label);
+  // The value last refused, with the field it was typed in, so that field is
+  // the one marked and the reason is said under the fields.
+  const [valueIssue, setValueIssue] = React.useState<RefusedValue>();
 
   const commitName = (value: string): void => {
     if (readOnly || value.trim() === entry.label) {
@@ -70,8 +80,35 @@ export function VariableEditor({
     if (issue === undefined) onChange(relabelToken(tokens, row.at, value));
   };
 
+  /*
+   * Every value field writes through here, so a refusal is decided once. The
+   * value it already holds writes nothing and clears a message, which is how
+   * putting back what was there before a refusal reads as fixing it.
+   */
+  const writeValue: ValueWrite = (at, mode, value) => {
+    const next = value.trim();
+    if (tokens.tokens[at]?.values[mode] === next) {
+      setValueIssue(undefined);
+      return;
+    }
+    const written = writeTokenValue(tokens, at, mode, next);
+    if ("issue" in written) {
+      setValueIssue({ at, mode, message: written.issue });
+      return;
+    }
+    setValueIssue(undefined);
+    onChange(written.tokens);
+  };
+  const saidId = `${id}-said`;
+  const refused: Refused = {
+    at: valueIssue?.at,
+    mode: valueIssue?.mode,
+    describedBy: saidId,
+  };
+
   const said = [
     ...(nameIssue === undefined ? [] : [nameIssue]),
+    ...(valueIssue === undefined ? [] : [valueIssue.message]),
     ...row.issues,
     ...(lineHeight?.issues ?? []),
   ];
@@ -105,10 +142,12 @@ export function VariableEditor({
           tokens={tokens}
           readOnly={readOnly}
           onChange={onChange}
+          write={writeValue}
+          refused={refused}
         />
       )}
       {said.length > 0 ? (
-        <p className="nx-vars-editor__issue" id={`${id}-said`} role="status">
+        <p className="nx-vars-editor__issue" id={saidId} role="status">
           {said.join(" ")}
         </p>
       ) : null}
@@ -126,6 +165,34 @@ export function VariableEditor({
   );
 }
 
+/** Writes one variable's value for one mode, or says why it cannot. */
+type ValueWrite = (at: number, mode: TokenMode, value: string) => void;
+
+/** A value refused, the field it was typed in, and why. */
+interface RefusedValue {
+  at: number;
+  mode: TokenMode;
+  message: string;
+}
+
+/** Which field holds a refused value, and the reason's element to point at. */
+interface Refused {
+  at: number | undefined;
+  mode: TokenMode | undefined;
+  describedBy: string;
+}
+
+/** The marking a field takes while it holds a refused value, or none. */
+function refusalAt(
+  refused: Refused,
+  at: number,
+  mode: TokenMode
+): string | undefined {
+  return refused.at === at && refused.mode === mode
+    ? refused.describedBy
+    : undefined;
+}
+
 /** The value fields a variable's kind calls for. */
 function Values({
   entry,
@@ -133,22 +200,25 @@ function Values({
   tokens,
   readOnly,
   onChange,
+  write,
+  refused,
 }: {
   entry: VariableEntry;
   token: SiteToken;
   tokens: SiteTokenSet;
   readOnly: boolean;
   onChange: (tokens: SiteTokenSet) => void;
+  write: ValueWrite;
+  refused: Refused;
 }): React.JSX.Element {
   const { row, lineHeight } = entry;
   const pair = (at: number, held: SiteToken): React.JSX.Element => (
     <ModeValues
       token={held}
       readOnly={readOnly}
-      onCommit={(mode, value) =>
-        onChange(setTokenValue(tokens, at, mode, value.trim()))
-      }
+      onCommit={(mode, value) => write(at, mode, value)}
       onClear={() => onChange(clearDarkValue(tokens, at))}
+      refusedIn={mode => refusalAt(refused, at, mode)}
     />
   );
   const lineToken =
@@ -165,6 +235,8 @@ function Values({
       tokens={tokens}
       readOnly={readOnly}
       onChange={onChange}
+      write={write}
+      refused={refused}
     />
   );
 }
@@ -183,6 +255,8 @@ function TypePair({
   tokens,
   readOnly,
   onChange,
+  write,
+  refused,
 }: {
   size: SiteToken;
   sizeAt: number;
@@ -191,9 +265,9 @@ function TypePair({
   tokens: SiteTokenSet;
   readOnly: boolean;
   onChange: (tokens: SiteTokenSet) => void;
+  write: ValueWrite;
+  refused: Refused;
 }): React.JSX.Element {
-  const write = (at: number, mode: "light" | "dark", value: string): void =>
-    onChange(setTokenValue(tokens, at, mode, value.trim()));
   const hasDark =
     size.values.dark !== undefined || line.values.dark !== undefined;
   const halves = [
@@ -222,6 +296,7 @@ function TypePair({
             label={`${half.name}, light`}
             value={half.token.values.light}
             readOnly={readOnly}
+            refusedBy={refusalAt(refused, half.at, "light")}
             onCommit={value => write(half.at, "light", value)}
           />
         ))}
@@ -237,6 +312,7 @@ function TypePair({
                   value={half.token.values.dark ?? ""}
                   placeholder={half.token.values.light}
                   readOnly={readOnly}
+                  refusedBy={refusalAt(refused, half.at, "dark")}
                   onCommit={value => write(half.at, "dark", value)}
                 />
                 {/* Each half returns to following light on its own; the
@@ -310,11 +386,14 @@ function ModeValues({
   readOnly,
   onCommit,
   onClear,
+  refusedIn,
 }: {
   token: SiteToken;
   readOnly: boolean;
-  onCommit: (mode: "light" | "dark", value: string) => void;
+  onCommit: (mode: TokenMode, value: string) => void;
   onClear: () => void;
+  /** The reason's element while a mode's field holds a refused value. */
+  refusedIn: (mode: TokenMode) => string | undefined;
 }): React.JSX.Element {
   const Field = token.kind === "color" ? ColourValue : TextValue;
   return (
@@ -323,11 +402,13 @@ function ModeValues({
         label="Light"
         value={token.values.light}
         readOnly={readOnly}
+        refusedBy={refusedIn("light")}
         onCommit={value => onCommit("light", value)}
       />
       <DarkValue
         token={token}
         readOnly={readOnly}
+        refusedBy={refusedIn("dark")}
         onCommit={value => onCommit("dark", value)}
         onAdd={() => onCommit("dark", token.values.light)}
         onClear={onClear}
@@ -341,11 +422,13 @@ function TextValue({
   label,
   value,
   readOnly,
+  refusedBy,
   onCommit,
 }: {
   label: string;
   value: string;
   readOnly: boolean;
+  refusedBy?: string | undefined;
   onCommit: (value: string) => void;
 }): React.JSX.Element {
   const id = React.useId();
@@ -358,6 +441,7 @@ function TextValue({
         id={id}
         value={value}
         readOnly={readOnly}
+        refusedBy={refusedBy}
         onCommit={onCommit}
       />
     </div>
@@ -366,7 +450,9 @@ function TextValue({
 
 /**
  * A value field that commits on blur or Enter, and only a real change: an
- * empty field or the value it already holds writes nothing.
+ * empty field or the value it already holds writes nothing. While it holds a
+ * refused value, the value it held before is committed too, since putting it
+ * back is how the author answers the refusal.
  */
 function CommitInput({
   id,
@@ -374,6 +460,7 @@ function CommitInput({
   value,
   placeholder,
   readOnly,
+  refusedBy,
   onCommit,
 }: {
   id?: string;
@@ -382,11 +469,17 @@ function CommitInput({
   value: string;
   placeholder?: string;
   readOnly: boolean;
+  /** The id of the reason, while this field holds a value that was refused. */
+  refusedBy?: string | undefined;
   onCommit: (value: string) => void;
 }): React.JSX.Element {
   const [draft, setDraft] = useDraft(value);
   const commit = (next: string): void => {
-    if (!readOnly && next.trim() !== "" && next.trim() !== value) {
+    if (
+      !readOnly &&
+      next.trim() !== "" &&
+      (next.trim() !== value || refusedBy !== undefined)
+    ) {
       onCommit(next);
     }
   };
@@ -394,6 +487,8 @@ function CommitInput({
     <Input
       id={id}
       aria-label={label}
+      aria-invalid={refusedBy === undefined ? undefined : true}
+      aria-describedby={refusedBy}
       className="nx-vars-editor__mono"
       value={draft}
       placeholder={placeholder}
@@ -419,11 +514,14 @@ function ColourValue({
   label,
   value,
   readOnly,
+  refusedBy,
   onCommit,
 }: {
   label: string;
   value: string;
   readOnly: boolean;
+  /** The id of the reason, while this field holds a value that was refused. */
+  refusedBy?: string | undefined;
   onCommit: (value: string) => void;
 }): React.JSX.Element {
   const id = React.useId();
@@ -478,6 +576,8 @@ function ColourValue({
         <Input
           id={id}
           className="nx-vars-editor__mono"
+          aria-invalid={refusedBy === undefined ? undefined : true}
+          aria-describedby={refusedBy}
           value={text}
           onChange={event => setText(event.currentTarget.value)}
           readOnly={readOnly}
@@ -517,12 +617,14 @@ function ColourValue({
 function DarkValue({
   token,
   readOnly,
+  refusedBy,
   onCommit,
   onAdd,
   onClear,
 }: {
   token: SiteToken;
   readOnly: boolean;
+  refusedBy: string | undefined;
   onCommit: (value: string) => void;
   onAdd: () => void;
   onClear: () => void;
@@ -557,6 +659,7 @@ function DarkValue({
         label="Dark"
         value={dark}
         readOnly={readOnly}
+        refusedBy={refusedBy}
         onCommit={onCommit}
       />
       {readOnly ? null : (

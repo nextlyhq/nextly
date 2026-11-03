@@ -5,7 +5,11 @@
  * panel, the keyboard behaviour of that editor, the read-only view, and each
  * state the panel can be in.
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  emitTokenBlocks,
+  validateStyleValues,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   act,
   cleanup,
@@ -539,6 +543,85 @@ describe("dark values for every kind", () => {
     );
     expect(saved().tokens[2]?.values).toEqual({ light: "16px" });
     expect(saved().tokens[3]?.values).toEqual({ light: "26px" });
+  });
+});
+
+describe("a type size's line height", () => {
+  const savedLine = (onChange: ReturnType<typeof vi.fn>) =>
+    (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet | undefined)?.tokens.find(
+      token => token.name === "line-height.body"
+    );
+
+  it("takes a unitless number, stored as a number the page reads unitless", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "1.02");
+
+    const line = savedLine(onChange);
+    expect(line?.values).toEqual({ light: "1.02" });
+    expect(line?.kind).toBe("number");
+    // The field keeps what was typed rather than going back to the old value.
+    expect(field).toHaveProperty("value", "1.02");
+
+    // What the site's sheet emits: the value as written, with no unit added
+    // and nothing reported, which is what a save is judged on.
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    const sheet = emitTokenBlocks(saved, ":root");
+    expect(sheet.issues).toEqual([]);
+    expect(sheet.css).toContain("--site-line-height-body:1.02");
+    // And a block whose line height is bound to it is a valid style.
+    const kinds = new Map(saved.tokens.map(token => [token.name, token.kind]));
+    expect(
+      validateStyleValues(
+        { lineHeight: { $token: "line-height.body" } },
+        "/styles",
+        "strict",
+        undefined,
+        false,
+        { kindOf: name => kinds.get(name) }
+      )
+    ).toEqual([]);
+  });
+
+  it("goes back to a length when a unit is typed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "1.4");
+    enter(field, "28px");
+    expect(savedLine(onChange)).toMatchObject({
+      kind: "dimension",
+      values: { light: "28px" },
+    });
+  });
+
+  it("says why a value is refused, under the field, and keeps what was typed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "tall");
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(
+      within(editor).getByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeDefined();
+    expect(field).toHaveProperty("value", "tall");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+
+    // A value that is accepted clears the message.
+    enter(field, "1.5");
+    expect(
+      within(editor).queryByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeNull();
+    expect(field.getAttribute("aria-invalid")).toBeNull();
   });
 });
 
