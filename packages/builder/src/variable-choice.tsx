@@ -368,7 +368,9 @@ export function VariableChip({
         : { "aria-labelledby": labelledBy })}
       tabIndex={-1}
     >
-      <span className="nx-variable-chip__text">
+      {/* One line, cut with an ellipsis where the field is narrow, with the
+          whole name on hover. */}
+      <span className="nx-variable-chip__text" title={name}>
         <span className="nx-variable-chip__name">{name}</span>
         {variable === undefined ? null : (
           <>

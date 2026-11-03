@@ -119,6 +119,27 @@ describe("escapeOutcome", () => {
     expect(escapeOutcome(document)).toBe("navigate-selection");
   });
 
+  it("leaves the key to a menu or list floating over the editor", () => {
+    /*
+     * A unit menu, a select's list or a picker's list portals into a floating
+     * layer and closes on Escape. Moving the canvas selection on the same key
+     * would do two things for one press, so while focus is inside one the
+     * editor consumes the key and does nothing more with it. A list that is
+     * NOT floating is the control below.
+     */
+    const layer = mount(
+      '<div data-radix-popper-content-wrapper=""><ul role="listbox" tabindex="0"></ul></div>'
+    );
+    layer.querySelector("ul")?.focus();
+    expect(escapeOutcome(document)).toBe("leave-to-field");
+  });
+
+  it("control: a list in the panel itself still lets Escape go up", () => {
+    const list = mount('<ul role="listbox" tabindex="0"></ul>');
+    (list as HTMLElement).focus();
+    expect(escapeOutcome(document)).toBe("navigate-selection");
+  });
+
   it("prefers the modal over a field inside it", () => {
     // A palette is a dialog containing a search input, so both conditions hold
     // at once and the order they are asked in decides. The modal wins: its own
