@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { FONT_CATALOGUE_ORIGIN } from "./support/font-catalogue-server.mjs";
 import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -276,6 +277,9 @@ export default defineConfig({
       // `next start` refuses to boot without the app's own address, which the
       // dev server never needed.
       NEXT_PUBLIC_APP_URL: BASE_URL,
+      // Points the page builder's font catalogue at the stand-in global setup
+      // starts, so adding a font never reaches the real catalogue.
+      NEXTLY_E2E_FONT_CATALOGUE: FONT_CATALOGUE_ORIGIN,
     },
   },
 
