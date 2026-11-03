@@ -1096,6 +1096,22 @@ export {
   type LayersLockChange,
   type LayersLockChangeKind,
 } from "./layers-lock-stored";
+export {
+  variantLockChanges,
+  type VariantDrawing,
+  type VariantLockChange,
+} from "./layers-lock-variants";
+export {
+  componentLayersLocks,
+  heldBaselines,
+  keptForSameComponents,
+  placedLockChanges,
+  placementsAsComponentsHoldThem,
+  type ComponentLayersLock,
+  type ComposedHeldBaseline,
+  type HeldBaseline,
+  type PlacedLockChange,
+} from "./component-layers-locks";
 // How every copy into a document keeps the Layers locks it carries.
 export { insertKeepingLocks, type Placed } from "./locked-insert";
 
