@@ -7,8 +7,8 @@
  *
  * The properties a plausible implementation gets wrong: offering the verb on
  * an ordinary block or to an author the host withheld it from, handing the
- * host the node id where it wants the component's, and a banner that calls a
- * count of documents a count of pages.
+ * host the node id where it wants the component's, and a banner that says
+ * "at least" of an exact count, or offers more than one way back.
  */
 import {
   COMPONENT_INSTANCE_TYPE,
@@ -201,33 +201,56 @@ describe("a host built before the verb", () => {
 });
 
 describe("the banner over a component's own view", () => {
-  it("names the component, says the reach as documents, and goes back", () => {
+  it("names the component, says the pages a change reaches, and goes back to where it names", () => {
     const back = vi.fn();
     render(
       <ComponentBanner
         name="Hero"
-        reach={{ count: 3, complete: false }}
-        onBack={back}
+        pages={{ count: 3, complete: false }}
+        back={{ to: "Home", onBack: back }}
       />
     );
     const banner = screen.getByRole("region", { name: "Editing a component" });
     expect(banner.textContent).toContain("Hero");
-    expect(banner.textContent).toContain(
-      "Changes reach at least the 3 documents that place it."
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(banner.textContent).toContain("Changes reach at least 3 pages");
+    // ONE way back, named for where it goes.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Back to Home" }));
     expect(back).toHaveBeenCalledTimes(1);
   });
 
-  it("offers no Back without somewhere to go, and says nothing of an unknown reach", () => {
-    render(<ComponentBanner name="Hero" reach={undefined} />);
-    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  it("says when every placement changes in the band's own tooltip, not a pill", () => {
+    render(<ComponentBanner name="Hero" pages={undefined} />);
+    const banner = screen.getByRole("region", { name: "Editing a component" });
+    expect(banner.getAttribute("title")).toBe(
+      "Every placement updates when you save."
+    );
+    // Read to a screen reader too, which a tooltip alone is not.
+    expect(banner.getAttribute("aria-describedby")).not.toBeNull();
+  });
+
+  it("takes the builder's tokens, so the component hue holds over the admin in dark", () => {
+    render(<ComponentBanner name="Hero" pages={undefined} />);
+    const banner = screen.getByRole("region", { name: "Editing a component" });
+    expect(banner.classList.contains("nx-builder-tokens")).toBe(true);
+  });
+
+  it("offers no Back without somewhere to go, and says nothing of an unknown count", () => {
+    render(<ComponentBanner name="Hero" pages={undefined} />);
+    expect(screen.queryByRole("button")).toBeNull();
     expect(reachSentence({ count: 1, complete: true })).toBe(
-      "Changes reach the 1 document that places it."
+      "Changes reach 1 page"
+    );
+    expect(reachSentence({ count: 4, complete: true })).toBe(
+      "Changes reach 4 pages"
+    );
+    // "at least" only when the count is a floor.
+    expect(reachSentence({ count: 1, complete: false })).toBe(
+      "Changes reach at least 1 page"
     );
     expect(reachSentence({ count: 0, complete: false })).toBeUndefined();
     expect(reachSentence({ count: 0, complete: true })).toBe(
-      "Nothing places it yet."
+      "Not on any page yet"
     );
   });
 });

@@ -13,6 +13,8 @@ A full uninstall drops the plugin's tables and the columns it added to other own
 - a foreign key or a relationship field pointing into them;
 - an index or key using a column the plugin added to someone else's table.
 
+A relationship field the plugin itself added to another owner's collection, Single or field group, by `extend` or by a transform, does not count, even nested in that owner's group or repeater: it goes with the plugin. A field beside it that the owner declared still counts.
+
 Dropping it would delete data that belongs to someone else, so no consent to this uninstall covers it. An element whose owner is no longer configured counts too, because nothing can say which columns it uses. Each element is judged by the definition the database holds, so one whose declaration was changed in code but never migrated counts while the database's definition still uses the plugin's schema. Nothing was changed.
 
 ## Fix

@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { e2eDatabase } from "./support/e2e-database.mjs";
 import { FONT_CATALOGUE_ORIGIN } from "./support/font-catalogue-server.mjs";
+import { EVERY_DIALECT } from "./tests/support/every-dialect";
 import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -29,11 +31,21 @@ const BASE_URL = `http://localhost:${PORT}`;
  * The suite's own database, never the one `pnpm dev:app` uses.
  *
  * A shell `DATABASE_URL` wins over the playground's `.env`, so the server can
- * be pointed at a throwaway file. That is what makes a test allowed to delete
- * things: there is nothing here anyone wanted. Relative because the playground
- * resolves it from its own directory.
+ * be pointed at a throwaway database. That is what makes a test allowed to
+ * delete things: there is nothing here anyone wanted. A file on SQLite, the
+ * default; on PostgreSQL or MySQL (`E2E_DB_DIALECT`), a database the run drops
+ * and creates on the server `E2E_DB_SERVER_URL` names
+ * (`support/e2e-database.mjs`).
  */
-const E2E_DB_RELATIVE = "file:./data/e2e.db";
+const E2E_DATABASE = e2eDatabase({ port: PORT });
+
+/**
+ * On PostgreSQL and MySQL the suite runs only the specs tagged
+ * `EVERY_DIALECT`: the document-lock specs, whose answers come from the
+ * database's lease rows. The rest runs on SQLite alone. A spec tagged later
+ * runs on every dialect with nothing else to change.
+ */
+const EVERY_DIALECT_ONLY = E2E_DATABASE.dialect !== "sqlite";
 
 /**
  * Which server the suite runs against. `dev` (the default) is `pnpm dev:app`:
@@ -88,9 +100,14 @@ const DEV_SPECS_ONLY =
 /**
  * Where a run writes its results and report. The dev specs' run has its own,
  * since Playwright empties its results folder as it starts, and a shared one
- * would lose the production run's traces and screenshots beside it.
+ * would lose the production run's traces and screenshots beside it. A run on
+ * PostgreSQL or MySQL has its own as well, named by its dialect.
  */
-const RUN_OUTPUT = DEV_SPECS_ONLY ? "dev-specs" : "suite";
+const RUN_OUTPUT = DEV_SPECS_ONLY
+  ? "dev-specs"
+  : EVERY_DIALECT_ONLY
+    ? E2E_DATABASE.dialect
+    : "suite";
 
 /**
  * The commands that start each server, after the database is emptied.
@@ -133,6 +150,7 @@ export default defineConfig({
     ...(SERVER === "production" ? DEV_SPECS : []),
   ],
   ...(DEV_SPECS_ONLY ? { testMatch: DEV_SPECS } : {}),
+  ...(EVERY_DIALECT_ONLY ? { grep: new RegExp(EVERY_DIALECT) } : {}),
   outputDir: `./.playwright/results/${RUN_OUTPUT}`,
 
   // A failing assertion in a shared admin is usually a real failure, so the
@@ -229,8 +247,8 @@ export default defineConfig({
       // A known signing secret, so share-preview-links.spec.ts can sign a link
       // as an earlier version minted it. It wins over the playground's `.env`.
       NEXTLY_SECRET: E2E_NEXTLY_SECRET,
-      DB_DIALECT: "sqlite",
-      DATABASE_URL: E2E_DB_RELATIVE,
+      DB_DIALECT: E2E_DATABASE.dialect,
+      DATABASE_URL: E2E_DATABASE.url,
       // Its own build directory. A separate port is not enough on its own:
       // two `next dev` processes on one app fight over `.next`, and the
       // second dies before it serves anything. With this, the suite runs
