@@ -613,10 +613,7 @@ describe("the inspector at the editor's density", () => {
       ".nx-inspector__field--exposed > label, .nx-inspector__field--exposed > .nx-inspector__field-name { display: flex; align-items: center; min-height: var(--nx-control-height); }"
     );
     const segment = ruleBody(".nx-style-inspector__toggle > button");
-    expect(ruleBody(".nx-style-inspector__toggle")).toContain(
-      "height: var(--nx-control-height)"
-    );
-    // Inside its track, a button fills the track's height.
+    expect(segment).toContain("height: var(--nx-control-height)");
     expect(segment).toContain("padding: 0 0.5rem");
   });
 
@@ -631,31 +628,26 @@ describe("the inspector at the editor's density", () => {
 });
 
 describe("the inspector's Content and Style tabs", () => {
-  it("are a segmented control, as the Design panel draws its tabs", () => {
-    // An underline under two words read as a different control from every
-    // other choice of two in the editor, which are segmented.
+  it("are underlined tabs, set at the start of the panel, over one divider", () => {
+    // Tabs, not a segmented control: Content and Style are two views of one
+    // block, not a choice of value, and the choices beside them are drawn
+    // differently on purpose.
     const list = ruleBody(".nx-inspector__tablist");
+    expect(list).toContain("justify-content: flex-start");
     expect(list).toContain("height: var(--nx-builder-control-height)");
-    expect(list).toContain("background: var(--nx-muted)");
-    // Edged as the state switcher below it is: the panel's surface is the
-    // muted colour too, so a track with no edge did not show.
-    expect(list).toContain("border: 1px solid var(--nx-border)");
+    expect(list).toContain("border-block-end: 1px solid var(--nx-border)");
+    expect(list).toContain("background: transparent");
     const tab = ruleBody(".nx-inspector__tab");
-    expect(tab).toContain("border: 0");
-    expect(tab).toContain("background: transparent");
+    expect(tab).toContain("flex: none");
+    expect(tab).toContain("font-size: var(--nx-builder-font-size)");
+    expect(tab).toContain("font-weight: 600");
+    expect(tab).toContain("border-block-end: 2px solid transparent");
     expect(tab).toContain("color: var(--nx-muted-foreground)");
-    // Its tabs fill the track's height, so the whole tab answers a click,
-    // and take the theme's radius tiers rather than recomputing them.
-    expect(list).toContain("align-items: stretch");
-    expect(list).toContain("border-radius: var(--radius-md)");
-    expect(tab).toContain("border-radius: var(--radius-sm)");
     const active = ruleBody('.nx-inspector__tab[data-state="active"]');
-    expect(active).toContain("background: var(--nx-card)");
-    // An edge that holds 3:1 against the track in both schemes: the card and
-    // the text colours alone measured about 1.2:1 and 2.5:1 in dark.
     expect(active).toContain(
-      "box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--nx-muted-foreground)"
+      "color: var(--nx-builder-text, var(--nx-foreground))"
     );
+    expect(active).toContain("border-block-end-color: var(--nx-foreground)");
     expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
       "outline: 2px solid var(--nx-ring)"
     );

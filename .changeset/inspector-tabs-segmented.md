@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The page builder inspector's Content and Style tabs are a segmented control, as the Design panel draws its tabs.
+The page builder inspector's Content and Style tabs are compact underlined tabs at the start of the panel, at the editor's density.

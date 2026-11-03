@@ -98,33 +98,32 @@ describe("a checkbox row opts out of the label column", () => {
 });
 
 describe("the segmented control", () => {
-  it("is one edged track, as the inspector's tabs are, its buttons without seams", () => {
-    // Every segmented choice in the inspector reads as one control: the track
-    // draws the only edge, so no button carries a border of its own and no
-    // seam can be drawn twice, whatever the number of buttons.
-    const track = ruleBody(CHROME, ".nx-style-inspector__toggle");
-    expect(track).toContain("border: 1px solid var(--nx-border)");
-    expect(track).toContain("background: var(--nx-muted)");
-    expect(track).toContain("padding: 2px");
-    const button = ruleBody(CHROME, ".nx-style-inspector__toggle > button");
-    expect(button).toContain("border: 0");
-    expect(button).toContain("border-radius: var(--radius-sm)");
-    expect(button).toContain("background: transparent");
+  it("draws each shared edge once, for three buttons as well as two", () => {
+    /*
+     * Every button gives its leading border up and the first takes it back, so
+     * the number of buttons cannot enter into it. The alternative — removing
+     * the border from the LAST button — is right only while there are exactly
+     * two, because at two "the last one" and "every one after the first" select
+     * the same element. At three it leaves the first seam two borders wide and
+     * the second one, and the segments stop reading as one control.
+     */
+    expect(ruleBody(CHROME, ".nx-style-inspector__toggle > button")).toContain(
+      "border-inline-start-width: 0"
+    );
+    expect(
+      ruleBody(CHROME, ".nx-style-inspector__toggle > button:first-child")
+    ).toContain("border-inline-start-width: 1px");
   });
 
-  it("raises the chosen button on the card surface, as the chosen tab is", () => {
-    // A grey fill under the tabs' raised card read as a second kind of
-    // segmented control on the same panel.
-    const chosen = ruleBody(
-      CHROME,
-      // This sheet is read as written, one selector per line.
-      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"]'
-    );
-    expect(chosen).toContain("background: var(--nx-card)");
-    // With an edge that holds 3:1 against the track in both schemes, which
-    // works for an icon as well as for words.
-    expect(chosen).toContain("var(--shadow-sm)");
-    expect(chosen).toContain("inset 0 0 0 1px var(--nx-muted-foreground)");
+  it("no longer takes the shared edge off the last button alone", () => {
+    /*
+     * The other half of the same decision, and the reason this is stated from
+     * the first button rather than the last: a rule keyed on the final button
+     * is a rule about the count, and it agrees with this one only at two.
+     */
+    expect(
+      ruleBody(CHROME, ".nx-style-inspector__toggle > button:last-child")
+    ).not.toContain("border-inline-start-width");
   });
 
   it("lets its buttons shrink, so the control cannot overflow the rail", () => {
