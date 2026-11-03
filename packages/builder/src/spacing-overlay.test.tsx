@@ -896,3 +896,166 @@ describe("the probe is asked again on every measurement", () => {
     expect(writes()).toBe(afterOnePass);
   });
 });
+
+describe("the space a container puts between its children", () => {
+  /** A container declaring a child gap, holding two leaves. */
+  function registerStack() {
+    register();
+    if (hasBlock("acme/stack")) return;
+    registerBlocks(
+      [
+        {
+          name: "acme/stack",
+          version: 1,
+          description: "A stack.",
+          example: { props: {} },
+          editor: { label: "Stack" },
+          childGap: { $token: "space.stack" },
+          slots: { children: {} },
+          supports: { spacing: { margin: true, padding: true } },
+          render: ({
+            className,
+            renderSlot,
+          }: {
+            className: string;
+            renderSlot: (name: string) => React.ReactNode;
+          }) =>
+            React.createElement("div", { className }, renderSlot("children")),
+        },
+        {
+          // A leaf that wears the classes it is handed, as every core block
+          // does, so its own node class can be taken away and put back.
+          name: "acme/item",
+          version: 1,
+          description: "An item.",
+          example: { props: {} },
+          supports: { spacing: { margin: true, padding: true } },
+          render: ({ className }: { className: string }) =>
+            React.createElement("p", { className }, "item"),
+        },
+      ] as never,
+      { source: "spacing-overlay-test" }
+    );
+  }
+
+  const STACKED = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "s",
+        type: "acme/stack",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            { id: "a", type: "acme/item", version: 1, props: {} },
+            { id: "b", type: "acme/item", version: 1, props: {} },
+          ],
+        },
+      },
+    ],
+  } as unknown as BlockDocument;
+
+  function stackedEditor(selectedId: string): EditorState {
+    return { ...editorOf(selectedId), document: STACKED } as EditorState;
+  }
+
+  /**
+   * Computed styles per node, where a node's value may depend on whether the
+   * element still wears its own node class: removing it is how the overlay
+   * asks what the block's margin is with the author's own spacing taken away.
+   */
+  function stubByElement(
+    styles: (
+      id: string,
+      ownClass: boolean
+    ) => Partial<Record<string, string>> | undefined
+  ) {
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) => {
+      const id = element.getAttribute?.(NODE_ID_ATTRIBUTE);
+      const ownClass = Array.from(element.classList ?? []).some(
+        name => name.startsWith("nx-pb-") && name !== "nx-pb-contained"
+      );
+      const values =
+        id === null || id === undefined ? undefined : styles(id, ownClass);
+      return values === undefined
+        ? REAL_COMPUTED_STYLE(element, pseudo)
+        : styleOf(
+            Object.fromEntries(
+              Object.entries(values).filter(
+                (entry): entry is [string, string] => entry[1] !== undefined
+              )
+            )
+          );
+    }) as typeof window.getComputedStyle);
+  }
+
+  function mountStacked(selectedId: string) {
+    stubLayoutBoxes(true);
+    registerStack();
+    const editor = stackedEditor(selectedId);
+    return render(
+      <Canvas
+        document={editor.document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={editor.selectedId}
+        selectedIds={editor.selection.ids}
+        overlay={<SpacingOverlay editor={editor} />}
+      />
+    );
+  }
+
+  it("names the container a second child's top space comes from", () => {
+    stubByElement(id =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: "18px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["18 · Gap · from Stack"]);
+  });
+
+  it("calls an author's own margin on the child its own", () => {
+    // 40px while the node wears its own class, 18px (the gap) without it: the
+    // author's value is what is on screen, and it is theirs.
+    stubByElement((id, ownClass) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: ownClass ? "40px" : "18px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["40"]);
+  });
+
+  it("never calls the first child's space a gap", () => {
+    stubByElement(id =>
+      id === "s"
+        ? { display: "block" }
+        : id === "a"
+          ? { marginTop: "18px" }
+          : undefined
+    );
+    const { container } = mountStacked("a");
+    expect(labels(container)).toEqual(["18"]);
+  });
+
+  it("leaves a flex container's child margin alone, since flex spaces with gap", () => {
+    stubByElement(id =>
+      id === "s"
+        ? { display: "flex" }
+        : id === "b"
+          ? { marginTop: "18px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["18"]);
+  });
+});

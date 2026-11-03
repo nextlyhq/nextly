@@ -97,6 +97,7 @@ import {
   type SpacingBox,
   type SpacingSide,
 } from "./spacing-bands";
+import { blockStartSide, gapOwnerOf } from "./spacing-gap";
 import {
   SpacingHandles,
   type SpacingScrubContext,
@@ -758,23 +759,38 @@ export function SpacingOverlay({
         : false;
 
     const layerBox = rootBox;
+    /*
+     * Whose space the block-start margin is. Asked once per measurement, after
+     * every reading above, because answering it takes the block's own classes
+     * away for one synchronous read.
+     */
+    const gapFrom = gapOwnerOf(block, document);
+    const gapSide = blockStartSide(style.writingMode);
+    const attributed = (bands: readonly SpacingBand[]): SpacingBand[] =>
+      bands.map(band =>
+        gapFrom !== undefined && band.box === "margin" && band.side === gapSide
+          ? { ...band, gapFrom }
+          : band
+      );
     apply(
-      spacingBands({
-        border,
-        borderWidths: boxes.borderWidths,
-        margin: boxes.margin,
-        padding: boxes.padding,
-        // Composed from the real transform between the block and the root, so
-        // a scaled ancestor counts and no rounded layout value is involved.
-        scale: scaledBy,
-        // Margins take the ancestors' scale ALONE — a transform does not scale
-        // the space a margin reserves, only the box it is drawn beside.
-        marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
-        // Resolved against the LAYOUT box, which is why the scale goes in with
-        // it: a rounded block's bands have to be cut to the curve, and the curve
-        // is stated in the units the author declared it in.
-        radii,
-      }),
+      attributed(
+        spacingBands({
+          border,
+          borderWidths: boxes.borderWidths,
+          margin: boxes.margin,
+          padding: boxes.padding,
+          // Composed from the real transform between the block and the root, so
+          // a scaled ancestor counts and no rounded layout value is involved.
+          scale: scaledBy,
+          // Margins take the ancestors' scale ALONE — a transform does not scale
+          // the space a margin reserves, only the box it is drawn beside.
+          marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
+          // Resolved against the LAYOUT box, which is why the scale goes in with
+          // it: a rounded block's bands have to be cut to the curve, and the curve
+          // is stated in the units the author declared it in.
+          radii,
+        })
+      ),
       layerBox,
       {
         nodeId: selectedId,
@@ -815,11 +831,10 @@ export function SpacingOverlay({
         },
       }
     );
-    // The document is NOT one of these. Nothing here is remembered across a
-    // measurement any more, so this reads the tree as it stands whenever it is
-    // called; what makes it run again after an edit is the effect below, which
-    // does depend on the document.
-  }, [selectedId]);
+    // The document is read for one thing: which container a gap belongs to,
+    // so a block moved into another container is named against the right
+    // one. The rendered tree is still read as it stands whenever this runs.
+  }, [selectedId, document]);
 
   // A zoom, or a page loading into the frame, moves the block on screen while
   // nothing in the document changes.
@@ -833,9 +848,8 @@ export function SpacingOverlay({
       return;
     }
     measure();
-    // `document` is NOT one of `measure`'s own dependencies — it reads the tree
-    // as it stands — and is listed here because this effect is what has to run
-    // again after an edit: an edit resizes the selected block, which is most of
+    // `document` is listed here as well as on `measure` because this effect is
+    // what has to run again after an edit: an edit resizes the selected block, which is most of
     // what the inspector does, and an effect keyed on the selection alone would
     // leave the bands describing the layout it had.
   }, [measure, hidden, document, canvasFrame]);
@@ -901,11 +915,16 @@ export function SpacingOverlay({
           data-box={band.box}
           data-side={band.side}
           data-negative={band.negative ? "" : undefined}
+          data-gap={band.gapFrom === undefined ? undefined : ""}
           // See the layer above: the report is hidden, the control is not.
           aria-hidden="true"
           style={bandStyle(band)}
         >
-          <span className="nx-spacing-overlay__value">{band.label}</span>
+          <span className="nx-spacing-overlay__value">
+            {band.gapFrom === undefined
+              ? band.label
+              : `${band.label} · Gap · from ${band.gapFrom}`}
+          </span>
         </div>
       ))}
       {subject === null || !singular || designHeld ? null : (

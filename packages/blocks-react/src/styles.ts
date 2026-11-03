@@ -17,6 +17,7 @@ import {
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
+  type StyleValue,
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
@@ -232,6 +233,26 @@ export function blockPartsFor(
 }
 
 /**
+ * The space each container type this document draws puts between its
+ * children, keyed by type.
+ *
+ * Read through the same walk as {@link blockBasesFor}, so the gap of a
+ * container reaches the sheet exactly when its defaults do.
+ */
+function childGapsFor(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  stated?: Readonly<Record<string, StyleValue>>
+): Record<string, StyleValue> {
+  return perUsedType(
+    document,
+    blocks,
+    definition => definition.childGap,
+    stated
+  );
+}
+
+/**
  * The islands a document contains, keyed by block type.
  *
  * The question `"use client"` cannot answer. A directive is a fact about a
@@ -430,6 +451,11 @@ function compileContextFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockParts
+    ),
+    childGaps: childGapsFor(
+      storedDocument ?? document,
+      blocks,
+      styleContext.childGaps
     ),
     drawsNothing,
   });

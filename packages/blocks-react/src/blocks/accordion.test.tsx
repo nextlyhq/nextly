@@ -115,18 +115,14 @@ describe("the accordion pair", () => {
   });
 
   it("separates sections with spacing, never a hardcoded divider colour", () => {
-    // The divider reasoning below is unchanged and was right. The SPACING moved
-    // twice: it required `space.4`, became a length when a token resolved to
-    // nothing on the stored-artifact path — `var(--site-space-4)` with the
-    // property undeclared is invalid at computed-value time, so `gap` fell back
-    // to `normal`, zero for a grid, and the sections touched — and is a token
-    // again now that the declaration reaches that path.
+    // The spacing is the `space.stack` token, the space every container puts
+    // between the blocks it holds.
     //
     // That the reference RESOLVES is proved against a rendered page in
     // `columns.test.tsx`. This asserts what this block declares.
     const declared = JSON.stringify(ACCORDION_BASE_STYLES);
 
-    expect(declared).toContain('"$token":"space.4"');
+    expect(declared).toContain('"$token":"space.stack"');
     // Must-differ: a raw length would pass the check above if the object
     // carried both, and would stop following the site's own spacing.
     expect(declared).not.toContain("1rem");

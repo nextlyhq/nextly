@@ -155,6 +155,37 @@ pageBuilder({
 });
 ```
 
+## Spacing
+
+Blocks have no outer margin of their own. The space between two blocks comes from the
+block that holds them:
+
+- **Section, Box, Card, Column**, an accordion item and a collection loop put a gap above
+  every block after the first. Set the container to flex or grid and the same gap
+  becomes its `gap`.
+- **Columns** and **Gallery** space their columns and images with a wider gap.
+- **Rich text** spaces its own paragraphs, headings and lists, inside the block.
+- **Section** pads its content above, below and beside it. **Card** pads its content.
+  Box and Column have no padding.
+
+Each value is a variable under **Design → Variables**, and most grow with the screen:
+
+| Variable           | What it sets                                  |
+| ------------------ | --------------------------------------------- |
+| `space.stack`      | The gap between blocks in a container         |
+| `space.section-y`  | A section's padding above and below           |
+| `space.gutter`     | A section's padding at the sides              |
+| `space.columns`    | The gap between columns and gallery images    |
+| `space.card`       | A card's padding                              |
+| `space.paragraph`  | The space between paragraphs of rich text     |
+| `button.padding-y` | A button's padding above and below its label  |
+| `button.padding-x` | A button's padding at the sides of its label  |
+
+Spacing you set on a block (its margin, padding or gap in **Style → Spacing**, or
+through a shared style) always wins over these. With a block selected, the canvas
+shows the space above it from its container as **Gap · from Section** (or the
+container's name), not as the block's own margin.
+
 ## The bottom bar
 
 The bottom bar shows where you are: **Page**, then each block holding the selected

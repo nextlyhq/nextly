@@ -319,6 +319,23 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       }
     }
   }
+  // A length or a token reference and nothing else: the compiler writes it
+  // into a margin and a `gap`, and a structure there would reach the compile
+  // context as a value neither can take.
+  if (def.childGap !== undefined) {
+    const gap: unknown = def.childGap;
+    const usable =
+      typeof gap === "string" ||
+      (isPlainRecord(gap) &&
+        typeof gap.$token === "string" &&
+        Object.keys(gap).length === 1);
+    if (!usable) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" childGap must be a length or a { $token } reference.`
+      );
+    }
+  }
   if (def.slots !== undefined) {
     if (!isPlainRecord(def.slots)) {
       fail(

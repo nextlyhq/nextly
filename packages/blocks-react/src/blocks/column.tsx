@@ -26,6 +26,7 @@ import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
 import {
+  CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
   containerContentModel,
   renderContainer,
@@ -124,6 +125,7 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       children: {},
     },
     baseStyles: COLUMN_BASE_STYLES,
+    childGap: CONTAINER_CHILD_GAP,
     supports: CONTAINER_SUPPORTS,
     // What it is as HTML follows the tag it renders.
     contentModel: containerContentModel,

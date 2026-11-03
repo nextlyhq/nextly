@@ -40,14 +40,10 @@
  * `minmax(180px, 1fr)` makes a single track wider than its parent and the
  * pictures overflow. `min(180px, 100%)` lets the last one fit.
  *
- * **The gap is the site's spacing token, and there is no aspect ratio.** This
- * block shipped with `{ $token: "space.4" }`, rendered its tiles touching, and
- * spent a while as a plain length because of it: the renderer withheld the
- * token tier from a consumer handing back a stored artifact, so the reference
- * arrived as a `var()` with nothing behind it — invalid at computed-value time,
- * and `gap` falls back to `normal`, zero for a grid. The declaration now reaches
- * that path and resolves to `1rem`, which is the value the literal stood in for,
- * so the gutter follows a site that redefines `space.4`. A default `aspect-ratio` was considered and refused: it
+ * **The gap is the site's `space.columns` token, and there is no aspect
+ * ratio.** The same gutter `core/columns` uses, so a gallery beside a row of
+ * columns lines up with it, and a site that redefines the token moves both.
+ * A default `aspect-ratio` was considered and refused: it
  * would crop every picture in the library to one shape, and the crop is
  * invisible in the editor's own preview because the same rule applies there.
  * Uniform tiles are a real want, so `aspectRatio` stays available on the image
@@ -94,7 +90,7 @@ export const GALLERY_BASE_STYLES = {
       // a grid. Measured on the path that used to fail — a stored artifact
       // handed back with no context — the property is now declared and resolves
       // to `1rem`, the value the literal stood in for.
-      gap: { $token: "space.4" },
+      gap: { $token: "space.columns" },
     },
   },
 } as const;

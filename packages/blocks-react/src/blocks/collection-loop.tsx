@@ -28,6 +28,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
+import { CONTAINER_CHILD_GAP } from "./container";
 
 export interface CollectionLoopProps {
   /** The collection queried. */
@@ -219,6 +220,8 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       // from its own declaration.
       children: {},
     },
+    // Spaces one entry from the next, as any container spaces its blocks.
+    childGap: CONTAINER_CHILD_GAP,
     supports: {
       spacing: true,
       layout: true,

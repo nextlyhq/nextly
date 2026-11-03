@@ -25,6 +25,7 @@ import type {
   BreakpointSet,
   NodeStyles,
   StyleState,
+  StyleValue,
 } from "../document";
 import {
   MAX_BREAKPOINTS_PER_AXIS,
@@ -186,6 +187,25 @@ export interface StyleCompileContext {
    * that manager can supply the same record later.
    */
   elementBases?: Readonly<Partial<Record<TypographicElement, NodeStyles>>>;
+
+  /**
+   * The space each container block type puts between the blocks in its slots,
+   * keyed by block type.
+   *
+   * A block carries no outer margin of its own; the space between two blocks
+   * belongs to the container holding them. In block flow it is a top margin on
+   * every child after the first (`> * + *`), so nothing reaches the
+   * container's own outer edge; the same value is the container's `gap`, which
+   * only a flex or grid container reads. Where a node or a named class makes
+   * the container flex or grid, the compiler takes the flow margin off its
+   * children at that breakpoint so the two do not add up.
+   *
+   * Emitted after the block-type tier and before the named classes, at the
+   * weight a default carries (`0-1-0`): it beats a child's default margin reset
+   * and an element default, and loses to anything an author set on the child
+   * (a node value or a named class, both `0-3-0`).
+   */
+  childGaps?: Readonly<Record<string, StyleValue>>;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -390,13 +410,18 @@ export const TYPOGRAPHIC_ELEMENTS = [
   "h5",
   "h6",
   "p",
+  "blockquote",
+  "figure",
+  "hr",
+  "ol",
+  "ul",
 ] as const;
 
 /**
  * An element a typographic default may be written for.
  *
  * The type is the allow-list rather than a widening of it, so a tag the
- * compiler does not emit — a typo, or `blockquote` before anyone decides it
+ * compiler does not emit — a typo, or `table` before anyone decides it
  * belongs — is refused where it is written instead of silently contributing
  * nothing. A caller reading `Record<string, …>` has no way to learn which keys
  * are honoured except by trying one.
@@ -1725,6 +1750,72 @@ function documentNodes(
  * before it can be written at all, so writing it before that exists would be the
  * one hole nothing else in this design leaves open.
  */
+/**
+ * The children a container's gap spaces: every child after the first.
+ *
+ * The first child is left alone so the gap never reaches the container's own
+ * outer edge, which is what keeps a block from carrying space it did not ask
+ * for into whatever holds it.
+ */
+const FLOW_CHILDREN = "> * + *";
+
+/** The flow margin a flex or grid container's children get instead of the gap. */
+const NO_FLOW_GAP: readonly Declaration[] = [
+  { property: "margin-block-start", value: "0" },
+];
+
+/**
+ * Whether a compiled `display` lays its children out with `gap` rather than in
+ * block flow. Every flex and grid form counts, including the inline and
+ * two-keyword ones (`inline-flex`, `block grid`).
+ */
+function spacesWithGap(display: string): boolean {
+  return /\b(?:flex|grid)\b/.test(display);
+}
+
+/**
+ * The flow-margin rules a container needs where its own styles set `display`.
+ *
+ * One rule per breakpoint that states a display, in breakpoint order, so the
+ * desktop-first cascade the display itself follows decides which applies: a
+ * flex or grid display takes the flow margin off the children, any other
+ * display puts the gap back. Only the base state is read, because a layout
+ * switched on hover is not one a gap can follow.
+ *
+ * The display is compiled through the catalog rather than read raw, so a value
+ * the stylesheet refuses changes nothing here either. Its warnings are already
+ * reported by the envelope that emits the display, so they are not repeated.
+ */
+function layoutModeRules(
+  styles: unknown,
+  container: string,
+  flow: readonly Declaration[],
+  contexts: readonly BreakpointContext[],
+  anchor: string,
+  tokenPrefix: string
+): CssRule[] {
+  if (!isPlainRecord(styles)) return [];
+  const byBreakpoint = styles.base;
+  if (!isPlainRecord(byBreakpoint)) return [];
+  const rules: CssRule[] = [];
+  for (const context of contexts) {
+    const values = byBreakpoint[context.id];
+    if (!isPlainRecord(values) || !Object.hasOwn(values, "display")) continue;
+    const display = compileStyleValues(
+      { display: values.display },
+      "/display",
+      tokenPrefix
+    ).declarations.find(declaration => declaration.property === "display");
+    if (display === undefined) continue;
+    rules.push({
+      ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
+      selector: `${anchor} :where(${container} ${FLOW_CHILDREN})`,
+      declarations: [...(spacesWithGap(display.value) ? NO_FLOW_GAP : flow)],
+    });
+  }
+  return rules;
+}
+
 export function compilePageCss(
   doc: BlockDocument,
   ctx: StyleCompileContext
@@ -1990,6 +2081,54 @@ export function compilePageCss(
     }
   }
 
+  // The space each container puts between its children. After every block
+  // default rather than beside each one, so no child type's own margin reset —
+  // which sorts after its container's type as often as before it — can cancel
+  // the gap at equal weight; before the named classes and the nodes, so an
+  // author's spacing on a child always wins.
+  const flowGaps = new Map<string, readonly Declaration[]>();
+  const gaps = ctx.childGaps ?? {};
+  for (const type of [...usedTypes].sort()) {
+    if (!Object.hasOwn(gaps, type)) continue;
+    const path = pointer("/childGaps", type);
+    // The same grammar the block-type tier holds a type to, for the same
+    // reason: the type reaches a selector.
+    if (!isBlockType(type)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path,
+        code: "invalid-node-type",
+        severity: "warning",
+        message: `"${describeValue(type)}" is not a block type, so the space between its children was not written.`,
+        suggestion: 'Use a namespaced slug such as "core/section".',
+      });
+      continue;
+    }
+    const flow = compileStyleValues(
+      { margin: { blockStart: gaps[type] } },
+      path,
+      tokenPrefix,
+      budget,
+      warningAllowance,
+      { mayFetchUrl }
+    );
+    warnings.push(...flow.warnings);
+    if (flow.declarations.length === 0) continue;
+    // The value was judged once above; this only respells it for `gap`.
+    const spaced = compileStyleValues({ gap: gaps[type] }, path, tokenPrefix);
+    const typeClass = `.${escapeIdentifier(blockTypeClassName(type))}`;
+    flowGaps.set(type, flow.declarations);
+    rules.push(
+      {
+        selector: `${defaultsAnchor} :where(${typeClass} ${FLOW_CHILDREN})`,
+        declarations: flow.declarations,
+      },
+      {
+        selector: `${defaultsAnchor} :where(${typeClass})`,
+        declarations: spaced.declarations,
+      }
+    );
+  }
+
   // The named classes, in library order — the tier between a block's defaults and a node's own
   // values. At one specificity the cascade is source order, so being emitted here IS what makes
   // a class beat the block default and lose to a local value.
@@ -2134,6 +2273,22 @@ export function compilePageCss(
         }
       )
     );
+    // A class that makes a container flex or grid swaps the flow margin for
+    // `gap` on every container type wearing it, exactly as a node's own
+    // display does below.
+    const classSelector = `.${escapeIdentifier(namedClassName(cls.slug))}`;
+    for (const [type, flow] of flowGaps) {
+      rules.push(
+        ...layoutModeRules(
+          cls.styles,
+          `.${escapeIdentifier(blockTypeClassName(type))}${classSelector}`,
+          flow,
+          contexts,
+          defaultsAnchor,
+          tokenPrefix
+        )
+      );
+    }
   }
 
   // Each node's own values, in document order so the stylesheet reads the way
@@ -2184,6 +2339,14 @@ export function compilePageCss(
         warnings,
         warningAllowance,
         preview
+      ),
+      ...layoutModeRules(
+        node.styles,
+        `.${className}`,
+        flowGaps.get(node.type) ?? [],
+        flowGaps.has(node.type) ? contexts : [],
+        defaultsAnchor,
+        tokenPrefix
       ),
     ];
     // Held out of the sheet when the node can be pruned at read time. Serialized on its own, so

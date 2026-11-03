@@ -197,6 +197,24 @@ describe("registration rules", () => {
     }
   });
 
+  it("registers a container declaring a child gap as a token or a length", () => {
+    // The control for the refusal below.
+    registerBlocks([
+      block({ name: "core/g1", childGap: { $token: "space.stack" } } as never),
+      block({ name: "core/g2", childGap: "1rem" } as never),
+    ]);
+    expect(getBlock("core/g1")?.childGap).toEqual({ $token: "space.stack" });
+    expect(hasBlock("core/g2")).toBe(true);
+  });
+
+  it("refuses a child gap that is neither a length nor a token reference", () => {
+    for (const childGap of [null, 16, { $token: 1 }, { $token: "a", x: 1 }]) {
+      expect(() =>
+        registerBlocks([block({ name: "core/g3", childGap } as never)])
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*childGap/s);
+    }
+  });
+
   it("registers a block declaring well-formed parts", () => {
     // The control every rejection below needs: a gate that refused every parts
     // record would pass all of them while making the feature unusable.
