@@ -157,6 +157,20 @@ function useGainLoad(
   };
 }
 
+/** What someone who may only read the document is shown. */
+function readOnlyAffordances(
+  because: "access" | "removed-from-code",
+  holder: DocumentLockHolder | null | undefined,
+  load: LatestDocumentLoad
+): DocumentLockAffordances {
+  // A reader writes nothing, so a failed read holds nothing back; it is still
+  // said, since what they read may be out of date.
+  if (load === "failed") return READER_LATEST_UNLOADED;
+  return because === "removed-from-code"
+    ? READ_ONLY_REMOVED_FROM_CODE
+    : readerAffordances(holder);
+}
+
 export function useDocumentLockSurface({
   readOnlyForReader = false,
   readOnlyBecause = "access",
@@ -198,13 +212,7 @@ export function useDocumentLockSurface({
 
   return {
     ...(readOnlyForReader
-      ? // A reader writes nothing, so a failed read holds nothing back; it is
-        // still said, since what they read may be out of date.
-        gainLoad.load === "failed"
-        ? READER_LATEST_UNLOADED
-        : readOnlyBecause === "removed-from-code"
-          ? READ_ONLY_REMOVED_FROM_CODE
-          : readerAffordances(holder)
+      ? readOnlyAffordances(readOnlyBecause, holder, gainLoad.load)
       : documentLockAffordances(state, lastKnownHolder.current, gainLoad.load)),
     takeOver,
     requestAccess,

@@ -256,6 +256,34 @@ function readError(
 }
 
 /**
+ * Keep the merge of a pair of reads that agree, made at `readAt`, and say
+ * whether it is a new one.
+ *
+ * A cached merge for exactly these inputs is reused, so the document keeps its
+ * identity across renders and the form is not reset by a re-render. Reads that
+ * found the document unchanged keep it too, but still say when it was read.
+ */
+function rememberMerge<T extends Doc>(
+  last: { current: Merge<T> | null },
+  pair: SettledPair<T>,
+  scope: string,
+  readAt: number
+): boolean {
+  const kept = last.current;
+  if (kept !== null && isMergeOf(kept, pair, scope)) {
+    kept.readAt = readAt;
+    return false;
+  }
+  last.current = {
+    scope,
+    ...pair,
+    document: withStoredReferences(pair.fields, pair.populated, pair.stored),
+    readAt,
+  };
+  return true;
+}
+
+/**
  * Merges the populated read with the depth-0 read once both have settled on
  * the same version of the document.
  *
@@ -299,22 +327,8 @@ export function useWithStoredReferences<T extends Doc>({
     populated.refetch,
     stored.refetch
   );
-  // A cached merge for exactly these inputs is reused, so the document keeps
-  // its identity across renders and the form is not reset by a re-render.
-  const pairReadAt = Math.min(populated.dataUpdatedAt, stored.dataUpdatedAt);
-  if (agree && !isMergeOf(last.current, pair, scope)) {
-    last.current = {
-      scope,
-      ...pair,
-      document: withStoredReferences(pair.fields, pair.populated, pair.stored),
-      readAt: pairReadAt,
-    };
-    retries.reset();
-  } else if (agree && last.current !== null) {
-    // Reads that found the document unchanged keep its identity, so the form
-    // is not reset, but still say when it was last read.
-    last.current.readAt = pairReadAt;
-  }
+  const readAt = Math.min(populated.dataUpdatedAt, stored.dataUpdatedAt);
+  if (agree && rememberMerge(last, pair, scope, readAt)) retries.reset();
 
   const document =
     !retries.spent && last.current?.scope === scope
