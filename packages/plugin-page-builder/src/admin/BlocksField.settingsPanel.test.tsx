@@ -281,7 +281,7 @@ describe("Settings, as a dialog rather than a panel", () => {
     entryFields = <p>fields</p>;
     openEditor();
     expect(rail()).toBe(withoutFields);
-    for (const panel of ["add", "layers", "design"]) {
+    for (const panel of ["add", "layers", "components", "design"]) {
       expect(withoutFields).toContain(panel);
     }
   });
