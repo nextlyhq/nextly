@@ -162,7 +162,7 @@ describe("the list", () => {
   it("says how to make one when there are none, with no + to create an empty one", async () => {
     await panel({ library: [] });
     expect(screen.getByText(/^No shared styles yet\./).textContent).toBe(
-      "No shared styles yet. Select a block and choose Save as shared style… in its ⋯ menu."
+      "Shared styles you make from a block show here."
     );
     expect(screen.queryByRole("button", { name: /add/i })).toBeNull();
   });
