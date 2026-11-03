@@ -173,6 +173,9 @@ const judged: boolean[] = [];
 /** Set to refuse every site-style write that changes breakpoints. */
 const refuse = { breakpoints: false };
 
+/** Set to have "another save" empty the shared styles right after one is written. */
+const overwrite: { classes: boolean; site?: TestNextly } = { classes: false };
+
 /** A plugin recording, for every component create, whether it was judged. */
 const recorder = definePlugin({
   name: "@t/transfer-recorder",
@@ -182,6 +185,15 @@ const recorder = definePlugin({
     ctx.hooks.on("afterCreate", "components", hook => {
       const context = (hook as { context?: Record<string, unknown> }).context;
       judged.push(context?.[TRANSFER_JUDGEMENT_CONTEXT] === true);
+    });
+    ctx.hooks.on("afterUpdate", `single:${SITE_STYLE_SLUG}`, async () => {
+      if (!overwrite.classes) return;
+      overwrite.classes = false;
+      await overwrite.site?.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { classes: [] },
+        overrideAccess: true,
+      });
     });
     ctx.hooks.on("beforeUpdate", `single:${SITE_STYLE_SLUG}`, hook => {
       const data = (hook as { data?: Record<string, unknown> }).data;
@@ -212,6 +224,8 @@ describe.each(getConfiguredTestDialects())(
       });
       judged.length = 0;
       refuse.breakpoints = false;
+      overwrite.classes = false;
+      overwrite.site = current;
       // The instance's first user is its super admin, so it is made here and
       // never acts: every author below holds only what it is granted.
       await person(current, "owner");
@@ -1097,6 +1111,38 @@ describe.each(getConfiguredTestDialects())(
         name: "dot.png",
         existingId: identical.id,
       });
+    });
+
+    it("imports nothing when another save drops the shared styles it just added", async () => {
+      const { file } = await exported("components", s => s.outer);
+      const t = await boot();
+      const { cookie } = await holding(t, WRITES_EVERYTHING);
+      const before = await snapshot(t);
+      const seen = await preview(cookie, file, {
+        breakpoints: Object.fromEntries(
+          file.breakpoints.map(entry => [entry.id, "drop" as const])
+        ),
+      });
+      expect(seen.ready).toBe(true);
+
+      overwrite.classes = true;
+      const answer = await post(cookie, ["transfer", "import"], {
+        file,
+        choices: {
+          breakpoints: Object.fromEntries(
+            file.breakpoints.map(entry => [entry.id, "drop"])
+          ),
+        },
+        expect: seen.fingerprint,
+      });
+
+      expect(answer.status).toBe(409);
+      const unchanged = (raw: string) => {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        delete parsed.style;
+        return parsed;
+      };
+      expect(unchanged(await snapshot(t))).toEqual(unchanged(before));
     });
 
     it("tells the hooks a write is judged, and commits without saying so", async () => {

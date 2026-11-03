@@ -737,6 +737,7 @@ async function applyPlan(
       );
     }
     await writeSiteStyle(ctx, plan, style);
+    await requireStyleHeld(plan, style);
     written = await writeDocuments(ctx, file, plan, slugs, media, true);
   } catch (error) {
     await takeBack(ctx, uploaded, style);
@@ -999,6 +1000,51 @@ async function appendBreakpoints(
   }
   await writeBreakpoints(ctx, undo.slug, set);
   for (const entry of added) undo.breakpointIds.add(entry.id);
+}
+
+/**
+ * Refuse, so everything is taken back, when a shared style, variable or
+ * breakpoint the documents will name is not in the site style just before
+ * they are written. The Single has no compare-and-swap, so a save landing
+ * between this import's read and its write can replace the sections whole;
+ * checked here, the documents never commit naming what that save dropped.
+ */
+async function requireStyleHeld(
+  plan: ImportPlan,
+  undo: StyleUndo
+): Promise<void> {
+  const named = {
+    classes: new Set(plan.classes.create.map(entry => entry.id)),
+    tokens: new Set(plan.tokens.create.map(token => token.name)),
+    breakpoints: new Set(plan.addBreakpoints.map(entry => entry.id)),
+  };
+  if (named.classes.size + named.tokens.size + named.breakpoints.size === 0)
+    return;
+  const now = await loadSiteStyle({
+    nextly: requireNextly(),
+    slug: undo.slug,
+    ...(undo.defaults === undefined ? {} : { defaults: undo.defaults }),
+  });
+  const held = {
+    classes: new Set((now.classes ?? []).map(entry => entry.id)),
+    tokens: new Set((now.tokens?.tokens ?? []).map(token => token.name)),
+    breakpoints: new Set(
+      [
+        ...(now.breakpoints?.viewport ?? []),
+        ...(now.breakpoints?.container ?? []),
+      ].map(def => def.id)
+    ),
+  };
+  const lost = (["classes", "tokens", "breakpoints"] as const).some(kind =>
+    [...named[kind]].some(id => !held[kind].has(id))
+  );
+  if (!lost) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      "The site's styles changed while this was being imported. Nothing was imported; preview it again.",
+    logContext: { reason: "transfer-import-style-overwritten" },
+  });
 }
 
 /** The checked breakpoint write, as Settings' route makes it. */
