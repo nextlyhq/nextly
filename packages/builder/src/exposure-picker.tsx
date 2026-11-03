@@ -2,7 +2,7 @@
 
 /**
  * Which values of a selection each placement of a new component may change:
- * the picker a "Save as component" or "Convert to component" form shows.
+ * the picker a "Turn into component" form shows.
  *
  * It lists every block in the selection with the props a placement could set
  * (text, rich text, an image, a link, a choice) and a switch to let a
@@ -36,18 +36,8 @@ import {
 import { Checkbox, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { fieldLabel } from "./inspector";
+import { propLabel } from "./inspector";
 import { layerLabel } from "./layers";
-
-/** What a picked value is called beside its name. */
-const TYPE_LABEL: Readonly<Record<ExposedPropertyType, string>> = {
-  text: "Text",
-  richText: "Rich text",
-  image: "Image",
-  link: "Link",
-  select: "Choice",
-  visibility: "Shown or hidden",
-};
 
 /** Why a pick was refused, as an author reads it. */
 const REFUSAL: Readonly<Record<ExposureEditProblem, string>> = {
@@ -253,9 +243,6 @@ function CandidateRow({
         <Label htmlFor={boxId} className="nx-expose-picker__name">
           {candidate.name}
         </Label>
-        <span className="nx-expose-picker__type">
-          {TYPE_LABEL[candidate.type]}
-        </span>
       </div>
       {entry === undefined ? null : (
         <Input
@@ -328,12 +315,13 @@ function candidatesOf(
   const candidates: Candidate[] = [];
   for (const [name, schema] of Object.entries(props)) {
     const type = exposureTypeForProp(schema);
-    if (type === undefined) continue;
+    if (type === undefined || schema === undefined) continue;
     candidates.push({
       key: `${node.id}\u0000${name}`,
       nodeId: node.id,
       prop: name,
-      name: fieldLabel(name),
+      // The block's own word for the property ("HTML tag"), not its name.
+      name: propLabel(name, schema),
       type,
     });
   }

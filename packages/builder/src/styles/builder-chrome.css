@@ -157,6 +157,23 @@
   --nx-builder-component: var(--nx-builder-component-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
+  /*
+   * The editor's ONE density scale, for the top bar, the panels and the
+   * inspector alike, so every control in the editor is one size:
+   * - a control (button, field, select, icon button) is 28px high, above the
+   *   24px WCAG target;
+   * - body text and labels are 12px on a 16px line;
+   * - a section title is 12px semibold;
+   * - rows sit 8px apart.
+   * The same in light and dark: density is not a colour.
+   */
+  --nx-builder-control-height: 1.75rem;
+  --nx-builder-control-padding-x: 0.5rem;
+  --nx-builder-font-size: 0.75rem;
+  --nx-builder-line-height: 1rem;
+  --nx-builder-title-size: 0.75rem;
+  --nx-builder-title-weight: 600;
+  --nx-builder-row-gap: 0.5rem;
 }
 
 /*
@@ -274,13 +291,13 @@
  * the accent mixed into transparency, so it is a tint of whichever accent the
  * theme gives, in either mode, rather than a second colour to keep in step.
  */
+/* No background: the shell's panel region is the one surface panels sit on. */
 .nx-insert-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
   color: var(--nx-builder-text, var(--nx-foreground));
-  background: var(--nx-builder-surface, var(--nx-background));
 }
 
 /* The panel's name, as the other panels on the rail head theirs. */
@@ -358,6 +375,13 @@
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+  /*
+   * On the panel's own surface: the command palette it is built from paints
+   * a card of its own (the admin background, rounded), which drew a second
+   * surface inside the panel — black in dark, a white band in light.
+   */
+  background: transparent;
+  border-radius: 0;
 }
 
 .nx-insert-panel .nx-insert-panel__list {
@@ -563,7 +587,13 @@
   border-radius: 0.4375rem;
   text-align: center;
   color: var(--nx-foreground);
-  background: var(--nx-background);
+  /*
+   * A quiet tile: the panel's own surface inside its border, so a grid of
+   * them reads as choices rather than as solid blocks (in dark, the admin
+   * background was the heaviest thing on screen). Hover and the highlighted
+   * tile are what fill it.
+   */
+  background: transparent;
   cursor: grab;
   /*
    * Reserve the sideways gesture, so a tile can be DRAGGED onto the canvas.
@@ -592,7 +622,7 @@
 .nx-insert-panel:not([data-highlight="shown"])
   [cmdk-item][data-selected="true"] {
   color: var(--nx-foreground);
-  background: var(--nx-background);
+  background: transparent;
 }
 
 /*
@@ -649,13 +679,13 @@
  * carries "Edit", and its name and sentence are what tell two components of
  * one site apart.
  */
+/* No background: the shell's panel region is the one surface panels sit on. */
 .nx-components-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
   color: var(--nx-builder-text, var(--nx-foreground));
-  background: var(--nx-builder-surface, var(--nx-background));
 }
 
 .nx-components-panel__search {
@@ -1138,10 +1168,32 @@
   border-block-start: 1px solid var(--nx-builder-border);
 }
 
+/*
+ * The panel's own chevron rather than the browser's triangle, which drew in
+ * a different glyph, weight and colour in each browser: right while closed,
+ * down while open, as the Style tab's section headings are.
+ */
 .nx-inspector__advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  list-style: none;
   cursor: pointer;
   font-size: var(--text-sm);
   font-weight: 500;
+}
+
+.nx-inspector__advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nx-inspector__advanced-chevron {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector__advanced[open] > summary > .nx-inspector__advanced-chevron {
+  rotate: 90deg;
 }
 
 .nx-inspector__advanced[open] > summary {
@@ -1298,79 +1350,160 @@
 }
 
 /*
- * A prop row in a component's own view: the field, then the switch that
- * exposes it. Stacked in one cell so the switch reads as belonging to the
- * field above it rather than as the next field.
+ * A prop row in a component's own view: the field, the icon that lets each
+ * placement change it, and under both the dashed row naming the field once
+ * it is exposed. The expose control's own wrapper is `display: contents`, so
+ * its icon, name row and reason are laid out by this grid.
+ *
+ * ONE column, the field's own. The icon is drawn over the field's first row
+ * at the trailing edge of its LABEL column, as Figma and Webflow put a bind
+ * icon beside a property's name, and the label keeps room for it; a column of
+ * its own would take its width from the control's and clip a wide control.
  */
 .nx-inspector__prop {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  /* 24px: the smallest target WCAG 2.2 AA allows, so the label keeps room. */
+  --nx-expose-toggle-size: 1.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  row-gap: 0.25rem;
   min-width: 0;
+}
+
+.nx-inspector__prop > :first-child {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+
+/* The label, held by a lock or not, leaves the icon its width. */
+.nx-inspector__prop > .nx-inspector__field > label,
+.nx-inspector__prop > .nx-inspector__field > .nx-inspector__field-name,
+.nx-inspector__prop > .nx-inspector__held > .nx-inspector__field > label,
+.nx-inspector__prop
+  > .nx-inspector__held
+  > .nx-inspector__field
+  > .nx-inspector__field-name {
+  padding-right: var(--nx-expose-toggle-size);
+}
+
+.nx-expose {
+  display: contents;
 }
 
 /*
- * The expose switch and, once on, the field's name. Quiet while off, since
- * most props are not exposed; once on, dashed in the component's hue, as the
- * accepted editor mock marks an exposed part (`.exposed`), so an exposed prop
- * is found at a glance down a long list.
+ * The expose icon: the component mark, quiet until hovered, in the
+ * component's hue and wash while pressed. Held (aria-disabled) stays readable
+ * and focusable, only dimmer. Drawn at the end of the field's label column,
+ * vertically centred on a control of the field's usual height.
  */
-.nx-expose {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-  padding: 0.25rem 0.5rem;
+.nx-expose__toggle {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+  align-self: start;
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  width: var(--nx-expose-toggle-size);
+  height: var(--nx-expose-toggle-size);
+  /* The label column's end, reaching half into the gap after it. */
+  margin-left: calc(6.5rem + 0.25rem - var(--nx-expose-toggle-size));
+  margin-top: 0.25rem;
+  padding: 0;
+  border: 1px solid transparent;
   border-radius: var(--radius-md, 0.375rem);
-  border: 1px dashed transparent;
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
 }
 
-.nx-expose[data-exposed] {
+/*
+ * Where the label does not sit in a column of its own (a switch row with its
+ * words beside it, a stacked field, a block's own inspector listing names
+ * alone, or a field stacked in a narrow rail) the icon goes to the row's end,
+ * where nothing is drawn.
+ */
+.nx-inspector__prop:has(> .nx-inspector__field--inline) .nx-expose__toggle,
+.nx-inspector__prop:has(> .nx-inspector__field--stacked) .nx-expose__toggle,
+[data-expose-rows] .nx-expose__toggle {
+  justify-self: end;
+  margin-left: 0;
+}
+
+@container nx-inspector-fields (max-width: 18rem) {
+  .nx-inspector__prop .nx-expose__toggle {
+    justify-self: end;
+    margin-left: 0;
+  }
+}
+
+.nx-expose__toggle:hover {
+  color: var(--nx-builder-component);
+  background: color-mix(in oklch, var(--nx-builder-component) 8%, transparent);
+}
+
+.nx-expose__toggle:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-expose__toggle[aria-pressed="true"] {
+  color: var(--nx-builder-component);
+  background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent);
   border-color: color-mix(
     in oklch,
-    var(--nx-builder-component) 45%,
+    var(--nx-builder-component) 40%,
     transparent
   );
-  background: color-mix(in oklch, var(--nx-builder-component) 6%, transparent);
 }
 
-.nx-expose--visibility {
-  margin-bottom: 0.5rem;
+.nx-expose__toggle[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-/*
- * Wraps, so a long label ("Let placements hide this") puts the name on a line
- * of its own rather than squeezing it to a few letters.
- */
-.nx-expose__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem 0.5rem;
-  min-width: 0;
-  min-height: 2rem;
-}
-
-.nx-expose__label {
-  flex: 0 0 auto;
-  font-size: 0.75rem;
-  font-weight: 500;
+.nx-expose__toggle[aria-disabled="true"]:hover {
   color: var(--nx-muted-foreground);
+  background: transparent;
 }
 
-.nx-expose[data-exposed] .nx-expose__label {
+/* The dashed "Field" row under an exposed property, naming the field. */
+.nx-expose__field {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  margin-bottom: 0.25rem;
+}
+
+.nx-expose__field-label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-xs);
+  font-weight: 500;
   color: var(--nx-builder-component);
 }
 
-.nx-expose__name {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  flex: 1 1 9rem;
-  min-width: 0;
+.nx-expose__field .nx-field-name {
+  flex: 1 1 auto;
+}
+
+.nx-expose__field .nx-expose__name-input {
+  border-style: dashed;
+  border-color: color-mix(
+    in oklch,
+    var(--nx-builder-component) 45%,
+    var(--nx-border)
+  );
 }
 
 .nx-expose__reason {
+  grid-column: 1 / -1;
   margin: 0;
   font-size: 0.75rem;
   line-height: 1.4;
@@ -1381,90 +1514,239 @@
   color: var(--nx-destructive);
 }
 
+/* A block's Shown row: the words in the field's place, the icon beside. */
+.nx-expose-shown {
+  margin-bottom: 0.5rem;
+}
+
 /*
- * The component's exposed fields, listed while nothing is selected: each a
- * name to edit, its type, the block and prop it drives, and the two things
- * that can be done with it.
+ * Laid out as a field is, a label column then the value, so the icon lands
+ * at the end of the label column here too.
  */
-.nx-exposed-fields {
+.nx-expose__shown {
+  display: grid;
+  grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.5rem;
+  min-height: 2rem;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.nx-expose__shown-label {
+  padding-right: var(--nx-expose-toggle-size);
+  font-weight: 500;
+}
+
+/* The Shown words are the row's field, in the cell the icon is drawn over. */
+.nx-expose-shown .nx-expose__shown {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.nx-expose__shown-value {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-expose[data-exposed] .nx-expose__shown-value {
+  color: var(--nx-builder-component);
+}
+
+/* A field's name and its refusal, stacked. */
+.nx-field-name {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.25rem;
+  min-width: 0;
 }
 
-/* The list's own heading, at the size the inspector's section labels take. */
-.nx-exposed-fields .nx-inspector__heading {
+/*
+ * The card heading a component's view: its mark in the component's wash, the
+ * name on one line (whole on hover), and what it holds.
+ */
+.nx-component-head {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--nx-border);
+  min-width: 0;
+}
+
+.nx-component-head__mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-lg, 0.5rem);
+  color: var(--nx-builder-component);
+  background: color-mix(in oklch, var(--nx-builder-component) 8%, transparent);
+  border: 1px solid
+    color-mix(in oklch, var(--nx-builder-component) 35%, transparent);
+}
+
+.nx-component-head__text {
+  min-width: 0;
+}
+
+.nx-component-head__name {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.nx-exposed-fields__list {
+.nx-component-head__holds {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* The fields, as flat rows of one even width. */
+.nx-component-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Sentence case, as the view's own words are: "Fields", not "FIELDS". */
+.nx-component-fields .nx-inspector__heading {
+  margin: 0;
+  font-size: var(--text-xs);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.nx-component-fields__list {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
 }
 
-.nx-exposed-fields__item {
+.nx-component-field {
+  display: grid;
+  grid-template-columns: 1.375rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-md, 0.375rem);
+}
+
+/*
+ * A faint wash of the text colour, not the accent or the muted ground: a
+ * theme may make the accent a brand colour, which drowns the row's type
+ * icon, and the muted ground is the panel's own, which shows nothing.
+ */
+.nx-component-field:hover,
+.nx-component-field:focus-within {
+  background: color-mix(in oklch, var(--nx-foreground) 6%, transparent);
+}
+
+.nx-component-field__type {
+  display: grid;
+  place-items: center;
+  color: var(--nx-builder-component);
+}
+
+.nx-component-field__text {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.5rem;
-  border: 1px solid var(--nx-border);
-  border-left: 3px solid var(--nx-builder-component);
-  border-radius: var(--radius-md, 0.375rem);
+  min-width: 0;
+}
+
+/*
+ * The field's name, edited in place but drawn as the row's title: no box
+ * until it is hovered or focused, so the list reads as a list.
+ */
+/*
+ * Qualified by the row: the design system's input classes are loaded after
+ * this sheet at the same weight, so the bare class would lose the border.
+ */
+.nx-component-field .nx-component-field__name {
+  height: 1.375rem;
+  padding: 0 0.25rem;
+  margin-left: -0.25rem;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.nx-component-field .nx-component-field__name:hover {
+  border-color: var(--nx-border);
+}
+
+.nx-component-field .nx-component-field__name:focus-visible {
   background: var(--nx-background);
 }
 
-.nx-exposed-fields__main {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.nx-exposed-fields__name {
-  flex: 1 1 auto;
-  min-width: 0;
+.nx-component-field__label {
   font-size: 0.8125rem;
   font-weight: 500;
-  line-height: 2rem;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.nx-exposed-fields__type {
-  flex: 0 0 auto;
-  margin-top: 0.4rem;
-  padding: 0 0.375rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--nx-builder-component);
-  background: color-mix(in oklch, var(--nx-builder-component) 12%, transparent);
-}
-
-.nx-exposed-fields__meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.nx-exposed-fields__target {
-  min-width: 0;
-  font-size: 0.75rem;
+.nx-component-field__source {
+  font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.nx-exposed-fields__actions {
+/* Drawn on hover and focus, and always where nothing can hover. */
+.nx-component-field__actions {
   display: flex;
-  flex: 0 0 auto;
   gap: 0.125rem;
+  opacity: 0;
+}
+
+.nx-component-field:hover .nx-component-field__actions,
+.nx-component-field:focus-within .nx-component-field__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .nx-component-field__actions {
+    opacity: 1;
+  }
+}
+
+/* Before the first field: what to do, with the icon itself in the sentence. */
+.nx-component-fields__empty {
+  display: grid;
+  gap: 0.375rem;
+  padding: 0.875rem;
+  border: 1px dashed var(--nx-border);
+  border-radius: var(--radius-lg, 0.5rem);
+}
+
+.nx-component-fields__empty-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.nx-component-fields__empty-text {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-component-fields__mark {
+  display: inline-flex;
+  vertical-align: -0.125rem;
+  color: var(--nx-builder-component);
 }
 
 .nx-remove-field__variants ul {
@@ -1476,45 +1758,98 @@
 
 /*
  * The banner over a component's own view: Webflow's banner over a main
- * component, in the component's hue from the accepted editor mock, so the
- * author reads it as "this is the shared thing". A band rather than a toast,
- * because it holds for the whole view. Drawn above the shell, outside the
- * chrome's own tokens, so the hue falls back to the admin's purple there.
+ * component, a band tinted with the component's hue, so the author reads the
+ * whole view as "this is the shared thing". A band rather than a toast,
+ * because it holds for the whole view. It carries the builder's token class,
+ * so the hue resolves here above the shell.
+ *
+ * The tint is stronger on the dark ground: 8% of the purple over a near-black
+ * page is barely there, so dark takes 16% over the card surface, as the
+ * accepted proposal draws it.
  */
 .nx-component-banner {
+  --nx-component-banner-wash: color-mix(
+    in oklch,
+    var(--nx-builder-component) 8%,
+    var(--nx-background)
+  );
+  --nx-component-banner-line: color-mix(
+    in oklch,
+    var(--nx-builder-component) 35%,
+    var(--nx-background)
+  );
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem 0.5rem;
-  padding: 0.375rem 0.75rem;
-  border-bottom: 1px solid
-    color-mix(
-      in oklch,
-      var(--nx-builder-component, var(--nx-code-keyword)) 35%,
-      transparent
-    );
-  background: color-mix(
-    in oklch,
-    var(--nx-builder-component, var(--nx-code-keyword)) 8%,
-    var(--nx-background)
-  );
+  gap: 0.25rem 0.75rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 1rem;
+  border-bottom: 1px solid var(--nx-component-banner-line);
+  background: var(--nx-component-banner-wash);
   color: var(--nx-foreground);
 }
 
-.nx-component-banner__glyph {
-  flex: 0 0 auto;
-  color: var(--nx-builder-component, var(--nx-code-keyword));
+.dark .nx-component-banner,
+.nx-component-banner.dark {
+  --nx-component-banner-wash: color-mix(
+    in oklch,
+    var(--nx-builder-component) 16%,
+    var(--nx-card)
+  );
+  --nx-component-banner-line: color-mix(
+    in oklch,
+    var(--nx-builder-component) 45%,
+    var(--nx-background)
+  );
+}
+
+/* The one way back: "Back", then where it goes in the quieter weight. */
+.nx-component-banner__back {
+  gap: 0.375rem;
+  font-weight: 500;
+}
+
+.nx-component-banner__to {
+  font-weight: 400;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The rule between the way back and what is being edited. */
+.nx-component-banner__rule {
+  align-self: center;
+  width: 1px;
+  height: 1.25rem;
+  background: var(--nx-component-banner-line);
 }
 
 .nx-component-banner__text {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.25rem 0.5rem;
+  gap: 0.25rem 0.375rem;
   margin: 0;
   min-width: 0;
   font-size: 0.8125rem;
   line-height: 1.5;
+}
+
+/* "Editing component" in the component's hue, its mark beside it. */
+.nx-component-banner__editing {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 0.375rem;
+  font-weight: 600;
+  color: var(--nx-builder-component);
+}
+
+.nx-component-banner__glyph {
+  flex: 0 0 auto;
 }
 
 .nx-component-banner__name {
@@ -2093,8 +2428,36 @@
   background: var(--nx-muted);
 }
 
+/* A keyword list, its control alone in the row. */
+.nx-style-inspector__select {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/*
+ * A list's chosen value stays on one line, cut with an ellipsis, rather than
+ * wrapping its row to twice the height of every other ("Semibold 600").
+ */
+.nx-style-inspector__select [data-slot="select-value"] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
+}
+
+/*
+ * A field's Clear, beside a list or a token: at least 24px square, WCAG 2.2's
+ * minimum target, where the browser's default button around a word of small
+ * text is smaller.
+ */
 .nx-style-inspector__token button {
-  font-size: 0.75rem;
+  min-block-size: 1.5rem;
+  min-inline-size: 1.5rem;
+  padding-inline: 0.375rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
   cursor: pointer;
 }
@@ -2144,18 +2507,6 @@
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
   color: var(--nx-foreground);
-}
-
-/*
- * What a reset falls back to, beside the button rather than only in its
- * accessible name. The whole point of computing it is to remove a guess, and
- * putting it in `aria-label` alone removes the guess for screen-reader users
- * and leaves it for everyone else.
- */
-.nx-style-inspector__breakpoint-reveals {
-  margin-left: 0.375rem;
-  font-size: 0.6875rem;
-  color: var(--nx-muted-foreground);
 }
 
 /*
@@ -2249,6 +2600,53 @@
   position: absolute;
   left: 0;
   top: 0;
+}
+
+/*
+ * The cue over the site's own layout around the canvas, on a page the site
+ * serves. The layout is inert in the page, so the cue answers the pointer in
+ * its place: a not-allowed cursor, the tooltip, and on hover a tag in the
+ * admin's words saying what it is. Nothing is drawn at rest beyond the page's
+ * own fading, so the page stays the focus.
+ */
+.nx-site-chrome-cue {
+  position: absolute;
+  pointer-events: auto;
+  cursor: not-allowed;
+}
+
+.nx-site-chrome-cue[hidden] {
+  display: none;
+}
+
+.nx-site-chrome-cue__tag {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-site-chrome-cue:hover {
+  box-shadow: inset 0 0 0 1px var(--nx-builder-border);
+}
+
+.nx-site-chrome-cue:hover .nx-site-chrome-cue__tag {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-site-chrome-cue__tag {
+    transition: none;
+  }
 }
 
 /*
@@ -2553,8 +2951,10 @@
   cursor: pointer;
 }
 
+/* The raised surface, not the panel's own: on the panel's surface a hover in
+   that colour would look exactly like rest. */
 .nx-layers-region:hover {
-  background: var(--nx-builder-surface);
+  background: var(--nx-builder-surface-raised);
 }
 
 .nx-layers-region:focus-visible {
@@ -4129,12 +4529,134 @@ fieldset.nx-inspector__fields {
   display: none;
 }
 
+/*
+ * Shown above the label while the field has focus, as a small tooltip, so
+ * the words reach a keyboard user without taking room in the label's column,
+ * where they pushed the label onto a second line.
+ */
+.nx-style-inspector .nx-inspector__field {
+  position: relative;
+}
+
 .nx-inspector__field:focus-within .nx-style-inspector__provenance-text {
-  display: inline;
-  margin-inline-start: 0.375rem;
+  display: block;
+  position: absolute;
+  z-index: 2;
+  inset-block-end: 100%;
+  inset-inline-start: 0;
+  padding: 0.125rem 0.375rem;
+  white-space: nowrap;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
   font-size: var(--text-xs);
   font-weight: 400;
-  color: var(--nx-muted-foreground);
+  background: var(--nx-popover);
+  color: var(--nx-popover-foreground);
+}
+
+/*
+ * A style field's row: its label, its control, then a fixed slot for the
+ * reset, on one line at the panel's default width as the design draws it.
+ *
+ * The label column is at most 7rem: wide enough for the longest common label
+ * ("Justify content"), and narrow enough that the widest icon strip (five
+ * icons and More) beside it starts where every other control does at the
+ * default width. It gives way to a control that needs more room:
+ * an icon strip never shrinks, so its column is at least its own width, and a
+ * text field, which can shrink, takes what is left. A longer label is cut with
+ * an ellipsis, its whole name still the field's accessible name.
+ *
+ * The reset's slot is kept whether or not the row has one, so every control
+ * ends at one edge and none changes width when a value is set or reset.
+ */
+.nx-style-inspector .nx-inspector__field {
+  grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem;
+}
+
+/*
+ * Placed by name rather than left to the shared rules, which below 18rem send
+ * every child to column 1 and would stack a style row the panel still has room
+ * to draw on one line.
+ */
+.nx-style-inspector .nx-inspector__field > * {
+  grid-column: 2;
+}
+
+.nx-style-inspector .nx-inspector__field > label,
+.nx-style-inspector .nx-inspector__field > .nx-inspector__field-name {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/*
+ * A set value's reset, in its slot at the end of its control's row: an icon,
+ * where a "Reset to unset" line under every set control made each one two
+ * rows. A jump to another tier, or a refusal, still reads under the control.
+ */
+.nx-style-inspector .nx-inspector__field > [data-action="reset"] {
+  display: inline-grid;
+  place-items: center;
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  margin: 0;
+  padding: 0;
+}
+
+.nx-style-inspector .nx-inspector__field > [data-action="jump"],
+.nx-style-inspector .nx-inspector__field > .nx-inspector__error {
+  grid-column: 2 / -1;
+}
+
+.nx-style-inspector .nx-style-inspector__field-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Narrow, a style field stacks: its label on a line of its own, then its
+ * control with the reset's slot at that line's end. Only below 17rem, near the
+ * inspector's narrowest (16rem of fields at its 280px minimum), where a 7rem
+ * label beside a control leaves the control too little room. Above it, a wide
+ * control narrows the label column instead.
+ */
+@container nx-inspector-fields (max-width: 17rem) {
+  .nx-style-inspector .nx-inspector__field {
+    grid-template-columns: minmax(0, 1fr) 1.5rem;
+  }
+
+  .nx-style-inspector .nx-inspector__field > * {
+    grid-column: 1;
+  }
+
+  .nx-style-inspector .nx-inspector__field > label,
+  .nx-style-inspector .nx-inspector__field > .nx-inspector__field-name {
+    grid-column: 1 / -1;
+  }
+
+  .nx-style-inspector
+    .nx-inspector__field
+    > .nx-style-inspector__breakpoint-action[data-action="reset"] {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .nx-style-inspector .nx-inspector__field > [data-action="jump"],
+  .nx-style-inspector .nx-inspector__field > .nx-inspector__error {
+    grid-column: 1 / -1;
+  }
+}
+
+/*
+ * An open section shows what overflows it: the shared accordion clips its
+ * content, which it needs while it animates open or shut, and that cut off a
+ * field's focus tooltip drawn above the section's first row.
+ */
+.nx-style-inspector [data-slot="accordion-content"][data-state="open"] {
+  overflow: visible;
 }
 
 /**
@@ -4804,10 +5326,6 @@ fieldset.nx-inspector__fields {
   color: var(--nx-muted-foreground);
 }
 
-.nx-font-pick__clear {
-  flex: none;
-}
-
 /* Two classes, to outrank the popover's own width and padding. */
 [data-slot="popover-content"].nx-font-pick__popover {
   width: var(--radix-popover-trigger-width);
@@ -5163,7 +5681,8 @@ fieldset.nx-inspector__fields {
   text-align: center;
 }
 
-.nx-spacing-box .nx-style-inspector__breakpoint-action {
+/* As specific as a style row's reset, which is drawn at the row's end. */
+.nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action {
   display: none;
 }
 
@@ -5193,6 +5712,17 @@ fieldset.nx-inspector__fields {
   background: var(--nx-popover);
   color: var(--nx-popover-foreground);
   box-shadow: var(--shadow-md);
+}
+
+/*
+ * A side whose value is stored here and shadowed by another tier offers both
+ * a reset and a jump, each in the overlay below the side: the jump drops
+ * below the reset rather than painting over it at the same inset.
+ */
+.nx-spacing-box
+  .nx-inspector__field:has(> [data-action="reset"])
+  > [data-action="jump"] {
+  inset-block-start: calc(100% + 2.5rem);
 }
 
 .nx-spacing-box [data-side="inlineEnd"] .nx-style-inspector__breakpoint-action,
@@ -5271,7 +5801,7 @@ fieldset.nx-inspector__fields {
     box-shadow: none;
   }
 
-  .nx-spacing-box .nx-style-inspector__breakpoint-action,
+  .nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action,
   .nx-spacing-box .nx-inspector__error {
     display: flex;
     position: static;
@@ -5580,8 +6110,6 @@ fieldset.nx-inspector__fields {
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--nx-builder-border, var(--nx-border));
 }
 
 .nx-variants__header {
@@ -5591,10 +6119,12 @@ fieldset.nx-inspector__fields {
   gap: 0.5rem;
 }
 
-/* The heading at the size the exposed fields' heading above it takes. */
+/* The heading at the size the fields' heading above it takes. */
 .nx-variants__header .nx-inspector__heading {
   margin: 0;
   font-size: var(--text-xs, 0.75rem);
+  text-transform: none;
+  letter-spacing: 0.02em;
 }
 
 .nx-variants__list {
@@ -5610,20 +6140,26 @@ fieldset.nx-inspector__fields {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--nx-border);
-  border-radius: var(--radius-md, 0.375rem);
+  border-radius: var(--radius-lg, 0.5rem);
   background: var(--nx-background);
 }
 
+/* The open variant, the one the canvas previews, in the component's hue. */
 .nx-variants__item[data-open] {
-  border-color: color-mix(in oklch, var(--nx-primary) 45%, var(--nx-border));
+  border-color: color-mix(
+    in oklch,
+    var(--nx-builder-component) 40%,
+    var(--nx-border)
+  );
 }
 
 .nx-variants__main {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.25rem;
   min-width: 0;
-  padding: 0.375rem 0.25rem;
+  min-height: 2.5rem;
+  padding: 0.125rem 0.25rem;
 }
 
 /* The chevron turns to point down while the variant's values are open. */
@@ -5642,8 +6178,30 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-variants__name {
-  flex: 1 1 9rem;
+  flex: 1 1 6rem;
   min-width: 0;
+}
+
+/*
+ * The variant's name, renamed in place but drawn as the row's title: no box
+ * until it is hovered or focused.
+ */
+/* Qualified by the row, for the reason the field's name is. */
+.nx-variants__name .nx-variants__name-input {
+  height: 1.75rem;
+  padding: 0 0.25rem;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.nx-variants__name .nx-variants__name-input:hover {
+  border-color: var(--nx-border);
+}
+
+.nx-variants__name .nx-variants__name-input:focus-visible {
+  background: var(--nx-background);
 }
 
 /*
@@ -5654,78 +6212,104 @@ fieldset.nx-inspector__fields {
   padding: 0 0.5rem 0.5rem 2.25rem;
 }
 
+/* "2 changes", or "No changes yet", quietly beside the name. */
 .nx-variants__summary {
   flex: 0 0 auto;
-  margin-top: 0.4rem;
-  padding: 0 0.375rem;
-  border-radius: 999px;
   font-size: var(--text-xs, 0.75rem);
-  font-weight: 500;
-  line-height: 1.5;
   white-space: nowrap;
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
-}
-
-/* "(no changes)" is a state to notice, said in the muted tone, not the accent. */
-.nx-variants__summary[data-empty] {
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
 }
 
+/* Inset only a little, so the values keep the inspector's own widths. */
 .nx-variants__values {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem 0.75rem;
+  gap: 0.25rem;
+  padding: 0.5rem 0.25rem;
   border-top: 1px solid var(--nx-border);
 }
 
+/*
+ * One value. Its columns are the inspector's own row grid, the placement
+ * panel's (`.nx-inspector__field`), not a copy: only the height is its own.
+ */
 .nx-variants__value {
+  min-height: 2.25rem;
+}
+
+/* The label with its dot, in the grid's label column. */
+.nx-variants__value > .nx-variants__value-label {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/* The value and its Reset slot, filling the value column. */
+.nx-variants__value-cell {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 0.25rem;
   min-width: 0;
 }
 
-.nx-variants__value-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+.nx-variants__value-cell > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /*
- * Whether the value is the variant's own or the component's default, as a
- * badge in words: the two differ by label and weight, never by colour alone.
+ * A text value's inset a little under the design system's, so a value of a
+ * usual length shows whole beside the Reset slot in the inspector's width.
  */
-.nx-variants__source {
-  padding: 0 0.375rem;
+.nx-variants__value-cell input:not([type="checkbox"]) {
+  padding-inline: 0.375rem;
+}
+
+/* A fixed 24px slot for Reset, the smallest target WCAG 2.2 AA allows. */
+.nx-variants__reset-slot {
+  display: grid;
+  flex: 0 0 1.5rem;
+  place-items: center;
+  width: 1.5rem;
+}
+
+.nx-variants__reset-slot .nx-variants__reset {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.nx-variants__value-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.nx-variants__dot {
+  flex: 0 0 auto;
+  width: 0.375rem;
+  height: 0.375rem;
   border-radius: 999px;
-  font-size: 0.625rem;
-  font-weight: 500;
-  line-height: 1.6;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  background: var(--nx-builder-component);
+}
+
+.nx-variants__value > .nx-variants__problem {
+  grid-column: 1 / -1;
+}
+
+.nx-variants__hint {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
 }
 
-.nx-variants__source[data-set] {
-  font-weight: 600;
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
-}
-
-.nx-variants__reset {
-  align-self: flex-start;
-}
-
-.nx-variants__switch {
+.nx-variants__check {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: var(--text-xs, 0.75rem);
+  font-size: 0.8125rem;
 }
 
 .nx-variants__problem {
@@ -5733,6 +6317,30 @@ fieldset.nx-inspector__fields {
   font-size: var(--text-xs, 0.75rem);
   line-height: 1.4;
   color: var(--nx-destructive);
+}
+
+/*
+ * The tag over the canvas while a variant is previewed: a pill in the
+ * component's hue at the frame's top right, naming the variant drawn.
+ */
+.nx-variant-preview-tag {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.1875rem 0.625rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-builder-component) 40%, var(--nx-border));
+  border-radius: 999px;
+  background: var(--nx-card);
+  color: var(--nx-builder-component);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  pointer-events: none;
 }
 
 /* A placement's variant, under its title in the placement's inspector. */
@@ -5852,12 +6460,6 @@ fieldset.nx-inspector__fields {
   font-size: 0.875rem;
 }
 
-.nx-expose-picker__type {
-  flex: none;
-  font-size: 0.75rem;
-  color: var(--nx-muted-foreground);
-}
-
 .nx-expose-picker__label {
   height: 2rem;
 }
@@ -5871,4 +6473,93 @@ fieldset.nx-inspector__fields {
 
 .nx-expose-picker__reason[role="alert"] {
   color: var(--nx-destructive);
+}
+
+/*
+ * Alignment and direction as one segmented strip, the design's icon group:
+ * each icon a 24px target (WCAG 2.2's minimum, so five icons, More and a
+ * Clear fit beside a label), the chosen one on the
+ * theme's accent surface in its own foreground, and the values without an
+ * icon in the strip's last segment. The strip sits on the input surface, as
+ * the panel's fields and lists do, in both schemes. A Clear follows it at the
+ * row's end while a value is set.
+ */
+.nx-icon-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-icon-choice__strip {
+  display: inline-flex;
+  /* Whole or stacked under its label, never clipped. */
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+}
+
+.nx-icon-choice__group {
+  display: inline-flex;
+}
+
+.nx-icon-choice__option,
+.nx-icon-choice .nx-icon-choice__more {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--nx-muted-foreground);
+  background: transparent;
+}
+
+.nx-icon-choice__option + .nx-icon-choice__option,
+.nx-icon-choice .nx-icon-choice__more {
+  border-inline-start: 1px solid var(--nx-builder-border);
+}
+
+/* A value from the list, shown by its own spelling, widens the segment. */
+.nx-icon-choice .nx-icon-choice__more:not([data-placeholder]) {
+  inline-size: auto;
+  padding-inline: 0.375rem;
+  font-size: var(--text-xs);
+}
+
+.nx-icon-choice .nx-icon-choice__more > svg:last-child {
+  display: none;
+}
+
+.nx-icon-choice__option:not(:disabled):hover,
+.nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-icon-choice__option[aria-checked="true"] {
+  color: var(--nx-accent-foreground);
+  background: var(--nx-accent);
+}
+
+.nx-icon-choice__option:focus-visible,
+.nx-icon-choice .nx-icon-choice__more:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -2px;
+}
+
+/* In a locked section the controls read as unavailable, as the toggles do. */
+.nx-icon-choice__option:disabled,
+.nx-icon-choice .nx-icon-choice__more:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A text icon for lines that run down the page, turned a quarter. */
+.nx-icon-choice__rotated {
+  rotate: 90deg;
 }

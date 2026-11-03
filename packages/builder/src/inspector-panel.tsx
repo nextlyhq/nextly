@@ -43,6 +43,7 @@ import {
   TabsTrigger,
   useIsomorphicLayoutEffect,
 } from "@nextlyhq/ui";
+import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
@@ -827,6 +828,11 @@ function ContentTab({
             setAdvancedOpen(open => !open);
           }}
         >
+          <ChevronRight
+            className="nx-inspector__advanced-chevron"
+            size={16}
+            aria-hidden="true"
+          />
           Advanced
         </summary>
         {/*

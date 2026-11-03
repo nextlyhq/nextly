@@ -61,11 +61,44 @@ describe("retiredElementRows", () => {
       retiredElementRows({
         rows: [row("column", "app_ref")],
         declared: new Map([
-          ["fx__notes", [{ elementKind: "column", elementName: "app_ref" }]],
+          [
+            "fx__notes",
+            [
+              {
+                elementKind: "column",
+                elementName: "app_ref",
+                owner: { kind: "app" },
+              },
+            ],
+          ],
         ]),
         live: liveWith(["id"]),
       })
     ).toEqual([]);
+  });
+
+  it("retires an element gone from the database that another owner now declares by its name", () => {
+    // The config handed the name to the plugin "sso": the app's row names an
+    // element of the app's that no longer exists anywhere.
+    const stale = row("column", "app_ref");
+    expect(
+      retiredElementRows({
+        rows: [stale],
+        declared: new Map([
+          [
+            "fx__notes",
+            [
+              {
+                elementKind: "column",
+                elementName: "app_ref",
+                owner: { kind: "plugin", id: "sso" },
+              },
+            ],
+          ],
+        ]),
+        live: liveWith(["id"]),
+      })
+    ).toEqual([stale]);
   });
 
   it("keeps an undeclared element that still exists in the database", () => {
