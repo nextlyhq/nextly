@@ -10,7 +10,7 @@
  * what keeps this package dependency-free and usable from any runtime.
  */
 import type { ContentModel } from "./content-model";
-import type { BlockNode, BlockPart, NodeStyles, StyleValue } from "./document";
+import type { BlockNode, BlockPart, NodeStyles, TokenRef } from "./document";
 import type { MigrationMap } from "./migration";
 
 /** Why a block needs JavaScript in the browser. */
@@ -521,7 +521,8 @@ export interface BlockDefinition<
   parts?: Readonly<Record<string, BlockPart>>;
   /**
    * The space this block puts between the blocks in its slots: a literal
-   * length or a `{ $token }` reference.
+   * length, the number `0` (which the catalog's `gap` also takes), or a
+   * `{ $token }` reference. Registration accepts exactly these.
    *
    * Declared by containers, never as a margin on the blocks they hold. A block
    * carries no outer margin of its own, so the space between two blocks belongs
@@ -529,7 +530,7 @@ export interface BlockDefinition<
    * child after the first, and as `gap` once the container is made flex or
    * grid. Anything an author sets on a child wins over it.
    */
-  childGap?: StyleValue;
+  childGap?: string | 0 | TokenRef;
   /**
    * Declared when this block needs JavaScript in the browser to do its job.
    *

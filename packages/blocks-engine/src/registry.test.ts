@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import type { BlockDefinition, BlockSupports, InferBlockProps } from "./block";
-import type { BlockNode } from "./document";
+import type { BlockNode, TokenRef } from "./document";
 import { defineBlock } from "./block";
 import { migrateDocument } from "./migration";
 import {
@@ -205,6 +205,19 @@ describe("registration rules", () => {
     ]);
     expect(getBlock("core/g1")?.childGap).toEqual({ $token: "space.stack" });
     expect(hasBlock("core/g2")).toBe(true);
+  });
+
+  it("types a child gap as exactly what registration accepts", () => {
+    // A length, the number zero the catalog's `gap` accepts, or a token
+    // reference: the declared type and the runtime check are one contract.
+    expectTypeOf<NonNullable<BlockDefinition["childGap"]>>().toEqualTypeOf<
+      string | 0 | TokenRef
+    >();
+  });
+
+  it("registers a child gap of the number zero, as the catalog's gap takes it", () => {
+    registerBlocks([block({ name: "core/g0", childGap: 0 } as never)]);
+    expect(getBlock("core/g0")?.childGap).toBe(0);
   });
 
   it("refuses a child gap that is neither a length nor a token reference", () => {

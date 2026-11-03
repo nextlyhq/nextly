@@ -319,13 +319,15 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       }
     }
   }
-  // A length or a token reference and nothing else: the compiler writes it
-  // into a margin and a `gap`, and a structure there would reach the compile
-  // context as a value neither can take.
+  // A length, the number zero, or a token reference and nothing else: what the
+  // declared type allows, and what the catalog's `gap` and margin accept. A
+  // structure or any other number would reach the compile context as a value
+  // neither can take.
   if (def.childGap !== undefined) {
     const gap: unknown = def.childGap;
     const usable =
       typeof gap === "string" ||
+      gap === 0 ||
       (isPlainRecord(gap) &&
         typeof gap.$token === "string" &&
         Object.keys(gap).length === 1);
