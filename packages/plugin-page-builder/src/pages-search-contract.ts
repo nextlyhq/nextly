@@ -111,6 +111,11 @@ export interface PageItem {
    * out, since a write does not read where its page stands in a release.
    */
   readonly state?: PageState;
+  /**
+   * Present when the page holds changes not yet published, whatever its state
+   * says: a scheduled page can hold them too. Absent otherwise.
+   */
+  readonly pendingChange?: true;
 }
 
 /**

@@ -548,7 +548,10 @@ function RowMenu({
   // A copy is made from the PUBLISHED page, so it cannot yet copy a draft,
   // nor the unpublished changes of a changed page: it would copy something
   // other than what the author sees.
-  const unpublished = page.status === "draft" || page.state === "changed";
+  const unpublished =
+    page.status === "draft" ||
+    page.state === "changed" ||
+    page.pendingChange === true;
   // Rename starts once the menu has CLOSED. Started while it closes, the
   // menu's focus return pulls focus out of the new field, whose blur then
   // ends the rename before anything was typed.

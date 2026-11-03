@@ -1034,12 +1034,19 @@ async function withStates(
   );
   return items.map(item => {
     const known = facts.get(item.collection);
+    const pending = known?.changed.has(item.id) === true;
     const state = pageStateOf(
       item.status,
-      known?.changed.has(item.id) === true,
+      pending,
       known?.scheduled.has(item.id) === true
     );
-    return state === undefined ? item : { ...item, state };
+    return {
+      ...item,
+      ...(state === undefined ? {} : { state }),
+      // Said apart from the state: a scheduled page shows "Scheduled" even
+      // when it also holds changes, and what a copy would read depends on it.
+      ...(pending ? { pendingChange: true as const } : {}),
+    };
   });
 }
 

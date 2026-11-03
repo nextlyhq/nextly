@@ -411,6 +411,24 @@ describe("a row's actions", () => {
     expect(duplicate.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("cannot duplicate a scheduled page that also holds changes", async () => {
+    // It shows "Scheduled", but a copy would still take the live content.
+    await mount([
+      item("a", "Home", {
+        status: "published",
+        state: "scheduled",
+        pendingChange: true,
+      }),
+    ]);
+    await userEvent.click(
+      screen.getByRole("button", { name: "More for Home" })
+    );
+    const duplicate = await screen.findByRole("menuitem", {
+      name: "Duplicate",
+    });
+    expect(duplicate.getAttribute("aria-disabled")).toBe("true");
+  });
+
   it("cannot duplicate a draft, and says why", async () => {
     await mount([item("a", "Home", { status: "draft", state: "draft" })]);
     await userEvent.click(

@@ -1097,6 +1097,14 @@ describe("where each page stands in publishing", () => {
       ["s", "scheduled"],
     ]);
     expect(answer.items[2]).not.toHaveProperty("state");
+    // The pending changes are said apart from the state, which a schedule
+    // takes over: "s" shows Scheduled and still holds them.
+    expect(answer.items.map(item => [item.id, item.pendingChange])).toEqual([
+      ["d", undefined],
+      ["c", true],
+      ["p", undefined],
+      ["s", true],
+    ]);
     // One read per filter, over the page's ids only, selecting only ids.
     expect(workflow.mock.calls.map(call => call[0])).toEqual([
       {
