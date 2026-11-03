@@ -47,18 +47,26 @@ function usePutOff(
   putOff: (identity: string) => void;
   isPutOff: (identity: string) => boolean;
 } {
-  const [held, setHeld] = useState<string | null>(null);
-  const key = `${author ?? ""}|${documentKey}`;
+  // The document it was pressed for, held with it: the editor can move to
+  // another document before the account is known, and the put-off belongs to
+  // the first.
+  const [held, setHeld] = useState<{
+    documentKey: string;
+    identity: string;
+  } | null>(null);
   useEffect(() => {
     if (author === null || held === null) return;
-    rememberPutOff(key, held);
+    rememberPutOff(`${author}|${held.documentKey}`, held.identity);
     setHeld(null);
-  }, [author, held, key]);
+  }, [author, held]);
+  const key = `${author ?? ""}|${documentKey}`;
   return {
     putOff: useCallback(
       (identity: string) =>
-        author === null ? setHeld(identity) : rememberPutOff(key, identity),
-      [author, key]
+        author === null
+          ? setHeld({ documentKey, identity })
+          : rememberPutOff(key, identity),
+      [author, documentKey, key]
     ),
     isPutOff: useCallback(
       (identity: string) => author !== null && wasPutOff(key, identity),

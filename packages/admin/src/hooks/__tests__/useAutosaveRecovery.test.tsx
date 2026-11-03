@@ -330,6 +330,42 @@ describe("useAutosaveRecovery", () => {
     expect(again.result.current.recovery.offer).toBeNull();
   });
 
+  it("keeps a Not now held for the account with the document it was pressed on", async () => {
+    // The editor can move to another document before the account is known:
+    // the put-off belongs to the first, and must not land on the second.
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const moving = renderHook(
+      ({ scope }: { scope: VersionScope }) => useRecoveryHarness(scope),
+      { wrapper, initialProps: { scope: SCOPE as VersionScope } }
+    );
+    await waitFor(() =>
+      expect(moving.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => moving.result.current.recovery.dismiss());
+    moving.rerender({ scope: OTHER });
+    signedIn.id = "author-1";
+    moving.rerender({ scope: OTHER });
+    moving.unmount();
+
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(first.result.current.recovery.offer).toBeNull();
+    first.unmount();
+
+    const second = renderRecovery(OTHER);
+    await waitFor(() =>
+      expect(second.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },
