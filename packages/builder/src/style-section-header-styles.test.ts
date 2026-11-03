@@ -95,6 +95,54 @@ describe("a field's provenance dot", () => {
   });
 });
 
+describe("an inherited value's icon", () => {
+  it("is ringed, dashed and muted, never filled as a chosen one is", () => {
+    const ring = ruleBody(".nx-icon-choice__option[data-inherited]");
+    expect(ring).toContain("outline: 1px dashed var(--nx-builder-text-muted)");
+    expect(ring).not.toContain("background");
+  });
+});
+
+describe("an inherited colour's swatch", () => {
+  it("is drawn with a dashed border, as the inherited icon is ringed", () => {
+    expect(ruleBody(".nx-style-inspector__swatch[data-inherited]")).toContain(
+      "border-style: dashed"
+    );
+  });
+});
+
+describe("an inherited value's source", () => {
+  it("sits muted at the end of the label's row, cut short rather than wrapped", () => {
+    // Always shown, unlike the dot: it is half of what the greyed value in
+    // the control means.
+    const source = ruleBody(".nx-style-inspector__provenance-source");
+    expect(source).toContain("margin-inline-start: auto");
+    expect(source).toContain("color: var(--nx-builder-text-muted)");
+    expect(source).toContain("font-size: var(--text-xs)");
+    expect(source).toContain("text-overflow: ellipsis");
+    expect(source).toContain("white-space: nowrap");
+    expect(source).not.toContain("opacity: 0");
+  });
+
+  it("takes a line of its own under the label in the wide layout", () => {
+    // Beside its control the label has a 7.5rem column, which the label and
+    // its source cannot share on one line.
+    expect(
+      ruleBody(".nx-style-inspector .nx-inspector__field > label")
+    ).toContain("flex-wrap: wrap");
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field > label > .nx-style-inspector__provenance-source { flex-basis: 100%; margin-inline-start: 0; }"
+    );
+    // Stacked, the label has the row to itself, so the source shares it.
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 19rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > label > .nx-style-inspector__provenance-source { flex-basis: auto; margin-inline-start: auto; }"
+    );
+  });
+});
+
 describe("the spacing box", () => {
   it("draws a side's action and a refusal over the box, bounded to the inspector", () => {
     // Inside a 3.5rem side, a sentence became a tall column and pushed the

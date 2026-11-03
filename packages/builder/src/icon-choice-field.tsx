@@ -64,6 +64,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { InheritedValue } from "./inherited-value";
 import type { AlignmentGroup } from "./style-alignment-icons";
 
 /** The icons the mapping names, by their lucide export name. */
@@ -130,6 +131,11 @@ export function IconChoiceField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const current = typeof stored === "string" ? stored : undefined;
+  // The value reaching this block from another tier. Its icon is marked, not
+  // checked, while nothing is set here: the group shows what the canvas draws
+  // without claiming this block chose it.
+  const inherited = React.useContext(InheritedValue);
+  const shownInherited = stored === undefined ? inherited : undefined;
   const { options } = group;
   const chosen = options.findIndex(option => option.value === current);
   const buttons = React.useRef<(HTMLButtonElement | null)[]>([]);
@@ -198,6 +204,9 @@ export function IconChoiceField({
                       {...(stop ? { id } : {})}
                       role="radio"
                       aria-checked={checked}
+                      data-inherited={
+                        option.value === shownInherited ? "" : undefined
+                      }
                       aria-label={option.label}
                       aria-invalid={invalid}
                       tabIndex={stop ? 0 : -1}

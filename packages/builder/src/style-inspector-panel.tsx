@@ -91,6 +91,7 @@ import {
   type FontChoices,
 } from "./font-family-field";
 import { IconChoiceField } from "./icon-choice-field";
+import { InheritedValue, useUnsetHint } from "./inherited-value";
 import {
   designIsWritable,
   designReadOnlyReason,
@@ -101,6 +102,7 @@ import type { InspectorSectionKey } from "./inspector-sections";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
+import { stateLabel } from "./state-switcher";
 import {
   alignmentGroupFor,
   drawsIcons,
@@ -1741,6 +1743,20 @@ function StyleFieldLabel({
   );
 }
 
+/**
+ * What reaches a control from another tier, shown in it while nothing is set
+ * here. Read from the same answer as the dot, so the two never disagree.
+ */
+function inheritedShown(
+  stored: StyleValue | undefined,
+  answer: ProvenanceAnswer | undefined
+): string | undefined {
+  if (stored !== undefined || answer?.provenance.kind !== "inherited") {
+    return undefined;
+  }
+  return answer.provenance.entry.value;
+}
+
 function StyleControlField({
   control,
   side,
@@ -1846,6 +1862,7 @@ function StyleControlField({
    * The dot and the action are two readings of one answer, not two answers.
    */
   const answer = provenanceOf(control.leaf);
+  const inherited = inheritedShown(stored, answer);
 
   const readOnly = showsNoField(control, stored, clearOnly);
   const labelId = `${id}-label`;
@@ -1887,20 +1904,22 @@ function StyleControlField({
         editing={editing}
         descendant={control.leaf.descendant}
       />
-      <ControlOrFont
-        id={id}
-        labelledBy={labelId}
-        control={control}
-        stored={stored}
-        actionName={actionName}
-        clearOnly={clearOnly}
-        tokens={tokens}
-        prefersDark={prefersDark}
-        pairedColour={pairedColour}
-        obscuredBy={obscuredBy}
-        describedBy={describedBy}
-        onCommit={commit}
-      />
+      <InheritedValue.Provider value={inherited}>
+        <ControlOrFont
+          id={id}
+          labelledBy={labelId}
+          control={control}
+          stored={stored}
+          actionName={actionName}
+          clearOnly={clearOnly}
+          tokens={tokens}
+          prefersDark={prefersDark}
+          pairedColour={pairedColour}
+          obscuredBy={obscuredBy}
+          describedBy={describedBy}
+          onCommit={commit}
+        />
+      </InheritedValue.Provider>
       <BreakpointAction
         answer={answer}
         label={actionName}
@@ -2664,6 +2683,7 @@ function SelectField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const current = typeof stored === "string" ? stored : "";
+  const hint = useUnsetHint("Not set");
   // The validator accepts a keyword case-insensitively, with surrounding CSS
   // whitespace and escapes, and accepts the CSS-wide keywords everywhere — so
   // a stored `Bold` or `inherit` is live and compiles while matching no item
@@ -2681,7 +2701,7 @@ function SelectField({
           aria-describedby={describedBy}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
-          <SelectValue placeholder="Not set" />
+          <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
           {extra === null ? null : (
@@ -2774,6 +2794,20 @@ function FoldedField({
   );
 }
 
+/**
+ * An inherited value by the name its option carries — `700` as "Bold 700" —
+ * found by the key it would be stored under, so the list and the hint name a
+ * weight the same way. As written when no option holds it.
+ */
+function optionNamed(
+  options: readonly FoldedOption[],
+  written: string
+): string {
+  const number = trimCssWhitespace(written) === "" ? NaN : Number(written);
+  const key = storedKey(Number.isFinite(number) ? number : written);
+  return options.find(option => option.key === key)?.label ?? written;
+}
+
 /** A select over named options, each committing its own stored value. */
 function OptionSelect({
   id,
@@ -2791,6 +2825,9 @@ function OptionSelect({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const current = storedKey(stored) ?? "";
+  const inherited = React.useContext(InheritedValue);
+  const hint =
+    inherited === undefined ? "Not set" : optionNamed(options, inherited);
   return (
     <div className="nx-style-inspector__select">
       <Select
@@ -2805,7 +2842,7 @@ function OptionSelect({
           aria-describedby={describedBy}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
-          <SelectValue placeholder="Not set" />
+          <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
           {options.map(option => (
@@ -2848,6 +2885,7 @@ function LengthOrNumberField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const { draft, setDraft } = useDraft(stored);
+  const hint = useUnsetHint("1.5, 24px or 150%");
   const commit = () => {
     if (draft === storedText(stored)) return;
     if (onCommit(lineHeightFromText(draft)) === "unchanged") {
@@ -2858,7 +2896,7 @@ function LengthOrNumberField({
     <Input
       id={id}
       value={draft}
-      placeholder="1.5, 24px or 150%"
+      placeholder={hint}
       aria-describedby={describedBy}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
@@ -3117,9 +3155,28 @@ function ProvenanceDot({
        * copies in the accessibility tree is the same sentence announced twice,
        * which reads as a stutter rather than as emphasis.
        */}
-      <span className="nx-style-inspector__provenance-text" aria-hidden="true">
-        {described.text}
-      </span>
+      {described.kind === "inherited" ? (
+        /*
+         * An inherited value's source stays in sight, at the end of the
+         * label's row: the value shown greyed in the control is only half an
+         * answer without where it came from. In brief, with the whole
+         * sentence on hover for a caption the row cuts short.
+         */
+        <span
+          className="nx-style-inspector__provenance-source"
+          title={described.text}
+          aria-hidden="true"
+        >
+          {described.source}
+        </span>
+      ) : (
+        <span
+          className="nx-style-inspector__provenance-text"
+          aria-hidden="true"
+        >
+          {described.text}
+        </span>
+      )}
     </>
   );
 }
@@ -3135,16 +3192,68 @@ export function describeProvenance(
   provenance: StyleProvenance | undefined,
   editing: EditedAddress,
   controlDescendant?: string
-): { kind: "authored" | "inherited"; text: string } | null {
+):
+  | { kind: "authored"; text: string }
+  | { kind: "inherited"; text: string; source: string }
+  | null {
   if (provenance === undefined) return null;
   if (provenance.kind === "authored") {
     return { kind: "authored", text: "Set here" };
   }
   if (provenance.kind !== "inherited") return null;
+  const { from, entry } = provenance;
   return {
     kind: "inherited",
-    text: `Inherited from ${originName(provenance.from, provenance.entry, editing, controlDescendant)}`,
+    text: `Inherited from ${originName(from, entry, editing, controlDescendant)}`,
+    source: `From ${originBrief(from, entry, editing, controlDescendant)}`,
   };
+}
+
+/**
+ * The same place in brief, for the caption drawn beside an inherited value:
+ * the tier, then each axis that differs, named as the panel names them.
+ *
+ * Built from the same reading as {@link originName}: the control a rule came
+ * through and the axes that differ are asked of the same helpers, so the
+ * caption and the sentence cannot name two different places. Shorter where
+ * the sentence spends words on what the author already knows, the block they
+ * selected, and on qualifiers a caption of one row has no room for.
+ */
+function originBrief(
+  origin: StyleOrigin,
+  entry: StyleTraceEntry,
+  editing: EditedAddress,
+  controlDescendant: string | undefined
+): string {
+  const control = sourceControl(entry, controlDescendant);
+  const ownBlock = origin.kind === "node" && origin.id === editing.nodeId;
+  const parts = [ownBlock ? control : briefSubject(origin, editing)];
+  if (entry.breakpoint !== editing.breakpoint) {
+    parts.push(editing.labelOf(entry.breakpoint));
+  }
+  if (entry.state !== editing.state) parts.push(stateLabel(entry.state));
+  const named = parts.filter(part => part !== undefined);
+  return named.length === 0 ? "this block" : named.join(" · ");
+}
+
+/** {@link originSubject}'s tiers, in the words a one-row caption can hold. */
+function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
+  switch (origin.kind) {
+    case "class":
+      return `.${origin.slug}`;
+    case "blockType":
+      return origin.type === editing.blockType
+        ? "block defaults"
+        : "enclosing block defaults";
+    case "page":
+      return "the page";
+    // The tag as the HTML tag control shows it, which is where an author
+    // meets it.
+    case "element":
+      return `${origin.tag.toUpperCase()} defaults`;
+    case "node":
+      return "an enclosing block";
+  }
 }
 
 /**
@@ -3194,7 +3303,7 @@ function originSubject(
 }
 
 /**
- * The control a declaration came from, when it was not this one.
+ * The label of the control a declaration came from, when it was not this one.
  *
  * `undefined` when the declaration belongs to this control's own address.
  *
@@ -3223,7 +3332,7 @@ function sourceControl(
   if (mine === theirs) return undefined;
   const writers = propertiesWriting(entry.property, entry.descendant);
   if (writers.length !== 1) return undefined;
-  return `the ${fieldLabel(writers[0] ?? "")} control`;
+  return fieldLabel(writers[0] ?? "");
 }
 
 /**
@@ -3313,7 +3422,8 @@ function originName(
   editing: EditedAddress,
   controlDescendant: string | undefined
 ): string {
-  const control = sourceControl(entry, controlDescendant);
+  const label = sourceControl(entry, controlDescendant);
+  const control = label === undefined ? undefined : `the ${label} control`;
   const ownControl = origin.kind === "node" && origin.id === editing.nodeId;
   const parts = [originSubject(origin, editing, control)];
   if (!ownControl && control !== undefined) parts.push(`via ${control}`);
@@ -3751,6 +3861,10 @@ function ColourPicker({
   // itself. Read once by the close below and reset there, so it cannot leak
   // into the next open.
   const superseded = React.useRef(false);
+  // A colour inherited from another tier is painted while none is set here,
+  // and marked so the swatch reads as inherited rather than chosen.
+  const inherited = React.useContext(InheritedValue);
+  const painted = shown ?? inherited;
   return (
     <Popover
       onOpenChange={open => {
@@ -3772,11 +3886,14 @@ function ColourPicker({
           // visible through it. `undefined` leaves the class's own "nothing
           // here" appearance rather than a colour this cannot vouch for.
           style={
-            shown === undefined
+            painted === undefined
               ? undefined
-              : ({ "--nx-swatch": shown } as React.CSSProperties)
+              : ({ "--nx-swatch": painted } as React.CSSProperties)
           }
-          data-empty={shown === undefined ? "" : undefined}
+          data-empty={painted === undefined ? "" : undefined}
+          data-inherited={
+            shown === undefined && inherited !== undefined ? "" : undefined
+          }
         />
       </PopoverTrigger>
       <PopoverContent
@@ -4381,6 +4498,7 @@ function TextField({
 }): React.JSX.Element {
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
+  const hint = useUnsetHint(compact ? "–" : placeholderFor(control));
   const commit = () => {
     if (draft === storedText(stored)) return;
     // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
@@ -4404,7 +4522,7 @@ function TextField({
     <Input
       id={id}
       value={draft}
-      placeholder={compact ? "–" : placeholderFor(control)}
+      placeholder={hint}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per

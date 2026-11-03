@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
 import { IconChoiceField } from "./icon-choice-field";
+import { InheritedValue } from "./inherited-value";
 import { alignmentGroupFor } from "./style-alignment-icons";
 
 afterEach(cleanup);
@@ -25,10 +26,10 @@ const group = alignmentGroupFor(
   }
 )!;
 
-function mount(stored?: string, describedBy?: string) {
+function mount(stored?: string, describedBy?: string, inherited?: string) {
   const onCommit = vi.fn(() => "applied" as const);
   render(
-    <>
+    <InheritedValue.Provider value={inherited}>
       <span id="label">Justify content</span>
       <IconChoiceField
         id="field"
@@ -39,12 +40,33 @@ function mount(stored?: string, describedBy?: string) {
         describedBy={describedBy}
         onCommit={onCommit}
       />
-    </>
+    </InheritedValue.Provider>
   );
   return onCommit;
 }
 
 describe("IconChoiceField", () => {
+  it("marks the inherited value's icon, without choosing it, while nothing is set here", () => {
+    mount(undefined, undefined, "center");
+    const marked = screen
+      .getAllByRole("radio")
+      .filter(radio => radio.hasAttribute("data-inherited"));
+    expect(marked.map(radio => radio.getAttribute("aria-label"))).toEqual([
+      screen.getByRole("radio", { name: /center/i }).getAttribute("aria-label"),
+    ]);
+    // Marked, not checked: nothing is stored on this block.
+    expect(marked[0]?.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("marks nothing once a value is set here", () => {
+    mount("start", undefined, "center");
+    expect(
+      screen
+        .getAllByRole("radio")
+        .some(radio => radio.hasAttribute("data-inherited"))
+    ).toBe(false);
+  });
+
   it("is one radio group named by its label, each icon named in words", () => {
     mount("center");
 

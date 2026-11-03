@@ -34,6 +34,7 @@ import { ChevronDown, Search } from "lucide-react";
 import * as React from "react";
 
 import { familyStack, siteFamilies } from "./font-library";
+import { InheritedValue } from "./inherited-value";
 
 export interface FontFamilyFieldProps {
   /** The control's id, so its label can point at it. */
@@ -198,6 +199,19 @@ function normalised(stack: string): string {
  * A family stored without its generic, or with another one, is still that
  * family: the first name in a stack is the author's choice.
  */
+/**
+ * The family reaching this block from another tier, shown greyed while none
+ * is chosen here: named as the list names it where the site offers it, and
+ * as written where it does not.
+ */
+function useInheritedFamily(
+  choices: readonly FontChoice[]
+): string | undefined {
+  const inherited = React.useContext(InheritedValue);
+  if (inherited === undefined) return undefined;
+  return currentChoice(inherited, choices)?.label ?? inherited;
+}
+
 function currentChoice(
   stored: StyleValue | undefined,
   choices: readonly FontChoice[]
@@ -247,9 +261,10 @@ export function FontFamilyField({
   const current = currentChoice(stored, choices);
   const unknown = stored !== undefined && current === undefined;
   const [open, setOpen] = React.useState(false);
+  const inheritedFamily = useInheritedFamily(choices);
   const shownValue = unknown
     ? `${storedText(stored)} · not on this site`
-    : (current?.label ?? "Default");
+    : (current?.label ?? inheritedFamily ?? "Default");
 
   return (
     <div className="nx-font-pick" data-unknown={unknown ? "" : undefined}>

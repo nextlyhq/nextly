@@ -25,6 +25,7 @@ import {
   FontFamilyField,
   type FontFamilyFieldProps,
 } from "./font-family-field";
+import { InheritedValue } from "./inherited-value";
 
 afterEach(cleanup);
 
@@ -71,17 +72,19 @@ const LORA: FontFaceDef = {
   source: { kind: "google", id: "lora", category: "serif" },
 };
 
-function mount(over: Partial<FontFamilyFieldProps> = {}) {
+function mount(over: Partial<FontFamilyFieldProps> = {}, inherited?: string) {
   const onCommit = vi.fn<(value: StyleValue | null) => void>();
   render(
-    <FontFamilyField
-      stored={undefined}
-      tokens={TOKENS}
-      faces={[INTER, LORA]}
-      fromCode={[]}
-      onCommit={onCommit}
-      {...over}
-    />
+    <InheritedValue.Provider value={inherited}>
+      <FontFamilyField
+        stored={undefined}
+        tokens={TOKENS}
+        faces={[INTER, LORA]}
+        fromCode={[]}
+        onCommit={onCommit}
+        {...over}
+      />
+    </InheritedValue.Provider>
   );
   return onCommit;
 }
@@ -103,6 +106,27 @@ function optionsIn(list: HTMLElement, heading: string): string[] {
 }
 
 describe("FontFamilyField", () => {
+  it("shows an inherited family greyed while none is chosen here", () => {
+    // By its choice's name where the site offers it, and as written where
+    // it does not; greyed as a placeholder, so it never reads as chosen.
+    mount({}, "Lora");
+    const value = trigger().querySelector(".nx-font-pick__value");
+    expect(value?.textContent).toBe("Lora");
+    expect(value?.hasAttribute("data-placeholder")).toBe(true);
+    cleanup();
+    mount({}, "Georgia, serif");
+    expect(trigger().querySelector(".nx-font-pick__value")?.textContent).toBe(
+      "Georgia, serif"
+    );
+  });
+
+  it("shows the family chosen here over an inherited one", () => {
+    mount({ stored: "Inter" }, "Lora");
+    const value = trigger().querySelector(".nx-font-pick__value");
+    expect(value?.textContent).toBe("Inter");
+    expect(value?.hasAttribute("data-placeholder")).toBe(false);
+  });
+
   it("offers the site's variables, then its families, then the system's, and nothing to type", () => {
     mount();
     const list = open();

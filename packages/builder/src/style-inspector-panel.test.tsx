@@ -1856,6 +1856,87 @@ describe("where a control's value came from", () => {
     return editor;
   }
 
+  /** A box carrying `.card` and nothing stored, so every value it shows is inherited. */
+  function mountCarded(
+    entries: readonly unknown[],
+    supports: Record<string, boolean | Record<string, boolean>>
+  ): void {
+    register(supports);
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={{ nodes: editor.document.nodes, entries } as never}
+      />
+    );
+  }
+  const fromCard = (over: Record<string, unknown>) =>
+    entry({ origin: { kind: "class", id: "cls-1", slug: "card" }, ...over });
+  const sourceIn = (property: string) =>
+    document.querySelector(
+      `[data-property="${property}"] .nx-style-inspector__provenance-source`
+    )?.textContent;
+
+  it("shows an inherited value in its field, and where it came from beside the label", () => {
+    // The value an author sees on the canvas, where a generic hint said
+    // nothing about it. Shown as the placeholder, so it reads as not set here
+    // and nothing is written by looking at it.
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-property="color"] input'
+    );
+    expect(input?.getAttribute("placeholder")).toBe("#123456");
+    expect(input?.value).toBe("");
+    expect(sourceIn("color")).toBe("From .card");
+  });
+
+  it("paints an inherited colour in its swatch, marked as inherited", () => {
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("#123456");
+    expect(swatch?.hasAttribute("data-inherited")).toBe(true);
+    expect(swatch?.hasAttribute("data-empty")).toBe(false);
+  });
+
+  it("shows an inherited keyword in its list in place of Not set", () => {
+    mountCarded([fromCard({ property: "display", value: "flex" })], {
+      layout: true,
+    });
+    // By the label's start: the label also holds the source caption.
+    const trigger = screen.getByLabelText(/^Display/);
+    expect(trigger.textContent).toBe("flex");
+    expect(trigger.textContent).not.toContain("Not set");
+    expect(sourceIn("display")).toBe("From .card");
+  });
+
+  it("shows an inherited weight by its name, not Not set", () => {
+    // The audit's case: a bold heading read its weight as "Not set".
+    mountCarded([fromCard({ property: "font-weight", value: "700" })], {
+      typography: true,
+    });
+    expect(screen.getByLabelText(/^Font weight/).textContent).toBe("Bold 700");
+    expect(sourceIn("fontWeight")).toBe("From .card");
+  });
+
+  it("draws no source beside a value set here", () => {
+    mountWithTrace([entry()]);
+    expect(sourceIn("color")).toBeUndefined();
+  });
+
   it("marks a value the author set on THIS block as set here", () => {
     mountWithTrace([entry()]);
     const dot = dotIn("color");
@@ -2045,17 +2126,32 @@ describe("where a control's value came from", () => {
       />
     );
 
-    const text = document.querySelector(
-      '[data-property="color"] .nx-style-inspector__provenance-text'
+    // An inherited value's source is shown without focus, in brief, with the
+    // dot's whole sentence on the caption for a pointer.
+    const source = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-source'
     );
 
     // The POPULATION first. Both sides of the comparison below read through
     // `?.`, so a query that found nothing would compare `undefined` with
     // `undefined` and pass while nothing was rendered at all.
     expect(dotIn("color")).not.toBeNull();
-    expect(text).not.toBeNull();
+    expect(source).not.toBeNull();
+    expect(source?.getAttribute("title")).toBe(
+      dotIn("color")?.getAttribute("aria-label")
+    );
+    expect(source?.textContent).toBe("From .card");
+    expect(source?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("puts 'Set here' in TEXT too, revealed when the field has focus", () => {
+    mountWithTrace([entry()]);
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
+    expect(dotIn("color")).not.toBeNull();
     expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
-    expect(text?.textContent).not.toBe("");
+    expect(text?.textContent).toBe("Set here");
     expect(text?.getAttribute("aria-hidden")).toBe("true");
   });
 
@@ -2612,6 +2708,78 @@ describe("naming the place a value came from", () => {
       )
     ).toBeNull();
     expect(describeProvenance(undefined, editing as never)).toBeNull();
+  });
+
+  describe("in brief, as the caption shown beside an inherited value", () => {
+    const sourceFor = (
+      origin: unknown,
+      entry = at(),
+      descendant?: string
+    ): string | undefined => {
+      const described = describeProvenance(
+        { kind: "inherited", entry, from: origin } as never,
+        editing as never,
+        descendant
+      );
+      return described?.kind === "inherited" ? described.source : undefined;
+    };
+
+    it("names only what differs when the value is this block's own", () => {
+      // "From this block at Medium" spends the row on the one part the author
+      // already knows: they selected this block.
+      expect(
+        sourceFor({ kind: "node", id: "a" }, at({ breakpoint: "md" }))
+      ).toBe("From Medium");
+      expect(sourceFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
+        "From Hover"
+      );
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ breakpoint: "md", state: "hover" })
+        )
+      ).toBe("From Medium · Hover");
+    });
+
+    it("names the tier it came from, with what differs after it", () => {
+      expect(sourceFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
+        "From .card"
+      );
+      expect(
+        sourceFor(
+          { kind: "class", id: "cls-1", slug: "card" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From .card · Medium");
+      expect(sourceFor({ kind: "page" })).toBe("From the page");
+      expect(sourceFor({ kind: "node", id: "outer" })).toBe(
+        "From an enclosing block"
+      );
+    });
+
+    it("calls a block's defaults and the typography baseline defaults", () => {
+      expect(sourceFor({ kind: "blockType", type: "acme/box" })).toBe(
+        "From block defaults"
+      );
+      expect(sourceFor({ kind: "blockType", type: "acme/section" })).toBe(
+        "From enclosing block defaults"
+      );
+      // A heading's weight from the h2 baseline: the element an author sees
+      // in the HTML tag control, not the tier's internal name.
+      expect(sourceFor({ kind: "element", tag: "h2" })).toBe(
+        "From H2 defaults"
+      );
+    });
+
+    it("names the control a descendant rule came from by its label alone", () => {
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ property: "color", descendant: " a" }),
+          "a:hover"
+        )
+      ).toBe("From Link color");
+    });
   });
 });
 
