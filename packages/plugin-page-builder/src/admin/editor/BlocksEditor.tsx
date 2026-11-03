@@ -916,6 +916,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           <SelectionBreadcrumb
             editor={editor}
             hints={{ editText: true, goUp: true, commandPalette: true }}
+            componentTitle={componentLibrary.titleOf}
           />
         }
         // Rendered only while it has somewhere to go: passing an element the
@@ -976,6 +977,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             canvas={canvas.canvasElement}
             // The Add panel's own sources, so search offers what it offers.
             insert={searchInsertSources(panels)}
+            componentTitle={componentLibrary.titleOf}
             open={panels.search.open}
             onOpenChange={panels.search.setOpen}
           />

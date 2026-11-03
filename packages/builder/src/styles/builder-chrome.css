@@ -2871,6 +2871,44 @@
 }
 
 /*
+ * A component placement's row: the component mark in the component colour, as
+ * its ring is on the canvas, and the muted word "component" after its name.
+ * On a selected row both take the row's own ink instead, since the selection
+ * surface is the theme's accent and only its foreground is meant to be read
+ * on it.
+ */
+.nx-layer-row[data-component] .nx-block-icon {
+  color: var(--nx-builder-component);
+}
+
+/*
+ * The word sits on the name's baseline, as the design sets it inline, rather
+ * than centred beside it: a smaller line centred on a larger one floats above
+ * it. Regular weight, so it stays quieter than a selected row's name.
+ */
+.nx-layer-row__label,
+.nx-layer-row__tag {
+  align-self: baseline;
+}
+
+.nx-layer-row__tag {
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row[data-component]
+  .nx-block-icon,
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row__tag {
+  color: inherit;
+}
+
+/*
  * A block's mark, wherever one is drawn.
  *
  * `flex: none` for the same reason the badge has it: the mark is a fixed-size
