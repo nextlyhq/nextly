@@ -67,7 +67,6 @@ import {
   UnsupportedField,
   type ContentServices,
 } from "./content-controls";
-import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
 import { HeldByLock } from "./held-by-lock";
@@ -99,6 +98,12 @@ import {
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
+import {
+  StyleTargetBar,
+  useStyleTarget,
+  type SharedStylesHost,
+  type StyleTargetBarProps,
+} from "./style-target";
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
@@ -143,17 +148,23 @@ export interface InspectorPanelProps {
    * Declared here only to CARRY it: this panel has no opinion about classes,
    * and the meaning of each — including why an absent library is a read in
    * flight rather than a host opting out — lives on
-   * {@link StyleInspectorPanelProps.classLibrary}.
+   * {@link StyleTargetBarProps.library}.
    *
    * Forwarded rather than left out because a prop the chain drops is invisible:
    * the surface renders in isolation, its tests pass, and every real selection
    * in the shipped editor shows nothing.
    */
-  classLibrary?: StyleInspectorPanelProps["classLibrary"];
+  classLibrary?: StyleTargetBarProps["library"];
   /** Why the library is absent, when it is. Carried, not interpreted. */
-  classLibraryAbsence?: StyleInspectorPanelProps["classLibraryAbsence"];
-  /** Create a class and apply it to the selected block. Opts the surface in. */
-  onCreateClass?: StyleInspectorPanelProps["onCreateClass"];
+  classLibraryAbsence?: StyleTargetBarProps["libraryAbsence"];
+  /**
+   * What the host lends for shared styles: the author's right, the write that
+   * stores a style, and the reads of its reach. Without it a block's shared
+   * styles are listed but cannot become the target.
+   *
+   * @experimental Settles with the shared-styles editor.
+   */
+  sharedStyles?: SharedStylesHost;
   /**
    * The site's fonts, carried to the Style tab's Font control. See
    * {@link StyleInspectorPanelProps.fonts}.
@@ -722,6 +733,7 @@ function SelectionInspector({
             breakpoint={breakpoint}
             cascade={cascade}
             previewContainer={previewContainer}
+            verbs={verbs}
           />
         </TabsContent>
       </Tabs>
@@ -823,6 +835,23 @@ function ContentTab({
   );
 }
 
+/** The state switcher the bar carries, bound to the host's choice. */
+function stateControlFor(
+  state: StyleState,
+  styleState: StyleStateBinding | undefined,
+  styleNode: ReturnType<typeof selectedNode>,
+  breakpoints: BreakpointSet | undefined
+): React.JSX.Element {
+  return (
+    <StyleStateField
+      state={state}
+      onSelect={styleState?.onChange}
+      node={styleNode}
+      breakpoints={breakpoints}
+    />
+  );
+}
+
 /**
  * The Style tab: the bar that says what an edit changes, then the style
  * controls themselves.
@@ -841,10 +870,9 @@ function StyleTab({
   liveBreakpoints,
   onJumpToBreakpoint,
   tokens,
-  classLibrary,
-  classLibraryAbsence,
-  onCreateClass,
   fonts,
+  // The bar's own inputs, kept together: the library, the host and the verbs.
+  ...shared
 }: Pick<
   InspectorPanelProps,
   | "editor"
@@ -859,7 +887,8 @@ function StyleTab({
   | "tokens"
   | "classLibrary"
   | "classLibraryAbsence"
-  | "onCreateClass"
+  | "sharedStyles"
+  | "verbs"
   | "fonts"
 > & {
   styleNode: ReturnType<typeof selectedNode>;
@@ -867,6 +896,12 @@ function StyleTab({
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
+  // ONE holder of what an edit changes, read by the bar and the controls.
+  const { target, choose } = useStyleTarget(
+    editor,
+    shared.classLibrary,
+    shared.sharedStyles
+  );
   return (
     <>
       {/*
@@ -875,18 +910,22 @@ function StyleTab({
       and an author would have edited a value before meeting the thing
       that says which state the value belongs to.
     */}
-      <EditingBar
-        target={{ kind: "block" }}
+      <StyleTargetBar
+        editor={editor}
+        target={target}
+        onChoose={choose}
+        library={shared.classLibrary}
+        libraryAbsence={shared.classLibraryAbsence}
+        host={shared.sharedStyles}
+        verbs={shared.verbs}
         device={editedDevice(breakpoints, breakpoint ?? BASE_BREAKPOINT)}
         state={state}
-        stateControl={
-          <StyleStateField
-            state={state}
-            onSelect={styleState?.onChange}
-            node={styleNode}
-            breakpoints={breakpoints}
-          />
-        }
+        stateControl={stateControlFor(
+          state,
+          styleState,
+          styleNode,
+          breakpoints
+        )}
       />
       <StyleInspectorPanel
         editor={editor}
@@ -901,9 +940,7 @@ function StyleTab({
         liveBreakpoints={liveBreakpoints}
         onJumpToBreakpoint={onJumpToBreakpoint}
         tokens={tokens}
-        classLibrary={classLibrary}
-        classLibraryAbsence={classLibraryAbsence}
-        onCreateClass={onCreateClass}
+        target={target}
         fonts={fonts}
       />
     </>

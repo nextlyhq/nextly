@@ -39,7 +39,6 @@ import {
   type BreakpointSet,
   type ContrastResult,
   type FontFaceDef,
-  type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
   type TokenMode,
@@ -79,8 +78,8 @@ import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
-import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
@@ -98,8 +97,8 @@ import {
   lockViewOf,
 } from "./inspector";
 import type { InspectorSectionKey } from "./inspector-sections";
-import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
+import { planMoveToSharedStyle, sharedStyleWrite } from "./shared-style-target";
 import type { SideOrientation } from "./side-orientation";
 import {
   alignmentGroupFor,
@@ -168,6 +167,7 @@ import {
   type SideBox,
 } from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
+import type { StyleTarget } from "./style-target";
 import {
   readStyleValue,
   type StyleAddress,
@@ -205,6 +205,17 @@ interface ProvenanceAnswer {
 }
 
 type ProvenanceOf = (leaf: StyleLeaf) => ProvenanceAnswer | undefined;
+
+/** Editing the block itself, wearing nothing: the target when none is given. */
+const BLOCK_TARGET: StyleTarget = { kind: "block", worn: [] };
+
+/**
+ * What the controls edit, for the field that reads and writes a value.
+ *
+ * A context rather than one more prop threaded through every section and row
+ * between the panel and the field: none of them reads it.
+ */
+const StyleTargetContext = React.createContext<StyleTarget>(BLOCK_TARGET);
 
 export interface StyleInspectorPanelProps {
   /**
@@ -353,56 +364,18 @@ export interface StyleInspectorPanelProps {
    */
   onJumpToBreakpoint?: (breakpoint: BreakpointId) => void;
   /**
-   * The site's class library, when the host has one to give.
-   *
-   * Two signals, not one. {@link StyleInspectorPanelProps.onCreateClass} says
-   * whether the host has a class surface at all; this says what it holds. So
-   * `undefined` here means the library is absent rather than unasked-for, and
-   * it covers BOTH a read in flight and a read that failed —
-   * {@link StyleInspectorPanelProps.classLibraryAbsence} says which. They need
-   * different words: one will finish and the other will not, and only the
-   * first has a field about to fill.
+   * What an edit changes: the block, or one of the shared styles it wears.
+   * The block when omitted. The Style tab holds the choice and its bar shows
+   * it; the controls read and write the target's values, so the two cannot
+   * disagree about what an edit changes.
    */
-  classLibrary?: readonly NamedClass[];
-  /** Why the library is absent, when it is. Forwarded to the selector. */
-  classLibraryAbsence?: ClassSelectorProps["libraryAbsence"];
-  /**
-   * Create a class under this slug and put it on the selected block.
-   *
-   * Supplying it is what OPTS IN to the class surface: a host that cannot
-   * write the site style has no way to create one, and a selector that offered
-   * to would report an intent nobody acts on.
-   *
-   * One callback rather than two, because this surface cannot mint an id — the
-   * class has no identity until the host has stored it, so "create it and
-   * apply it" is a single intent and splitting it would leave the caller
-   * correlating them.
-   *
-   * Applying and removing an EXISTING class needs no callback: those are edits
-   * to the selected node, which this panel already writes through the editor.
-   */
-  onCreateClass?: ClassSelectorProps["onCreateClass"];
+  target?: StyleTarget;
   /**
    * The site's fonts, for the Font control. It lists only what the site can
    * draw: its font variables, the families it has files for, and the system
    * families. Absent, it lists the variables and the system families.
    */
   fonts?: FontChoices;
-}
-
-/**
- * The op that stores a node's class ids.
- *
- * An empty list REMOVES the field rather than storing `[]`. The two mean the
- * same thing to every reader, and the field is optional, so writing the empty
- * array would leave a document carrying a key that says nothing — and an
- * inverse built from it would restore that key on undo.
- */
-function nodeClassesOp(nodeId: string, classIds: readonly string[]): BuilderOp {
-  if (classIds.length === 0) {
-    return { kind: "update", id: nodeId, patch: {}, unset: ["classes"] };
-  }
-  return { kind: "update", id: nodeId, patch: { classes: [...classIds] } };
 }
 
 /**
@@ -507,73 +480,6 @@ export function StyleInspectorPanel(
   );
 }
 
-/**
- * The class surface for the selected block, or nothing.
- *
- * Its own component rather than a conditional in the panel body: the panel is
- * already near the complexity the gate allows, and a branch plus two inline
- * callbacks is exactly the kind of growth that pushes a large function over
- * without anyone deciding to.
- *
- * `onCreateClass` is what OPTS IN. `library` being undefined then means the
- * read is in flight, which the selector draws as such — two signals, so a host
- * mid-load and a host with no class surface are never the same picture.
- */
-function SelectedNodeClasses({
-  editor,
-  nodeId,
-  library,
-  libraryAbsence,
-  onCreateClass,
-}: {
-  editor: EditorState;
-  nodeId: string;
-  library: readonly NamedClass[] | undefined;
-  libraryAbsence: ClassSelectorProps["libraryAbsence"];
-  onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
-}): React.JSX.Element | null {
-  /*
-   * The editor as it stands NOW. A class creation resolves through the
-   * callback of the render that began it, and a lock set while it was in
-   * flight lives only in a later render's editor.
-   */
-  const live = React.useRef(editor);
-  live.current = editor;
-  if (onCreateClass === undefined) return null;
-  return (
-    <ClassSelector
-      nodeId={nodeId}
-      /*
-       * Keyed by NODE, for the reason the style sections are. The typed query
-       * and the highlighted row are state about the node in hand; unkeyed,
-       * React reuses this component when the selection changes and Enter can
-       * apply the previous block's pending choice to the new one.
-       */
-      key={nodeId}
-      library={library}
-      libraryAbsence={libraryAbsence}
-      nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
-      onNodeClassesChange={classIds => {
-        const now = live.current;
-        // The lock is asked of the live document at the moment of the write,
-        // as a style value's write does: the store does not refuse an update
-        // to a block only because the block's own lock is set.
-        if (!designIsWritable(now.document, nodeId, lockViewOf(now))) {
-          return "refused";
-        }
-        // `applyAll` answers null when the store refuses — a document at its
-        // byte limit rejects an edit the class rules found perfectly valid.
-        // Reported back so the selector keeps the draft rather than clearing
-        // it as though the write had landed.
-        return now.applyAll([nodeClassesOp(nodeId, classIds)]) === null
-          ? "refused"
-          : "applied";
-      }}
-      onCreateClass={onCreateClass}
-    />
-  );
-}
-
 function StyleInspectorBody({
   editor,
   renderedTag,
@@ -587,9 +493,7 @@ function StyleInspectorBody({
   previewContainer,
   liveBreakpoints,
   onJumpToBreakpoint,
-  classLibrary,
-  classLibraryAbsence,
-  onCreateClass,
+  target = BLOCK_TARGET,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -645,6 +549,9 @@ function StyleInspectorBody({
     media: rendersMedia(renderedTag),
     breakpoints,
     cascade: cascadeFor(cascade, subject),
+    // A shared target's values are the style's own, so the controls show
+    // and offer what the style stores rather than what the block does.
+    styles: targetStyles(target),
   });
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -685,8 +592,9 @@ function StyleInspectorBody({
     state: inspected.state,
     breakpoint: inspected.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
+    sharedStyleName: sharedStyleNamer(target),
   };
-  const provenanceOf = provenanceReader({
+  const blockProvenance = provenanceReader({
     cascade,
     subject,
     live,
@@ -695,17 +603,21 @@ function StyleInspectorBody({
     breakpoints,
     onJumpToBreakpoint,
   });
+  /*
+   * The cascade traces the block, so its dots describe the block's values;
+   * a shared target's values are the style's, which say where they come
+   * from in their own line (set on this block, Move to) instead.
+   */
+  const provenanceOf = targetProvenance(target, blockProvenance);
 
   /*
    * Why the design is read-only, read from the document's own locks: the
    * same answer the write path refuses by, so the controls drawn and the
-   * writes allowed cannot disagree.
+   * writes allowed cannot disagree. A shared target is read-only for its own
+   * reasons (locked, or the author may not change the site's design), and
+   * the block's lock does not hold a site-wide style.
    */
-  const readOnlyReason = designReadOnlyReason(
-    editor.document,
-    inspected.nodeId,
-    lockViewOf(editor)
-  );
+  const readOnlyReason = targetReadOnly(target, editor, inspected.nodeId);
   const groups = inspected.sections.map(section => section.key);
   // Held rather than left to the accordion, so the open section survives a
   // change of selection. Falling back to the first is what keeps it valid when
@@ -740,40 +652,34 @@ function StyleInspectorBody({
   };
 
   return (
-    <div className="nx-style-inspector">
-      {/*
-       * Above the sections, because applying a class is the frequent action and
-       * it decides what the controls below are even editing. Webflow puts its
-       * selector field at the top of the Style panel for the same reason.
-       */}
-      <PanelClasses
-        readOnlyReason={readOnlyReason}
-        editor={editor}
-        nodeId={inspected.nodeId}
-        library={classLibrary}
-        libraryAbsence={classLibraryAbsence}
-        onCreateClass={onCreateClass}
-      />
-      <NoStyleProperties count={inspected.sections.length} />
-      <Accordion
-        type="single"
-        collapsible
-        value={open}
-        onValueChange={setOpenGroup}
-      >
-        {inspected.sections.map(section => (
-          <StyleSectionItem
-            // Keyed by node AND group: a bare group would let React reuse one
-            // block's inputs for the next block's same-named section, so a field
-            // would keep the previous block's uncommitted text.
-            key={`${inspected.nodeId}:${section.key}`}
-            section={section}
-            readOnlyReason={readOnlyReason}
-            {...surroundings}
-          />
-        ))}
-      </Accordion>
-    </div>
+    <StyleTargetContext.Provider value={target}>
+      <div className="nx-style-inspector" data-style-target={target.kind}>
+        {readOnlyReason === undefined ? null : (
+          <p className="nx-inspector__note" data-read-only="style">
+            {readOnlyReason}
+          </p>
+        )}
+        <NoStyleProperties count={inspected.sections.length} />
+        <Accordion
+          type="single"
+          collapsible
+          value={open}
+          onValueChange={setOpenGroup}
+        >
+          {inspected.sections.map(section => (
+            <StyleSectionItem
+              // Keyed by node AND group: a bare group would let React reuse one
+              // block's inputs for the next block's same-named section, so a field
+              // would keep the previous block's uncommitted text.
+              key={`${inspected.nodeId}:${section.key}`}
+              section={section}
+              readOnlyReason={readOnlyReason}
+              {...surroundings}
+            />
+          ))}
+        </Accordion>
+      </div>
+    </StyleTargetContext.Provider>
   );
 }
 
@@ -998,36 +904,6 @@ const REPLACED_ELEMENTS: ReadonlySet<string> = new Set([
 /** Whether the block renders as one of {@link REPLACED_ELEMENTS}. */
 function rendersMedia(renderedTag: string | undefined): boolean {
   return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
-}
-
-/**
- * The class chips, and above them the reason when the design is read-only.
- *
- * A disabled fieldset rather than a flag on every control: it disables every
- * native control inside at once, so a control added later cannot forget to be
- * read-only.
- */
-function PanelClasses({
-  readOnlyReason,
-  ...classes
-}: {
-  readOnlyReason: string | undefined;
-} & React.ComponentProps<typeof SelectedNodeClasses>): React.JSX.Element {
-  return (
-    <>
-      {readOnlyReason === undefined ? null : (
-        <p className="nx-inspector__note" data-read-only="style">
-          {readOnlyReason}
-        </p>
-      )}
-      <fieldset
-        className="nx-style-inspector__classes"
-        disabled={readOnlyReason !== undefined}
-      >
-        <SelectedNodeClasses {...classes} />
-      </fieldset>
-    </>
-  );
 }
 
 /**
@@ -1815,10 +1691,8 @@ function StyleControlField({
     property: control.property,
     path: control.path,
   };
-  // Read ONCE and shared by both lookups below, so the control's own value and
-  // its contrast partner cannot come from two different reads of the document.
-  const styles = findNode(editor.document.nodes, nodeId)?.styles;
-  const stored = readStyleValue(styles, address);
+  const writes = useFieldTarget({ editor, nodeId, address, policy });
+  const { target, nodeStyles, styles, stored, issue } = writes;
   const pairedColour = partnerColour(control.leaf, styles, address);
   // This node's own styles first, then every ancestor's. An ancestor's
   // `opacity`, `filter` or `mixBlendMode` composites this node along with the
@@ -1828,19 +1702,8 @@ function StyleControlField({
     contrastObscuredIn(styles) ??
     contrastObscuredAbove(editor.document.nodes, nodeId);
   const actionName = actionNameFor(propertyLabel, label);
-  const [issue, setIssue] = React.useState<string | null>(null);
 
-  // A refusal describes the draft that produced it, so it stops describing
-  // anything the moment the document holds a different value here. Clearing on
-  // the stored value rather than only on the next commit is what covers an undo
-  // or an edit applied from elsewhere: the remount key changes with the
-  // SELECTION, and neither of those changes the selection.
-  React.useEffect(() => {
-    setIssue(null);
-  }, [stored]);
-
-  const commit = (value: StyleValue | null): CommitOutcome =>
-    writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
+  const commit = writes.commit;
   /*
    * The provenance and its breakpoint reading, from ONE ranking of the trace.
    * The dot and the action are two readings of one answer, not two answers.
@@ -1908,12 +1771,32 @@ function StyleControlField({
         fieldId={id}
         onReset={() => commit(null)}
       />
-      {issue === null ? null : (
-        <p className="nx-inspector__error" id={errorId} role="alert">
-          {issue}
-        </p>
-      )}
+      <SharedValueLine
+        target={target}
+        nodeStyles={nodeStyles}
+        address={address}
+        actionName={actionName}
+        onResetBlock={writes.resetBlock}
+        onMoveTo={writes.moveTo}
+      />
+      <FieldIssue id={errorId} issue={issue} />
     </div>
+  );
+}
+
+/** A field's refusal, which the control points at by its id; nothing without one. */
+function FieldIssue({
+  id,
+  issue,
+}: {
+  id: string;
+  issue: string | null;
+}): React.JSX.Element | null {
+  if (issue === null) return null;
+  return (
+    <p className="nx-inspector__error" id={id} role="alert">
+      {issue}
+    </p>
   );
 }
 
@@ -3046,6 +2929,291 @@ function writeStyleValue({
   return "applied";
 }
 
+/** A shared style's name by its class name, from the styles the block wears. */
+function sharedStyleNamer(target: StyleTarget): (slug: string) => string {
+  return slug => target.worn.find(row => row.slug === slug)?.name ?? slug;
+}
+
+/**
+ * The provenance dots for the target: the block's, from the cascade, or none
+ * for a shared target, whose values say where they come from in their own line.
+ */
+function targetProvenance(
+  target: StyleTarget,
+  block: ProvenanceOf
+): ProvenanceOf {
+  return target.kind === "shared" ? () => undefined : block;
+}
+
+/**
+ * Why the target's values can't be changed. The block's own locks for the
+ * block; a shared target has its own reasons (locked, or no right to change
+ * design), and the block's lock does not hold a site-wide style.
+ */
+function targetReadOnly(
+  target: StyleTarget,
+  editor: EditorState,
+  nodeId: string
+): string | undefined {
+  return target.kind === "shared"
+    ? target.readOnly
+    : designReadOnlyReason(editor.document, nodeId, lockViewOf(editor));
+}
+
+/** The values a shared target shows, or `undefined` while the block is the target. */
+function targetStyles(target: StyleTarget): NodeStyles | undefined {
+  return target.kind === "shared" ? target.style.styles : undefined;
+}
+
+/** The block's own styles, and the styles a field shows for the target. */
+function fieldStyles(
+  target: StyleTarget,
+  editor: EditorState,
+  nodeId: string
+): { nodeStyles: NodeStyles | undefined; styles: NodeStyles | undefined } {
+  const nodeStyles = findNode(editor.document.nodes, nodeId)?.styles;
+  return { nodeStyles, styles: targetStyles(target) ?? nodeStyles };
+}
+
+/**
+ * What one field edits (the block, or the shared style that is the target),
+ * the value it shows, its refusal, and the writes it makes: a value (into the block, or into
+ * the shared style), the block's Reset of an override, and Move to.
+ */
+function useFieldTarget({
+  editor,
+  nodeId,
+  address,
+  policy,
+}: {
+  editor: EditorState;
+  nodeId: string;
+  address: StyleAddress;
+  policy: StylePolicy | undefined;
+}): {
+  target: StyleTarget;
+  nodeStyles: NodeStyles | undefined;
+  styles: NodeStyles | undefined;
+  stored: StyleValue | undefined;
+  issue: string | null;
+  setIssue: (message: string | null) => void;
+  commit: (value: StyleValue | null) => CommitOutcome;
+  resetBlock: () => void;
+  moveTo: (shared: Extract<StyleTarget, { kind: "shared" }>) => void;
+} {
+  const target = React.useContext(StyleTargetContext);
+  // Read ONCE and shared by every lookup the field makes, so the control's
+  // own value and its contrast partner cannot come from two different reads
+  // of the document. A shared target's values are the style's own.
+  const { nodeStyles, styles } = fieldStyles(target, editor, nodeId);
+  const stored = readStyleValue(styles, address);
+  const [issue, setIssue] = React.useState<string | null>(null);
+  // A refusal describes the draft that produced it, so it stops describing
+  // anything the moment the document holds a different value here. Clearing on
+  // the stored value rather than only on the next commit is what covers an undo
+  // or an edit applied from elsewhere: the remount key changes with the
+  // SELECTION, and neither of those changes the selection.
+  React.useEffect(() => {
+    setIssue(null);
+  }, [stored]);
+  const survive = useSurvivingReport();
+  // A refusal of a write that answers later: said beside the field while it
+  // is still on screen, and through the shell once it is not.
+  const report = (reason: string): void =>
+    survive(reason, () => {
+      setIssue(reason);
+      return true;
+    });
+  const writeBlock = (value: StyleValue | null): CommitOutcome =>
+    writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
+  return {
+    target,
+    nodeStyles,
+    styles,
+    stored,
+    issue,
+    setIssue,
+    commit: value =>
+      target.kind === "shared"
+        ? writeSharedStyleValue({
+            target,
+            address,
+            policy,
+            value,
+            setIssue,
+            report,
+          })
+        : writeBlock(value),
+    resetBlock: () => {
+      writeBlock(null);
+    },
+    moveTo: shared =>
+      moveToSharedStyle({
+        editor,
+        nodeId,
+        target: shared,
+        address,
+        policy,
+        setIssue,
+        report,
+      }),
+  };
+}
+
+/**
+ * One control's value written into the shared style that is the target.
+ *
+ * Through the block's own write rule (`sharedStyleWrite`), judged under the
+ * same policy, so the style may hold what a block may. The style is stored by
+ * the host, over the network: the field answers at once and a refusal that
+ * comes back later is reported where the author can still read it.
+ */
+function writeSharedStyleValue({
+  target,
+  address,
+  policy,
+  value,
+  setIssue,
+  report,
+}: {
+  target: Extract<StyleTarget, { kind: "shared" }>;
+  address: StyleAddress;
+  policy: StylePolicy | undefined;
+  value: StyleValue | null;
+  setIssue: (message: string | null) => void;
+  report: (reason: string) => void;
+}): CommitOutcome {
+  // Refused here as well as drawn read-only, for a lock set after the
+  // controls drew.
+  if (target.readOnly !== undefined) {
+    setIssue(target.readOnly);
+    return "refused";
+  }
+  const write = sharedStyleWrite(target.style.styles, address, value, policy);
+  if (write.kind === "refused") {
+    setIssue(write.reason);
+    return "refused";
+  }
+  setIssue(null);
+  if (write.kind === "unchanged") return "unchanged";
+  void target.write(write.styles).then(refused => {
+    if (refused !== undefined) report(refused);
+  });
+  return "applied";
+}
+
+/**
+ * "Move to Card": the block's value at this control written into the style,
+ * then cleared from the block once the style has it, so a refused style
+ * leaves the block as it was.
+ */
+function moveToSharedStyle({
+  editor,
+  nodeId,
+  target,
+  address,
+  policy,
+  setIssue,
+  report,
+}: {
+  editor: EditorState;
+  nodeId: string;
+  target: Extract<StyleTarget, { kind: "shared" }>;
+  address: StyleAddress;
+  policy: StylePolicy | undefined;
+  setIssue: (message: string | null) => void;
+  report: (reason: string) => void;
+}): void {
+  const node = findNode(editor.document.nodes, nodeId);
+  if (node === undefined) return;
+  if (target.readOnly !== undefined) {
+    setIssue(target.readOnly);
+    return;
+  }
+  if (!designIsWritable(editor.document, nodeId, lockViewOf(editor))) {
+    setIssue("This block's design is locked, so it can't be changed here.");
+    return;
+  }
+  const plan = planMoveToSharedStyle(node, target.style, address, policy);
+  if (!plan.ok) {
+    setIssue(plan.reason);
+    return;
+  }
+  setIssue(null);
+  void target.write(plan.styles).then(refused => {
+    if (refused !== undefined) {
+      report(refused);
+      return;
+    }
+    if (plan.ops.length > 0 && editor.applyAll(plan.ops) === null) {
+      report(
+        `${target.style.name} has the value, but it could not be cleared from this block.`
+      );
+    }
+  });
+}
+
+/**
+ * Where a value stands between the block and its shared style, in words.
+ *
+ * Editing the block, a value the block sets over its style reads "Set on this
+ * block · overrides Card", with Reset, which shows the style's value again.
+ * Editing the style, a value the block sets over it reads "Set on this block
+ * · Move to Card", which moves it into the style. Nothing otherwise.
+ */
+function SharedValueLine({
+  target,
+  nodeStyles,
+  address,
+  actionName,
+  onResetBlock,
+  onMoveTo,
+}: {
+  target: StyleTarget;
+  nodeStyles: NodeStyles | undefined;
+  address: StyleAddress;
+  actionName: string;
+  onResetBlock: () => void;
+  onMoveTo: (target: Extract<StyleTarget, { kind: "shared" }>) => void;
+}): React.JSX.Element | null {
+  if (readStyleValue(nodeStyles, address) === undefined) return null;
+  if (target.kind === "shared") {
+    return (
+      <p className="nx-style-inspector__shared-line" data-shared-line="move">
+        Set on this block ·{" "}
+        <button
+          type="button"
+          className="nx-style-inspector__breakpoint-action"
+          aria-label={`Move ${actionName} to ${target.style.name}`}
+          disabled={target.readOnly !== undefined}
+          onClick={() => onMoveTo(target)}
+        >
+          Move to {target.style.name}
+        </button>
+      </p>
+    );
+  }
+  // The style that would show here without the block's value: the last one
+  // in library order setting this address, as the cascade applies them.
+  const under = [...target.worn]
+    .reverse()
+    .find(row => readStyleValue(row.styles, address) !== undefined);
+  if (under === undefined) return null;
+  return (
+    <p className="nx-style-inspector__shared-line" data-shared-line="override">
+      Set on this block · overrides {under.name} ·{" "}
+      <button
+        type="button"
+        className="nx-style-inspector__breakpoint-action"
+        aria-label={`Reset ${actionName} on this block, showing ${under.name}'s value`}
+        onClick={onResetBlock}
+      >
+        Reset
+      </button>
+    </p>
+  );
+}
+
 /**
  * Where a control's value came from, as a dot beside its label.
  *
@@ -3141,9 +3309,12 @@ export function describeProvenance(
     return { kind: "authored", text: "Set here" };
   }
   if (provenance.kind !== "inherited") return null;
+  // A shared style is named as the source the author chose for the block,
+  // "From Card"; every other tier is inherited.
+  const lead = provenance.from.kind === "class" ? "From" : "Inherited from";
   return {
     kind: "inherited",
-    text: `Inherited from ${originName(provenance.from, provenance.entry, editing, controlDescendant)}`,
+    text: `${lead} ${originName(provenance.from, provenance.entry, editing, controlDescendant)}`,
   };
 }
 
@@ -3167,7 +3338,7 @@ function originSubject(
 ): string {
   switch (origin.kind) {
     case "class":
-      return `.${origin.slug}`;
+      return editing.sharedStyleName?.(origin.slug) ?? origin.slug;
     case "blockType":
       /*
        * The same problem the `node` case has, and it arrives by the same route:
@@ -3286,6 +3457,11 @@ export interface EditedAddress {
   readonly breakpoint: BreakpointId;
   /** A breakpoint's author-facing name, for saying which one a value came from. */
   readonly labelOf: (breakpoint: BreakpointId) => string;
+  /**
+   * A shared style's name by its class name, for saying a value comes from
+   * it: "From Card". The class name itself when omitted.
+   */
+  readonly sharedStyleName?: (slug: string) => string;
 }
 
 /**

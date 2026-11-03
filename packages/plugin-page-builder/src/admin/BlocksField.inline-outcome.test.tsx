@@ -68,6 +68,12 @@ let beforeAction: ((action: string) => void | Promise<void>) | undefined;
 /** The save-as-pattern verb the editor published, so a test can run it. */
 let offeredSaveVerb: (() => void) | undefined;
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/ui", async importOriginal => {
   // Spread rather than replaced: the shell below is the REAL module and draws
   // real components from here, so a closed literal would blank them.

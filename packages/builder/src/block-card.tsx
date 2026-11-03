@@ -46,6 +46,7 @@ export type CardVerbs = SharedBlockVerbs;
 /** The verbs from the shared set that the card's menu offers, in order. */
 const CARD_VERBS: readonly ToolbarActionId[] = [
   "duplicate",
+  "save-as-shared-style",
   "save-as-component",
   "convert-to-component",
   "detach-component",

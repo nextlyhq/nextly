@@ -54,6 +54,7 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import type { SharedStyleOffer } from "./shared-style-target";
 import {
   depthMoveActions,
   SAVE_PATTERN_GRANT_REFUSAL,
@@ -196,6 +197,11 @@ export interface BlockActions {
    * opens a modal belongs to the host's own key map rather than to the canvas.
    */
   readonly saveAsPattern: () => void;
+  /**
+   * Begin saving the block's look as a shared style, handed to the host as
+   * the pattern save is. Absent where the host offers no shared styles.
+   */
+  readonly saveAsSharedStyle?: () => void;
   /**
    * Open the selected placement's component in its own view, through the
    * host. Like Save as pattern it runs no op: where the component opens, and
@@ -435,6 +441,21 @@ export interface BlockKeyboardActionsOptions {
    * forms. Absent, neither verb is offered.
    */
   components?: ComponentVerbsHost;
+  /**
+   * Saving a block's look as a shared style, where the host has the site's
+   * shared styles: what it knows of them and the author's right, and the
+   * gesture that opens its form. Absent, the verb is not offered.
+   */
+  sharedStyles?: SharedStyleVerbHost;
+}
+
+/**
+ * The host's side of "Save as shared style…".
+ *
+ * @experimental Settles with the shared-styles editor.
+ */
+export interface SharedStyleVerbHost extends SharedStyleOffer {
+  readonly onSaveAsSharedStyle: () => void;
 }
 
 /**
@@ -531,6 +552,7 @@ export function useBlockKeyboardActions({
   onSaveAsPattern,
   onEditComponent,
   components,
+  sharedStyles,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
@@ -1130,6 +1152,20 @@ export function useBlockKeyboardActions({
   );
 
   /*
+   * What the host knows of the site's shared styles, kept by its two values
+   * so a host building a fresh object each render does not rebuild the list.
+   */
+  const sharedLibrary = sharedStyles?.library;
+  const sharedMayChange = sharedStyles?.mayChange;
+  const sharedOffer = React.useMemo(
+    () =>
+      sharedMayChange === undefined
+        ? undefined
+        : { library: sharedLibrary, mayChange: sharedMayChange },
+    [sharedLibrary, sharedMayChange]
+  );
+
+  /*
    * The verb list, computed ONCE for every surface below.
    *
    * See {@link SelectionActionsContext}: the save preflight builds the document
@@ -1146,7 +1182,8 @@ export function useBlockKeyboardActions({
         mayCreatePattern,
         editor.lockRefusalFor,
         componentOffer,
-        onEditComponent !== undefined
+        onEditComponent !== undefined,
+        sharedOffer
       ),
     [
       editor.document,
@@ -1157,8 +1194,25 @@ export function useBlockKeyboardActions({
       editor.lockRefusalFor,
       onEditComponent,
       componentOffer,
+      sharedOffer,
     ]
   );
+  /*
+   * "Save as shared style…", refused in words before the host is asked, as
+   * the component verbs are: a dimmed verb stays focusable in the toolbar.
+   */
+  const onSaveAsSharedStyle = sharedStyles?.onSaveAsSharedStyle;
+  const saveAsSharedStyle = React.useCallback(() => {
+    const offered = selectionActions.find(
+      action => action.id === "save-as-shared-style"
+    );
+    if (offered === undefined) return;
+    if (!offered.enabled) {
+      if (offered.reason !== undefined) announce(offered.reason);
+      return;
+    }
+    onSaveAsSharedStyle?.();
+  }, [selectionActions, onSaveAsSharedStyle, announce]);
   const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
 
   const actions = React.useMemo<BlockActions>(
@@ -1174,8 +1228,10 @@ export function useBlockKeyboardActions({
       detachComponent: () => runComponentVerb("detach-component"),
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),
+      saveAsSharedStyle,
     }),
     [
+      saveAsSharedStyle,
       moveSelected,
       deleteSelected,
       duplicateSelected,

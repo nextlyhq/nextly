@@ -303,50 +303,24 @@ describe("what the selector offers next", () => {
 });
 
 describe("what one keystroke resolves to", () => {
-  it("offers the matches first and the new name last", () => {
-    // Enter has to resolve to exactly one action. Create sitting last is what
-    // makes a partially typed name apply the match rather than create a
-    // near-duplicate beside it.
+  it("offers the matching shared styles and never a new, empty one", () => {
+    // Styles are made from a block, so a typed name that matches nothing
+    // offers nothing rather than an empty style.
     const { options } = selectorOptions(LIBRARY, [], "ca");
-    expect(options.map(o => o.kind)).toEqual(["apply", "create"]);
-    expect(options[0]).toEqual({
-      kind: "apply",
-      choice: expect.objectContaining({ slug: "card" }),
-    });
-    expect(options[1]).toEqual({ kind: "create", slug: "ca" });
-  });
-
-  it("does not offer to create a name the library already holds", () => {
-    // A second class under one slug is dropped by the compiler, so offering it
-    // would be offering an entry that styles nothing.
-    const { options } = selectorOptions(LIBRARY, [], "hero");
-    expect(options.map(o => o.kind)).toEqual(["apply"]);
+    expect(options).toEqual([
+      { kind: "apply", choice: expect.objectContaining({ slug: "card" }) },
+    ]);
+    expect(selectorOptions(LIBRARY, [], "brand-new").options).toEqual([]);
   });
 
   it("offers nothing for a class the node already carries", () => {
-    // Neither action is available: applying is a no-op and creating collides.
     expect(selectorOptions(LIBRARY, ["id-hero"], "hero").options).toEqual([]);
   });
 
-  it("offers no creation for a name the engine's grammar rejects", () => {
-    const { options } = selectorOptions(LIBRARY, [], "Not A Slug");
-    expect(options.every(o => o.kind === "apply")).toBe(true);
-  });
-
-  it("offers every applicable class and no creation for an empty query", () => {
-    // The opened-but-untyped state. An empty name cannot be created, so the
-    // list is exactly what the node could still be given.
+  it("offers every applicable class for an empty query", () => {
+    // The opened-but-untyped state: exactly what the node could still wear.
     const { options } = selectorOptions(LIBRARY, ["id-hero"], "");
     expect(options.map(o => o.kind)).toEqual(["apply", "apply"]);
-  });
-
-  it("carries the CREATE slug normalized, not as typed", () => {
-    expect(selectorOptions(LIBRARY, [], "  new-thing ").options).toContainEqual(
-      {
-        kind: "create",
-        slug: "new-thing",
-      }
-    );
   });
 });
 
@@ -359,9 +333,7 @@ describe("a library too long to put in front of an author", () => {
     // A truncated list that says nothing reads as "these are all of them",
     // which is the one thing it is not.
     const { options, hidden } = selectorOptions(many, [], "many");
-    expect(options.filter(o => o.kind === "apply")).toHaveLength(
-      MAX_SELECTOR_OPTIONS
-    );
+    expect(options).toHaveLength(MAX_SELECTOR_OPTIONS);
     expect(hidden).toBe(20);
   });
 
@@ -369,13 +341,6 @@ describe("a library too long to put in front of an author", () => {
     // The control: `hidden` must distinguish a capped list from a short one,
     // or the surface would warn about a list it showed in full.
     expect(selectorOptions(LIBRARY, [], "").hidden).toBe(0);
-  });
-
-  it("keeps the CREATE row even when the matches are capped", () => {
-    // It is the one row the author's own typing produced; dropping it would
-    // make a full library unable to gain a class through this surface.
-    const { options } = selectorOptions(many, [], "brand-new");
-    expect(options.at(-1)).toEqual({ kind: "create", slug: "brand-new" });
   });
 });
 

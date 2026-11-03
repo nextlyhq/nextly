@@ -34,6 +34,7 @@ import {
   SelectionBreadcrumb,
   SpacingOverlay,
   type OpenPassages,
+  type SharedStylesHost,
 } from "@nextlyhq/builder/shell";
 import {
   DocumentPrimaryAction,
@@ -402,7 +403,8 @@ function editorChecklist({
 /** The inspector, given the same readings the canvas draws with. */
 function editorInspector(
   view: EditorView,
-  verbs: CardVerbs
+  verbs: CardVerbs,
+  sharedStyles: SharedStylesHost
 ): React.JSX.Element {
   const {
     editor,
@@ -449,7 +451,9 @@ function editorInspector(
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
-      onCreateClass={classes.create}
+      // The author's right, the style write and the reach reads, so a
+      // shared style the block wears can become the Style tab's target.
+      sharedStyles={sharedStyles}
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
@@ -903,6 +907,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
 
+  // Shared styles on a block: the Style tab's target and "Save as shared
+  // style…", from the same class surface the canvas compiles from.
+  const { sharedStyle } = canvas;
   // The page's title, for the canvas frame's accessible name.
   const pageTitle = page.title;
   const view: EditorView = {
@@ -984,7 +991,7 @@ function EditorBody<TFieldValues extends FieldValues>({
         // already holds and cannot enumerate one. This is the MERGED set the
         // canvas compiles with, so the picker offers exactly the tokens the
         // page will resolve.
-        inspector={editorInspector(view, cardVerbs)}
+        inspector={editorInspector(view, cardVerbs, sharedStyle.host)}
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
@@ -1032,6 +1039,8 @@ function EditorBody<TFieldValues extends FieldValues>({
           */
           mayCreatePattern={mayCreatePattern}
           components={componentVerbs}
+          // "Save as shared style…", offered by every block menu.
+          sharedStyles={sharedStyle.verb}
           // Opening a placed component in its own view: the host's, since it
           // knows the view's address and whether this author may update
           // components. Absent, no surface offers it.
@@ -1087,6 +1096,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             onClose={makeComponent.close}
             returnFocusTo={makeComponent.returnFocusTo}
           />
+          {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>
     </EditorFrame>

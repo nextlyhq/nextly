@@ -465,16 +465,14 @@ export function applicableClasses(
 }
 
 /**
- * One thing the selector can do with what the author typed.
- *
- * The two are one list rather than a list plus a special case, because they
- * compete for the same keystroke: pressing Enter has to resolve to exactly one
- * action, and a surface holding "the matches" separately from "the new name"
- * has to invent a precedence between them. Here the order IS the precedence.
+ * One row the selector offers: a shared style the block may wear. Styles are
+ * made from a block ("Save as shared style…"), never typed into being here, so
+ * an empty one cannot be created by a stray Enter.
  */
-export type ClassOption =
-  | { readonly kind: "apply"; readonly choice: ClassChoice }
-  | { readonly kind: "create"; readonly slug: string };
+export type ClassOption = {
+  readonly kind: "apply";
+  readonly choice: ClassChoice;
+};
 
 export interface SelectorOptions {
   /** The rows to draw, in the order Enter would take them. */
@@ -488,21 +486,7 @@ export interface SelectorOptions {
   readonly hidden: number;
 }
 
-/**
- * What the selector offers for a query, applying first and creating last.
- *
- * Creating is offered only when the typed name could become a class, which
- * already excludes a name the library holds — so a query naming an existing
- * class never offers to create a second one under the same slug, and a query
- * naming a class the node already carries offers nothing at all. Both fall out
- * of {@link newClassName} rather than being re-decided here.
- *
- * Create sits LAST so that Enter on a partially typed name applies the match
- * rather than creating a near-duplicate. An author who means to create keeps
- * typing until nothing matches, which is the same gesture that makes the name
- * unambiguous. It is never dropped by the cap, for the same reason: it is the
- * one row the author's own typing produced.
- */
+/** What the selector offers for a query: the matching styles, capped. */
 export function selectorOptions(
   library: readonly NamedClass[],
   nodeClassIds: readonly string[],
@@ -514,8 +498,6 @@ export function selectorOptions(
     kind: "apply",
     choice,
   }));
-  const outcome = newClassName(query, library);
-  if (outcome.ok) options.push({ kind: "create", slug: outcome.slug });
   return { options, hidden: applicable.length - shown.length };
 }
 

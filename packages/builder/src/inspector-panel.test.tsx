@@ -117,49 +117,47 @@ function mount(node: Partial<BlockNode> = {}) {
 }
 
 describe("what InspectorPanel forwards to the style tab", () => {
-  it("carries the class props through, so the selector reaches the editor", () => {
+  it("carries the class library through, so the bar lists the block's shared styles", () => {
     /*
-     * The chain is the feature. `StyleInspectorPanel` treats a missing
-     * `onCreateClass` as the host opting out, so a prop dropped ANYWHERE
-     * between the host and it is invisible: the selector renders fine in
-     * isolation, its own tests pass, and every real selection in the shipped
-     * editor shows nothing at all.
-     *
-     * Asserted through the rendered SELECTOR rather than by inspecting props,
-     * because what matters is that it arrives — a forwarding test that checked
-     * the call would pass on a panel that received the prop and ignored it.
+     * The chain is the feature: a library dropped anywhere between the host
+     * and the bar is invisible, the bar rendering fine with no chips at all.
+     * Asserted through the rendered chip, because what matters is that it
+     * arrives.
      */
     register();
-    const editor = editorFor(documentOf({}));
     render(
       <InspectorPanel
-        editor={editor}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
+        editor={editorFor(documentOf({ classes: ["id-hero"] }))}
         classLibrary={[
-          { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
+          {
+            id: "id-hero",
+            slug: "hero",
+            label: "Hero",
+            orderIndex: 0,
+            styles: {},
+          },
         ]}
       />
     );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.getByRole("combobox", { name: /add a class/i })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Hero" })).toBeDefined();
   });
 
-  it("shows no class surface when the host passed nothing", () => {
-    // The control: the assertion above must be about forwarding, not about the
-    // selector rendering unconditionally.
+  it("lists no shared style when the host passed no library", () => {
+    // The control: the assertion above must be about forwarding, not about a
+    // chip drawn from the node's ids alone.
     register();
-    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({ classes: ["id-hero"] }))}
+      />
+    );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /hero/i })).toBeNull();
   });
 
   it("offers the state switcher when the host can act on the choice", () => {
@@ -2182,12 +2180,14 @@ describe("a block inside an area locked to its content", () => {
   it("shows the Style tab and the Advanced section read-only", () => {
     mountHeld();
 
-    // Controls that change something. A section's toggle and the state
-    // switcher only choose what is shown, so they stay usable.
+    // Controls that change something. A section's toggle, the state
+    // switcher and the target chips only choose what is shown, so they stay
+    // usable.
     const editingControls = (panel: Element) =>
       controlsIn(panel).filter(
         control =>
           !control.hasAttribute("aria-expanded") &&
+          !control.hasAttribute("aria-pressed") &&
           control.getAttribute("role") !== "radio"
       );
 

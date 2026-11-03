@@ -11,12 +11,12 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/site-style-studios
  */
 import {
-  newId,
   resolveSiteTokens,
   validateFontFace,
   type BreakpointSet,
   type FontFaceDef,
   type NamedClass,
+  type NodeStyles,
   type SiteTokenSet,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -26,7 +26,6 @@ import {
   SharedStylesPanel,
   TokensPanel,
   withoutFamily,
-  type ClassCreation,
   type ClassRenameOutcome,
   type FontCatalogue,
   type FontFaceUpload,
@@ -390,7 +389,20 @@ export type ClassSurface = {
 
   absence: "pending" | "failed";
 
-  create: (slug: string) => Promise<ClassCreation>;
+  /**
+   * Store a new shared style, made from a block ("Save as shared style…").
+   * Resolves to the refusal in words, or `undefined` once stored. There is
+   * no way to make an empty one: a style is born from a block's look.
+   */
+  add: (entry: NamedClass) => Promise<string | undefined>;
+  /**
+   * Store one shared style's styles, whole, while it is the Style tab's
+   * target. Resolves to the refusal in words, or `undefined` once stored.
+   */
+  writeStyles: (
+    classId: string,
+    styles: NodeStyles
+  ) => Promise<string | undefined>;
   /** The name each class is heading for while its rename is open. */
   pendingNames: Record<string, string>;
 
@@ -495,7 +507,14 @@ export function useClassSurface(
      * against it would compose a library missing everything stored — and the
      * save would then delete those classes rather than add one.
      */
-    create: useHeldWhileReplaying(useCreateClass(writes, configured)),
+    add: useRefusalWhileReplaying(useAddClass(writes, configured)),
+    /*
+     * Withheld the same way: a style's styles written against a library
+     * missing what a replay restored would take it away again.
+     */
+    writeStyles: useRefusalWhileReplaying(
+      useWriteClassStyles(writes, configured)
+    ),
     /** Which classes are mid-rename, for the manager's no-op check. */
     pendingNames,
     /*
@@ -522,6 +541,25 @@ const REPLAY_SETTLING = {
 };
 
 /**
+ * A shared-style write answering its refusal in words, refused the same way
+ * while a style undo or redo settles.
+ */
+function useRefusalWhileReplaying<Args extends unknown[]>(
+  write: (...args: Args) => Promise<string | undefined>
+): (...args: Args) => Promise<string | undefined> {
+  const held = useHeldWhileReplaying(write);
+  return useCallback(
+    async (...args: Args) => {
+      const outcome = await held(...args);
+      // A string or nothing is the write's own answer; the settling refusal
+      // is the only object, and says why in its reason.
+      return typeof outcome === "object" ? outcome.reason : outcome;
+    },
+    [held]
+  );
+}
+
+/**
  * A class write, refused while a style undo or redo settles.
  *
  * The inspector and the class manager compose a whole library from the one
@@ -542,66 +580,46 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
   );
 }
 
+/** A section save's refusal in words, or the fallback when it gave none. */
+function refusalOf(
+  result: { saved: boolean; issues: Record<string, string> },
+  fallback: string
+): string | undefined {
+  if (result.saved) return undefined;
+  const reasons = Object.values(result.issues);
+  // An empty `issues` is still a refusal: reporting it as saved is the one
+  // outcome that must never be silent.
+  return reasons.length > 0 ? reasons.join(" ") : fallback;
+}
+
 /**
- * Create a named class in the site's library, answering with its new id.
+ * Add a shared style the builder made from a block: appended to the library,
+ * through the one queue every class write joins, so it builds on a rename
+ * still in flight rather than on the list both started from.
  *
- * Two documents are involved and this owns only one. The class lives in the
- * site style; putting it on a block is a node write the inspector already
- * performs, so this returns the id rather than applying it — one application
- * path, and the per-node bound stays enforced in a single place.
- *
- * The id is minted with the engine's own `newId`, which is where every other id
- * in this repository comes from. Deliberately not derived from the slug:
- * `NamedClass` keeps `id` and `slug` apart precisely so a rename cannot orphan
- * the documents referencing it, and a slug-seeded id would be a fossil of
- * whatever the class was called first.
- *
- * `orderIndex` is one past the highest in the library, so a class an author has
- * just created and applied wins over the ones already there rather than being
- * silently overridden by them.
+ * The entry comes whole from the builder's save plan (its id, class name,
+ * position and the block's styles), so the plan and the store cannot
+ * disagree about what was saved.
  */
-function useCreateClass(
+function useAddClass(
   writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
-  // Its own write handle rather than one passed in. The caller is already the
-  // largest component in this file, and a dependency a hook can obtain for
-  // itself is a statement that does not need to live there.
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
-    async (slug: string): Promise<ClassCreation> =>
-      // Composed INSIDE the queue, so a creation following a rename builds on
-      // that rename rather than on the list they both started from.
-      //
-      // The result type is stated rather than inferred: inference takes the
-      // first branch it meets, which is the refusal, and the success branch
-      // then fails to assign.
-      writes.run<ClassCreation>(async existing => {
+    async (entry: NamedClass): Promise<string | undefined> =>
+      writes.run<string | undefined>(async existing => {
         if (existing === undefined) {
           return {
-            result: {
-              ok: false as const,
-              reason:
-                "This site's classes could not be read, so none can be added.",
-            },
+            result:
+              "This site's shared styles could not be read, so none can be added.",
           };
         }
-        const classId = newId();
-        const next: NamedClass[] = [
-          ...existing,
-          {
-            id: classId,
-            slug,
-            orderIndex: nextOrderIndex(existing),
-            styles: {},
-          },
-        ];
+        const next: NamedClass[] = [...existing, entry];
         /*
          * Only what DIFFERS from the site's own config classes. The base is the
          * MERGED set the canvas compiles, so saving it whole would copy every
-         * config class into the database on the first creation and mask the
-         * site's code from then on — the argument `tokenOverrideOf` already
-         * makes for tokens.
+         * config class into the database and mask the site's code from then on.
          */
         const result = await saveSection(
           "classes",
@@ -609,22 +627,54 @@ function useCreateClass(
         );
         // `next` is returned ONLY on success, so a refused write never becomes
         // the base the following edit builds on.
-        if (result.saved) {
-          return { result: { ok: true as const, classId }, next };
+        const refused = refusalOf(
+          result,
+          "This shared style could not be saved."
+        );
+        return refused === undefined
+          ? { result: undefined, next }
+          : { result: refused };
+      }),
+    [writes, configured, saveSection]
+  );
+}
+
+/**
+ * Store one shared style's styles, every other key of its entry (its name,
+ * its lock) kept. A history step like any style write, so the editor's Undo
+ * writes the style's previous styles back.
+ */
+function useWriteClassStyles(
+  writes: ClassWrites,
+  configured: readonly NamedClass[] | undefined
+) {
+  const { save: saveSection } = useSaveSiteStyle();
+  return useCallback(
+    async (classId: string, styles: NodeStyles): Promise<string | undefined> =>
+      writes.run<string | undefined>(async existing => {
+        if (existing === undefined) {
+          return {
+            result:
+              "This site's shared styles could not be read, so this one can't be changed.",
+          };
         }
-        const reasons = Object.values(result.issues);
-        // An empty `issues` is still a refusal — the transport could not
-        // describe it. Reporting it as saved is the one outcome that must never
-        // be silent, which is the rule the breakpoints writer below follows too.
-        return {
-          result: {
-            ok: false as const,
-            reason:
-              reasons.length > 0
-                ? reasons.join(" ")
-                : "This class could not be saved.",
-          },
-        };
+        if (!existing.some(entry => entry.id === classId)) {
+          return { result: "This shared style is no longer on the site." };
+        }
+        const next = existing.map(entry =>
+          entry.id === classId ? { ...entry, styles } : entry
+        );
+        const result = await saveSection(
+          "classes",
+          classOverrideOf(configured, next)
+        );
+        const refused = refusalOf(
+          result,
+          "This shared style could not be changed."
+        );
+        return refused === undefined
+          ? { result: undefined, next }
+          : { result: refused };
       }),
     [writes, configured, saveSection]
   );
@@ -711,17 +761,6 @@ function useRenameClass(
       }
     },
     [writes, configured, saveSection, beginRename, endRename]
-  );
-}
-
-/** One past the highest position in the library, or zero for an empty one. */
-function nextOrderIndex(library: readonly NamedClass[]): number {
-  return library.reduce(
-    (highest, entry) =>
-      Number.isFinite(entry.orderIndex)
-        ? Math.max(highest, entry.orderIndex + 1)
-        : highest,
-    0
   );
 }
 
