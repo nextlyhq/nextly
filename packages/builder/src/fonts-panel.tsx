@@ -20,7 +20,7 @@
  *
  * @module fonts-panel
  */
-import { cssString } from "@nextlyhq/blocks-engine";
+import { cssString, tokenDisplayLabel } from "@nextlyhq/blocks-engine";
 import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import {
   Button,
@@ -650,7 +650,8 @@ function RemoveFamily({
 
 /** A font variable's plain name. */
 function labelOf(row: FontTokenRow): string {
-  return row.token.label ?? row.token.name;
+  // The name Variables shows for it, never the code name.
+  return tokenDisplayLabel(row.token);
 }
 
 /** The site's font variables, each with a note when its first font has no file. */

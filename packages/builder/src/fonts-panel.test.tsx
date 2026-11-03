@@ -296,6 +296,23 @@ describe("the site's fonts", () => {
 });
 
 describe("the font variables", () => {
+  it("names a variable as Variables does when it has no name of its own", () => {
+    panel({
+      onOpenTokens: vi.fn(),
+      tokens: {
+        tokens: [
+          {
+            name: "font.body",
+            kind: "fontFamily",
+            values: { light: "system-ui" },
+          },
+        ],
+      },
+    });
+    expect(row(/^Body,/)).toBeTruthy();
+    expect(screen.queryByText("font.body")).toBeNull();
+  });
+
   it("lists each font variable by its plain name, with its first family", () => {
     panel({ onOpenTokens: vi.fn() });
     const body = row(/^Body/);

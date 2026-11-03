@@ -276,6 +276,8 @@ function FileField({
           type="file"
           accept={acceptFiles}
           aria-label="Font file"
+          // Out of the accessibility tree: "Choose file" is the control.
+          aria-hidden="true"
           tabIndex={-1}
           onChange={event => form.chooseFile(event.target.files?.[0] ?? null)}
         />
