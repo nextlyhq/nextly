@@ -22,7 +22,6 @@ const group = alignmentGroupFor(
     rtl: false,
     flex: true,
     direction: "row",
-    wrapReversed: false,
   }
 )!;
 

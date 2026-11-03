@@ -252,9 +252,11 @@ export function IconChoiceField({
 function iconClass(
   option: AlignmentGroup["options"][number]
 ): string | undefined {
-  if (option.flipped === true) return "nx-icon-choice__flipped";
-  if (option.rotated === true) return "nx-icon-choice__rotated";
-  return undefined;
+  const classes = [
+    option.rotated === true ? "nx-icon-choice__rotated" : "",
+    option.flip === undefined ? "" : `nx-icon-choice__flip-${option.flip}`,
+  ].filter(name => name !== "");
+  return classes.length === 0 ? undefined : classes.join(" ");
 }
 
 /**

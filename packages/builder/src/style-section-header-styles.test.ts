@@ -197,3 +197,36 @@ describe("a field's Clear", () => {
     expect(clear).toContain("min-inline-size: 1.5rem");
   });
 });
+
+describe("a style field in the narrow inspector", () => {
+  it("stacks its label over its control, as every narrow field does", () => {
+    // The Style tab's wider label column outranks the shared narrow rule by
+    // specificity, so it has its own narrow rule after it.
+    const style = FLAT.indexOf(
+      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr); }"
+    );
+    expect(style).toBeGreaterThan(-1);
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 18rem)"
+    ).filter(body =>
+      body.includes(
+        ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 1fr); }"
+      )
+    );
+    expect(narrow).toHaveLength(1);
+    const at = FLAT.indexOf(narrow[0] ?? "");
+    expect(at).toBeGreaterThan(style);
+  });
+});
+
+describe("an open style section", () => {
+  it("lets a field's focus tooltip show above the section's first row", () => {
+    // The shared accordion clips its content, which cut off a provenance
+    // tooltip drawn above the first field.
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("overflow: visible");
+  });
+});

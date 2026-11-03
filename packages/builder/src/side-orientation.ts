@@ -52,12 +52,11 @@ export interface SideOrientation {
   readonly direction: string;
   /**
    * How the element lays out its children, read in the same measurement, so
-   * alignment icons follow the layout the canvas draws: its `display`,
-   * `flex-direction` and `flex-wrap`. Absent where none was measured.
+   * alignment icons follow the layout the canvas draws: its `display` and
+   * `flex-direction`. Absent where none was measured.
    */
   readonly display?: string;
   readonly flexDirection?: string;
-  readonly flexWrap?: string;
 }
 
 /**
@@ -102,6 +101,5 @@ export function orientationOfElement(
     direction,
     display: style.display,
     flexDirection: style.flexDirection,
-    flexWrap: style.flexWrap,
   };
 }

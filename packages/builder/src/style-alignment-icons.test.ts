@@ -11,7 +11,6 @@ function flow(over: Partial<Flow> = {}): Flow {
     rtl: false,
     flex: true,
     direction: "row",
-    wrapReversed: false,
     ...over,
   };
 }
@@ -70,7 +69,10 @@ describe("alignmentGroupFor", () => {
     ]);
   });
 
-  it("swaps start and end along a reversed main axis", () => {
+  it("keeps start and end on the writing mode's edges in a reversed flow", () => {
+    // CSS Box Alignment ties `start` and `end` to the writing mode; only
+    // `flex-start` and `flex-end` follow a reversed direction, and those sit
+    // in More. So a reversed row still starts at the left.
     expect(
       icons(
         "justify-content",
@@ -78,9 +80,9 @@ describe("alignmentGroupFor", () => {
         flow({ direction: "row-reverse" })
       )?.slice(0, 3)
     ).toEqual([
-      "start:AlignHorizontalJustifyEnd",
+      "start:AlignHorizontalJustifyStart",
       "center:AlignHorizontalJustifyCenter",
-      "end:AlignHorizontalJustifyStart",
+      "end:AlignHorizontalJustifyEnd",
     ]);
   });
 
@@ -98,12 +100,25 @@ describe("alignmentGroupFor", () => {
     );
   });
 
-  it("swaps the cross axis's start and end when the lines wrap in reverse", () => {
-    const values = ["start", "center", "end"];
-    expect(icons("align-items", values, flow({ wrapReversed: true }))).toEqual([
-      "start:AlignEndHorizontal",
-      "center:AlignCenterHorizontal",
-      "end:AlignStartHorizontal",
+  it("turns the wrap icons with the cross axis, and flips reversed wrapping along it", () => {
+    const values = ["nowrap", "wrap", "wrap-reverse"];
+    const along = (at: Flow) =>
+      alignmentGroupFor("flex-wrap", values, at)?.options.map(option =>
+        [option.value, option.rotated ? "turned" : "", option.flip ?? ""].join(
+          ":"
+        )
+      );
+    // In a row the lines wrap downward, and in reverse upward.
+    expect(along(ROW)).toEqual([
+      "nowrap::",
+      "wrap::",
+      "wrap-reverse::vertical",
+    ]);
+    // In a column they wrap across, so the icons turn and reverse sideways.
+    expect(along(COLUMN)).toEqual([
+      "nowrap:turned:",
+      "wrap:turned:",
+      "wrap-reverse:turned:horizontal",
     ]);
   });
 
@@ -114,7 +129,7 @@ describe("alignmentGroupFor", () => {
       icons(
         "justify-content",
         JUSTIFY,
-        flow({ flex: false, direction: "column", wrapReversed: true })
+        flow({ flex: false, direction: "column" })
       )?.[0]
     ).toBe("start:AlignHorizontalJustifyStart");
   });
@@ -190,14 +205,12 @@ describe("flowOf", () => {
         direction: "rtl",
         display: "inline-flex",
         flexDirection: "column-reverse",
-        flexWrap: "wrap-reverse",
       })
     ).toEqual({
       writingMode: "horizontal-tb",
       rtl: true,
       flex: true,
       direction: "column-reverse",
-      wrapReversed: true,
     });
   });
 
@@ -224,7 +237,6 @@ describe("flowOf", () => {
       rtl: false,
       flex: false,
       direction: "row",
-      wrapReversed: false,
     });
   });
 });

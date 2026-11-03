@@ -38,8 +38,6 @@ export interface Flow {
   readonly flex: boolean;
   /** Its `flex-direction`, `row` when unset. */
   readonly direction: string;
-  /** Whether its lines wrap in reverse, swapping the cross axis's ends. */
-  readonly wrapReversed: boolean;
 }
 
 /** One icon button: the value it stores, its name, and the icon drawn. */
@@ -48,8 +46,8 @@ export interface AlignmentOption {
   readonly label: string;
   /** A lucide icon's export name. */
   readonly icon: string;
-  /** Drawn upside down, for a value whose icon has no reversed twin. */
-  readonly flipped?: true;
+  /** Mirrored along an axis, for a value whose icon has no reversed twin. */
+  readonly flip?: "vertical" | "horizontal";
   /** Turned a quarter, for text that runs down the page. */
   readonly rotated?: true;
 }
@@ -98,28 +96,22 @@ function blockAxis(flow: Flow): Axis {
   };
 }
 
-function reversed(axis: Axis, reverse: boolean): Axis {
-  return reverse ? { ...axis, start: OPPOSITE[axis.start] } : axis;
-}
-
 /**
- * The main and cross axes. A flex container's main axis follows its
- * direction and its cross axis its wrap; anything else aligns along its
- * inline and block axes, whatever flex values it still stores.
+ * The main and cross axes. A flex container's main axis is its inline axis in
+ * a row and its block axis in a column; anything else aligns along its inline
+ * and block axes, whatever flex values it still stores.
+ *
+ * Never reversed. CSS Box Alignment ties `start` and `end` to the writing
+ * mode's edges, whatever the flex direction or wrap; only `flex-start` and
+ * `flex-end` follow a reversed flow, and those are listed, not drawn.
  */
 function axesOf(flow: Flow): { main: Axis; cross: Axis; inline: Axis } {
   const inline = inlineAxis(flow);
   const block = blockAxis(flow);
-  if (!flow.flex) return { main: inline, cross: block, inline };
-  const column = flow.direction.startsWith("column");
-  return {
-    main: reversed(
-      column ? block : inline,
-      flow.direction.endsWith("-reverse")
-    ),
-    cross: reversed(column ? inline : block, flow.wrapReversed),
-    inline,
-  };
+  if (!flow.flex || !flow.direction.startsWith("column")) {
+    return { main: inline, cross: block, inline };
+  }
+  return { main: block, cross: inline, inline };
 }
 
 /** Whether an axis starts at the end its icons draw as start: left or top. */
@@ -277,16 +269,27 @@ function directionOptions(
   return options.filter(option => values.includes(option.value));
 }
 
-const WRAPS: readonly AlignmentOption[] = [
-  { value: "nowrap", label: "No wrap", icon: "ArrowRightToLine" },
-  { value: "wrap", label: "Wrap", icon: "WrapText" },
-  {
-    value: "wrap-reverse",
-    label: "Wrap, reversed",
-    icon: "WrapText",
-    flipped: true,
-  },
-];
+/**
+ * The wrap icons, drawn for lines that wrap down the page: turned a quarter
+ * when the lines run down it instead (the main axis is vertical), and the
+ * reversed one mirrored along the cross axis the lines wrap across.
+ */
+function wrapOptions(values: readonly string[], flow: Flow): AlignmentOption[] {
+  const turned = !axesOf(flow).main.horizontal;
+  const extra = turned ? { rotated: true as const } : {};
+  const options: AlignmentOption[] = [
+    { value: "nowrap", label: "No wrap", icon: "ArrowRightToLine", ...extra },
+    { value: "wrap", label: "Wrap", icon: "WrapText", ...extra },
+    {
+      value: "wrap-reverse",
+      label: "Wrap, reversed",
+      icon: "WrapText",
+      ...extra,
+      flip: turned ? "horizontal" : "vertical",
+    },
+  ];
+  return options.filter(option => values.includes(option.value));
+}
 
 /** The icon buttons for one aligned property, in this flow. */
 function alignedOptions(
@@ -326,7 +329,7 @@ export function alignmentGroupFor(
   if (cssProperty === "flex-direction") {
     options = directionOptions(values, flow);
   } else if (cssProperty === "flex-wrap") {
-    options = WRAPS.filter(option => values.includes(option.value));
+    options = wrapOptions(values, flow);
   } else if (Object.hasOwn(GROUPS, cssProperty)) {
     const group = GROUPS[cssProperty];
     if (group === undefined) return undefined;
@@ -379,6 +382,5 @@ export function flowOf(
     rtl: measured?.direction === "rtl",
     flex: display === "flex" || display === "inline-flex",
     direction: measured?.flexDirection ?? at("flexDirection") ?? "row",
-    wrapReversed: (measured?.flexWrap ?? at("flexWrap")) === "wrap-reverse",
   };
 }

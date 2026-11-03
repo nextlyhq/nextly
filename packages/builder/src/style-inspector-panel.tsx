@@ -3970,7 +3970,6 @@ const AlignmentFlow = React.createContext<Flow>({
   rtl: false,
   flex: false,
   direction: "row",
-  wrapReversed: false,
 });
 
 /**

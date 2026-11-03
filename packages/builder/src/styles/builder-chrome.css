@@ -3993,6 +3993,23 @@ fieldset.nx-inspector__fields {
   white-space: nowrap;
 }
 
+/* Narrow, a style field stacks like every other: the wider column above
+   outranks the shared narrow rule, so it is undone here, after it. */
+@container nx-inspector-fields (max-width: 18rem) {
+  .nx-style-inspector .nx-inspector__field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * An open section shows what overflows it: the shared accordion clips its
+ * content, which it needs while it animates open or shut, and that cut off a
+ * field's focus tooltip drawn above the section's first row.
+ */
+.nx-style-inspector [data-slot="accordion-content"][data-state="open"] {
+  overflow: visible;
+}
+
 /**
  * The "+" drawn over an empty container.
  *
@@ -5804,9 +5821,13 @@ fieldset.nx-inspector__fields {
   outline-offset: -2px;
 }
 
-/* The one icon with no reversed twin, drawn upside down. */
-.nx-icon-choice__flipped {
+/* An icon with no reversed twin, mirrored along the axis it reverses on. */
+.nx-icon-choice__flip-vertical {
   scale: 1 -1;
+}
+
+.nx-icon-choice__flip-horizontal {
+  scale: -1 1;
 }
 
 /* A text icon for lines that run down the page, turned a quarter. */
