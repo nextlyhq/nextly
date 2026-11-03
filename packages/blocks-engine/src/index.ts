@@ -1047,6 +1047,10 @@ export {
   type LayersLockChange,
   type LayersLockChangeKind,
 } from "./layers-lock-stored";
+export {
+  variantLockChanges,
+  type VariantLockChange,
+} from "./layers-lock-variants";
 // How every copy into a document keeps the Layers locks it carries.
 export { insertKeepingLocks, type Placed } from "./locked-insert";
 

@@ -527,6 +527,35 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("refuses a variant of the component that sets a value on the locked block", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const id = await promo(t);
+        const stored = (await t.nextly.findByID({
+          collection: COMPONENTS_SLUG,
+          id,
+          overrideAccess: true,
+        })) as unknown as { content: Record<string, unknown> };
+        const withVariant = (overrides: Record<string, string>) =>
+          t.nextly.update({
+            collection: COMPONENTS_SLUG,
+            id,
+            data: {
+              content: {
+                ...stored.content,
+                variants: { dark: { label: "Dark", overrides } },
+              },
+            },
+            overrideAccess: true,
+          });
+
+        // CONTROL: a variant setting the free block's value saves.
+        await expect(
+          withVariant({ subtitle: "Spring sale" })
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(withVariant({ title: "Changed" }));
+      });
+
       it("refuses it on an update too", async () => {
         const { update } = await storedPage([heading("loose")]);
         const id = await promo(current!);
