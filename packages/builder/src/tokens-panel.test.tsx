@@ -547,6 +547,84 @@ describe("dark values for every kind", () => {
 });
 
 describe("a type size's line height", () => {
+  const REFUSAL = "A line height is a number like 1.4, or a length like 24px.";
+
+  it("says dark follows light when a light edit changes which kind they are", async () => {
+    const dark: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={dark} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(
+      within(editor).getByText(
+        "Dark now follows the light value; set a dark value again if you need one."
+      )
+    ).toBeDefined();
+  });
+
+  it("drops a refusal when Use light value removes the refused field", async () => {
+    const dark: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={dark} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, dark"), "tall");
+    expect(within(editor).getByText(REFUSAL)).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Use light line height" })
+    );
+    expect(within(editor).queryByText(REFUSAL)).toBeNull();
+  });
+
+  it("drops a refusal when Reset puts back the value the site's code supplies", async () => {
+    const supplied: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={SITE} supplied={supplied} />);
+    const editor = await openEditor(/^Body/);
+    const line = within(editor).getByLabelText("Line height, light");
+    enter(line, "tall");
+    expect(line.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(within(editor).getByRole("button", { name: "Reset" }));
+    expect(within(editor).queryByText(REFUSAL)).toBeNull();
+    expect(line).toHaveProperty("value", "24px");
+    expect(line.getAttribute("aria-invalid")).toBeNull();
+  });
+
   const savedLine = (onChange: ReturnType<typeof vi.fn>) =>
     (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet | undefined)?.tokens.find(
       token => token.name === "line-height.body"
@@ -927,6 +1005,33 @@ describe("a row's name in the dark preview", () => {
 });
 
 describe("the colour picker in the editor", () => {
+  it("has what the open picker held stored before the editor says it is done", async () => {
+    // Closing the editor with its picker still open: the picker's colour is
+    // committed as it goes away, and the host is told the edit is done after
+    // that commit, not before it.
+    const events: string[] = [];
+    render(
+      <Hosted
+        tokens={SITE}
+        onChange={() => events.push("change")}
+        onSettle={() => events.push("settle")}
+      />
+    );
+    const editor = await openEditor(/^Text/);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Pick the light colour" })
+    );
+    fireEvent.keyDown(
+      within(editor).getByLabelText(/^Saturation and brightness/),
+      { key: "ArrowRight" }
+    );
+    expect(events).toEqual([]);
+    escape();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(events).toContain("change");
+    expect(events.at(-1)).toBe("settle");
+  });
+
   it("keeps each step of a gesture rather than snapping back", async () => {
     render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Text/);

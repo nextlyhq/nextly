@@ -238,7 +238,31 @@ function VariablesView({
   // only on unmount rather than on every render that hands a new one.
   const settle = React.useRef(onSettle);
   settle.current = onSettle;
-  React.useEffect(() => () => settle.current?.(), []);
+  // Which editor is open as of the latest render, and whether the panel is
+  // still mounted: read when an editor commits, which it may do as it goes
+  // away, after the close or the unmount has already settled.
+  const openNow = React.useRef(openKey);
+  openNow.current = openKey;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      settle.current?.();
+    };
+  }, []);
+  /*
+   * An edit committed by an editor that is already closed, such as a colour
+   * picker writing what it held as it unmounts, comes after the settle its
+   * closing made, so it settles again rather than wait for a pause the
+   * author has already ended.
+   */
+  const commitFrom =
+    (key: string) =>
+    (next: SiteTokenSet): void => {
+      onChange(next);
+      if (!mounted.current || openNow.current !== key) settle.current?.();
+    };
   const search = React.useRef<HTMLInputElement>(null);
 
   const groups = React.useMemo(
@@ -302,7 +326,7 @@ function VariablesView({
                   readOnly={readOnly}
                   open={openKey === entry.row.key}
                   onOpenChange={open => toggle(entry.row.key, open)}
-                  onChange={onChange}
+                  onChange={commitFrom(entry.row.key)}
                   onRemoved={() => {
                     forget(entry.row.key);
                     search.current?.focus();

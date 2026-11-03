@@ -66,21 +66,28 @@ export function VariableEditor({
   const token = tokens.tokens[row.at];
   const [nameIssue, setNameIssue] = React.useState<string | undefined>();
   const [name, setName] = useDraft(entry.label);
-  // Each field holding a refused value, with why: that field is marked and
-  // the reason said under the fields until THAT field is corrected, whatever
-  // else is committed meanwhile.
-  const [refusals, setRefusals] = React.useState<ReadonlyMap<string, string>>(
-    () => new Map()
-  );
+  // Each field holding a refused value, with why and with the value the field
+  // stored when it was refused: that field is marked and the reason said under
+  // the fields until THAT field is corrected, whatever else is committed.
+  const [recorded, setRefusals] = React.useState<
+    ReadonlyMap<string, RefusedValue>
+  >(() => new Map());
+  // A refusal lasts only while its field stores what it did when refused. A
+  // control that replaces or removes the value (Use light value, Reset, an
+  // undo) also replaces what the field shows, so its refusal goes with it.
+  const refusals = liveRefusals(recorded, tokens);
+  if (refusals.size !== recorded.size) setRefusals(refusals);
   const refuse = (at: number, mode: TokenMode, message?: string): void =>
     setRefusals(current => {
       const key = fieldKey(at, mode);
-      if (current.get(key) === message) return current;
+      if (current.get(key)?.message === message) return current;
       const next = new Map(current);
       if (message === undefined) next.delete(key);
-      else next.set(key, message);
+      else next.set(key, { message, held: tokens.tokens[at]?.values[mode] });
       return next;
     });
+  // What a write changed beyond its own field, said until the next write.
+  const [note, setNote] = React.useState<string | undefined>();
 
   const commitName = (value: string): void => {
     if (readOnly || value.trim() === entry.label) {
@@ -109,6 +116,7 @@ export function VariableEditor({
       return;
     }
     refuse(at, mode);
+    setNote(written.note);
     onChange(written.tokens);
   };
   const saidId = `${id}-said`;
@@ -117,7 +125,8 @@ export function VariableEditor({
   const said = [
     ...(nameIssue === undefined ? [] : [nameIssue]),
     // Once each: two fields refused for the same reason say it once.
-    ...new Set(refusals.values()),
+    ...new Set([...refusals.values()].map(refusal => refusal.message)),
+    ...(note === undefined ? [] : [note]),
     ...row.issues,
     ...(lineHeight?.issues ?? []),
   ];
@@ -177,6 +186,28 @@ export function VariableEditor({
 /** Writes one variable's value for one mode, or says why it cannot. */
 type ValueWrite = (at: number, mode: TokenMode, value: string) => void;
 
+/** A refused value's reason, and what its field stored when it was refused. */
+interface RefusedValue {
+  message: string;
+  held: string | undefined;
+}
+
+/**
+ * The refusals still about what their fields store; the same map when every
+ * one is, so a render that changes nothing sets no state.
+ */
+function liveRefusals(
+  recorded: ReadonlyMap<string, RefusedValue>,
+  tokens: SiteTokenSet
+): ReadonlyMap<string, RefusedValue> {
+  const live = [...recorded].filter(([key, refusal]) => {
+    const [at, mode] = key.split(":");
+    const values = tokens.tokens[Number(at)]?.values;
+    return (mode === "dark" ? values?.dark : values?.light) === refusal.held;
+  });
+  return live.length === recorded.size ? recorded : new Map(live);
+}
+
 /** One value field: a stored variable's position and a mode. */
 function fieldKey(at: number, mode: TokenMode): string {
   return `${String(at)}:${mode}`;
@@ -184,7 +215,7 @@ function fieldKey(at: number, mode: TokenMode): string {
 
 /** The fields holding a refused value, and the reason's element to point at. */
 interface Refused {
-  fields: ReadonlyMap<string, string>;
+  fields: ReadonlyMap<string, RefusedValue>;
   describedBy: string;
 }
 

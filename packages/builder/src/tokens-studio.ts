@@ -450,9 +450,9 @@ const LINE_HEIGHT_REFUSAL =
   "A line height is a number like 1.4, or a length like 24px.";
 
 /**
- * What a line height is told when its two modes would need two kinds. A token
- * has one kind, and a number token refuses a length as surely as a length
- * token refuses a number.
+ * What a dark line height is told when it would need a kind other than
+ * light's. A token has one kind, and a number token refuses a length as surely
+ * as a length token refuses a number; the light value is the one that sets it.
  */
 export const LINE_HEIGHT_MIXED =
   "Light and dark line heights are both numbers, like 1.4, or both lengths, like 24px. Use the light value first to change which.";
@@ -489,8 +489,16 @@ function lineHeightValueIssue(value: string): string | undefined {
 
 /** What writing a variable's value comes to: the new set, or why not. */
 export type TokenValueWrite =
-  | { readonly tokens: SiteTokenSet }
+  | {
+      readonly tokens: SiteTokenSet;
+      /** Something the write changed beyond the field, said in words. */
+      readonly note?: string;
+    }
   | { readonly issue: string };
+
+/** What the author is told when a light line height's new kind drops dark. */
+export const DARK_FOLLOWS_LIGHT =
+  "Dark now follows the light value; set a dark value again if you need one.";
 
 /**
  * The set with one variable's value changed for one mode, or why it cannot be.
@@ -500,6 +508,11 @@ export type TokenValueWrite =
  * what is written: held as a `dimension`, `1.4` is a number where a length
  * belongs, and the save is refused for it. A value no line height can be is
  * refused here, in words, rather than stored for the page to drop.
+ *
+ * The LIGHT value sets the kind. A light edit of the other kind drops a dark
+ * value that no longer fits, so dark follows light, and says so; a dark edit
+ * of a kind other than light's is refused. Otherwise, with both modes set as
+ * lengths, neither could be the first to become a number.
  */
 export function writeTokenValue(
   tokens: SiteTokenSet,
@@ -514,16 +527,26 @@ export function writeTokenValue(
   const issue = lineHeightValueIssue(value);
   if (issue !== undefined) return { issue };
   const kind = lineHeightKindOf(value);
-  const other = token.values[mode === "light" ? "dark" : "light"];
-  if (other !== undefined && lineHeightKindOf(other) !== kind) {
-    return { issue: LINE_HEIGHT_MIXED };
+  if (mode === "dark") {
+    if (lineHeightKindOf(token.values.light) !== kind) {
+      return { issue: LINE_HEIGHT_MIXED };
+    }
+    return {
+      tokens: withToken(tokens, at, {
+        ...token,
+        values: { ...token.values, dark: value },
+      }),
+    };
   }
+  const dark = token.values.dark;
+  const darkFits = dark === undefined || lineHeightKindOf(dark) === kind;
   return {
     tokens: withToken(tokens, at, {
       ...token,
       kind,
-      values: { ...token.values, [mode]: value },
+      values: darkFits ? { ...token.values, light: value } : { light: value },
     }),
+    ...(darkFits ? {} : { note: DARK_FOLLOWS_LIGHT }),
   };
 }
 

@@ -36,6 +36,7 @@ import {
   tokenRowsFor,
   writeTokenValue,
   LINE_HEIGHT_MIXED,
+  DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
@@ -658,6 +659,37 @@ describe("a type size's name", () => {
 });
 
 describe("a line height's two modes", () => {
+  it("take their kind from light: a light edit of the other kind drops dark, and says so", () => {
+    // Both lengths: the light value is the one edit that can change which,
+    // and dark then follows it until it is set again.
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    const light = writeTokenValue(set, 0, "light", "1.4");
+    expect(light).toEqual({
+      tokens: {
+        tokens: [
+          {
+            name: "line-height.body",
+            kind: "number",
+            values: { light: "1.4" },
+          },
+        ],
+      },
+      note: DARK_FOLLOWS_LIGHT,
+    });
+    // Dark of the other kind is still refused, in the words that say how.
+    expect(writeTokenValue(set, 0, "dark", "1.6")).toEqual({
+      issue: LINE_HEIGHT_MIXED,
+    });
+  });
+
   it("are one kind, so a length beside a number is refused in words", () => {
     // A token has one kind: written as given, the dark length would be a
     // value the number token reports, and the save would be refused for it.
