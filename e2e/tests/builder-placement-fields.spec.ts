@@ -348,22 +348,20 @@ test.describe("a placement's exposed fields", () => {
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
     const badge = row(page, "Headline").locator(".nx-inspector__source");
-    await expect(badge).toHaveText("Overridden");
+    await expect(badge).toHaveText("Set on this page");
 
     const field = page.getByRole("textbox", { name: "Headline" });
     await field.fill("");
     await field.press("Enter");
-    await expect(badge).toHaveText("Cleared");
+    await expect(badge).toHaveText("Cleared on this page");
     // Cleared draws no headline at all: neither the old value nor the
     // component's own.
     const placed = (await canvasRoot(page)).locator('[data-nx-instance="p1"]');
     await expect(placed.filter({ hasText: "Site name" })).toHaveCount(0);
     await expect(placed.filter({ hasText: "Mine" })).toHaveCount(0);
 
-    await page
-      .getByRole("button", { name: "Reset Headline to inherited value" })
-      .click();
-    await expect(badge).toHaveText("Inherited");
+    await page.getByRole("button", { name: "Reset Headline" }).click();
+    await expect(badge).toHaveText("From the component");
     await expect(await headline(page, "p1")).toHaveText("Site name");
     await expect(field).toHaveValue("Site name");
 
@@ -379,10 +377,12 @@ test.describe("a placement's exposed fields", () => {
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
 
-    await expect(page.getByText(/This component is locked/)).toBeVisible();
+    // Said once, by the card's lock line, which the held fields point at.
+    const headlineField = page.getByRole("textbox", { name: "Headline" });
+    await expect(headlineField).toBeDisabled();
     await expect(
-      page.getByRole("textbox", { name: "Headline" })
-    ).toBeDisabled();
+      page.locator("fieldset[disabled]").first()
+    ).toHaveAccessibleDescription(/^Locked: it can.t be moved/);
     await expect(
       page.getByRole("textbox", { name: "Button link" })
     ).toBeDisabled();
