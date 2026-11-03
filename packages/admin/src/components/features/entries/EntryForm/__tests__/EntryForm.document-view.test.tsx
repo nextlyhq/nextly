@@ -665,7 +665,9 @@ describe("EntryForm with a document view", () => {
     expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
     expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
     expect(
       await screen.findByText(/you have unsaved changes from/i)
     ).toBeInTheDocument();
@@ -690,7 +692,9 @@ describe("EntryForm with a document view", () => {
     };
     renderView({ documentView: { component: CHIP_VIEW, onExit } });
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
     await userEvent.click(
       await screen.findByRole("button", { name: "Not now" })
     );

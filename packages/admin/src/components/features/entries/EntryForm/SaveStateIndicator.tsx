@@ -26,7 +26,14 @@ import {
 import type { JSX } from "react";
 import { useId, useState } from "react";
 
-import { AlertCircle, Check, Cloud, Loader2 } from "@admin/components/icons";
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  Cloud,
+  Loader2,
+  RotateCcw,
+} from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import type { HostedRecoveryOffer } from "./RecoveryOfferContext";
@@ -215,13 +222,17 @@ function SettledSaveState({
 }
 
 /**
- * The recovery offer, made in the chip: "Restore…" beside "Unsaved changes",
- * whose popover says when the work is from and asks. One save state, so no
- * banner above the editor says the same thing in a second place.
+ * The recovery offer, made in the chip: while it waits, "Unsaved changes" is
+ * itself the control, with the restore mark and an arrow, and its popover says
+ * when the work is from and asks. One save state, so no banner above the
+ * editor says the same thing in a second place; and no button beside it, so
+ * the top bar is no wider than it is for unsaved work alone.
  */
-function RecoveryOfferControl({
+function RecoveryOfferChip({
+  label,
   offer,
 }: {
+  label: string;
   offer: HostedRecoveryOffer;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -232,14 +243,15 @@ function RecoveryOfferControl({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 whitespace-nowrap"
+          aria-label={`${label}: restore options`}
+          className="-mx-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground hover:bg-muted data-[state=open]:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          Restore…
-        </Button>
+          <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="whitespace-nowrap">{label}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 text-sm">
         <p className="text-foreground">
@@ -303,14 +315,13 @@ export function SaveStateIndicator({
     >
       {view === null ? null : view.tone === "failed" ? (
         <FailedSaveState view={view} />
+      ) : offer !== null && view.tone === "unsaved" ? (
+        // Only for unsaved work: the offer's edits are what keep it unsaved,
+        // and a save or a failure says something else first.
+        <RecoveryOfferChip label={view.label} offer={offer} />
       ) : (
         <SettledSaveState view={view} />
       )}
-      {/* Only beside unsaved work: the offer's edits are what keep it
-          unsaved, and a save or a failure says something else first. */}
-      {offer !== null && view?.tone === "unsaved" ? (
-        <RecoveryOfferControl offer={offer} />
-      ) : null}
     </div>
   );
 }

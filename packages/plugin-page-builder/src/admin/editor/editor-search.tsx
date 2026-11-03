@@ -101,10 +101,10 @@ export function SearchButton({
     >
       <Search className="size-4" aria-hidden="true" />
       {/* The key hint gives way first when the top bar is short of room, so
-          the save state beside it never has to wrap; the title still names
-          the key. */}
+          the save state beside it never has to wrap and its recovery offer
+          fits at 1440; the title still names the key. */}
       {hint === null ? null : (
-        <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px] text-muted-foreground @max-[1400px]/topbar:hidden">
+        <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px] text-muted-foreground @max-[1500px]/topbar:hidden">
           {hint}
         </kbd>
       )}
