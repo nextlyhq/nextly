@@ -96,8 +96,14 @@ export function useBuilderChecklist({
     setDismissed(true);
   }, [store]);
 
+  // A first-run card, for a page the author starts from nothing. A page that
+  // opens with blocks was built already, by this author or another, and the
+  // card would only list steps nobody here just took. Read once, at open:
+  // emptying the page later doesn't make it a first run.
+  const [openedEmpty] = useState(() => document.nodes.length === 0);
+
   const steps = builderChecklist(document);
-  return { steps, visible: enabled && !dismissed, dismiss };
+  return { steps, visible: enabled && openedEmpty && !dismissed, dismiss };
 }
 
 export interface OnboardingChecklistProps {
@@ -126,7 +132,9 @@ export function OnboardingChecklist({
     <aside
       aria-label="Getting started"
       className={cn(
-        "border-[color:var(--nx-builder-border)] bg-[color:var(--nx-builder-surface-raised)] text-[color:var(--nx-builder-text)] w-72 rounded-lg border p-4 shadow-lg",
+        // Above the canvas's own overlays (the spacing bands sit at 1), which
+        // would otherwise paint over the card; below the toolbar's menus.
+        "border-[color:var(--nx-builder-border)] bg-[color:var(--nx-builder-surface-raised)] text-[color:var(--nx-builder-text)] relative z-10 w-72 rounded-lg border p-4 shadow-lg",
         className
       )}
     >

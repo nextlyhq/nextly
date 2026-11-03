@@ -12,12 +12,15 @@ import {
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
 import {
+  browserStore,
   DEFAULT_PREFERENCES,
   type LeftPanel,
+  type PreferenceStore,
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
+  CHECKLIST_STORAGE_KEY,
   ClassManagerPanel,
   ComponentsPanel,
   InsertPanel,
@@ -66,6 +69,17 @@ import {
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
+
+/**
+ * Where the getting-started card's dismissal is kept: under the author's own
+ * key, so dismissing it is one author's choice in a browser two people share.
+ * With no author known, the card's own browser-wide default.
+ */
+function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : browserStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
+}
 
 /**
  * Every left panel the editor can fill today: Add, Layers, Pages, the site's
@@ -380,9 +394,14 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
+  const checklistStore = useMemo(
+    () => checklistStoreFor(mount.userId),
+    [mount.userId]
+  );
   const checklist = useBuilderChecklist({
     document: editor.document,
     enabled: clientConfig?.checklist !== false,
+    ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
   const library = useOfferedLibrary(mount);

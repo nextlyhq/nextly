@@ -54,6 +54,13 @@ function register() {
       // A block with NOTHING an author can type into, so "write something"
       // cannot be satisfied by adding one.
       { ...base, name: "acme/divider", props: {} },
+      // A block placed with text of its own, which nobody here wrote.
+      {
+        ...base,
+        name: "acme/titled",
+        props: { text: { type: "text", inline: true } },
+        defaultProps: { text: "Heading" },
+      },
     ] as never,
     { source: "onboarding-test" }
   );
@@ -106,6 +113,26 @@ describe("builderChecklist", () => {
 
   it("counts writing as done once a block carries text", () => {
     expect(step(documentOf([heading("a", "Hello")]), "write-text")?.done).toBe(
+      true
+    );
+  });
+
+  it("does not count a block's starting text as writing", () => {
+    // Placing a heading that reads "Heading" is adding a block, not writing.
+    const titled = (text: string) =>
+      ({
+        id: "t",
+        type: "acme/titled",
+        version: 1,
+        props: { text },
+      }) as BlockNode;
+    expect(step(documentOf([titled("Heading")]), "write-text")?.done).toBe(
+      false
+    );
+    expect(step(documentOf([titled("  Heading ")]), "write-text")?.done).toBe(
+      false
+    );
+    expect(step(documentOf([titled("Our story")]), "write-text")?.done).toBe(
       true
     );
   });

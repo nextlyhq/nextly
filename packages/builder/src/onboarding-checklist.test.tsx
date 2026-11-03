@@ -62,6 +62,30 @@ function fakeStore(initial: string | null = null): PreferenceStore & {
 }
 
 describe("useBuilderChecklist", () => {
+  const block = (id: string) =>
+    ({ id, type: "acme/heading", version: 1, props: {} }) as BlockNode;
+
+  it("stays away from a page that opened with blocks", () => {
+    // The page was built already; the card would list steps nobody here took.
+    const { result } = renderHook(() =>
+      useBuilderChecklist({
+        document: documentOf([block("a")]),
+        store: fakeStore(),
+      })
+    );
+    expect(result.current.visible).toBe(false);
+  });
+
+  it("stays on a page that opened empty as its author adds blocks", () => {
+    const { result, rerender } = renderHook(
+      ({ document }) => useBuilderChecklist({ document, store: fakeStore() }),
+      { initialProps: { document: documentOf() } }
+    );
+    expect(result.current.visible).toBe(true);
+    rerender({ document: documentOf([block("a"), block("b")]) });
+    expect(result.current.visible).toBe(true);
+  });
+
   it("is visible on a page nobody has dismissed it for", () => {
     const { result } = renderHook(() =>
       useBuilderChecklist({ document: documentOf(), store: fakeStore() })

@@ -23,7 +23,12 @@
  * @module onboarding
  */
 
-import { walkNodes, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  getBlock,
+  walkNodes,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 import { inlineTargets } from "./inline-text";
 
@@ -37,7 +42,22 @@ export interface ChecklistStep {
   readonly done: boolean;
 }
 
-/** Whether any block on the page carries text an author typed. */
+/**
+ * The text a block starts with when it is placed, for one of its values: the
+ * block's own default, which an author has not written.
+ */
+function startingText(node: BlockNode, prop: string): string {
+  const defaults = getBlock(node.type)?.defaultProps;
+  const value: unknown =
+    defaults === undefined ? undefined : Reflect.get(defaults, prop);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Whether any block on the page carries text an author typed: text that is
+ * neither empty nor what the block started with, so placing a heading whose
+ * default reads "Heading" does not count as writing something.
+ */
 function hasAuthoredText(document: BlockDocument): boolean {
   let found = false;
   walkNodes(document.nodes, node => {
@@ -46,9 +66,10 @@ function hasAuthoredText(document: BlockDocument): boolean {
     // so "text an author could have written here" means one thing in both
     // places. A block with no inline values cannot satisfy this step, which is
     // correct: there was nothing to type.
-    found = inlineTargets(document, node.id).some(
-      target => target.value.trim() !== ""
-    );
+    found = inlineTargets(document, node.id).some(target => {
+      const text = target.value.trim();
+      return text !== "" && text !== startingText(node, target.prop);
+    });
   });
   return found;
 }
