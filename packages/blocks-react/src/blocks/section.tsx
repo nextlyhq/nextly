@@ -11,7 +11,11 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -22,8 +26,11 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
   defineBlock({
     name: "core/section",
     version: 1,
-    description:
-      "A page region. Renders a landmark element, and opts into the site's content width once the site stylesheet defines it.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A page region.
+    // Renders a landmark element, and opts into the site's content width once
+    // the site stylesheet defines it.
+    description: "A full-width band of the page.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -34,8 +41,13 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["container", "wrapper", "band", "region"],
     },
     props: {
-      as: { type: "select", options: ["section", "header", "footer", "main"] },
-      contained: { type: "checkbox" },
+      as: {
+        label: "Element type",
+        display: "menu",
+        type: "select",
+        options: ["section", "header", "footer", "main"],
+      },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "section", contained: true },
     example: { props: { as: "section", contained: true } },
@@ -48,5 +60,7 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       children: {},
     },
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   });

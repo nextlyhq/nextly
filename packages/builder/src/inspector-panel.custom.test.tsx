@@ -130,6 +130,7 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 
@@ -150,7 +151,7 @@ beforeEach(() => {
 });
 
 describe("a block's own inspector", () => {
-  it("replaces the generated content controls, keeping identity, Advanced and Style", () => {
+  it("replaces the generated content controls, keeping the card, Advanced and Style", () => {
     render(
       <InspectorPanel
         editor={editorFor(documentOf([hero()]))}
@@ -163,7 +164,8 @@ describe("a block's own inspector", () => {
     expect(screen.queryByLabelText("Title")).toBeNull();
     // What every block keeps.
     expect(screen.getByRole("tab", { name: "Style" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Advanced" })).toBeTruthy();
+    expect(screen.getByText("Advanced", { selector: "summary" })).toBeTruthy();
+    expect(document.querySelector("[data-block-card]")).not.toBeNull();
     expect(document.getElementById("nx-block-css-id")).not.toBeNull();
     expect(given?.node.id).toBe("hero");
     expect(given?.props).toEqual({ title: "Hello", tone: "warm" });

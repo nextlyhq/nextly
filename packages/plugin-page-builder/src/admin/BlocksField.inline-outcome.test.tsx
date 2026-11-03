@@ -148,6 +148,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     TokensPanel: nothing,
     OnboardingChecklist: nothing,
@@ -212,7 +213,24 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => undefined,
   // No document around the field: the state every case here was written
@@ -261,14 +279,18 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useBeforeDocumentAction: (handler: (action: string) => void) => {
     beforeAction = handler;
   },
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useSuppressAdminChrome: () => {},
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
-  useSingleDocument: () => ({
-    data: undefined,
-    isPending: false,
-    error: null,
-  }),
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,

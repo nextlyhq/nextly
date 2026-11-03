@@ -24,6 +24,7 @@ import {
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
+import { installRegistryResolver } from "../../utils/registry-resolver";
 import { runMigrateDown } from "../migrate-down";
 import {
   runPluginInstall,
@@ -285,6 +286,10 @@ async function applied(): Promise<void> {
 beforeEach(async () => {
   const adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
+  // The static resolver every production adapter carries: the schema lock seeds
+  // its row through a transaction insert, which an adapter refuses for a table
+  // its resolver does not hold.
+  installRegistryResolver(adapter);
   state.adapter = adapter as unknown as typeof state.adapter;
   state.db = adapter.getDrizzle();
   state.sqlite = adapter.getDrizzle<{ $client: Database.Database }>().$client;
@@ -320,15 +325,13 @@ describe("plugins uninstall against a real database", () => {
 
     await uninstall();
 
+    // Undone in the wrong order, 0002's DOWN fails on the table 0001's DOWN
+    // already dropped, so both tables gone is the order holding.
     expect(tables()).not.toContain("fx__notes");
     expect(tables()).not.toContain("fx__tags");
-    // Each rollback lands on the module's own key, retiring its applied row.
-    expect(await ledger()).toEqual([
-      { filename: key("0001_init"), status: "superseded" },
-      { filename: key("0002_more"), status: "superseded" },
-      { filename: key("0002_more"), status: "rolled_back" },
-      { filename: key("0001_init"), status: "rolled_back" },
-    ]);
+    // A full uninstall forgets the plugin's migrations, so a later install
+    // applies them again from the first.
+    expect(await ledger()).toEqual([]);
   });
 
   it("refuses an older module's foreign drop before the newer module's DOWN runs", async () => {
@@ -483,7 +486,10 @@ describe("plugins uninstall against a real database", () => {
 
     await uninstall();
 
-    expect(await ownerStates()).toEqual(["uninstalled"]);
+    // A full uninstall forgets its owner records with its tables, and the
+    // migration rows of the modules migrate:down already undid.
+    expect(await ownerStates()).toEqual([]);
+    expect(await ledger()).toEqual([]);
   });
 
   it("names only the elements on its own tables as dropped with them", async () => {
@@ -534,6 +540,124 @@ describe("plugins uninstall against a real database", () => {
   });
 });
 
+describe("plugins uninstall refuses to drop what another owner built", () => {
+  it("refuses while the app's index is on one of its tables, naming it, and drops nothing", async () => {
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        tableName: "fx__notes",
+        elementKind: "index" as const,
+        elementName: "app_idx_on_notes",
+        ownerKind: "app",
+        ownerId: "app",
+        migratedBy: "app",
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active" as const,
+      },
+    ]);
+    state.migrations = [init, more];
+
+    const refusal: unknown = await uninstall().catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+    });
+    const message = (refusal as { publicMessage: string }).publicMessage;
+    expect(message).toContain("app_idx_on_notes");
+    expect(message).toContain("the app");
+    expect(message).toContain("--keep-data");
+    // Refused before anything ran: both tables and the applied rows remain.
+    expect(tables()).toContain("fx__notes");
+    expect(tables()).toContain("fx__tags");
+    expect(await ownerStates()).not.toEqual([]);
+  });
+});
+
+describe("plugins uninstall reads the keys the database holds", () => {
+  it("refuses while a key no configuration declares any more points into one of its tables", async () => {
+    // The app's key into fx__notes, its declaration removed from code and
+    // never migrated away.
+    state.sqlite.exec(
+      "CREATE TABLE app_links (note_id TEXT, CONSTRAINT fk_app_links_note FOREIGN KEY (note_id) REFERENCES fx__notes (id))"
+    );
+    state.migrations = [init, more];
+
+    await expect(uninstall()).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      publicMessage: expect.stringContaining(
+        '"fk_app_links_note" on app_links'
+      ),
+    });
+    expect(tables()).toContain("fx__notes");
+    expect(await ownerStates()).toEqual(["active"]);
+  });
+});
+
+describe("a full uninstall forgets the plugin", () => {
+  it("leaves another owner's rows that share its name", async () => {
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        tableName: "app_notes",
+        elementKind: "index" as const,
+        elementName: "app_idx_named_like_the_plugin",
+        ownerKind: "app",
+        ownerId: PLUGIN,
+        migratedBy: "app",
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active" as const,
+      },
+    ]);
+    state.migrations = [init, more];
+
+    await uninstall();
+
+    const left = await new SchemaOwnersRepository(state.db, "sqlite").read([
+      "app_notes",
+    ]);
+    expect(left.map(row => row.elementName)).toContain(
+      "app_idx_named_like_the_plugin"
+    );
+  });
+
+  it("deletes its settings, secrets included, and leaves another owner's", async () => {
+    const insert = state.sqlite.prepare(
+      `INSERT INTO "nextly_plugin_settings" ("owner", "key", "value", "is_secret", "updated_at") VALUES (?, ?, ?, ?, ?)`
+    );
+    insert.run(PLUGIN, "apiKey", '"secret"', 1, Date.now());
+    insert.run(PLUGIN, "mode", '"fast"', 0, Date.now());
+    insert.run("other-plugin", "mode", '"slow"', 0, Date.now());
+    state.migrations = [init, more];
+
+    await uninstall();
+
+    const owners = state.sqlite
+      .prepare(
+        `SELECT "owner", "key" FROM "nextly_plugin_settings" ORDER BY "owner", "key"`
+      )
+      .all();
+    expect(owners).toEqual([{ owner: "other-plugin", key: "mode" }]);
+  });
+
+  it("CONTROL: keeping the data keeps its settings", async () => {
+    state.sqlite
+      .prepare(
+        `INSERT INTO "nextly_plugin_settings" ("owner", "key", "value", "is_secret", "updated_at") VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(PLUGIN, "mode", '"fast"', 0, Date.now());
+    state.migrations = [init, more];
+
+    await runPluginUninstall(PLUGIN, { keepData: true, yes: false }, context);
+
+    const count = state.sqlite
+      .prepare(
+        `SELECT COUNT(*) AS n FROM "nextly_plugin_settings" WHERE "owner" = ?`
+      )
+      .get(PLUGIN) as { n: number };
+    expect(count.n).toBe(1);
+  });
+});
+
 describe("plugins uninstall names a column it added to another owner's table", () => {
   it("only while the column is still there", async () => {
     // fx records a column on the app's table, as a module that added one
@@ -565,6 +689,79 @@ describe("plugins uninstall names a column it added to another owner's table", (
 
     state.sqlite.exec("ALTER TABLE app_notes ADD COLUMN fx_flag TEXT");
     expect(await refusal()).toContain("column app_notes.fx_flag");
+  });
+});
+
+describe("plugins uninstall over a column it contributed that is already gone", () => {
+  it("is not refused over an element on that table whose owner is not configured", async () => {
+    // fx's column row on the app's table outlives the rollback that removed
+    // the column. An index there whose owner is gone cannot be described,
+    // and was counted as possibly using a column no DOWN left will drop.
+    const element = {
+      tableName: "app_notes",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active" as const,
+    };
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        ...element,
+        elementKind: "column",
+        elementName: "fx_flag",
+        ownerKind: "plugin",
+        ownerId: PLUGIN,
+        migratedBy: `plugin:${PLUGIN}`,
+      },
+      {
+        ...element,
+        elementKind: "index",
+        elementName: "gone_idx",
+        ownerKind: "plugin",
+        ownerId: "@acme/gone",
+        migratedBy: "plugin:@acme/gone",
+      },
+    ]);
+    state.migrations = [init, more];
+
+    await uninstall();
+
+    expect(tables()).not.toContain("fx__notes");
+    expect(tables()).not.toContain("fx__tags");
+  });
+
+  it("CONTROL: is refused over that element while the column is still there", async () => {
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        tableName: "app_notes",
+        elementKind: "column",
+        elementName: "fx_flag",
+        ownerKind: "plugin",
+        ownerId: PLUGIN,
+        migratedBy: `plugin:${PLUGIN}`,
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active",
+      },
+      {
+        tableName: "app_notes",
+        elementKind: "index",
+        elementName: "gone_idx",
+        ownerKind: "plugin",
+        ownerId: "@acme/gone",
+        migratedBy: "plugin:@acme/gone",
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active",
+      },
+    ]);
+    state.sqlite.exec("ALTER TABLE app_notes ADD COLUMN fx_flag TEXT");
+    state.migrations = [init, more];
+
+    await expect(uninstall()).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      publicMessage: expect.stringContaining("gone_idx"),
+    });
+    expect(tables()).toContain("fx__notes");
   });
 });
 

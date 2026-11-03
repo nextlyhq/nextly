@@ -918,25 +918,30 @@ async function decidedOne(
  * `action` is a plain string rather than the operation union, because a
  * permission's action is not bounded by those six: `export-submissions` and
  * `manage-background-jobs` are both real grants.
+ *
+ * `options.anyEntry` asks whether the caller may perform `action` on any
+ * entry at all: the same decision, with a rule's filter counting as yes for a
+ * write as well as a read. It decides nothing about an entry, so it applies
+ * and bypasses no rule; the write itself is still judged on its entry.
  */
 export async function callerMayPerform(
   scope: AuthenticatedScope | undefined,
   action: string,
   resource: string,
-  user: { id: string; roles?: readonly string[] }
+  user: { id: string; roles?: readonly string[] },
+  options: { readonly anyEntry?: boolean } = {}
 ): Promise<boolean> {
   if (!user.id) return false;
   const rules = getRBACService();
   const caller = probedCaller(scope, user);
   if (!action || !resource) return refusedEmpty(caller, action, resource);
+  // `anyEntry` asks the type-level question a capability cell asks: a rule's
+  // filter counts as yes for any action, since the caller may act on the
+  // entries it matches. Otherwise a filter answers yes for a read alone, as a
+  // yes-or-no with no entry to apply it to must.
+  const readFilter = options.anyEntry === true ? "cell" : "some-entries";
   if (!caller.key) {
-    return sessionAnswer(
-      caller.userId,
-      action,
-      resource,
-      rules,
-      "some-entries"
-    );
+    return sessionAnswer(caller.userId, action, resource, rules, readFilter);
   }
   // A key is judged on its own scope, the route gate's way, with or without
   // the service.
@@ -947,7 +952,7 @@ export async function callerMayPerform(
       resource,
       rules,
       () => Promise.resolve(false),
-      "some-entries"
+      readFilter
     )
   ).allowed;
 }

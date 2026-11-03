@@ -75,6 +75,22 @@ describe("core block editor metadata", () => {
     }
   );
 
+  it("describes every block in one plain line an author reads", () => {
+    // Shown in the Add panel's popover and the block card: one sentence in an
+    // author's words. How a block works belongs in its code comments, not
+    // here, and an internal name ("core/column") never reaches an author.
+    const problems = coreBlocks.flatMap(block => {
+      const text = block.description;
+      const wrong: string[] = [];
+      if (text.length > 70) wrong.push("over 70 characters");
+      if (!text.endsWith(".")) wrong.push("does not end a sentence");
+      if (/\.\s+\S/.test(text)) wrong.push("more than one sentence");
+      if (/core\//.test(text)) wrong.push("names an internal block");
+      return wrong.map(reason => `${block.name}: ${reason}`);
+    });
+    expect(problems).toEqual([]);
+  });
+
   it("gives every block a distinct label", () => {
     // Two blocks reading the same in the palette is indistinguishable to an
     // author, and a per-block check cannot see it: each label is individually

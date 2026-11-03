@@ -9,6 +9,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// The exclusion is not what is judged here: it runs the guarded work at once. The address check
+// it guards is the subject.
+vi.mock(
+  "../../../schema/services/schema-change-exclusion",
+  async importOriginal => ({
+    ...(await importOriginal<object>()),
+    withSchemaChangeExcluded: (_opts: unknown, work: () => unknown) => work(),
+  })
+);
+
 import { judgeAddress } from "../../../../shared/address-rule";
 import { ADDRESS_CASES } from "../../../../shared/__tests__/helpers/address-cases";
 import { CollectionMetadataService } from "../collection-metadata-service";

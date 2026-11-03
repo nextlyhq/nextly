@@ -30,6 +30,7 @@
  */
 
 import {
+  allBlocks,
   clearBlocks,
   registerBlocks,
   registerSupport,
@@ -137,6 +138,7 @@ interface BlockRegistrationBackend {
  */
 export function createBlockRegistrationService(): BlockRegistrationBackend {
   clearBlocks();
+  editorVisible.clear();
   return {
     registerSupport,
     register(definitions, source) {
@@ -265,6 +267,7 @@ export function registerCoreBlocks(ctx: PluginContext): void {
   const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
   if (!isBlockRegistrationBackend(service)) return;
   service.register(coreBlocks, PAGE_BUILDER_PLUGIN);
+  for (const block of coreBlocks) editorVisible.add(block.name);
 }
 
 export function registerDeclaredBlocks(ctx: PluginContext): void {
@@ -284,13 +287,43 @@ export function registerDeclaredBlocks(ctx: PluginContext): void {
     for (const support of supports) service.registerSupport(support);
   }
   for (const declaration of declarations) {
-    const { blocks, error } = blocksIn(declaration);
-    if (error) throw new Error(error);
-    // Judged here, at boot, though only the generated component map reads it:
-    // a malformed entry would otherwise surface as blocks silently missing
-    // from the editor.
-    const entry = editorEntryIn(declaration);
-    if (entry.error) throw new Error(entry.error);
-    if (blocks.length > 0) service.register(blocks, declaration.source);
+    registerDeclaration(service, declaration);
   }
+}
+
+/** One plugin's declared blocks, registered, and noted when the editor draws them. */
+function registerDeclaration(
+  service: BlockRegistrationBackend,
+  declaration: Parameters<typeof blocksIn>[0]
+): void {
+  const { blocks, error } = blocksIn(declaration);
+  if (error) throw new Error(error);
+  // Judged here, at boot, though only the generated component map reads it:
+  // a malformed entry would otherwise surface as blocks silently missing
+  // from the editor.
+  const entry = editorEntryIn(declaration);
+  if (entry.error) throw new Error(entry.error);
+  if (blocks.length > 0) service.register(blocks, declaration.source);
+  // Drawn by the editor only when the declaration names the module that
+  // exports them to it; without one the blocks reach the server alone.
+  if (entry.editorEntry !== undefined) {
+    for (const block of blocks) editorVisible.add(block.name);
+  }
+}
+
+/**
+ * The names of the blocks the editor can draw: the core set, and those a
+ * plugin declares with an `editorEntry`. A block registered in code, or
+ * declared without an entry, reaches the server only. Cleared with the
+ * registry at boot.
+ */
+const editorVisible = new Set<string>();
+
+/**
+ * The registered blocks the editor can draw, for anything the server derives
+ * from what an author can reach there (the relation targets a search may
+ * read, for one), rather than from the whole server registry.
+ */
+export function editorVisibleBlocks(): AnyBlockDefinition[] {
+  return allBlocks().filter(block => editorVisible.has(block.name));
 }

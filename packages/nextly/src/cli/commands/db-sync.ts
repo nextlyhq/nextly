@@ -58,8 +58,6 @@
  * ```
  */
 
-import { basename } from "node:path";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
@@ -73,14 +71,12 @@ import { readRecordedEntities } from "../../domains/i18n/migration/recorded-befo
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import {
   ACCEPT_DATA_LOSS_ENV,
-  ACCEPT_DATA_LOSS_HELP,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import { exitWithError } from "../errors";
 import {
   createContext,
@@ -482,17 +478,9 @@ export async function runDbSync(
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-/**
- * Register the dev command with the program
- *
- * @param program - Commander program instance
- */
-// What: registers `nextly db:sync` (with `nextly sync` as a shorter alias).
-// also dropped the `--seed` flag — demo seeding is now Payload-style and
-// runs from the project's auth-gated POST route.
 /**
  * Hands `--accept-data-loss` to the push as `NEXTLY_ACCEPT_DATA_LOSS`, the
  * spelling the schema prompt reads, for the rest of the run: `true` as the
@@ -510,113 +498,63 @@ export function exportDataLossConsent(
   env[ACCEPT_DATA_LOSS_ENV] = flag === true ? "1" : flag;
 }
 
-export function registerDbSyncCommand(program: Command): void {
-  program
-    .command("db:sync")
-    .alias("sync")
-    .description("Sync database schema with nextly.config.ts.")
-    .option("-w, --watch", "Watch for config file changes", false)
-    .option(
-      "--types",
-      `Generate TypeScript types (to typescript.outputFile, ${basename(DEFAULT_TYPESCRIPT_CONFIG.outputFile)} by default)`,
-      false
-    )
-    .option(
-      "--schemas",
-      "Generate Zod validation schema files to src/db/schemas/zod/",
-      false
-    )
-    .option(
-      "--no-auto-sync",
-      "Disable auto-sync of schema changes (use migrations instead)"
-    )
-    // Deprecated no-op: the schema pipeline handles destructive ops via
-    // interactive prompts (or the data-loss consent, --accept-data-loss or
-    // NEXTLY_ACCEPT_DATA_LOSS, in non-interactive runs). Kept registered so
-    // existing scripts passing it keep working; the runtime emits a
-    // deprecation warning instead.
-    .option(
-      "-f, --force",
-      "(deprecated, no effect) Destructive ops are prompted; use --accept-data-loss for non-interactive runs",
-      false
-    )
-    .option(
-      "--remove-orphaned",
-      "Remove code-first collections/singles/components that no longer exist in config",
-      false
-    )
-    // --promote moves a UI-owned collection to code; --demote does the
-    // reverse. Either flag bypasses the normal sync flow and runs the
-    // dedicated handler. See conflict-detector for the reason these exist.
-    .option(
-      "--promote <slug>",
-      "Move a UI-owned collection to code (prints TS snippet, removes UI record)"
-    )
-    .option(
-      "--demote <slug>",
-      "Move a code-owned collection to UI (writes to dynamic_collections)"
-    )
-    // The data-loss consent for the push's column drops, handed on as
-    // NEXTLY_ACCEPT_DATA_LOSS (`exportDataLossConsent`). Only drops: renames
-    // and type changes still need a terminal to answer their prompts.
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .action(
-      async (
-        cmdOptions: DbSyncCommandOptions & {
-          promote?: string;
-          demote?: string;
-          acceptDataLoss?: string | boolean;
-        },
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
-        const context = createContext(globalOpts);
+/** The action of `nextly db:sync`, loaded when it runs. */
+export async function dbSyncAction(
+  cmdOptions: DbSyncCommandOptions & {
+    promote?: string;
+    demote?: string;
+    acceptDataLoss?: string | boolean;
+  },
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
+  const context = createContext(globalOpts);
 
-        // Surface the flag as an env var so downstream modules (the
-        // schema-change prompt, the auto-sync path) pick it up without
-        // needing to thread the option through every function call.
-        try {
-          exportDataLossConsent(cmdOptions.acceptDataLoss);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
+  // Surface the flag as an env var so downstream modules (the
+  // schema-change prompt, the auto-sync path) pick it up without
+  // needing to thread the option through every function call.
+  try {
+    exportDataLossConsent(cmdOptions.acceptDataLoss);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 
-        // Promote / demote short-circuit the full db:sync flow because
-        // they operate on a single slug and do not need the normal
-        // multi-collection sync pipeline.
-        if (cmdOptions.promote) {
-          try {
-            const { runPromote } = await import("./db-sync-promote");
-            await runPromote(cmdOptions.promote, context);
-            return;
-          } catch (error) {
-            exitWithError(context.logger, error);
-          }
-        }
+  // Promote / demote short-circuit the full db:sync flow because
+  // they operate on a single slug and do not need the normal
+  // multi-collection sync pipeline.
+  if (cmdOptions.promote) {
+    try {
+      const { runPromote } = await import("./db-sync-promote");
+      await runPromote(cmdOptions.promote, context);
+      return;
+    } catch (error) {
+      exitWithError(context.logger, error);
+    }
+  }
 
-        if (cmdOptions.demote) {
-          try {
-            const { runDemote } = await import("./db-sync-demote");
-            await runDemote(cmdOptions.demote, context);
-            return;
-          } catch (error) {
-            exitWithError(context.logger, error);
-          }
-        }
+  if (cmdOptions.demote) {
+    try {
+      const { runDemote } = await import("./db-sync-demote");
+      await runDemote(cmdOptions.demote, context);
+      return;
+    } catch (error) {
+      exitWithError(context.logger, error);
+    }
+  }
 
-        const resolvedOptions: ResolvedDevOptions = {
-          ...cmdOptions,
-          config: globalOpts.config,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-          cwd: globalOpts.cwd,
-        };
+  const resolvedOptions: ResolvedDevOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-        try {
-          await runDbSync(resolvedOptions, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
-    );
+  try {
+    await runDbSync(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerDbSyncCommand } from "./db-sync.command";
