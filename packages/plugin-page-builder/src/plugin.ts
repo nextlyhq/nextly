@@ -52,7 +52,7 @@ import {
 } from "./collections/components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
-import { pagesCollection } from "./collections/pages";
+import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
@@ -70,7 +70,10 @@ import {
   type DefaultLayoutSetup,
 } from "./default-layout/install";
 import { makeDefaultRoute } from "./default-layout/make-default-route";
-import { pageBuilderSettingsSingle } from "./default-layout/settings-single";
+import {
+  PAGE_BUILDER_SETTINGS_SLUG,
+  pageBuilderSettingsSingle,
+} from "./default-layout/settings-single";
 import { entriesRoute } from "./entries-route";
 import type {
   CompositionSetup,
@@ -78,7 +81,12 @@ import type {
 } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import {
+  layoutChoicesRoute,
+  pageCollectionRoute,
+} from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
+import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
   componentLibraryRoute,
@@ -1052,6 +1060,16 @@ export const pageBuilder = (
         markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
       });
       registerReadinessNotice(ctx, opts);
+      // A page published naming a Layout that is not: it is served inside the
+      // site's default until its own is published, and the author is told.
+      registerLayoutReadinessNotice({
+        ctx,
+        pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+        layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+        settings:
+          ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+          PAGE_BUILDER_SETTINGS_SLUG,
+      });
       // A component's removed fields: recorded when the definition dropping
       // them is published, and their values stripped from every later write.
       // On the store pages are composed against, so a host that redirected it
@@ -1252,6 +1270,17 @@ export const pageBuilder = (
         // preconditions (the Layout is published, the caller may publish
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
+        // The Layouts an author may choose for a page, with the published
+        // regions the editor draws around it, read as the author from the
+        // component store the editor's library reads, under the bounds the
+        // published renderer draws with.
+        layoutChoicesRoute(
+          componentStoreOf(opts),
+          () => opts.limits ?? DEFAULT_LIMITS
+        ),
+        // Which collection holds the pages, as renamed: the picker draws on
+        // that collection's forms and no other.
+        pageCollectionRoute(),
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),

@@ -12,6 +12,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  regionDocument,
   resolveComponentInstances,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -20,7 +21,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { coreBlocks } from "./blocks";
-import { regionDocument } from "./next-layouts";
 import { createBlockResolver } from "./resolver";
 import { throughBoundary } from "./__tests__/through-boundary";
 
