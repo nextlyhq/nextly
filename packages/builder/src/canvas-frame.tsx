@@ -54,7 +54,11 @@ import {
   CANVAS_FRAME_SHEET,
   SITE_CHROME_ATTRIBUTE,
 } from "./canvas-frame-sheet";
-import { frameFitScale, previewHeight, type FrameSize } from "./canvas-width";
+import {
+  frameFillingRegion,
+  frameFitScale,
+  type FrameSize,
+} from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isHTMLElement } from "./dom-kind";
 import { frameContentOrigin, pointToHost } from "./geometry";
@@ -195,9 +199,10 @@ export interface CanvasFrameProps {
   /** The width the page is laid out at: the device being previewed. */
   width: number;
   /**
-   * The height the page is laid out at. Derived from the width when left out,
-   * by {@link previewHeight}, so `vh` follows the device and never the room the
-   * panels leave.
+   * The height the page is laid out at, fitted into the region with the width.
+   * Left out, the frame fills the region's height at any zoom and a taller
+   * page scrolls inside it, as in a visitor's browser window; `vh` then
+   * answers for that window. See {@link frameFillingRegion}.
    */
   height?: number;
   /** The zoom: fitting both dimensions into the region, or a chosen scale. */
@@ -273,7 +278,7 @@ export function CanvasFrame(props: CanvasFrameProps): React.JSX.Element {
 
 function FramedCanvas({
   width,
-  height = previewHeight(width),
+  height: statedHeight,
   zoom = FIT_ZOOM,
   onScale,
   title,
@@ -297,8 +302,7 @@ function FramedCanvas({
   const siteChrome = useSiteChrome(page, mountPoint);
 
   const region = useRegionSize(stage);
-  const size: FrameSize = { width, height };
-  const scale = frameScale(size, region, zoom);
+  const { height, scale } = frameLayout(width, statedHeight, region, zoom);
   useReportedScale(scale, onScale);
 
   const viewport = useFrameViewport(frame, page, width, height);
@@ -415,6 +419,28 @@ function frameScale(
     if (chosen !== null) return chosen;
   }
   return frameFitScale(size, region ?? {});
+}
+
+/**
+ * The height the page is laid out at and the scale it is painted at.
+ *
+ * A height the host states is laid out as given and fitted both ways; without
+ * one, the frame fills the region's height at any zoom and the page scrolls
+ * inside it (see `frameFillingRegion`).
+ */
+function frameLayout(
+  width: number,
+  statedHeight: number | undefined,
+  region: Partial<FrameSize> | undefined,
+  zoom: CanvasZoom
+): { readonly height: number; readonly scale: number } {
+  if (statedHeight === undefined) {
+    return frameFillingRegion(width, region, zoom);
+  }
+  return {
+    height: statedHeight,
+    scale: frameScale({ width, height: statedHeight }, region, zoom),
+  };
 }
 
 /**

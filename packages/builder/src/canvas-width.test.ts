@@ -24,6 +24,7 @@ import {
   editedBreakpointAtWidth,
   editingBreakpointOf,
   frameFitScale,
+  frameFillingRegion,
   previewHeight,
   previewWidth,
   widthForBreakpoint,
@@ -464,6 +465,49 @@ describe("the height a device is previewed at", () => {
     expect(previewHeight(phablet ?? 0)).toBe(1024);
     expect(previewHeight(small ?? 0)).toBe(844);
     expect(previewHeight(base ?? 0)).toBe(800);
+  });
+});
+
+describe("a frame that fills its region's height", () => {
+  const region = { width: 1000, height: 820 };
+
+  it("fits the device's width, and is as tall as the region at that scale", () => {
+    // Desktop at 1280 in a 1000-wide region: scaled to fit its width, and
+    // tall enough that painted it fills the region from top to bottom.
+    const { scale, height } = frameFillingRegion(1280, region, { kind: "fit" });
+    expect(scale).toBeCloseTo(1000 / 1280);
+    expect(height * scale).toBeCloseTo(820);
+  });
+
+  it("fills the region at a chosen zoom too", () => {
+    for (const chosen of [0.5, 1, 2]) {
+      const { scale, height } = frameFillingRegion(1280, region, {
+        kind: "fixed",
+        scale: chosen,
+      });
+      expect(scale).toBe(chosen);
+      expect(height * scale, String(chosen)).toBeCloseTo(820);
+    }
+  });
+
+  it("is never drawn larger than life to fit", () => {
+    // A phone in a wide region fits at 1, not magnified.
+    const { scale, height } = frameFillingRegion(390, region, { kind: "fit" });
+    expect(scale).toBe(1);
+    expect(height).toBe(820);
+  });
+
+  it("holds a chosen zoom before the region is measured", () => {
+    expect(
+      frameFillingRegion(1280, undefined, { kind: "fixed", scale: 0.5 })
+    ).toEqual({ scale: 0.5, height: previewHeight(1280) });
+  });
+
+  it("keeps the device's own height until the region is measured", () => {
+    expect(frameFillingRegion(1280, undefined, { kind: "fit" })).toEqual({
+      scale: 1,
+      height: previewHeight(1280),
+    });
   });
 });
 
