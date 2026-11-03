@@ -48,11 +48,14 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   INSTANCE_ATTRIBUTE,
+  layoutPartSheets,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   sharedStyleInputs,
+  type PagePart,
+  type PageRendererProps,
+  type PartSheet,
 } from "@nextlyhq/blocks-react";
-import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import {
   BlockEnvironmentProvider,
   type BlockEnvironment,
@@ -68,9 +71,11 @@ import {
   useState,
 } from "react";
 
+import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { guardCanvasNavigation } from "./canvas-link-guard";
+import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import {
@@ -172,21 +177,9 @@ export const DROP_PARENT_ATTRIBUTE = "data-nx-drop-parent";
  */
 export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
 
-/**
- * Marks editor chrome drawn over the page, which is not part of the page.
- *
- * A click on the canvas background CLEARS the selection, and the overlay sits
- * inside the canvas root — so without this a press on any control drawn over
- * the page resolves to "no node" and deselects the very block that control
- * acts on. The floating toolbar would run its action and then watch itself
- * disappear.
- *
- * An attribute rather than each overlay calling `stopPropagation`: the rule
- * belongs to what chrome IS, and the version where every new overlay has to
- * remember it is the version where the next one does not. The drop indicator
- * needs no marker only because it takes no pointer events at all.
- */
-export const CHROME_ATTRIBUTE = "data-nx-chrome";
+// Defined in its own module so the region frames drawn inside the canvas can
+// mark themselves as chrome without importing the canvas back.
+export { CHROME_ATTRIBUTE } from "./canvas-chrome";
 
 /**
  * The site tokens the canvas page is drawn from, by IDENTITY as the default
@@ -1267,6 +1260,18 @@ export interface CanvasProps {
    * the site's CSS cannot reach it.
    */
   overlay?: React.ReactNode;
+  /**
+   * The regions of the page's Layout, drawn locked around the page: a header
+   * before it, a footer after it, as a visitor gets them.
+   *
+   * Drawn inside the canvas root, as part of what the canvas renders, so any
+   * surface the canvas is mounted on carries them with the page. They share
+   * the page's one site sheet and its previewed breakpoints, each compiled
+   * under a scope of its own (`layoutPartSheets`), so the canvas shows the
+   * cascade the published route serves. Absent or empty, the canvas draws the
+   * page exactly as it always has.
+   */
+  regions?: readonly CanvasRegion[];
 }
 
 /**
@@ -1551,6 +1556,143 @@ export function DropRefusal({
 }
 
 /**
+ * The canvas root's style, with the scale the page is painted at published as
+ * `--nx-canvas-zoom`.
+ *
+ * Chrome drawn inside the page (a Layout region's badge and tag) is scaled
+ * with everything else when the frame is painted smaller or larger, which
+ * makes its words unreadable on a zoomed-out canvas. Reading the factor back
+ * lets that chrome undo it and stay at the admin's own size, without each
+ * piece measuring the canvas.
+ */
+function withCanvasScale(
+  style: React.CSSProperties | undefined,
+  scale: number
+): React.CSSProperties {
+  return { ...style, "--nx-canvas-zoom": scale } as React.CSSProperties;
+}
+
+/** A region of the page's Layout, with how it treats the site sheet. */
+interface DrawnRegion {
+  region: CanvasRegion;
+  sheet: PartSheet;
+}
+
+/** The page and the regions drawn around it, each with its sheet inputs. */
+interface LayoutParts {
+  page: PartSheet;
+  header: DrawnRegion | undefined;
+  footer: DrawnRegion | undefined;
+}
+
+/**
+ * The page and the regions around it, each with its site-sheet inputs.
+ *
+ * Asked of `layoutPartSheets`, the answer the published route uses, so the
+ * first part drawn emits the site sheet and each part compiles under its own
+ * scope. `undefined` when there is no region to draw.
+ */
+function useLayoutParts(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+): LayoutParts | undefined {
+  return useMemo(
+    () => layoutPartsOf(regions, rendered, sheet),
+    [regions, rendered, sheet]
+  );
+}
+
+/** {@link useLayoutParts}'s answer, computed. */
+function layoutPartsOf(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+): LayoutParts | undefined {
+  const header = regions?.find(region => region.area === "header");
+  const footer = regions?.find(region => region.area === "footer");
+  if (header === undefined && footer === undefined) return undefined;
+  const parts = drawingOrder(header !== undefined, footer !== undefined);
+  const sheets = layoutPartSheets({
+    parts,
+    styleContext: rendered?.styleContext,
+    siteStyles: sheet,
+    pageScope: pageScopeOf(rendered),
+  });
+  const sheetFor = (part: PagePart): PartSheet =>
+    sheets[parts.indexOf(part)] ?? {};
+  return {
+    page: sheetFor("page"),
+    header: drawnRegion(header, sheetFor),
+    footer: drawnRegion(footer, sheetFor),
+  };
+}
+
+/** The parts in the order they are drawn: header, page, footer. */
+function drawingOrder(hasHeader: boolean, hasFooter: boolean): PagePart[] {
+  return [
+    ...(hasHeader ? (["header"] as const) : []),
+    "page",
+    ...(hasFooter ? (["footer"] as const) : []),
+  ];
+}
+
+/** The scope the page's own styles compile under, when it states one. */
+function pageScopeOf(
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined
+): string | undefined {
+  const scope = rendered?.styles?.scope;
+  return typeof scope === "string" ? scope : undefined;
+}
+
+/** One region with its sheet inputs, or nothing for a region not drawn. */
+function drawnRegion(
+  region: CanvasRegion | undefined,
+  sheetFor: (part: PagePart) => PartSheet
+): DrawnRegion | undefined {
+  return region === undefined
+    ? undefined
+    : { region, sheet: sheetFor(region.area) };
+}
+
+/**
+ * The page between its Layout's header and footer, as the canvas draws them.
+ *
+ * Each region is drawn in the page's environment, so a header block that
+ * measures itself or listens is told the frame the canvas draws in, as the
+ * page is. Without regions it is the page alone, exactly as before.
+ */
+function RegionsAround({
+  drawn,
+  rendered,
+  environment,
+  children,
+}: {
+  drawn: LayoutParts | undefined;
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  environment: BlockEnvironment | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const frame = (part: DrawnRegion | undefined) =>
+    part === undefined ? null : (
+      <BlockEnvironmentProvider value={environment}>
+        <CanvasRegionFrame
+          region={part.region}
+          rendered={rendered}
+          sheet={part.sheet}
+        />
+      </BlockEnvironmentProvider>
+    );
+  return (
+    <>
+      {frame(drawn?.header)}
+      {children}
+      {frame(drawn?.footer)}
+    </>
+  );
+}
+
+/**
  * The document and window the canvas draws in, held where nothing walking an
  * object's own keys can reach them.
  *
@@ -1584,6 +1726,156 @@ class CanvasEnvironment implements BlockEnvironment {
   }
 }
 
+/**
+ * The canvas root, published to both of its readers, and guarded.
+ *
+ * ONE assignment site for both publications.
+ *
+ * They are two APIs because they answer two questions — `rootRef` is read in
+ * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
+ * so a reader can REACT to the canvas arriving, which a ref cannot express
+ * because assigning `.current` changes no dependency. Neither can serve the
+ * other's caller.
+ *
+ * But two effects deciding what the element is could drift: an edit to one is
+ * invisible to the other, and the two would then hand out different answers
+ * with nothing to report it. One effect, one element, published twice.
+ *
+ * After paint rather than through a merged ref callback: the element is the
+ * same for the life of the mount, and one assignment here is easier to follow
+ * than a callback keeping two refs agreeing.
+ */
+function usePublishedRoot(
+  root: React.RefObject<HTMLDivElement | null>,
+  rootRef: CanvasProps["rootRef"],
+  onRoot: CanvasProps["onRoot"]
+): void {
+  useEffect(() => {
+    const element = root.current;
+    if (rootRef !== undefined) rootRef.current = element;
+    onRoot?.(element);
+    return () => {
+      if (rootRef !== undefined) rootRef.current = null;
+      onRoot?.(null);
+    };
+  }, [root, rootRef, onRoot]);
+
+  // A link or form the page draws selects its block here and never takes the
+  // editor anywhere: see `canvas-link-guard`. Same element, same lifetime as
+  // the effect above, so it is installed once per mount.
+  useEffect(() => {
+    const element = root.current;
+    return element === null
+      ? undefined
+      : guardCanvasNavigation(element, `[${CHROME_ATTRIBUTE}]`);
+  }, [root]);
+}
+
+/**
+ * What is marked as selected, and the pointer handlers that select.
+ *
+ * The primary alone is marked when a host has not adopted the set yet, which
+ * keeps every existing caller correct without a change. A drag's own pointer
+ * down runs first, so its behaviour is exactly what it was.
+ */
+function useSelectionPointer({
+  selectedIds,
+  selectedId,
+  onSelect,
+  onDoubleClick,
+  dragPointerDown,
+}: {
+  selectedIds: CanvasProps["selectedIds"];
+  selectedId: string | null;
+  onSelect: CanvasProps["onSelect"];
+  onDoubleClick: CanvasProps["onDoubleClick"];
+  dragPointerDown:
+    | ((event: React.PointerEvent<HTMLDivElement>) => void)
+    | undefined;
+}) {
+  const marked = useMemo(
+    () => markedIds(selectedIds, selectedId),
+    [selectedIds, selectedId]
+  );
+  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const canvasPointerDown = pointer.onPointerDown;
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragPointerDown?.(event);
+      canvasPointerDown(event);
+    },
+    [canvasPointerDown, dragPointerDown]
+  );
+  return { marked, pointer, pointerDown };
+}
+
+/**
+ * The document and window the blocks are drawn in, for block code that
+ * measures itself or listens (`useBlockEnvironment`). Read from the canvas
+ * root's OWN document rather than the globals, so the answer is the frame's
+ * once the canvas renders inside one, with nothing here to change.
+ * `undefined` until the root has mounted, which the hook passes on rather
+ * than falling back to the admin page. Built as a `CanvasEnvironment` rather
+ * than an object literal; see there for why.
+ */
+function useCanvasEnvironment(
+  root: React.RefObject<HTMLDivElement | null>
+): BlockEnvironment | undefined {
+  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
+    undefined
+  );
+  useEffect(() => {
+    const view = root.current?.ownerDocument.defaultView;
+    if (root.current === null || view == null) return;
+    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
+  }, [root]);
+  return environment;
+}
+
+/**
+ * The page, drawn, and the regions of its Layout around it.
+ *
+ * The parts in drawing order, each with how it treats the site sheet:
+ * `undefined` when there are no regions, so a canvas without a Layout renders
+ * exactly as it did.
+ */
+function useDrawnPage({
+  regions,
+  rendered,
+  sheet,
+  document,
+  environment,
+}: {
+  regions: readonly CanvasRegion[] | undefined;
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  sheet: NonNullable<PageRendererProps["siteStyles"]>;
+  document: BlockDocument;
+  environment: BlockEnvironment | undefined;
+}): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
+  const drawn = useLayoutParts(regions, rendered, sheet);
+  const page = useMemo(
+    () => (
+      <BlockEnvironmentProvider value={environment}>
+        <PageRenderer
+          {...rendered}
+          document={document}
+          siteStyles={sheet}
+          {...drawn?.page}
+          // What makes the hit-testing above possible at all. The renderer emits
+          // the node attribute only when asked, because a PUBLISHED page should
+          // not carry an editor's addressing — so the canvas asks and a route
+          // does not. Spread first and set here deliberately: a caller passing
+          // `nodeAttribute: false` through `render` would silently disable
+          // selection for the whole canvas.
+          nodeAttribute
+        />
+      </BlockEnvironmentProvider>
+    ),
+    [rendered, document, sheet, environment, drawn]
+  );
+  return { drawn, page };
+}
+
 export function Canvas({
   document,
   rootRef,
@@ -1599,108 +1891,32 @@ export function Canvas({
   drag,
   onDoubleClick,
   overlay,
+  regions,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
+  usePublishedRoot(root, rootRef, onRoot);
 
-  /*
-   * ONE assignment site for both publications.
-   *
-   * They are two APIs because they answer two questions — `rootRef` is read in
-   * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
-   * so a reader can REACT to the canvas arriving, which a ref cannot express
-   * because assigning `.current` changes no dependency. Neither can serve the
-   * other's caller.
-   *
-   * But two effects deciding what the element is could drift: an edit to one is
-   * invisible to the other, and the two would then hand out different answers
-   * with nothing to report it. One effect, one element, published twice.
-   *
-   * After paint rather than through a merged ref callback: the element is the
-   * same for the life of the mount, and one assignment here is easier to follow
-   * than a callback keeping two refs agreeing.
-   */
-  useEffect(() => {
-    const element = root.current;
-    if (rootRef !== undefined) rootRef.current = element;
-    onRoot?.(element);
-    return () => {
-      if (rootRef !== undefined) rootRef.current = null;
-      onRoot?.(null);
-    };
-  }, [rootRef, onRoot]);
-
-  // A link or form the page draws selects its block here and never takes the
-  // editor anywhere: see `canvas-link-guard`. Same element, same lifetime as
-  // the effect above, so it is installed once per mount.
-  useEffect(() => {
-    const element = root.current;
-    return element === null
-      ? undefined
-      : guardCanvasNavigation(element, `[${CHROME_ATTRIBUTE}]`);
-  }, []);
-
-  /*
-   * What to mark. The primary alone when a host has not adopted the set yet,
-   * which keeps every existing caller correct without a change.
-   */
-  const marked = useMemo(
-    () => markedIds(selectedIds, selectedId),
-    [selectedIds, selectedId]
-  );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
-  const dragPointerDown = dragHandlers?.onPointerDown;
-  const canvasPointerDown = pointer.onPointerDown;
-  const pointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      dragPointerDown?.(event);
-      canvasPointerDown(event);
-    },
-    [canvasPointerDown, dragPointerDown]
-  );
+  const { marked, pointer, pointerDown } = useSelectionPointer({
+    selectedIds,
+    selectedId,
+    onSelect,
+    onDoubleClick,
+    dragPointerDown: dragHandlers?.onPointerDown,
+  });
 
   useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
+  // The scale the page is painted at, for chrome drawn inside it to undo.
+  const canvasScale = useCanvasFrame().scale;
 
-  /*
-   * The document and window the blocks are drawn in, for block code that
-   * measures itself or listens (`useBlockEnvironment`). Read from the canvas
-   * root's OWN document rather than the globals, so the answer is the frame's
-   * once the canvas renders inside one, with nothing here to change.
-   * `undefined` until the root has mounted, which the hook passes on rather
-   * than falling back to the admin page. Built as a `CanvasEnvironment` rather
-   * than an object literal; see there for why.
-   */
-  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
-    undefined
-  );
-  useEffect(() => {
-    const view = root.current?.ownerDocument.defaultView;
-    if (root.current === null || view == null) return;
-    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
-  }, []);
-
-  const page = useMemo(
-    () => (
-      <BlockEnvironmentProvider value={environment}>
-        <PageRenderer
-          {...render}
-          document={document}
-          // Compiled exactly as the published route compiles it: the canvas
-          // is a viewport of the previewed device's size, so the site's own
-          // media and container queries answer for it unchanged.
-          siteStyles={siteStyles}
-          // What makes the hit-testing above possible at all. The renderer emits
-          // the node attribute only when asked, because a PUBLISHED page should
-          // not carry an editor's addressing — so the canvas asks and a route
-          // does not. Spread first and set here deliberately: a caller passing
-          // `nodeAttribute: false` through `render` would silently disable
-          // selection for the whole canvas.
-          nodeAttribute
-        />
-      </BlockEnvironmentProvider>
-    ),
-    [render, document, siteStyles, environment]
-  );
+  const environment = useCanvasEnvironment(root);
+  const { drawn, page } = useDrawnPage({
+    regions,
+    rendered: render,
+    sheet: siteStyles,
+    document,
+    environment,
+  });
 
   /*
    * The locked nodes, collected in ONE traversal per document rather than asked
@@ -1731,7 +1947,7 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={surface?.style}
+      style={withCanvasScale(surface?.style, canvasScale)}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and
@@ -1788,7 +2004,9 @@ export function Canvas({
       {...dragHandlers}
       onPointerDown={pointerDown}
     >
-      {page}
+      <RegionsAround drawn={drawn} rendered={render} environment={environment}>
+        {page}
+      </RegionsAround>
       {overlay}
     </div>
   );

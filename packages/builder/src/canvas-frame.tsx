@@ -227,7 +227,7 @@ function FramedCanvas({
   const viewport = useFrameViewport(frame, page, width, height);
   useRegistered(frame, scale, viewport);
 
-  usePageMarkers(page, theme, showEmptyElements);
+  usePageMarkers(frame, page, theme, showEmptyElements);
   useLayerPlacement(frame, page, mountPoint, layer, layerContent, scale);
 
   return (
@@ -461,12 +461,15 @@ function useFrameViewport(
  * - The editor chrome class with the shell's empty-elements preference, so
  *   the one selector that decides whether an empty container shows its
  *   placeholder answers the same in the frame as in the editor's document.
+ * - The admin's tokens the page's own chrome reads (see `usePageTokens`).
  */
 function usePageMarkers(
+  frame: HTMLIFrameElement | null,
   page: Document | null,
   theme: string | undefined,
   showEmptyElements: boolean
 ): void {
+  usePageTokens(frame, page);
   useIsomorphicLayoutEffect(() => {
     const root = page?.documentElement;
     if (root === undefined) return;
@@ -476,6 +479,72 @@ function usePageMarkers(
     if (showEmptyElements) root.removeAttribute(EMPTY_ELEMENTS_ATTRIBUTE);
     else root.setAttribute(EMPTY_ELEMENTS_ATTRIBUTE, "hidden");
   }, [page, theme, showEmptyElements]);
+}
+
+/**
+ * The admin's tokens the chrome drawn INSIDE the page reads: a Layout region's
+ * badge and tag, which are the admin's words on the site's page.
+ *
+ * The frame's document loads none of the admin's stylesheets, so these are
+ * handed in as values, read where the frame sits in the editor.
+ */
+const PAGE_CHROME_TOKENS = [
+  "--nx-builder-border",
+  "--nx-builder-surface-raised",
+  "--nx-builder-text",
+  "--nx-builder-text-muted",
+  "--nx-builder-accent",
+  "--nx-builder-region-opacity",
+  "--nx-builder-scheme",
+  "--radius-sm",
+  "--text-xs",
+  "--font-sans",
+] as const;
+
+/** Copy each token's value where the frame sits onto the page's root. */
+function handTokens(frame: HTMLIFrameElement, root: HTMLElement): void {
+  const view = frame.ownerDocument.defaultView;
+  if (view === null) return;
+  const from = view.getComputedStyle(frame);
+  for (const token of PAGE_CHROME_TOKENS) {
+    const value = from.getPropertyValue(token).trim();
+    if (value === "") root.style.removeProperty(token);
+    else root.style.setProperty(token, value);
+  }
+}
+
+/**
+ * Hand the page the admin's tokens its in-page chrome reads, and again
+ * whenever the admin's theme changes: the admin switches it by a class or an
+ * attribute on its own root or body, or the system's contrast preference
+ * moves the border and muted text.
+ */
+function usePageTokens(
+  frame: HTMLIFrameElement | null,
+  page: Document | null
+): void {
+  useIsomorphicLayoutEffect(() => {
+    const root = page?.documentElement;
+    const host = frame?.ownerDocument;
+    const view = host?.defaultView;
+    if (frame == null || root == null || host == null || view == null) return;
+    const hand = () => handTokens(frame, root);
+    hand();
+    const watch = new view.MutationObserver(hand);
+    for (const target of [host.documentElement, host.body]) {
+      watch.observe(target, {
+        attributes: true,
+        attributeFilter: ["class", "style", "data-theme"],
+      });
+    }
+    // Absent where there is no media to query, as in a test document.
+    const contrast = view.matchMedia?.("(prefers-contrast: more)");
+    contrast?.addEventListener("change", hand);
+    return () => {
+      watch.disconnect();
+      contrast?.removeEventListener("change", hand);
+    };
+  }, [frame, page]);
 }
 
 /**

@@ -120,9 +120,16 @@
  *
  * `.nx-builder-tokens` is that scope on its own. One declaration block serves
  * both, so the two cannot drift apart; only the painting below is the chrome's.
+ *
+ * The canvas is a third case: it is also mounted on its own, with no scope
+ * above it, and the chrome it draws (a Layout's region badge and tag) reads
+ * these tokens too. It takes them only when nothing above it declares them,
+ * and at zero specificity, so inside the shell it inherits the shell's values
+ * untouched and its own rules below still win where they apply.
  */
 .nx-builder-tokens,
-.nx-builder-chrome {
+.nx-builder-chrome,
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
@@ -136,6 +143,9 @@
   /* How far a block in mid-drag fades where it sits, on the canvas and in
      Layers alike, so the thing in hand reads the same on both. */
   --nx-builder-drag-source-opacity: 0.4;
+  /* How far a Layout's region is quietened on the canvas: still the site's own
+     colours, read as "around the page" rather than "part of it". */
+  --nx-builder-region-opacity: 0.6;
   /*
    * The admin's colour scheme, as a value chrome can be handed back: chrome
    * drawn inside the canvas sits under the page's own scheme and takes the
@@ -193,6 +203,7 @@
  */
 .dark .nx-builder-tokens,
 .dark .nx-builder-chrome,
+.dark :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
 .nx-builder-tokens.dark,
 .nx-builder-chrome.dark {
   --nx-builder-scheme: dark;
@@ -223,7 +234,8 @@
    * should be quiet when someone has asked for more contrast.
    */
   .nx-builder-tokens,
-  .nx-builder-chrome {
+  .nx-builder-chrome,
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
   }
@@ -1841,6 +1853,48 @@
  */
 .nx-drop-refusal__takes {
   opacity: 0.9;
+}
+
+/*
+ * A region of the page's Layout in Layers: a read-only row above or below the
+ * page's own blocks, outside the tree so it takes no part in the page's
+ * selection, drag and drop, locks or visibility.
+ */
+.nx-layers-region {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 1px dashed var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-builder-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-layers-region:hover {
+  background: var(--nx-builder-surface);
+}
+
+.nx-layers-region:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+.nx-layers-region__name {
+  flex: none;
+}
+
+.nx-layers-region__origin {
+  overflow: hidden;
+  color: var(--nx-builder-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /*

@@ -185,6 +185,49 @@ describe("the canvas frame", () => {
     expect(root?.hasAttribute("data-nx-empty-elements")).toBe(false);
   });
 
+  it("hands the page the admin's tokens its in-page chrome reads, and again when the theme changes", async () => {
+    /*
+     * jsdom does not inherit custom properties into a computed style, so the
+     * value where the frame sits is stated for the frame directly, as a
+     * browser would compute it from the editor's scope above.
+     */
+    let border = "rgb(1, 2, 3)";
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (element.tagName !== "IFRAME") return style;
+        return {
+          ...style,
+          getPropertyValue: (name: string) =>
+            name === "--nx-builder-border" ? border : "",
+        } as CSSStyleDeclaration;
+      }
+    );
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />
+    );
+    const frame = frameIn(container);
+    loadPage(frame);
+    const root = frame.contentDocument?.documentElement;
+    expect(root?.style.getPropertyValue("--nx-builder-border")).toBe(
+      "rgb(1, 2, 3)"
+    );
+    // A token the editor does not declare is not invented.
+    expect(root?.style.getPropertyValue("--nx-builder-accent")).toBe("");
+
+    // The admin switches its theme on its own root; the page follows.
+    border = "rgb(4, 5, 6)";
+    await act(async () => {
+      document.documentElement.classList.add("dark");
+    });
+    expect(root?.style.getPropertyValue("--nx-builder-border")).toBe(
+      "rgb(4, 5, 6)"
+    );
+    document.documentElement.classList.remove("dark");
+    vi.restoreAllMocks();
+  });
+
   it("hands its frame to the provider above it, for the code around the canvas", () => {
     let seen: ReturnType<typeof useCanvasFrame> | null = null;
     function Beside(): null {

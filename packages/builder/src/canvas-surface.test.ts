@@ -31,6 +31,17 @@ const CHROME = readFileSync(
 );
 
 /**
+ * The canvas mounted on its own, with no builder scope above it. Matches
+ * nothing inside the shell, where the tokens are inherited, and at zero
+ * specificity, so the canvas's own rules still win where they apply.
+ */
+const STANDALONE_CANVAS =
+  ":where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
+
+/** The token scopes' selector list: the shell's two, and a lone canvas. */
+const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS}`;
+
+/**
  * Every place a rule is written under exactly `selector` in `css`: at the
  * start of a line, followed by its brace, and not the last line of a longer
  * selector LIST — a list such as `.a,\n.nx-canvas {` names the canvas too, but
@@ -139,16 +150,32 @@ describe("the canvas surface is the site's, not the admin's", () => {
     expect(declared(rule, "color-scheme")).toBe("light");
   });
 
-  it("names no admin token anywhere in the frame's sheet", () => {
+  it("paints the page with no admin token: only a Layout region's chrome reads them", () => {
     /*
-     * The admin's tokens are custom properties of the editor's document and
-     * resolve to nothing in the frame — and were they to resolve, they would
-     * repaint the page whenever the admin changed theme. The canvas's own
-     * site-token references are the one `--nx-` name allowed: they point at
-     * the site's tokens.
+     * The admin's tokens would repaint the page whenever the admin changed
+     * theme, so the page's own rules name only the site's tokens. The one
+     * exception is a Layout region's badge and tag, which are the admin's
+     * words on the page and take the tokens the frame hands it.
      */
     expect(CANVAS_FRAME_SHEET).toContain("var(--nx-canvas-site-ground");
-    expect(/var\(--nx-(?!canvas-site-)/.test(CANVAS_FRAME_SHEET)).toBe(false);
+    const naming = [
+      ...CANVAS_FRAME_SHEET.matchAll(/([^{}]+)\{([^{}]*)\}/g),
+    ].filter(([, , body]) =>
+      /var\(--nx-(?!canvas-site-|canvas-zoom)/.test(body ?? "")
+    );
+    // The control: the region's rules are found, so the scan reads rules.
+    expect(naming.length).toBeGreaterThan(0);
+    for (const [, selector] of naming) {
+      const selectors = (selector ?? "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split(",")
+        .map(part => part.trim());
+      for (const part of selectors) {
+        expect(part, "a rule painting with an admin token").toMatch(
+          /^\.nx-canvas-region/
+        );
+      }
+    }
   });
 
   it("sets the page in the site's body font, not the admin's face", () => {
@@ -248,8 +275,7 @@ function hexOf(body: string, property: string): string {
 }
 
 const CONSTANTS = ".nx-builder-tokens,\n.nx-builder-chrome,\n.nx-canvas-layer";
-const ADMIN_DARK =
-  ".dark .nx-builder-tokens,\n.dark .nx-builder-chrome,\n.nx-builder-tokens.dark,\n.nx-builder-chrome.dark";
+const ADMIN_DARK = `.dark .nx-builder-tokens,\n.dark .nx-builder-chrome,\n.dark ${STANDALONE_CANVAS},\n.nx-builder-tokens.dark,\n.nx-builder-chrome.dark`;
 
 const SELECTED = '.nx-canvas-mark[data-mark="selected"]';
 
@@ -352,7 +378,7 @@ describe("the editing colours drawn on the page", () => {
       "var(--nx-builder-ink-text)"
     );
 
-    const light = ruleFor(".nx-builder-tokens,\n.nx-builder-chrome");
+    const light = ruleFor(TOKENS);
     const text = hexOf(light, "--nx-builder-ink-text");
     const inks = [
       hexOf(light, "--nx-builder-ink"),
@@ -364,5 +390,65 @@ describe("the editing colours drawn on the page", () => {
         `toolbar text on ${ink}`
       ).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+/**
+ * The selector list of the rule whose body declares `property`, where that
+ * rule is the one opening with `first`.
+ */
+function selectorListDeclaring(first: string, property: string): string[] {
+  const pattern =
+    /(?:^|\n)((?:[^{}\n/*][^{}\n]*,\n)*[^{}\n/*][^{}\n]*)\s*\{([^{}]*)\}/g;
+  for (const match of CHROME.matchAll(pattern)) {
+    // One selector per line: a comma inside `:is(...)` is not a list's.
+    const selectors = (match[1] ?? "")
+      .split(",\n")
+      .map(selector => selector.trim().replace(/,$/, ""));
+    if (selectors[0] === first && (match[2] ?? "").includes(`${property}:`)) {
+      return selectors;
+    }
+  }
+  return [];
+}
+
+describe("a canvas mounted outside the editor shell", () => {
+  it("declares the builder tokens its region chrome reads", () => {
+    // The token block: the region's opacity, and the border, surface and text
+    // its badge and tag are drawn with.
+    const scope = selectorListDeclaring(
+      ".nx-builder-tokens",
+      "--nx-builder-region-opacity"
+    );
+    expect(scope).toContain(STANDALONE_CANVAS);
+  });
+
+  it("takes the dark picks under the admin's dark theme, as the shell does", () => {
+    const dark = selectorListDeclaring(
+      ".dark .nx-builder-tokens",
+      "--nx-builder-scheme"
+    );
+    expect(dark).toContain(`.dark ${STANDALONE_CANVAS}`);
+  });
+});
+
+describe("a Layout region drawn in the canvas frame", () => {
+  it("is styled by the frame's own sheet, in the admin's tokens, at the admin's size", () => {
+    const badge = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__badge");
+    expect(declared(badge, "background")).toBe(
+      "var(--nx-builder-surface-raised)"
+    );
+    expect(declared(badge, "color")).toBe("var(--nx-builder-text-muted)");
+    const words = ruleIn(
+      CANVAS_FRAME_SHEET,
+      ".nx-canvas-region__badge,\n.nx-canvas-region__tag"
+    );
+    expect(declared(words, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+    expect(declared(words, "font-family")).toBe(
+      "var(--font-sans, system-ui), sans-serif"
+    );
+    // One home: the editor's own sheet never reaches the frame, so it holds
+    // none of these rules.
+    expect(CHROME.includes(".nx-canvas-region")).toBe(false);
   });
 });

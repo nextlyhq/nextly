@@ -11,6 +11,10 @@ import {
 import { blocks } from "../fields/blocksHelper";
 
 import { LAYOUTS_SLUG } from "./layouts";
+
+/** The slug pages are stored under, before any rename a host applies. */
+export const PAGES_SLUG = "pages";
+
 /**
  * There is no page-level custom CSS field.
  *
@@ -113,7 +117,7 @@ export function pagesCollection(
   const { previewPath, breakpoints } = options;
 
   return defineCollection({
-    slug: "pages",
+    slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
     fields: [
       text({ name: "title", required: true }),
@@ -126,11 +130,19 @@ export function pagesCollection(
       // which is the ordinary case: a page names a Layout only to differ from
       // the rest of the site. A named Layout that is not published falls back
       // to the default rather than drawing unpublished regions.
+      //
+      // Hidden, as is the switch below: the form keeps both values, and the
+      // page builder draws ONE Layout picker that writes them together (in the
+      // editor's Settings and on the Page Builder card), so an author makes one
+      // choice rather than reconciling two controls.
       relationship({
         name: "layout",
         label: "Layout",
         relationTo: LAYOUTS_SLUG,
-        admin: { description: "Leave empty to use the site's default Layout." },
+        admin: {
+          description: "Leave empty to use the site's default Layout.",
+          hidden: true,
+        },
       }),
       // Draw this page with no header or footer at all. It wins over any
       // Layout the page also names, whoever wrote either field: a landing page
@@ -141,6 +153,7 @@ export function pagesCollection(
         name: "noHeaderFooter",
         label: "No header or footer",
         defaultValue: false,
+        admin: { hidden: true },
       }),
     ],
     status: true,

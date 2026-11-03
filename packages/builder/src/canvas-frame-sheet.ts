@@ -154,4 +154,107 @@ ${ROOT} [data-nx-drag-source] { opacity: 0.4; }
 /* Text being edited keeps the platform's long-press callout. */
 ${ROOT} [contenteditable] { -webkit-touch-callout: default; }
 ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
+
+/* A region of the page's Layout, drawn locked around the page. Its content
+   keeps the site's own colours, quietened, so it reads as what surrounds the
+   page; its links and forms are inert. The region is one focus stop: its
+   badge says where it comes from at rest, and a click or Enter opens the tag
+   with the way to edit it. The badge and tag are the admin's words, so they
+   read the admin's tokens, which the frame hands the page as values. */
+.nx-canvas-region {
+  position: relative;
+  cursor: default;
+}
+
+.nx-canvas-region__content {
+  opacity: var(--nx-builder-region-opacity, 0.6);
+}
+
+/* Where the region meets the page: a quiet line. */
+.nx-canvas-region[data-nx-region="header"] {
+  border-bottom: 1px dashed var(--nx-builder-border);
+}
+
+.nx-canvas-region[data-nx-region="footer"] {
+  border-top: 1px dashed var(--nx-builder-border);
+}
+
+.nx-canvas-region:hover,
+.nx-canvas-region[data-open] {
+  box-shadow: inset 0 0 0 1px var(--nx-builder-border);
+}
+
+.nx-canvas-region:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+/* The admin's face and scheme rather than the site's, and the admin's size
+   however far the frame is painted down: the scale the canvas publishes is
+   undone here. */
+.nx-canvas-region__badge,
+.nx-canvas-region__tag {
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+  color-scheme: var(--nx-builder-scheme, light);
+  font-family: var(--font-sans, system-ui), sans-serif;
+}
+
+.nx-canvas-region__badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+/* The badge opens into the tag, in the same place. */
+.nx-canvas-region[data-open] .nx-canvas-region__badge {
+  display: none;
+}
+
+.nx-canvas-region__tag {
+  position: absolute;
+  z-index: 3;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  max-width: calc(100% - 1rem);
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: 0.375rem;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  box-shadow: 0 1px 3px var(--nx-builder-border);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.nx-canvas-region__note {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-canvas-region__edit {
+  color: var(--nx-builder-text);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.nx-canvas-region__edit:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 `;
