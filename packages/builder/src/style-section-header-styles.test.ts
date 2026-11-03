@@ -517,7 +517,9 @@ describe("the inspector at the editor's density", () => {
   it("sizes every control to the density's height and its text to 12px", () => {
     // The shared controls size from these tokens, so pointing them at the
     // density's one height reaches every field, select and button at once.
-    const root = ruleBody(".nx-inspector");
+    // On both roots: a host may draw the Style panel on its own, with no
+    // inspector around it.
+    const root = ruleBody(":is(.nx-inspector, .nx-style-inspector)");
     expect(root).toContain(
       "--nx-control-height: var(--nx-builder-control-height)"
     );
@@ -528,7 +530,7 @@ describe("the inspector at the editor's density", () => {
     expect(root).toContain("line-height: var(--nx-builder-line-height)");
     expect(
       ruleBody(
-        '.nx-inspector :is(input, textarea, button, label, [data-slot="select-trigger"])'
+        ':is(.nx-inspector, .nx-style-inspector) :is(input, textarea, button, label, [data-slot="select-trigger"])'
       )
     ).toContain("font-size: var(--nx-builder-font-size)");
   });
@@ -551,6 +553,24 @@ describe("the inspector at the editor's density", () => {
     expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
       "height: var(--nx-control-height)"
     );
+  });
+
+  it("keeps a field's text inside its 28px, and every control at that height", () => {
+    // The shared input's 10px vertical padding left about 6px for a 16px line
+    // at 28px; a placement row kept a 40px floor; a segmented button came out
+    // at 26px from its own padding.
+    const input = ruleBody(
+      ':is(.nx-inspector, .nx-style-inspector) input[data-slot="input"]'
+    );
+    expect(input).toContain("padding-block: 0");
+    expect(input).toContain("line-height: var(--nx-builder-line-height)");
+    // Exact text: the selector also appears inside a narrow-rail query.
+    expect(FLAT).toContain(
+      ".nx-inspector__field--exposed > label, .nx-inspector__field--exposed > .nx-inspector__field-name { display: flex; align-items: center; min-height: var(--nx-control-height); }"
+    );
+    const segment = ruleBody(".nx-style-inspector__toggle > button");
+    expect(segment).toContain("height: var(--nx-control-height)");
+    expect(segment).toContain("padding: 0 0.5rem");
   });
 
   it("sets notes at the density's text size and rows its gap apart", () => {

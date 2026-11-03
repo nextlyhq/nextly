@@ -997,17 +997,6 @@
    */
   --nx-chrome-writing-mode: horizontal-tb;
   --nx-chrome-direction: ltr;
-  /*
-   * The editor's density, as the top bar takes it: the shared controls size
-   * from these tokens, so every field, select and button in the panel is the
-   * one 28px height, and its text the density's 12px on a 16px line.
-   */
-  --nx-control-height: var(--nx-builder-control-height);
-  --nx-control-height-sm: var(--nx-builder-control-height);
-  --nx-control-height-md: var(--nx-builder-control-height);
-  --nx-control-height-lg: var(--nx-builder-control-height);
-  font-size: var(--nx-builder-font-size);
-  line-height: var(--nx-builder-line-height);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1020,13 +1009,37 @@
 }
 
 /*
- * The shared controls set their own text size (`text-sm`); in the panel they
- * take the density's 12px. `:is()` keeps an element in the selector's weight,
- * so this outranks the utility class whatever order the sheets load in.
+ * The editor's density, as the top bar takes it: the shared controls size
+ * from these tokens, so every field, select and button in the panel is the
+ * one 28px height, and its text the density's 12px on a 16px line. On both
+ * roots, since a host may draw the Style panel alone, with no inspector
+ * around it.
  */
-.nx-inspector
+:is(.nx-inspector, .nx-style-inspector) {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+/*
+ * The shared controls set their own text size (`text-sm`); in the panel they
+ * take the density's 12px. Unlayered, so this outranks the utility class.
+ */
+:is(.nx-inspector, .nx-style-inspector)
   :is(input, textarea, button, label, [data-slot="select-trigger"]) {
   font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * The shared input pads 10px above and below its text, which a 28px height
+ * leaves about 6px of: its text is centred by the line instead.
+ */
+:is(.nx-inspector, .nx-style-inspector) input[data-slot="input"] {
+  padding-block: 0;
+  line-height: var(--nx-builder-line-height);
 }
 
 .nx-inspector__note {
@@ -1286,11 +1299,12 @@
   align-items: start;
 }
 
+/* As tall as the control beside it, so a label centres on its row. */
 .nx-inspector__field--exposed > label,
 .nx-inspector__field--exposed > .nx-inspector__field-name {
   display: flex;
   align-items: center;
-  min-height: 2.5rem;
+  min-height: var(--nx-control-height);
 }
 
 /*
@@ -2397,7 +2411,9 @@
    * to be about where the label reads best rather than about what fits.
    */
   min-width: 0;
-  padding: 0.25rem 0.5rem;
+  /* The control's height, not its padding, sets its size: 28px like its neighbours. */
+  height: var(--nx-control-height);
+  padding: 0 0.5rem;
   border: 1px solid var(--nx-border);
   /* Given up here and taken back by the first button, so a seam is one border. */
   border-inline-start-width: 0;
