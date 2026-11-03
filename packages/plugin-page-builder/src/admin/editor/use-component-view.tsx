@@ -17,10 +17,13 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   ComponentBanner,
+  useVariantPreview,
   type ComponentFieldsHost,
   type EditorState,
+  type VariantPreviewState,
 } from "@nextlyhq/builder/shell";
 import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
+import type * as React from "react";
 import { useCallback, useState, type JSX } from "react";
 
 import type { ComponentLibraryRead } from "../component-library-client";
@@ -53,6 +56,69 @@ export interface ComponentView {
    * exit arrow is withheld, so the view has ONE Back.
    */
   readonly offersBack: boolean;
+  /** The variant open in the view, which the canvas previews. */
+  readonly preview: PreviewedEditing;
+}
+
+/** The editor's inline typing, as the mount hands it out. */
+interface InlineTyping {
+  readonly begin: (nodeId: string) => boolean;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+}
+
+/** The open variant's preview, with the canvas typing it allows. */
+export interface PreviewedEditing extends VariantPreviewState {
+  /** Typing into a block from the keyboard; withheld while previewing. */
+  readonly onEditText: ((nodeId: string) => boolean) | undefined;
+  /** Typing into a block from a double click; withheld while previewing. */
+  readonly onDoubleClick:
+    | ((event: React.MouseEvent<HTMLDivElement>) => void)
+    | undefined;
+}
+
+/**
+ * The variant open in a component's view, and typing into the canvas
+ * withheld while it is previewed: the canvas then shows the variant's values,
+ * and typing there would write the component's own value under them, where
+ * the author cannot see it land.
+ */
+function usePreviewedEditing(
+  document: BlockDocument,
+  inline: InlineTyping
+): PreviewedEditing {
+  const preview = useVariantPreview(document);
+  const typing = preview.previewing === undefined;
+  return {
+    ...preview,
+    onEditText: typing ? inline.begin : undefined,
+    onDoubleClick: typing ? inline.onDoubleClick : undefined,
+  };
+}
+
+/** Where Back goes and what it says, from the view's own address. */
+type Back = { readonly to: string; readonly onBack: () => void } | undefined;
+
+/**
+ * The way back the view's address names: a checked admin path, and the
+ * name it is said by as plain words, never a target.
+ */
+function readBack(): Back {
+  if (typeof window === "undefined") return undefined;
+  const returnTo = returnFromSearch(window.location.search);
+  if (returnTo === undefined) return undefined;
+  return {
+    to: returnLabelFromSearch(window.location.search) ?? UNNAMED_RETURN,
+    onBack: () => openDocument(returnTo),
+  };
+}
+
+/** The banner over the view: the component, the pages it reaches, Back. */
+function bannerFor(
+  name: string | undefined,
+  facts: ComponentFieldsHost | undefined,
+  back: Back
+): JSX.Element {
+  return <ComponentBanner name={name} pages={facts?.pages} back={back} />;
 }
 
 export function useComponentView({
@@ -62,6 +128,7 @@ export function useComponentView({
   fieldName,
   componentFacts,
   here,
+  inline,
 }: {
   initialDocument: BlockDocument;
   editor: EditorState;
@@ -75,6 +142,8 @@ export function useComponentView({
   componentFacts: ComponentFieldsHost | undefined;
   /** The open document's name, which Back from a component opened here says. */
   here: string | undefined;
+  /** The editor's inline typing, withheld while a variant is previewed. */
+  inline: InlineTyping;
 }): ComponentView {
   const isSection = useCallback(
     (nodeId: string) => editor.document.nodes.some(node => node.id === nodeId),
@@ -93,38 +162,21 @@ export function useComponentView({
   const editing = useComponentEditing();
   const inStore = isStoreRow(identity, editing, fieldName);
   // Read once, as the view opens: the address it came from, checked to be an
-  // admin path. A later change to the address is the author's own moving.
-  const [returnTo] = useState(() =>
-    typeof window === "undefined"
-      ? undefined
-      : returnFromSearch(window.location.search)
-  );
-  // And the name it is said by, read with it: plain words, never a target.
-  const [returnLabel] = useState(() =>
-    typeof window === "undefined"
-      ? undefined
-      : returnLabelFromSearch(window.location.search)
-  );
+  // admin path, and the name it is said by. A later change to the address is
+  // the author's own moving.
+  const [back] = useState(readBack);
   const showsBanner = componentId !== undefined && inStore;
-  const back =
-    returnTo === undefined
-      ? undefined
-      : {
-          to: returnLabel ?? UNNAMED_RETURN,
-          onBack: () => openDocument(returnTo),
-        };
-  const banner = showsBanner ? (
-    <ComponentBanner
-      name={
-        componentLibrary.components.find(row => row.id === componentId)?.title
-      }
-      pages={componentFacts?.pages}
-      back={back}
-    />
-  ) : null;
   return {
     onEditComponent,
-    banner,
+    banner: showsBanner
+      ? bannerFor(
+          componentLibrary.components.find(row => row.id === componentId)
+            ?.title,
+          componentFacts,
+          back
+        )
+      : null,
     offersBack: showsBanner && back !== undefined,
+    preview: usePreviewedEditing(editor.document, inline),
   };
 }

@@ -5674,8 +5674,6 @@ fieldset.nx-inspector__fields {
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--nx-builder-border, var(--nx-border));
 }
 
 .nx-variants__header {
@@ -5685,7 +5683,7 @@ fieldset.nx-inspector__fields {
   gap: 0.5rem;
 }
 
-/* The heading at the size the exposed fields' heading above it takes. */
+/* The heading at the size the fields' heading above it takes. */
 .nx-variants__header .nx-inspector__heading {
   margin: 0;
   font-size: var(--text-xs, 0.75rem);
@@ -5704,20 +5702,26 @@ fieldset.nx-inspector__fields {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--nx-border);
-  border-radius: var(--radius-md, 0.375rem);
+  border-radius: var(--radius-lg, 0.5rem);
   background: var(--nx-background);
 }
 
+/* The open variant, the one the canvas previews, in the component's hue. */
 .nx-variants__item[data-open] {
-  border-color: color-mix(in oklch, var(--nx-primary) 45%, var(--nx-border));
+  border-color: color-mix(
+    in oklch,
+    var(--nx-builder-component) 40%,
+    var(--nx-border)
+  );
 }
 
 .nx-variants__main {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.25rem;
   min-width: 0;
-  padding: 0.375rem 0.25rem;
+  min-height: 2.5rem;
+  padding: 0.125rem 0.25rem;
 }
 
 /* The chevron turns to point down while the variant's values are open. */
@@ -5736,8 +5740,29 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-variants__name {
-  flex: 1 1 9rem;
+  flex: 1 1 6rem;
   min-width: 0;
+}
+
+/*
+ * The variant's name, renamed in place but drawn as the row's title: no box
+ * until it is hovered or focused.
+ */
+.nx-variants__name-input {
+  height: 1.75rem;
+  padding: 0 0.25rem;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.nx-variants__name-input:hover {
+  border-color: var(--nx-border);
+}
+
+.nx-variants__name-input:focus-visible {
+  background: var(--nx-background);
 }
 
 /*
@@ -5748,78 +5773,70 @@ fieldset.nx-inspector__fields {
   padding: 0 0.5rem 0.5rem 2.25rem;
 }
 
+/* "2 changes", or "No changes yet", quietly beside the name. */
 .nx-variants__summary {
   flex: 0 0 auto;
-  margin-top: 0.4rem;
-  padding: 0 0.375rem;
-  border-radius: 999px;
   font-size: var(--text-xs, 0.75rem);
-  font-weight: 500;
-  line-height: 1.5;
   white-space: nowrap;
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
-}
-
-/* "(no changes)" is a state to notice, said in the muted tone, not the accent. */
-.nx-variants__summary[data-empty] {
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
 }
 
 .nx-variants__values {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem 0.75rem;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem 0.625rem;
   border-top: 1px solid var(--nx-border);
 }
 
+/*
+ * One value, label-left as the placement panel lays its fields out: the
+ * label (with the dot when the variant sets it), the control, and the reset,
+ * whose column stays even when there is none.
+ */
 .nx-variants__value {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 6rem) minmax(0, 1fr) 1.75rem;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+  min-height: 2.25rem;
   min-width: 0;
 }
 
-.nx-variants__value-head {
-  display: flex;
+.nx-variants__value-label {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.375rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
 }
 
-/*
- * Whether the value is the variant's own or the component's default, as a
- * badge in words: the two differ by label and weight, never by colour alone.
- */
-.nx-variants__source {
-  padding: 0 0.375rem;
+.nx-variants__dot {
+  flex: 0 0 auto;
+  width: 0.375rem;
+  height: 0.375rem;
   border-radius: 999px;
-  font-size: 0.625rem;
-  font-weight: 500;
-  line-height: 1.6;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  background: var(--nx-builder-component);
+}
+
+.nx-variants__value > .nx-variants__problem {
+  grid-column: 1 / -1;
+}
+
+.nx-variants__hint {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
 }
 
-.nx-variants__source[data-set] {
-  font-weight: 600;
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
-}
-
-.nx-variants__reset {
-  align-self: flex-start;
-}
-
-.nx-variants__switch {
+.nx-variants__check {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: var(--text-xs, 0.75rem);
+  font-size: 0.8125rem;
 }
 
 .nx-variants__problem {
@@ -5827,6 +5844,30 @@ fieldset.nx-inspector__fields {
   font-size: var(--text-xs, 0.75rem);
   line-height: 1.4;
   color: var(--nx-destructive);
+}
+
+/*
+ * The tag over the canvas while a variant is previewed: a pill in the
+ * component's hue at the frame's top right, naming the variant drawn.
+ */
+.nx-variant-preview-tag {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.1875rem 0.625rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-builder-component) 40%, var(--nx-border));
+  border-radius: 999px;
+  background: var(--nx-card);
+  color: var(--nx-builder-component);
+  font-size: 0.75rem;
+  font-weight: 500;
+  pointer-events: none;
 }
 
 /* A placement's variant, under its title in the placement's inspector. */

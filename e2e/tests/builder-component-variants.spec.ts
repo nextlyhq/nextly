@@ -216,7 +216,9 @@ test.describe("a component's variants", () => {
       name: "Name of the variant Variant 1",
     });
     await expect(name).toBeFocused();
-    await expect(variantRow(page, "Variant 1")).toContainText("(no changes)");
+    await expect(variantRow(page, "Variant 1")).toContainText(
+      "No changes yet"
+    );
     await page.keyboard.type("Featured");
     await page.keyboard.press("Enter");
     const row = variantRow(page, "Featured");
@@ -226,8 +228,23 @@ test.describe("a component's variants", () => {
     await expect(value).toHaveValue("Plain card");
     await value.fill("Big news");
     await value.press("Enter");
-    await expect(row).toContainText("1 value");
-    await expect(row).toContainText("Set by variant");
+    await expect(row).toContainText("1 change");
+    await expect(row.getByRole("img", { name: "Set by this variant" })).toBeVisible();
+    // The canvas previews the open variant, and a tag over it says so.
+    await expect(await block(page, "card-heading")).toContainText("Big news");
+    await expect(
+      page.getByRole("status").filter({ hasText: "Previewing Featured" })
+    ).toBeVisible();
+    // Closed, the canvas draws the component's own value again.
+    await row
+      .getByRole("button", { name: "Hide the values of Featured" })
+      .click();
+    await expect(await block(page, "card-heading")).toContainText(
+      "Plain card"
+    );
+    await expect(
+      page.getByRole("status").filter({ hasText: "Previewing" })
+    ).toHaveCount(0);
 
     // A second variant may not take the same name, whatever its case.
     await section.getByRole("button", { name: "Add variant" }).click();
@@ -253,8 +270,10 @@ test.describe("a component's variants", () => {
     await expect(await block(page, "card-heading")).toBeVisible({
       timeout: 30_000,
     });
-    await expect(variantRow(page, "Featured")).toContainText("1 value");
-    await expect(variantRow(page, "Variant 2")).toContainText("(no changes)");
+    await expect(variantRow(page, "Featured")).toContainText("1 change");
+    await expect(variantRow(page, "Variant 2")).toContainText(
+      "No changes yet"
+    );
   });
 
   test("a placement picks a variant, overrides a field, and keeps it through a rename", async ({

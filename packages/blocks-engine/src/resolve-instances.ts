@@ -2618,6 +2618,74 @@ export function instanceExposure(
   return { properties, orphanedOverrideIds };
 }
 
+/**
+ * A component's own tree as one of its variants draws it: the variant's
+ * values written onto the definition's nodes, and the nodes it hides dropped,
+ * with every node keeping its id. For an editor previewing the variant open
+ * in the component's own view, where the canvas selects and edits by id, so
+ * the placement's scoped copy the resolver composes cannot stand in.
+ *
+ * Derived from the resolver's own pieces, as {@link instanceExposure} is: the
+ * overrides a placement choosing the variant puts in force, written with the
+ * same writer in the same order, and the same visibility decision. A variant
+ * the component does not define, or one setting nothing in force, answers the
+ * component itself.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export function variantPreview(
+  definition: ComponentDocument,
+  variant: string
+): ComponentDocument {
+  const chooser: BlockNode = {
+    id: "",
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { variant },
+  };
+  const overrides = effectiveOverrides(definition, chooser);
+  const applied = appliedWrites(usableExposures(definition.exposed), overrides);
+  if (applied.length === 0) return definition;
+  const props = finalProps(nodeIndex(definition.nodes), applied);
+  // The last in-force decision per node, as the plan for that node keeps it.
+  const visible = new Map<string, boolean>();
+  for (const { property, override } of applied) {
+    if (property.type !== "visibility") continue;
+    const decided = visibilityDecision(override.value);
+    if (decided !== undefined) visible.set(property.nodeId, decided);
+  }
+  return {
+    ...definition,
+    nodes: previewForest(definition.nodes, props, visible),
+  };
+}
+
+/** One forest of the preview: written props, hidden nodes dropped, ids kept. */
+function previewForest(
+  nodes: readonly BlockNode[],
+  props: ReadonlyMap<string, Record<string, unknown>>,
+  visible: ReadonlyMap<string, boolean>
+): BlockNode[] {
+  return nodes.flatMap(node => {
+    const shown = visible.get(node.id);
+    if (shown === false) return [];
+    const copy: BlockNode = { ...node };
+    const written = props.get(node.id);
+    if (written !== undefined) copy.props = written;
+    // Shown on purpose lifts the node's own gate, as the resolver does.
+    if (shown === true) delete copy.visibility;
+    if (node.slots !== undefined) {
+      copy.slots = Object.fromEntries(
+        Object.entries(node.slots).map(([name, inner]) => [
+          name,
+          previewForest(inner, props, visible),
+        ])
+      );
+    }
+    return [copy];
+  });
+}
+
 /** One in-force override, together with the exposure that carries it. */
 interface AppliedWrite {
   property: ExposedProperty;

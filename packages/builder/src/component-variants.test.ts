@@ -251,13 +251,21 @@ describe("editing a component's variants", () => {
     expect(defaultValues(component).get("title")).toBe("Default title");
   });
 
-  it("summarises an empty variant as no changes", () => {
+  it("summarises a variant by the changes it makes", () => {
     expect(
       valuesSummary({ id: "a", label: "A", empty: true, values: {} })
-    ).toBe("(no changes)");
+    ).toBe("No changes yet");
     expect(
       valuesSummary({ id: "a", label: "A", empty: false, values: { t: 1 } })
-    ).toBe("1 value");
+    ).toBe("1 change");
+    expect(
+      valuesSummary({
+        id: "a",
+        label: "A",
+        empty: false,
+        values: { t: 1, u: 2 },
+      })
+    ).toBe("2 changes");
   });
 });
 

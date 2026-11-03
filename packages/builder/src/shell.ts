@@ -174,7 +174,14 @@ export type { ComponentFieldsHost } from "./component-fields";
 export { ComponentBanner } from "./component-banner";
 export type { ComponentBannerProps } from "./component-banner";
 // And about its variants: how many placements chose one, for the delete dialog.
-export type { ComponentVariantsHost, VariantUse } from "./component-variants";
+export type {
+  ComponentVariantsHost,
+  VariantPreviewBinding,
+  VariantUse,
+} from "./component-variants";
+// The variant open in a component's view, previewed on the host's canvas.
+export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
+export type { VariantPreviewState } from "./variant-preview";
 
 /**
  * The Style half of the same inspector.

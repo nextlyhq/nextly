@@ -33,8 +33,11 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  VariantPreviewTag,
   type ComponentFieldsHost,
+  type ComponentVariantsHost,
   type OpenPassages,
+  type VariantPreviewState,
 } from "@nextlyhq/builder/shell";
 import {
   DocumentPrimaryAction,
@@ -114,6 +117,8 @@ type EditorView = EditorMount &
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** The variant open in a component's view, which the canvas previews. */
+    preview: ComponentView["preview"];
   };
 
 /**
@@ -487,10 +492,19 @@ function editorInspector(
       // new field must never reuse, how far a removal reaches, and its name
       // for the card heading the view, which is the open document's title.
       componentFields={namedFacts(componentFacts, view.pageTitle)}
-      // And how many placements chose a variant, for its delete dialog.
-      componentVariants={componentVariants}
+      // And how many placements chose a variant, for its delete dialog, and
+      // the open variant, which the canvas previews.
+      componentVariants={previewingHost(componentVariants, view.preview)}
     />
   );
+}
+
+/** The variants host, holding the open variant for the canvas to preview. */
+function previewingHost(
+  host: ComponentVariantsHost | undefined,
+  preview: VariantPreviewState
+): ComponentVariantsHost {
+  return { ...host, preview: preview.binding };
 }
 
 /** The component facts with the component's name, or nothing for a page. */
@@ -593,6 +607,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             showEmptyElements={showEmptyElements}
             overlay={
               <>
+                <VariantPreviewTag name={view.preview.previewing} />
                 <CanvasMarks />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
@@ -644,7 +659,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             }
           >
             <Canvas
-              document={editor.document}
+              // The document as the open variant draws it, in a component's
+              // view; the document itself otherwise.
+              document={view.preview.document}
               rootRef={canvasRoot}
               onRoot={setCanvasElement}
               forcedState={shownStyleState}
@@ -668,7 +685,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The pointer route into typing a block's text. Its keyboard
               // counterpart is the Enter binding, registered in the same
               // place so a surface cannot gain one without the other.
-              onDoubleClick={inline.onDoubleClick}
+              onDoubleClick={view.preview.onDoubleClick}
             />
           </CanvasFrame>
         </BlockContextMenu>
@@ -894,6 +911,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentFacts: mount.componentFacts,
     // Said by the banner's Back in the view a placement here opens.
     here: page.title,
+    inline,
   });
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
@@ -909,6 +927,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     documentDirty,
     pageTitle,
     componentView,
+    preview: componentView.preview,
   };
   useOpenAtSection({
     sectionId: openAt,
@@ -1009,7 +1028,7 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
         <BlockKeyboardActions
           editor={editor}
-          onEditText={inline.begin}
+          onEditText={componentView.preview.onEditText}
           onSaveAsPattern={savePattern.open}
           /*
             The same map the canvas draws with, so a keyboard move of an
