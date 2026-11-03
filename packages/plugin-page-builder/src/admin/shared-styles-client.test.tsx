@@ -25,6 +25,10 @@ let readAnswer: unknown;
 let writeBehaviour: () => Promise<unknown> = async () => ({});
 let refetches = 0;
 
+// The real error readers, so a refusal is read as the admin reads it.
+const admin =
+  await vi.importActual<typeof import("@nextlyhq/admin")>("@nextlyhq/admin");
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   readPluginRoute: async (read: { path: string }) => {
     reads.push({ path: read.path });
@@ -38,7 +42,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     mutateAsync: async () => ({}),
     isPending: false,
   }),
-  validationIssues: () => [],
+  validationIssues: admin.validationIssues,
+  apiErrorMessage: admin.apiErrorMessage,
 }));
 
 // The editor's one read of the stored style; a write asks it again.
@@ -158,6 +163,27 @@ describe("locking and removing", () => {
         body: { ids: ["c-card", "c-hero"] },
       },
     ]);
+  });
+
+  it("answers an issue naming no field in its own words, not the envelope's", async () => {
+    // The in-use refusal as the admin's fetcher raises it (`parseApiError`,
+    // not exported): the envelope's message, its status and code, and a
+    // validation payload whose one issue names no field.
+    const words =
+      "Still used on Home and 2 more. Remove it from those pages first.";
+    writeBehaviour = async () => {
+      throw Object.assign(new Error("Validation failed."), {
+        status: 400,
+        code: "VALIDATION_ERROR",
+        data: { errors: [{ path: "", code: "IN_USE", message: words }] },
+      });
+    };
+    const { result } = renderHook(() => useSharedStylesClient());
+    let refusal: string | undefined;
+    await act(async () => {
+      refusal = await result.current.remove(["c-card"]);
+    });
+    expect(refusal).toBe(words);
   });
 
   it("answers a refusal in the route's own words, and reads nothing again", async () => {
