@@ -2,8 +2,8 @@
 
 /**
  * The marks drawn over blocks: the selection, the editable parts of a selected
- * component placement, and during a drag the container a drop would land in or
- * the one refusing it.
+ * component placement, the block a Layers row points at, and during a drag the
+ * container a drop would land in or the one refusing it.
  *
  * The canvas decides WHICH elements are marked and says so with attributes on
  * them (`useCanvasMarkers` in `canvas.tsx`): every rendering of a selected
@@ -16,7 +16,8 @@
  * @module canvas-marks
  */
 
-import { INSTANCE_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import type { BreakpointSet } from "@nextlyhq/blocks-engine";
+import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import {
@@ -24,11 +25,14 @@ import {
   SQUARE_CORNERS,
   type CornerRadii,
 } from "./border-radii";
+import { deviceLabel } from "./breakpoint-switcher";
 import {
   CANVAS_ROOT_CLASS,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
+  isOutermostForAddress,
   LOCKED_ATTRIBUTE,
+  nodeAddressOf,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -47,16 +51,27 @@ import {
   visiblePartOf,
   type OverlaySpace,
 } from "./geometry-dom";
+import { useHoveredBlock } from "./hovered-block";
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
-  readonly kind: "selected" | "exposed" | "drop-parent" | "drop-refused";
+  readonly kind:
+    | "selected"
+    | "hovered"
+    | "exposed"
+    | "drop-parent"
+    | "drop-refused";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
   readonly secondary: boolean;
   /** A component placement, drawn in the component colour. */
   readonly component: boolean;
   /** A block locked in Layers, by its own lock or one around it: dashed. */
   readonly locked: boolean;
+  /**
+   * A selected block the page hides on the device shown, drawn because it is
+   * selected: hatched, and tagged as hidden.
+   */
+  readonly hidden: boolean;
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
   readonly rect: Rect;
@@ -66,14 +81,34 @@ interface Mark {
 
 const NO_MARKS: readonly Mark[] = [];
 
+const NO_IDS: readonly string[] = [];
+
+/** @experimental */
+export interface CanvasMarksProps {
+  /**
+   * Selected blocks the page hides on the device being shown, which the
+   * canvas draws anyway while they are selected. Their ring is hatched and
+   * tagged, so a block a visitor will not see is never mistaken for one they
+   * will.
+   */
+  readonly revealed?: readonly string[];
+  /**
+   * The site's breakpoints and the device being shown, which names the tag
+   * on such a ring: "Hidden on Mobile".
+   */
+  readonly device?: { breakpoints: BreakpointSet | undefined; id: string };
+}
+
 /** Everything that decides how a mark is drawn, as one comparable value. */
 function markKey(mark: Mark): string {
-  const { kind, secondary, component, locked, clipped, radius, rect } = mark;
+  const { kind, secondary, component, locked, hidden, clipped, radius, rect } =
+    mark;
   return JSON.stringify([
     kind,
     secondary,
     component,
     locked,
+    hidden,
     clipped,
     radius,
     rect.x,
@@ -152,8 +187,16 @@ function outlineOf(
   };
 }
 
+/** What the marks are drawn for besides what the canvas marks on the page. */
+interface MarkInputs {
+  /** The block a Layers row points at, or `null`. */
+  readonly hovered: string | null;
+  /** Selected blocks shown although the page hides them on this device. */
+  readonly revealed: readonly string[];
+}
+
 /** The marked elements of a canvas root, as the boxes to draw over them. */
-function marksOf(element: HTMLElement): readonly Mark[] {
+function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
   if (space === null) return NO_MARKS;
   const { root } = space;
@@ -168,15 +211,22 @@ function marksOf(element: HTMLElement): readonly Mark[] {
       const outline = outlineOf(marked, root, space);
       // Wholly cut away by a clipping ancestor: the page shows none of it.
       if (outline === null) return;
-      const plain = { secondary: false, component: false, locked: false };
+      const plain = {
+        secondary: false,
+        component: false,
+        locked: false,
+        hidden: false,
+      };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
       if (selected !== null) {
+        const address = nodeAddressOf(marked);
         found.push({
           ...outline,
           kind: "selected",
           secondary: selected !== "primary",
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
+          hidden: address !== null && inputs.revealed.includes(address),
         });
       }
       // An exposed part that is itself selected keeps its ring alone: one
@@ -191,6 +241,31 @@ function marksOf(element: HTMLElement): readonly Mark[] {
         found.push({ ...outline, ...plain, kind: "drop-refused" });
       }
     });
+  const { hovered } = inputs;
+  if (hovered !== null) {
+    /*
+     * Every rendering of the hovered block, found by its ADDRESS and the
+     * outermost element standing for it, as the selection is: a placement's
+     * component draws no element of its own, and a block drawn twice is
+     * pointed at twice. A block already selected keeps its ring alone.
+     */
+    root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(candidate => {
+      if (candidate.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
+      if (candidate.hasAttribute(SELECTED_ATTRIBUTE)) return;
+      if (nodeAddressOf(candidate) !== hovered) return;
+      if (!isOutermostForAddress(candidate, hovered, root)) return;
+      const outline = outlineOf(candidate, root, space);
+      if (outline === null) return;
+      found.push({
+        ...outline,
+        kind: "hovered",
+        secondary: false,
+        component: candidate.hasAttribute(INSTANCE_ATTRIBUTE),
+        locked: false,
+        hidden: false,
+      });
+    });
+  }
   return found;
 }
 
@@ -204,16 +279,34 @@ function marksOf(element: HTMLElement): readonly Mark[] {
  *
  * @experimental
  */
-export function CanvasMarks(): React.JSX.Element {
+export function CanvasMarks({
+  revealed = NO_IDS,
+  device,
+}: CanvasMarksProps = {}): React.JSX.Element {
+  const shownOn =
+    device === undefined
+      ? undefined
+      : deviceLabel(device.breakpoints, device.id);
+  const hiddenLabel = shownOn === undefined ? "Hidden" : `Hidden on ${shownOn}`;
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [marks, setMarks] = React.useState<readonly Mark[]>(NO_MARKS);
   const canvasFrame = useCanvasFrame();
+  const hovered = useHoveredBlock();
+  // Keyed by value, so a host handing a new array of the same ids on every
+  // render does not re-measure every block.
+  const revealedKey = revealed.join("\n");
 
   const measure = React.useCallback(() => {
     const element = layer.current;
-    const next = element === null ? NO_MARKS : marksOf(element);
+    const next =
+      element === null
+        ? NO_MARKS
+        : marksOf(element, {
+            hovered,
+            revealed: revealedKey === "" ? NO_IDS : revealedKey.split("\n"),
+          });
     setMarks(current => (sameMarks(current, next) ? current : next));
-  }, []);
+  }, [hovered, revealedKey]);
 
   React.useLayoutEffect(() => {
     measure();
@@ -244,6 +337,11 @@ export function CanvasMarks(): React.JSX.Element {
           data-secondary={mark.secondary ? "" : undefined}
           data-component={mark.component ? "" : undefined}
           data-locked={mark.locked ? "" : undefined}
+          data-hidden={mark.hidden ? "" : undefined}
+          // The tag a hidden block's ring carries, drawn by the stylesheet
+          // from this attribute; the layer is hidden from assistive
+          // technology, and Layers and the inspector say it in words.
+          data-label={mark.hidden ? hiddenLabel : undefined}
           data-clipped={mark.clipped ? "" : undefined}
           style={{
             left: mark.rect.x,

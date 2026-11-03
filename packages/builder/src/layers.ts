@@ -36,9 +36,11 @@
  */
 
 import {
+  hiddenOnDevice,
   isComponentInstance,
   type BlockDocument,
   type BlockNode,
+  type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
 import { blockLabel, type SavedComponent } from "./inserter";
@@ -115,7 +117,22 @@ export interface LayerNode {
    * have to pick one of those to be true about.
    */
   readonly breakpointHidden: boolean;
+  /**
+   * The block is hidden on the device being edited, which is the device the
+   * canvas shows: the row is drawn dimmed with a "Hidden" badge. Only known
+   * when the tree was asked for a device.
+   */
+  readonly hiddenHere: boolean;
   readonly children: readonly LayerNode[];
+}
+
+/**
+ * The device the tree is read for: the site's breakpoints and the one being
+ * edited, which decides each row's {@link LayerNode.hiddenHere}.
+ */
+export interface LayersDevice {
+  readonly breakpoints: BreakpointSet | undefined;
+  readonly id: string;
 }
 
 /** Whether any breakpoint switches this node off. */
@@ -182,7 +199,8 @@ export function layerLabel(
  */
 export function layersOf(
   document: BlockDocument,
-  componentTitle?: ComponentTitleOf
+  componentTitle?: ComponentTitleOf,
+  device?: LayersDevice
 ): LayerNode[] {
   // `heldBy` is the nearest locked block above, carried down the walk so the
   // tree is read once rather than climbed per row.
@@ -202,6 +220,12 @@ export function layersOf(
         ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),
         conditional: hasConditions(node),
         breakpointHidden: hiddenAtSomeBreakpoint(node),
+        // Asked of the engine's per-device reading, the cascade the published
+        // stylesheet is compiled from, so a row says hidden exactly where a
+        // visitor on that device sees nothing.
+        hiddenHere:
+          device !== undefined &&
+          hiddenOnDevice(node.visibility, device.breakpoints, device.id),
         // Declaration order across every slot the node holds. `Object.values`
         // preserves insertion order for string keys, which is the order the
         // document was written in — so the tree matches the document rather

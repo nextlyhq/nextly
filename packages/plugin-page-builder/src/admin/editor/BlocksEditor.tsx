@@ -10,7 +10,13 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
-import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  hiddenOnDevice,
+  revealDeviceHidden,
+  type BlockDocument,
+  type DocumentKind,
+} from "@nextlyhq/blocks-engine";
 import {
   prepareDocumentForRead,
   registeredBlocks,
@@ -42,7 +48,7 @@ import {
   MediaPickerDialog,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useState, type ComponentProps, type JSX } from "react";
+import { useMemo, useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
   useWatch,
@@ -113,7 +119,52 @@ type EditorView = EditorMount &
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** The block verbs shared for the surfaces drawn outside the provider. */
+    layerVerbs: CardVerbs;
+    /** What the canvas draws: the document, with selected hidden blocks shown. */
+    reveal: Reveal;
   };
+
+/**
+ * The document the canvas draws, and the selected blocks it shows although
+ * the page hides them on the device being edited.
+ */
+interface Reveal {
+  readonly document: BlockDocument;
+  readonly ids: readonly string[];
+}
+
+/**
+ * A selected block the page hides on the device shown is drawn anyway, while
+ * it is selected, so the author can see and edit what they chose in Layers.
+ *
+ * Editor-only by construction: the canvas draws the derived document and the
+ * editor saves its own, so nothing lifted here reaches what is stored or
+ * published. Derived again only when the document, the selection or the
+ * device changes, so the canvas keeps its rendered tree otherwise.
+ */
+function useReveal(
+  document: BlockDocument,
+  selected: readonly string[],
+  breakpoints: Parameters<typeof hiddenOnDevice>[1],
+  device: string
+): Reveal {
+  const ids = selected.filter(id => {
+    const node = findNode(document.nodes, id);
+    return (
+      node !== undefined && hiddenOnDevice(node.visibility, breakpoints, device)
+    );
+  });
+  const key = ids.join("\n");
+  return useMemo(
+    () => ({
+      document:
+        key === "" ? document : revealDeviceHidden(document, key.split("\n")),
+      ids: key === "" ? [] : key.split("\n"),
+    }),
+    [document, key]
+  );
+}
 
 /**
  * Whether the empty-container appender should be suppressed right now.
@@ -582,7 +633,15 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             showEmptyElements={showEmptyElements}
             overlay={
               <>
-                <CanvasMarks />
+                {/* A selected block the page hides on this device is drawn
+                    anyway, and its ring says so. */}
+                <CanvasMarks
+                  revealed={view.reveal.ids}
+                  device={{
+                    breakpoints: canvasRender.styleContext.breakpoints,
+                    id: view.editedBreakpoint,
+                  }}
+                />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
                 {/*
@@ -633,7 +692,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             }
           >
             <Canvas
-              document={editor.document}
+              // The page as the editor shows it: its own document, with a
+              // selected block it hides on this device drawn while selected.
+              document={view.reveal.document}
               rootRef={canvasRoot}
               onRoot={setCanvasElement}
               forcedState={shownStyleState}
@@ -888,6 +949,12 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   // The page's title, for the canvas frame's accessible name.
   const pageTitle = page.title;
+  const reveal = useReveal(
+    mount.editor.document,
+    mount.editor.selection.ids,
+    canvas.canvasRender.styleContext.breakpoints,
+    canvas.editedBreakpoint
+  );
   const view: EditorView = {
     ...mount,
     ...style,
@@ -896,6 +963,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     documentDirty,
     pageTitle,
     componentView,
+    layerVerbs: cardVerbs,
+    reveal,
   };
   useOpenAtSection({
     sectionId: openAt,

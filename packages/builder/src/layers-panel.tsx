@@ -57,12 +57,25 @@
  * lands and whether the placement rule and the locks allow it. Off while a
  * search filters the list, whose hidden neighbours a drop would land between.
  *
+ * ## A row is a handle on its block
+ *
+ * Pointing at a row outlines its block on the canvas, and choosing one
+ * scrolls the canvas to it. A row's eye hides its block on the device being
+ * edited, and that device only; its padlock locks it. Both icons are for the
+ * pointer, shown while the row is hovered and always while they say
+ * something (hidden here, locked); the keyboard reaches the same verbs by F2,
+ * the eye's and the lock's chords, and the row's menu, which also carries the
+ * block verbs every other surface offers. A row renames in place.
+ *
  * @module layers-panel
  */
 
 import {
   allBlocks,
+  findNode,
+  hiddenOnDevice,
   registryNestingSource,
+  type BreakpointSet,
   type ComponentLookup,
   type NestingSource,
   type RegionArea,
@@ -73,16 +86,33 @@ import {
   detectApplePlatform,
   type TreeNode,
 } from "@nextlyhq/ui";
-import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
+import { Eye, EyeOff, Lock, LockOpen, SlidersHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import { deviceLabel } from "./breakpoint-switcher";
 import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
+import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { useHoveredBlockSetter } from "./hovered-block";
+import {
+  layersLockChangeable,
+  lockOp,
+  lockStatusOf,
+  lockViewOf,
+  renameOp,
+} from "./inspector";
 import { keyHint } from "./key-hint";
-import { MOVE_KEYS } from "./keyboard-actions";
+import { MOVE_KEYS, type SharedBlockVerbs } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
+import {
+  ROW_KEYS,
+  rowKeyAction,
+  toggleOnDeviceOp,
+  type RowKeyAction,
+} from "./layer-row-actions";
+import { LayerRowMenu, type RowMenuItem } from "./layer-row-menu";
 import {
   ancestorIds,
   filterLayers,
@@ -97,6 +127,10 @@ import {
   LayersDropOverlay,
   useLayersDrag,
 } from "./layers-drag";
+import { lockRefusalWording } from "./lock-refusal";
+import { refusalAnnouncement } from "./move-refusal";
+import type { BuilderOp } from "./ops";
+import { revealNode } from "./reveal-node";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */
@@ -142,6 +176,22 @@ export interface LayersPanelProps {
    * titles, and the host read it.
    */
   componentTitle?: ComponentTitleOf;
+  /**
+   * The site's breakpoints and the one being edited, which the eye hides a
+   * block on. Absent, rows offer no eye: hiding "here" needs a device.
+   */
+  device?: { breakpoints: BreakpointSet | undefined; id: string };
+  /**
+   * The canvas, as the frame draws it: its root element or the frame's
+   * document. A row chosen here scrolls its block into view there.
+   */
+  canvasRoot?: HTMLElement | Document | null;
+  /**
+   * The block verbs the host's verbs provider shares, for the row menu: the
+   * same verbs and reasons the toolbar and the canvas menu show. Absent, the
+   * menu offers the row's own verbs alone.
+   */
+  verbs?: SharedBlockVerbs;
 }
 
 /** One region of the page's Layout, as a read-only row in Layers. */
@@ -240,12 +290,123 @@ function ComponentTag({ node }: { node: LayerNode }): React.JSX.Element | null {
   return <span className="nx-layer-row__tag">component</span>;
 }
 
+/** What a row is drawn with beyond its own layer. */
+interface RowView {
+  readonly icons: ReadonlyMap<string, string | undefined>;
+  readonly draggingId: string | null;
+  /** The row being renamed, which draws a field in place of its name. */
+  readonly renamingId: string | null;
+  /** The device the eye acts on, by name ("Mobile"); absent, no eye. */
+  readonly deviceName: string | undefined;
+  readonly onRenamed: (id: string, name: string | null) => void;
+  readonly onAct: (id: string, action: RowKeyAction) => void;
+}
+
+/**
+ * The field a row's name becomes while it is renamed.
+ *
+ * Its keys are its own: the tree reads arrows, Home, End and typed letters
+ * for itself, and a field inside a row would otherwise lose every one of
+ * them to the tree. Enter keeps the name and Escape keeps the old one; a
+ * blur keeps what was typed, as leaving a field does everywhere else.
+ */
+function RenameField({
+  id,
+  label,
+  onDone,
+}: {
+  id: string;
+  label: string;
+  onDone: (name: string | null) => void;
+}): React.JSX.Element {
+  const field = React.useRef<HTMLInputElement | null>(null);
+  const finished = React.useRef(false);
+  React.useEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+  }, []);
+  const finish = (name: string | null): void => {
+    if (finished.current) return;
+    finished.current = true;
+    onDone(name);
+  };
+  const stop = (event: React.SyntheticEvent): void => event.stopPropagation();
+  return (
+    <input
+      ref={field}
+      className="nx-layer-row__rename"
+      // The row's hook stays on what stands for the block while it is renamed.
+      data-nx-layer={id}
+      defaultValue={label}
+      aria-label={`Rename ${label}`}
+      // A press inside the field is a caret, not a drag, a selection or the
+      // tree's own click.
+      onPointerDown={stop}
+      onClick={stop}
+      onDoubleClick={stop}
+      onKeyDown={event => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          finish(event.currentTarget.value);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          finish(null);
+        }
+      }}
+      onBlur={event => finish(event.currentTarget.value)}
+    />
+  );
+}
+
+/**
+ * A row's eye or padlock. Pointer-only, so it is out of the Tab order and
+ * hidden from assistive technology: the keyboard reaches the same verb by its
+ * chord and the row's menu, and the row says hidden and locked in words.
+ */
+function RowAction({
+  id,
+  action,
+  title,
+  pinned,
+  onAct,
+  children,
+}: {
+  id: string;
+  action: RowKeyAction;
+  title: string;
+  /** Shown at rest, not only on hover, because it states something true. */
+  pinned: boolean;
+  onAct: RowView["onAct"];
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const stop = (event: React.SyntheticEvent): void => event.stopPropagation();
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-hidden="true"
+      className="nx-layer-row__action"
+      data-action={action}
+      {...(pinned ? { "data-pinned": "" } : {})}
+      title={title}
+      // Neither a drag nor a selection of the row: the press is the action.
+      onPointerDown={stop}
+      onDoubleClick={stop}
+      onClick={event => {
+        event.stopPropagation();
+        onAct(id, action);
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** A layer as a row: its mark, its name, and what is true about it. */
-function rowOf(
-  node: LayerNode,
-  icons: ReadonlyMap<string, string | undefined>,
-  draggingId: string | null
-): TreeNode {
+function rowOf(node: LayerNode, view: RowView): TreeNode {
+  const { icons, draggingId, renamingId, deviceName } = view;
+  const held = node.locked || node.lockedBy !== undefined;
   return {
     id: node.id,
     // `textValue` carries the NAME alone even though the label renders badges
@@ -257,29 +418,43 @@ function rowOf(
       <span
         className="nx-layer-row"
         {...(node.component ? { "data-component": "" } : {})}
+        // Dimmed where the canvas shows nothing of it, with the word beside.
+        {...(node.hiddenHere ? { "data-hidden": "" } : {})}
         // The block in hand, faded where it sits as the canvas fades its own
         // drag source; the same attribute, so the two read as one gesture.
         {...(node.id === draggingId ? { [DRAG_SOURCE_ATTRIBUTE]: "" } : {})}
       >
         <BlockIconMark icon={markOf(node, icons)} size={14} />
-        {/* `data-nx-layer` names the block a row stands for. Labels repeat —
+        {node.id === renamingId ? (
+          <RenameField
+            id={node.id}
+            label={node.label}
+            onDone={name => view.onRenamed(node.id, name)}
+          />
+        ) : (
+          /* `data-nx-layer` names the block a row stands for. Labels repeat —
             every paragraph is "Text" — so it is the one stable way to find a
             given block's row, the Layers counterpart of the canvas's
-            `data-nx-node`. */}
-        <span className="nx-layer-row__label" data-nx-layer={node.id}>
-          {node.label}
-        </span>
+            `data-nx-node`. */
+          <span className="nx-layer-row__label" data-nx-layer={node.id}>
+            {node.label}
+          </span>
+        )}
         <ComponentTag node={node} />
+        {node.hiddenHere ? (
+          // A word, on screen and read out: hidden on the device shown.
+          <span className="nx-layer-row__hidden">Hidden</span>
+        ) : null}
         {/* Both locks in the row's own ink, so each reads against the row in
             every state it can be in. A lock held from a block around it is
             quieter by weight, a thinner stroke, never by a fainter colour; both
             say so in words, and the inherited one names the block to unlock. */}
         {node.locked ? (
-          <Badge
-            icon={<Lock size={12} strokeWidth={2.5} />}
-            text="Locked"
-            lock="own"
-          />
+          // The word, read out; the padlock pinned at the row's end is what
+          // the eye sees, at the stronger stroke.
+          <span className="nx-sr-only" data-lock="own">
+            Locked
+          </span>
         ) : node.lockedBy === undefined ? null : (
           <Badge
             icon={<Lock size={12} strokeWidth={1.25} />}
@@ -287,7 +462,7 @@ function rowOf(
             lock="inherited"
           />
         )}
-        {node.breakpointHidden ? (
+        {node.breakpointHidden && !node.hiddenHere ? (
           <Badge
             icon={<EyeOff size={12} />}
             text="Hidden at some screen sizes"
@@ -299,6 +474,36 @@ function rowOf(
             text="Shown conditionally"
           />
         ) : null}
+        <span className="nx-layer-row__actions">
+          {/* No eye on a block a lock holds: the lock refuses the change. */}
+          {deviceName === undefined || held ? null : (
+            <RowAction
+              id={node.id}
+              action="toggle-hidden"
+              title={`${node.hiddenHere ? "Show" : "Hide"} on ${deviceName}`}
+              pinned={node.hiddenHere}
+              onAct={view.onAct}
+            >
+              {node.hiddenHere ? <EyeOff size={14} /> : <Eye size={14} />}
+            </RowAction>
+          )}
+          {/* The block's own lock; one held from around it is lifted there. */}
+          {node.lockedBy !== undefined ? null : (
+            <RowAction
+              id={node.id}
+              action="toggle-lock"
+              title={node.locked ? "Unlock" : "Lock"}
+              pinned={node.locked}
+              onAct={view.onAct}
+            >
+              {node.locked ? (
+                <Lock size={14} strokeWidth={2.5} />
+              ) : (
+                <LockOpen size={14} />
+              )}
+            </RowAction>
+          )}
+        </span>
       </span>
     ),
     // Omitted for a block that holds nothing: the tree draws a twisty and an
@@ -307,7 +512,7 @@ function rowOf(
     ...(node.children.length === 0
       ? {}
       : {
-          children: node.children.map(child => rowOf(child, icons, draggingId)),
+          children: node.children.map(child => rowOf(child, view)),
         }),
   };
 }
@@ -346,6 +551,180 @@ function draggingState(drag: LayersDrag): string | undefined {
   return drag.drawn?.result.kind === "refused" ? "refused" : "";
 }
 
+/** The block of the row an event happened in, or `null` off the rows. */
+function rowIdOf(target: EventTarget | null): string | null {
+  // Asked by node kind, so a row in another document still answers.
+  if (!isElement(target)) return null;
+  const row = target.closest('[role="treeitem"]');
+  return (
+    row?.querySelector("[data-nx-layer]")?.getAttribute("data-nx-layer") ?? null
+  );
+}
+
+/** Whether the block is hidden on the device being edited. */
+function hiddenHere(
+  editor: EditorState,
+  id: string,
+  device: NonNullable<LayersPanelProps["device"]>
+): boolean {
+  const node = findNode(editor.document.nodes, id);
+  return (
+    node !== undefined &&
+    hiddenOnDevice(node.visibility, device.breakpoints, device.id)
+  );
+}
+
+/** Put focus back on a block's row, once a rename has ended. */
+function focusRow(id: string): void {
+  requestAnimationFrame(() => {
+    const rows = document.querySelectorAll<HTMLElement>('[role="treeitem"]');
+    rows.forEach(row => {
+      if (rowIdOf(row) === id) row.focus();
+    });
+  });
+}
+
+/** What the row verbs give the panel. */
+interface RowVerbs {
+  readonly renamingId: string | null;
+  readonly onRenamed: (id: string, name: string | null) => void;
+  readonly act: (id: string, action: RowKeyAction) => void;
+  /** The row menu's own items, for the primary selection. */
+  readonly menuItems: () => readonly RowMenuItem[];
+  /** What the last verb did, or why it was refused. */
+  readonly notice: string;
+}
+
+/**
+ * Rename, the eye and the lock for one row, refused up front in the words
+ * every lock refusal uses, so a verb the store would refuse says why instead
+ * of doing nothing.
+ */
+function useRowVerbs(
+  editor: EditorState,
+  device: LayersPanelProps["device"]
+): RowVerbs {
+  const [renamingId, setRenamingId] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState("");
+  const latest = React.useRef({ editor, device });
+  latest.current = { editor, device };
+
+  /** Why the store would refuse `ops`, or `undefined` when it would not. */
+  const refusalOf = React.useCallback(
+    (ops: readonly BuilderOp[]): string | undefined => {
+      const found = latest.current.editor.lockRefusalFor(ops);
+      return found === undefined
+        ? undefined
+        : refusalAnnouncement(lockRefusalWording(found));
+    },
+    []
+  );
+
+  /** Why a verb may not run on `id`, or `undefined` when it may. */
+  const reasonFor = React.useCallback(
+    (id: string, action: RowKeyAction): string | undefined => {
+      const { editor: now, device: on } = latest.current;
+      switch (action) {
+        case "rename":
+          return refusalOf([renameOp(id, "name")]);
+        case "toggle-hidden": {
+          if (on === undefined) return "";
+          const op = toggleOnDeviceOp(now.document, id, on);
+          return op === null ? "" : refusalOf([op]);
+        }
+        case "toggle-lock": {
+          const status = lockStatusOf(now.document, id, lockViewOf(now));
+          if (status.inheritedFrom !== undefined && !status.layers) {
+            return `This block is inside ${status.inheritedFrom}, which is locked. Unlock ${status.inheritedFrom} to change it.`;
+          }
+          return layersLockChangeable(status)
+            ? undefined
+            : "The area it sits in fixes this.";
+        }
+      }
+    },
+    [refusalOf]
+  );
+
+  const act = React.useCallback(
+    (id: string, action: RowKeyAction): void => {
+      const reason = reasonFor(id, action);
+      if (reason !== undefined) {
+        setNotice(reason);
+        return;
+      }
+      const { editor: now, device: on } = latest.current;
+      setNotice("");
+      if (action === "rename") {
+        setRenamingId(id);
+        return;
+      }
+      if (action === "toggle-hidden") {
+        if (on === undefined) return;
+        const wasHidden = hiddenHere(now, id, on);
+        const op = toggleOnDeviceOp(now.document, id, on);
+        if (op === null || now.apply(op) === null) return;
+        const name = deviceLabel(on.breakpoints, on.id) ?? on.id;
+        setNotice(wasHidden ? `Shown on ${name}.` : `Hidden on ${name}.`);
+        return;
+      }
+      const node = findNode(now.document.nodes, id);
+      if (node === undefined) return;
+      const locking = node.locked !== true;
+      if (now.apply(lockOp(id, locking)) === null) return;
+      setNotice(locking ? "Locked." : "Unlocked.");
+    },
+    [reasonFor]
+  );
+
+  const onRenamed = React.useCallback(
+    (id: string, name: string | null): void => {
+      setRenamingId(null);
+      focusRow(id);
+      if (name === null) return;
+      latest.current.editor.apply(renameOp(id, name));
+    },
+    []
+  );
+
+  const menuItems = React.useCallback((): readonly RowMenuItem[] => {
+    const { editor: now, device: on } = latest.current;
+    const id = now.selectedId;
+    if (id === null) return [];
+    const node = findNode(now.document.nodes, id);
+    if (node === undefined) return [];
+    const items: RowMenuItem[] = [
+      {
+        id: "rename",
+        label: "Rename",
+        reason: reasonFor(id, "rename"),
+        keys: ROW_KEYS.rename,
+        run: () => act(id, "rename"),
+      },
+    ];
+    if (on !== undefined) {
+      const name = deviceLabel(on.breakpoints, on.id) ?? on.id;
+      items.push({
+        id: "toggle-hidden",
+        label: hiddenHere(now, id, on) ? `Show on ${name}` : `Hide on ${name}`,
+        reason: reasonFor(id, "toggle-hidden"),
+        keys: ROW_KEYS["toggle-hidden"],
+        run: () => act(id, "toggle-hidden"),
+      });
+    }
+    items.push({
+      id: "toggle-lock",
+      label: node.locked === true ? "Unlock" : "Lock",
+      reason: reasonFor(id, "toggle-lock"),
+      keys: ROW_KEYS["toggle-lock"],
+      run: () => act(id, "toggle-lock"),
+    });
+    return items;
+  }, [act, reasonFor]);
+
+  return { renamingId, onRenamed, act, menuItems, notice };
+}
+
 export function LayersPanel({
   editor,
   moveHints = false,
@@ -353,6 +732,9 @@ export function LayersPanel({
   definitions,
   regions,
   componentTitle,
+  device,
+  canvasRoot,
+  verbs,
 }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
@@ -376,10 +758,33 @@ export function LayersPanel({
       ),
   });
 
+  const rows = useRowVerbs(editor, device);
+  const setHovered = useHoveredBlockSetter();
+  // Nothing stays pointed at once the panel goes, or the canvas would keep
+  // outlining a block no row is under.
+  React.useEffect(() => () => setHovered(null), [setHovered]);
+
+  /*
+   * A row chosen here scrolls the canvas to its block, once the selection has
+   * reached the canvas: a hidden block is drawn only once it is selected, so
+   * the scroll waits for the frame that draws it.
+   */
+  const chosenHere = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const id = editor.selectedId;
+    if (id === null || chosenHere.current !== id) return;
+    chosenHere.current = null;
+    if (canvasRoot === null || canvasRoot === undefined) return;
+    const frame = requestAnimationFrame(() => {
+      revealNode(canvasRoot, id);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editor.selectedId, canvasRoot]);
+
   // Recomputed each render rather than memoised. The tree is only valid against
   // the document it was read from, and every edit replaces that document — a
   // memo would need the document as its key and would therefore never hit.
-  const tree = layersOf(editor.document, componentTitle);
+  const tree = layersOf(editor.document, componentTitle, device);
   const search = filterLayers(tree, query);
 
   /*
@@ -423,9 +828,32 @@ export function LayersPanel({
   );
 
   const icons = React.useMemo(iconsByType, []);
+  const deviceName =
+    device === undefined
+      ? undefined
+      : (deviceLabel(device.breakpoints, device.id) ?? device.id);
+  const { renamingId, onRenamed, act } = rows;
   const nodes = React.useMemo(
-    () => search.roots.map(root => rowOf(root, icons, drag.draggingId)),
-    [search.roots, icons, drag.draggingId]
+    () =>
+      search.roots.map(root =>
+        rowOf(root, {
+          icons,
+          draggingId: drag.draggingId,
+          renamingId,
+          deviceName,
+          onRenamed,
+          onAct: act,
+        })
+      ),
+    [
+      search.roots,
+      icons,
+      drag.draggingId,
+      renamingId,
+      deviceName,
+      onRenamed,
+      act,
+    ]
   );
 
   /*
@@ -499,39 +927,72 @@ export function LayersPanel({
       ) : nodes.length === 0 ? (
         <p className="nx-layers-panel__note">No blocks match “{query}”.</p>
       ) : (
-        <div
-          className="nx-layers-panel__body"
-          data-nx-dragging={draggingState(drag)}
-          {...drag.handlers}
+        <LayerRowMenu
+          rowOf={rowIdOf}
+          selectedIds={editor.selection.ids}
+          select={id => editor.select(id, "replace")}
+          items={rows.menuItems}
+          verbs={verbs}
+          apple={apple}
         >
-          <TreeView
-            className={LAYERS_TREE_CLASS}
-            aria-label={EDITOR_WORDS.layers}
-            nodes={nodes}
-            selectedId={editor.selectedId}
-            // The panel shows what the canvas shows. Passing only the primary
-            // would leave two surfaces disagreeing about what is selected, on a
-            // screen where a delete acts on all of it.
-            selectedIds={editor.selection.ids}
-            // The tree's three gestures ARE the editor's three gestures: it
-            // reports which one a row's modifiers meant and the store's own rules
-            // decide what that does. A panel translating them itself would be a
-            // second grammar to keep in step.
-            onSelectedChange={editor.select}
-            expandedIds={expandedIds}
-            // The tree reports the whole next set, which during a search includes
-            // branches only the search opened. Those are dropped before storing,
-            // so clearing the query collapses them again instead of baking a
-            // temporary reveal into what the author has open.
-            onExpandedChange={next =>
-              setOpened(next.filter(id => !search.expand.includes(id)))
+          <div
+            className="nx-layers-panel__body"
+            data-nx-dragging={draggingState(drag)}
+            {...drag.handlers}
+            // The row under the pointer outlines its block on the canvas; not
+            // during a drag, whose own marks say where the block will land.
+            onPointerOver={event =>
+              setHovered(
+                drag.draggingId === null ? rowIdOf(event.target) : null
+              )
             }
-            // The hint is the tree's DESCRIPTION, so it is announced on entering
-            // the tree rather than only readable by someone who can see it below.
-            aria-describedby={hints.length === 0 ? undefined : hintId}
-          />
-          <LayersDropOverlay drawn={drag.drawn} />
-        </div>
+            onPointerLeave={() => setHovered(null)}
+            // The row's verbs by keyboard, for the row that has focus: the
+            // eye's and the lock's icons are for the pointer alone.
+            onKeyDown={event => {
+              const action = rowKeyAction(event, apple ?? false);
+              const id = action === null ? null : rowIdOf(event.target);
+              if (action === null || id === null) return;
+              event.preventDefault();
+              act(id, action);
+            }}
+            onDoubleClick={event => {
+              const id = rowIdOf(event.target);
+              if (id !== null) act(id, "rename");
+            }}
+          >
+            <TreeView
+              className={LAYERS_TREE_CLASS}
+              aria-label={EDITOR_WORDS.layers}
+              nodes={nodes}
+              selectedId={editor.selectedId}
+              // The panel shows what the canvas shows. Passing only the primary
+              // would leave two surfaces disagreeing about what is selected, on a
+              // screen where a delete acts on all of it.
+              selectedIds={editor.selection.ids}
+              // The tree's three gestures ARE the editor's three gestures: it
+              // reports which one a row's modifiers meant and the store's own rules
+              // decide what that does. A panel translating them itself would be a
+              // second grammar to keep in step.
+              onSelectedChange={(id, mode) => {
+                chosenHere.current = id;
+                editor.select(id, mode);
+              }}
+              expandedIds={expandedIds}
+              // The tree reports the whole next set, which during a search includes
+              // branches only the search opened. Those are dropped before storing,
+              // so clearing the query collapses them again instead of baking a
+              // temporary reveal into what the author has open.
+              onExpandedChange={next =>
+                setOpened(next.filter(id => !search.expand.includes(id)))
+              }
+              // The hint is the tree's DESCRIPTION, so it is announced on entering
+              // the tree rather than only readable by someone who can see it below.
+              aria-describedby={hints.length === 0 ? undefined : hintId}
+            />
+            <LayersDropOverlay drawn={drag.drawn} />
+          </div>
+        </LayerRowMenu>
       )}
 
       {regions
@@ -549,6 +1010,14 @@ export function LayersPanel({
       <div role="status" aria-live="polite" className="nx-sr-only">
         {drag.announcement}
       </div>
+
+      {/*
+        What a row's verb did, or why it could not: on screen as well as read
+        out, since a refused eye or rename otherwise changes nothing visible.
+      */}
+      <p role="status" aria-live="polite" className="nx-layers-panel__notice">
+        {rows.notice}
+      </p>
 
       {/*
         Outside the empty and no-match branches deliberately: the bindings are

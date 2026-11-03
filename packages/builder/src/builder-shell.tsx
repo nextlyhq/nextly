@@ -28,6 +28,7 @@ import { isHTMLElement } from "./dom-kind";
 import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 import { HelpDialog } from "./help-dialog";
+import { HoveredBlockProvider } from "./hovered-block";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
   BUILDER_CHROME_CLASS,
@@ -1993,7 +1994,7 @@ export function BuilderShell({
   const notices = supplied ?? own;
 
   return (
-    <ShortcutProvider>
+    <ShellProviders>
       {/* The same manager, listening in the canvas's frame as well, so a key
           pressed with focus inside the page reaches every binding above. */}
       <CanvasFrameShortcuts />
@@ -2215,6 +2216,23 @@ export function BuilderShell({
           </div>
         </div>
       </TooltipProvider>
+    </ShellProviders>
+  );
+}
+
+/**
+ * What every shell provides to everything inside it: the shortcut manager,
+ * and one hovered block for its panels and its canvas, so a Layers row the
+ * pointer is over outlines its block on the page.
+ */
+function ShellProviders({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <ShortcutProvider>
+      <HoveredBlockProvider>{children}</HoveredBlockProvider>
     </ShortcutProvider>
   );
 }

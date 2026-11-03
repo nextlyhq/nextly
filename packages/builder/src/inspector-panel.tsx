@@ -102,6 +102,7 @@ import {
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
+import { VisibleOn } from "./visible-on";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -708,6 +709,8 @@ function SelectionInspector({
             onScreen={tab === "content"}
             reasonId={reasonId}
             fields={fields}
+            breakpoints={styleOnly.breakpoints}
+            breakpoint={breakpoint ?? BASE_BREAKPOINT}
           />
         </TabsContent>
 
@@ -743,6 +746,8 @@ function ContentTab({
   onScreen,
   reasonId,
   fields,
+  breakpoints,
+  breakpoint,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -756,6 +761,10 @@ function ContentTab({
   onScreen: boolean;
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
+  /** The site's breakpoints, for "Visible on". */
+  breakpoints: BreakpointSet | undefined;
+  /** The device being edited. */
+  breakpoint: BreakpointId;
 }): React.JSX.Element {
   // Whether the Advanced section is open, so the panel inside it can be told
   // when it stops being on screen and settle its draft.
@@ -780,6 +789,14 @@ function ContentTab({
         services={services}
         reasonId={reasonId}
         fields={fields}
+      />
+      {/* Which devices the block shows on: after its own fields, before the
+          Advanced section, as the design draws the Content tab. */}
+      <VisibleOn
+        editor={editor}
+        nodeId={block.nodeId}
+        breakpoints={breakpoints}
+        editing={breakpoint}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*

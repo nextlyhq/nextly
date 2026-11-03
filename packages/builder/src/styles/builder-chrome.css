@@ -1905,6 +1905,43 @@
 }
 
 /*
+ * "Visible on": one button per device, filled where the block shows. A device
+ * it is hidden on is struck through as well as unfilled, so the state does
+ * not rest on the fill's colour alone; the sentence below says it in words.
+ * The device being edited is underlined, as the device buttons mark it.
+ */
+.nx-visible-on > button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nx-visible-on__icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.nx-visible-on > button[aria-pressed="false"] {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-visible-on > button[aria-pressed="false"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1.25rem;
+  height: 1.5px;
+  background: currentColor;
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.nx-visible-on > button[data-editing] {
+  box-shadow: inset 0 -2px 0 var(--nx-ring);
+}
+
+/*
  * A prop the panel cannot draw is dimmed rather than hidden — present, and
  * visibly not one of the things an author can change here.
  */
@@ -2312,6 +2349,54 @@
 }
 
 /*
+ * The block a Layers row points at: a thin ring in the select colour, haloed
+ * for the reason the selection is, and lighter than it, since a hover is only
+ * where the pointer is. A component placement takes the component colour.
+ */
+.nx-canvas-mark[data-mark="hovered"] {
+  outline: 1px solid var(--nx-builder-select);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-component] {
+  outline-color: var(--nx-builder-component);
+}
+
+/*
+ * A selected block the page hides on the device shown, drawn only because it
+ * is selected: hatched over, and tagged in words, so it never reads as a block
+ * a visitor sees. The hatch is the select colour at low weight, so the block
+ * underneath stays readable.
+ */
+.nx-canvas-mark[data-mark="selected"][data-hidden] {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--nx-builder-select) 14%, transparent) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/*
+ * The tag on the fixed dark ink the block toolbar uses, at the ring's top
+ * left corner inside it, so it reads on any section of the page.
+ */
+.nx-canvas-mark[data-mark="selected"][data-hidden]::after {
+  content: attr(data-label);
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--nx-builder-ink);
+  color: var(--nx-builder-ink-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+}
+
+/*
  * Where a dragged block will land.
  *
  * The same accent as the selection ring, because both answer "this is what the
@@ -2678,6 +2763,123 @@
  */
 .nx-layer-row__badge[data-lock] {
   color: inherit;
+}
+
+/*
+ * The tree's label fills the row, so the row's actions sit at its right edge
+ * whatever the name's length, as the design draws them.
+ */
+.nx-layers-panel__tree [role="treeitem"] > .truncate {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * A block hidden on the device being edited: its mark and name dimmed, and
+ * the word "Hidden" beside them. Dimmed by the muted ink rather than by
+ * opacity, so the name keeps the contrast the design system checks; on a
+ * selected row everything takes the row's own ink.
+ */
+.nx-layer-row[data-hidden] .nx-block-icon,
+.nx-layer-row[data-hidden] .nx-layer-row__label {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-layer-row__hidden {
+  flex: none;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  background: var(--nx-muted);
+  color: var(--nx-builder-text-muted);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row[data-hidden]
+  :is(.nx-block-icon, .nx-layer-row__label, .nx-layer-row__hidden) {
+  color: inherit;
+}
+
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row__hidden {
+  border-color: currentColor;
+  background: transparent;
+}
+
+/*
+ * The eye and the padlock, at the row's right edge. Shown while the row is
+ * hovered and always while they state something (hidden here, locked); kept
+ * in place and only faded otherwise, so showing them moves nothing. A touch
+ * screen cannot hover, so there they are always shown.
+ */
+.nx-layer-row__actions {
+  display: inline-flex;
+  flex: none;
+  gap: 0.125rem;
+  margin-left: auto;
+}
+
+.nx-layer-row__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.nx-layer-row__action:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+@media (hover: hover) {
+  .nx-layers-panel__tree
+    [role="treeitem"]:not(:hover)
+    .nx-layer-row__action:not([data-pinned]) {
+    opacity: 0;
+  }
+}
+
+/* A row being renamed: the field takes the name's place and its height. */
+.nx-layer-row__rename {
+  flex: 1;
+  min-width: 0;
+  height: 1.375rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-ring);
+  border-radius: 0.25rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nx-ring) 30%, transparent);
+}
+
+/*
+ * What a row's verb did, or why it could not, under the tree. Always in the
+ * page, so the live region is there before its first message; empty, it
+ * takes no height.
+ */
+.nx-layers-panel__notice {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+}
+
+/* Why a row menu's verb is held, under its label. */
+.nx-layer-menu__reason {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  color: var(--nx-muted-foreground);
 }
 
 /*

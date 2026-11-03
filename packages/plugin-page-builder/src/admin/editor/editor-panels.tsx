@@ -457,9 +457,19 @@ export function editorPanelRenderer({
   requestPanel,
   insertInside,
   pages,
+  canvasRender,
+  editedBreakpoint,
+  canvasElement,
+  layerVerbs,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
+  /**
+   * The block verbs the verbs provider shares, for the Layers row menu: drawn
+   * in the shell's panel region, outside the provider, so they are handed
+   * across as the inspector's card menu has them.
+   */
+  layerVerbs?: React.ComponentProps<typeof LayersPanel>["verbs"];
   /** "Edit component", which the Components panel offers on each row. */
   componentView: Pick<ComponentView, "onEditComponent">;
 } & Pick<
@@ -472,7 +482,15 @@ export function editorPanelRenderer({
     | "unreadableStoredFonts"
     | "classes"
   > &
-  Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
+  Pick<
+    CanvasInputs,
+    | "drag"
+    | "documentClasses"
+    | "classSummaryContext"
+    | "canvasRender"
+    | "editedBreakpoint"
+    | "canvasElement"
+  > &
   Pick<
     EditorPanels,
     "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
@@ -550,6 +568,15 @@ export function editorPanelRenderer({
           // Its titles come with the read, so a placement of a component
           // the panel does not offer (the one being edited) is still named.
           componentTitle={offered.titleOf}
+          // The device the eye hides on: the one being edited, against the
+          // breakpoints the canvas is compiled with.
+          device={{
+            breakpoints: canvasRender.styleContext.breakpoints,
+            id: editedBreakpoint,
+          }}
+          // A row chosen there scrolls its block into view here.
+          canvasRoot={canvasElement}
+          {...(layerVerbs === undefined ? {} : { verbs: layerVerbs })}
         />
       ),
       // Read when the panel is drawn, as every other entry reads its inputs,
