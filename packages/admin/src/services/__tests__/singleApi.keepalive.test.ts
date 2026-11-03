@@ -13,7 +13,8 @@ vi.mock("../../lib/api/protectedApi", () => ({
 }));
 
 import { protectedApi } from "../../lib/api/protectedApi";
-import { KEEPALIVE_BODY_LIMIT, singleApi } from "../singleApi";
+import { KEEPALIVE_BODY_LIMIT } from "../../lib/api/keepalive";
+import { singleApi } from "../singleApi";
 
 const patch = protectedApi.patch as unknown as ReturnType<typeof vi.fn>;
 

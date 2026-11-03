@@ -779,6 +779,10 @@ export { usePluginRouteMutation } from "@nextlyhq/admin";
  * moment it awaits can. Same session handling and CSRF token as the hook; not
  * cached, and it invalidates nothing. Experimental while its first caller
  * settles; the intent is to keep its name and options stable.
+ *
+ * `keepalive: true` (optional, additive) sends the write so the browser
+ * finishes it after the page is hidden or closed, while its body fits the
+ * 64 KB browsers allow; a larger one goes as an ordinary request.
  */
 export { writePluginRoute } from "@nextlyhq/admin";
 /**
