@@ -185,6 +185,39 @@ describe("before a publish", () => {
     await running;
   });
 
+  it("lists parts in page order, and publishes the deepest first", async () => {
+    // The server answers deepest first: the badge the card places, then the
+    // card, then the Layout.
+    const badge = { ...card, id: "c0", title: "Badge in the card" };
+    const layout = {
+      kind: "layout" as const,
+      id: "l1",
+      title: "Landing",
+      mayPublish: true,
+    };
+    server({ dependencies: [badge, card, layout], missing: 0 });
+    render(<Harness layout="l1" />);
+    const running = publish();
+    const dialog = await screen.findByRole("alertdialog");
+    const listed = [...dialog.querySelectorAll("li")].map(
+      item => item.textContent
+    );
+    expect(listed).toEqual([
+      "Pricing card, component",
+      "Badge in the card, component",
+      "Landing, Layout",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Publish all 4" }));
+    await running;
+    expect(routes).toHaveBeenLastCalledWith("/publish-dependencies", {
+      dependencies: [
+        { kind: "component", id: "c0" },
+        { kind: "component", id: "c1" },
+        { kind: "layout", id: "l1" },
+      ],
+    });
+  });
+
   it("leaves out a component the author unticks", async () => {
     const second = { ...card, id: "c3", title: "Footer" };
     server({ dependencies: [card, second], missing: 0 });

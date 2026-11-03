@@ -284,9 +284,15 @@ export function PublishOfferDialog({
     setUnchecked(new Set());
   }, [readiness]);
 
-  const entries = readiness?.dependencies ?? [];
+  // Published deepest first, but listed in the order the page places them:
+  // the server's order reversed, with a Layout, which wraps the page, last.
+  const publishOrder = readiness?.dependencies ?? [];
+  const entries = [
+    ...publishOrder.filter(entry => entry.kind === "component").reverse(),
+    ...publishOrder.filter(entry => entry.kind === "layout"),
+  ];
   const keyOf = (entry: UnpublishedDependency) => `${entry.kind}:${entry.id}`;
-  const offered = entries.filter(entry => entry.mayPublish);
+  const offered = publishOrder.filter(entry => entry.mayPublish);
   const chosen = offered.filter(entry => !unchecked.has(keyOf(entry)));
   const offerWords =
     withLabel ??
@@ -301,7 +307,9 @@ export function PublishOfferDialog({
       }}
     >
       <AlertDialogContent className="max-w-lg">
-        <AlertDialogHeader>
+        {/* Left-aligned at every width, so the icon and the list below sit
+            on one edge. */}
+        <AlertDialogHeader className="text-left sm:text-left">
           <AlertDialogTitle className="flex items-start gap-2">
             <TriangleAlert
               aria-hidden
@@ -351,7 +359,8 @@ export function PublishOfferDialog({
                   />
                   <label
                     htmlFor={withheld === null ? checkboxId : undefined}
-                    className="min-w-0 flex-1 truncate text-sm"
+                    // Wrapped rather than cut off: a long title is read whole.
+                    className="min-w-0 flex-1 text-sm break-words"
                   >
                     {nameOf(entry)}
                     <span className="sr-only">
