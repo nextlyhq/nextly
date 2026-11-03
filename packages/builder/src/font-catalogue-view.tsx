@@ -45,6 +45,11 @@ export interface CatalogueFamilyView {
   readonly defSubset: string;
   readonly variable: boolean;
   readonly licence: string;
+  /**
+   * How much the family is used, which "Popular" orders by: higher is more.
+   * Absent when the host could not say, and the list is then ordered by name.
+   */
+  readonly popularity?: number;
 }
 
 /** What the Fonts tab asks the catalogue to add: names, never addresses. */
@@ -71,6 +76,9 @@ export interface FontCatalogue {
   readonly add: (request: CatalogueAddRequest) => Promise<string | undefined>;
 }
 
+/** The list before the catalogue has answered, kept so its order is too. */
+const NO_FAMILIES: readonly CatalogueFamilyView[] = Object.freeze([]);
+
 /** How many families mount before the author asks for more. */
 const PAGE_SIZE = 30;
 
@@ -84,6 +92,37 @@ const CATEGORIES = [
 ] as const;
 
 type Category = (typeof CATEGORIES)[number][0];
+
+const SORTS = [
+  ["popular", "Popular"],
+  ["name", "A–Z"],
+] as const;
+
+type Sort = (typeof SORTS)[number][0];
+
+/** Names in the order a reader expects, whatever their case or accents. */
+const BY_NAME = new Intl.Collator(undefined, { sensitivity: "base" });
+
+/**
+ * The families in the order chosen: the most used first, then by name among
+ * equals; or by name alone. The catalogue arrives in its own order, which is
+ * not promised to be either.
+ */
+function ordered(
+  families: readonly CatalogueFamilyView[],
+  sort: Sort
+): CatalogueFamilyView[] {
+  return [...families].sort(
+    (a, b) =>
+      (sort === "popular" ? (b.popularity ?? 0) - (a.popularity ?? 0) : 0) ||
+      BY_NAME.compare(a.family, b.family)
+  );
+}
+
+/** Whether the host said how much any family is used, so "Popular" can mean something. */
+function knowsPopularity(families: readonly CatalogueFamilyView[]): boolean {
+  return families.some(family => family.popularity !== undefined);
+}
 
 /** A category in words. */
 function categoryName(category: string): string {
@@ -171,6 +210,7 @@ export function FontCatalogueView({
   const { load, retry } = useCatalogue(catalogue);
   const [query, setQuery] = React.useState(initialQuery);
   const [category, setCategory] = React.useState<Category>("all");
+  const [sort, setSort] = React.useState<Sort>("popular");
   const [sample, setSample] = React.useState("");
   const [pages, setPages] = React.useState(1);
   const search = React.useRef<HTMLInputElement>(null);
@@ -181,9 +221,17 @@ export function FontCatalogueView({
   }, []);
 
   const needle = query.trim().toLowerCase();
+  const families = load.status === "ready" ? load.families : NO_FAMILIES;
+  // Without figures "Popular" would be a promise the list cannot keep, so the
+  // choice is not offered and the list reads by name.
+  const sortable = knowsPopularity(families);
+  const sorted = React.useMemo(
+    () => ordered(families, sortable ? sort : "name"),
+    [families, sortable, sort]
+  );
   const matching =
     load.status === "ready"
-      ? load.families.filter(
+      ? sorted.filter(
           family =>
             (category === "all" || family.category === category) &&
             family.family.toLowerCase().includes(needle)
@@ -229,15 +277,28 @@ export function FontCatalogueView({
         />
       </div>
       <div className="nx-fonts-catalogue__filters">
-        <ChoiceMenu
-          label="Category"
-          value={category}
-          options={CATEGORIES}
-          onChange={next => {
-            setCategory(next);
-            setPages(1);
-          }}
-        />
+        <div className="nx-fonts-catalogue__choices">
+          <ChoiceMenu
+            label="Category"
+            value={category}
+            options={CATEGORIES}
+            onChange={next => {
+              setCategory(next);
+              setPages(1);
+            }}
+          />
+          {sortable ? (
+            <ChoiceMenu
+              label="Sort"
+              value={sort}
+              options={SORTS}
+              onChange={next => {
+                setSort(next);
+                setPages(1);
+              }}
+            />
+          ) : null}
+        </div>
         <Input
           type="text"
           aria-label="Preview text"

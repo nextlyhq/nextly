@@ -266,6 +266,47 @@ describe("browsing", () => {
   });
 });
 
+describe("ordering", () => {
+  /** The families' names, top to bottom, as the list shows them. */
+  const order = (): string[] =>
+    [...document.querySelectorAll<HTMLElement>("[data-catalogue-family]")].map(
+      each => each.dataset.catalogueFamily ?? ""
+    );
+
+  const ABEL: CatalogueFamilyView = { ...LORA, id: "abel", family: "Abel" };
+  const ranked = [
+    { ...ABEL, popularity: 10 },
+    { ...INTER, popularity: 900 },
+    { ...LORA, popularity: 300 },
+    { ...LORA, id: "zilla", family: "Zilla Slab", popularity: 300 },
+  ];
+
+  it("puts the most used families first, and names in order among equals", async () => {
+    view(catalogue({}, ranked));
+    await row(/^Inter/);
+    expect(screen.getByRole("button", { name: "Sort, Popular" })).toBeTruthy();
+    expect(order()).toEqual(["inter", "lora", "zilla", "abel"]);
+  });
+
+  it("orders by name when A to Z is chosen", async () => {
+    view(catalogue({}, ranked));
+    await row(/^Inter/);
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Sort/ }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "A–Z" }));
+    expect(order()).toEqual(["abel", "inter", "lora", "zilla"]);
+    expect(screen.getByRole("button", { name: "Sort, A–Z" })).toBeTruthy();
+  });
+
+  it("orders by name, and offers no sort, when the catalogue says nothing of popularity", async () => {
+    view(catalogue({}, [LORA, INTER, ABEL]));
+    await row(/^Inter/);
+    expect(order()).toEqual(["abel", "inter", "lora"]);
+    expect(screen.queryByRole("button", { name: /^Sort/ })).toBeNull();
+  });
+});
+
 describe("adding a family", () => {
   it("starts a static family on Regular and Bold, its own script, and no italics", async () => {
     view(catalogue());

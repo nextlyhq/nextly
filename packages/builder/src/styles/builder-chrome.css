@@ -4650,12 +4650,23 @@ fieldset.nx-inspector__fields {
   font-weight: 600;
 }
 
+/* Category and order share the first line, each half of it, or all of it
+   when there is no order to choose; the preview text has the second. */
 .nx-fonts-catalogue__filters {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--nx-border);
+}
+
+.nx-fonts-catalogue__choices {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nx-fonts-catalogue__choices > * {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .nx-fonts-catalogue__filters input {
