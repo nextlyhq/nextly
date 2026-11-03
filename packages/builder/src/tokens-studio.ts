@@ -534,6 +534,10 @@ export function writeTokenValue(
     return {
       tokens: withToken(tokens, at, {
         ...token,
+        // The kind both values are read as, set rather than kept: a legacy
+        // unitless zero held as a length is a number to this rule, and a
+        // number dark beside it would otherwise be refused as not a length.
+        kind,
         values: { ...token.values, dark: value },
       }),
     };

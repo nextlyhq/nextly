@@ -659,6 +659,25 @@ describe("a type size's name", () => {
 });
 
 describe("a line height's two modes", () => {
+  it("hold the kind a unitless dark value needs over a legacy unitless zero", () => {
+    // A zero was storable as a length with no unit. A dark value written as a
+    // plain number beside it makes the token a number, which both values are.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "line-height.body", kind: "dimension", values: { light: "0" } },
+      ],
+    };
+    const dark = writeTokenValue(set, 0, "dark", "1.2");
+    expect("tokens" in dark && dark.tokens.tokens[0]).toEqual({
+      name: "line-height.body",
+      kind: "number",
+      values: { light: "0", dark: "1.2" },
+    });
+    expect(
+      "tokens" in dark && emitTokenBlocks(dark.tokens, ":root").issues
+    ).toEqual([]);
+  });
+
   it("take their kind from light: a light edit of the other kind drops dark, and says so", () => {
     // Both lengths: the light value is the one edit that can change which,
     // and dark then follows it until it is set again.

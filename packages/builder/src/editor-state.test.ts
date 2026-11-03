@@ -2014,6 +2014,54 @@ describe("a step recorded from outside the document", () => {
     expect(result.current.canRedo).toBe(false);
   });
 
+  it("gives back the redo branch once every one of several unanswered steps is withdrawn", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let first: () => void = () => {};
+    let second: () => void = () => {};
+    act(() => {
+      first = result.current.recordStep(step(calls, "first"));
+      second = result.current.recordStep(step(calls, "second"));
+    });
+    act(() => first());
+    // One of them may still have taken effect: no redo yet.
+    expect(result.current.canRedo).toBe(false);
+    act(() => second());
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("keeps the redo branch ended when one of several unanswered steps stays", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let second: () => void = () => {};
+    act(() => {
+      result.current.recordStep(step(calls, "first"));
+      second = result.current.recordStep(step(calls, "second"));
+    });
+    act(() => second());
+    expect(result.current.canRedo).toBe(false);
+  });
+
   it("keeps the redo branch ended once another edit has followed it", async () => {
     const calls: string[] = [];
     const { result } = renderHook(() =>

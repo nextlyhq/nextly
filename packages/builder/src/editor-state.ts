@@ -920,31 +920,25 @@ function useHistoryStacks(): {
     });
   }, []);
   /*
-   * The redo branch the newest recorded step ended, with that step and the
-   * entry below it, so that withdrawing the step before anything follows
-   * gives the branch back: a change that never took effect must not cost the
-   * author their redo either. Kept while the step itself is undone and not yet
-   * answered, since its change may still be refused.
+   * The redo branch a run of recorded steps ended, with those steps and the
+   * entry below the first, so that withdrawing every one of them before
+   * anything else follows gives the branch back: changes that never took
+   * effect must not cost the author their redo either. Kept while the steps
+   * are recorded one after another, and while any of them only moves between
+   * the stacks unanswered, since each change may still be refused; dropped
+   * once a replay of one takes effect or any other entry is pushed.
    */
-  const endedBranch = useRef<{
-    by: HistoryEntry;
-    below: HistoryEntry | undefined;
-    branch: HistoryEntry[];
-  } | null>(null);
+  const endedBranch = useRef<StepRun | null>(null);
   const push = useCallback(
     (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
       let dropped: HistoryEntry | undefined;
-      // Whatever is pushed next means the branch can no longer come back,
-      // unless it is that step itself moving between the stacks.
-      const ended = endedBranch.current;
-      const sameStep =
-        into !== "new" &&
-        ended !== null &&
-        ended.by.kind === "step" &&
-        entry.kind === "step" &&
-        entry.origin === ended.by.origin;
-      if (!sameStep) endedBranch.current = null;
-      const below = undoStack.current.at(-1);
+      endedBranch.current = runAfterPush(
+        endedBranch.current,
+        entry,
+        into,
+        undoStack.current.at(-1),
+        redoStack.current
+      );
       if (into === "redo") {
         redoStack.current.push(entry);
       } else {
@@ -961,7 +955,6 @@ function useHistoryStacks(): {
         // A new edit invalidates the redo branch: those inverses were computed
         // against a document that no longer exists, so replaying one would
         // apply an edit derived from a tree that has since changed.
-        endedBranch.current = { by: entry, below, branch: redoStack.current };
         redoStack.current = [];
       }
       sync();
@@ -995,19 +988,18 @@ function useHistoryStacks(): {
     (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
       const kept = (held: HistoryEntry) =>
         held.kind !== "step" || held.origin !== origin;
-      // With the step gone, the history as it was when the step was recorded
-      // (nothing made since, and nothing else undone): the redo branch its
-      // recording ended comes back with its withdrawal.
+      // With the last step of the run gone, the history as it was before it
+      // began (nothing made since, and nothing else undone): the redo branch
+      // the run ended comes back with that withdrawal. While others of the
+      // run remain, one of them may yet take effect, so the branch waits.
       const ended = endedBranch.current;
-      endedBranch.current = null;
+      ended?.steps.delete(origin);
+      const last = ended !== null && ended.steps.size === 0;
+      if (last) endedBranch.current = null;
       undoStack.current = undoStack.current.filter(kept);
       const redo = redoStack.current.filter(kept);
       const restore =
-        ended !== null &&
-        ended.by.kind === "step" &&
-        ended.by.origin === origin &&
-        undoStack.current.at(-1) === ended.below &&
-        redo.length === 0
+        last && undoStack.current.at(-1) === ended.below && redo.length === 0
           ? ended.branch
           : [];
       redoStack.current = [...redo, ...restore];
@@ -1020,16 +1012,41 @@ function useHistoryStacks(): {
     [sync]
   );
   /*
-   * A replay of the step took effect: its change and its undo are both real,
-   * so the branch it ended is gone for good.
+   * A replay of a step of the run took effect: its change and its undo are
+   * both real, so the branch the run ended is gone for good.
    */
   const settle = useCallback((origin: HistoryStep) => {
-    const ended = endedBranch.current;
-    if (ended?.by.kind === "step" && ended.by.origin === origin) {
+    if (endedBranch.current?.steps.has(origin) === true) {
       endedBranch.current = null;
     }
   }, []);
   return { depths, push, pop, remove, withdraw, settle };
+}
+
+/** A run of recorded steps, the redo branch it ended, and what lay below it. */
+interface StepRun {
+  steps: Set<HistoryStep>;
+  below: HistoryEntry | undefined;
+  branch: HistoryEntry[];
+}
+
+/**
+ * The run of recorded steps once `entry` is pushed: a new step joins the run
+ * or starts one (keeping the branch it ends and what lay below), a step of
+ * the run moving between the stacks keeps it, and anything else ends it.
+ */
+function runAfterPush(
+  run: StepRun | null,
+  entry: HistoryEntry,
+  into: "undo" | "redo" | "new",
+  below: HistoryEntry | undefined,
+  branch: HistoryEntry[]
+): StepRun | null {
+  if (entry.kind !== "step") return null;
+  if (into !== "new") return run?.steps.has(entry.origin) === true ? run : null;
+  if (run === null) return { steps: new Set([entry.origin]), below, branch };
+  run.steps.add(entry.origin);
+  return run;
 }
 
 /**
