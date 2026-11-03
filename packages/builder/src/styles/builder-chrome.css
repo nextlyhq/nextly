@@ -358,6 +358,13 @@
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+  /*
+   * On the panel's own surface: the command palette it is built from paints
+   * a card of its own (the admin background, rounded), which drew a second
+   * surface inside the panel — black in dark, a white band in light.
+   */
+  background: transparent;
+  border-radius: 0;
 }
 
 .nx-insert-panel .nx-insert-panel__list {
