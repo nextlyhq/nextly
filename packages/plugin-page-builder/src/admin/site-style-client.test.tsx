@@ -79,6 +79,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return writeBehaviour();
   },
   validationIssues: () => issuesAnswer,
+  // The form's storing gate, absent here: nothing is tracked.
+  useTrackedWrite: () => () => {},
   readPluginRoute: async () => undefined,
   useUpdateSingleDocument: (
     _slug: string,

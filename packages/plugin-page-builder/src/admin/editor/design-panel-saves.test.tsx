@@ -35,8 +35,13 @@ vi.mock("@nextlyhq/ui", async importOriginal => {
   return { ...actual, toast: { ...actual.toast, error: toastError } };
 });
 
-/** What the editor last reported about unsaved work, by key. */
-const unsavedWork = vi.hoisted(() => new Map<string, boolean>());
+/**
+ * The writes the editor tracked with the entry form's storing gate, which
+ * lives as long as the form does, whether or not the editor is open.
+ */
+const tracked = vi.hoisted(() => ({
+  writes: [] as { label: string; write: Promise<unknown> }[],
+}));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: () => true,
@@ -96,10 +101,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   useBeforeDocumentAction: (handler: () => unknown) => {
     beforeAction.run = handler;
   },
-  // The report the entry form's unsaved-changes guard reads, the one that
-  // asks the browser's "Leave site?" on closing or reloading the tab.
-  useReportUnsavedWork: (key: string, unsaved: boolean) => {
-    unsavedWork.set(key, unsaved);
+  useTrackedWrite: () => (label: string, write: Promise<unknown>) => {
+    tracked.writes.push({ label, write });
   },
 }));
 
@@ -214,7 +217,7 @@ beforeEach(() => {
   single.keepalive = [];
   single.gate = undefined;
   toastError.mockClear();
-  unsavedWork.clear();
+  tracked.writes = [];
   beforeAction.run = undefined;
   vi.useFakeTimers();
 });
@@ -411,36 +414,6 @@ describe("the Design panel's writes", () => {
     }
   });
 
-  it("makes Save wait for a write released earlier that has not answered", async () => {
-    let open: () => void = () => {};
-    single.gate = new Promise(resolve => {
-      open = resolve;
-    });
-    render(<Editor steps={[]} />);
-    const field = openBrand();
-    enter(field, "#00000c");
-    act(() => {
-      fireEvent.keyDown(field, { key: "Escape" });
-    });
-    await settle();
-    // Released when the editor closed, and still on its way.
-    expect(writes).toHaveLength(1);
-    let saved = false;
-    let saving: Promise<unknown> = Promise.resolve();
-    act(() => {
-      saving = Promise.resolve(beforeAction.run?.()).then(() => {
-        saved = true;
-      });
-    });
-    await settle();
-    expect(saved).toBe(false);
-    open();
-    await act(async () => {
-      await saving;
-    });
-    expect(saved).toBe(true);
-  });
-
   it("writes nothing and keeps no step for an edit changed back within the pause", async () => {
     const brand = {
       name: "color.brand",
@@ -511,109 +484,6 @@ describe("the Design panel's writes", () => {
     // Stored where the read already holds it, so nothing is drawn over it.
     expect(previewing()).toBe("0");
   });
-  it("refuses Save when the held edit it writes is refused, and says why", async () => {
-    single.refuse = "That colour cannot be stored.";
-    render(<Editor steps={[]} />);
-    enter(openBrand(), "#000012");
-    let refusal: unknown;
-    await act(async () => {
-      try {
-        await beforeAction.run?.();
-      } catch (error) {
-        refusal = error;
-      }
-    });
-    // Throwing is how a before-action refuses Save and Publish, with its
-    // message: the page is not stored with a style that was not.
-    expect(refusal).toBeInstanceOf(Error);
-    expect((refusal as Error).message).toBe(
-      "The page was not saved because a design change was refused: That colour cannot be stored."
-    );
-    expect(writes).toHaveLength(1);
-    expect(screen.getByRole("alert", { hidden: true }).textContent).toBe(
-      "That colour cannot be stored."
-    );
-  });
-
-  it("refuses Save for a write released earlier that is refused while Save waits", async () => {
-    single.refuse = "That colour cannot be stored.";
-    let open: () => void = () => {};
-    single.gate = new Promise(resolve => {
-      open = resolve;
-    });
-    render(<Editor steps={[]} />);
-    const field = openBrand();
-    enter(field, "#000013");
-    act(() => {
-      fireEvent.keyDown(field, { key: "Escape" });
-    });
-    await settle();
-    let saving: Promise<unknown> = Promise.resolve();
-    act(() => {
-      saving = Promise.resolve(beforeAction.run?.());
-    });
-    open();
-    await act(async () => {
-      await expect(saving).rejects.toThrow(/design change was refused/);
-    });
-  });
-  /** Run Save's before-action and answer with what it threw, if anything. */
-  async function save(): Promise<unknown> {
-    let refusal: unknown;
-    await act(async () => {
-      try {
-        await beforeAction.run?.();
-      } catch (error) {
-        refusal = error;
-      }
-    });
-    return refusal;
-  }
-
-  it("refuses Save for a held edit refused after the pause, before Save", async () => {
-    single.refuse = "That colour cannot be stored.";
-    render(<Editor steps={[]} />);
-    enter(openBrand(), "#000014");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    expect(writes).toHaveLength(1);
-    const refusal = await save();
-    expect((refusal as Error | undefined)?.message).toBe(
-      "The page was not saved because a design change was refused: That colour cannot be stored."
-    );
-  });
-
-  it("lets Save go ahead once a later edit of the section is stored", async () => {
-    single.refuse = "That colour cannot be stored.";
-    render(<Editor steps={[]} />);
-    const field = openBrand();
-    enter(field, "#000015");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    single.refuse = undefined;
-    enter(field, "#000016");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    expect(writes).toHaveLength(2);
-    expect(await save()).toBeUndefined();
-  });
-
-  it("lets Save go ahead once the refused edit is undone", async () => {
-    single.refuse = "That colour cannot be stored.";
-    const steps: EditorStep[] = [];
-    render(<Editor steps={steps} />);
-    enter(openBrand(), "#000017");
-    // Undone while it waits: written first, refused, and taken back.
-    await act(async () => {
-      await steps[0]?.undo();
-    });
-    await settle();
-    expect(writes).toHaveLength(1);
-    expect(await save()).toBeUndefined();
-  });
   it("undoes a held edit whose write is refused quietly, back to the original", async () => {
     stored.data = {
       tokens: {
@@ -638,27 +508,182 @@ describe("the Design panel's writes", () => {
     expect(canvas()).toBe("#1d2b6b");
   });
 
-  it("tells the form there is unsaved work while a style write is held or on its way", async () => {
+  /**
+   * What Save would come to now: its before-action run, then the entry form's
+   * storing gate over the tracked writes, by the gate's contract (pinned in
+   * the admin's `DocumentActionsHost.before-and-tracked.test`): it waits for
+   * every tracked write, and refuses while any change's latest attempt
+   * failed. Answers the refusal, or `undefined` when the page would be saved.
+   */
+  async function save(): Promise<string | undefined> {
+    let refusal: string | undefined;
+    await act(async () => {
+      await beforeAction.run?.();
+      for (let pass = 0; pass < 5; pass += 1) {
+        const seen = tracked.writes.length;
+        await Promise.allSettled(tracked.writes.map(entry => entry.write));
+        if (tracked.writes.length === seen) break;
+      }
+      const latest = new Map(
+        tracked.writes.map(entry => [entry.label, entry.write])
+      );
+      for (const [label, write] of latest) {
+        try {
+          await write;
+        } catch (error) {
+          refusal ??= `${label} wasn't saved, so this page wasn't either: ${(error as Error).message}`;
+        }
+      }
+    });
+    return refusal;
+  }
+
+  const REFUSED =
+    "A change to the site's variables wasn't saved, so this page wasn't either: That colour cannot be stored.";
+
+  it("makes Save wait for a write released earlier that has not answered", async () => {
     let open: () => void = () => {};
     single.gate = new Promise(resolve => {
       open = resolve;
     });
     render(<Editor steps={[]} />);
-    const pending = () => [...unsavedWork.values()].some(Boolean);
-    expect(pending()).toBe(false);
     const field = openBrand();
-    enter(field, "#000019");
-    // Held for the pause.
-    expect(pending()).toBe(true);
+    enter(field, "#000020");
     act(() => {
       fireEvent.keyDown(field, { key: "Escape" });
     });
     await settle();
-    // Released and on its way.
     expect(writes).toHaveLength(1);
-    expect(pending()).toBe(true);
+    let saved = false;
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = save().then(() => {
+        saved = true;
+      });
+    });
+    await settle();
+    expect(saved).toBe(false);
+    open();
+    await act(async () => {
+      await saving;
+    });
+    expect(saved).toBe(true);
+  });
+
+  it("refuses Save when the held edit it writes is refused, and says why", async () => {
+    single.refuse = "That colour cannot be stored.";
+    render(<Editor steps={[]} />);
+    enter(openBrand(), "#000021");
+    expect(await save()).toBe(REFUSED);
+    expect(writes).toHaveLength(1);
+    expect(screen.getByRole("alert", { hidden: true }).textContent).toBe(
+      "That colour cannot be stored."
+    );
+  });
+
+  it("refuses Save for a held edit refused after the pause, before Save", async () => {
+    single.refuse = "That colour cannot be stored.";
+    render(<Editor steps={[]} />);
+    enter(openBrand(), "#000022");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(1);
+    expect(await save()).toBe(REFUSED);
+  });
+
+  it("lets Save go ahead once a later edit of the section is stored", async () => {
+    single.refuse = "That colour cannot be stored.";
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    enter(field, "#000023");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    single.refuse = undefined;
+    enter(field, "#000024");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(2);
+    expect(await save()).toBeUndefined();
+  });
+
+  it("lets Save go ahead once the refused edit is undone", async () => {
+    single.refuse = "That colour cannot be stored.";
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    enter(openBrand(), "#000025");
+    // Undone while it waits: written first, refused, and taken back.
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    await settle();
+    expect(writes).toHaveLength(1);
+    expect(await save()).toBeUndefined();
+  });
+
+  it("makes Save wait, once the editor has closed, for an edit it left held", async () => {
+    let open: () => void = () => {};
+    single.gate = new Promise(resolve => {
+      open = resolve;
+    });
+    const { unmount } = render(<Editor steps={[]} />);
+    enter(openBrand(), "#000026");
+    expect(writes).toEqual([]);
+    // Leaving the builder: the editor goes, and with it its before-action;
+    // the form, and its storing gate, stay.
+    unmount();
+    beforeAction.run = undefined;
+    let saved = false;
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = save().then(() => {
+        saved = true;
+      });
+    });
+    await settle();
+    expect(writes).toHaveLength(1);
+    expect(saved).toBe(false);
+    open();
+    await act(async () => {
+      await saving;
+    });
+    expect(saved).toBe(true);
+  });
+
+  it("refuses Save, once the editor has closed, for an edit it left that is refused", async () => {
+    single.refuse = "That colour cannot be stored.";
+    const { unmount } = render(<Editor steps={[]} />);
+    enter(openBrand(), "#000027");
+    unmount();
+    beforeAction.run = undefined;
+    expect(await save()).toBe(REFUSED);
+  });
+
+  it("tracks a held edit with the form from when it is held until it answers", async () => {
+    let open: () => void = () => {};
+    single.gate = new Promise(resolve => {
+      open = resolve;
+    });
+    render(<Editor steps={[]} />);
+    expect(tracked.writes).toEqual([]);
+    enter(openBrand(), "#000028");
+    // One change, tracked under the section's name while it is held: the
+    // form counts it as unsaved work from here, and its gate waits for it.
+    expect(tracked.writes.map(entry => entry.label)).toEqual([
+      "A change to the site's variables",
+    ]);
+    let answered = false;
+    void tracked.writes[0]?.write.then(() => {
+      answered = true;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(answered).toBe(false);
     open();
     await settle();
-    expect(pending()).toBe(false);
+    expect(answered).toBe(true);
   });
 });

@@ -256,6 +256,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   }) => {
     chromeRequests.push(request);
   },
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: (handler: () => void) => {
     beforeStore = handler;
   },
@@ -402,16 +404,9 @@ describe("the unsaved-work report", () => {
   it("reports no work under the field's own key when the editor opens", () => {
     openEditor();
 
-    const own = reports.filter(report => report.key === "blocks:body");
-    expect(own.length).toBeGreaterThan(0);
-    expect(own.at(-1)?.hasWork).toBe(false);
-    // The editor's other report, its site style writes still on their way,
-    // has none either when nothing has been written.
-    expect(
-      reports
-        .filter(report => report.key !== "blocks:body")
-        .every(report => report.key === "site-style-writes" && !report.hasWork)
-    ).toBe(true);
+    expect(reports.length).toBeGreaterThan(0);
+    expect(reports.every(report => report.key === "blocks:body")).toBe(true);
+    expect(reports.at(-1)?.hasWork).toBe(false);
   });
 
   it("reports work once the document has been edited", () => {

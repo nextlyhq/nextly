@@ -17,10 +17,7 @@
  *
  * @module admin/editor/site-style-history
  */
-import {
-  useBeforeDocumentAction,
-  useReportUnsavedWork,
-} from "@nextlyhq/plugin-sdk/admin";
+import { useBeforeDocumentAction } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
 import {
   createContext,
@@ -186,7 +183,6 @@ export function useSiteStyleHistory(): {
 } {
   const [revision, setRevision] = useState(0);
   const { shown, preview } = useHeldPreview();
-  const writing = useUnfinishedWrites();
   const { inFlight, waitForRead, settling } = useReadBack(setRevision);
   const settled = useRef(new Map<SiteStyleSection, SectionChain>()).current;
   const recorder = useRef<RecordStep | null>(null);
@@ -216,38 +212,16 @@ export function useSiteStyleHistory(): {
     return {
       settled,
       preview,
-      writing,
       record: step =>
         recorder.current?.({
           undo: replay(step.undo, "undone"),
           redo: replay(step.redo, "redone"),
         }) ?? (() => {}),
     };
-  }, [settled, inFlight, waitForRead, preview, writing]);
+  }, [settled, inFlight, waitForRead, preview]);
   const replay = useMemo(() => ({ revision, settling }), [revision, settling]);
   useReleaseWhenDone(history);
   return { history, replay, connect, preview: shown };
-}
-
-/** Why Save or Publish did not run, when a design change it waited for was refused. */
-function designRefusal(reasons: readonly string[]): string {
-  return `The page was not saved because a design change was refused: ${reasons.join(" ")}`;
-}
-
-/**
- * Counts the site style writes not yet answered, held ones included, and
- * reports them to the entry form as unsaved work while there are any. The
- * form's own unsaved-changes guard then asks the browser's "Leave site?" on
- * closing or reloading the tab, through its one `beforeunload` listener: a
- * write still waiting behind another when the page goes is lost, and this
- * makes that a question rather than a silence.
- */
-function useUnfinishedWrites(): NonNullable<SiteStyleHistory["writing"]> {
-  const [unfinished, setUnfinished] = useState(0);
-  useReportUnsavedWork("site-style-writes", unfinished > 0);
-  return useCallback((delta: 1 | -1) => {
-    setUnfinished(current => current + delta);
-  }, []);
 }
 
 /** A held value drawn over the read, and the read its write answered at. */
@@ -327,18 +301,17 @@ function useHeldPreview(): {
 
 /**
  * Writes what a Design edit left waiting for the author's pause whenever the
- * pause cannot be waited for: before the page is saved or published (and the
- * action waits for it, and for any write still on its way, so the page and
- * its styles are stored together), when the browser tab is hidden or closed,
- * and when the editor goes away.
+ * pause cannot be waited for: before the page is saved or published (the
+ * form's storing gate then waits for it, and for any write still on its way,
+ * so the page and its styles are stored together), when the browser tab is
+ * hidden or closed, and when the editor goes away.
  */
 function useReleaseWhenDone(history: SiteStyleHistory): void {
-  // A refused write refuses the action too: storing the page then could
-  // keep a reference to a style that was never stored. Thrown, as a
-  // before-action refuses Save and Publish, with words the author reads.
-  useBeforeDocumentAction(async () => {
-    const refused = await releaseHeldSiteStyle(history);
-    if (refused.length > 0) throw new Error(designRefusal(refused));
+  // Started here; the form's storing gate then waits for every write, these
+  // included, and refuses Save and Publish while one of them was refused,
+  // for as long as the form lives, so also once the editor has closed.
+  useBeforeDocumentAction(() => {
+    void releaseHeldSiteStyle(history);
   });
   useEffect(() => {
     const release = (): void => {

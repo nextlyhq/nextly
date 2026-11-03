@@ -49,6 +49,7 @@
  */
 import {
   readPluginRoute,
+  useTrackedWrite,
   useUpdateSingleDocument,
   validationIssues,
   writePluginRoute,
@@ -276,11 +277,6 @@ export interface SiteStyleHistory {
     value: unknown,
     state: "held" | "stored" | "dropped"
   ) => void;
-  /**
-   * Hears each write joining a section's chain (`1`, held ones included) and
-   * each one answering (`-1`), so the editor knows while any is unfinished.
-   */
-  readonly writing?: (delta: 1 | -1) => void;
 }
 
 /**
@@ -311,17 +307,25 @@ export interface SectionChain {
    * is written, so every later write and replay waits behind it.
    */
   waiting?: HeldWrite;
-  /** The answers of this editor's writes to the section still on their way. */
-  writing?: Set<Promise<SiteStyleSaveResult>>;
   /**
-   * Why the section's last write was refused, while that stands: until a
-   * later write of the section is stored (the correction, an undo of an
-   * earlier change included) or the refused change itself is undone. Save
-   * and Publish are refused while it stands, since the page may refer to
-   * what was never stored. `by` is the write it came from.
+   * The section's latest write, as the entry form's storing gate tracks it:
+   * the gate refuses Save and Publish while a section's latest attempt
+   * failed, until a later one succeeds, and it lives as long as the form,
+   * open builder or not. `by` names the write it came from.
    */
-  refused?: { readonly reasons: readonly string[]; readonly by: object };
+  attempt?: { readonly by: object; readonly settled: Promise<void> };
 }
+
+/**
+ * Each section's name in the storing gate's words: "… wasn't saved, so this
+ * page wasn't either", said when a write of it was refused.
+ */
+const SECTION_LABELS: Readonly<Record<SiteStyleSection, string>> = {
+  tokens: "A change to the site's variables",
+  classes: "A change to the site's shared styles",
+  fonts: "A change to the site's fonts",
+  breakpoints: "A change to the site's breakpoints",
+};
 
 /** A save held for the author's pause. */
 export interface HeldWrite {
@@ -357,20 +361,16 @@ function heldWrites(history: SiteStyleHistory | null): HeldWrite[] {
  */
 export async function releaseHeldSiteStyle(
   history: SiteStyleHistory | null
-): Promise<readonly string[]> {
-  if (history === null) return [];
+): Promise<void> {
+  if (history === null) return;
   for (const write of heldWrites(history)) write.release();
-  // Every write still on its way, not only the ones released here: one
-  // released earlier, when an editor closed, is no longer held but has not
-  // answered either, and a page saved meanwhile must wait for it too.
+  // Every write still on its way, a chain's tail settling once each made to
+  // it so far has answered. Save does not rely on this: the form's storing
+  // gate waits for every tracked write, and says when one was refused.
   await Promise.all(
-    [...history.settled.values()].flatMap(chain => [...(chain.writing ?? [])])
-  );
-  // Then every refusal still standing, those answered just now and earlier
-  // alike, so a caller that must not go on without them, as Save does, can
-  // say why.
-  return [...history.settled.values()].flatMap(
-    chain => chain.refused?.reasons ?? []
+    [...history.settled.values()]
+      .filter(chain => chain.pending > 0)
+      .map(chain => chain.tail)
   );
 }
 
@@ -483,6 +483,8 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   const stored = useRef(data);
   stored.current = data;
   const history = useContext(SiteStyleHistoryContext);
+  // The entry form's storing gate, which every write in turn is tracked with.
+  const track = useTrackedWrite();
 
   const write = useCallback(
     async (
@@ -548,17 +550,18 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     ) => {
       const before = chain.tail;
       chain.pending += 1;
-      history?.writing?.(1);
-      // This write, as a standing refusal names the one it came from.
+      // This write, as the section's latest attempt names the one it was.
       const turn = {};
       const done = before.then(async held => {
         const next = await value(held);
-        // A write whose step was withdrawn while it waited stores nothing.
+        // A write whose step was withdrawn while it waited stores nothing,
+        // and says nothing new about the section either.
         if (next === SKIP) {
           return {
             result: { saved: false, issues: {} },
             holds: held,
             wrote: false,
+            skipped: true,
           };
         }
         if (next === ALREADY_UNDONE) {
@@ -571,7 +574,6 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         // Nothing to write: the section already holds what was asked for,
         // which is as good a correction of a refusal as a stored write.
         if (next === UNCHANGED) {
-          delete chain.refused;
           return {
             result: { saved: true, issues: {} },
             holds: held,
@@ -579,19 +581,12 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           };
         }
         const result = await write(section, next);
-        const reasons = Object.values(result.issues);
-        if (result.saved) delete chain.refused;
-        else if (reasons.length > 0) chain.refused = { reasons, by: turn };
         return { result, holds: result.saved ? next : held, wrote: true };
       });
-      // Counted while it is on its way, for a barrier to wait on and read.
-      const answer = done.then(({ result }) => result);
-      const writing = (chain.writing ??= new Set());
-      writing.add(answer);
-      void answer.then(() => writing.delete(answer));
+      chain.attempt = attemptOf(chain.attempt, turn, done);
+      track(SECTION_LABELS[section], chain.attempt.settled);
       chain.tail = done.then(({ holds }) => {
         chain.pending -= 1;
-        history?.writing?.(-1);
         if (chain.pending === 0) {
           chain.held = holds;
           chain.heldAt = stored.current;
@@ -600,7 +595,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       });
       return { before, done, turn };
     },
-    [write, history]
+    [write, track]
   );
 
   /**
@@ -625,9 +620,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         pending: 0,
         held,
         heldAt: stored.current,
-        // Begun again from a newer read, the section's standing refusal
-        // stays: nothing has stored a correction yet.
-        ...(known?.refused === undefined ? {} : { refused: known.refused }),
+        // Begun again from a newer read, the section's latest attempt
+        // stays: a write skipped later answers as it did.
+        ...(known?.attempt === undefined ? {} : { attempt: known.attempt }),
       };
       settled.set(section, fresh);
       return fresh;
@@ -679,18 +674,21 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       const replay =
         (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
           let sent: unknown = SKIP;
+          const chainNow = chainOf(settled, section);
+          // Whether this step's write is still the section's latest attempt,
+          // asked before the replay becomes one itself.
+          const latestIsMine = chainNow.attempt?.by === turn;
           const { result, holds } = await inTurn(
-            chainOf(settled, section),
+            chainNow,
             section,
             async () => {
               if (withdrawn) {
-                // Undoing a change that was refused takes it back: its
-                // refusal no longer stands in the way of Save, and the undo
-                // is done, since what came before it already shows.
-                const current = chainOf(settled, section);
-                if (current.refused?.by !== turn) return SKIP;
-                delete current.refused;
-                return ALREADY_UNDONE;
+                // Undoing a change that was refused takes it back: answering
+                // as done clears its refusal from the storing gate, and the
+                // undo is done, since what came before it already shows. Only
+                // while nothing of the section came after it, whose refusal
+                // this must not clear.
+                return latestIsMine ? ALREADY_UNDONE : SKIP;
               }
               // The section's value, not a promise of it: an undo's target is
               // what the section held, which may still be settling.
@@ -742,6 +740,34 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   return { save, saving: mutation.isPending };
+}
+
+/**
+ * A write's attempt as the storing gate tracks it: settled when the write
+ * answered, rejected with the reasons when it was refused, and, for a write
+ * skipped without being sent, settled as the section's attempt before it
+ * was, so that it says nothing new about the section.
+ */
+function attemptOf(
+  prior: SectionChain["attempt"],
+  by: object,
+  done: Promise<{
+    result: SiteStyleSaveResult;
+    skipped?: boolean;
+  }>
+): NonNullable<SectionChain["attempt"]> {
+  const settled = done.then(({ result, skipped }) => {
+    if (skipped === true) return prior?.settled;
+    const reasons = Object.values(result.issues);
+    if (!result.saved && reasons.length > 0) {
+      throw new Error(reasons.join(" "));
+    }
+    return undefined;
+  });
+  // The gate reads the refusal; held here too, so a refusal no gate is
+  // tracking is not reported as unhandled.
+  settled.catch(() => {});
+  return { by, settled };
 }
 
 /**
