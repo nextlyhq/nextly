@@ -971,17 +971,64 @@ describe("controls", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("names every ROOT form selector for its own property", () => {
+  it("names a ROOT form selector for its own property", () => {
     // A property whose shape is a union at the top draws one control and so no
-    // heading. `fontWeight`, `lineHeight` and `fontStyle` are all such unions,
-    // and a selector called "Form" three times over tells a screen-reader user
-    // nothing about which property it changes.
-    mount({ typography: true });
-    reveal("typography", "Font style");
+    // heading, so a selector called "Form" would tell a screen-reader user
+    // nothing about which property it changes. Typography's unions draw no
+    // form selector at all: their one control takes either form.
+    mount({ border: { radius: true } });
 
-    expect(screen.getByLabelText("Font weight form")).toBeDefined();
-    expect(screen.getByLabelText("Line height form")).toBeDefined();
-    expect(screen.getByLabelText("Font style form")).toBeDefined();
+    expect(screen.getByLabelText("Border radius form")).toBeDefined();
+  });
+
+  it("offers font weight as ONE list of named weights, with no form to choose first", () => {
+    // "Font weight form: Keyword" asked the author which kind of value they
+    // meant before letting them pick one. One list holds both kinds.
+    const editor = mount({ typography: true });
+
+    expect(screen.queryByLabelText("Font weight form")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Font weight"));
+    expect(screen.getByRole("option", { name: "Thin 100" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Black 900" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Lighter" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("option", { name: "Bold 700" }));
+    // Stored as the number, the numeric arm of the union.
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"fontWeight":700'
+    );
+  });
+
+  it("keeps a stored keyword weight visible in the list", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontWeight: "bold" } },
+    } as NodeStyles;
+    mount({ typography: true }, styles);
+
+    expect(screen.getByLabelText("Font weight").textContent).toContain("Bold");
+  });
+
+  it("takes a line height as typed, a number or a length, with no form to choose", () => {
+    const editor = mount({ typography: true });
+
+    expect(screen.queryByLabelText("Line height form")).toBeNull();
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "1.5" } });
+    fireEvent.blur(field);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":1.5'
+    );
+  });
+
+  it("stores a line height typed with a unit as that length", () => {
+    const editor = mount({ typography: true });
+
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "24px" } });
+    fireEvent.blur(field);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":"24px"'
+    );
   });
 
   it("hints at a value in words short enough to read inside the field", () => {

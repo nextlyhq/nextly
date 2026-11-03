@@ -113,6 +113,14 @@ import type {
   StyleControlVariants,
 } from "./style-controls";
 import {
+  fontWeightOptions,
+  foldedControlFor,
+  lineHeightFromText,
+  storedKey,
+  type FoldedControl,
+  type FoldedOption,
+} from "./style-folded";
+import {
   inspectStyle,
   type StyleInspectionOptions,
   type InspectedStyleProperty,
@@ -1375,6 +1383,9 @@ function StylePropertyFields({
    * only.
    */
   const box = sideBoxFor(property.controls, orientation);
+  const fold = property.offered
+    ? foldedControlFor(property.property)
+    : undefined;
   return (
     <div
       className="nx-style-inspector__property"
@@ -1405,7 +1416,12 @@ function StylePropertyFields({
         there.
       */}
       {(property.offered ? property.variants : [])
-        .filter(variant => variant.count > 1)
+        // A folded property's root form follows from its value; see
+        // `style-folded.ts`. Its other choices, if any, stay.
+        .filter(
+          variant =>
+            variant.count > 1 && (fold === undefined || variant.path.length > 0)
+        )
         .map(variant => (
           <FormChoice
             key={variant.path.join(".")}
@@ -1425,39 +1441,50 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      <SideBoxFrame box={box}>
-        {box.controls.map(control => (
-          <StyleControlField
-            // The ADDRESS, not just the position: a host switching state or
-            // breakpoint leaves this field mounted, and where the old and new
-            // addresses hold the same value — both unset, most often — the
-            // synchronisation effect does not run either. An unfinished draft
-            // from the base breakpoint would then commit into the hover state.
-            key={[state, breakpoint, property.property, ...control.path].join(
-              "."
-            )}
-            control={control}
-            side={sideOf(box, control)}
-            label={
-              many
-                ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                : property.label
-            }
-            summary={many ? undefined : property.summary}
-            propertyLabel={property.label}
-            clearOnly={!property.offered || control.withheld}
-            nodeId={nodeId}
-            state={state}
-            breakpoint={breakpoint}
-            editor={editor}
-            policy={policy}
-            tokens={tokens}
-            prefersDark={prefersDark}
-            provenanceOf={provenanceOf}
-            editing={editing}
-          />
-        ))}
-      </SideBoxFrame>
+      {/* A folded union's one control, read where the value field is drawn;
+          see `style-folded.ts`. Its controls sit at the root, so the whole
+          property is the fold's. */}
+      <FoldedUnion.Provider
+        value={
+          fold === undefined
+            ? undefined
+            : { kind: fold, property: property.property }
+        }
+      >
+        <SideBoxFrame box={box}>
+          {box.controls.map(control => (
+            <StyleControlField
+              // The ADDRESS, not just the position: a host switching state or
+              // breakpoint leaves this field mounted, and where the old and new
+              // addresses hold the same value — both unset, most often — the
+              // synchronisation effect does not run either. An unfinished draft
+              // from the base breakpoint would then commit into the hover state.
+              key={[state, breakpoint, property.property, ...control.path].join(
+                "."
+              )}
+              control={control}
+              side={sideOf(box, control)}
+              label={
+                many
+                  ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                  : property.label
+              }
+              summary={many ? undefined : property.summary}
+              propertyLabel={property.label}
+              clearOnly={!property.offered || control.withheld}
+              nodeId={nodeId}
+              state={state}
+              breakpoint={breakpoint}
+              editor={editor}
+              policy={policy}
+              tokens={tokens}
+              prefersDark={prefersDark}
+              provenanceOf={provenanceOf}
+              editing={editing}
+            />
+          ))}
+        </SideBoxFrame>
+      </FoldedUnion.Provider>
     </div>
   );
 }
@@ -2565,6 +2592,155 @@ function SelectField({
  * start, so two buttons called "Clear block start" name the same thing twice
  * and a screen-reader user cannot tell which style each removes.
  */
+/** A folded union's control, and the property it edits. */
+interface Fold {
+  readonly kind: FoldedControl;
+  readonly property: string;
+}
+
+/** The folded control the property being drawn takes, if it is folded. */
+const FoldedUnion = React.createContext<Fold | undefined>(undefined);
+
+/**
+ * One control for a union the author picks without naming its form: a list
+ * holding both forms' values, or a field that infers the form from the text.
+ */
+function FoldedField({
+  id,
+  fold,
+  stored,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  fold: Fold;
+  stored: StyleValue | undefined;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  if (fold.kind === "number-or-length") {
+    return (
+      <LengthOrNumberField
+        id={id}
+        stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  return (
+    <OptionSelect
+      id={id}
+      options={fontWeightOptions(stored)}
+      stored={stored}
+      actionName={actionName}
+      describedBy={describedBy}
+      onCommit={onCommit}
+    />
+  );
+}
+
+/** A select over named options, each committing its own stored value. */
+function OptionSelect({
+  id,
+  options,
+  stored,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  options: readonly FoldedOption[];
+  stored: StyleValue | undefined;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const current = storedKey(stored) ?? "";
+  return (
+    <div className="nx-style-inspector__select">
+      <Select
+        value={current}
+        onValueChange={key => {
+          const chosen = options.find(option => option.key === key);
+          if (chosen !== undefined) onCommit(chosen.value);
+        }}
+      >
+        <SelectTrigger
+          id={id}
+          aria-describedby={describedBy}
+          aria-invalid={describedBy === undefined ? undefined : true}
+        >
+          <SelectValue placeholder="Not set" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(option => (
+            <SelectItem key={option.key} value={option.key}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {/* Cleared beside the list, as a keyword select is: an empty choice is
+          not one the list can carry. */}
+      {current === "" ? null : (
+        <button
+          type="button"
+          onClick={() => onCommit(null)}
+          aria-label={`Clear ${actionName}`}
+        >
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A field taking a number or a length as typed: "1.5" is stored as a number,
+ * "24px" or "150%" as written. Committed on blur and on Enter, as every text
+ * field in the panel is, so one undo removes one value, not one character.
+ */
+function LengthOrNumberField({
+  id,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  stored: StyleValue | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const { draft, setDraft } = useDraft(stored);
+  const commit = () => {
+    if (draft === storedText(stored)) return;
+    if (onCommit(lineHeightFromText(draft)) === "unchanged") {
+      setDraft(storedText(stored));
+    }
+  };
+  return (
+    <Input
+      id={id}
+      value={draft}
+      placeholder="1.5, 24px or 150%"
+      aria-describedby={describedBy}
+      aria-invalid={describedBy === undefined ? undefined : true}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={event => {
+        if (event.key !== "Enter") return;
+        // Enter finishes the field, and must not submit an entry form around
+        // the editor.
+        event.preventDefault();
+        commit();
+      }}
+    />
+  );
+}
+
 function actionNameFor(propertyLabel: string, label: string): string {
   return propertyLabel === label
     ? propertyLabel
@@ -3718,6 +3894,19 @@ function ValueField({
   // Decided BEFORE the menu, because every keyword leaf resolves to the
   // `select` control kind — so a branch on that kind placed first would return
   // for all of them and the toggle could never be reached.
+  const fold = React.useContext(FoldedUnion);
+  if (fold !== undefined) {
+    return (
+      <FoldedField
+        id={id}
+        fold={fold}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   const toggle = toggleOptionsFor(control.leaf);
   if (toggle !== undefined && toggleShows(toggle, stored)) {
     return (
