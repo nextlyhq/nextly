@@ -1,0 +1,302 @@
+/**
+ * The fence: while a component's copies are being turned into plain blocks, no
+ * write may add a new reference to it.
+ *
+ * Opening a run inserts its row, and that insert IS the fence: the row's
+ * `componentId` is unique, so two people starting one delete at once start one
+ * run, and every write from then on reads the row. A write is judged by
+ * comparing what it would store with what is stored now, read afresh on the
+ * write's own connection: a reference the stored form already holds may stay
+ * (the rewrite converts it), and a reference it does not hold is new and is
+ * refused. Judged in the blocks field's validation, which every write path
+ * runs, so it holds for the editor, the API, a batch and an import alike.
+ *
+ * Where the judgement cannot be made it refuses: a stored form that cannot be
+ * read, a document too large to survey to the end, a fence that cannot be read
+ * at all. Doubt counts as a new reference, because a reference let in by
+ * mistake is one the rewrite may already have passed.
+ *
+ * @module host-rewrite/fence
+ */
+import {
+  componentReferencesIn,
+  stillReferences,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
+import { and, eq } from "@nextlyhq/plugin-sdk/db";
+import {
+  isUniqueViolation,
+  type PluginDatabase,
+} from "@nextlyhq/plugin-sdk/schema";
+
+import { formsChangedBy } from "../component-cycle-guard";
+import { readStoredForms } from "../fields/lock-baselines";
+import { componentDeletionHosts, componentDeletions } from "../schema/tables";
+
+/** The issue code a write adding a reference to a fenced component carries. */
+export const COMPONENT_BEING_DELETED = "COMPONENT_BEING_DELETED";
+
+/** Which walk a run is on. */
+export type RunPhase = "converting" | "final" | "done";
+
+/** One run, as its row stores it. */
+export interface DeletionRun {
+  readonly id: string;
+  readonly componentId: string;
+  /** The id of the person who started it, who every write is made as. */
+  readonly startedBy: string;
+  readonly phase: RunPhase;
+  /** Where the final walk stopped, or `null` before it started. */
+  readonly cursor: string | null;
+}
+
+/** The fenced components, or the fact that they could not be read. */
+export type FencedComponents =
+  | { readonly kind: "read"; readonly ids: ReadonlySet<string> }
+  | { readonly kind: "unreadable" };
+
+/** The runs' own table, through the plugin's database surface. */
+export interface FenceStore {
+  /**
+   * Open the run for a component, which fences it. `opened` is false when a
+   * run for it already exists (started by anybody), and that run is answered.
+   */
+  open(
+    componentId: string,
+    startedBy: string
+  ): Promise<{ readonly opened: boolean; readonly run: DeletionRun }>;
+  /** The run for a component, or `null` when none is open. */
+  runFor(componentId: string): Promise<DeletionRun | null>;
+  /**
+   * Move a run from one phase to another, with where its final walk stopped.
+   * Answers false, changing nothing, when the run is no longer in `from`: a
+   * write re-queued a document and sent it back to its converting walk.
+   */
+  advance(
+    runId: string,
+    from: RunPhase,
+    to: RunPhase,
+    cursor: string | null
+  ): Promise<boolean>;
+  /** Every component a run is open for. */
+  fenced(): Promise<ReadonlySet<string>>;
+  /** Close a run, which lifts its fence, and drop its progress. */
+  close(componentId: string): Promise<void>;
+}
+
+/** The dialect, as `ctx.dialect` names it. */
+type Dialect = Parameters<typeof isUniqueViolation>[0];
+
+/** A stored phase, read strictly: anything else is the converting walk. */
+function phaseOf(value: string): RunPhase {
+  return value === "final" || value === "done" ? value : "converting";
+}
+
+/** A run row as this module hands it out. */
+function runOf(row: {
+  id: string;
+  componentId: string;
+  startedBy: string;
+  phase: string;
+  cursor: string | null;
+}): DeletionRun {
+  return {
+    id: row.id,
+    componentId: row.componentId,
+    startedBy: row.startedBy,
+    phase: phaseOf(row.phase),
+    cursor: row.cursor,
+  };
+}
+
+/** The fence store over the plugin's own `ctx.db`. */
+export function fenceStore(
+  db: Pick<PluginDatabase, "transaction" | "select" | "table" | "update">,
+  dialect: Dialect
+): FenceStore {
+  const runFor = async (componentId: string): Promise<DeletionRun | null> => {
+    const r = db.table(componentDeletions);
+    const row = await db
+      .select(componentDeletions)
+      .where(eq(r.componentId, componentId))
+      .first();
+    return row === null ? null : runOf(row);
+  };
+
+  return {
+    runFor,
+    open: async (componentId, startedBy) => {
+      try {
+        const run = await db.transaction(tx =>
+          tx.insertReturning(componentDeletions, {
+            componentId,
+            startedBy,
+            phase: "converting",
+          })
+        );
+        return { opened: true, run: runOf(run) };
+      } catch (error) {
+        // The unique key refused a second run: the one that won is the run.
+        if (!isUniqueViolation(dialect, error)) throw error;
+        const held = await runFor(componentId);
+        if (held === null) throw error;
+        return { opened: false, run: held };
+      }
+    },
+    advance: async (runId, from, to, cursor) => {
+      const r = db.table(componentDeletions);
+      const where = and(eq(r.id, runId), eq(r.phase, from));
+      if (where === undefined) return false;
+      // Every move writes a phase or a cursor it did not hold before, so the
+      // count is the rows matched on MySQL too, which counts changed rows.
+      const moved = await db
+        .update(componentDeletions, { phase: to, cursor })
+        .where(where);
+      return moved > 0;
+    },
+    fenced: async () => {
+      const rows = await db.select(componentDeletions).all();
+      return new Set(rows.map(row => row.componentId));
+    },
+    close: async componentId =>
+      db.transaction(async tx => {
+        const r = tx.table(componentDeletions);
+        const run = await tx
+          .select(componentDeletions)
+          .where(eq(r.componentId, componentId))
+          .first();
+        if (run === null) return;
+        const h = tx.table(componentDeletionHosts);
+        await tx.delete(componentDeletionHosts).where(eq(h.deletionId, run.id));
+        await tx.delete(componentDeletions).where(eq(r.id, run.id));
+      }),
+  };
+}
+
+/** The issue the blocks field raises for a write the fence refuses. */
+export interface FenceIssue {
+  readonly path: string;
+  readonly code: typeof COMPONENT_BEING_DELETED;
+  readonly message: string;
+}
+
+/** What judging one write against the fence needs. */
+export interface FenceJudgement {
+  /** The document the write would store. */
+  readonly document: BlockDocument;
+  readonly write: PluginFieldWrite;
+  /** The field's path in the write. */
+  readonly path: string;
+  /** The lifecycle status the write moves to, when it names one. */
+  readonly nextStatus: string | undefined;
+  /** Whether the field stores per language. */
+  readonly localized: boolean;
+  /** How many nodes to read before a document counts as unreadable. */
+  readonly maxNodes: number;
+  /** The fenced components, read when the write places any component. */
+  readonly fenced: () => Promise<FencedComponents>;
+}
+
+/**
+ * The refusals for a write that adds a reference to a fenced component.
+ *
+ * Asks nothing of the database for a write that places no component, which is
+ * most of them: such a write can add no reference, and the document is
+ * surveyed before the fence is read.
+ */
+export async function fenceIssues(
+  judged: FenceJudgement
+): Promise<FenceIssue[]> {
+  const placed = componentReferencesIn(judged.document, judged.maxNodes);
+  if (placed.complete && placed.ids.length === 0) return [];
+  const fenced = await judged.fenced();
+  const candidates = fencedAmong(placed, fenced);
+  if (candidates.length === 0) return [];
+
+  const stored = await storedFormsOrNothing(judged);
+  return candidates
+    .filter(
+      id =>
+        stored === null ||
+        stored.some(form => !holds(form, id, judged.maxNodes))
+    )
+    .map(id => ({
+      path: judged.path,
+      code: COMPONENT_BEING_DELETED,
+      message: fencedMessage(id, fenced.kind === "unreadable"),
+    }));
+}
+
+/**
+ * The fenced components this write may add. Every one it places, when the
+ * fence could not be read; every fenced one, when the document could not be
+ * surveyed to the end.
+ */
+function fencedAmong(
+  placed: { readonly ids: readonly string[]; readonly complete: boolean },
+  fenced: FencedComponents
+): string[] {
+  if (fenced.kind === "unreadable") return [...placed.ids];
+  if (!placed.complete) return [...fenced.ids];
+  return placed.ids.filter(id => fenced.ids.has(id));
+}
+
+/**
+ * The stored forms this write changes, read afresh; `null` when they cannot be
+ * read, which counts every candidate as new. A create stores nothing yet, so
+ * it reads as no forms, and every candidate is new to it as well.
+ */
+async function storedFormsOrNothing(
+  judged: FenceJudgement
+): Promise<readonly unknown[] | null> {
+  // Only top-level fields can be read stored; a field inside a group or a
+  // repeater cannot be told apart from new.
+  if (/[.[]/.test(judged.path)) return null;
+  try {
+    const read = await readStoredForms(
+      judged.write,
+      judged.path,
+      formsChangedBy(judged.nextStatus),
+      judged.localized
+    );
+    if (!read.readable) return null;
+    // A create, or a form with nothing stored: every reference is new to it.
+    return read.forms.length === 0 ? [undefined] : read.forms;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a stored form already references a component, beyond doubt. */
+function holds(form: unknown, componentId: string, maxNodes: number): boolean {
+  return (
+    form !== undefined && stillReferences(form, componentId, maxNodes) === "yes"
+  );
+}
+
+/** The refusal's words. */
+function fencedMessage(componentId: string, unread: boolean): string {
+  return unread
+    ? `Whether component "${componentId}" is being deleted could not be checked, so it cannot be added here right now. Try again in a moment.`
+    : `Component "${componentId}" is being deleted, so it cannot be added here. Remove it and save again; its existing copies are being turned into plain blocks.`;
+}
+
+/**
+ * The fence as the blocks field reads it: the open runs, or `unreadable` when
+ * the table could not be read. Never throws, so a database hiccup refuses only
+ * the writes that add a component rather than every write.
+ */
+export function fencedComponentsReader(
+  store: () => Pick<FenceStore, "fenced">,
+  onUnreadable: (error: unknown) => void
+): () => Promise<FencedComponents> {
+  return async () => {
+    try {
+      return { kind: "read", ids: await store().fenced() };
+    } catch (error) {
+      onUnreadable(error);
+      return { kind: "unreadable" };
+    }
+  };
+}

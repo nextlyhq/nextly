@@ -6,5 +6,6 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 import migration0 from "./20261102_183408_943_create_usage_bookkeeping";
+import migration1 from "./20261103_012528_584_create_component_deletions";
 
-export const migrations: PluginMigration[] = [migration0];
+export const migrations: PluginMigration[] = [migration0, migration1];

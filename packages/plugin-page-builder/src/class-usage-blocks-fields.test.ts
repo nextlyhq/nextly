@@ -11,7 +11,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { blocksFieldSurvey, blocksFieldsOf } from "./class-usage-blocks-fields";
+import {
+  blocksFieldReach,
+  blocksFieldSurvey,
+  blocksFieldsOf,
+} from "./class-usage-blocks-fields";
 
 describe("finding the blocks fields on a collection", () => {
   it("returns the blocks fields and ignores every other type", () => {
@@ -536,5 +540,114 @@ describe("noticing a blocks field this index cannot address", () => {
     expect(blocksFieldsOf(collection)).toEqual(
       blocksFieldSurvey(collection).addressable
     );
+  });
+});
+
+describe("reaching blocks fields through named groups", () => {
+  it("reaches a field under a named group at the path its value is stored", () => {
+    const reach = blocksFieldReach({
+      fields: [
+        { type: "blocks", name: "content" },
+        {
+          type: "group",
+          name: "hero",
+          fields: [
+            { type: "blocks", name: "body" },
+            {
+              type: "group",
+              name: "",
+              fields: [{ type: "blocks", name: "aside" }],
+            },
+            {
+              type: "group",
+              name: "inner",
+              fields: [{ type: "blocks", name: "deep" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(reach.fields.map(field => field.path)).toEqual([
+      ["content"],
+      ["hero", "body"],
+      ["hero", "aside"],
+      ["hero", "inner", "deep"],
+    ]);
+    expect(reach.unreachable).toBe(false);
+  });
+
+  it("reports a field in a repeater as unreachable rather than reaching it", () => {
+    const reach = blocksFieldReach({
+      fields: [
+        {
+          type: "repeater",
+          name: "rows",
+          fields: [{ type: "blocks", name: "body" }],
+        },
+        {
+          type: "group",
+          name: "hero",
+          fields: [
+            {
+              type: "repeater",
+              name: "slides",
+              fields: [{ type: "blocks", name: "slide" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(reach.fields).toEqual([]);
+    expect(reach.unreachable).toBe(true);
+  });
+
+  it("reaches one group declared in two places at both of its paths", () => {
+    const shared = {
+      type: "group",
+      name: "",
+      fields: [{ type: "blocks", name: "body" }],
+    };
+    const reach = blocksFieldReach({
+      fields: [shared, { type: "group", name: "hero", fields: [shared] }],
+    });
+
+    expect(reach.fields.map(field => field.path)).toEqual([
+      ["body"],
+      ["hero", "body"],
+    ]);
+  });
+
+  it("stops a named group that lists itself, reporting it as unreachable", () => {
+    const loop: { type: string; name: string; fields: unknown[] } = {
+      type: "group",
+      name: "loop",
+      fields: [{ type: "blocks", name: "body" }],
+    };
+    loop.fields.push(loop);
+
+    const reach = blocksFieldReach({ fields: [loop] });
+
+    expect(reach.unreachable).toBe(true);
+    expect(reach.fields[0]?.path).toEqual(["loop", "body"]);
+  });
+
+  it("is what the survey derives from: top-level fields only, nested ones as unaddressable", () => {
+    const collection = {
+      fields: [
+        { type: "blocks", name: "content" },
+        {
+          type: "group",
+          name: "hero",
+          fields: [{ type: "blocks", name: "body" }],
+        },
+      ],
+    };
+
+    expect(blocksFieldSurvey(collection)).toEqual({
+      addressable: [{ name: "content", localized: false }],
+      unaddressable: true,
+    });
   });
 });

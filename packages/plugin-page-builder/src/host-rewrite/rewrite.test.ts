@@ -1,0 +1,436 @@
+/**
+ * The walker over in-memory hosts: the step contract, the compare-and-swap
+ * retry, resuming after a budget or a crash, and the final walk that trusts no
+ * progress row.
+ *
+ * The fakes keep one stored value per host and form, and the fake writer does
+ * what the real write's validation does: it refuses a write whose expected
+ * hash is not the hash of what is stored now.
+ */
+import { describe, expect, it } from "vitest";
+
+import type { HostAddress, HostStep, StepOutcome } from "./contract";
+import type { DeletionRun, RunPhase } from "./fence";
+import type { HostState } from "./progress";
+import {
+  rewriteHosts,
+  type HostAccess,
+  type HostDocument,
+  type HostWrite,
+  type RewriteDeps,
+  type WriteResult,
+} from "./rewrite";
+import { storedHash } from "./stored-hash";
+
+/** A stored value the test step understands: how many copies it still holds. */
+interface Value {
+  copies: number;
+  edit?: string;
+  refuse?: boolean;
+}
+
+/** Converts every copy; refuses a value marked so; leaves the rest. */
+const step: HostStep = (doc): StepOutcome => {
+  const value = doc as Value;
+  if (value.refuse === true) return { kind: "refuse", reason: "marked" };
+  if (value.copies === 0) return { kind: "unchanged" };
+  return { kind: "rewritten", value: { ...value, copies: 0 } };
+};
+
+interface StoredHost {
+  published: Value | null;
+  draft: Value | null;
+  live: boolean;
+  access: HostAccess;
+}
+
+/** A site of hosts, one per document, keyed by document id. */
+function site(hosts: Record<string, Partial<StoredHost>>) {
+  const stored = new Map<string, StoredHost>(
+    Object.entries(hosts).map(([id, host]) => [
+      id,
+      {
+        published: host.published ?? null,
+        draft: host.draft ?? null,
+        live: host.live ?? false,
+        access: host.access ?? "write",
+      },
+    ])
+  );
+  const ids = [...stored.keys()].sort();
+  const addressOf = (id: string): HostAddress => ({
+    kind: "collection",
+    slug: "pages",
+    id,
+    path: ["content"],
+  });
+  const documentOf = (id: string): HostDocument => ({
+    key: `doc:${id}`,
+    hosts: [{ host: addressOf(id), access: stored.get(id)?.access ?? "write" }],
+  });
+
+  let run: DeletionRun = {
+    id: "run-1",
+    componentId: "card",
+    startedBy: "u1",
+    phase: "converting",
+    cursor: null,
+  };
+  const progress = new Map<string, HostState>();
+  const writes: HostWrite[] = [];
+  const hooks = {
+    /** Called before each write; may throw (a crash) or edit the host. */
+    beforeWrite: (_write: HostWrite): void => undefined,
+    /** Called after each read of a host. */
+    afterRead: (_id: string): void => undefined,
+    /** Called after each document the final walk finishes. */
+    afterAdvance: (): void => undefined,
+  };
+  const denied = new Set<string>();
+
+  const deps: RewriteDeps = {
+    fence: {
+      runFor: async () => run,
+      advance: async (_id, from: RunPhase, to: RunPhase, cursor) => {
+        if (run.phase !== from) return false;
+        run = { ...run, phase: to, cursor };
+        hooks.afterAdvance();
+        return true;
+      },
+    },
+    progress: {
+      finished: async () =>
+        new Set(
+          [...progress]
+            .filter(
+              ([, state]) => state === "rewritten" || state === "unchanged"
+            )
+            .map(([key]) => key)
+        ),
+      record: async (_run, key, state) => {
+        progress.set(key, state);
+      },
+    },
+    source: {
+      async *documents(cursor) {
+        for (const id of ids) {
+          if (cursor !== null && id <= cursor) continue;
+          yield documentOf(id);
+        }
+      },
+      cursorOf: document => document.hosts[0]?.host.id ?? "",
+      hinted: async () => [],
+      outside: async () => [],
+    },
+    read: async host => {
+      const held = stored.get(host.id ?? "");
+      if (held === undefined) throw new Error("no such host");
+      const read = {
+        published:
+          held.published === null
+            ? ({ kind: "absent" } as const)
+            : ({
+                kind: "value",
+                value: structuredClone(held.published),
+              } as const),
+        draft:
+          held.draft === null
+            ? null
+            : ({ kind: "value", value: structuredClone(held.draft) } as const),
+        live: held.live,
+      };
+      hooks.afterRead(host.id ?? "");
+      return read;
+    },
+    write: async (write): Promise<WriteResult> => {
+      hooks.beforeWrite(write);
+      const held = stored.get(write.host.id ?? "");
+      if (held === undefined) throw new Error("no such host");
+      const now =
+        write.expected.form === "draft" && held.draft !== null
+          ? held.draft
+          : held.published;
+      if ((await storedHash(now)) !== write.expected.hash)
+        return { kind: "changed" };
+      writes.push(write);
+      const value = write.value as Value;
+      if (write.mode === "publish" || held.draft === null)
+        held.published = value;
+      else held.draft = value;
+      return { kind: "written" };
+    },
+    may: async (action, host) => !denied.has(`${action}:${host.id ?? ""}`),
+  };
+
+  return {
+    deps,
+    stored,
+    progress,
+    writes,
+    hooks,
+    denied,
+    run: () => run,
+    setRun: (next: Partial<DeletionRun>) => {
+      run = { ...run, ...next };
+    },
+  };
+}
+
+const args = { componentId: "card", step };
+
+/** Every host's live value, by id. */
+function liveOf(s: ReturnType<typeof site>): Record<string, Value | null> {
+  return Object.fromEntries(
+    [...s.stored].map(([id, host]) => [id, host.published])
+  );
+}
+
+describe("rewriting every host of a component", () => {
+  it("rewrites every host, and the final walk then finds nothing to do", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 2 } },
+      c: { published: { copies: 0 } },
+    });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.finished).toBe(true);
+    expect(report.rewritten.map(host => host.id)).toEqual(["a", "b"]);
+    expect(report.caughtByFinalWalk).toEqual([]);
+    expect(liveOf(s)).toEqual({
+      a: { copies: 0 },
+      b: { copies: 0 },
+      c: { copies: 0 },
+    });
+    expect(s.run().phase).toBe("done");
+  });
+
+  it("does not let a progress row claiming a host is done skip the final walk", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 1 } },
+    });
+    // A row nobody's walk wrote: it claims `a` is finished.
+    s.progress.set("doc:a", "unchanged");
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.finished).toBe(true);
+    expect(liveOf(s)).toEqual({ a: { copies: 0 }, b: { copies: 0 } });
+    expect(report.caughtByFinalWalk.map(host => host.id)).toEqual(["a"]);
+  });
+
+  it("resumes after its budget without skipping or repeating a document", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 1 } },
+      c: { published: { copies: 1 } },
+    });
+
+    const first = await rewriteHosts(s.deps, { ...args, maxDocuments: 1 });
+    expect(first.finished).toBe(false);
+    expect(first.rewritten.map(host => host.id)).toEqual(["a"]);
+
+    const second = await rewriteHosts(s.deps, args);
+    expect(second.finished).toBe(true);
+    expect(second.rewritten.map(host => host.id)).toEqual(["b", "c"]);
+    // The converting walk did the work: the final walk found none left.
+    expect(second.caughtByFinalWalk).toEqual([]);
+    expect(s.writes).toHaveLength(3);
+  });
+
+  it("resumes after a crash mid-run without skipping the host it crashed on", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 1 } },
+      c: { published: { copies: 1 } },
+    });
+    let crashed = false;
+    s.hooks.beforeWrite = write => {
+      if (write.host.id === "b" && !crashed) {
+        crashed = true;
+        throw new Error("the process stopped");
+      }
+    };
+
+    await expect(rewriteHosts(s.deps, args)).rejects.toThrow(
+      "the process stopped"
+    );
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.finished).toBe(true);
+    expect(liveOf(s)).toEqual({
+      a: { copies: 0 },
+      b: { copies: 0 },
+      c: { copies: 0 },
+    });
+    expect(report.caughtByFinalWalk).toEqual([]);
+  });
+
+  it("resumes the final walk where it stopped", async () => {
+    const s = site({
+      a: { published: { copies: 0 } },
+      b: { published: { copies: 0 } },
+      c: { published: { copies: 0 } },
+    });
+    s.setRun({ phase: "final", cursor: "a" });
+    const read: string[] = [];
+    s.hooks.afterRead = id => read.push(id);
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.finished).toBe(true);
+    expect(read).toEqual(["b", "c"]);
+  });
+
+  it("stops the final walk when a write sends the run back to converting", async () => {
+    const s = site({
+      a: { published: { copies: 0 } },
+      b: { published: { copies: 0 } },
+    });
+    s.setRun({ phase: "final", cursor: null });
+    s.hooks.afterRead = id => {
+      // A write re-queues a document while the final walk reads `a`.
+      if (id === "a") s.setRun({ phase: "converting", cursor: null });
+    };
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.finished).toBe(false);
+    expect(s.run().phase).toBe("converting");
+  });
+
+  it("reads a host again when it changed under the write, keeping the edit", async () => {
+    const s = site({ a: { published: { copies: 1 } } });
+    let edited = false;
+    s.hooks.afterRead = id => {
+      if (id !== "a" || edited) return;
+      edited = true;
+      // An author saves between the rewrite's read and its write.
+      const held = s.stored.get("a");
+      if (held !== undefined) held.published = { copies: 1, edit: "author" };
+    };
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.finished).toBe(true);
+    expect(s.stored.get("a")?.published).toEqual({ copies: 0, edit: "author" });
+  });
+
+  it("leaves a host that keeps changing once its retries are spent", async () => {
+    const s = site({ a: { published: { copies: 1 } } });
+    let n = 0;
+    s.hooks.afterRead = () => {
+      n += 1;
+      const held = s.stored.get("a");
+      if (held !== undefined) held.published = { copies: 1, edit: String(n) };
+    };
+
+    const report = await rewriteHosts(s.deps, { ...args, maxAttempts: 2 });
+
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "changed" })
+    );
+    expect(s.writes).toEqual([]);
+  });
+
+  it("publishes a live row with no pending draft, checked against the live form", async () => {
+    const s = site({ a: { published: { copies: 1 }, live: true } });
+
+    await rewriteHosts(s.deps, args);
+
+    expect(s.writes[0]?.mode).toBe("publish");
+    expect(s.writes[0]?.expected.form).toBe("published");
+  });
+
+  it("converts a pending draft and leaves its live row, reporting it", async () => {
+    const s = site({
+      a: {
+        published: { copies: 1 },
+        draft: { copies: 1, edit: "draft" },
+        live: true,
+      },
+    });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(s.writes.map(write => [write.mode, write.expected.form])).toEqual([
+      ["save", "draft"],
+    ]);
+    expect(s.stored.get("a")).toMatchObject({
+      draft: { copies: 0, edit: "draft" },
+      published: { copies: 1 },
+    });
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "pending-draft" })
+    );
+  });
+
+  it("leaves a host the person may not update or publish, writing nothing", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 1 }, live: true },
+    });
+    s.denied.add("update:a");
+    s.denied.add("publish:b");
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.left.map(left => [left.host.id, left.reason])).toEqual(
+      expect.arrayContaining([
+        ["a", "not-permitted"],
+        ["b", "not-permitted"],
+      ])
+    );
+    expect(s.writes).toEqual([]);
+  });
+
+  it("leaves a host the step refuses, and one it cannot read", async () => {
+    const s = site({ a: { published: { copies: 1, refuse: true } } });
+    s.hooks.afterRead = id => {
+      if (id === "a") throw new Error("read failed");
+    };
+    const unreadable = await rewriteHosts(s.deps, { ...args, dryRun: true });
+    expect(unreadable.left).toContainEqual(
+      expect.objectContaining({ reason: "unreadable" })
+    );
+
+    s.hooks.afterRead = () => undefined;
+    const refused = await rewriteHosts(s.deps, args);
+    expect(refused.left).toContainEqual(
+      expect.objectContaining({ reason: "refused", detail: "marked" })
+    );
+    expect(s.writes).toEqual([]);
+  });
+
+  it("never writes a host it can read but not address", async () => {
+    const s = site({
+      a: { published: { copies: 1 }, access: "read" },
+      b: { published: { copies: 0 }, access: "read" },
+    });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.left.map(left => [left.host.id, left.reason])).toEqual([
+      ["a", "unaddressable"],
+      ["a", "unaddressable"],
+    ]);
+    expect(s.writes).toEqual([]);
+    expect(report.unchanged.map(host => host.id)).toContain("b");
+  });
+
+  it("writes and records nothing on a dry run", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 0 } },
+    });
+
+    const report = await rewriteHosts(s.deps, { ...args, dryRun: true });
+
+    expect(report.rewritten.map(host => host.id)).toEqual(["a"]);
+    expect(s.writes).toEqual([]);
+    expect(s.progress.size).toBe(0);
+    expect(s.run().phase).toBe("converting");
+  });
+});

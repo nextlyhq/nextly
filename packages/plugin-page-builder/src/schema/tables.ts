@@ -1,5 +1,6 @@
 /**
- * The page builder's own tables: the usage indexes' bookkeeping.
+ * The page builder's own tables: the usage indexes' bookkeeping, and the runs
+ * that turn every copy of a component into plain blocks before it is deleted.
  *
  * Kept in tables this plugin declares, reached only through its own `ctx.db`,
  * rather than in collections. A collection has an admin screen, a REST route
@@ -29,7 +30,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -107,8 +108,83 @@ export const usageProgress: TableDefinition<
   { indexes: [{ columns: ["token", "scopeKey"], unique: true }] }
 );
 
+/** The columns of {@link componentDeletions}. */
+type ComponentDeletionsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly componentId: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, false, false>;
+  readonly phase: ColumnBuilder<string, false, true>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * One run turning a component's copies into plain blocks, one row per
+ * component.
+ *
+ * Inserting the row IS the fence: while it exists, a write that would add a
+ * reference to the component is refused, and the unique `componentId` means
+ * two people starting a delete of one component at once start one run.
+ *
+ * `phase` says which walk the run is on: `converting` (every host, skipping
+ * the ones its progress says are done), `final` (every host again, trusting
+ * no progress row) or `done`. `cursor` is where the final walk stopped, so a
+ * walk larger than one tick resumes rather than starting over.
+ */
+export const componentDeletions: TableDefinition<
+  "component_deletions",
+  ComponentDeletionsColumns
+> = defineTable<"component_deletions", ComponentDeletionsColumns>(
+  "component_deletions",
+  {
+    id: col.id(),
+    componentId: col.varchar(255),
+    startedBy: col.varchar(255),
+    phase: col.varchar(16, { default: "converting" }),
+    cursor: col.varchar(1024, { nullable: true }),
+  },
+  { indexes: [{ columns: ["componentId"], unique: true }] }
+);
+
+/** The columns of {@link componentDeletionHosts}. */
+type ComponentDeletionHostsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly deletionId: ColumnBuilder<string, false, false>;
+  readonly hostKey: ColumnBuilder<string, false, false>;
+  readonly state: ColumnBuilder<string, false, false>;
+  readonly reason: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * What a run has done to one host document: `rewritten`, `unchanged`, `left`
+ * (with the reason) or `pending` (re-queued by a write made while fenced).
+ *
+ * An ordering hint for the converting walk only. The final walk reads every
+ * host again whatever these rows say, so a row claiming a host is done skips
+ * nothing that still needs converting.
+ */
+export const componentDeletionHosts: TableDefinition<
+  "component_deletion_hosts",
+  ComponentDeletionHostsColumns
+> = defineTable<"component_deletion_hosts", ComponentDeletionHostsColumns>(
+  "component_deletion_hosts",
+  {
+    id: col.id(),
+    deletionId: col.char(36),
+    hostKey: col.varchar(512),
+    state: col.varchar(16),
+    reason: col.varchar(64, { nullable: true }),
+  },
+  { indexes: [{ columns: ["deletionId", "hostKey"], unique: true }] }
+);
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
   typeof usageProgress,
-] = [usageRuns, usageProgress];
+  typeof componentDeletions,
+  typeof componentDeletionHosts,
+] = [usageRuns, usageProgress, componentDeletions, componentDeletionHosts];
