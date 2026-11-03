@@ -1276,6 +1276,28 @@
   color: var(--nx-muted-foreground);
 }
 
+/*
+ * A rich-text field in the Content tab, drawn as a field: at least the
+ * control's height, so even an empty one is a target an author can hit (an
+ * unstyled element was as tall as its one 16px line, under the 24px a target
+ * needs), with the input's edge and surface and the focus ring.
+ */
+.nx-inspector__rich-text {
+  min-height: var(--nx-control-height);
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+  cursor: text;
+}
+
+.nx-inspector__rich-text:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
 /* The control, and a held row's reason under it, in the row's second column. */
 .nx-inspector__exposed {
   display: flex;

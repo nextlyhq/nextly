@@ -624,3 +624,17 @@ describe("the inspector at the editor's density", () => {
     );
   });
 });
+
+describe("a rich-text field in the Content tab", () => {
+  it("is drawn as a field at least the control's height", () => {
+    // An unstyled element is as tall as its one 16px line, or nothing when
+    // empty: under the 24px a target needs, which axe refused.
+    const field = ruleBody(".nx-inspector__rich-text");
+    expect(field).toContain("min-height: var(--nx-control-height)");
+    expect(field).toContain("border: 1px solid var(--nx-input)");
+    expect(field).toContain("cursor: text");
+    expect(ruleBody(".nx-inspector__rich-text:focus-visible")).toContain(
+      "outline: 2px solid var(--nx-ring)"
+    );
+  });
+});
