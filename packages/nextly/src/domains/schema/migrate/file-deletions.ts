@@ -272,6 +272,47 @@ function readStatement(statement: string, dialect: SupportedDialect): Step[] {
   }
   if (cursor.accept("DELETE")) return readDelete(cursor, tokens);
   if (cursor.accept("TRUNCATE")) return readTruncate(cursor, tokens, dialect);
+  const dialectForm = readDialectForm(cursor, tokens, dialect);
+  if (dialectForm !== null) return dialectForm;
+  if (NEVER_DELETING.has(first)) return [];
+  return unreadIfDeleting(tokens);
+}
+
+/** `DROP TABLE [IF EXISTS] a, b [CASCADE | RESTRICT]`: each table, dropped. */
+function readDropTables(
+  cursor: StatementCursor,
+  tokens: readonly Token[]
+): Step[] {
+  cursor.acceptCondition();
+  const tables = readNames(cursor);
+  if (tables === undefined) return [unread(tokens)];
+  if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
+  if (!cursor.done()) return [unread(tokens)];
+  return tables.map(table => ({ kind: "drop", table }));
+}
+
+/** A comma-separated list of plain names; undefined when one is not plain. */
+function readNames(cursor: StatementCursor): string[] | undefined {
+  const names: string[] = [];
+  do {
+    const name = cursor.name();
+    if (name === undefined) return undefined;
+    names.push(name);
+  } while (cursor.accept(","));
+  return names;
+}
+
+/**
+ * The statements only some dialects have that remove rows or rename tables:
+ * `REPLACE` (MySQL, SQLite), SQLite's `INSERT OR REPLACE` and `UPDATE OR
+ * REPLACE`, and MySQL's `RENAME TABLE`. Null for a statement that is none
+ * of them.
+ */
+function readDialectForm(
+  cursor: StatementCursor,
+  tokens: readonly Token[],
+  dialect: SupportedDialect
+): Step[] | null {
   if (dialect !== "postgresql" && cursor.accept("REPLACE")) {
     return readRowsInto(cursor, tokens);
   }
@@ -288,8 +329,7 @@ function readStatement(statement: string, dialect: SupportedDialect): Step[] {
   if (dialect === "mysql" && cursor.accept("RENAME", "TABLE")) {
     return readRenameTables(cursor, tokens);
   }
-  if (NEVER_DELETING.has(first)) return [];
-  return unreadIfDeleting(tokens);
+  return null;
 }
 
 /**
@@ -331,18 +371,7 @@ function readDrop(
   // MySQL's temporary tables live for the session, holding nothing a
   // migration could have found there.
   if (cursor.accept("TEMPORARY")) return [];
-  if (cursor.accept("TABLE")) {
-    cursor.acceptCondition();
-    const tables: string[] = [];
-    do {
-      const table = cursor.name();
-      if (table === undefined) return [unread(tokens)];
-      tables.push(table);
-    } while (cursor.accept(","));
-    if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
-    if (!cursor.done()) return [unread(tokens)];
-    return tables.map(table => ({ kind: "drop", table }));
-  }
+  if (cursor.accept("TABLE")) return readDropTables(cursor, tokens);
   const kind = cursor.peek();
   const definition =
     typeof kind === "string" &&
@@ -494,33 +523,54 @@ function readAlterClause(
   if (clause.accept("RENAME")) return readRenameClause(clause, table, dialect);
   if (clause.accept("ALTER")) return readAlterColumn(clause, table);
   if (dialect === "mysql") {
-    if (clause.accept("MODIFY")) {
-      clause.accept("COLUMN");
-      const column = clause.name();
-      return column === undefined
-        ? undefined
-        : [{ kind: "column", table, column }];
-    }
-    if (clause.accept("CHANGE")) {
-      // A CHANGE restates the column's type, so its values are judged as a
-      // type change; under a new name the old one is gone as well.
-      clause.accept("COLUMN");
-      const from = clause.name();
-      const to = clause.name();
-      if (from === undefined || to === undefined) return undefined;
-      const changed: Step[] = [{ kind: "column", table, column: from }];
-      if (from !== to) {
-        changed.push({ kind: "rename-column", table, from, to });
-      }
-      return changed;
-    }
-    // Converting the table's character set rewrites every text column.
-    if (clause.isWord("CONVERT")) return undefined;
-    if (clause.accept("TRUNCATE", "PARTITION")) {
-      return [{ kind: "rows", table, reach: "none" }];
-    }
+    const mysql = readMysqlAlterClause(clause, table);
+    if (mysql !== null) return mysql;
   }
   return saysDelete(clause.rest()) ? undefined : [];
+}
+
+/**
+ * MySQL's own ALTER TABLE clauses that can lose values: `MODIFY` and
+ * `CHANGE`, which restate a column's type, `CONVERT`, and `TRUNCATE
+ * PARTITION`. Undefined for one that cannot be read, null for a clause that
+ * is none of them.
+ */
+function readMysqlAlterClause(
+  clause: StatementCursor,
+  table: string
+): Step[] | undefined | null {
+  if (clause.accept("MODIFY")) {
+    clause.accept("COLUMN");
+    const column = clause.name();
+    return column === undefined
+      ? undefined
+      : [{ kind: "column", table, column }];
+  }
+  if (clause.accept("CHANGE")) return readChangeColumn(clause, table);
+  // Converting the table's character set rewrites every text column.
+  if (clause.isWord("CONVERT")) return undefined;
+  if (clause.accept("TRUNCATE", "PARTITION")) {
+    return [{ kind: "rows", table, reach: "none" }];
+  }
+  return null;
+}
+
+/**
+ * MySQL's `CHANGE [COLUMN] from to <type>`: it restates the column's type, so
+ * its values are judged as a type change; under a new name the old one is
+ * gone as well.
+ */
+function readChangeColumn(
+  clause: StatementCursor,
+  table: string
+): Step[] | undefined {
+  clause.accept("COLUMN");
+  const from = clause.name();
+  const to = clause.name();
+  if (from === undefined || to === undefined) return undefined;
+  const changed: Step[] = [{ kind: "column", table, column: from }];
+  if (from !== to) changed.push({ kind: "rename-column", table, from, to });
+  return changed;
 }
 
 /**
@@ -766,15 +816,10 @@ function readCopy(
   const conflict = cursor.accept("OR");
   if (conflict) cursor.name();
   if (!cursor.accept("INTO") || cursor.name() !== twin) return undefined;
-  let into = columns.map(column => column.name);
+  let into: string[] | undefined = columns.map(column => column.name);
   if (cursor.accept("(")) {
-    into = [];
-    do {
-      const name = cursor.name();
-      if (name === undefined) return undefined;
-      into.push(name);
-    } while (cursor.accept(","));
-    if (!cursor.accept(")")) return undefined;
+    into = readNames(cursor);
+    if (into === undefined || !cursor.accept(")")) return undefined;
   }
   if (!cursor.accept("SELECT")) return undefined;
   const distinct = cursor.accept("DISTINCT");
@@ -785,19 +830,30 @@ function readCopy(
   const items = splitTopLevel(rest.slice(0, fromAt));
   const source = new StatementCursor(rest.slice(fromAt + 1));
   const from = source.name();
-  const filled = new Map<string, string>();
-  if (items.length === into.length) {
-    items.forEach((item, at) => {
-      const reading = new StatementCursor(item);
-      const name = reading.name();
-      if (name !== undefined && reading.done()) filled.set(into[at], name);
-    });
-  }
   return {
     from,
     allRows: !conflict && !distinct && from !== undefined && source.done(),
-    filled,
+    filled: filledColumns(items, into),
   };
+}
+
+/**
+ * Each twin column a copy fills straight from a source column, by the
+ * source column's name: a select item that is a plain name, at the place of
+ * the column it fills. Empty when the items and the columns do not line up.
+ */
+function filledColumns(
+  items: readonly (readonly Token[])[],
+  into: readonly string[]
+): Map<string, string> {
+  const filled = new Map<string, string>();
+  if (items.length !== into.length) return filled;
+  items.forEach((item, at) => {
+    const reading = new StatementCursor(item);
+    const name = reading.name();
+    if (name !== undefined && reading.done()) filled.set(into[at], name);
+  });
+  return filled;
 }
 
 /** Where `word` stands outside every parenthesis, or -1. */
@@ -976,6 +1032,43 @@ class FileWalk {
   }
 
   /**
+   * One live column of a rebuilt table: named when the twin does not carry
+   * it, or carries it converted (an unreadable type counts as converted), and
+   * followed under the name the twin gives it. `filled` is the copy's
+   * twin-to-source columns, undefined without a single copy from the table,
+   * when a column the twin declares counts as carried.
+   */
+  private rebuildColumn(
+    table: string,
+    liveColumn: string,
+    declared: ReadonlyMap<string, TwinColumn>,
+    filled: ReadonlyMap<string, string> | undefined,
+    after: ColumnNames
+  ): void {
+    const current = this.currentColumn(table, liveColumn);
+    const twinColumn =
+      current === undefined
+        ? undefined
+        : declared.get(carriedAs(current, declared, filled) ?? "");
+    if (twinColumn === undefined) {
+      // Gone before the rebuild already, or left out by it.
+      if (current !== undefined) {
+        this.emit({ kind: "column", table, column: liveColumn });
+      }
+      after.away.add(liveColumn);
+      return;
+    }
+    const liveType = this.facts.liveType(table, liveColumn);
+    if (liveType === undefined || typeSpelling(liveType) !== twinColumn.type) {
+      this.emit({ kind: "column", table, column: liveColumn });
+    }
+    if (twinColumn.name !== liveColumn) {
+      after.renamed.set(twinColumn.name, liveColumn);
+      after.away.add(liveColumn);
+    }
+  }
+
+  /**
    * A rebuild, judged at its drop by what it does to its table: each live
    * column the twin does not carry, or carries converted, and the rows when
    * the copy does not take them all. A table whose live columns could not
@@ -1008,44 +1101,27 @@ class FileWalk {
     );
     const after: ColumnNames = { renamed: new Map(), away: new Set() };
     for (const liveColumn of live) {
-      const current = this.currentColumn(table, liveColumn);
-      if (current === undefined) {
-        after.away.add(liveColumn);
-        continue;
-      }
-      const carriedAs =
-        filled === undefined
-          ? declared.has(current)
-            ? current
-            : undefined
-          : [...filled].find(([, source]) => source === current)?.[0];
-      const twinColumn =
-        carriedAs === undefined ? undefined : declared.get(carriedAs);
-      const liveType = this.facts.liveType(table, liveColumn);
-      if (twinColumn === undefined) {
-        this.emit({ kind: "column", table, column: liveColumn });
-        after.away.add(liveColumn);
-        continue;
-      }
-      // A converted type may not hold every value; an unreadable one counts
-      // as converted.
-      if (
-        twinColumn.type === undefined ||
-        liveType === undefined ||
-        typeSpelling(liveType) !== twinColumn.type
-      ) {
-        this.emit({ kind: "column", table, column: liveColumn });
-      }
-      if (twinColumn.name !== liveColumn) {
-        after.renamed.set(twinColumn.name, liveColumn);
-        after.away.add(liveColumn);
-      }
+      this.rebuildColumn(table, liveColumn, declared, filled, after);
     }
     if (filled === undefined || copy?.allRows !== true) {
       this.emit({ kind: "rows", table });
     }
     this.columnNames.set(table, after);
   }
+}
+
+/**
+ * The twin column a rebuild carries the column now named `current` into:
+ * the one the copy fills from it, or, without a copy to read, the twin's
+ * column of the same name.
+ */
+function carriedAs(
+  current: string,
+  declared: ReadonlyMap<string, TwinColumn>,
+  filled: ReadonlyMap<string, string> | undefined
+): string | undefined {
+  if (filled === undefined) return declared.has(current) ? current : undefined;
+  return [...filled].find(([, source]) => source === current)?.[0];
 }
 
 /** Every step of the list, with each SQLite rebuild judged as one. */

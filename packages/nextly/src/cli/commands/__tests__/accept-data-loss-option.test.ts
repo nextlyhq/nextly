@@ -10,6 +10,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { exportDataLossConsent, registerDbSyncCommand } from "../db-sync";
+import { registerMigrateCommand } from "../migrate.command";
 import { downConsent, registerMigrateDownCommand } from "../migrate-down";
 import { registerMigrateFreshCommand } from "../migrate-fresh";
 import { registerPluginsCommand } from "../plugins";
@@ -44,6 +45,7 @@ vi.mock("../plugin-lifecycle-runner", () => ({
 function program(): Command {
   const root = new Command().exitOverride();
   registerDbSyncCommand(root);
+  registerMigrateCommand(root);
   registerMigrateDownCommand(root);
   registerMigrateFreshCommand(root);
   registerPruneCommand(root);

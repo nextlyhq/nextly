@@ -424,22 +424,10 @@ export async function runChecks(args: {
   // check cannot tell a pending file from an applied one, which never runs
   // again.
   if (args.dialect !== undefined) {
-    const judged = await judgeStatements(migrationsDir, args.dialect);
-    for (const file of judged.outsideTransaction) {
-      logger.info(
-        `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
-      );
-    }
-    for (const { file, message } of judged.refused) {
-      logger.warn(
-        `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
-      );
-    }
-    for (const { file, section, deletions } of judged.destructive) {
-      logger.warn(
-        `DESTRUCTIVE: ${file} (${section}) deletes data: ${deletions.map(describeDeletion).join("; ")}. ${section === "UP" ? "nextly migrate" : "migrate:down"} runs it only with --accept-data-loss covering each.`
-      );
-    }
+    reportStatements(
+      await judgeStatements(migrationsDir, args.dialect),
+      logger
+    );
   }
 
   // Check 4: schema drift (config vs latest snapshot).
@@ -538,6 +526,33 @@ function settingsInStep(
     .map(change => `~ ${describeSettingsChange(change)}`);
   if (changes.length > 10) listed.push(`... and ${changes.length - 10} more`);
   return settingsChangeWithoutMigration(changes.length, listed);
+}
+
+/**
+ * Prints what `judgeStatements` found: each file marked to run outside a
+ * transaction, each statement a run would refuse (`REFUSED_STATEMENT`), and
+ * each UP or DOWN that deletes data (`DESTRUCTIVE`). Warnings only.
+ */
+function reportStatements(
+  judged: Awaited<ReturnType<typeof judgeStatements>>,
+  logger: CommandContext["logger"]
+): void {
+  for (const file of judged.outsideTransaction) {
+    logger.info(
+      `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
+    );
+  }
+  for (const { file, message } of judged.refused) {
+    logger.warn(
+      `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
+    );
+  }
+  for (const { file, section, deletions } of judged.destructive) {
+    const command = section === "UP" ? "nextly migrate" : "migrate:down";
+    logger.warn(
+      `DESTRUCTIVE: ${file} (${section}) deletes data: ${deletions.map(describeDeletion).join("; ")}. ${command} runs it only with --accept-data-loss covering each.`
+    );
+  }
 }
 
 /**

@@ -14,10 +14,13 @@ import * as clack from "@clack/prompts";
 
 import {
   deprecationNotices,
+  judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
+  type Deletion,
   type EarlierSpelling,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { NextlyError } from "../../errors/nextly-error";
 
 /** What the option parser hands over for `--accept-data-loss [targets]`. */
 export type AcceptDataLossOption = string | boolean | undefined;
@@ -55,4 +58,42 @@ export async function askToDeleteInTerminal(
     initialValue: false,
   });
   return !clack.isCancel(answer) && answer;
+}
+
+/**
+ * A run's deletions judged once, each listed under the file it comes from
+ * (`sources`, keyed by identity). The first judgement (`agreed` absent) may
+ * ask the person at a terminal and prints the listing; a later one, under the
+ * command's lock, accepts only what was agreed. A refusal throws, its
+ * listing naming each file; a decline is answered, for the command to end
+ * the way it ends one.
+ */
+export async function judgeRunDeletions(args: {
+  sources: ReadonlyMap<Deletion, string>;
+  consent: DataLossConsent;
+  agreed: readonly Deletion[] | undefined;
+  interactive: boolean | undefined;
+  askToDelete: ((question: string) => Promise<boolean>) | undefined;
+  warn: (line: string) => void;
+}): Promise<"proceed" | "declined"> {
+  const first = args.agreed === undefined;
+  const verdict = await judgeDataLoss({
+    deletions: [...args.sources.keys()],
+    consent: args.consent,
+    interactive: first && args.interactive === true,
+    ask: question => args.askToDelete?.(question) ?? Promise.resolve(false),
+    print: first ? args.warn : () => {},
+    approved: args.agreed,
+    sourceOf: deletion => args.sources.get(deletion),
+  });
+  if (verdict.kind === "refused") {
+    throw NextlyError.invalidInput({
+      message: verdict.message,
+      logContext: {
+        files: [...new Set(args.sources.values())],
+        reason: `data-loss-${verdict.reason}`,
+      },
+    });
+  }
+  return verdict.kind;
 }

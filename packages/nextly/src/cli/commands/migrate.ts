@@ -65,7 +65,6 @@ import {
   consentToCover,
   describeDeletion,
   isInteractiveTerminal,
-  judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
@@ -167,6 +166,7 @@ import {
 } from "../utils/command-prerequisites";
 import {
   askToDeleteInTerminal,
+  judgeRunDeletions,
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
@@ -455,11 +455,7 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
-        // The consent a file that deletes data needs, from the flag or the
-        // environment; a person at a terminal is asked instead.
-        consent: migrateConsent(options, m => logger.warn(m)),
-        interactive: isInteractiveTerminal(),
-        askToDelete: askToDeleteInTerminal,
+        ...commandLineConsent(options, logger),
         // A file the Builder wrote with no snapshot is replaced by the one
         // `migrate:create` writes, never applied as written here.
         refuseBuilderFilesWithoutSnapshot: true,
@@ -1942,124 +1938,12 @@ export async function refuseUnresolvedAppAttempts(args: {
   });
 }
 
-/** What the history checks read: how `readAppHistory` is asked. */
-interface AppHistoryArgs {
-  adapter: CLIDatabaseAdapter;
-  db: unknown;
-  dialect: SupportedDialect;
-  migrationsDir: string;
-  logger: CommandContext["logger"];
-}
-
-/**
- * The app's migration files as the run reads them, and every attempt and
- * outcome row of the ledger, for the history checks made before a run's
- * first write. Undefined where the database has no ledger yet: nothing ran,
- * so there is nothing to check.
- */
-async function readAppHistory(args: AppHistoryArgs): Promise<
-  | {
-      files: ParsedMigration[];
-      rows: SchemaEventRow[];
-      repo: SchemaEventsRepository;
-    }
-  | undefined
-> {
-  const hasLedger = await (
-    args.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
-  ).tableExists("nextly_schema_events");
-  if (!hasLedger) return undefined;
-  const repo = new SchemaEventsRepository(args.db, args.dialect);
-  const rows = [
-    ...(await repo.listFileApplies()),
-    ...(await repo.listFailedRollbacks()),
-  ];
-  const files = await discoverMigrations(
-    args.migrationsDir,
-    args.logger,
-    args.dialect,
-    "app"
-  );
-  return { files, rows, repo };
-}
-
-/**
- * Refuses, before the run's first write, while an applied app migration file
- * has changed since it ran (`appliedChecksums`): the database holds what its
- * earlier text did, and running the files after it on top of that would build
- * on a history nobody has. The refusal names every such file and says how to
- * accept an intended edit; the command exits with code 2 (`migrateExitCode`).
- *
- * An applied row recorded without a checksum, by an earlier version or an
- * earlier `migrate:resolve --applied`, is taken as matching: once nothing is
- * refused, the file's checksum is recorded on it in place, and the files are
- * listed.
- */
-export async function assertAppliedFilesUnchanged(
-  args: AppHistoryArgs & {
-    /** The command refusing, as the operator typed it. */
-    command: string;
-  }
-): Promise<void> {
-  const history = await readAppHistory(args);
-  if (history === undefined) return;
-  const { changed, unrecorded } = appliedChecksums(
-    history.files.map(m => ({
-      filename: `${m.name}.sql`,
-      checksum: m.checksum,
-    })),
-    history.rows
-  );
-  if (changed.length > 0) throw appliedFilesChanged(args.command, changed);
-  for (const row of unrecorded) {
-    await history.repo.recordChecksum(
-      row.outcomeId,
-      row.checksum,
-      "checksum recorded (none was)"
-    );
-  }
-  if (unrecorded.length > 0) {
-    args.logger.info(
-      `Recorded the checksum of ${formatCount(unrecorded.length, "applied migration")} that had none: ${unrecorded.map(row => row.filename).join(", ")}.`
-    );
-  }
-}
-
-/** The refusal for applied files edited since they ran (`MIGRATION_TAMPERED`). */
-function appliedFilesChanged(
-  command: string,
-  changed: readonly string[]
-): CliError {
-  const [only] = changed;
-  const what =
-    changed.length === 1 && only !== undefined
-      ? `\`${only}\` has changed since it was applied, so \`${command}\` ran nothing.`
-      : `${String(changed.length)} applied migrations have changed since they were applied (${changed.map(f => `\`${f}\``).join(", ")}), so \`${command}\` ran nothing.`;
-  return new CliError("MIGRATION_TAMPERED", {
-    what,
-    why: "A file's checksum no longer matches the one recorded when it ran on this database, so the database holds what its earlier text did.",
-    next: "Restore each file as it was when it ran, and put the change in a new migration with `nextly migrate:create`. If the edit is intended and the database already stands as the file now says, accept it with `nextly migrate:resolve --applied <file>`, which compares the database with the file's snapshot (add `--skip-verify` where it has none).",
-    context: { files: [...changed] },
-  });
-}
-
-/**
- * The exit code `nextly migrate` ends with on `error`: 2 for an applied file
- * edited since it ran, the code the guide documents, so a deploy script can
- * tell it from any other failure (1).
- */
-export function migrateExitCode(error: unknown): 1 | 2 {
-  return error instanceof CliError && error.code === "MIGRATION_TAMPERED"
-    ? 2
-    : 1;
-}
-
 /**
  * Refuses, before the run changes anything, an app migration file it would
  * apply that deletes data (`pendingRunDeletions`, read from the files'
  * statements for this dialect, never from a header, each file against the
  * schema as the files before it leave it) unless the consent covers every
- * deletion in it, naming the file and each deletion (`judgeDataLoss`).
+ * deletion in it, naming the file and each deletion (`judgeRunDeletions`).
  *
  * Asked twice. Before the lock (`agreed` absent), a person at a terminal is
  * shown every file's deletions, each file named above its own, and asked once
@@ -2091,7 +1975,6 @@ async function judgeFileDeletions(
     deps.logger
   );
   const plan = fileRunPlan(listed, deps.step);
-  const first = agreed === undefined;
   // Each deletion keeps the file it comes from, by identity, for the listing.
   const sources = new Map<Deletion, string>();
   for (const { file, deletions } of await pendingRunDeletions(
@@ -2101,24 +1984,17 @@ async function judgeFileDeletions(
   )) {
     for (const deletion of deletions) sources.set(deletion, `${file.name}.sql`);
   }
-  const deletions = [...sources.keys()];
-  const files = [...new Set(sources.values())];
-  const verdict = await judgeDataLoss({
-    deletions,
+  const answer = await judgeRunDeletions({
+    sources,
     consent,
-    interactive: first && deps.interactive === true,
-    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
-    print: first ? line => deps.logger.warn(line) : () => {},
-    approved: agreed,
-    sourceOf: deletion => sources.get(deletion),
+    agreed,
+    interactive: deps.interactive,
+    askToDelete: deps.askToDelete,
+    warn: line => deps.logger.warn(line),
   });
-  if (verdict.kind === "refused") {
-    throw NextlyError.invalidInput({
-      message: `${files.join(", ")} ${files.length === 1 ? "deletes" : "delete"} data, so \`nextly migrate\` applied nothing. ${verdict.message}`,
-      logContext: { files, reason: `data-loss-${verdict.reason}` },
-    });
-  }
-  if (verdict.kind === "declined") {
+  const deletions = [...sources.keys()];
+  if (answer === "declined") {
+    const files = [...new Set(sources.values())];
     throw NextlyError.invalidInput({
       message: `${files.join(", ")} ${files.length === 1 ? "deletes" : "delete"} data and the deletion was declined, so \`nextly migrate\` applied nothing.`,
       logContext: { files, reason: "data-loss-declined" },
@@ -2144,6 +2020,21 @@ async function pendingRunDeletions(
   const facts = await readDeletionFacts(db, dialect, runStatements(lists));
   const perFile = runDeletions(lists, dialect, facts);
   return files.map((file, at) => ({ file, deletions: perFile[at] ?? [] }));
+}
+
+/**
+ * The consent a file that deletes data needs, at the command line: from the
+ * flag or the environment, with a person at a terminal asked instead.
+ */
+function commandLineConsent(
+  options: Pick<MigrateCommandOptions, "acceptDataLoss">,
+  logger: CommandContext["logger"]
+): Pick<MigrateCoreDeps, "consent" | "interactive" | "askToDelete"> {
+  return {
+    consent: migrateConsent(options, m => logger.warn(m)),
+    interactive: isInteractiveTerminal(),
+    askToDelete: askToDeleteInTerminal,
+  };
 }
 
 /**

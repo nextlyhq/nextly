@@ -43,7 +43,6 @@ import {
   consentToCover,
   describeDeletion,
   isInteractiveTerminal,
-  judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
@@ -103,6 +102,7 @@ import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
+  judgeRunDeletions,
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
@@ -789,7 +789,6 @@ async function planAndGuard(
       honours: ["--allow-data-loss"],
       earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
     });
-  const first = agreed === undefined;
   // Each deletion keeps the file it comes from, by identity, for the listing.
   const sources = new Map<Deletion, string>();
   for (const p of planned) {
@@ -797,24 +796,19 @@ async function planAndGuard(
       sources.set(deletion, p.filename);
     }
   }
-  const deletions = [...sources.keys()];
-  const verdict = await judgeDataLoss({
-    deletions,
+  const answer = await judgeRunDeletions({
+    sources,
     consent,
-    interactive: first && deps.interactive === true,
-    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
-    print: first ? line => deps.logger.warn(line) : () => {},
-    approved: agreed,
-    sourceOf: deletion => sources.get(deletion),
+    agreed,
+    interactive: deps.interactive,
+    askToDelete: deps.askToDelete,
+    warn: line => deps.logger.warn(line),
   });
-  if (verdict.kind === "refused") {
-    const files = [...new Set(sources.values())];
-    throw NextlyError.invalidInput({
-      message: `The down section of ${files.join(", ")} deletes data, so nothing was rolled back. ${verdict.message}`,
-      logContext: { files, reason: `data-loss-${verdict.reason}` },
-    });
-  }
-  return { planned, deletions, declined: verdict.kind === "declined" };
+  return {
+    planned,
+    deletions: [...sources.keys()],
+    declined: answer === "declined",
+  };
 }
 
 /**

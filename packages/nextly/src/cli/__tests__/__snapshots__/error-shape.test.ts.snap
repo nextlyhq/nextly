@@ -37,9 +37,10 @@ exports[`a command that ends with an error > names a missing configuration file,
 exports[`a rollback refused for want of consent > ends with what it would delete and the consent that allows it, running nothing 1`] = `
 "✗ Deleting data needs consent, and no terminal is attached to ask.
   Why:  This would delete:
-        - 20261020_120000_add_summary.sql's DOWN, which drops a table or column, or empties a table
+        20261020_120000_add_summary.sql:
+        - column dc_posts.summary
         Nothing was changed.
-  Next: To consent: --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1).
+  Next: To consent: --accept-data-loss=dc_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts.summary).
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)"
 `;
 
