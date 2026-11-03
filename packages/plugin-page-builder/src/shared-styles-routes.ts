@@ -50,7 +50,6 @@ import {
 } from "./library-contract";
 import {
   SHARED_STYLE_LOCK_WRITE_CONTEXT,
-  SHARED_STYLE_REMOVE_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
   sharedStyleName,
 } from "./site-style-storage";
@@ -415,7 +414,8 @@ export async function removeSharedStyles(
     classes.filter(
       entry => typeof entry.id !== "string" || !gone.has(entry.id)
     ),
-    SHARED_STYLE_REMOVE_WRITE_CONTEXT
+    // Unmarked: only a lock change needs a route's mark.
+    {}
   );
   return respondMutation(
     ids.length === 1

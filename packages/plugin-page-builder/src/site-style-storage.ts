@@ -128,9 +128,6 @@ export function refuseBreakpointsOutsideSettings(hook: {
 /** The mark the shared-style lock route puts on its own write. */
 const SHARED_STYLE_LOCK_WRITE = "pageBuilder.sharedStyleLockWrite";
 
-/** The mark the shared-style remove route puts on its own write. */
-const SHARED_STYLE_REMOVE_WRITE = "pageBuilder.sharedStyleRemoveWrite";
-
 /**
  * The context the lock route writes with: the one write that may lock or
  * unlock a shared style.
@@ -139,21 +136,9 @@ export const SHARED_STYLE_LOCK_WRITE_CONTEXT: Readonly<
   Record<string, unknown>
 > = { [SHARED_STYLE_LOCK_WRITE]: true };
 
-/**
- * The context the remove route writes with: the one write that may remove a
- * shared style, made only after it found nothing using it.
- */
-export const SHARED_STYLE_REMOVE_WRITE_CONTEXT: Readonly<
-  Record<string, unknown>
-> = { [SHARED_STYLE_REMOVE_WRITE]: true };
-
 /** What a write that moves a lock outside the lock route is told. */
 const LOCK_OUTSIDE_ITS_ROUTE =
   "A shared style is locked and unlocked with its own action, which needs the permission to lock shared styles.";
-
-/** What a write that removes a shared style outside the remove route is told. */
-const REMOVAL_OUTSIDE_ITS_ROUTE =
-  "Shared styles are removed with Remove, which first checks that nothing uses them.";
 
 /** A stored or sent class list, by id: only entries that carry one. */
 function classEntriesById(raw: unknown): Map<string, Record<string, unknown>> {
@@ -185,12 +170,6 @@ function refusedOnClasses(message: string, reason: string): NextlyError {
   });
 }
 
-/** Which of the two marked routes a write came through. */
-interface ClassWriteRoutes {
-  readonly lock: boolean;
-  readonly remove: boolean;
-}
-
 function lockOutsideItsRoute(): NextlyError {
   return refusedOnClasses(
     LOCK_OUTSIDE_ITS_ROUTE,
@@ -200,14 +179,20 @@ function lockOutsideItsRoute(): NextlyError {
 
 /**
  * Refuse what a write does to one stored entry: a locked one changed or
- * removed by anyone, a lock moved outside the lock route, or an entry removed
- * outside the remove route. `now` is the entry as written, absent if removed.
+ * removed by anyone, or a lock moved outside the lock route. `now` is the
+ * entry as written, absent if removed.
+ *
+ * An unlocked entry may be removed by a whole-list write: undoing the making
+ * of a style writes the section back without it. Checking that nothing uses a
+ * style before it goes needs a usage index that has counted every page, which
+ * a site holding blocks in Singles does not have yet; the remove route makes
+ * that check, and refuses while the index is not whole.
  */
 function refuseStoredEntryChange(
   id: string,
   was: Record<string, unknown>,
   now: Record<string, unknown> | undefined,
-  routes: ClassWriteRoutes
+  lockRoute: boolean
 ): void {
   const wasLocked = was.locked === true;
   // Still locked after the write, so the entry must come back as it was; an
@@ -221,22 +206,15 @@ function refuseStoredEntryChange(
       logContext: { classId: id },
     });
   }
-  if (now === undefined) {
-    if (routes.remove) return;
-    throw refusedOnClasses(
-      REMOVAL_OUTSIDE_ITS_ROUTE,
-      "shared-style-removed-outside-route"
-    );
-  }
-  if (wasLocked !== (now.locked === true) && !routes.lock) {
+  if (now === undefined) return;
+  if (wasLocked !== (now.locked === true) && !lockRoute) {
     throw lockOutsideItsRoute();
   }
 }
 
 /**
- * Refuse a write to this Single that changes a locked shared style, moves a
- * lock outside the lock route, or removes a shared style outside the remove
- * route.
+ * Refuse a write to this Single that changes or removes a locked shared style,
+ * or moves a lock outside the lock route.
  *
  * A locked style holds for everyone, whatever they may otherwise change: its
  * styles, name and slug stay as they are, and it is not removed, until someone
@@ -245,10 +223,10 @@ function refuseStoredEntryChange(
  * caller, so the refusal is a conflict naming the style, not a permission
  * error.
  *
- * Removal has one door for the same reason the breakpoints do: the remove
- * route checks, just before it writes, that the usage index is whole and that
- * nothing uses the style. A whole-list write here could drop an entry a page
- * still applies, and that page would lose its styling in silence.
+ * An unlocked style may still be removed by a whole-list write, which is how
+ * an undo of making one is written. The remove route is the editor's delete:
+ * it checks, just before it writes, that the usage index is whole and that
+ * nothing uses the style.
  *
  * Applying a style to a block, detaching it and overriding it on one block are
  * page writes, which never reach this Single, so a lock does not stop them.
@@ -266,18 +244,15 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
   const data = hook.data;
   if (data === undefined || !Object.hasOwn(data, "classes")) return;
   if (hook.user === undefined && hook.principal === undefined) return;
-  const routes: ClassWriteRoutes = {
-    lock: hook.context?.[SHARED_STYLE_LOCK_WRITE] === true,
-    remove: hook.context?.[SHARED_STYLE_REMOVE_WRITE] === true,
-  };
+  const lockRoute = hook.context?.[SHARED_STYLE_LOCK_WRITE] === true;
   const before = classEntriesById(hook.originalData?.classes);
   const after = classEntriesById(data.classes);
   for (const [id, was] of before) {
-    refuseStoredEntryChange(id, was, after.get(id), routes);
+    refuseStoredEntryChange(id, was, after.get(id), lockRoute);
   }
   for (const [id, now] of after) {
     // A style written already locked is a lock moved outside its route.
-    if (!before.has(id) && now.locked === true && !routes.lock) {
+    if (!before.has(id) && now.locked === true && !lockRoute) {
       throw lockOutsideItsRoute();
     }
   }

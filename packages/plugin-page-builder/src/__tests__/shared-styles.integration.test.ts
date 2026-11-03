@@ -311,23 +311,22 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
-    it("removes a style only through the remove route, trusting server code", async () => {
+    it("lets a signed-in write remove an unlocked style, as undo does, but never a locked one", async () => {
       const { t } = await boot();
       const designer = await holding(t, ...DESIGN);
-      const dropped = await call("PATCH", SINGLE, designer, {
+      // Undoing a style just made writes the section back without it.
+      const undone = await call("PATCH", SINGLE, designer, {
         classes: [lockedCard, hero],
       });
-      expect(dropped.status).toBe(400);
-      expect(JSON.stringify(dropped.body)).toContain(
-        "Shared styles are removed with Remove, which first checks that nothing uses them."
-      );
-      expect(await stored(t)).toHaveLength(3);
-      // The Direct API acting as nobody, as an import does.
-      await t.nextly.updateSingle({
-        slug: SITE_STYLE_SLUG,
-        data: { classes: [lockedCard, hero] },
-        overrideAccess: true,
+      expect(undone.status).toBe(200);
+      expect((await stored(t)).map(entry => entry.id)).toEqual([
+        "c-card",
+        "c-hero",
+      ]);
+      const dropped = await call("PATCH", SINGLE, designer, {
+        classes: [hero],
       });
+      expect(dropped.status).toBe(409);
       expect((await stored(t)).map(entry => entry.id)).toEqual([
         "c-card",
         "c-hero",

@@ -8,7 +8,6 @@ import { describe, expect, it } from "vitest";
 import {
   refuseSharedStyleChangesOutsideTheirRoutes,
   SHARED_STYLE_LOCK_WRITE_CONTEXT,
-  SHARED_STYLE_REMOVE_WRITE_CONTEXT,
   siteStyleSingle,
 } from "./site-style-storage";
 
@@ -75,13 +74,13 @@ describe("a locked shared style", () => {
     }
   });
 
-  it("refuses its removal, even through the remove route", () => {
+  it("refuses its removal, even through the lock route's mark", () => {
     expect(
       refused({
         data: { classes: [hero] },
         originalData: { classes: [lockedCard, hero] },
         user: author,
-        context: { ...SHARED_STYLE_REMOVE_WRITE_CONTEXT },
+        context: { ...SHARED_STYLE_LOCK_WRITE_CONTEXT },
       })
     ).toMatchObject({ code: "CONFLICT" });
   });
@@ -166,7 +165,8 @@ describe("a shared style's lock", () => {
 });
 
 describe("removing a shared style", () => {
-  it("is refused outside the remove route", () => {
+  it("passes for an unlocked style, as an undo of making one writes", () => {
+    // Undo writes the section back as it was, which removes the style made.
     expect(
       refused({
         data: { classes: [hero] },
@@ -174,21 +174,7 @@ describe("removing a shared style", () => {
         user: author,
         context: {},
       })
-    ).toMatchObject({
-      code: "VALIDATION_ERROR",
-      publicData: {
-        errors: [
-          {
-            path: "classes",
-            message:
-              "Shared styles are removed with Remove, which first checks that nothing uses them.",
-          },
-        ],
-      },
-    });
-  });
-
-  it("is refused to a person a plugin signs in, as to a user", () => {
+    ).toBeUndefined();
     expect(
       refused({
         data: { classes: [] },
@@ -196,18 +182,18 @@ describe("removing a shared style", () => {
         principal: { type: "principal", kind: "member", id: "m-1" },
         context: {},
       })
-    ).toMatchObject({ code: "VALIDATION_ERROR" });
+    ).toBeUndefined();
   });
 
-  it("passes through the remove route", () => {
+  it("is refused for a locked style, however it is written", () => {
     expect(
       refused({
         data: { classes: [hero] },
-        originalData: { classes: [card, hero] },
+        originalData: { classes: [lockedCard, hero] },
         user: author,
-        context: { ...SHARED_STYLE_REMOVE_WRITE_CONTEXT },
+        context: {},
       })
-    ).toBeUndefined();
+    ).toMatchObject({ code: "CONFLICT" });
   });
 });
 

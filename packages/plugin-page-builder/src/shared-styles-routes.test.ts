@@ -16,10 +16,7 @@ import {
   type SharedStyleStore,
   type SharedStyleUsageSource,
 } from "./shared-styles-routes";
-import {
-  SHARED_STYLE_LOCK_WRITE_CONTEXT,
-  SHARED_STYLE_REMOVE_WRITE_CONTEXT,
-} from "./site-style-storage";
+import { SHARED_STYLE_LOCK_WRITE_CONTEXT } from "./site-style-storage";
 import type { DocumentsUsing } from "./usage-count";
 import type { UsageIndexHealth } from "./usage-index-health";
 
@@ -352,10 +349,7 @@ describe("removing unused shared styles", () => {
       source,
       new Set()
     );
-    expect(write).toHaveBeenCalledWith(
-      [hero],
-      SHARED_STYLE_REMOVE_WRITE_CONTEXT
-    );
+    expect(write).toHaveBeenCalledWith([hero], {});
     expect(await response.json()).toEqual({
       message: "The shared style was removed.",
       item: { ids: ["c-card"] },
