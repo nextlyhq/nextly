@@ -52,7 +52,7 @@ function ready(
         layoutsCollection: "layouts",
         canUpdateLayouts: true,
         more: false,
-        inaccessible: [],
+        defaultUnreadable: false,
         regionComponents: {},
         regionDefinitions: {},
         ...overrides,
@@ -103,42 +103,34 @@ describe("the page's Layout picker", () => {
     expect(view.effective?.id).toBe("main");
   });
 
-  it("says a chosen Layout was deleted, and selects the default", () => {
-    const view = layoutPickerView(page("gone"), ready());
-    expect(view.value).toBe(SITE_DEFAULT_VALUE);
-    expect(view.options[0]?.label).toBe(
-      "Site default (the chosen Layout was deleted)"
-    );
-    expect(view.why).toBe("Site default: Main (the chosen Layout was deleted)");
-  });
-
-  it("names a Layout the author cannot read as one they can't view, not as deleted", () => {
-    // It exists and is published, but a row rule hides it from this author.
-    const view = layoutPickerView(
-      page("secret"),
-      ready({ inaccessible: [{ id: "secret", published: true }] })
-    );
-    expect(view.value).toBe(layoutValue("secret"));
+  it("names a Layout the answer does not hold as one they can't view or that was deleted", () => {
+    // Hidden from this author by a row rule, or gone: the answer cannot tell
+    // which, and the picker says both rather than guessing.
+    const view = layoutPickerView(page("unknown"), ready());
+    expect(view.value).toBe(layoutValue("unknown"));
     expect(view.options.find(o => o.value === view.value)?.label).toBe(
-      "A Layout you can't view"
+      "A Layout you can't view, or one that was deleted"
     );
     expect(view.options[0]?.label).toBe("Site default (Main)");
-    expect(view.why).toBe("A Layout you can't view");
-    // Drawn inside it, as the published route draws the page, with nothing
-    // of its content shown to an author who may not read it.
-    expect(view.effective?.id).toBe("secret");
-    expect(view.effective?.regions).toEqual([]);
+    expect(view.why).toBe(
+      "A Layout you can't view, or one that was deleted: the published page uses whatever it resolves to"
+    );
+    // Nothing of it is drawn.
+    expect(view.effective).toBeNull();
   });
 
-  it("falls back as the published route does for a hidden Layout that is not published", () => {
+  it("says a default is set without naming one the author cannot read", () => {
     const view = layoutPickerView(
-      page("secret"),
-      ready({ inaccessible: [{ id: "secret", published: false }] })
+      page(),
+      ready({ defaultLayout: null, defaultUnreadable: true })
+    );
+    expect(view.options[0]?.label).toBe(
+      "Site default (a Layout you can't view, or one that was deleted)"
     );
     expect(view.why).toBe(
-      "A Layout you can't view (not published, so the site default shows)"
+      "Site default: a Layout you can't view, or one that was deleted"
     );
-    expect(view.effective?.id).toBe("main");
+    expect(view.effective).toBeNull();
   });
 
   it("draws a page inside its own Layout when the route added it past the list's bound", () => {

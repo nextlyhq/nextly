@@ -80,7 +80,7 @@ const choices: LayoutChoicesResponse = {
     layoutsCollection: "layouts",
     canUpdateLayouts: true,
     more: false,
-    inaccessible: [],
+    defaultUnreadable: false,
     regionComponents: {},
     regionDefinitions: {},
   },
@@ -282,6 +282,111 @@ describe("the page's Layout picker", () => {
       fireEvent.click(found);
     });
     expect(values()).toMatchObject({ layout: "l230", noHeaderFooter: false });
+  });
+
+  /** A capped list whose search answers as `searched` says. */
+  async function searchCapped(searched: {
+    data?: unknown;
+    error?: unknown;
+  }): Promise<{ retry: ReturnType<typeof vi.fn> }> {
+    const layout = (i: number) => ({
+      id: `l${i}`,
+      title: `Layout ${i}`,
+      published: true,
+      draftChangesNotLive: false,
+      regions: [],
+    });
+    const first = {
+      items: Array.from({ length: 200 }, (_, i) => layout(i)),
+      meta: { ...choices.meta, defaultLayout: "l0", more: true },
+    };
+    const retry = vi.fn();
+    identity.mockImplementation(() => ({ kind: "collection", slug: "pages" }));
+    read.mockImplementation(({ path }) => {
+      if (path === PAGE_COLLECTION_ROUTE_PATH) {
+        return {
+          data: { pagesCollection: "pages" },
+          error: null,
+          pending: false,
+          refetch: () => {},
+        } as unknown as ReturnType<typeof usePluginRoute>;
+      }
+      if (path.includes("q=")) {
+        return {
+          data: searched.data,
+          error: searched.error ?? null,
+          pending: searched.data === undefined && searched.error === undefined,
+          refetch: retry,
+        } as unknown as ReturnType<typeof usePluginRoute>;
+      }
+      return {
+        data: first,
+        error: null,
+        pending: false,
+        refetch: () => {},
+      } as unknown as ReturnType<typeof usePluginRoute>;
+    });
+    renderPicker();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("combobox", { name: "Layout" }));
+    });
+    await act(async () => {
+      fireEvent.change(
+        screen.getByRole("combobox", { name: "Search Layouts" }),
+        { target: { value: "Layout 230" } }
+      );
+    });
+    // Past the pause before a search is asked.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });
+    return { retry };
+  }
+
+  it("says it is searching, and shows none of the first answer, while a search is on its way", async () => {
+    await searchCapped({});
+    expect(screen.getByText("Searching…")).toBeTruthy();
+    // The first answer's Layouts are not matches for what was typed.
+    expect(screen.queryByRole("option", { name: "Layout 5" })).toBeNull();
+  });
+
+  it("says a search failed and offers to try again, with no stale options", async () => {
+    const { retry } = await searchCapped({
+      error: Object.assign(new Error("Boom"), { status: 500 }),
+    });
+    expect(screen.getByText("Couldn't search Layouts")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Layout 5" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    });
+    expect(retry).toHaveBeenCalled();
+  });
+
+  it("asks for the choices again when the author comes back to the tab", async () => {
+    const refetch = vi.fn();
+    read.mockImplementation(
+      ({ path }) =>
+        ({
+          data:
+            path === PAGE_COLLECTION_ROUTE_PATH
+              ? { pagesCollection: "pages" }
+              : choices,
+          error: null,
+          pending: false,
+          refetch,
+        }) as unknown as ReturnType<typeof usePluginRoute>
+    );
+    renderPicker();
+    refetch.mockClear();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(refetch).toHaveBeenCalled();
+    refetch.mockClear();
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(refetch).toHaveBeenCalled();
   });
 
   it("keeps the plain dropdown when every Layout fits in one answer", () => {

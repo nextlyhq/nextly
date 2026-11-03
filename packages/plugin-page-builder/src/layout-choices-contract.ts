@@ -117,8 +117,16 @@ export interface RegionComponentFacts {
 export interface LayoutChoicesResponse {
   readonly items: readonly LayoutChoice[];
   readonly meta: {
-    /** The site's default Layout, by id, or null when none is set. */
+    /**
+     * The site's default Layout, by id: null when none is set, and null when
+     * the caller's own reads do not return it.
+     */
     readonly defaultLayout: string | null;
+    /**
+     * Whether a default is set that the caller's reads do not return: hidden
+     * from them, or gone. Which one, and its id, they are not told.
+     */
+    readonly defaultUnreadable: boolean;
     /**
      * The Layouts collection's RESOLVED slug, so "Edit Layout" opens the
      * collection the site actually has, renamed or not.
@@ -131,15 +139,6 @@ export interface LayoutChoicesResponse {
      * a search, since the rest are reachable by title.
      */
     readonly more: boolean;
-    /**
-     * The selected and default Layouts that exist but the caller may not
-     * read, with whether each is published, and nothing else about them. A
-     * named Layout neither listed nor here does not exist.
-     */
-    readonly inaccessible: readonly {
-      readonly id: string;
-      readonly published: boolean;
-    }[];
     /**
      * Facts about the region components of the selected Layout and the
      * default, by id, for an author who may update components: a region has

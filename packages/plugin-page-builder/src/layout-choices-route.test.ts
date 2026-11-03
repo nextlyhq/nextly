@@ -6,6 +6,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
 } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
@@ -435,35 +436,86 @@ describe("readLayoutChoices", () => {
     const { meta } = await readLayoutChoices(context(), nextly, asked("l7"));
     expect(Object.keys(meta.regionDefinitions).sort()).toEqual(["h0", "h7"]);
   });
-  it("tells a Layout the caller cannot read from one that does not exist", async () => {
-    // A row rule hides "secret" from this caller; "gone" exists for nobody.
-    const secret = layoutRow("secret", "Secret", "secret-header");
-    const { nextly, calls } = fake({
-      ...store,
-      layouts: [...store.layouts, secret],
-      components: { ...store.components, "secret-header": component([]) },
-      filtered: ["secret"],
-    });
-    const hidden = await readLayoutChoices(context(), nextly, asked("secret"));
-    expect(hidden.items.some(item => item.id === "secret")).toBe(false);
-    // Existence and publication only: no title, no regions, no content.
-    expect(hidden.meta.inaccessible).toEqual([
-      { id: "secret", published: true },
-    ]);
-    expect(Object.keys(hidden.meta.regionDefinitions)).not.toContain(
-      "secret-header"
-    );
-    // Asked as the system for those ids alone, and only their id and status.
-    const systemReads = calls.filter(call => call.overrideAccess === true);
-    expect(systemReads).toHaveLength(1);
-    expect(systemReads[0]).toMatchObject({
-      where: { id: { in: ["secret"] } },
-      select: { id: true, status: true },
-    });
+  it("reads every Layout and component as the caller, never past their access", async () => {
+    const { nextly, calls } = fake({ ...store, filtered: ["main"] });
+    await readLayoutChoices(context(), nextly, asked("main"));
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.filter(call => call.overrideAccess !== false)).toEqual([]);
+  });
 
-    const { nextly: again } = fake(store);
-    const gone = await readLayoutChoices(context(), again, asked("gone"));
-    expect(gone.meta.inaccessible).toEqual([]);
+  it("answers a hidden Layout and one that does not exist identically", async () => {
+    // A row rule hides "secret"; "ghost" exists for nobody. Asking about
+    // either must tell the caller nothing that tells them apart.
+    const secret = layoutRow("secret", "Secret", "secret-header");
+    const probe = async (selected: string) => {
+      const { nextly } = fake({
+        ...store,
+        layouts: [...store.layouts, secret],
+        components: { ...store.components, "secret-header": component([]) },
+        filtered: ["secret"],
+      });
+      return readLayoutChoices(context(), nextly, asked(selected));
+    };
+    const hidden = await probe("secret");
+    expect(hidden).toEqual(await probe("ghost"));
+    expect(JSON.stringify(hidden)).not.toContain("secret");
+  });
+
+  it("does not disclose a default Layout the caller cannot read", async () => {
+    const answerWith = async (defaultLayout: string) => {
+      const { nextly } = fake({
+        ...store,
+        layouts: [
+          ...store.layouts,
+          layoutRow("secret-default", "Secret default"),
+        ],
+        filtered: ["secret-default"],
+        defaultLayout,
+      });
+      return readLayoutChoices(context(), nextly, asked());
+    };
+    const hidden = await answerWith("secret-default");
+    // A default is set, which the picker says, but not which one.
+    expect(hidden.meta.defaultLayout).toBeNull();
+    expect(hidden.meta.defaultUnreadable).toBe(true);
+    expect(JSON.stringify(hidden)).not.toContain("secret-default");
+    // Identical to a default that names a Layout that does not exist.
+    expect(hidden).toEqual(await answerWith("ghost-default"));
+    // And a readable default is named as before.
+    const { nextly } = fake(store);
+    const readable = await readLayoutChoices(context(), nextly, asked());
+    expect(readable.meta).toMatchObject({
+      defaultLayout: "main",
+      defaultUnreadable: false,
+    });
+  });
+
+  it("fails the answer when a definition read fails for any reason but access", async () => {
+    const throwing = (error: Error) => {
+      const { nextly } = fake(store);
+      const find = nextly.find.bind(nextly);
+      (nextly as { find: unknown }).find = async (
+        args: Record<string, unknown>
+      ) => {
+        if (args.collection === "components") throw error;
+        return find(args as never);
+      };
+      return nextly;
+    };
+    await expect(
+      readLayoutChoices(
+        context(),
+        throwing(new Error("database unavailable")),
+        asked()
+      )
+    ).rejects.toThrow("database unavailable");
+    // An access refusal is expected: the regions draw as missing instead.
+    const refused = await readLayoutChoices(
+      context(),
+      throwing(NextlyError.forbidden()),
+      asked()
+    );
+    expect(refused.meta.regionDefinitions).toEqual({});
   });
 
   it("says a region has draft changes when a component it embeds does", async () => {

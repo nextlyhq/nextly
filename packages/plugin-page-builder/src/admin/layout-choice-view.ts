@@ -103,12 +103,10 @@ function optionLabel(item: LayoutChoice, site: LayoutSite): string {
  * - the default: "Site default (Main)", or "Site default (none set)" when the
  *   site has no published default;
  * - a published Layout by its title; an unpublished one marked as such;
- * - a Layout that no longer exists: "Site default (the chosen Layout was
- *   deleted)";
+ * - a Layout the answer does not hold, hidden from the author or deleted:
+ *   "A Layout you can't view, or one that was deleted";
  * - "No header or footer";
- * - without the right to read Layouts, read-only: "A Layout you can't view";
- * - a Layout that exists but a row rule hides from this author: the same
- *   words, while one that does not exist at all reads as deleted.
+ * - without the right to read Layouts, read-only: "A Layout you can't view".
  */
 export function layoutPickerView(
   stored: StoredLayoutChoice,
@@ -147,7 +145,7 @@ function viewWithoutList(
   ];
   return {
     options,
-    value: storedValue(named, switchedOff, false),
+    value: storedValue(named, switchedOff),
     why: whyWithoutList(named, switchedOff, forbidden),
     readOnly: forbidden,
     effective: null,
@@ -168,15 +166,25 @@ function whyWithoutList(
   return named === null ? "Site default" : UNREADABLE_LAYOUT;
 }
 
-/** The option the stored values select; a deleted Layout selects the default. */
-function storedValue(
-  named: string | null,
-  switchedOff: boolean,
-  deleted: boolean
-): string {
+/** The option the stored values select. */
+function storedValue(named: string | null, switchedOff: boolean): string {
   if (switchedOff) return NO_HEADER_FOOTER_VALUE;
-  return named === null || deleted ? SITE_DEFAULT_VALUE : layoutValue(named);
+  return named === null ? SITE_DEFAULT_VALUE : layoutValue(named);
 }
+
+/**
+ * What a Layout the answer does not hold is called. The author's own reads
+ * did not return it, which happens to a Layout hidden from them and to one
+ * that was deleted alike, and the answer does not say which.
+ */
+const UNKNOWN_LAYOUT = "A Layout you can't view, or one that was deleted";
+
+/**
+ * The default, as the rule is asked about it, when one is set that the author
+ * cannot read: it stands for "the site's default", whatever that turns out to
+ * be, and is never drawn.
+ */
+const UNREADABLE_DEFAULT = "\u0000unreadable-default";
 
 /** The view once the list has arrived. */
 function viewFromList(
@@ -185,50 +193,28 @@ function viewFromList(
   choices: LayoutChoicesResponse
 ): LayoutPickerView {
   const { items, meta } = choices;
-  // A Layout that exists but this author may not read stands in under the
-  // words they can see, with its published state and no regions: the page is
-  // drawn inside it as the published route draws it, showing nothing of it.
-  const hidden = meta.inaccessible.map(
-    (layout): LayoutChoice => ({
-      id: layout.id,
-      title: UNREADABLE_LAYOUT,
-      published: layout.published,
-      draftChangesNotLive: false,
-      regions: [],
-    })
-  );
-  const byId = new Map([...items, ...hidden].map(item => [item.id, item]));
-  const isPublished = (id: string) => byId.get(id)?.published === true;
-  const site: LayoutSite = { defaultLayout: meta.defaultLayout, isPublished };
-  const toOption = (item: LayoutChoice): PickerOption => ({
-    value: layoutValue(item.id),
-    label: optionLabel(item, site),
-  });
-  // A named Layout the answer does not hold is gone: the route answers for
-  // the page's selected Layout however far past its bound it sorts.
-  const deleted = named !== null && !byId.has(named) && !switchedOff;
-
-  const options: PickerOption[] = [
-    {
-      value: SITE_DEFAULT_VALUE,
-      label: defaultLabel(deleted, meta.defaultLayout, byId),
-    },
-    ...items.filter(item => item.published).map(toOption),
-    ...items.filter(item => !item.published).map(toOption),
-    // The page's own Layout when it is one they cannot view, so the picker
-    // still shows what is chosen.
-    ...hidden.filter(item => item.id === named).map(toOption),
-    NONE_OPTION,
-  ];
-
+  const byId = new Map(items.map(item => [item.id, item]));
+  // A named Layout the answer does not hold: nothing more is known of it, so
+  // nothing more is said or drawn.
+  if (named !== null && !switchedOff && !byId.has(named)) {
+    return unknownLayoutView(named, items, meta);
+  }
+  const site: LayoutSite = {
+    defaultLayout: meta.defaultUnreadable
+      ? UNREADABLE_DEFAULT
+      : meta.defaultLayout,
+    isPublished: id =>
+      id === UNREADABLE_DEFAULT || byId.get(id)?.published === true,
+  };
+  const options = choiceOptions(items, meta, site);
   const resolution = resolvePageLayout(
     { layout: named, noHeaderFooter: switchedOff },
     site
   );
   return {
     options,
-    value: storedValue(named, switchedOff, deleted),
-    why: whyLine(resolution, byId, named, deleted),
+    value: storedValue(named, switchedOff),
+    why: whyLine(resolution, byId, named),
     readOnly: false,
     effective:
       resolution.kind === "layout"
@@ -237,14 +223,62 @@ function viewFromList(
   };
 }
 
+/** The options: the default, published Layouts, unpublished ones, then none. */
+function choiceOptions(
+  items: readonly LayoutChoice[],
+  meta: LayoutChoicesResponse["meta"],
+  site: LayoutSite
+): PickerOption[] {
+  const toOption = (item: LayoutChoice): PickerOption => ({
+    value: layoutValue(item.id),
+    label: optionLabel(item, site),
+  });
+  return [
+    { value: SITE_DEFAULT_VALUE, label: defaultLabel(meta, items) },
+    ...items.filter(item => item.published).map(toOption),
+    ...items.filter(item => !item.published).map(toOption),
+    NONE_OPTION,
+  ];
+}
+
+/**
+ * The view for a page naming a Layout the answer does not hold: the choice is
+ * kept and named honestly, and nothing of it is drawn. The published page is
+ * drawn by what that Layout resolves to, which this author cannot be told.
+ */
+function unknownLayoutView(
+  named: string,
+  items: readonly LayoutChoice[],
+  meta: LayoutChoicesResponse["meta"]
+): LayoutPickerView {
+  const byId = new Map(items.map(item => [item.id, item]));
+  const site: LayoutSite = {
+    defaultLayout: meta.defaultLayout,
+    isPublished: id => byId.get(id)?.published === true,
+  };
+  const options = choiceOptions(items, meta, site);
+  return {
+    options: [
+      ...options.slice(0, -1),
+      { value: layoutValue(named), label: UNKNOWN_LAYOUT },
+      NONE_OPTION,
+    ],
+    value: layoutValue(named),
+    why: `${UNKNOWN_LAYOUT}: the published page uses whatever it resolves to`,
+    readOnly: false,
+    effective: null,
+  };
+}
+
 /** The default option's words: which Layout it is, or why it is not one. */
 function defaultLabel(
-  deleted: boolean,
-  defaultLayout: string | null,
-  byId: ReadonlyMap<string, LayoutChoice>
+  meta: LayoutChoicesResponse["meta"],
+  items: readonly LayoutChoice[]
 ): string {
-  if (deleted) return "Site default (the chosen Layout was deleted)";
-  const usable = defaultLayout === null ? undefined : byId.get(defaultLayout);
+  if (meta.defaultUnreadable) {
+    return "Site default (a Layout you can't view, or one that was deleted)";
+  }
+  const usable = items.find(item => item.id === meta.defaultLayout);
   return usable?.published === true
     ? `Site default (${usable.title})`
     : "Site default (none set)";
@@ -282,13 +316,14 @@ function whyNothingShows(
 function whyLine(
   resolution: ReturnType<typeof resolvePageLayout>,
   byId: ReadonlyMap<string, LayoutChoice>,
-  named: string | null,
-  deleted: boolean
+  named: string | null
 ): string {
   if (resolution.kind === "none") return whyNothingShows(resolution, byId);
-  const title = byId.get(resolution.id)?.title ?? resolution.id;
+  const title =
+    resolution.id === UNREADABLE_DEFAULT
+      ? "a Layout you can't view, or one that was deleted"
+      : (byId.get(resolution.id)?.title ?? resolution.id);
   if (resolution.source === "page") return title;
-  if (deleted) return `Site default: ${title} (the chosen Layout was deleted)`;
   const fellFrom = named === null ? undefined : byId.get(named);
   return fellFrom === undefined
     ? `Site default: ${title}`

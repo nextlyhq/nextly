@@ -37,6 +37,18 @@ export const LAYOUT_NOT_PUBLISHED_MESSAGE =
 export const LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE =
   "This page names a Layout that is not published, so it is shown with no header or footer until that Layout is published.";
 
+/**
+ * What the author reads when the page names a Layout their own reads do not
+ * return: one hidden from them, or one that no longer exists. Nothing is
+ * promised about publishing it, since it may not exist.
+ */
+export const LAYOUT_UNKNOWN_MESSAGE =
+  "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the site's default Layout shows instead.";
+
+/** The same, when the site has no usable default to show. */
+export const LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE =
+  "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the page shows no header or footer.";
+
 /** The publishing phases a page's write passes through. */
 const PUBLISHING_PHASES = ["afterCreate", "afterUpdate"] as const;
 
@@ -83,26 +95,80 @@ export function registerLayoutReadinessNotice(args: {
  *
  * Asked of the rule the published route uses, so the notice says what a
  * visitor gets: the site's default Layout where one is usable, and otherwise
- * no header or footer, rather than assuming a default exists.
+ * no header or footer, rather than assuming a default exists. A Layout the
+ * write cannot read is named as hidden or gone, and nothing is promised
+ * about publishing it.
  */
 async function adviceFor(
   nextly: Pick<DefaultLayoutDirectApi, "find" | "findSingle">,
   slugs: { layouts: string; settings: string },
-  named: string
+  named: string,
+  reading: WriteReading
 ): Promise<string | null> {
   const { defaultLayout } = await readLayoutSettings(nextly, slugs);
-  const published = await publishedLayoutIds(
-    nextly,
-    slugs,
-    defaultLayout === null ? [named] : [named, defaultLayout]
-  );
+  const defaultPublished =
+    defaultLayout !== null &&
+    (await publishedLayoutIds(nextly, slugs, [defaultLayout])).has(
+      defaultLayout
+    );
+  // Whether it exists, asked with the write's own access: a Layout the
+  // writer may not read is not theirs to learn about, so it is told apart
+  // from a deleted one by nothing they could not read themselves.
+  const row = await namedRow(nextly, slugs.layouts, named, reading);
   const resolution = resolvePageLayout(
     { layout: named, noHeaderFooter: false },
-    { defaultLayout, isPublished: id => published.has(id) }
+    {
+      defaultLayout,
+      isPublished: id =>
+        id === named ? row?.published === true : defaultPublished,
+    }
   );
-  if (resolution.kind === "none")
-    return LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE;
-  return resolution.source === "page" ? null : LAYOUT_NOT_PUBLISHED_MESSAGE;
+  if (resolution.kind === "layout" && resolution.source === "page") return null;
+  const defaultShows = resolution.kind === "layout";
+  if (row === null) {
+    return defaultShows
+      ? LAYOUT_UNKNOWN_MESSAGE
+      : LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE;
+  }
+  return defaultShows
+    ? LAYOUT_NOT_PUBLISHED_MESSAGE
+    : LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE;
+}
+
+/** Whom the existence read is made as: the write's own identity. */
+type WriteReading =
+  | { overrideAccess: true; user: undefined; req: undefined }
+  | { overrideAccess: false; user: NonNullable<HookContext<unknown>["user"]> };
+
+/**
+ * The write's own access: its user's where a user made it, and the system's
+ * for a write the system made, which no rule refuses.
+ */
+function writeReading(context: HookContext<unknown>): WriteReading {
+  const user = context.user;
+  return user === undefined
+    ? { overrideAccess: true, user: undefined, req: undefined }
+    : { overrideAccess: false, user };
+}
+
+/** The named Layout's row as the write may read it, or null. */
+async function namedRow(
+  nextly: Pick<DefaultLayoutDirectApi, "find">,
+  layouts: string,
+  named: string,
+  reading: WriteReading
+): Promise<{ published: boolean } | null> {
+  const found = await nextly.find({
+    collection: layouts,
+    where: { id: { in: [named] } },
+    ...reading,
+    status: "all",
+    select: { id: true, status: true },
+    limit: 1,
+    depth: 0,
+  });
+  const row = found.items[0] as { status?: unknown } | undefined;
+  return row === undefined ? null : { published: row.status === "published" };
 }
 
 async function report(
@@ -124,7 +190,12 @@ async function report(
   if (data?.noHeaderFooter === true) return;
   const named = layoutRelationId(data?.layout);
   if (named === null) return;
-  const message = await adviceFor(target.nextly, args, named);
+  const message = await adviceFor(
+    target.nextly,
+    args,
+    named,
+    writeReading(context)
+  );
   if (message === null) return;
   recordAdvisoryNotice({
     phase,

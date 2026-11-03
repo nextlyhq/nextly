@@ -43,7 +43,7 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import { Check, ChevronDown } from "lucide-react";
-import { useEffect, useId, useMemo, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import {
   useController,
   useWatch,
@@ -100,16 +100,21 @@ function useLayoutChoices(
       search === undefined ? { locale } : { locale, search }
     ),
     enabled,
-    // Asked again on every mount: a Layout published or made the default in
-    // another tab is a choice the author should see when they come back.
+    // Asked again on every mount, and when the author comes back to the tab
+    // (below): a Layout published or made the default in another tab, from
+    // "Edit Layout", is a choice the author should see when they return.
     staleTime: 0,
   });
+  // A search's answer belongs to its own query, so a search holds nothing:
+  // the last one's matches are not this one's.
+  const holds = search === undefined;
   const [held, setHeld] = useState<LayoutChoicesResponse | undefined>(
     undefined
   );
   useEffect(() => {
-    if (read.data !== undefined) setHeld(read.data);
-  }, [read.data]);
+    if (holds && read.data !== undefined) setHeld(read.data);
+  }, [holds, read.data]);
+  useRefreshOnReturn(enabled && holds, read.refetch);
   const state = useMemo((): LayoutChoicesState => {
     if (read.data !== undefined) return { kind: "ready", choices: read.data };
     if (read.error !== null) {
@@ -126,6 +131,33 @@ function useLayoutChoices(
   const stale =
     read.data === undefined && read.error === null && held !== undefined;
   return { state, stale, retry: read.refetch };
+}
+
+/**
+ * Ask again when the author returns to this tab: on window focus, and when
+ * the page becomes visible. The admin turns refetch-on-focus off for every
+ * read, so this one read asks for it itself.
+ */
+function useRefreshOnReturn(enabled: boolean, refetch: () => void): void {
+  // The newest `refetch`, without re-attaching the listeners on each render:
+  // the read hands out a new function every time.
+  const latest = useRef(refetch);
+  useEffect(() => {
+    latest.current = refetch;
+  });
+  useEffect(() => {
+    if (!enabled) return;
+    const onFocus = () => latest.current();
+    const onVisible = () => {
+      if (document.visibilityState !== "hidden") latest.current();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [enabled]);
 }
 
 /**
@@ -325,6 +357,69 @@ const SEARCH_PAUSE_MS = 200;
 const CAPPED_NOTE = "Showing the first 200; search to find more.";
 
 /**
+ * A capped list's search: what is typed, the server's answer for it once the
+ * typing pauses, and the options to show.
+ *
+ * Searching from the first keystroke: what is typed is the query, and until
+ * its own answer arrives nothing shown may claim to match it. A search's
+ * answer belongs to its own query, so the last one's matches are never shown
+ * for the next.
+ */
+function useLayoutSearch(
+  open: boolean,
+  stored: { layout: unknown; noHeaderFooter: boolean },
+  view: LayoutPickerView
+) {
+  const [typed, setTyped] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(typed.trim()), SEARCH_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [typed]);
+  const searching = typed.trim() !== "";
+  const { state: found, retry } = useLayoutChoices(
+    open && search !== "",
+    selectedOf(stored),
+    search
+  );
+  const current = searching && search === typed.trim();
+  const answered = current && found.kind === "ready";
+  const failed =
+    current && (found.kind === "failed" || found.kind === "forbidden");
+  const options = !searching
+    ? view.options
+    : found.kind === "ready" && answered
+      ? layoutPickerView(stored, found).options
+      : [];
+  return { typed, setTyped, searching, answered, failed, options, retry };
+}
+
+/** What the list says when it shows no Layouts: why, and what to do. */
+function SearchNote({
+  searching,
+  answered,
+  failed,
+  retry,
+}: {
+  searching: boolean;
+  answered: boolean;
+  failed: boolean;
+  retry: () => void;
+}): JSX.Element {
+  if (failed) {
+    return (
+      <span className="flex items-center justify-center gap-2">
+        Couldn&apos;t search Layouts
+        <Button type="button" variant="ghost" size="sm" onClick={retry}>
+          Try again
+        </Button>
+      </span>
+    );
+  }
+  return <>{searching && !answered ? "Searching…" : "No Layouts match."}</>;
+}
+
+/**
  * The picker for a site with more Layouts than one answer lists: the same
  * choices behind a search field, as the admin's other searchable choices are
  * drawn. Titles are searched on the server, so every Layout the author may
@@ -346,23 +441,8 @@ function SearchingPicker({
   onChoose: (value: string) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const [typed, setTyped] = useState("");
-  const [search, setSearch] = useState("");
-  useEffect(() => {
-    const timer = setTimeout(() => setSearch(typed.trim()), SEARCH_PAUSE_MS);
-    return () => clearTimeout(timer);
-  }, [typed]);
-  const searching = search !== "";
-  const found = useLayoutChoices(
-    open && searching,
-    selectedOf(stored),
-    search
-  ).state;
-  // The matches while searching, words and all; the first answer otherwise.
-  const options =
-    searching && found.kind === "ready"
-      ? layoutPickerView(stored, found).options
-      : view.options;
+  const { typed, setTyped, searching, answered, failed, options, retry } =
+    useLayoutSearch(open, stored, view);
   const current = view.options.find(option => option.value === view.value);
 
   return (
@@ -402,9 +482,12 @@ function SearchingPicker({
           />
           <CommandList>
             <CommandEmpty>
-              {searching && found.kind === "pending"
-                ? "Searching…"
-                : "No Layouts match."}
+              <SearchNote
+                searching={searching}
+                answered={answered}
+                failed={failed}
+                retry={retry}
+              />
             </CommandEmpty>
             <CommandGroup>
               {options.map(option => (

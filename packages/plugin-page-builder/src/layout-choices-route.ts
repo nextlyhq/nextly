@@ -24,9 +24,10 @@ import {
   type LayoutRegion,
 } from "@nextlyhq/blocks-engine";
 import { definitionsFor } from "@nextlyhq/blocks-react";
-import type {
-  PluginRouteContext,
-  PluginRoutePermissionScope,
+import {
+  NextlyError,
+  type PluginRouteContext,
+  type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
@@ -186,13 +187,11 @@ export async function readLayoutChoices(
   const items = rows
     .map(choiceOf)
     .filter((item): item is LayoutChoice => item !== null);
-  // Of the two, those the caller's own reads did not return: hidden from them
-  // by a row rule, or gone. Told apart as the system, by existence alone.
-  const inaccessible = await existingButHidden(
-    nextly,
-    layouts,
-    focus.filter(id => !items.some(item => item.id === id))
-  );
+  // The default, named only when the caller's own reads returned it: one
+  // they cannot read is hidden from them or gone, and either way its id is
+  // not theirs to learn. That one is set is all they are told.
+  const defaultReadable =
+    defaultLayout !== null && items.some(item => item.id === defaultLayout);
 
   const canUpdateLayouts = (await ctx.caller?.can("update", layouts)) === true;
   const focused = items.filter(item => focus.includes(item.id));
@@ -247,12 +246,12 @@ export async function readLayoutChoices(
       draftChangesNotLive: drafts.has(item.id),
     })),
     meta: {
-      defaultLayout,
+      defaultLayout: defaultReadable ? defaultLayout : null,
+      defaultUnreadable: defaultLayout !== null && !defaultReadable,
       layoutsCollection: layouts,
       canUpdateLayouts,
       more:
         (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
-      inaccessible,
       // A region has edits not live when ANY component it draws does: the
       // one it names, or one that component places, however deep.
       regionComponents: Object.fromEntries(
@@ -303,40 +302,6 @@ function reachableComponents(
     reached.set(top, order);
   }
   return reached;
-}
-
-/**
- * Which of `ids` exist, and whether each is published, asked as the system.
- *
- * For the selected and default Layouts the caller's own reads did not return,
- * so a Layout a row rule hides is told from one that is gone. Only the id and
- * the status are read: nothing about a row the caller may not read leaves
- * here but that it exists and whether it is live, which is what the page's
- * published route acts on.
- */
-async function existingButHidden(
-  nextly: LayoutChoicesDirectApi,
-  layouts: string,
-  ids: readonly string[]
-): Promise<{ id: string; published: boolean }[]> {
-  if (ids.length === 0) return [];
-  const rows = rowsOf(
-    await nextly.find({
-      collection: layouts,
-      where: { id: { in: [...ids] } },
-      overrideAccess: true,
-      user: undefined,
-      req: undefined,
-      status: "all",
-      select: { id: true, status: true },
-      limit: ids.length,
-      depth: 0,
-    })
-  );
-  return rows.flatMap(row => {
-    const id = rowId(row);
-    return id === null ? [] : [{ id, published: row.status === "published" }];
-  });
 }
 
 /**
@@ -455,10 +420,15 @@ async function publishedDefinitions(
     async ids => {
       try {
         return await source(ids);
-      } catch {
-        // Refused or failed: the regions draw as missing rather than failing
-        // the whole answer, which the picker needs either way.
-        return new Map<string, BlockDocument>();
+      } catch (error) {
+        // Refused: the caller may not read these, and the regions draw as
+        // missing, which is what they are to this caller. Anything else is a
+        // failure, not an answer, and fails the request, so the picker says
+        // it could not load rather than calling the components missing.
+        if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
+          return new Map<string, BlockDocument>();
+        }
+        throw error;
       }
     },
     read.limits

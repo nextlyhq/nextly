@@ -19,6 +19,8 @@ const {
   LAYOUT_NOT_PUBLISHED_CODE,
   LAYOUT_NOT_PUBLISHED_MESSAGE,
   LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE,
+  LAYOUT_UNKNOWN_MESSAGE,
+  LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE,
 } = await import("./layout-readiness-hook");
 
 type Handler = (context: unknown) => unknown;
@@ -27,8 +29,17 @@ type Handler = (context: unknown) => unknown;
 async function publish(
   data: Record<string, unknown>,
   published: readonly string[],
-  defaultLayout: string | null = "main"
+  defaultLayout: string | null = "main",
+  world: {
+    /** The Layouts that exist; by default the published ones and "unfinished". */
+    existing?: readonly string[];
+    /** Layouts a row rule hides from the writer. */
+    hiddenFromWriter?: readonly string[];
+    /** The writing user, when the write was made by one. */
+    user?: { id: string };
+  } = {}
 ): Promise<void> {
+  const existing = world.existing ?? [...published, "unfinished", "draft"];
   const handlers: { phase: string; collection: string; run: Handler }[] = [];
   registerLayoutReadinessNotice({
     ctx: {
@@ -49,17 +60,44 @@ async function publish(
     ["afterUpdate", "pages"],
   ]);
   const nextly = {
-    find: async ({ where }: { where: { id: { in: string[] } } }) => ({
-      items: where.id.in
-        .filter(id => published.includes(id))
-        .map(id => ({ id })),
-    }),
+    find: async ({
+      where,
+      status,
+      overrideAccess,
+    }: {
+      where: { id: { in: string[] } };
+      status?: string;
+      overrideAccess?: boolean;
+    }) => {
+      // Whether the rows exist, read with the write's own access.
+      if (status === "all") {
+        return {
+          items: where.id.in
+            .filter(id => existing.includes(id))
+            .filter(
+              id =>
+                overrideAccess === true ||
+                !(world.hiddenFromWriter ?? []).includes(id)
+            )
+            .map(id => ({
+              id,
+              status: published.includes(id) ? "published" : "draft",
+            })),
+        };
+      }
+      return {
+        items: where.id.in
+          .filter(id => published.includes(id))
+          .map(id => ({ id })),
+      };
+    },
     findSingle: async () => ({ defaultLayout }),
   };
   await handlers[1]!.run({
     collection: "pages",
     data: { id: "p1", ...data },
     req: { nextly },
+    ...(world.user === undefined ? {} : { user: world.user }),
   });
 }
 
@@ -95,6 +133,43 @@ describe("the advisory for a page naming an unpublished Layout", () => {
     expect(LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE).toBe(
       "This page names a Layout that is not published, so it is shown with no header or footer until that Layout is published."
     );
+  });
+
+  it("does not promise a Layout that no longer exists can be published", async () => {
+    await publish({ status: "published", layout: "gone" }, ["main"]);
+    await publish({ status: "published", layout: "gone" }, [], null);
+    expect(recorded).toHaveLength(2);
+    expect(recorded[0]).toMatchObject({
+      code: LAYOUT_NOT_PUBLISHED_CODE,
+      message: LAYOUT_UNKNOWN_MESSAGE,
+    });
+    expect(recorded[1]).toMatchObject({
+      message: LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE,
+    });
+    expect(LAYOUT_UNKNOWN_MESSAGE).toBe(
+      "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the site's default Layout shows instead."
+    );
+    expect(LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE).toBe(
+      "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the page shows no header or footer."
+    );
+  });
+
+  it("tells the writer nothing more than their own reads return about a hidden Layout", async () => {
+    // It exists and is published, but the writer may not read it: they are
+    // told what they would be told of one that does not exist.
+    await publish(
+      { status: "published", layout: "secret" },
+      ["main", "secret"],
+      "main",
+      {
+        existing: ["main", "secret"],
+        hiddenFromWriter: ["secret"],
+        user: { id: "writer" },
+      }
+    );
+    expect(recorded).toEqual([
+      expect.objectContaining({ message: LAYOUT_UNKNOWN_MESSAGE }),
+    ]);
   });
 
   it("says nothing for a published Layout, the default, a draft page, or no header or footer", async () => {
