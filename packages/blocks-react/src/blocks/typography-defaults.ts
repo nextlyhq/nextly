@@ -59,11 +59,19 @@ import type { NodeStyles, StyleCompileContext } from "@nextlyhq/blocks-engine";
 /**
  * No outer margin on the block axis: what every element here carries, and
  * all that a paragraph, a list, a figure, a quotation and a rule carry.
+ *
+ * A function rather than a shared value: the defaults are a published,
+ * mutable export, and an entry adjusted in place must not move every other
+ * entry holding the same object.
  */
-const FLUSH = { blockStart: "0", blockEnd: "0" } as const;
+function flushMargin(): { blockStart: string; blockEnd: string } {
+  return { blockStart: "0", blockEnd: "0" };
+}
 
-/** An element whose default is only {@link FLUSH}. */
-const flush: NodeStyles = { base: { base: { margin: FLUSH } } };
+/** An element whose default is only {@link flushMargin}, as objects of its own. */
+function flush(): NodeStyles {
+  return { base: { base: { margin: flushMargin() } } };
+}
 
 /** A heading's default look at one level: its size, leading and weight. */
 function heading(size: string, lineHeight: number): NodeStyles {
@@ -73,7 +81,7 @@ function heading(size: string, lineHeight: number): NodeStyles {
         fontSize: size,
         lineHeight,
         fontWeight: 700,
-        margin: FLUSH,
+        margin: flushMargin(),
       },
     },
   };
@@ -125,14 +133,14 @@ export const TYPOGRAPHY_DEFAULTS: NonNullable<
    * proportionally tighter leading than body text, so a single inherited value
    * cannot serve both.
    */
-  p: flush,
+  p: flush(),
   // Rendered by List, Quote, Image and rich text, each with a browser margin
   // a host without a reset keeps.
-  blockquote: flush,
-  figure: flush,
-  hr: flush,
-  ol: flush,
-  ul: flush,
+  blockquote: flush(),
+  figure: flush(),
+  hr: flush(),
+  ol: flush(),
+  ul: flush(),
 };
 
 /**

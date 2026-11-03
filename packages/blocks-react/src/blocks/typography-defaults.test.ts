@@ -87,6 +87,21 @@ describe("the typographic baseline", () => {
     }
   });
 
+  it("gives every element its own objects, so changing one changes no other", () => {
+    // A published, mutable export: a consumer adjusting one entry in place must
+    // not move the others with it, which holds exactly when no two entries
+    // share an object at any level.
+    const entries = Object.values(TYPOGRAPHY_DEFAULTS);
+    const values = entries.map(entry => entry?.base?.base);
+    const margins = values.map(value => value?.margin);
+    // Population: every element has values and a margin to compare.
+    expect(entries).toHaveLength(12);
+    expect(margins.every(margin => typeof margin === "object")).toBe(true);
+    expect(new Set(entries).size).toBe(entries.length);
+    expect(new Set(values).size).toBe(values.length);
+    expect(new Set(margins).size).toBe(margins.length);
+  });
+
   it("keeps a heading's own leading, which is the deliberate asymmetry", () => {
     // Large text needs proportionally tighter leading than body text, so one
     // inherited value cannot serve both. An author changing a heading's leading
