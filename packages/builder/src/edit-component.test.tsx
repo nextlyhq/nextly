@@ -250,7 +250,7 @@ describe("the banner over a component's own view", () => {
     );
     expect(reachSentence({ count: 0, complete: false })).toBeUndefined();
     expect(reachSentence({ count: 0, complete: true })).toBe(
-      "No page uses it yet"
+      "Not on any page yet"
     );
   });
 });

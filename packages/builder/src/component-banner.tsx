@@ -37,7 +37,7 @@ export function reachSentence(
 ): string | undefined {
   if (pages === undefined) return undefined;
   if (pages.count === 0) {
-    return pages.complete ? "No page uses it yet" : undefined;
+    return pages.complete ? "Not on any page yet" : undefined;
   }
   const noun = pages.count === 1 ? "page" : "pages";
   return pages.complete

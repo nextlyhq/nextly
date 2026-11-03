@@ -378,7 +378,7 @@ test.describe("the Components panel", () => {
     const banner = page.getByRole("region", { name: "Editing a component" });
     await expect(banner).toContainText(title);
     // Whatever it says of reach is about pages, never documents: a component
-    // placed nowhere says "No page uses it yet", or nothing while the usage
+    // placed nowhere says "Not on any page yet", or nothing while the usage
     // index is still being filled (a floor of none says nothing).
     await expect(banner).not.toContainText(/document/);
 
