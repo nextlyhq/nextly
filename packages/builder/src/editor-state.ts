@@ -33,12 +33,13 @@ import {
   compositionFaults,
   DEFAULT_LIMITS,
   findNode,
+  heldBaselines,
+  keptForSameComponents,
   lockRefusal,
   lockRepairRule,
   placedLockChanges,
   placementRefusal,
   placementRepairRule,
-  placementsAsComponentsHoldThem,
   planRepair as planDocumentRepair,
   registryBlockSource,
   registryNestingSource,
@@ -469,15 +470,14 @@ function componentLockAdded(
     form => componentLayersLocks(form.nodes, limits).size > 0
   );
   if (!drawsLock) return undefined;
-  const asHeld = compose(
-    placementsAsComponentsHoldThem(after, limits)
-  ).document;
-  const held = componentLayersLocks(asHeld.nodes, limits);
-  if (held.size === 0) return undefined;
-  const [change] = placedLockChanges(composedAfter, asHeld, kept, limits);
+  const held = heldBaselines(after, limits).map(level => ({
+    form: compose(level.document).document,
+    placements: level.placements,
+  }));
+  const [change] = placedLockChanges(composedAfter, held, kept, limits);
   if (change === undefined) return undefined;
   return componentLockFacts(
-    componentNameOf(after, held.get(change.id)?.placementId, componentName)
+    componentNameOf(after, change.placementId, componentName)
   );
 }
 
@@ -529,7 +529,13 @@ function composedLockAdded(
   const composedBefore = compose(before);
   const baselines = [composedBefore.document, compose(stored).document];
   const composedAfter = compose(after);
-  const held = componentLockAdded(after, composedAfter.document, baselines, {
+  // A value is kept only under the component that gave it: a placement this
+  // edit switches to another component is left out of the forms it keeps.
+  const kept = [before, stored].map((form, index) => {
+    const same = keptForSameComponents(after, form, limits);
+    return same === form ? baselines[index] : compose(same).document;
+  });
+  const held = componentLockAdded(after, composedAfter.document, kept, {
     compose,
     limits,
     componentName,

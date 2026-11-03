@@ -21,7 +21,7 @@ import {
 import { layersLockChanges, type LayersLockChange } from "./layers-lock-stored";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
-import { walkNodes } from "./tree";
+import { removeNode, walkNodes } from "./tree";
 
 /** The lock a component holds a composed node under. */
 export interface ComponentLayersLock {
@@ -79,50 +79,169 @@ export function componentLayersLocks(
 }
 
 /**
- * The document with each placement's own values, its chosen variant and its
- * slot content removed, so composing it draws every component as the
- * component holds it: the baseline a placement's values are measured against.
- * A variant is a placement's choice too, and one that changes a locked block
- * changes it as a value would.
+ * A page with the placements of one nesting level as their components hold
+ * them, and the placements that level holds.
+ */
+export interface HeldBaseline {
+  readonly document: BlockDocument;
+  /** The ids of the placements drawn as held: the level's own. */
+  readonly placements: ReadonlySet<string>;
+}
+
+/**
+ * The page with each placement `level` slots deep (0: not inside another
+ * placement's slot) stripped of its own values, its chosen variant and its
+ * slot content, and everything shallower left as the page gives it. A variant
+ * is a placement's choice too, and one that changes a locked block changes it
+ * as a value would. The slot content goes because a component's lock covers
+ * what a page puts inside the locked block; a placement in that content is
+ * measured at the next level, inside its host as the page composes it.
+ */
+function heldAtLevel(
+  document: BlockDocument,
+  level: number,
+  limits: Pick<DocumentLimits, "maxNodes">
+): HeldBaseline {
+  const copy = structuredClone(document);
+  const placements = new Set<string>();
+  // Iterative, and bounded by the node count, as every walk of a document is.
+  const pending: Array<{ nodes: BlockNode[]; depth: number }> = [
+    { nodes: copy.nodes, depth: 0 },
+  ];
+  let budget = limits.maxNodes;
+  for (
+    let next = pending.pop();
+    next !== undefined && budget > 0;
+    next = pending.pop()
+  ) {
+    budget -= next.nodes.length;
+    for (const node of next.nodes) {
+      const placed = node.type === COMPONENT_INSTANCE_TYPE;
+      if (placed && next.depth === level) {
+        placements.add(node.id);
+        holdAsItsComponent(node);
+        continue;
+      }
+      const depth = placed ? next.depth + 1 : next.depth;
+      for (const children of Object.values(node.slots ?? {})) {
+        pending.push({ nodes: children, depth });
+      }
+    }
+  }
+  return { document: copy, placements };
+}
+
+/** A placement stripped of its own values, its variant and its slot content. */
+function holdAsItsComponent(node: BlockNode): void {
+  const own = node as unknown as Record<string, unknown>;
+  if (isPlainRecord(own.props)) {
+    delete own.props.overrides;
+    delete own.props.variant;
+  }
+  delete own.slots;
+}
+
+/**
+ * The page with every placement not inside another's slot as its component
+ * holds it: the baseline a page's own lock baselines start from.
  */
 export function placementsAsComponentsHoldThem(
   document: BlockDocument,
   limits: Pick<DocumentLimits, "maxNodes">
 ): BlockDocument {
-  const copy = structuredClone(document);
-  walkNodes(
-    copy.nodes,
-    node => {
-      if (node.type !== COMPONENT_INSTANCE_TYPE) return;
-      const own = node as unknown as Record<string, unknown>;
-      const props = own.props;
-      if (typeof props === "object" && props !== null) {
-        delete (props as Record<string, unknown>).overrides;
-        delete (props as Record<string, unknown>).variant;
-      }
-      delete own.slots;
-    },
-    { maxNodes: limits.maxNodes }
-  );
-  return copy;
+  return heldAtLevel(document, 0, limits).document;
 }
 
 /**
- * A composed document with only the components' locks kept. A lock the page
- * sets on its own block is judged against the stored page elsewhere; measured
- * here too, against a baseline whose placements carry no values, it would read
- * every value given inside it as a change.
+ * One held baseline per nesting level the page places components at,
+ * outermost first, for {@link placedLockChanges} once each is composed. A
+ * component placed inside another's slot is held at its own level, so its
+ * locks are measured too, where the outer level's baseline drops it with the
+ * slot content.
+ */
+export function heldBaselines(
+  document: BlockDocument,
+  limits: Pick<DocumentLimits, "maxNodes">
+): HeldBaseline[] {
+  const levels: HeldBaseline[] = [];
+  for (let level = 0; ; level++) {
+    const held = heldAtLevel(document, level, limits);
+    if (held.placements.size === 0) return levels;
+    levels.push(held);
+  }
+}
+
+/**
+ * A kept form with any placement the page now draws from another component
+ * removed. Composed nodes are named by placement, not by component, so a
+ * placement switched to a component whose locked block shares an id would
+ * otherwise keep the first component's value under the second's lock. The
+ * form itself when nothing was switched.
+ */
+export function keptForSameComponents(
+  document: BlockDocument,
+  kept: BlockDocument,
+  limits: Pick<DocumentLimits, "maxNodes">
+): BlockDocument {
+  const drawn = new Map<string, unknown>();
+  walkNodes(
+    document.nodes,
+    node => {
+      if (node.type === COMPONENT_INSTANCE_TYPE) {
+        drawn.set(node.id, componentIdOf(node));
+      }
+    },
+    { maxNodes: limits.maxNodes }
+  );
+  const switched: string[] = [];
+  walkNodes(
+    kept.nodes,
+    node => {
+      if (
+        node.type === COMPONENT_INSTANCE_TYPE &&
+        drawn.has(node.id) &&
+        drawn.get(node.id) !== componentIdOf(node)
+      ) {
+        switched.push(node.id);
+      }
+    },
+    { maxNodes: limits.maxNodes }
+  );
+  if (switched.length === 0) return kept;
+  return {
+    ...kept,
+    nodes: switched.reduce((nodes, id) => removeNode(nodes, id), kept.nodes),
+  };
+}
+
+/** The component a placement draws, as its props name it. */
+function componentIdOf(node: BlockNode): unknown {
+  return isPlainRecord(node.props) ? node.props.componentId : undefined;
+}
+
+/**
+ * A composed document with only the locks of the given placements'
+ * components kept. A lock the page sets on its own block is judged against
+ * the stored page elsewhere; measured here too, against a baseline whose
+ * placements carry no values, it would read every value given inside it as a
+ * change. So would a lock of a shallower placement, whose slot content a
+ * deeper level's baseline leaves holding the page's values.
  */
 function placedLocksOnly(
   form: unknown,
-  limits: Pick<DocumentLimits, "maxNodes">
+  limits: Pick<DocumentLimits, "maxNodes">,
+  placements?: ReadonlySet<string>
 ): unknown {
   if (nodesOf(form).length === 0) return form;
   const copy = structuredClone(form as BlockDocument);
   walkNodes(
     copy.nodes,
     node => {
-      if (!isPlacedLock(node)) delete (node as { locked?: unknown }).locked;
+      const kept =
+        isPlacedLock(node) &&
+        (placements === undefined ||
+          placements.has(String((node as { instanceOf?: unknown }).instanceOf)));
+      if (!kept) delete (node as { locked?: unknown }).locked;
     },
     { maxNodes: limits.maxNodes }
   );
@@ -179,10 +298,9 @@ function keptBy(
   change: LayersLockChange,
   composed: unknown,
   kept: readonly KeptForm[],
-  placementOf: (id: string) => string | undefined
+  placement: string | undefined
 ): boolean {
   if (change.kind === "removed") {
-    const placement = placementOf(change.id);
     if (
       placement !== undefined &&
       kept.some(
@@ -199,28 +317,51 @@ function keptBy(
   );
 }
 
+/** A held baseline composed: the form, and the placements it holds. */
+export interface ComposedHeldBaseline {
+  readonly form: unknown;
+  readonly placements: ReadonlySet<string>;
+}
+
+/** A block a placed component locks, changed, and the placement it is drawn for. */
+export interface PlacedLockChange extends LayersLockChange {
+  readonly placementId: string | undefined;
+}
+
 /**
  * Each block a placed component locks that the composed page changes, moves
- * or removes through its placements, outermost first.
+ * or removes through its placements, outermost level first.
  *
  * @param composed - the page as written, composed
- * @param asHeld - the same page with every placement as its component holds
- *   it ({@link placementsAsComponentsHoldThem}), composed
+ * @param held - each of {@link heldBaselines}, composed: a level's locks are
+ *   measured against its own baseline only
  * @param kept - composed forms whose values a block may keep: a value one of
  *   them already gives a locked block is no change, so a block locked after
- *   pages gave it values does not make them unsavable
+ *   pages gave it values does not make them unsavable. Each is read with
+ *   {@link keptForSameComponents} before it is composed.
  */
 export function placedLockChanges(
   composed: unknown,
-  asHeld: unknown,
+  held: readonly ComposedHeldBaseline[],
   kept: readonly unknown[],
   limits: Pick<DocumentLimits, "maxNodes">
-): LayersLockChange[] {
-  const found = layersLockChanges(composed, placedLocksOnly(asHeld, limits));
-  if (found.length === 0) return [];
-  const forms = kept.map(form => keptFormOf(form, limits));
-  const held = componentLayersLocks(nodesOf(asHeld), limits);
-  return found.filter(
-    change => !keptBy(change, composed, forms, id => held.get(id)?.placementId)
-  );
+): PlacedLockChange[] {
+  let forms: KeptForm[] | undefined;
+  const changes: PlacedLockChange[] = [];
+  for (const level of held) {
+    const found = layersLockChanges(
+      composed,
+      placedLocksOnly(level.form, limits, level.placements)
+    );
+    if (found.length === 0) continue;
+    forms ??= kept.map(form => keptFormOf(form, limits));
+    const locks = componentLayersLocks(nodesOf(level.form), limits);
+    for (const change of found) {
+      const placementId = locks.get(change.id)?.placementId;
+      if (!keptBy(change, composed, forms, placementId)) {
+        changes.push({ ...change, placementId });
+      }
+    }
+  }
+  return changes;
 }

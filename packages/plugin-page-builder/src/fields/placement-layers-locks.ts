@@ -22,11 +22,13 @@
  */
 import {
   componentLayersLocks,
+  heldBaselines,
   isConditionGated,
+  keptForSameComponents,
   placedLockChanges,
-  placementsAsComponentsHoldThem,
   walkNodes,
   type BlockDocument,
+  type BlockNode,
   type DocumentLimits,
   type LayersLockChange,
   type WorkAllowance,
@@ -109,11 +111,32 @@ function libraryWithGatesLifted(
   return lifted ? { held, missing: new Set(library.missing) } : undefined;
 }
 
+/** Whether any definition the page reaches locks one of its blocks in Layers. */
+function aDefinitionLocks(
+  library: HeldLibrary,
+  limits: DocumentLimits
+): boolean {
+  let locks = false;
+  for (const definition of library.held.values()) {
+    const nodes = (definition as { nodes?: unknown } | null)?.nodes;
+    if (!Array.isArray(nodes)) continue;
+    walkNodes(
+      nodes as BlockNode[],
+      node => {
+        if ((node as { locked?: unknown }).locked === true) locks = true;
+      },
+      { maxNodes: limits.maxNodes }
+    );
+    if (locks) return true;
+  }
+  return false;
+}
+
 /**
  * Each block a placed component locks that this write changes, moves or
  * removes through its placements, judged on the composition already resolved.
- * Nothing more is composed or read unless the page places such a block, and
- * the stored page is read only once one is found changed.
+ * Nothing more is composed or read unless a definition the page reaches locks
+ * a block, and the stored page is read only once one is found changed.
  */
 export async function placedLayersLocks(args: {
   /** The page as written. */
@@ -142,20 +165,37 @@ export async function placedLayersLocks(args: {
       ? args.composed
       : (await composeWithReads({ host: document, ...reading })).composition
           .document;
-  if (componentLayersLocks(composed.nodes, limits).size === 0) return NONE;
+  // Asked of the definitions too, not of the composed page alone: a value that
+  // hides every block a component locks leaves no lock in the page to find.
+  if (
+    componentLayersLocks(composed.nodes, limits).size === 0 &&
+    !aDefinitionLocks(reading.library, limits)
+  ) {
+    return NONE;
+  }
+  const baselines = heldBaselines(document, limits);
   const asHeld = await composedFormsRead({
     ...reading,
-    hosts: [placementsAsComponentsHoldThem(document, limits)],
+    hosts: baselines.map(level => level.document),
   });
   if (!asHeld.complete) return { kind: "unchecked" };
-  const [held] = asHeld.forms;
+  const held = baselines.map((level, index) => ({
+    form: asHeld.forms[index],
+    placements: level.placements,
+  }));
   if (placedLockChanges(composed, held, [], limits).length === 0) return NONE;
   const stored = await args.stored();
   if (!stored.readable) return { kind: "unjudged" };
   // Cut short, a stored form only fails to keep a value: measured strictly.
   const storedComposed = await composedFormsRead({
     ...reading,
-    hosts: stored.forms.map(form => withGatesLifted(form, limits) ?? form),
+    hosts: stored.forms.map(form =>
+      keptForSameComponents(
+        document,
+        withGatesLifted(form, limits) ?? form,
+        limits
+      )
+    ),
   });
   return {
     kind: "judged",

@@ -1287,6 +1287,136 @@ describe("the locks an edit is held to", () => {
     ).toBeUndefined();
   });
 
+  /** A component locking "Hero" and exposing its text, and a free block's. */
+  const lockingPromo = (heroText = "hero") =>
+    ({
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          ...headline("hero"),
+          props: { text: heroText, align: "left" },
+          locked: true,
+          name: "Hero",
+        },
+        headline("free"),
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "hero",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "free",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    }) as unknown as BlockDocument;
+
+  it("refuses a value on a block locked by a component placed in another's slot", () => {
+    // The promo is the page's own placement, inside the frame's exposed row:
+    // the frame's baseline drops it with the row's content, so it is held at
+    // a level of its own.
+    const frame = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [holding("acme/fixed-row", "items", [])],
+      slots: { body: { label: "Body", nodeId: "holder", slot: "items" } },
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "o1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "frame" },
+            slots: {
+              body: [
+                {
+                  id: "i1",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: "promo" },
+                } as BlockNode,
+              ],
+            },
+          } as BlockNode,
+        ]),
+        definitions: new Map([
+          ["frame", frame],
+          ["promo", lockingPromo()],
+        ]),
+        componentName: id => (id === "promo" ? "Promo" : "Frame"),
+      })
+    );
+    const give = (overrides: Record<string, string>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "promo", overrides } },
+    });
+
+    expect(result.current.lockRefusalFor([give({ title: "Changed" })])).toEqual(
+      {
+        code: "layers-locked",
+        label: "Promo",
+        relation: "component",
+        verb: "change",
+      }
+    );
+    // CONTROL: the free block's value is the placement's to give.
+    expect(
+      result.current.lockRefusalFor([give({ strap: "Sale" })])
+    ).toBeUndefined();
+  });
+
+  it("refuses switching a placement to another component while keeping the first one's value", () => {
+    // The copy's locked block shares the first one's id; the value the page
+    // gave it was given under the first component's lock, not the copy's.
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo", overrides: { strap: "Sale" } },
+          } as BlockNode,
+        ]),
+        definitions: new Map([
+          ["promo", lockingPromo()],
+          ["copy", lockingPromo("Held by the copy")],
+        ]),
+        componentName: id => (id === "copy" ? "Promo copy" : "Promo"),
+      })
+    );
+    const switchTo = (overrides: Record<string, string>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "copy", overrides } },
+    });
+
+    expect(
+      result.current.lockRefusalFor([switchTo({ title: "hero" })])
+    ).toEqual({
+      code: "layers-locked",
+      label: "Promo copy",
+      relation: "component",
+      verb: "change",
+    });
+    // CONTROL: switched with no value for the locked block, it draws as the
+    // copy holds it.
+    expect(
+      result.current.lockRefusalFor([switchTo({ strap: "Sale" })])
+    ).toBeUndefined();
+  });
+
   it("refuses content a placement gives a component's locked slot, judged on the composed page", () => {
     // The component exposes its own row, locked "all", for each placement to
     // fill. One headline is what the row starts with; a second is a block the
