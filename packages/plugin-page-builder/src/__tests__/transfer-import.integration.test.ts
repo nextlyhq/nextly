@@ -341,6 +341,7 @@ describe.each(getConfiguredTestDialects())(
       const { cookie } = await holding(t, WRITES_EVERYTHING);
 
       const seen = await preview(cookie, file);
+      expect(seen.problems).toEqual([]);
       expect(seen.ready).toBe(true);
       expect(seen.conflicts).toEqual([]);
       expect(seen.missingBlockTypes).toEqual([]);

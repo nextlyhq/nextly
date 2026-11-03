@@ -526,7 +526,10 @@ function publishes(
 /**
  * Every write the import would make, made and rolled back: the site's own
  * checks answer, and nothing stays. Media the plan uploads are named by the
- * file's own ids here, which no check reads.
+ * file's own ids here, which no check reads. The shared styles the import
+ * adds are not in the site style until it applies, and a write may only add
+ * a class the site holds, so the judging writes leave those classes off; the
+ * documents written for real carry them, after the site style does.
  */
 async function judgeWrites(
   ctx: ImportContext,
@@ -538,8 +541,16 @@ async function judgeWrites(
   for (const [fileId, fate] of plan.media) {
     media.set(fileId, fate.action === "existing" ? fate.id : fileId);
   }
+  const added = new Set(plan.classes.create.map(entry => entry.id));
+  const judged: ImportPlan = {
+    ...plan,
+    classes: {
+      ...plan.classes,
+      map: new Map([...plan.classes.map].filter(([, to]) => !added.has(to))),
+    },
+  };
   try {
-    await writeDocuments(ctx, file, plan, slugs, media);
+    await writeDocuments(ctx, file, judged, slugs, media);
   } catch (error) {
     // A database adapter can wrap what the transaction threw; the cause is
     // what answered.
