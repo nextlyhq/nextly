@@ -241,7 +241,11 @@ describe("judging a run's deletions", () => {
     consent: DataLossConsent,
     interactive: boolean,
     answer = false,
-    extra: { flag?: boolean; approved?: Deletion[] } = {}
+    extra: {
+      flag?: boolean;
+      approved?: Deletion[];
+      sourceOf?: (deletion: Deletion) => string | undefined;
+    } = {}
   ) => {
     const printed: string[] = [];
     const ask = vi.fn(() => Promise.resolve(answer));
@@ -313,6 +317,34 @@ describe("judging a run's deletions", () => {
       "This deletes 2 items, which cannot be undone:",
       "  - table posts (1 row)",
       "  - rows of pages (the table has 4 rows)",
+    ]);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(verdict).toEqual({ kind: "proceed" });
+  });
+
+  it("asks once for deletions from several files, naming each file above its own", async () => {
+    const posts = table("posts");
+    const pages = { kind: "rows", table: "pages" } as const;
+    const summary = column("posts", "summary");
+    const sources = new Map<Deletion, string>([
+      [posts, "a.sql"],
+      [summary, "a.sql"],
+      [pages, "b.sql"],
+    ]);
+    const { verdict, printed, ask } = await judge(
+      [posts, summary, pages],
+      NO_CONSENT,
+      true,
+      true,
+      { sourceOf: deletion => sources.get(deletion) }
+    );
+    expect(printed).toEqual([
+      "This deletes 3 items, which cannot be undone:",
+      "  a.sql:",
+      "    - table posts",
+      "    - column posts.summary",
+      "  b.sql:",
+      "    - rows of pages",
     ]);
     expect(ask).toHaveBeenCalledTimes(1);
     expect(verdict).toEqual({ kind: "proceed" });

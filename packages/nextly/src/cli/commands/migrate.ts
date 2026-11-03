@@ -62,11 +62,25 @@ import {
 } from "../../domains/schema/migrate/applied-checksums";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
+  ACCEPT_DATA_LOSS_HELP,
+  consentToCover,
+  describeDeletion,
+  isInteractiveTerminal,
+  judgeDataLoss,
+  resolveDataLossConsent,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
+import {
   assertNotPartiallyApplied,
   applyFailedError,
   reconcileFile,
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
+import {
+  fileDeletions,
+  readDeletionFacts,
+} from "../../domains/schema/migrate/file-deletions";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -151,6 +165,11 @@ import {
   requireDatabaseEnv,
   loadConfigOrExit,
 } from "../utils/command-prerequisites";
+import {
+  askToDeleteInTerminal,
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   builderMigrationRemedy,
@@ -215,6 +234,14 @@ export interface MigrateCommandOptions {
    * @default false
    */
   repairLocalization?: boolean;
+
+  /**
+   * Consent to the data a migration file deletes: alone, every deletion of
+   * the run; with tables and `table.column` pairs, only those
+   * (`--accept-data-loss=posts,pages.summary`). Same as
+   * `NEXTLY_ACCEPT_DATA_LOSS`.
+   */
+  acceptDataLoss?: AcceptDataLossOption;
 }
 
 /**
@@ -427,6 +454,11 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
+        // The consent a file that deletes data needs, from the flag or the
+        // environment; a person at a terminal is asked instead.
+        consent: migrateConsent(options, m => logger.warn(m)),
+        interactive: isInteractiveTerminal(),
+        askToDelete: askToDeleteInTerminal,
         // A file the Builder wrote with no snapshot is replaced by the one
         // `migrate:create` writes, never applied as written here.
         refuseBuilderFilesWithoutSnapshot: true,
@@ -725,6 +757,15 @@ export interface MigrateCoreDeps {
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
   runFileMigrationsFn?: typeof runFileMigrations;
+  /**
+   * The consent to the data the run's files delete (`judgeFileDeletions`).
+   * Absent, it is read from the environment alone, as a boot reads it.
+   */
+  consent?: DataLossConsent;
+  /** Whether a person is at a terminal to be asked; absent reads as no. */
+  interactive?: boolean;
+  /** Asks that person a yes-or-no question; only called when `interactive`. */
+  askToDelete?: (question: string) => Promise<boolean>;
   /** The unresolved-attempt refusal; injected for tests (`refuseUnresolvedAppAttempts`). */
   refuseUnresolvedAttemptsFn?: typeof refuseUnresolvedAppAttempts;
   /** The applied-file checksum check; injected for tests (`assertAppliedFilesUnchanged`). */
@@ -881,7 +922,7 @@ export async function previewMigrate(args: {
     }
   }
   for (const m of pendingFiles) {
-    previewPendingFile(m, dialect, logger);
+    await previewPendingFile(m, db, dialect, logger);
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
@@ -964,22 +1005,35 @@ export async function previewRetiredImageSizes(
  * One pending file as `migrate --dry-run` lists it: its name, whether it runs
  * outside a transaction, each refusal a real run would make, from the same
  * check, so the preview and the run cannot disagree, and the SQL it would run,
- * as `migrate:down --dry-run` prints the SQL a rollback would run.
+ * as `migrate:down --dry-run` prints the SQL a rollback would run. A file
+ * that deletes data is listed with each deletion, read as a real run reads
+ * it (`fileDeletions`), and the consent that run needs.
  */
-function previewPendingFile(
+async function previewPendingFile(
   m: ParsedMigration,
+  db: unknown,
   dialect: SupportedDialect,
   logger: CommandContext["logger"]
-): void {
+): Promise<void> {
   logger.info(
     `  • ${m.name}.sql${m.transaction ? "" : " (runs outside a transaction)"}`
   );
-  for (const refusal of statementRefusals(
-    splitSqlStatements(m.upSql, dialect, m),
-    dialect,
-    { transaction: m.transaction, unit: "file" }
-  )) {
+  const statements = splitSqlStatements(m.upSql, dialect, m);
+  for (const refusal of statementRefusals(statements, dialect, {
+    transaction: m.transaction,
+    unit: "file",
+  })) {
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
+  }
+  const deletions = fileDeletions(
+    statements,
+    dialect,
+    await readDeletionFacts(db, dialect, statements)
+  );
+  if (deletions.length > 0) {
+    logger.info(
+      `    ⚠ deletes data: ${deletions.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletions)}.`
+    );
   }
   // The file's own UP section. A run that finds the schema already at the file's target adopts it
   // without running these, and one that finds it at neither end refuses it for drift.
@@ -1577,6 +1631,10 @@ export async function migrateCore(
   if (deps.refuseBuilderFilesWithoutSnapshot === true) {
     await assertNoBuilderFilesWithoutSnapshot(deps);
   }
+  // Before the lock as well, so a person is asked without other runs waiting
+  // on them; judged again under the lock, below, against the database as it
+  // stands then, accepting only what was agreed here.
+  const agreedDeletions = await judgeFileDeletions(deps);
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1610,6 +1668,9 @@ export async function migrateCore(
         ...deps,
         command: deps.lockCommand ?? "nextly migrate",
       });
+      // A file that deletes data runs only with consent covering each
+      // deletion, judged from the database this run holds the lock on.
+      await judgeFileDeletions(deps, agreedDeletions);
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -1822,6 +1883,97 @@ export async function refuseUnresolvedAppAttempts(args: {
   });
 }
 
+/**
+ * Refuses, before the run changes anything, an app migration file it would
+ * apply that deletes data (`fileDeletions`, read from the file's statements
+ * for this dialect, never from its header) unless the consent covers every
+ * deletion in it, naming the file and each deletion (`judgeDataLoss`).
+ *
+ * Asked twice. Before the lock (`agreed` absent), a person at a terminal is
+ * shown every file's deletions, each file named above its own, and asked once
+ * for the whole run; a decline stops the run with nothing changed. Under the lock (`agreed` given), the files are judged again against
+ * the database as it stands then, and only what was agreed is accepted without
+ * asking: anything new is refused rather than asked about while other runs
+ * wait. Returns the deletions agreed to.
+ *
+ * Every pending file within `--step` is judged; the plugin modules a run
+ * applies first may leave the step fewer app files than that, so this can ask
+ * about a file the run then leaves for the next one, never miss one it runs.
+ */
+async function judgeFileDeletions(
+  deps: MigrateCoreDeps,
+  agreed?: readonly Deletion[]
+): Promise<Deletion[]> {
+  const consent =
+    deps.consent ??
+    resolveDataLossConsent({
+      env: process.env,
+      honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE"],
+    });
+  const listed = await listMigrationFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger
+  );
+  const plan = fileRunPlan(listed, deps.step);
+  const first = agreed === undefined;
+  // Each deletion keeps the file it comes from, by identity, for the listing.
+  const sources = new Map<Deletion, string>();
+  for (const { file } of listed) {
+    if (!plan.runs.has(file)) continue;
+    const statements = splitSqlStatements(file.upSql, deps.dialect, file);
+    const deletions = fileDeletions(
+      statements,
+      deps.dialect,
+      await readDeletionFacts(deps.db, deps.dialect, statements)
+    );
+    for (const deletion of deletions) sources.set(deletion, `${file.name}.sql`);
+  }
+  const deletions = [...sources.keys()];
+  const files = [...new Set(sources.values())];
+  const verdict = await judgeDataLoss({
+    deletions,
+    consent,
+    interactive: first && deps.interactive === true,
+    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
+    print: first ? line => deps.logger.warn(line) : () => {},
+    approved: agreed,
+    sourceOf: deletion => sources.get(deletion),
+  });
+  if (verdict.kind === "refused") {
+    throw NextlyError.invalidInput({
+      message: `${files.join(", ")} ${files.length === 1 ? "deletes" : "delete"} data, so \`nextly migrate\` applied nothing. ${verdict.message}`,
+      logContext: { files, reason: `data-loss-${verdict.reason}` },
+    });
+  }
+  if (verdict.kind === "declined") {
+    throw NextlyError.invalidInput({
+      message: `${files.join(", ")} ${files.length === 1 ? "deletes" : "delete"} data and the deletion was declined, so \`nextly migrate\` applied nothing.`,
+      logContext: { files, reason: "data-loss-declined" },
+    });
+  }
+  return [...(agreed ?? []), ...deletions];
+}
+
+/**
+ * `nextly migrate`'s consent: `--accept-data-loss` or
+ * `NEXTLY_ACCEPT_DATA_LOSS`. `NEXTLY_ALLOW_CORE_DESTRUCTIVE` is honoured for
+ * what it always covered, Nextly's own tables, and so never covers an app
+ * migration's deletion.
+ */
+function migrateConsent(
+  options: Pick<MigrateCommandOptions, "acceptDataLoss">,
+  warn: (message: string) => void
+): DataLossConsent {
+  return readDataLossConsent({
+    flag: options.acceptDataLoss,
+    honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE"],
+    warn,
+  });
+}
+
 /** What the history checks read: how `readAppHistory` is asked. */
 interface AppHistoryArgs {
   adapter: CLIDatabaseAdapter;
@@ -1962,6 +2114,8 @@ async function listMigrationFiles(
 ): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
   const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
+  // No files, nothing to look up: the ledger is not read at all.
+  if (all.length === 0) return [];
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
@@ -2496,6 +2650,7 @@ export function registerMigrateCommand(program: Command): void {
       "Clear a stale migrate lock before running",
       false
     )
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .option(
       "--repair-localization",
       "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",

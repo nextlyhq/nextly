@@ -24,7 +24,8 @@
  *
  * Before the drift check it also warns, without failing, about each file
  * holding a statement `nextly migrate` or `migrate:down` would refuse
- * (`REFUSED_STATEMENT`), and names each file marked
+ * (`REFUSED_STATEMENT`), and about each file whose UP or DOWN deletes data,
+ * naming what it deletes (`DESTRUCTIVE`), and names each file marked
  * `-- nextly:no-transaction`. A warning, because the check does not connect:
  * a file already applied is never run again, and failing CI over one would
  * leave the operator nothing to fix.
@@ -56,6 +57,11 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
+import {
+  describeDeletion,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
+import { fileDeletions } from "../../domains/schema/migrate/file-deletions";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -429,6 +435,11 @@ export async function runChecks(args: {
         `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
       );
     }
+    for (const { file, section, deletions } of judged.destructive) {
+      logger.warn(
+        `DESTRUCTIVE: ${file} (${section}) deletes data: ${deletions.map(describeDeletion).join("; ")}. ${section === "UP" ? "nextly migrate" : "migrate:down"} runs it only with --accept-data-loss covering each.`
+      );
+    }
   }
 
   // Check 4: schema drift (config vs latest snapshot).
@@ -542,9 +553,19 @@ export async function judgeStatements(
 ): Promise<{
   outsideTransaction: string[];
   refused: { file: string; message: string }[];
+  destructive: {
+    file: string;
+    section: "UP" | "DOWN";
+    deletions: Deletion[];
+  }[];
 }> {
   const outsideTransaction: string[] = [];
   const refused: { file: string; message: string }[] = [];
+  const destructive: {
+    file: string;
+    section: "UP" | "DOWN";
+    deletions: Deletion[];
+  }[] = [];
   const groups = await discoverMigrationGroups(migrationsDir);
   for (const baseName of getSortedBaseNames(groups)) {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
@@ -553,17 +574,30 @@ export async function judgeStatements(
     const transaction = !marksNoTransaction(content);
     if (!transaction) outsideTransaction.push(file);
     const { upSql, downSql } = parseSqlSections(content);
-    for (const sql of [upSql, downSql]) {
-      for (const refusal of statementRefusals(
-        splitSqlStatements(sql, dialect, { transaction }),
-        dialect,
-        { transaction, unit: "file" }
-      )) {
+    for (const [section, sql] of [
+      ["UP", upSql],
+      ["DOWN", downSql],
+    ] as const) {
+      const statements = splitSqlStatements(sql, dialect, { transaction });
+      for (const refusal of statementRefusals(statements, dialect, {
+        transaction,
+        unit: "file",
+      })) {
         refused.push({ file, message: refusal.message });
       }
+      // What the section deletes, read from its statements as the run reads
+      // them. This check has no database, so no foreign key or live column is
+      // known: the deletions named are the ones the statements name, and the
+      // run itself also judges what a row removal cascades to.
+      const deletions = fileDeletions(statements, dialect, {
+        cascadeFrom: () => [],
+        truncateCascadeFrom: () => [],
+        liveColumns: new Map(),
+      });
+      if (deletions.length > 0) destructive.push({ file, section, deletions });
     }
   }
-  return { outsideTransaction, refused };
+  return { outsideTransaction, refused, destructive };
 }
 
 /**

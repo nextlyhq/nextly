@@ -166,6 +166,25 @@ describe("runChecks (F11 PR 4)", () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
+    it("reports a file that deletes data as DESTRUCTIVE, naming each deletion per section, without failing", async () => {
+      await writeGenerated(
+        "20260101_120000_001_drop",
+        "-- UP\nDROP TABLE t;\n\n-- DOWN\nDELETE FROM u WHERE a = 1;\n"
+      );
+      const logger = await run();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_001_drop\.sql \(UP\) deletes data: table t\. nextly migrate runs it only with --accept-data-loss/
+        )
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_001_drop\.sql \(DOWN\) deletes data: rows of u\. migrate:down runs it only with --accept-data-loss/
+        )
+      );
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
     it("names a marked file and lets its statement through", async () => {
       await writeGenerated(
         "20260101_120000_001_index",

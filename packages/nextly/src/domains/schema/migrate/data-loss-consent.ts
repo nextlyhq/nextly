@@ -376,6 +376,15 @@ function consentHint(
   return forms(tokens.join(","));
 }
 
+/**
+ * The consent a command taking `--accept-data-loss` needs to delete
+ * `deletions` when none is given: what a dry run names, so the operator
+ * learns the exact value before a real run refuses.
+ */
+export function consentToCover(deletions: readonly Deletion[]): string {
+  return consentHint(deletions, NO_CONSENT, true);
+}
+
 /** What `judgeDataLoss` decided. */
 export type DataLossVerdict =
   | { kind: "proceed" }
@@ -406,7 +415,9 @@ export type DataLossVerdict =
  * `approved` holds deletions the operator already agreed to in this run (a
  * command that decides twice, before and under its lock, asks only once).
  * `flag` says whether the command takes `--accept-data-loss`, so the hint
- * names only a spelling that reaches it.
+ * names only a spelling that reaches it. `sourceOf` names the file a
+ * deletion comes from, so one listing, and one question, can cover a run of
+ * several files: each file is named above what it deletes.
  */
 export async function judgeDataLoss(args: {
   deletions: readonly Deletion[];
@@ -416,6 +427,7 @@ export async function judgeDataLoss(args: {
   print: (line: string) => void;
   flag?: boolean;
   approved?: readonly Deletion[];
+  sourceOf?: (deletion: Deletion) => string | undefined;
 }): Promise<DataLossVerdict> {
   const { deletions, consent } = args;
   if (deletions.length === 0) return { kind: "proceed" };
@@ -423,8 +435,22 @@ export async function judgeDataLoss(args: {
   const uncovered = deletions.filter(
     d => !consentCovers(consent, d) && !approved.has(deletionKey(d))
   );
-  const lines = (list: readonly Deletion[]) =>
-    list.map(d => `  - ${describeDeletion(d)}`);
+  const lines = (list: readonly Deletion[]) => {
+    const out: string[] = [];
+    let heading: string | undefined;
+    for (const d of list) {
+      const source = args.sourceOf?.(d);
+      if (source === undefined) {
+        heading = undefined;
+        out.push(`  - ${describeDeletion(d)}`);
+        continue;
+      }
+      if (source !== heading) out.push(`  ${source}:`);
+      heading = source;
+      out.push(`    - ${describeDeletion(d)}`);
+    }
+    return out;
+  };
 
   if (uncovered.length === 0) {
     args.print(

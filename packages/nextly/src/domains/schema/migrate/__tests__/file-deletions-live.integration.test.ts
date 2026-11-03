@@ -1,0 +1,168 @@
+/**
+ * The live facts a file's deletions are judged against (`readDeletionFacts`),
+ * on a real database of each dialect: the tables a removal of rows cascades
+ * to through ON DELETE CASCADE keys, followed to a grandchild and never
+ * through a key without the action; on PostgreSQL every table TRUNCATE ...
+ * CASCADE empties; nothing on SQLite while foreign keys are not enforced; no
+ * answer for a table the database does not have yet; and a rebuilt table's
+ * live columns and types. Then one `fileDeletions` call on those facts.
+ *
+ * A fake cannot show any of this: the unit matrix proves the rules, and only
+ * the catalogs can prove the facts the rules are fed.
+ */
+import { randomBytes } from "node:crypto";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import {
+  LOCK_DIALECTS,
+  lockWorld,
+  type LockWorld,
+} from "../../pipeline/__tests__/helpers/schema-lock-world";
+import { fileDeletions, readDeletionFacts } from "../file-deletions";
+
+describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
+  const P = `fdl_${randomBytes(3).toString("hex")}`;
+  const parent = `${P}_parent`;
+  const child = `${P}_child`;
+  const grand = `${P}_grand`;
+  const keeper = `${P}_keeper`;
+  const posts = `${P}_posts`;
+  const missing = `${P}_missing`;
+  let world: LockWorld;
+  let adapter: DrizzleAdapter;
+
+  /** A SQLite rebuild of posts that leaves `body` out. */
+  const rebuild = [
+    `CREATE TABLE __new_${posts} (id integer PRIMARY KEY, title text)`,
+    `INSERT INTO __new_${posts} (id, title) SELECT id, title FROM ${posts}`,
+    `DROP TABLE ${posts}`,
+    `ALTER TABLE __new_${posts} RENAME TO ${posts}`,
+  ];
+  const statements = [
+    `DELETE FROM ${parent} WHERE id = 1`,
+    `DELETE FROM ${missing}`,
+    ...(dialect === "postgresql" ? [`TRUNCATE ${parent} CASCADE`] : []),
+    ...(dialect === "sqlite" ? rebuild : []),
+  ];
+
+  beforeAll(async () => {
+    world = await lockWorld(dialect, { fresh: true });
+    adapter = await world.connect();
+    // parent <- child (cascade) <- grand (cascade), and parent <- keeper
+    // through a key with no ON DELETE action.
+    for (const statement of [
+      `CREATE TABLE ${parent} (id integer PRIMARY KEY)`,
+      `CREATE TABLE ${child} (id integer PRIMARY KEY, parent_id integer, FOREIGN KEY (parent_id) REFERENCES ${parent} (id) ON DELETE CASCADE)`,
+      `CREATE TABLE ${grand} (id integer PRIMARY KEY, child_id integer, FOREIGN KEY (child_id) REFERENCES ${child} (id) ON DELETE CASCADE)`,
+      `CREATE TABLE ${keeper} (id integer PRIMARY KEY, parent_id integer, FOREIGN KEY (parent_id) REFERENCES ${parent} (id))`,
+      `CREATE TABLE ${posts} (id integer PRIMARY KEY, title text, body varchar(64))`,
+    ]) {
+      await adapter.executeQuery(statement);
+    }
+    // Enforcement on, so the SQLite case shows the connection setting is not
+    // what the reader goes by.
+    if (dialect === "sqlite") {
+      await adapter.executeQuery("PRAGMA foreign_keys = ON");
+    }
+  }, 120_000);
+
+  afterAll(async () => {
+    await adapter.disconnect();
+    await world.dispose();
+  }, 60_000);
+
+  it.runIf(dialect !== "sqlite")(
+    "follows ON DELETE CASCADE keys to a grandchild, never through a key without it, and answers nothing for a table not there yet",
+    async () => {
+      const facts = await readDeletionFacts(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+      expect(facts.cascadeFrom(parent)).toEqual([child, grand]);
+      // A table an earlier pending file creates has keys nobody can read yet.
+      expect(facts.cascadeFrom(missing)).toBeUndefined();
+      // A question the statements never ask has no answer either.
+      expect(facts.cascadeFrom(keeper)).toBeUndefined();
+    },
+    120_000
+  );
+
+  it.runIf(dialect === "postgresql")(
+    "reads what TRUNCATE ... CASCADE empties: every referencing table, the key's action aside",
+    async () => {
+      const facts = await readDeletionFacts(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+      expect(facts.truncateCascadeFrom(parent)).toEqual([child, grand, keeper]);
+    },
+    120_000
+  );
+
+  it.runIf(dialect === "sqlite")(
+    "reads no cascade for any table, even while the connection enforces foreign keys, since the runner applies a file with them off",
+    async () => {
+      const facts = await readDeletionFacts(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+      expect(facts.cascadeFrom(parent)).toEqual([]);
+      expect(facts.cascadeFrom(missing)).toEqual([]);
+    },
+    120_000
+  );
+
+  it.runIf(dialect === "sqlite")(
+    "reads the live columns and declared types of a table a rebuild rebuilds",
+    async () => {
+      const facts = await readDeletionFacts(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+      expect([...(facts.liveColumns.get(posts) ?? [])].sort()).toEqual([
+        "body",
+        "id",
+        "title",
+      ]);
+      expect(
+        Object.fromEntries(facts.liveColumnTypes?.get(posts) ?? new Map())
+      ).toEqual({ id: "integer", title: "text", body: "varchar(64)" });
+    },
+    120_000
+  );
+
+  it("judges a file against the facts the database gives", async () => {
+    const facts = await readDeletionFacts(
+      adapter.getDrizzle(),
+      dialect,
+      statements
+    );
+    const missingCascade = {
+      kind: "unnamed",
+      description: `rows removed from tables ${missing}'s foreign keys cascade to, which could not be read`,
+    };
+    expect(fileDeletions(statements, dialect, facts)).toEqual([
+      { kind: "rows", table: parent },
+      // No cascade fires on SQLite: the runner applies a file with foreign
+      // keys off, so neither the children nor an unread table are named.
+      ...(dialect === "sqlite"
+        ? [{ kind: "rows", table: missing }]
+        : [
+            { kind: "rows", table: child },
+            { kind: "rows", table: grand },
+            { kind: "rows", table: missing },
+            missingCascade,
+          ]),
+      ...(dialect === "postgresql" ? [{ kind: "rows", table: keeper }] : []),
+      ...(dialect === "sqlite"
+        ? [{ kind: "column", table: posts, column: "body" }]
+        : []),
+    ]);
+  }, 120_000);
+});

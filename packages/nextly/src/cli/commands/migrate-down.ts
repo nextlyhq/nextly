@@ -41,6 +41,8 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import {
   ACCEPT_DATA_LOSS_HELP,
+  consentToCover,
+  describeDeletion,
   isInteractiveTerminal,
   judgeDataLoss,
   resolveDataLossConsent,
@@ -52,6 +54,11 @@ import {
   failedAttemptMayBePartial,
   isConcurrentRun,
 } from "../../domains/schema/migrate/drift-reconcile";
+import {
+  fileDeletions,
+  readDeletionFacts,
+  type DeletionFacts,
+} from "../../domains/schema/migrate/file-deletions";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -378,6 +385,13 @@ export interface MigrateDownCoreDeps {
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<ReadonlyMap<string, string>>;
   withLock: typeof withMigrateLock;
+  /**
+   * The live facts a target's DOWN deletions are judged against: the foreign
+   * keys a row removal cascades through (`readDeletionFacts`). Absent, no
+   * foreign key is known, and a cascading removal needs the consent without
+   * targets.
+   */
+  readDeletionFacts?: (statements: readonly string[]) => Promise<DeletionFacts>;
   /**
    * Refuses while an app migration has an unresolved attempt that may have
    * stopped part-way (`refuseUnresolvedAppAttempts`), its own down section's
@@ -766,43 +780,89 @@ async function planAndGuard(
     if (refusal !== undefined) throw refusal;
   }
 
-  // A DOWN that loses data takes the data-loss consent, judged for every
-  // target before the first runs. Each is judged by its statements as a
-  // whole, so it is named by its file: only the consent without targets
-  // covers it, and a list naming tables is refused rather than read as
-  // covering a DOWN it cannot be matched against.
-  const deletions: Deletion[] = planned
-    .filter(p => isDestructiveDown(p.statements, deps.dialect, p.liveColumns))
-    .map(p => ({
-      kind: "unnamed" as const,
-      description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
-      // The statements as judged: under the lock the DOWN is read again, and
-      // one that changed since it was agreed to is a different deletion.
-      fingerprint: createHash("sha256")
-        .update(p.statements.join("\n;\n"))
-        .digest("hex"),
-    }));
+  // A DOWN that loses data takes the data-loss consent, judged once for
+  // every target before the first runs, by the deletions their statements
+  // make (`downDeletions`), each file named above its own.
+  const consent =
+    deps.options.consent ??
+    resolveDataLossConsent({
+      honours: ["--allow-data-loss"],
+      earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
+    });
   const first = agreed === undefined;
+  // Each deletion keeps the file it comes from, by identity, for the listing.
+  const sources = new Map<Deletion, string>();
+  for (const p of planned) {
+    for (const deletion of await downDeletions(p, deps)) {
+      sources.set(deletion, p.filename);
+    }
+  }
+  const deletions = [...sources.keys()];
   const verdict = await judgeDataLoss({
     deletions,
-    consent:
-      deps.options.consent ??
-      resolveDataLossConsent({
-        honours: ["--allow-data-loss"],
-        earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
-      }),
+    consent,
     interactive: first && deps.interactive === true,
     ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
     print: first ? line => deps.logger.warn(line) : () => {},
     approved: agreed,
+    sourceOf: deletion => sources.get(deletion),
   });
   if (verdict.kind === "refused") {
+    const files = [...new Set(sources.values())];
     throw NextlyError.invalidInput({
-      message: verdict.message,
-      logContext: { reason: `data-loss-${verdict.reason}` },
+      message: `The down section of ${files.join(", ")} deletes data, so nothing was rolled back. ${verdict.message}`,
+      logContext: { files, reason: `data-loss-${verdict.reason}` },
     });
   }
   return { planned, deletions, declined: verdict.kind === "declined" };
+}
+
+/**
+ * The deletions one target's DOWN makes, named, for the consent to cover.
+ *
+ * An app migration's DOWN is read by `fileDeletions`, statement by statement:
+ * each table or column it drops, each table it removes rows from, the tables a
+ * row removal cascades to, and each column a type change can clear, so a
+ * consent naming them covers it. A plugin's module keeps the judgement of its
+ * whole DOWN as one deletion named by its file, which only the consent
+ * without targets covers.
+ */
+async function downDeletions(
+  p: PlannedDown,
+  deps: Pick<MigrateDownCoreDeps, "dialect" | "options" | "readDeletionFacts">
+): Promise<Deletion[]> {
+  if (deps.options.plugin !== undefined) {
+    return isDestructiveDown(p.statements, deps.dialect, p.liveColumns)
+      ? [
+          {
+            kind: "unnamed",
+            description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
+            // The statements as judged: under the lock the DOWN is read
+            // again, and one that changed since it was agreed to is a
+            // different deletion.
+            fingerprint: createHash("sha256")
+              .update(p.statements.join("\n;\n"))
+              .digest("hex"),
+          },
+        ]
+      : [];
+  }
+  const facts = await deps.readDeletionFacts?.(p.statements);
+  return fileDeletions(p.statements, deps.dialect, {
+    // Without a reader no foreign key is known, so a row removal's
+    // cascade is refused unless the consent has no targets.
+    cascadeFrom: table => facts?.cascadeFrom(table),
+    truncateCascadeFrom: table => facts?.truncateCascadeFrom(table),
+    // The columns as the targets before this one leave them.
+    liveColumns: p.liveColumns ?? facts?.liveColumns ?? new Map(),
+    // The types as read before the rollback, so a rebuild that carries a
+    // column as it is asks nothing. A target that converts a column before
+    // this one names that column itself, so the consent covering it covers
+    // this one's conversion too.
+    ...(facts?.liveColumnTypes === undefined
+      ? {}
+      : { liveColumnTypes: facts.liveColumnTypes }),
+  });
 }
 
 /** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
@@ -871,9 +931,10 @@ export async function migrateDownCore(
         );
         continue;
       }
-      if (isDestructiveDown(p.statements, deps.dialect, p.liveColumns)) {
+      const deletes = await downDeletions(p, deps);
+      if (deletes.length > 0) {
         deps.logger.info(
-          "    ⚠ drops a table or column — a real run needs --accept-data-loss"
+          `    ⚠ deletes data: ${deletes.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletes)}.`
         );
       }
       if (!p.transaction) {
@@ -1016,6 +1077,7 @@ export async function downDatabaseDeps(args: {
     | "readLiveElements"
     | "readLiveTables"
     | "readLiveIndexTables"
+    | "readDeletionFacts"
     | "listFileApplies"
     | "execDown"
     | "recordRolledBack"
@@ -1054,6 +1116,7 @@ export async function downDatabaseDeps(args: {
     readLiveElements: lists => readLiveElements(db, dialect, lists),
     readLiveTables: lists => readLiveTables(db, dialect, lists),
     readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
+    readDeletionFacts: statements => readDeletionFacts(db, dialect, statements),
     listFileApplies: () => repo.listFileApplies(),
     execDown: (statements, unit, after) =>
       runMigrationStatements(adapter, statements, unit, handle =>

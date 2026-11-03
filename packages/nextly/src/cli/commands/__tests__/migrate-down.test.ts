@@ -307,19 +307,24 @@ describe("migrateDownCore", () => {
     expect(executed.length).toBe(1);
   });
 
-  it("refuses a consent naming targets, which cannot cover a DOWN it does not name", async () => {
-    const { deps, executed } = baseDeps({
-      options: {
-        step: 1,
-        yes: false,
-        dryRun: false,
-        consent: resolveDataLossConsent({ flag: "t", env: {} }),
-      },
-    });
-    await expect(migrateDownCore(deps)).rejects.toThrow(
-      /does not cover[\s\S]*a\.sql's DOWN[\s\S]*only by the consent without targets/
+  it("refuses a consent naming targets that leave out what the DOWN deletes, and rolls back with one naming it", async () => {
+    const withConsent = (targets: string) =>
+      baseDeps({
+        options: {
+          step: 1,
+          yes: false,
+          dryRun: false,
+          consent: resolveDataLossConsent({ flag: targets, env: {} }),
+        },
+      });
+    const other = withConsent("u");
+    await expect(migrateDownCore(other.deps)).rejects.toThrow(
+      /does not cover[\s\S]*column t\.c[\s\S]*--accept-data-loss=u,t\.c/
     );
-    expect(executed).toEqual([]);
+    expect(other.executed).toEqual([]);
+    const named = withConsent("t.c");
+    await migrateDownCore(named.deps);
+    expect(named.executed.length).toBe(1);
   });
 
   it("asks a terminal, and rolls back only on yes", async () => {
@@ -360,7 +365,7 @@ describe("migrateDownCore", () => {
         ),
     });
     await expect(migrateDownCore(changed.deps)).rejects.toThrow(
-      /needs consent[\s\S]*a\.sql's DOWN/
+      /needs consent[\s\S]*column t\.d/
     );
     expect(changed.executed).toEqual([]);
   });
@@ -377,8 +382,23 @@ describe("migrateDownCore", () => {
     const { deps, executed } = baseDeps({
       dialect: "sqlite",
       readDownSql: async () => down(`${rebuild.join(";\n")};`),
-      // The table as the database holds it: the twin declares every column.
+      // The table as the database holds it: the twin declares every column,
+      // each with the type it has.
       readLiveColumns: async () => new Map([["t", new Set(["id", "a"])]]),
+      readDeletionFacts: async () => ({
+        cascadeFrom: () => [],
+        truncateCascadeFrom: () => [],
+        liveColumns: new Map([["t", new Set(["id", "a"])]]),
+        liveColumnTypes: new Map([
+          [
+            "t",
+            new Map([
+              ["id", "text"],
+              ["a", "text"],
+            ]),
+          ],
+        ]),
+      }),
     });
     await migrateDownCore(deps);
     expect(executed).toEqual([rebuild.join(";\n")]);
