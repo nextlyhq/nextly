@@ -42,6 +42,7 @@ import {
   requiredColumnOverNullsError,
   type RequiredColumnBreak,
   type RequiredColumnEntity,
+  requiredColumnUncountedError,
 } from "../required-column-refusal";
 import {
   getColumnDescriptor,
@@ -122,32 +123,37 @@ export async function judgeRequiredColumnTargets(
 ): Promise<RequiredColumnBreak[]> {
   const breaks: RequiredColumnBreak[] = [];
   for (const target of targets) {
+    // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
+    // judged too, and named by its table and column.
     const owner = facts.owners.owner(target.table);
-    if (owner === undefined) continue;
-    const live = facts.live(owner.table, target.column);
+    const table = owner?.table ?? target.table;
+    const live = facts.live(table, target.column);
     if (live === undefined) continue;
     if (target.column !== null && !live.nullable) continue;
     let rows: RowsBreakingNotNull;
     try {
       rows = await facts.count({
-        table: owner.table,
+        table,
         column: target.column === null ? null : (live.name ?? target.column),
-        byParent: owner.fieldGroup,
+        byParent: owner?.fieldGroup === true,
       });
-    } catch (error) {
-      throw new NextlyError({
-        code: "INTERNAL_ERROR",
-        publicMessage: "An unexpected error occurred.",
-        logMessage: `The rows of '${owner.table}' that would break making '${target.required}' required could not be counted, so the migration was not run.`,
-        logContext: {
-          reason: "required-column-count-failed",
-          table: owner.table,
-          column: target.column,
-        },
-        ...(error instanceof Error ? { cause: error } : {}),
+    } catch (cause) {
+      throw requiredColumnUncountedError({
+        table,
+        field: target.required,
+        cause,
       });
     }
     if (rows.total === 0) continue;
+    if (owner === undefined) {
+      breaks.push({
+        entity: { kind: "table", slug: table },
+        field: target.required,
+        count: rows.total,
+        added: target.column === null,
+      });
+      continue;
+    }
     const field =
       owner.fieldsByColumn.get(target.required) ??
       (target.column === null
@@ -245,12 +251,7 @@ async function readFacts(
 ): Promise<RequiredColumnFacts> {
   const owners = await readRequiredColumnOwners(db, dialect);
   const tables = [
-    ...new Set(
-      targets.flatMap(t => {
-        const owner = owners.owner(t.table);
-        return owner === undefined ? [] : [owner.table];
-      })
-    ),
+    ...new Set(targets.map(t => owners.owner(t.table)?.table ?? t.table)),
   ];
   const snapshot = await introspectLiveColumns(db, dialect, tables);
   const columns = new Map(

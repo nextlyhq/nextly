@@ -17,11 +17,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-import { NextlyError } from "../../../errors";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
 import {
-  requiredColumnBreakMessage,
+  requiredColumnUncountedError,
   requiredColumnOverNullsError,
   type RequiredColumnBreak,
   type RequiredColumnEntity,
@@ -65,6 +64,7 @@ const KIND_ORDER: Record<RequiredColumnEntityKind, number> = {
   collection: 0,
   single: 1,
   fieldGroup: 2,
+  table: 3,
 };
 
 /** Every entity of the desired schema by its table, lowercased: MySQL may fold a table's name. */
@@ -184,28 +184,36 @@ export async function refuseRequiredColumnsOverNulls(args: {
   // Read once, and only when a field group's rows have to be named.
   let registry: Map<string, RequiredColumnEntity> | undefined;
   const breaks: RequiredColumnBreak[] = [];
-  const unowned: { table: string; column: string; count: number }[] = [];
 
   for (const event of unanswered) {
     const added = event.kind === "add_required_field_no_default";
     const owner = owners.get(event.tableName.toLowerCase());
     const byParent = owner?.entity.kind === "fieldGroup";
-    const { total, byParentTable } = await countRowsBreakingNotNull(
-      db,
-      dialect,
-      {
+    let counted: Awaited<ReturnType<typeof countRowsBreakingNotNull>>;
+    try {
+      counted = await countRowsBreakingNotNull(db, dialect, {
         table: event.tableName,
         // An added column holds null in every existing row.
         column: added ? null : event.columnName,
         byParent,
-      }
-    );
+      });
+    } catch (cause) {
+      // A count that fails cannot say the change is safe: refused before anything runs.
+      throw requiredColumnUncountedError({
+        table: event.tableName,
+        field: owner ? fieldNameOf(owner, event.columnName) : event.columnName,
+        cause,
+      });
+    }
+    const { total, byParentTable } = counted;
     if (total === 0) continue;
     if (owner === undefined) {
-      unowned.push({
-        table: event.tableName,
-        column: event.columnName,
+      // A table outside the entities (a plugin's, an extension's) is named by its table and column.
+      breaks.push({
+        entity: { kind: "table", slug: event.tableName },
+        field: event.columnName,
         count: total,
+        added,
       });
       continue;
     }
@@ -240,25 +248,6 @@ export async function refuseRequiredColumnsOverNulls(args: {
     });
   }
 
-  if (unowned.length > 0) {
-    // A table outside the entities (a plugin's, an extension's) has no entity or field to name, so
-    // its refusal names the table and the column instead, under the same code.
-    throw NextlyError.validation({
-      errors: [
-        ...breaks.map(b => ({
-          path: `fields.${b.field}`,
-          code: "REQUIRED_COLUMN_HAS_NULLS",
-          message: requiredColumnBreakMessage(b),
-        })),
-        ...unowned.map(u => ({
-          path: `tables.${u.table}.${u.column}`,
-          code: "REQUIRED_COLUMN_HAS_NULLS",
-          message: `Table '${u.table}': column '${u.column}' cannot become NOT NULL while ${u.count === 1 ? "1 row holds" : `${u.count} rows hold`} no value in it.`,
-        })),
-      ],
-      logContext: { reason: "required-column-over-nulls", unowned },
-    });
-  }
   if (breaks.length > 0) throw requiredColumnOverNullsError(breaks);
 }
 

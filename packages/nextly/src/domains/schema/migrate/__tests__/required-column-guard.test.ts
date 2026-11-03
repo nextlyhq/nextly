@@ -149,7 +149,7 @@ describe("judgeRequiredColumnTargets", () => {
     });
   });
 
-  it("leaves alone a table the registry does not name, a column not there, one already NOT NULL, and a zero count", async () => {
+  it("leaves alone a column not there, one already NOT NULL, and a zero count", async () => {
     const f = facts({});
     expect(
       await judgeRequiredColumnTargets(
@@ -162,12 +162,34 @@ describe("judgeRequiredColumnTargets", () => {
         f
       )
     ).toEqual([]);
-    // Only the column that could hold a null was counted.
-    expect(f.counted).toEqual(["dc_pages.body"]);
+    // Every column that could hold a null was counted, a table the registry does not name too.
+    expect(f.counted).toEqual(["users.name", "dc_pages.body"]);
+  });
+
+  // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
+  // judged as well, and named by its table and column.
+  it("judges a table the registry does not name, naming its table and column", async () => {
+    const f = facts({
+      "plugin_forms.label": { total: 2, byParentTable: new Map() },
+    });
+    expect(
+      await judgeRequiredColumnTargets(
+        [{ table: "plugin_forms", column: "label", required: "label" }],
+        f
+      )
+    ).toEqual([
+      {
+        entity: { kind: "table", slug: "plugin_forms" },
+        field: "label",
+        count: 2,
+        added: false,
+      },
+    ]);
   });
 
   it("a count that fails refuses, naming the table, rather than letting the change run", async () => {
-    const f = facts({ "dc_posts.sub_title": new Error("connection lost") });
+    const cause = new Error("connection lost");
+    const f = facts({ "dc_posts.sub_title": cause });
     const error = await judgeRequiredColumnTargets(
       [{ table: "dc_posts", column: "sub_title", required: "sub_title" }],
       f
@@ -176,10 +198,17 @@ describe("judgeRequiredColumnTargets", () => {
       (thrown: unknown) => thrown
     );
     expect(NextlyError.is(error)).toBe(true);
-    expect((error as NextlyError).logMessage).toContain("'dc_posts'");
-    expect((error as NextlyError).logContext?.reason).toBe(
-      "required-column-count-failed"
-    );
+    expect((error as NextlyError).publicData).toEqual({
+      errors: [
+        {
+          path: "fields.sub_title",
+          code: "REQUIRED_COLUMN_UNCOUNTED",
+          message:
+            "Table 'dc_posts': the rows that would break making 'sub_title' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.",
+        },
+      ],
+    });
+    expect((error as NextlyError).cause).toBe(cause);
   });
 });
 

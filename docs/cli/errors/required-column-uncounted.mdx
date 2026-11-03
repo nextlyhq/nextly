@@ -1,0 +1,23 @@
+---
+title: REQUIRED_COLUMN_UNCOUNTED
+description: "The rows in the way of a column becoming required could not be counted, so the change was refused before anything ran."
+---
+
+## Cause
+
+The rows in the way of a column becoming required could not be counted, so the change was refused before anything ran.
+
+Before a change makes a column NOT NULL, Nextly counts the rows of its table that hold no value in it. When that count fails (the database could not be reached, or the table could not be read), the change cannot be known to be safe, so it is refused rather than run and left to the database. The Why line names the table and the field.
+
+## Fix
+
+The database couldn't be read: check the connection and that the table exists and can be read, then run the command again.
+
+## Example
+
+```text
+✗ A column could not be made required, because the rows in its way could not be counted.
+  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.
+  Next: Check the database connection and that the table can be read, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)
+```

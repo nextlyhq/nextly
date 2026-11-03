@@ -333,6 +333,24 @@ describe.each(LOCK_DIALECTS)(
       expect(await ledger()).toEqual([]);
     }, 120_000);
 
+    // A table that is not a collection, a Single or a field group (a plugin's, here) is checked as
+    // well, and its refusal names the table and the column.
+    it("refuses a table that is not an entity, naming the table and the column; nothing applied", async () => {
+      const notes = "plugin_notes_required";
+      await run([
+        `CREATE TABLE ${q(notes)} (${q("id")} varchar(36) PRIMARY KEY, ${q("label")} text)`,
+        `INSERT INTO ${q(notes)} (${q("id")}, ${q("label")}) VALUES ('n1', NULL)`,
+        `INSERT INTO ${q(notes)} (${q("id")}, ${q("label")}) VALUES ('n2', 'kept')`,
+      ]);
+      writeFile(await makeRequired(notes, "label"));
+      const error = await refusal();
+      expect(issues(error)).toEqual([
+        "Table 'plugin_notes_required': column 'label' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the column nullable.",
+      ]);
+      expect(await nullable(notes, "label")).toBe(true);
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
+
     it("refuses a Single's field, naming the Single", async () => {
       writeFile(await makeRequired(SETTINGS, "tagline"));
       expect(issues(await refusal())).toEqual([

@@ -473,6 +473,53 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
+  REQUIRED_COLUMN_HAS_NULLS: {
+    cause:
+      "A migration would make a column required while rows of its table hold no value in it.",
+    from: [
+      {
+        // The migrate refusal names its file (`logContext.source`) and whether it came before any
+        // statement or part-way; each column it names is an issue under this code.
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_HAS_NULLS",
+        when: error => typeof error.logContext?.source === "string",
+        describe: error => {
+          const source = String(error.logContext?.source);
+          const message = error.publicMessage;
+          const split = message.indexOf(": ", message.indexOf(" was refused "));
+          const what = split === -1 ? message : message.slice(0, split);
+          return {
+            what: `${what.startsWith(source) ? `\`${source}\`${what.slice(source.length)}` : what}.`,
+            why: split === -1 ? message : message.slice(split + 2),
+            next: "Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again.",
+          };
+        },
+      },
+    ],
+  },
+  REQUIRED_COLUMN_UNCOUNTED: {
+    cause:
+      "The rows in the way of a column becoming required could not be counted, so the change was refused before anything ran.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_UNCOUNTED",
+        describe: error => {
+          const data = error.publicData as
+            | { errors?: Array<{ code?: string; message?: string }> }
+            | undefined;
+          const issue = data?.errors?.find(
+            e => e.code === "REQUIRED_COLUMN_UNCOUNTED"
+          );
+          return {
+            what: "A column could not be made required, because the rows in its way could not be counted.",
+            why: issue?.message ?? error.publicMessage,
+            next: "Check the database connection and that the table can be read, then run the command again.",
+          };
+        },
+      },
+    ],
+  },
   MIGRATION_TAMPERED: {
     cause:
       "A migration recorded as applied has a file that no longer matches its recorded checksum.",

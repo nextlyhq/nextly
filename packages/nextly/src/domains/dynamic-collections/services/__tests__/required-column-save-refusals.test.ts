@@ -140,6 +140,40 @@ describe("a schema save making columns required over rows holding no value", () 
     ]);
   });
 
+  // A count that fails cannot say the save is safe, so the save is refused before anything runs,
+  // naming the table and the field, rather than left to the database.
+  it("refuses, naming the table and the field, when the rows cannot be counted", async () => {
+    const save = refusalsForCollectionSave({
+      adapter: {
+        executeQuery: <T>(q: string) =>
+          Promise.resolve(sqlite.prepare(q).all() as T[]),
+      },
+      dialect: "sqlite",
+      tableName: "dc_gone",
+      oldFields: [text("summary", false)],
+      newFields: [text("summary", true)],
+      rename: schema.detectFieldRename(
+        [text("summary", false)],
+        [text("summary", true)]
+      ),
+      addedColumnBackfill: field => schema.addedColumnBackfill(field),
+      presentColumns: new Set(["summary"]),
+      requiredColumns: { db: drizzle({ client: sqlite }), entity: posts },
+    });
+    await expect(save).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            path: "fields.summary",
+            code: "REQUIRED_COLUMN_UNCOUNTED",
+            message:
+              "Table 'dc_gone': the rows that would break making 'summary' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.",
+          },
+        ],
+      },
+    });
+  });
+
   it("refuses nothing when no row is in the way", async () => {
     // The controls: a column holding no null (`sub_title` after the first row is filled), a field
     // already required (`body`), a column the table does not have yet (`ghost`, left to the ALTER

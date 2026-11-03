@@ -1503,6 +1503,20 @@ exports[`each code, as a command ends with it > REFUSED_STATEMENT 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/refused-statement  (REFUSED_STATEMENT)"
 `;
 
+exports[`each code, as a command ends with it > REQUIRED_COLUMN_HAS_NULLS 1`] = `
+"✗ \`20261103_101500_posts.sql\` was refused before any of its statements ran, and nothing of it was applied.
+  Why:  Collection 'posts': field 'subtitle' cannot become required while 2 rows hold no value in it. Give those rows a value first, or keep the field optional.
+  Next: Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-has-nulls  (REQUIRED_COLUMN_HAS_NULLS)"
+`;
+
+exports[`each code, as a command ends with it > REQUIRED_COLUMN_UNCOUNTED 1`] = `
+"✗ A column could not be made required, because the rows in its way could not be counted.
+  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.
+  Next: Check the database connection and that the table can be read, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
+`;
+
 exports[`each code, as a command ends with it > RESOLVE_FILE_NOT_FOUND 1`] = `
 "✗ Migration file not found: 20261020_120000_add_posts.sql.
   Why:  \`nextly migrate:resolve\` records a file of the project's migrations folder (\`db.migrationsDir\`), and none has this name.

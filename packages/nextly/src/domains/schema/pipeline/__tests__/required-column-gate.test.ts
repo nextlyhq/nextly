@@ -174,6 +174,43 @@ describe("refuseRequiredColumnsOverNulls", () => {
     ]);
   });
 
+  // A table that is not a collection, a Single or a field group is refused too, named by its
+  // table and column through the same refusal every road gives.
+  it("names a table that is not an entity by its table and column", async () => {
+    sqlite.exec(`CREATE TABLE plugin_forms (id TEXT, label TEXT)`);
+    sqlite.exec(`INSERT INTO plugin_forms VALUES ('1', NULL), ('2', NULL)`);
+    expect(
+      await refusal(posts, [madeRequired("plugin_forms", "label")])
+    ).toEqual([
+      "Table 'plugin_forms': column 'label' cannot become required while 2 rows hold no value in it. Give those rows a value first, or keep the column nullable.",
+    ]);
+  });
+
+  it("refuses before anything runs when the rows cannot be counted, naming the table", async () => {
+    const error = await refuseRequiredColumnsOverNulls({
+      db,
+      dialect: "sqlite",
+      desired: posts,
+      events: [madeRequired("dc_gone", "title")],
+      resolutions: [],
+      fieldGroupRegistryTable: undefined,
+    }).then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+    expect(NextlyError.isValidation(error)).toBe(true);
+    expect((error as NextlyError).publicData).toEqual({
+      errors: [
+        {
+          path: "fields.title",
+          code: "REQUIRED_COLUMN_UNCOUNTED",
+          message:
+            "Table 'dc_gone': the rows that would break making 'title' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.",
+        },
+      ],
+    });
+  });
+
   it("names a Single", async () => {
     expect(
       await refusal(home, [madeRequired("single_home", "tagline")])

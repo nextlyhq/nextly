@@ -37,6 +37,8 @@ import { builderMigrationRemedy } from "../../utils/migration-discovery";
 
 import { PROJECT, type ErrorCase, type ErrorCases } from "./types";
 import { assertRunnableStatements } from "../../../domains/schema/migrate/split-sql";
+import { requiredColumnMigrationRefusal } from "../../../domains/schema/migrate/required-column-guard";
+import { requiredColumnUncountedError } from "../../../domains/schema/required-column-refusal";
 
 /** A fixed clock, so the holder's start and lapse times read the same in every run. */
 const NOW = Date.UTC(2026, 9, 29, 10, 2, 0);
@@ -375,6 +377,24 @@ export const MIGRATION_CASES = {
     }
     throw new Error("expected the statements to be refused");
   },
+  REQUIRED_COLUMN_HAS_NULLS: () =>
+    requiredColumnMigrationRefusal(
+      [
+        {
+          entity: { kind: "collection", slug: "posts" },
+          field: "subtitle",
+          count: 2,
+          added: false,
+        },
+      ],
+      { source: "20261103_101500_posts.sql", dialect: "postgresql" }
+    ),
+  REQUIRED_COLUMN_UNCOUNTED: () =>
+    requiredColumnUncountedError({
+      table: "dc_posts",
+      field: "subtitle",
+      cause: new Error("connection reset"),
+    }),
 } satisfies ErrorCases;
 
 /**

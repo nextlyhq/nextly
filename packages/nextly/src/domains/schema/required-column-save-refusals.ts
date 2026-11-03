@@ -25,6 +25,7 @@ import {
   requiredColumnOverNullsError,
   type RequiredColumnBreak,
   type RequiredColumnEntity,
+  requiredColumnUncountedError,
 } from "./required-column-refusal";
 import {
   fieldProducesColumn,
@@ -57,13 +58,23 @@ export async function requiredColumnSaveRefusals(args: {
   addedColumnBackfill: (field: FieldDefinition) => string | null;
   presentColumns: ReadonlySet<string>;
 }): Promise<ValidationPublicData["errors"]> {
-  const count = async (column: string | null) =>
-    (
-      await countRowsBreakingNotNull(args.db, args.dialect, {
+  // A count that fails refuses the save before anything runs, naming the table and the field.
+  const count = async (column: string | null, field: string) => {
+    try {
+      return (
+        await countRowsBreakingNotNull(args.db, args.dialect, {
+          table: args.tableName,
+          column,
+        })
+      ).total;
+    } catch (cause) {
+      throw requiredColumnUncountedError({
         table: args.tableName,
-        column,
-      })
-    ).total;
+        field,
+        cause,
+      });
+    }
+  };
   // Every row is in the way of each added column, so the table is counted once.
   let rows: number | undefined;
 
@@ -76,7 +87,7 @@ export async function requiredColumnSaveRefusals(args: {
       // Counted under the column as the live table has it, before any rename in this save.
       const held = toSnakeCase(previous.name);
       if (!args.presentColumns.has(held)) continue;
-      const nulls = await count(held);
+      const nulls = await count(held, field.name);
       if (nulls > 0) {
         breaks.push({
           entity: args.entity,
@@ -90,7 +101,7 @@ export async function requiredColumnSaveRefusals(args: {
     // Added, or moved onto the row from another table: a column created now. One whose type
     // gives the existing rows a value leaves none of them empty.
     if (args.addedColumnBackfill(field) !== null) continue;
-    rows ??= await count(null);
+    rows ??= await count(null, field.name);
     if (rows > 0) {
       breaks.push({
         entity: args.entity,
