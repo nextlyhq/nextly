@@ -570,7 +570,13 @@
   border-radius: 0.4375rem;
   text-align: center;
   color: var(--nx-foreground);
-  background: var(--nx-background);
+  /*
+   * A quiet tile: the panel's own surface inside its border, so a grid of
+   * them reads as choices rather than as solid blocks (in dark, the admin
+   * background was the heaviest thing on screen). Hover and the highlighted
+   * tile are what fill it.
+   */
+  background: transparent;
   cursor: grab;
   /*
    * Reserve the sideways gesture, so a tile can be DRAGGED onto the canvas.
@@ -599,7 +605,7 @@
 .nx-insert-panel:not([data-highlight="shown"])
   [cmdk-item][data-selected="true"] {
   color: var(--nx-foreground);
-  background: var(--nx-background);
+  background: transparent;
 }
 
 /*
