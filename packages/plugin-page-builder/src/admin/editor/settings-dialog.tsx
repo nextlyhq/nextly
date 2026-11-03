@@ -203,13 +203,13 @@ export function SettingsDialog({
               </TabsContent>
             ) : null}
           </Tabs>
-          <p className="border-t px-6 py-3 text-xs text-muted-foreground">
-            {/* Said as each one saves: the default Layout as it is chosen,
-                and breakpoints when their editor's Save is pressed. */}
-            {
-              "This page's settings save with the page, from Save or Publish in the top bar. Site settings apply to the live site as soon as they save: the default Layout when you choose it, breakpoints when you save them."
-            }
-          </p>
+          {/* Per tab, one line: This page says when its settings save. Site
+              has its own banner saying it applies at once, so it adds none. */}
+          {leave.tab === "page" ? (
+            <p className="border-t px-6 py-3 text-xs text-muted-foreground">
+              Saved with the page when you Save or Publish.
+            </p>
+          ) : null}
         </DialogContent>
       </Dialog>
       <AlertDialog

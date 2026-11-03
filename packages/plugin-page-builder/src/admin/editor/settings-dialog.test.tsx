@@ -178,11 +178,17 @@ describe("the Settings dialog", () => {
     expect(screen.queryByText(/The SEO plugin adds fields/)).toBeNull();
   });
 
-  it("says breakpoints save when their Save is pressed, not as they change", () => {
+  it("says when This page saves, and leaves Site to its own banner", async () => {
     show();
-    const footer = screen.getByText(/Site settings apply to the live site/);
-    expect(footer.textContent).toContain("breakpoints when you save them");
-    expect(footer.textContent).not.toContain("save as you change them");
+    expect(
+      screen.getByText("Saved with the page when you Save or Publish.")
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    // The banner says it applies at once; a footer would say it twice.
+    expect(
+      screen.queryByText("Saved with the page when you Save or Publish.")
+    ).toBeNull();
+    expect(screen.queryByText(/save as you change them/)).toBeNull();
   });
 
   it("offers no Site tab to a role that may not manage the site", () => {
