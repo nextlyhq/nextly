@@ -315,7 +315,12 @@ async function sweepOne(
       await settleRemoval(deps, removal);
       return;
     case "restoring":
-      if ((await resumeRestore(deps, removal)) !== null) return;
+      // A row that records its Layout is finished, or settled when that
+      // Layout was deleted since, by the resume itself.
+      if (removal.copy?.restoredAs !== undefined) {
+        await resumeRestore(deps, removal);
+        return;
+      }
       deps.warn(
         "[page-builder] a Layout's restore stopped part-way; check the Layouts list for a restored copy",
         { layoutId: removal.layoutId }
