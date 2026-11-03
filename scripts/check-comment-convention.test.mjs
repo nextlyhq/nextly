@@ -300,7 +300,7 @@ describe("the allowlist", () => {
   // naming a numbered change, no longer exist, and its entry emptied (217 -> 216).
   // 477 -> 475: one recorded offence each in `register-collections.ts` and
   // `collections-handler.ts` no longer exists; both entries remain.
-  const EXPECTED_TOTAL = 475;
+  const EXPECTED_TOTAL = 473;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
