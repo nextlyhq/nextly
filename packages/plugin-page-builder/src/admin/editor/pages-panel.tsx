@@ -552,13 +552,12 @@ function RowMenu({
   actions: RowActions;
   onRename: () => void;
 }): React.JSX.Element {
-  // A copy is made from the PUBLISHED page, so it cannot yet copy a draft,
-  // nor the unpublished changes of a changed page: it would copy something
-  // other than what the author sees.
-  const unpublished =
-    page.status === "draft" ||
-    page.state === "changed" ||
-    page.pendingChange === true;
+  // A copy is made from the stored page: a never-published draft as it is,
+  // and a published page as published, so newer unpublished changes are left
+  // behind. Said under Duplicate, so the author knows what the copy holds.
+  const copiesPublished =
+    page.status !== "draft" &&
+    (page.state === "changed" || page.pendingChange === true);
   // Rename starts once the menu has CLOSED. Started while it closes, the
   // menu's focus return pulls focus out of the new field, whose blur then
   // ends the rename before anything was typed.
@@ -595,10 +594,13 @@ function RowMenu({
         >
           Rename
         </DropdownMenuItem>
-        {unpublished ? (
-          <UnavailableItem reason="Publish it first to duplicate it.">
+        {copiesPublished ? (
+          <NotedItem
+            note="Copies the published version, without your unpublished changes."
+            onSelect={() => void actions.duplicate(page)}
+          >
             Duplicate
-          </UnavailableItem>
+          </NotedItem>
         ) : (
           <DropdownMenuItem onSelect={() => void actions.duplicate(page)}>
             Duplicate
@@ -612,12 +614,13 @@ function RowMenu({
             either leave the author on a page that no longer exists or, when
             its unsaved work asks first, delete a page they chose to keep. */}
         {editing ? (
-          <UnavailableItem
-            reason="Open another page to delete this one."
+          <NotedItem
+            unavailable
+            note="Open another page to delete this one."
             className="text-destructive focus:text-destructive"
           >
             Delete…
-          </UnavailableItem>
+          </NotedItem>
         ) : (
           <DropdownMenuItem
             className="text-destructive focus:text-destructive"
@@ -632,42 +635,52 @@ function RowMenu({
 }
 
 /**
- * A menu item the author cannot use on this page, kept in the arrow-key order
- * and described by its reason, so a keyboard or screen reader user reaches it
- * and hears why. A `disabled` item is skipped without a word. The reason is
- * also drawn as a muted second line, so a pointer user sees it too. Choosing
- * it does nothing and leaves the menu open.
+ * A menu item with a note under it: why it can't be used on this page, or
+ * what it will do. The note is a muted second line for a pointer user, and the
+ * item's description for a keyboard or screen reader user.
+ *
+ * An unavailable item stays in the arrow-key order, where a `disabled` one is
+ * skipped without a word; choosing it does nothing and leaves the menu open.
  */
-function UnavailableItem({
-  reason,
+function NotedItem({
+  note,
+  unavailable = false,
   className,
+  onSelect,
   children,
 }: {
-  reason: string;
+  note: string;
+  unavailable?: boolean;
   className?: string;
+  onSelect?: () => void;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const reasonId = React.useId();
+  const noteId = React.useId();
   return (
     <>
       <DropdownMenuItem
-        aria-disabled="true"
-        aria-describedby={reasonId}
+        {...(unavailable ? { "aria-disabled": "true" as const } : {})}
+        aria-describedby={noteId}
         className={`items-start ${className ?? ""}`}
-        onSelect={event => event.preventDefault()}
+        onSelect={event => {
+          if (unavailable) event.preventDefault();
+          else onSelect?.();
+        }}
       >
         <span className="flex flex-col gap-0.5">
-          <span className="opacity-50">{children}</span>
+          <span className={unavailable ? "opacity-50" : undefined}>
+            {children}
+          </span>
           {/* Seen, not read: assistive technology hears the description, so
               the item's name stays the action alone. */}
           <span aria-hidden="true" className="text-xs text-muted-foreground">
-            {reason}
+            {note}
           </span>
         </span>
       </DropdownMenuItem>
       {/* Hidden, yet still read as the item's description. */}
-      <span id={reasonId} hidden>
-        {reason}
+      <span id={noteId} hidden>
+        {note}
       </span>
     </>
   );

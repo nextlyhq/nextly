@@ -399,58 +399,70 @@ describe("a row's actions", () => {
     );
   });
 
-  it("cannot duplicate a page with unpublished changes either", async () => {
-    // The copy is made from the published page, not the changes on screen.
-    await mount([item("a", "Home", { status: "published", state: "changed" })]);
+  /** The menu's Duplicate for `page`, and what it is described by. */
+  async function duplicateFor(page: PageItem) {
+    await mount([page]);
     await userEvent.click(
-      screen.getByRole("button", { name: "More for Home" })
+      screen.getByRole("button", { name: `More for ${page.title}` })
     );
-    const duplicate = await screen.findByRole("menuitem", {
-      name: "Duplicate",
-    });
-    expect(duplicate.getAttribute("aria-disabled")).toBe("true");
+    const entry = await screen.findByRole("menuitem", { name: "Duplicate" });
+    const id = entry.getAttribute("aria-describedby");
+    return {
+      entry,
+      description:
+        id === null ? undefined : document.getElementById(id)?.textContent,
+    };
+  }
+
+  const COPIES_PUBLISHED =
+    "Copies the published version, without your unpublished changes.";
+
+  it("duplicates a page with unpublished changes, and says the copy is the published version", async () => {
+    // The copy is made from the published page, not the changes on screen,
+    // so the author is told before choosing it.
+    const home = item("a", "Home", { status: "published", state: "changed" });
+    client.duplicatePage.mockResolvedValue(
+      item("copy", "Copy of Home", { status: "draft" })
+    );
+    const { entry, description } = await duplicateFor(home);
+    expect(entry.getAttribute("aria-disabled")).toBeNull();
+    expect(within(entry).getByText(COPIES_PUBLISHED)).toBeTruthy();
+    expect(description).toBe(COPIES_PUBLISHED);
+    await userEvent.click(entry);
+    expect(client.duplicatePage).toHaveBeenCalledWith(home);
   });
 
-  it("cannot duplicate a scheduled page that also holds changes", async () => {
-    // It shows "Scheduled", but a copy would still take the live content.
-    await mount([
+  it("says the same for a scheduled page that also holds changes", async () => {
+    // It shows "Scheduled", but a copy still takes the live content.
+    const { entry, description } = await duplicateFor(
       item("a", "Home", {
         status: "published",
         state: "scheduled",
         pendingChange: true,
-      }),
-    ]);
-    await userEvent.click(
-      screen.getByRole("button", { name: "More for Home" })
+      })
     );
-    const duplicate = await screen.findByRole("menuitem", {
-      name: "Duplicate",
-    });
-    expect(duplicate.getAttribute("aria-disabled")).toBe("true");
+    expect(entry.getAttribute("aria-disabled")).toBeNull();
+    expect(description).toBe(COPIES_PUBLISHED);
   });
 
-  it("cannot duplicate a draft, and says why", async () => {
-    await mount([item("a", "Home", { status: "draft", state: "draft" })]);
-    await userEvent.click(
-      screen.getByRole("button", { name: "More for Home" })
+  it("duplicates a never-published draft as it is, with no note", async () => {
+    const draft = item("a", "Home", { status: "draft", state: "draft" });
+    client.duplicatePage.mockResolvedValue(
+      item("copy", "Copy of Home", { status: "draft" })
     );
-    const duplicate = await screen.findByRole("menuitem", {
-      name: "Duplicate",
-    });
-    expect(duplicate.getAttribute("aria-disabled")).toBe("true");
-    // Shown to a pointer user as well as heard: the reason is on screen.
-    expect(
-      within(duplicate).getByText("Publish it first to duplicate it.")
-    ).toBeTruthy();
-    await userEvent.click(duplicate);
-    expect(client.duplicatePage).not.toHaveBeenCalled();
+    const { entry, description } = await duplicateFor(draft);
+    expect(entry.getAttribute("aria-disabled")).toBeNull();
+    expect(description).toBeUndefined();
+    expect(entry.textContent).toBe("Duplicate");
+    await userEvent.click(entry);
+    expect(client.duplicatePage).toHaveBeenCalledWith(draft);
   });
 
   it("keeps an unavailable item in the arrow-key order, described by its reason", async () => {
     // A `disabled` item is skipped by the arrow keys, so a keyboard or screen
-    // reader user would never learn why Duplicate and Delete are missing.
+    // reader user would never learn why Delete is missing.
     identity = { kind: "collection", slug: "pages", documentId: "a" };
-    await mount([item("a", "Home", { status: "draft", state: "draft" })]);
+    await mount([item("a", "Home", { status: "published", state: "changed" })]);
     await userEvent.click(
       screen.getByRole("button", { name: "More for Home" })
     );
@@ -460,9 +472,6 @@ describe("a row's actions", () => {
       await userEvent.keyboard("{ArrowDown}");
       if (document.activeElement !== null) reached.add(document.activeElement);
     }
-    expect(
-      reached.has(screen.getByRole("menuitem", { name: "Duplicate" }))
-    ).toBe(true);
     expect(reached.has(screen.getByRole("menuitem", { name: "Delete…" }))).toBe(
       true
     );
@@ -472,10 +481,10 @@ describe("a row's actions", () => {
       const id = entry.getAttribute("aria-describedby") ?? "";
       return document.getElementById(id)?.textContent;
     };
-    expect(described("Duplicate")).toBe("Publish it first to duplicate it.");
     expect(described("Delete…")).toBe("Open another page to delete this one.");
+    expect(described("Duplicate")).toBe(COPIES_PUBLISHED);
 
-    // Choosing one does nothing, and the menu stays open to say why.
+    // Choosing it does nothing, and the menu stays open to say why.
     await userEvent.keyboard("{Enter}");
     expect(screen.getByRole("menu")).toBeTruthy();
     expect(client.deletePage).not.toHaveBeenCalled();
