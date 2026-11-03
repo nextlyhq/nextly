@@ -536,8 +536,10 @@ export interface PluginFieldWrite {
    *
    * Scoped to fields of the validator's own type, and refused otherwise: a
    * type may read the values of its own kind wherever they are stored, and
-   * nothing else. Only top-level fields of a collection or a single are
-   * readable.
+   * nothing else. A top-level field of a collection or a single is
+   * readable, and so is one inside named groups, named by its path
+   * (`hero.body`). A field in a repeater's rows, in a field-group instance or
+   * in a group kept per language is not.
    */
   readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
 }
@@ -552,7 +554,10 @@ export type PluginStoredValueTarget =
 
 /** @experimental What a stored read names in either kind of document. */
 interface PluginStoredFieldTarget {
-  /** A top-level field of the validator's own type. */
+  /**
+   * A field of the validator's own type: its name at top level, or its path
+   * through named groups (`hero.body`).
+   */
   readonly field: string;
   /**
    * `published` reads the live row. `draft` reads what an editor's preview

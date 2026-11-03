@@ -74,6 +74,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { X } from "lucide-react";
 import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
@@ -89,6 +90,7 @@ import {
   fontFamilyShowable,
   type FontChoices,
 } from "./font-family-field";
+import { IconChoiceField } from "./icon-choice-field";
 import {
   designIsWritable,
   designReadOnlyReason,
@@ -99,6 +101,12 @@ import type { InspectorSectionKey } from "./inspector-sections";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
+import {
+  alignmentGroupFor,
+  drawsIcons,
+  flowOf,
+  type Flow,
+} from "./style-alignment-icons";
 import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import {
   activeTokenMode,
@@ -1469,50 +1477,63 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      {/* A folded union's one control, read where the value field is drawn;
+      {/* The container's flow, which alignment icons are drawn in. */}
+      <AlignmentFlow.Provider
+        value={flowOf(
+          findNode(editor.document.nodes, nodeId)?.styles,
+          state,
+          breakpoint,
+          orientation
+        )}
+      >
+        {/* A folded union's one control, read where the value field is drawn;
           see `style-folded.ts`. Its controls sit at the root, so the whole
           property is the fold's. */}
-      <FoldedUnion.Provider
-        value={
-          fold === undefined
-            ? undefined
-            : { kind: fold, property: property.property }
-        }
-      >
-        <SideBoxFrame box={box}>
-          {box.controls.map(control => (
-            <StyleControlField
-              // The ADDRESS, not just the position: a host switching state or
-              // breakpoint leaves this field mounted, and where the old and new
-              // addresses hold the same value — both unset, most often — the
-              // synchronisation effect does not run either. An unfinished draft
-              // from the base breakpoint would then commit into the hover state.
-              key={[state, breakpoint, property.property, ...control.path].join(
-                "."
-              )}
-              control={control}
-              side={sideOf(box, control)}
-              label={
-                many
-                  ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                  : property.label
-              }
-              summary={many ? undefined : property.summary}
-              propertyLabel={property.label}
-              clearOnly={!property.offered || control.withheld}
-              nodeId={nodeId}
-              state={state}
-              breakpoint={breakpoint}
-              editor={editor}
-              policy={policy}
-              tokens={tokens}
-              prefersDark={prefersDark}
-              provenanceOf={provenanceOf}
-              editing={editing}
-            />
-          ))}
-        </SideBoxFrame>
-      </FoldedUnion.Provider>
+        <FoldedUnion.Provider
+          value={
+            fold === undefined
+              ? undefined
+              : { kind: fold, property: property.property }
+          }
+        >
+          <SideBoxFrame box={box}>
+            {box.controls.map(control => (
+              <StyleControlField
+                // The ADDRESS, not just the position: a host switching state or
+                // breakpoint leaves this field mounted, and where the old and new
+                // addresses hold the same value — both unset, most often — the
+                // synchronisation effect does not run either. An unfinished draft
+                // from the base breakpoint would then commit into the hover state.
+                key={[
+                  state,
+                  breakpoint,
+                  property.property,
+                  ...control.path,
+                ].join(".")}
+                control={control}
+                side={sideOf(box, control)}
+                label={
+                  many
+                    ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                    : property.label
+                }
+                summary={many ? undefined : property.summary}
+                propertyLabel={property.label}
+                clearOnly={!property.offered || control.withheld}
+                nodeId={nodeId}
+                state={state}
+                breakpoint={breakpoint}
+                editor={editor}
+                policy={policy}
+                tokens={tokens}
+                prefersDark={prefersDark}
+                provenanceOf={provenanceOf}
+                editing={editing}
+              />
+            ))}
+          </SideBoxFrame>
+        </FoldedUnion.Provider>
+      </AlignmentFlow.Provider>
     </div>
   );
 }
@@ -1667,6 +1688,7 @@ function StyleFieldLabel({
   id,
   htmlFor,
   readOnly,
+  focusOnly,
   title,
   label,
   answer,
@@ -1683,6 +1705,12 @@ function StyleFieldLabel({
    * left saying what it wants drawn rather than how to draw it.
    */
   readOnly: boolean;
+  /**
+   * Whether the control is a group of buttons. A label's `for` would CLICK
+   * a button, choosing or clearing a value; this label only moves focus to
+   * the element the id names, the group's tab stop.
+   */
+  focusOnly: boolean;
   title: string | undefined;
   label: string;
   answer: ProvenanceAnswer | undefined;
@@ -1690,7 +1718,19 @@ function StyleFieldLabel({
   descendant: string | undefined;
 }): React.JSX.Element {
   return (
-    <Label id={id} htmlFor={readOnly ? undefined : htmlFor} title={title}>
+    <Label
+      id={id}
+      htmlFor={readOnly || focusOnly ? undefined : htmlFor}
+      title={title}
+      {...(focusOnly && !readOnly
+        ? {
+            onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
+              event.currentTarget.ownerDocument
+                .getElementById(htmlFor)
+                ?.focus(),
+          }
+        : {})}
+    >
       <span className="nx-style-inspector__field-label-text">{label}</span>
       <ProvenanceDot
         answer={answer}
@@ -1840,6 +1880,7 @@ function StyleControlField({
         id={labelId}
         htmlFor={id}
         readOnly={readOnly}
+        focusOnly={drawsIcons(control.leaf)}
         title={summary}
         label={label}
         answer={answer}
@@ -2662,10 +2703,14 @@ function SelectField({
       {current === "" ? null : (
         <button
           type="button"
+          className="nx-style-inspector__select-clear"
           onClick={() => onCommit(null)}
           aria-label={`Clear ${actionName}`}
+          title="Clear"
         >
-          Clear
+          {/* An icon, not the word: beside a list in a narrow column, the
+              word ran to the panel's edge. */}
+          <X size={14} aria-hidden="true" />
         </button>
       )}
     </div>
@@ -2775,6 +2820,7 @@ function OptionSelect({
       {current === "" ? null : (
         <button
           type="button"
+          className="nx-style-inspector__select-clear"
           onClick={() => onCommit(null)}
           aria-label={`Clear ${actionName}`}
         >
@@ -3945,6 +3991,25 @@ function ContrastNote({
   );
 }
 
+/** The edited container's flow; CSS's defaults until it is measured or read. */
+const AlignmentFlow = React.createContext<Flow>({
+  writingMode: "horizontal-tb",
+  rtl: false,
+  flex: false,
+  direction: "row",
+});
+
+/**
+ * The icon buttons a keyword control draws, when its property is one drawn as
+ * icons, in the flow of the container being edited.
+ */
+function useAlignmentGroup(control: StyleControl) {
+  const flow = React.useContext(AlignmentFlow);
+  return control.leaf.kind === "keyword"
+    ? alignmentGroupFor(control.leaf.cssProperty, control.leaf.values, flow)
+    : undefined;
+}
+
 /**
  * The control a leaf's kind resolves to.
  *
@@ -3990,12 +4055,28 @@ function ValueField({
   // Decided BEFORE the menu, because every keyword leaf resolves to the
   // `select` control kind — so a branch on that kind placed first would return
   // for all of them and the toggle could never be reached.
+  // Both read before any branch, as hooks must be.
   const fold = React.useContext(FoldedUnion);
+  // Alignment and direction as icons that follow the container's flow.
+  const alignment = useAlignmentGroup(control);
   if (fold !== undefined) {
     return (
       <FoldedField
         id={id}
         fold={fold}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  if (alignment !== undefined) {
+    return (
+      <IconChoiceField
+        id={id}
+        labelledBy={labelledBy}
+        group={alignment}
         stored={stored}
         actionName={actionName}
         describedBy={describedBy}

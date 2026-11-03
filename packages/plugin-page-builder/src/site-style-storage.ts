@@ -18,6 +18,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style-storage
  */
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
@@ -32,6 +33,7 @@ import {
   type SectionCheck,
   type SectionPolicy,
 } from "./site-style-record";
+import { readStoredJson } from "./stored-json";
 
 /** The single the stored tier lives in. One document per site, by design. */
 export const SITE_STYLE_SLUG = "site-style";
@@ -124,6 +126,139 @@ export function refuseBreakpointsOutsideSettings(hook: {
   });
 }
 
+/** The mark the shared-style lock route puts on its own write. */
+const SHARED_STYLE_LOCK_WRITE = "pageBuilder.sharedStyleLockWrite";
+
+/**
+ * The context the lock route writes with: the one write that may lock or
+ * unlock a shared style.
+ */
+export const SHARED_STYLE_LOCK_WRITE_CONTEXT: Readonly<
+  Record<string, unknown>
+> = { [SHARED_STYLE_LOCK_WRITE]: true };
+
+/** What a write that moves a lock outside the lock route is told. */
+const LOCK_OUTSIDE_ITS_ROUTE =
+  "A shared style is locked and unlocked with its own action, which needs the permission to lock shared styles.";
+
+/** A stored or sent class list, by id: only entries that carry one. */
+function classEntriesById(raw: unknown): Map<string, Record<string, unknown>> {
+  const entries = new Map<string, Record<string, unknown>>();
+  // SQLite hands a JSON column back as text; the other dialects as values.
+  const list = readStoredJson(raw);
+  if (!Array.isArray(list)) return entries;
+  for (const entry of list) {
+    if (!isPlainRecord(entry) || typeof entry.id !== "string") continue;
+    // The first entry with an id is the one the compiler applies, so it is
+    // the one a lock holds.
+    if (!entries.has(entry.id)) entries.set(entry.id, entry);
+  }
+  return entries;
+}
+
+/** The name a refusal calls a shared style by: its name, else its slug. */
+export function sharedStyleName(entry: Record<string, unknown>): string {
+  if (typeof entry.label === "string" && entry.label.trim() !== "") {
+    return entry.label;
+  }
+  return typeof entry.slug === "string" ? entry.slug : "This shared style";
+}
+
+function refusedOnClasses(message: string, reason: string): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: "classes", code: "INVALID_VALUE", message }],
+    logContext: { reason },
+  });
+}
+
+function lockOutsideItsRoute(): NextlyError {
+  return refusedOnClasses(
+    LOCK_OUTSIDE_ITS_ROUTE,
+    "shared-style-lock-outside-route"
+  );
+}
+
+/**
+ * Refuse what a write does to one stored entry: a locked one changed or
+ * removed by anyone, or a lock moved outside the lock route. `now` is the
+ * entry as written, absent if removed.
+ *
+ * An unlocked entry may be removed by a whole-list write: undoing the making
+ * of a style writes the section back without it. Checking that nothing uses a
+ * style before it goes needs a usage index that has counted every page, which
+ * a site holding blocks in Singles does not have yet; the remove route makes
+ * that check, and refuses while the index is not whole.
+ */
+function refuseStoredEntryChange(
+  id: string,
+  was: Record<string, unknown>,
+  now: Record<string, unknown> | undefined,
+  lockRoute: boolean
+): void {
+  const wasLocked = was.locked === true;
+  // Still locked after the write, so the entry must come back as it was; an
+  // unlock through the lock route is the one change a locked entry takes.
+  const lockedEntryChanged =
+    now === undefined || (now.locked === true && !sameValue(was, now));
+  if (wasLocked && lockedEntryChanged) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `${sharedStyleName(was)} is locked, so it can't be changed, renamed or removed. Unlock it first.`,
+      logContext: { classId: id },
+    });
+  }
+  if (now === undefined) return;
+  if (wasLocked !== (now.locked === true) && !lockRoute) {
+    throw lockOutsideItsRoute();
+  }
+}
+
+/**
+ * Refuse a write to this Single that changes or removes a locked shared style,
+ * or moves a lock outside the lock route.
+ *
+ * A locked style holds for everyone, whatever they may otherwise change: its
+ * styles, name and slug stay as they are, and it is not removed, until someone
+ * allowed to lock shared styles unlocks it through the route that asks for
+ * that permission. The lock is a fact about the style rather than about the
+ * caller, so the refusal is a conflict naming the style, not a permission
+ * error.
+ *
+ * An unlocked style may still be removed by a whole-list write, which is how
+ * an undo of making one is written. The remove route is the editor's delete:
+ * it checks, just before it writes, that the usage index is whole and that
+ * nothing uses the style.
+ *
+ * Applying a style to a block, detaching it and overriding it on one block are
+ * page writes, which never reach this Single, so a lock does not stop them.
+ *
+ * Server code acting as nobody (the Direct API, an import) is trusted, as for
+ * the breakpoints.
+ */
+export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}): void {
+  const data = hook.data;
+  if (data === undefined || !Object.hasOwn(data, "classes")) return;
+  if (hook.user === undefined && hook.principal === undefined) return;
+  const lockRoute = hook.context?.[SHARED_STYLE_LOCK_WRITE] === true;
+  const before = classEntriesById(hook.originalData?.classes);
+  const after = classEntriesById(data.classes);
+  for (const [id, was] of before) {
+    refuseStoredEntryChange(id, was, after.get(id), lockRoute);
+  }
+  for (const [id, now] of after) {
+    // A style written already locked is a lock moved outside its route.
+    if (!before.has(id) && now.locked === true && !lockRoute) {
+      throw lockOutsideItsRoute();
+    }
+  }
+}
+
 /**
  * The Site Style single: the one global, versioned, access-controlled
  * document a site's stored style edits live in.
@@ -147,7 +282,12 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
     versions: true,
     // A precondition, so before validation: a refused write learns where the
     // change is made rather than what is wrong with a value it may not set.
-    hooks: { beforeValidate: [refuseBreakpointsOutsideSettings] },
+    hooks: {
+      beforeValidate: [
+        refuseBreakpointsOutsideSettings,
+        refuseSharedStyleChangesOutsideTheirRoutes,
+      ],
+    },
     // No `access` block, deliberately: read and update both fall through to
     // the `read-site-style` / `update-site-style` permissions seeded with the
     // single and granted to super_admin, so a role reaches this document only
@@ -198,7 +338,7 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
         validate: refusing(raw => checkStoredClasses(raw, policy)),
         admin: {
           description:
-            "Reusable style presets: [{ id, slug, orderIndex, styles }]. Documents reference a class by id; a later orderIndex overrides an earlier one.",
+            "Reusable style presets: [{ id, slug, label?, orderIndex, styles, locked? }]. Documents reference a class by id; a later orderIndex overrides an earlier one. `label` is the name authors see; `locked: true` holds the class as it is until it is unlocked.",
         },
       }),
       json({
