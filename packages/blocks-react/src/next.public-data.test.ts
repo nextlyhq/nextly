@@ -14,11 +14,23 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 // The real cache helper, watched, so a test can read what each list read is
 // cached under. Outside a Next request it runs the read directly.
+//
+// The real reader, told the faked instance's declarations: no Nextly services
+// are registered in this process, so the reader cannot read a schema and would
+// refuse every read. The fake declares no hidden field, which is what its rows
+// hold; the reader's own stripping and refusals still run.
 const cached = vi.hoisted(() => ({ calls: [] as unknown[] }));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
   return {
     ...actual,
+    createPublicReader: (
+      ...[source, binding]: Parameters<typeof actual.createPublicReader>
+    ) =>
+      actual.createPublicReader(source, {
+        ...binding,
+        declarations: { hiddenFields: () => [] },
+      }),
     cachedFind: (
       read: () => Promise<unknown>,
       options: Parameters<typeof actual.cachedFind>[1]

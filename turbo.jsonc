@@ -655,9 +655,12 @@
       // E2E_SERVER and E2E_PRODUCTION_PREBUILT choose the server the suite
       // runs against (dev or production) and whether that build is reused;
       // E2E_DEV_SPECS_ONLY runs only the specs that need the dev server.
+      // E2E_FONT_CATALOGUE_PORT: where the stand-in font catalogue the fonts
+      // spec reads is served, beside E2E_PORT by default.
       "env": [
         "CI",
         "E2E_DEV_SPECS_ONLY",
+        "E2E_FONT_CATALOGUE_PORT",
         "E2E_PORT",
         "E2E_PROD_PORT",
         "E2E_PRODUCTION_PREBUILT",

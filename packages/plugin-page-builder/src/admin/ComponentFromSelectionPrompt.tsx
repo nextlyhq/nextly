@@ -1,13 +1,18 @@
 "use client";
 
 /**
- * The "Save as component" and "Convert to component" form, mounted only while
- * the author has asked for one.
+ * The "Turn into component" form, mounted only while the author has asked
+ * for one. One form for both ways of making a component from a selection:
+ * replacing the blocks with a placement (a convert), or, with "Keep the
+ * original blocks on this page" ticked, saving a copy and leaving the page
+ * alone (a save). Where only one way is open, the choice is held there with
+ * the reason the other is not.
  *
  * It names the component, offers the exposure picker, and says beforehand
- * what the convert will do to the page: the server's dry run runs when the
- * form opens, so a refusal (the composed depth, a lock) or a warning (a link
- * the convert leaves pointing at nothing) is shown before anything is made.
+ * what it will do to the page: the server's dry run runs when the form opens,
+ * and again when the choice changes, so a refusal (the composed depth, a
+ * lock) or a warning (a link the convert leaves pointing at nothing) is shown
+ * before anything is made.
  *
  * On confirm the server creates the component, published. A save is then
  * done. A convert answers with the page ops, which are applied to the unsaved
@@ -27,11 +32,13 @@ import {
   ExposurePicker,
   useModalKeyboardHold,
   type EditorState,
+  type TurnIntoChoice,
 } from "@nextlyhq/builder/shell";
 import {
   Alert,
   AlertDescription,
   Button,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -59,8 +66,11 @@ import { focusAfterClose, subjectOf } from "./library-dialog";
 
 /** What the author asked for, snapshotted at the gesture. */
 export interface ComponentRequest {
+  /** The way the form opens on: replacing the blocks, or keeping them. */
   readonly action: ComponentFromSelectionAction;
   readonly document: BlockDocument;
+  /** Which ways are open, with the reason for one that is not. */
+  readonly choice?: TurnIntoChoice;
 }
 
 /** The editor and library this form acts on. */
@@ -86,21 +96,23 @@ export interface ComponentFromSelectionPromptProps {
 /** How long a convert waits for the canvas to hold the new definition. */
 const DEFINITION_WAIT_MS = 8000;
 
+/** The form's one title, the menu item's own words. */
+const TITLE = "Turn into component";
+
+/** What the submit says and the toast reports, by the way chosen. */
 const COPY: Record<
   ComponentFromSelectionAction,
-  { title: string; submit: string; working: string; done: string }
+  { submit: string; working: string; done: string }
 > = {
   "save-as": {
-    title: "Save as component",
     submit: "Save component",
     working: "Saving…",
     done: "Component saved",
   },
   convert: {
-    title: "Convert to component",
-    submit: "Convert",
-    working: "Converting…",
-    done: "Converted to a component",
+    submit: "Turn into component",
+    working: "Turning into a component…",
+    done: "Turned into a component",
   },
 };
 
@@ -110,6 +122,7 @@ export function ComponentFromSelectionPrompt(
     readonly request: {
       readonly action: string;
       readonly document: BlockDocument;
+      readonly choice?: TurnIntoChoice;
     } | null;
   }
 ): React.JSX.Element | null {
@@ -121,7 +134,11 @@ export function ComponentFromSelectionPrompt(
   return (
     <ComponentForm
       {...props}
-      request={{ action: request.action, document: request.document }}
+      request={{
+        action: request.action,
+        document: request.document,
+        ...(request.choice === undefined ? {} : { choice: request.choice }),
+      }}
     />
   );
 }
@@ -146,18 +163,20 @@ interface Asked extends ComponentRequest {
   readonly subject: string;
 }
 
-/** The dry run, once, as the form opens. */
+/** The dry run, as the form opens and again whenever the way chosen changes. */
 function useDryRun(
   preview: ComponentFromSelectionWriter["preview"],
-  asked: Asked
+  asked: Asked,
+  action: ComponentFromSelectionAction
 ): DryRunCheck {
   const [check, setCheck] = React.useState<DryRunCheck>({
     state: "checking",
   });
   React.useEffect(() => {
     let live = true;
+    setCheck({ state: "checking" });
     void preview({
-      action: asked.action,
+      action,
       document: asked.document,
       selectedIds: asked.selectedIds,
       fields: { title: "Preview" },
@@ -172,7 +191,7 @@ function useDryRun(
     return () => {
       live = false;
     };
-  }, [preview, asked]);
+  }, [preview, asked, action]);
   return check;
 }
 
@@ -264,7 +283,11 @@ function ComponentForm(
     selectedIds,
     subject: subjectOf(request.document, selectedIds),
   }));
-  const copy = COPY[asked.action];
+  // The way chosen: replacing the blocks, or keeping them and saving a copy.
+  const [action, setAction] = React.useState<ComponentFromSelectionAction>(
+    asked.action
+  );
+  const copy = COPY[action];
   const [metadata, setMetadata] = React.useState<Metadata>({
     title: "",
     description: "",
@@ -276,7 +299,7 @@ function ComponentForm(
   const [busy, setBusy] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
   const [pending, setPending] = React.useState<PendingOps | null>(null);
-  const check = useDryRun(writer.preview, asked);
+  const check = useDryRun(writer.preview, asked, action);
   usePendingApply(pending, props, copy.done);
   useModalKeyboardHold("component-from-selection-dialog", true);
 
@@ -292,7 +315,7 @@ function ComponentForm(
     setBusy(true);
     setFailed(false);
     const result = await writer.create({
-      action: asked.action,
+      action,
       document: asked.document,
       selectedIds: asked.selectedIds,
       fields: fieldsOf(metadata),
@@ -309,7 +332,7 @@ function ComponentForm(
       return;
     }
     props.library.retry();
-    if (asked.action === "convert") {
+    if (action === "convert") {
       setPending({ id: result.component.id, ops: result.pageOps });
       return;
     }
@@ -336,9 +359,9 @@ function ComponentForm(
           aria-busy={busy || check.state === "checking"}
         >
           <DialogHeader>
-            <DialogTitle>{copy.title}</DialogTitle>
+            <DialogTitle>{TITLE}</DialogTitle>
             <DialogDescription>
-              {asked.action === "convert"
+              {action === "convert"
                 ? `${asked.subject} will become one placement of a new component. Edit the component later and every placement follows.`
                 : `${asked.subject} will be saved as a new component. This page is not changed.`}
             </DialogDescription>
@@ -350,6 +373,12 @@ function ComponentForm(
               onChange={setMetadata}
               categories={categoriesOf(props.library.components)}
               disabled={busy}
+            />
+            <KeepOriginals
+              action={action}
+              choice={asked.choice}
+              disabled={busy}
+              onChange={setAction}
             />
             <ExposurePicker
               document={asked.document}
@@ -383,6 +412,49 @@ function ComponentForm(
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * "Keep the original blocks on this page": ticked, the form saves a copy and
+ * leaves the page alone; clear, it replaces the blocks with a placement. Held
+ * where only one way is open, with the reason the other is not.
+ */
+function KeepOriginals({
+  action,
+  choice,
+  disabled,
+  onChange,
+}: {
+  action: ComponentFromSelectionAction;
+  choice: TurnIntoChoice | undefined;
+  disabled: boolean;
+  onChange: (next: ComponentFromSelectionAction) => void;
+}): React.JSX.Element {
+  const held = choice?.replaceRefused ?? choice?.keepRefused;
+  const reasonId = React.useId();
+  return (
+    <div className="grid gap-1">
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id="nx-component-keep"
+          checked={action === "save-as"}
+          disabled={disabled || held !== undefined}
+          aria-describedby={held === undefined ? undefined : reasonId}
+          onCheckedChange={checked =>
+            onChange(checked === true ? "save-as" : "convert")
+          }
+        />
+        <Label htmlFor="nx-component-keep">
+          Keep the original blocks on this page
+        </Label>
+      </div>
+      {held === undefined ? null : (
+        <p id={reasonId} className="text-xs text-muted-foreground">
+          {held}
+        </p>
+      )}
+    </div>
   );
 }
 

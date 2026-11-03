@@ -103,7 +103,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 72, tailMeanModules: 1_291 };
+export const BUDGET = { heavyFiles: 63, tailMeanModules: 1_291 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

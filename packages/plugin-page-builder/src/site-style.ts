@@ -137,11 +137,17 @@ export function classOverrideOf(
   });
 }
 
-/** Whether two classes are the same class, to the byte. */
+/**
+ * Whether two classes are the same class, to the byte: every key an entry
+ * stores, so an override that only names a supplied class, or only locks it,
+ * is a difference worth storing.
+ */
 function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
   return (
     a.id === b.id &&
     a.slug === b.slug &&
+    a.label === b.label &&
+    a.locked === b.locked &&
     a.orderIndex === b.orderIndex &&
     sameJsonValue(a.styles, b.styles)
   );

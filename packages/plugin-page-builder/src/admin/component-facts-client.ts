@@ -73,8 +73,11 @@ export function useComponentFacts(
     // A failed read, even one holding an earlier answer, is not trusted.
     if (failed) return { reserved: { unavailable: FACTS_FAILED } };
     if (data === undefined) return { reserved: { unavailable: FACTS_PENDING } };
+    // The pages a change reaches, for the banner, whether or not a field can
+    // be added: the count says nothing about ids.
+    const pages = data.pages === null ? {} : { pages: data.pages };
     if (data.retired === null) {
-      return { reserved: { unavailable: FACTS_UNRECORDED } };
+      return { reserved: { unavailable: FACTS_UNRECORDED }, ...pages };
     }
     // Both lists, for the reason each is reserved: placements may hold values
     // under a live id the draft dropped, and under a retired one until their
@@ -85,6 +88,7 @@ export function useComponentFacts(
         slots: [...data.live.slots, ...data.retired.slots],
       },
       ...(data.reach === null ? {} : { reach: data.reach }),
+      ...pages,
     };
   }, [componentId, data, failed]);
 }

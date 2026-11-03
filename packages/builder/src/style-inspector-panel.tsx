@@ -73,7 +73,12 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@nextlyhq/ui";
+import { RotateCcw } from "lucide-react";
 import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
@@ -89,6 +94,7 @@ import {
   fontFamilyShowable,
   type FontChoices,
 } from "./font-family-field";
+import { IconChoiceField } from "./icon-choice-field";
 import {
   designIsWritable,
   designReadOnlyReason,
@@ -99,6 +105,12 @@ import type { InspectorSectionKey } from "./inspector-sections";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
+import {
+  alignmentGroupFor,
+  drawsIcons,
+  flowOf,
+  type Flow,
+} from "./style-alignment-icons";
 import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import {
   activeTokenMode,
@@ -1469,50 +1481,63 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      {/* A folded union's one control, read where the value field is drawn;
+      {/* The container's flow, which alignment icons are drawn in. */}
+      <AlignmentFlow.Provider
+        value={flowOf(
+          findNode(editor.document.nodes, nodeId)?.styles,
+          state,
+          breakpoint,
+          orientation
+        )}
+      >
+        {/* A folded union's one control, read where the value field is drawn;
           see `style-folded.ts`. Its controls sit at the root, so the whole
           property is the fold's. */}
-      <FoldedUnion.Provider
-        value={
-          fold === undefined
-            ? undefined
-            : { kind: fold, property: property.property }
-        }
-      >
-        <SideBoxFrame box={box}>
-          {box.controls.map(control => (
-            <StyleControlField
-              // The ADDRESS, not just the position: a host switching state or
-              // breakpoint leaves this field mounted, and where the old and new
-              // addresses hold the same value — both unset, most often — the
-              // synchronisation effect does not run either. An unfinished draft
-              // from the base breakpoint would then commit into the hover state.
-              key={[state, breakpoint, property.property, ...control.path].join(
-                "."
-              )}
-              control={control}
-              side={sideOf(box, control)}
-              label={
-                many
-                  ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                  : property.label
-              }
-              summary={many ? undefined : property.summary}
-              propertyLabel={property.label}
-              clearOnly={!property.offered || control.withheld}
-              nodeId={nodeId}
-              state={state}
-              breakpoint={breakpoint}
-              editor={editor}
-              policy={policy}
-              tokens={tokens}
-              prefersDark={prefersDark}
-              provenanceOf={provenanceOf}
-              editing={editing}
-            />
-          ))}
-        </SideBoxFrame>
-      </FoldedUnion.Provider>
+        <FoldedUnion.Provider
+          value={
+            fold === undefined
+              ? undefined
+              : { kind: fold, property: property.property }
+          }
+        >
+          <SideBoxFrame box={box}>
+            {box.controls.map(control => (
+              <StyleControlField
+                // The ADDRESS, not just the position: a host switching state or
+                // breakpoint leaves this field mounted, and where the old and new
+                // addresses hold the same value — both unset, most often — the
+                // synchronisation effect does not run either. An unfinished draft
+                // from the base breakpoint would then commit into the hover state.
+                key={[
+                  state,
+                  breakpoint,
+                  property.property,
+                  ...control.path,
+                ].join(".")}
+                control={control}
+                side={sideOf(box, control)}
+                label={
+                  many
+                    ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                    : property.label
+                }
+                summary={many ? undefined : property.summary}
+                propertyLabel={property.label}
+                clearOnly={!property.offered || control.withheld}
+                nodeId={nodeId}
+                state={state}
+                breakpoint={breakpoint}
+                editor={editor}
+                policy={policy}
+                tokens={tokens}
+                prefersDark={prefersDark}
+                provenanceOf={provenanceOf}
+                editing={editing}
+              />
+            ))}
+          </SideBoxFrame>
+        </FoldedUnion.Provider>
+      </AlignmentFlow.Provider>
     </div>
   );
 }
@@ -1667,6 +1692,7 @@ function StyleFieldLabel({
   id,
   htmlFor,
   readOnly,
+  focusOnly,
   title,
   label,
   answer,
@@ -1683,6 +1709,12 @@ function StyleFieldLabel({
    * left saying what it wants drawn rather than how to draw it.
    */
   readOnly: boolean;
+  /**
+   * Whether the control is a group of buttons. A label's `for` would CLICK
+   * a button, choosing or clearing a value; this label only moves focus to
+   * the element the id names, the group's tab stop.
+   */
+  focusOnly: boolean;
   title: string | undefined;
   label: string;
   answer: ProvenanceAnswer | undefined;
@@ -1690,7 +1722,19 @@ function StyleFieldLabel({
   descendant: string | undefined;
 }): React.JSX.Element {
   return (
-    <Label id={id} htmlFor={readOnly ? undefined : htmlFor} title={title}>
+    <Label
+      id={id}
+      htmlFor={readOnly || focusOnly ? undefined : htmlFor}
+      title={title}
+      {...(focusOnly && !readOnly
+        ? {
+            onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
+              event.currentTarget.ownerDocument
+                .getElementById(htmlFor)
+                ?.focus(),
+          }
+        : {})}
+    >
       <span className="nx-style-inspector__field-label-text">{label}</span>
       <ProvenanceDot
         answer={answer}
@@ -1840,6 +1884,7 @@ function StyleControlField({
         id={labelId}
         htmlFor={id}
         readOnly={readOnly}
+        focusOnly={drawsIcons(control.leaf)}
         title={summary}
         label={label}
         answer={answer}
@@ -1866,6 +1911,8 @@ function StyleControlField({
         editing={editing}
         fieldId={id}
         onReset={() => commit(null)}
+        stored={stored}
+        readOnly={readOnly}
       />
       {issue === null ? null : (
         <p className="nx-inspector__error" id={errorId} role="alert">
@@ -2041,6 +2088,8 @@ function BreakpointAction({
   editing,
   fieldId,
   onReset,
+  stored,
+  readOnly,
 }: {
   answer: ProvenanceAnswer | undefined;
   /**
@@ -2057,15 +2106,29 @@ function BreakpointAction({
   /** The field this control's actions write, passed on to {@link ResetAction}. */
   fieldId: string;
   onReset: () => void;
+  /** What this address stores: with no cascade, reset while it holds anything. */
+  stored: StyleValue | undefined;
+  /** A field drawn as a retained value, whose own Clear already resets it. */
+  readOnly: boolean;
 }): React.JSX.Element | null {
+  /*
+   * The row's one way back, so a list or an icon group needs no Clear of its
+   * own. With a cascade it follows the cascade's answer: a value authored at
+   * this tier is reset, revealing whatever shows through, and one arriving
+   * from another tier is a jump there.
+   *
+   * Where the cascade gives no answer for this row — none was supplied, or
+   * the tier being edited is one the canvas is not showing, so its values
+   * read as unset — a value stored at this address is still reset, unless the
+   * field is a retained value with a Clear of its own. What it reveals is not
+   * known there, so the reset does not claim it.
+   */
   const badge = answer?.badge;
-  // `none` is also refused below, by having no handler bound for it — this is
-  // the readable exit rather than the load-bearing one.
-  if (badge === undefined || badge.kind === "none") return null;
-  if (badge.kind === "authored") {
+  if (badge === undefined || badge.kind === "none") {
+    if (stored === undefined || readOnly) return null;
     return (
       <ResetAction
-        revealed={badge.revealed}
+        revealed="unknown"
         label={label}
         editing={editing}
         fieldId={fieldId}
@@ -2073,9 +2136,39 @@ function BreakpointAction({
       />
     );
   }
-  if (answer?.jump === undefined) return null;
+  if (badge.kind === "authored") {
+    return (
+      <ResetAction
+        revealed={badge.revealed ?? "unset"}
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  }
+  /*
+   * The value showing came from another tier. A value stored HERE as well is
+   * shadowed by it, and is still this row's to remove: the reset stays beside
+   * the jump, naming nothing it reveals, since what shows here once it is
+   * gone is the winning tier's business.
+   */
+  const reset =
+    stored === undefined || readOnly ? null : (
+      <ResetAction
+        revealed="unknown"
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  if (answer?.jump === undefined) return reset;
   return (
-    <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+    <>
+      {reset}
+      <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+    </>
   );
 }
 
@@ -2222,52 +2315,52 @@ function ResetAction({
   fieldId,
   onReset,
 }: {
-  revealed: BreakpointSource | undefined;
+  /**
+   * What shows once this value is gone: another tier's value, nothing, or
+   * `"unknown"` where no ranking of the cascade covers this tier, which the
+   * names then leave unsaid rather than guess.
+   */
+  revealed: BreakpointSource | "unset" | "unknown";
   label: string;
   editing: EditedAddress;
   /** The field whose value this press writes. See {@link commitsFor}. */
   fieldId: string;
   onReset: () => void;
 }): React.JSX.Element {
-  const reveals =
-    revealed === undefined
-      ? "leaving it unset"
-      : `showing the value from ${sourceLabel(revealed)}`;
+  const at = `Reset ${label} at ${editing.labelOf(editing.breakpoint)}`;
+  const named =
+    revealed === "unknown"
+      ? at
+      : revealed === "unset"
+        ? `${at}, leaving it unset`
+        : `${at}, showing the value from ${sourceLabel(revealed)}`;
+  const tip =
+    revealed === "unknown"
+      ? "Reset"
+      : revealed === "unset"
+        ? "Reset to unset"
+        : `Reset to ${sourceLabel(revealed)}`;
   return (
-    <button
-      type="button"
-      className="nx-style-inspector__breakpoint-action"
-      data-action="reset"
-      /*
-       * This press writes THIS field's value, which a picker mid-gesture on it
-       * needs to know.
-       *
-       * The colour picker commits its draft when the popover closes, and
-       * pressing anything outside it closes the popover first — so without this
-       * one Reset gesture writes twice: the draft the author was discarding,
-       * then the clear. The first undo would then restore the very colour they
-       * pressed Reset to be rid of.
-       *
-       * Declared on the element rather than held as a ref by each picker,
-       * because the rule is about what a CONTROL does, not about which specific
-       * button a particular field happens to know.
-       */
-      {...commitsFor(fieldId)}
-      onClick={onReset}
-      aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
-    >
-      Reset
-      {/*
-       * `aria-hidden`, because the accessible name above already carries this
-       * sentence: read out twice it is a stutter rather than emphasis.
-       */}
-      <span
-        className="nx-style-inspector__breakpoint-reveals"
-        aria-hidden="true"
-      >
-        {revealed === undefined ? "to unset" : `to ${sourceLabel(revealed)}`}
-      </span>
-    </button>
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="nx-style-inspector__breakpoint-action"
+            data-action="reset"
+            {...commitsFor(fieldId)}
+            onClick={onReset}
+            aria-label={named}
+          >
+            {/* An icon at the row's end, where a "Reset to unset" line under
+                every set control made each one two rows. The words are its
+                tooltip and, in full, its name. */}
+            <RotateCcw size={14} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{tip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -2611,14 +2704,12 @@ function SelectField({
   id,
   control,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl & { leaf: Extract<StyleLeaf, { kind: "keyword" }> };
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2653,21 +2744,6 @@ function SelectField({
           ))}
         </SelectContent>
       </Select>
-      {/*
-          A select cannot offer "unset" as an item: an empty value is not a
-          choice the list can carry, and a sentinel standing for it would mean
-          two things at once. A button beside it clears, which is the same act
-          an emptied text field performs.
-        */}
-      {current === "" ? null : (
-        <button
-          type="button"
-          onClick={() => onCommit(null)}
-          aria-label={`Clear ${actionName}`}
-        >
-          Clear
-        </button>
-      )}
     </div>
   );
 }
@@ -2696,14 +2772,12 @@ function FoldedField({
   id,
   fold,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   fold: Fold;
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2722,7 +2796,6 @@ function FoldedField({
       id={id}
       options={fontWeightOptions(stored)}
       stored={stored}
-      actionName={actionName}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -2734,14 +2807,12 @@ function OptionSelect({
   id,
   options,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2770,17 +2841,6 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
-      {/* Cleared beside the list, as a keyword select is: an empty choice is
-          not one the list can carry. */}
-      {current === "" ? null : (
-        <button
-          type="button"
-          onClick={() => onCommit(null)}
-          aria-label={`Clear ${actionName}`}
-        >
-          Clear
-        </button>
-      )}
     </div>
   );
 }
@@ -3945,6 +4005,25 @@ function ContrastNote({
   );
 }
 
+/** The edited container's flow; CSS's defaults until it is measured or read. */
+const AlignmentFlow = React.createContext<Flow>({
+  writingMode: "horizontal-tb",
+  rtl: false,
+  flex: false,
+  direction: "row",
+});
+
+/**
+ * The icon buttons a keyword control draws, when its property is one drawn as
+ * icons, in the flow of the container being edited.
+ */
+function useAlignmentGroup(control: StyleControl) {
+  const flow = React.useContext(AlignmentFlow);
+  return control.leaf.kind === "keyword"
+    ? alignmentGroupFor(control.leaf.cssProperty, control.leaf.values, flow)
+    : undefined;
+}
+
 /**
  * The control a leaf's kind resolves to.
  *
@@ -3990,12 +4069,27 @@ function ValueField({
   // Decided BEFORE the menu, because every keyword leaf resolves to the
   // `select` control kind — so a branch on that kind placed first would return
   // for all of them and the toggle could never be reached.
+  // Both read before any branch, as hooks must be.
   const fold = React.useContext(FoldedUnion);
+  // Alignment and direction as icons that follow the container's flow.
+  const alignment = useAlignmentGroup(control);
   if (fold !== undefined) {
     return (
       <FoldedField
         id={id}
         fold={fold}
+        stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  if (alignment !== undefined) {
+    return (
+      <IconChoiceField
+        id={id}
+        labelledBy={labelledBy}
+        group={alignment}
         stored={stored}
         actionName={actionName}
         describedBy={describedBy}
@@ -4025,7 +4119,6 @@ function ValueField({
         id={id}
         control={{ ...control, leaf: control.leaf }}
         stored={stored}
-        actionName={actionName}
         describedBy={describedBy}
         onCommit={onCommit}
       />

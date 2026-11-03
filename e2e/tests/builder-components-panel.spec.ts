@@ -449,11 +449,12 @@ test.describe("the Components panel", () => {
     );
     const banner = page.getByRole("region", { name: "Editing a component" });
     await expect(banner).toContainText(title);
-    await expect(banner).toContainText(
-      /Changes reach (at least )?the 1 document that places it\./
-    );
+    // A published page places it, so the banner counts the page a change
+    // reaches, in pages, never documents.
+    await expect(banner).toContainText(/Changes reach (at least )?1 page/);
 
-    await banner.getByRole("button", { name: "Back" }).click();
+    // The one Back, named for the page it returns to.
+    await banner.getByRole("button", { name: /^Back to / }).click();
     await expect(page).toHaveURL(
       new RegExp(`/admin/collections/pages/${id}/builder\\?`)
     );
