@@ -498,6 +498,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             plugin: PAGE_BUILDER_PLUGIN_NAME,
             path: SITE_BREAKPOINTS_ROUTE_PATH,
             body: { breakpoints: value },
+            // Unload-safe, as the Single's update below is: the browser
+            // finishes the write if the page goes before it answers.
+            keepalive: true,
           });
           await refetch();
         } else {

@@ -222,6 +222,9 @@ describe("writing one section", () => {
         plugin: "@nextlyhq/plugin-page-builder",
         path: "/site/breakpoints",
         body: { breakpoints: set },
+        // Unload-safe, as every site style write is: the browser finishes it
+        // if the page goes before it answers.
+        keepalive: true,
       },
     ]);
     expect(refetches).toBe(1);
