@@ -8,6 +8,17 @@
  * @module layout-removal/words
  */
 
+/**
+ * What a delete or unpublish of the site's default Layout is told, by the
+ * default guard and by Remove Layout alike.
+ */
+export const DEFAULT_LAYOUT_REFUSAL =
+  "This Layout is the site's default. Choose another default first.";
+
+/** The dialog's sentence over the pages that stop a removal. */
+export const PAGES_USE_IT =
+  "These pages use this Layout. Choose another Layout for them first.";
+
 /** What a plain delete or unpublish of a Layout is told: the way to do it. */
 export const REMOVE_LAYOUT_REFUSAL =
   "Use Remove Layout to take a Layout down safely.";

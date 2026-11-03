@@ -12,3 +12,11 @@ export const BUILDER_VIEW_PATH = "builder";
 /** The component the admin draws at that address. */
 export const BUILDER_VIEW_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView";
+
+/**
+ * The "Remove Layout…" action drawn under a Layout's edit form. Declared here,
+ * a module with no React in it, so the plugin's node-safe entry can name it
+ * without bringing the admin component along.
+ */
+export const REMOVE_LAYOUT_ACTION_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#RemoveLayoutAction";

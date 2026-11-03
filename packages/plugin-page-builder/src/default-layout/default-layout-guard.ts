@@ -34,6 +34,8 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { DEFAULT_LAYOUT_REFUSAL } from "../layout-removal/words";
+
 import { queueDefaultLayoutRepair } from "./ensure-default";
 import {
   defaultIsUsable,
@@ -42,10 +44,6 @@ import {
   type DefaultLayoutDirectApi,
   type DefaultLayoutSlugs,
 } from "./store";
-
-/** What a refused delete or unpublish is told. */
-export const DEFAULT_LAYOUT_REFUSAL =
-  "This Layout is the site's default. Choose another default first.";
 
 /** What a delete or unpublish inside a caller's transaction is told. */
 const BATCH_REFUSAL =

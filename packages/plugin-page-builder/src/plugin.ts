@@ -26,7 +26,11 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
+import {
+  BUILDER_VIEW_COMPONENT,
+  BUILDER_VIEW_PATH,
+  REMOVE_LAYOUT_ACTION_COMPONENT,
+} from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import {
@@ -1480,6 +1484,14 @@ export const pageBuilder = (
             label: "Page Builder",
           },
         ],
+        // "Remove Layout…" under a Layout's edit form: the one way an author
+        // deletes or unpublishes a Layout, since the form's own delete and
+        // unpublish are refused. Under the form rather than above it: the
+        // edit screen's sticky document bar covers a slot drawn above. Keyed
+        // by the declared slug; the admin resolves a host's rename.
+        views: {
+          [LAYOUTS_SLUG]: { afterEdit: REMOVE_LAYOUT_ACTION_COMPONENT },
+        },
         menu: [
           {
             label: "Patterns",

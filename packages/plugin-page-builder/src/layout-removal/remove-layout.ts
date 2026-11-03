@@ -30,7 +30,6 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-import { DEFAULT_LAYOUT_REFUSAL } from "../default-layout/default-layout-guard";
 import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
@@ -53,6 +52,7 @@ import type { RemovalAction } from "./store";
 import {
   ALREADY_BEING_REMOVED,
   CHANGED_WHILE_REMOVING,
+  DEFAULT_LAYOUT_REFUSAL,
   KEPT_AS_DEFAULT,
   NOT_PUBLISHED,
   pagesUseItRefusal,
