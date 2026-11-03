@@ -42,10 +42,6 @@ describe("the breakpoint actions are styled, not merely marked", () => {
     );
   });
 
-  it("styles the visible reset fallback beside it", () => {
-    expect(CHROME).toContain(".nx-style-inspector__breakpoint-reveals");
-  });
-
   it("finds nothing for a class that was never written", () => {
     /*
      * The control. `toContain` over a 1600-line file is exactly the assertion

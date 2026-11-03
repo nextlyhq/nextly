@@ -49,8 +49,10 @@ import {
   type CanvasFrame as CanvasFrameReading,
 } from "./canvas-frame-context";
 import {
+  BLANK_PAGE_ATTRIBUTE,
   CANVAS_FRAME_DEFAULTS,
   CANVAS_FRAME_SHEET,
+  SITE_CHROME_ATTRIBUTE,
 } from "./canvas-frame-sheet";
 import { frameFitScale, previewHeight, type FrameSize } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
@@ -69,34 +71,88 @@ import {
   CANVAS_ROOT_CLASS,
   EMPTY_ELEMENTS_ATTRIBUTE,
 } from "./shell-state";
+import { SiteChromeCues } from "./site-chrome-cues";
 
 /**
  * Where the frame's page comes from, and where in it the canvas is mounted.
  *
- * A seam rather than a constant, because the page will not always be a blank
- * document: a site can serve the canvas inside its own layout, and then the
- * frame loads that route and the canvas mounts at a point the route marks.
- * Only the `srcdoc` source exists today.
+ * Either the editor's own blank document, or a page the SITE serves: a route
+ * rendering an empty mount point inside the site's own layouts, so the site's
+ * global stylesheets, fonts, header and footer are around the canvas exactly
+ * as they are around the published page.
  *
  * @experimental
  */
-export interface CanvasFrameSource {
-  /** The frame's document, as `srcdoc`. */
-  readonly srcDoc: string;
+export type CanvasFrameSource = BlankFrameSource | SiteFrameSource;
+
+/** @experimental */
+interface FrameSourceReading {
   /**
-   * Whether a document the frame holds is this source's page, rather than the
-   * blank page a frame shows before its content loads.
+   * Whether a document the frame holds is this source's page, ready for the
+   * canvas, rather than the blank page a frame shows before its content loads
+   * or a site page still starting up.
    */
   readonly ready: (doc: Document) => boolean;
   /** Where in that page the canvas is mounted. */
   readonly mountPoint: (doc: Document) => HTMLElement | null;
 }
 
+/**
+ * The editor's own document, as `srcdoc`.
+ *
+ * @experimental
+ */
+export interface BlankFrameSource extends FrameSourceReading {
+  readonly srcDoc: string;
+}
+
+/**
+ * A page the site serves for the canvas, loaded by URL.
+ *
+ * The site's own React root runs in that page, so the canvas is portalled in
+ * only once the page says it is ready: before the site's root has hydrated, an
+ * element the editor added inside it would not match what the server sent.
+ *
+ * @experimental
+ */
+export interface SiteFrameSource extends FrameSourceReading {
+  /** The page's URL. Only one on the editor's own origin is loaded. */
+  readonly src: string;
+  /**
+   * Whether a loaded document is this route's page at all, ready or not. A
+   * page that is not — a "not found" page, a redirect elsewhere — is never
+   * going to be, and the frame falls back to the blank page.
+   */
+  readonly served: (doc: Document) => boolean;
+  /**
+   * Call `changed` whenever the page's readiness may have changed, until the
+   * returned function is called.
+   */
+  readonly watch: (doc: Document, changed: () => void) => () => void;
+}
+
+/**
+ * Why the frame shows the blank page rather than the site's:
+ * - `other-origin`: the page is on another origin, whose document the editor
+ *   can neither reach nor draw into;
+ * - `not-served`: the page loaded but is not the canvas route, so the site
+ *   has not mounted it;
+ * - `not-ready`: the page is the route, but never said it was ready.
+ *
+ * @experimental
+ */
+export type CanvasFrameFallback = "other-origin" | "not-served" | "not-ready";
+
+/**
+ * How long a page the site serves has to say it is ready, once loaded.
+ *
+ * Generous, because a site's first page in development compiles on request;
+ * a page that has not hydrated by then has failed in its own scripts.
+ */
+const SITE_PAGE_READY_WITHIN_MS = 20_000;
+
 /** The page's colour scheme, stated on the chrome layer for its marks. */
 const PAGE_SCHEME_ATTRIBUTE = "data-nx-page-scheme";
-
-/** The attribute the `srcdoc` page carries, which the blank page does not. */
-const FRAME_DOCUMENT_ATTRIBUTE = "data-nx-canvas-frame";
 
 /**
  * A blank, standards-mode page of the editor's own.
@@ -110,13 +166,13 @@ const FRAME_DOCUMENT_ATTRIBUTE = "data-nx-canvas-frame";
  *
  * @experimental
  */
-export const SRCDOC_FRAME_SOURCE: CanvasFrameSource = {
+export const SRCDOC_FRAME_SOURCE: BlankFrameSource = {
   srcDoc:
     "<!doctype html>" +
-    `<html ${FRAME_DOCUMENT_ATTRIBUTE}="">` +
+    `<html ${BLANK_PAGE_ATTRIBUTE}="">` +
     `<head><meta charset="utf-8"><style>${CANVAS_FRAME_DEFAULTS}</style></head>` +
     "<body></body></html>",
-  ready: doc => doc.documentElement.hasAttribute(FRAME_DOCUMENT_ATTRIBUTE),
+  ready: doc => doc.documentElement.hasAttribute(BLANK_PAGE_ATTRIBUTE),
   mountPoint: doc => doc.body,
 };
 
@@ -166,12 +222,24 @@ export interface CanvasFrameProps {
    * there is, and the frame takes that.
    */
   lang?: string | undefined;
+  /**
+   * The direction the page's content is written in, as `dir` on the frame's
+   * root element, for the same reason as `lang`. Left out, the editor
+   * document's own direction, where it states one.
+   */
+  dir?: "ltr" | "rtl" | undefined;
   /** The editor's chrome, drawn over the frame in the editor's document. */
   overlay?: React.ReactNode;
   /** The canvas, rendered inside the frame. */
   children?: React.ReactNode;
   /** Where the frame's page comes from. The editor's blank page by default. */
   source?: CanvasFrameSource;
+  /**
+   * Told why the frame shows the blank page in place of the site's page it
+   * was given, and `null` again when it shows that page, so the host can say
+   * which the author is looking at.
+   */
+  onSourceFallback?: (reason: CanvasFrameFallback | null) => void;
   className?: string;
 }
 
@@ -212,6 +280,7 @@ function FramedCanvas({
   overlay,
   children,
   source = SRCDOC_FRAME_SOURCE,
+  onSourceFallback,
   className,
   ...markers
 }: CanvasFrameProps): React.JSX.Element {
@@ -223,8 +292,9 @@ function FramedCanvas({
    * runs once it exists. It is created once and kept: see the module docblock.
    */
   const [frame, setFrame] = React.useState<HTMLIFrameElement | null>(null);
-  const page = useFramePage(frame, source);
-  const mountPoint = page === null ? null : source.mountPoint(page);
+  const { shown, pending, refuse } = useShownSource(source, onSourceFallback);
+  const { page, mountPoint } = useFramePage(frame, shown, refuse);
+  const siteChrome = useSiteChrome(page, mountPoint);
 
   const region = useRegionSize(stage);
   const size: FrameSize = { width, height };
@@ -250,7 +320,7 @@ function FramedCanvas({
           ref={setFrame}
           className="nx-canvas-frame__page"
           title={canvasFrameTitle(title)}
-          srcDoc={source.srcDoc}
+          {...frameDocumentProps(shown, pending)}
           // Laid out at the device's size and painted at the zoom.
           style={{ width, height, transform: `scale(${String(scale)})` }}
         />
@@ -259,6 +329,12 @@ function FramedCanvas({
           className="nx-canvas-layer"
           {...{ [CANVAS_LAYER_ATTRIBUTE]: "" }}
         >
+          <SiteChromeCues
+            frame={frame}
+            page={page}
+            elements={siteChrome}
+            scale={scale}
+          />
           <div ref={layerContent} className="nx-canvas-layer__content">
             {overlay}
           </div>
@@ -267,6 +343,18 @@ function FramedCanvas({
       <FramePage mountPoint={mountPoint}>{children}</FramePage>
     </div>
   );
+}
+
+/**
+ * What the iframe is given to load its page: the site's page by URL, the
+ * editor's blank page as `srcdoc`, or nothing while the choice is pending.
+ */
+function frameDocumentProps(
+  source: CanvasFrameSource,
+  pending: boolean
+): { src: string } | { srcDoc: string } | Record<string, never> {
+  if (pending) return {};
+  return "src" in source ? { src: source.src } : { srcDoc: source.srcDoc };
 }
 
 /**
@@ -330,30 +418,415 @@ function frameScale(
 }
 
 /**
- * The frame's page once it is the source's, or `null` before.
+ * The source the frame shows: the one it was given, or the blank page in its
+ * place when a site's page cannot be shown, with the way to say it cannot.
+ *
+ * A refusal is held against the source it was made for, so a new source is
+ * tried afresh. A page on another origin is refused before it is ever loaded:
+ * its document could be neither reached nor drawn into, and loading it would
+ * still run its scripts.
+ *
+ * Which origin the editor is on is known only in the browser. Until then —
+ * on the server, and in the render that hydrates what the server sent — a
+ * site's page is `pending`: neither it nor the blank page is asked for, so
+ * the server's markup and the browser's first render agree, and the frame
+ * loads once the origin is known.
+ */
+function useShownSource(
+  source: CanvasFrameSource,
+  onSourceFallback: CanvasFrameProps["onSourceFallback"]
+): {
+  shown: CanvasFrameSource;
+  pending: boolean;
+  refuse: (reason: CanvasFrameFallback) => void;
+} {
+  const editorOrigin = React.useSyncExternalStore(
+    staysTheSame,
+    readEditorOrigin,
+    noOriginYet
+  );
+  const pending = "src" in source && editorOrigin === null;
+  const [refusal, setRefusal] = React.useState<{
+    readonly source: CanvasFrameSource;
+    readonly reason: CanvasFrameFallback;
+  } | null>(null);
+  const reason: CanvasFrameFallback | null =
+    "src" in source && !pending && !onOrigin(source.src, editorOrigin)
+      ? "other-origin"
+      : refusal !== null && refusal.source === source
+        ? refusal.reason
+        : null;
+  const refuse = React.useCallback(
+    (refused: CanvasFrameFallback) => setRefusal({ source, reason: refused }),
+    [source]
+  );
+  const latest = React.useRef(onSourceFallback);
+  React.useEffect(() => {
+    latest.current = onSourceFallback;
+  }, [onSourceFallback]);
+  const asked = "src" in source;
+  React.useEffect(() => {
+    // Only a site's page can be fallen back from; the blank page is the
+    // fallback, so a host given that has nothing to be told.
+    if (asked) latest.current?.(reason);
+  }, [asked, reason]);
+  return {
+    shown: reason === null ? source : SRCDOC_FRAME_SOURCE,
+    pending,
+    refuse,
+  };
+}
+
+/** The editor's origin never changes while it runs, so nothing to hear. */
+function staysTheSame(): () => void {
+  return () => undefined;
+}
+
+/** The editor window's own origin, read in the browser. */
+function readEditorOrigin(): string | null {
+  return typeof location === "undefined" ? null : location.origin;
+}
+
+/** On the server, and while hydrating, the origin is not known yet. */
+function noOriginYet(): null {
+  return null;
+}
+
+/**
+ * Whether a URL is on the editor's own origin, so the frame's document will be
+ * one the editor can reach.
+ */
+function onOrigin(src: string, origin: string | null): boolean {
+  if (origin === null) return false;
+  try {
+    return new URL(src, origin).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+/** The frame's page, and where in it the canvas mounts, once both exist. */
+interface FramePageReading {
+  readonly page: Document | null;
+  readonly mountPoint: HTMLElement | null;
+}
+
+const NO_PAGE: FramePageReading = { page: null, mountPoint: null };
+
+/** The document a frame holds, or `null` where it cannot be reached. */
+function documentOf(frame: HTMLIFrameElement): Document | null {
+  try {
+    return frame.contentDocument;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The frame's page once it is the source's and ready, with its mount point,
+ * or neither before.
  *
  * Held as state and re-read on every `load`, because a frame replaces its
  * document as it loads — the blank page it starts with gives way to the
  * source's, and a reload builds another — and nothing about that renders.
  * Read once on mount as well, for a frame that finished loading before the
  * listener was there to hear it.
+ *
+ * A site's page is read again whenever it says its readiness changed, since
+ * the site's own React root decides when the mount point is there to portal
+ * into, and can replace it. One that is not the canvas route, or that never
+ * says it is ready, is refused, which shows the blank page in its place.
  */
 function useFramePage(
   frame: HTMLIFrameElement | null,
-  source: CanvasFrameSource
-): Document | null {
-  const [page, setPage] = React.useState<Document | null>(null);
+  source: CanvasFrameSource,
+  refuse: (reason: CanvasFrameFallback) => void
+): FramePageReading {
+  const [reading, setReading] = React.useState<FramePageReading>(NO_PAGE);
   useIsomorphicLayoutEffect(() => {
     if (frame === null) return;
-    const read = (): void => {
-      const doc = frame.contentDocument;
-      setPage(doc !== null && source.ready(doc) ? doc : null);
+    let unwatch: (() => void) | null = null;
+    const wait = readinessDeadline(
+      frame.ownerDocument.defaultView,
+      () => {
+        const now = documentOf(frame);
+        return !("src" in source && now !== null && source.ready(now));
+      },
+      () => refuse("not-ready")
+    );
+    const show = (doc: Document | null): void => {
+      const mountPoint =
+        doc !== null && source.ready(doc) ? source.mountPoint(doc) : null;
+      const next = mountPoint === null ? NO_PAGE : { page: doc, mountPoint };
+      setReading(current =>
+        current.page === next.page && current.mountPoint === next.mountPoint
+          ? current
+          : next
+      );
     };
-    read();
-    frame.addEventListener("load", read);
-    return () => frame.removeEventListener("load", read);
-  }, [frame, source]);
-  return page;
+    // `loaded` is whether a `load` just reported this document: see
+    // `readSitePage`.
+    const read = (loaded: boolean): void => {
+      unwatch?.();
+      unwatch = null;
+      if (loaded) wait.disarm();
+      const doc = documentOf(frame);
+      if ("src" in source) {
+        unwatch = readSitePage(doc, loaded, source, { show, wait, refuse });
+      } else {
+        show(doc);
+      }
+    };
+    const onLoad = (): void => read(true);
+    read(false);
+    frame.addEventListener("load", onLoad);
+    return () => {
+      unwatch?.();
+      wait.disarm();
+      frame.removeEventListener("load", onLoad);
+    };
+  }, [frame, source, refuse]);
+  return reading;
+}
+
+/** What reading a site's page in the frame acts through. */
+interface SitePageReader {
+  readonly show: (doc: Document | null) => void;
+  readonly wait: { arm: () => void; disarm: () => void };
+  readonly refuse: (reason: CanvasFrameFallback) => void;
+}
+
+/**
+ * Read the frame's document as a site's page: show it once it is the source's
+ * and ready, wait for it within the deadline, or refuse it. Answers the way to
+ * stop watching its readiness, when it is the route's page.
+ *
+ * `loaded` is whether a `load` just reported this document. Read on mount
+ * instead, a page at another address is the one an earlier source left behind
+ * while this one's request is on its way — never this source's, however ready
+ * it looks — and a page that is not the route's may be the empty one every
+ * frame starts with, so both are waited for rather than refused.
+ */
+function readSitePage(
+  doc: Document | null,
+  loaded: boolean,
+  source: SiteFrameSource,
+  { show, wait, refuse }: SitePageReader
+): (() => void) | null {
+  if (!loaded && leftBehind(doc, source.src)) {
+    show(null);
+    wait.arm();
+    return null;
+  }
+  if (doc === null || !source.served(doc)) {
+    show(null);
+    if (!loaded) wait.arm();
+    else refuse(doc === null ? "other-origin" : "not-served");
+    return null;
+  }
+  // Ready, or waiting for readiness again: the site's root can take the
+  // mount point away without the frame loading anything.
+  const settle = (): void => {
+    show(doc);
+    if (source.ready(doc)) wait.disarm();
+    else wait.arm();
+  };
+  const unwatch = source.watch(doc, settle);
+  settle();
+  return unwatch;
+}
+
+/** Whether a document is a page other than the one `src` names. */
+function leftBehind(doc: Document | null, src: string): boolean {
+  return doc !== null && !isPageAt(doc.URL, doc.baseURI, src);
+}
+
+/**
+ * Whether a frame's document, at `address`, is the page `src` names: the same
+ * address, whatever its fragment, `src` read against the document's `base`
+ * when it is relative. The frame's starting page is at no address, so it never
+ * is.
+ *
+ * @internal
+ */
+export function isPageAt(address: string, base: string, src: string): boolean {
+  try {
+    const want = new URL(src, base);
+    const have = new URL(address);
+    return (
+      have.origin === want.origin &&
+      have.pathname === want.pathname &&
+      have.search === want.search
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The time a site's page has to be ready for the canvas, running while it is
+ * not: armed once and left running when armed again, so waiting that keeps
+ * being reported never pushes the deadline back.
+ */
+function readinessDeadline(
+  view: Window | null,
+  stillWaiting: () => boolean,
+  giveUp: () => void
+): { arm: () => void; disarm: () => void } {
+  let timer: number | undefined;
+  const disarm = (): void => {
+    if (timer !== undefined) view?.clearTimeout(timer);
+    timer = undefined;
+  };
+  const arm = (): void => {
+    if (timer !== undefined || view === null) return;
+    timer = view.setTimeout(() => {
+      timer = undefined;
+      if (stillWaiting()) giveUp();
+    }, SITE_PAGE_READY_WITHIN_MS);
+  };
+  return { arm, disarm };
+}
+
+/** Elements of a site's layout that draw nothing, and so are left alone. */
+const UNDRAWN_ELEMENTS: ReadonlySet<string> = new Set([
+  "script",
+  "style",
+  "link",
+  "meta",
+  "template",
+  "noscript",
+]);
+
+/**
+ * Mark one element of the site's layout as its chrome, inert unless the site
+ * made it so itself, remembering which it marked so they can be given back.
+ * Answers whether the element is chrome at all: one that draws nothing is not.
+ */
+function markBeside(
+  element: Element,
+  seen: Set<Element>,
+  marked: Set<Element>
+): boolean {
+  seen.add(element);
+  if (UNDRAWN_ELEMENTS.has(element.localName)) return false;
+  element.setAttribute(SITE_CHROME_ATTRIBUTE, "");
+  if (element.hasAttribute("inert")) return true;
+  element.setAttribute("inert", "");
+  marked.add(element);
+  return true;
+}
+
+/**
+ * Forget the chrome the site's layout took away: no longer chrome, its cue
+ * goes with it rather than staying over the canvas it uncovered. Answers
+ * whether anything went.
+ */
+function dropDetached(
+  drawn: Element[],
+  ancestors: readonly Element[],
+  seen: Set<Element>
+): boolean {
+  const kept = drawn.filter(
+    element =>
+      element.parentElement !== null &&
+      ancestors.includes(element.parentElement)
+  );
+  if (kept.length === drawn.length) return false;
+  for (const element of drawn)
+    if (!kept.includes(element)) seen.delete(element);
+  drawn.splice(0, drawn.length, ...kept);
+  return true;
+}
+
+/**
+ * Mark what is new beside the mount point and its ancestors, adding what
+ * draws to `drawn`. Answers whether anything was added.
+ */
+function markArrivals(
+  mountPoint: HTMLElement,
+  ancestors: readonly Element[],
+  drawn: Element[],
+  seen: Set<Element>,
+  marked: Set<Element>
+): boolean {
+  let added = false;
+  for (const parent of ancestors) {
+    for (const beside of Array.from(parent.children)) {
+      const onThePath = beside === mountPoint || ancestors.includes(beside);
+      if (onThePath || seen.has(beside)) continue;
+      if (markBeside(beside, seen, marked)) {
+        drawn.push(beside);
+        added = true;
+      }
+    }
+  }
+  return added;
+}
+
+/** The mount point's ancestors below the body, and the body itself. */
+function ancestorsUpToBody(
+  mountPoint: HTMLElement,
+  body: HTMLElement
+): Element[] {
+  const ancestors: Element[] = [];
+  for (
+    let node = mountPoint.parentElement;
+    node !== null;
+    node = node === body ? null : node.parentElement
+  ) {
+    ancestors.push(node);
+  }
+  return ancestors;
+}
+
+/** No site chrome: the blank page, or a site page not yet ready. */
+const NO_CHROME: readonly Element[] = [];
+
+/**
+ * Make the site's own layout around the mount point inert and quiet, on a
+ * page the site serves: every element beside the mount point and beside each
+ * of its ancestors up to the body. The ancestors themselves cannot be inert,
+ * since the canvas is inside them.
+ *
+ * Marked again when an ancestor gains a child, for a site whose layout draws
+ * part of itself once its own scripts have run. Answers with the elements it
+ * marked, for the cues drawn over them.
+ */
+function useSiteChrome(
+  page: Document | null,
+  mountPoint: HTMLElement | null
+): readonly Element[] {
+  const [chrome, setChrome] = React.useState<readonly Element[]>(NO_CHROME);
+  useIsomorphicLayoutEffect(() => {
+    if (page === null || mountPoint === null || mountPoint === page.body)
+      return;
+    const ancestors = ancestorsUpToBody(mountPoint, page.body);
+    // Every element looked at, and the ones this marked: an element the site
+    // made inert itself stays so when the canvas leaves.
+    const seen = new Set<Element>();
+    const marked = new Set<Element>();
+    const drawn: Element[] = [];
+    const mark = (): void => {
+      const dropped = dropDetached(drawn, ancestors, seen);
+      const added = markArrivals(mountPoint, ancestors, drawn, seen, marked);
+      if (dropped || added) setChrome([...drawn]);
+    };
+    mark();
+    const Mutations = page.defaultView?.MutationObserver;
+    const arrivals = Mutations === undefined ? null : new Mutations(mark);
+    for (const parent of ancestors) {
+      arrivals?.observe(parent, { childList: true });
+    }
+    return () => {
+      arrivals?.disconnect();
+      for (const element of seen)
+        element.removeAttribute(SITE_CHROME_ATTRIBUTE);
+      for (const element of marked) element.removeAttribute("inert");
+      setChrome(NO_CHROME);
+    };
+  }, [page, mountPoint]);
+  return chrome;
 }
 
 /**
@@ -469,7 +942,8 @@ function useFrameViewport(
  *   the one selector that decides whether an empty container shows its
  *   placeholder answers the same in the frame as in the editor's document.
  * - The admin's tokens the page's own chrome reads (see `usePageTokens`).
- * - The page's language, or the editor document's where it states none.
+ * - The page's language and direction, or the editor document's where it
+ *   states none.
  */
 function usePageMarkers(
   frame: HTMLIFrameElement | null,
@@ -478,21 +952,63 @@ function usePageMarkers(
     theme,
     showEmptyElements = true,
     lang,
-  }: Pick<CanvasFrameProps, "theme" | "showEmptyElements" | "lang">
+    dir,
+  }: Pick<CanvasFrameProps, "theme" | "showEmptyElements" | "lang" | "dir">
 ): void {
   usePageTokens(frame, page);
   useIsomorphicLayoutEffect(() => {
     const root = page?.documentElement;
     if (root === undefined) return;
+    const editorRoot = frame?.ownerDocument.documentElement;
     root.classList.add(BUILDER_CHROME_CLASS);
-    if (theme === undefined) root.removeAttribute("data-nx-theme");
-    else root.setAttribute("data-nx-theme", theme);
-    if (showEmptyElements) root.removeAttribute(EMPTY_ELEMENTS_ATTRIBUTE);
-    else root.setAttribute(EMPTY_ELEMENTS_ATTRIBUTE, "hidden");
-    const language = lang ?? frame?.ownerDocument.documentElement.lang ?? "";
-    if (language === "") root.removeAttribute("lang");
-    else root.setAttribute("lang", language);
-  }, [frame, page, theme, showEmptyElements, lang]);
+    // Named, the editor's theme; otherwise whatever the page itself states,
+    // which on a page the site serves is the site's own, live mode.
+    stateTheme(root, theme);
+    stateAttribute(
+      root,
+      EMPTY_ELEMENTS_ATTRIBUTE,
+      showEmptyElements ? undefined : "hidden"
+    );
+    stateAttribute(root, "lang", lang ?? editorRoot?.lang);
+    stateAttribute(root, "dir", dir ?? editorRoot?.dir);
+  }, [frame, page, theme, showEmptyElements, lang, dir]);
+}
+
+/**
+ * The theme a page's root stated when the editor began naming one, held only
+ * while the editor names one, so naming none again gives the page's own back.
+ */
+const SITE_THEMES = new WeakMap<Element, string | undefined>();
+
+/**
+ * State the editor's theme on a page's root, or leave the page's own.
+ *
+ * Only an override is written. With none named, the attribute is left alone,
+ * so a site that switches its own mode after hydrating keeps it, unless the
+ * editor had been naming one: then the page's value from before that comes
+ * back, once.
+ */
+function stateTheme(root: Element, theme: string | undefined): void {
+  if (theme !== undefined) {
+    if (!SITE_THEMES.has(root)) {
+      SITE_THEMES.set(root, root.getAttribute("data-nx-theme") ?? undefined);
+    }
+    root.setAttribute("data-nx-theme", theme);
+    return;
+  }
+  if (!SITE_THEMES.has(root)) return;
+  stateAttribute(root, "data-nx-theme", SITE_THEMES.get(root));
+  SITE_THEMES.delete(root);
+}
+
+/** Set an attribute to a value, or remove it where there is none to state. */
+function stateAttribute(
+  element: Element,
+  name: string,
+  value: string | undefined
+): void {
+  if (value === undefined || value === "") element.removeAttribute(name);
+  else element.setAttribute(name, value);
 }
 
 /**
@@ -517,7 +1033,7 @@ const PAGE_CHROME_TOKENS: readonly {
     tokens: ["--nx-builder-border", "--nx-builder-accent"],
   },
   {
-    selector: ".nx-canvas-region__content",
+    selector: `.nx-canvas-region__content, [${SITE_CHROME_ATTRIBUTE}]`,
     tokens: ["--nx-builder-region-opacity"],
   },
   {
@@ -736,6 +1252,11 @@ function useLayerPlacement(
         if (root !== null && typeof Sizes === "function") {
           sizes = new Sizes(place);
           sizes.observe(root);
+          // The root can MOVE without changing size, when what is above it
+          // in a site's own layout grows — a banner, a header image loading —
+          // and only the page's own size says so.
+          sizes.observe(view.document.documentElement);
+          if (view.document.body !== null) sizes.observe(view.document.body);
         }
         // The root's own attributes say how the site's dark mode applies.
         if (root !== null && Mutations !== undefined) {
