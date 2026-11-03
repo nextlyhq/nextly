@@ -48,10 +48,21 @@ async function undoDepth(page: Page): Promise<number> {
 
 async function open(page: Page, seed?: "broken"): Promise<void> {
   await page.goto(seed === undefined ? ROUTE : `${ROUTE}?seed=${seed}`);
-  // The canvas's frame first: the driver decides once per call whether the
-  // blocks are in a frame, and a call made before the frame is mounted would
-  // look for them on the page for the rest of the wait.
-  await expect(page.locator(CANVAS_FRAME)).toHaveCount(1, { timeout: 30_000 });
+  // The canvas's frame first, one of it, and on screen: the route streams the harness, and until the
+  // stream is swapped in its first copy waits in a hidden container, so a
+  // frame counted then is not the one the page keeps.
+  await expect
+    .poll(
+      () =>
+        page
+          .locator(CANVAS_FRAME)
+          .evaluateAll(
+            frames =>
+              frames.length === 1 && (frames[0] as HTMLElement).offsetWidth > 0
+          ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
   // On screen before anything is aimed at it, as the editor suite waits.
   await expect(await block(page, "lk-free-text")).toBeVisible({
     timeout: 30_000,

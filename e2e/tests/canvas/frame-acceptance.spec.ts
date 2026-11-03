@@ -630,6 +630,10 @@ test.describe("the frame in the canvas region", () => {
       "wide"
     );
     await chooseZoom(page, "200%");
+    // The zoom menu hands focus back to its trigger as it closes; taken
+    // first, so focus moved after it is not taken back.
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(zoomTrigger(page)).toBeFocused();
     const region = page.getByRole("region", { name: "Canvas" });
     // The region itself scrolls the painted frame; it is a tab stop of its
     // own while it does, and keeps focus rather than handing it on.
@@ -654,12 +658,27 @@ test.describe("a locked block's ring", () => {
       [{ ...text("held", "A locked block"), locked: true }],
       "held"
     );
-    // A locked block still selects, so it can be unlocked.
-    await canvasBlock(page, "held").click();
-    const ring = canvasLayer(page).locator(
-      '.nx-canvas-mark[data-mark="selected"]'
-    );
-    await expect(ring).toHaveCSS("outline-style", "dashed");
+    try {
+      // A locked block still selects, so it can be unlocked.
+      await canvasBlock(page, "held").click();
+      const ring = canvasLayer(page).locator(
+        '.nx-canvas-mark[data-mark="selected"]'
+      );
+      await expect(ring).toHaveCSS("outline-style", "dashed");
+    } finally {
+      // Unlocked again, as the server lets a lock be lifted: a locked block
+      // left on the shared homepage refuses every later test's layout.
+      const unlocked = await page.request.patch("/admin/api/singles/homepage", {
+        data: {
+          layout: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [text("held", "A locked block")],
+          },
+        },
+      });
+      expect(unlocked.ok(), `unlocking: ${unlocked.status()}`).toBe(true);
+    }
   });
 });
 

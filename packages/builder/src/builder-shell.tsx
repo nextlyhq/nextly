@@ -26,6 +26,7 @@ import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { isHTMLElement } from "./dom-kind";
 import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
+import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 import { HelpDialog } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
@@ -1334,12 +1335,29 @@ function useScrollsItsContent(element: HTMLElement | null): boolean {
     measure();
     const view = element.ownerDocument.defaultView;
     if (view === null || typeof view.ResizeObserver !== "function") return;
-    const observer = new view.ResizeObserver(measure);
-    observer.observe(element);
-    // What the region holds, whose size the zoom changes while the region's
-    // own stays put.
-    for (const child of Array.from(element.children)) observer.observe(child);
-    return () => observer.disconnect();
+    const sizes = new view.ResizeObserver(measure);
+    /*
+     * The region, and the painted frame's box inside it, whose size the zoom
+     * changes while the region's own stays put. Found again whenever what
+     * the region holds changes, since the frame mounts after the region.
+     */
+    const observe = () => {
+      sizes.disconnect();
+      sizes.observe(element);
+      for (const box of Array.from(
+        element.querySelectorAll(`[${CANVAS_FRAME_BOX_ATTRIBUTE}]`)
+      )) {
+        sizes.observe(box);
+      }
+      measure();
+    };
+    observe();
+    const contents = new view.MutationObserver(observe);
+    contents.observe(element, { childList: true, subtree: true });
+    return () => {
+      contents.disconnect();
+      sizes.disconnect();
+    };
   }, [element]);
   return overflows;
 }
