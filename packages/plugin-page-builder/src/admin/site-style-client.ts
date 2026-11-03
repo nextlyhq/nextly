@@ -444,11 +444,12 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   // four fields of one record, which is exactly the case a shared scope is for.
   const mutation = useUpdateSingleDocument(SITE_STYLE_SLUG, undefined, {
     scopeId: SITE_STYLE_SLUG,
-    // A write sent while the page is hidden may be the last it makes, as
-    // what was held is written then: sent so the browser finishes it after
-    // the page is gone. Asked at each send, on the one write path.
-    keepalive: () =>
-      typeof document !== "undefined" && document.visibilityState === "hidden",
+    // Every write is sent so the browser finishes it after the page is gone:
+    // one released while the page is visible can still be in flight when
+    // the author leaves, and keepalive cannot be added once a request has
+    // started. It costs nothing while the page stays; a body over 64 KB is
+    // sent as an ordinary request.
+    keepalive: () => true,
   });
   // The stored document, read at the moment of a save rather than closed over.
   const { data, refetch } = useStoredSiteStyle();
@@ -627,9 +628,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           const { result, holds } = await inTurn(
             chainOf(settled, section),
             section,
-            () => {
+            async () => {
               if (withdrawn) return SKIP;
-              sent = target();
+              // The section's value, not a promise of it: an undo's target is
+              // what the section held, which may still be settling.
+              sent = await target();
               // Drawn at once, over whatever an earlier write left drawn: the
               // read may already hold this value, and then never moves on.
               history.preview?.(section, sent, "held");

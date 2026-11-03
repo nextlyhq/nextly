@@ -163,10 +163,18 @@ function Canvas(): React.JSX.Element {
   const brand = siteStyle.tokens?.tokens.find(
     token => token.name === "color.brand"
   );
-  return <output data-testid="canvas">{brand?.values.light ?? "none"}</output>;
+  // How many sections are drawn over the read, beside what is drawn.
+  const previewing = React.useContext(SiteStylePreviewContext).size;
+  return (
+    <output data-testid="canvas" data-previewing={previewing}>
+      {brand?.values.light ?? "none"}
+    </output>
+  );
 }
 
 const canvas = (): string | null => screen.getByTestId("canvas").textContent;
+const previewing = (): string | null =>
+  screen.getByTestId("canvas").getAttribute("data-previewing");
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<
@@ -451,5 +459,39 @@ describe("the Design panel's writes", () => {
     expect(writes).toHaveLength(2);
     expect(writes[1]).toEqual({ tokens: null });
     expect(canvas()).toBe("none");
+  });
+  it("sends a write released while the page is visible so it outlives the page", async () => {
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    enter(field, "#000010");
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+    });
+    await settle();
+    expect(writes).toHaveLength(1);
+    expect(single.keepalive).toEqual([true]);
+  });
+
+  it("draws the section's stored value when a held edit is undone, then the read alone", async () => {
+    stored.data = {
+      tokens: {
+        tokens: [
+          { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+        ],
+      },
+    };
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    expect(canvas()).toBe("#1d2b6b");
+    enter(openBrand(), "#000011");
+    expect(canvas()).toBe("#000011");
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    await settle();
+    expect(writes).toHaveLength(2);
+    expect(canvas()).toBe("#1d2b6b");
+    // Stored where the read already holds it, so nothing is drawn over it.
+    expect(previewing()).toBe("0");
   });
 });

@@ -315,7 +315,7 @@ function useReleaseWhenDone(history: SiteStyleHistory): void {
     // Hidden is the last moment a page is sure to see: it comes before
     // `pagehide`, and is all a mobile browser closing a tab may send. Nothing
     // here can wait for the write, so it is sent to outlive the page (the
-    // Single's update asks `keepalive` while the page is hidden).
+    // Single's update asks `keepalive` for every site style write).
     const hidden = (): void => {
       if (document.visibilityState === "hidden") release();
     };
