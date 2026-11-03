@@ -60,7 +60,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { usePrefersDark } from "./prefers-dark";
-import { colourHexOf } from "./style-colour";
+import { colourHexOf, colourPairOf } from "./style-colour";
 import {
   addVariable,
   labelNewVariable,
@@ -69,7 +69,8 @@ import {
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
-import { swatchStyle, VariableEditor } from "./variable-editor";
+import { VariableEditor } from "./variable-editor";
+import { ColourPair, swatchStyle } from "./variable-swatch";
 import { useVariablesTransfer } from "./variables-transfer";
 
 export interface TokensPanelProps {
@@ -889,22 +890,7 @@ function RowTail({
 }): React.JSX.Element | null {
   if (token === undefined) return null;
   if (entry.row.kind === "color") {
-    return (
-      <span className="nx-vars__pair" aria-hidden="true">
-        <span
-          className="nx-vars__swatch nx-vars__swatch--mode"
-          data-mode="light"
-          style={swatchStyle(colourHexOf(token.values.light, undefined))}
-        />
-        <span
-          className="nx-vars__swatch nx-vars__swatch--mode"
-          data-mode="dark"
-          style={swatchStyle(
-            colourHexOf(token.values.dark ?? token.values.light, undefined)
-          )}
-        />
-      </span>
-    );
+    return <ColourPair {...colourPairOf(token)} />;
   }
   return (
     <span className="nx-vars__chip" aria-hidden="true">
