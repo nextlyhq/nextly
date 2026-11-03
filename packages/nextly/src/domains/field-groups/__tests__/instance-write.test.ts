@@ -85,6 +85,21 @@ describe("an instance's view of its host write", () => {
     expect(write.readStored).toHaveBeenCalledTimes(2);
   });
 
+  it("answers a read of a field nested in one of the instance's own as nothing stored", async () => {
+    const write = host();
+    for (const field of ["title.content", "content[0].body"]) {
+      await expect(
+        instanceWriteOf(write, OWN).readStored("blocks", {
+          collection: "landings",
+          id: "l1",
+          field,
+          form: "published",
+        })
+      ).resolves.toEqual({ kind: "absent" });
+    }
+    expect(write.readStored).not.toHaveBeenCalled();
+  });
+
   it("reads another field of the host through the host's own read", async () => {
     const write = host();
     const target = {

@@ -6775,7 +6775,8 @@ export class CollectionMutationService extends BaseService {
               entry.id as string,
               tx,
               params.locale,
-              finalData
+              // The payload as written, before its relations were lifted out of it.
+              { ...finalData, ...manyToManyData, ...componentFieldData }
             ),
           });
         }
@@ -11644,7 +11645,8 @@ export class CollectionMutationService extends BaseService {
                   params.entryId,
                   tx,
                   params.locale,
-                  finalData
+                  // The payload as written, before its relations were lifted out of it.
+                  { ...finalData, ...manyToManyData, ...attemptComponentData }
                 ),
               }
             );
@@ -15073,7 +15075,8 @@ export class CollectionMutationService extends BaseService {
             (entry as { id: string }).id,
             tx,
             localizedWrite?.writeLocale,
-            finalData
+            // The payload as written, before its relations were lifted out of it.
+            { ...finalData, ...manyToManyData, ...componentFieldData }
           ),
         });
         return entry;
@@ -16208,7 +16211,8 @@ export class CollectionMutationService extends BaseService {
             entryId,
             tx,
             localizedUpdate?.writeLocale,
-            finalData
+            // The payload as written, before its relations were lifted out of it.
+            { ...finalData, ...manyToManyData, ...componentFieldData }
           ),
         });
         // Which media items the entry uses now, from what this update stored.

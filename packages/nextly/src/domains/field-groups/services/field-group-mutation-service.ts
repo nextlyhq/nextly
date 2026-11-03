@@ -385,10 +385,20 @@ export function instanceWriteOf(
   return {
     ...host,
     readStored: (allowedType, target) =>
-      ownFields.has(target.field) && readsTheHost(host, target)
+      ownFields.has(topLevelName(target.field)) && readsTheHost(host, target)
         ? Promise.resolve({ kind: "absent" as const })
         : host.readStored(allowedType, target),
   };
+}
+
+/**
+ * The top-level field a stored read's field path starts at: `settings` for
+ * `settings.content`, `rows` for `rows[0].content`, the name itself for a
+ * top-level field. A field nested in an instance's group or repeater reads
+ * by such a path, and it is still the instance's own.
+ */
+function topLevelName(path: string): string {
+  return path.split(/[.[]/, 1)[0] ?? path;
 }
 
 /**

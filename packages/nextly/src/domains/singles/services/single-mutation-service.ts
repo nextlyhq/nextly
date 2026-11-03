@@ -3653,7 +3653,8 @@ export class SingleMutationService extends BaseService {
                     defaultLocale: this.localization?.defaultLocale ?? null,
                   },
                 }),
-                payload: currentData,
+                // As written: the field groups were lifted out of it before.
+                payload: { ...currentData, ...attemptComponentFields },
               },
             });
             if (
