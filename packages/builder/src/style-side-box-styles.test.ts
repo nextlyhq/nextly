@@ -250,3 +250,20 @@ describe("the spacing box's rings give their sides the room", () => {
     );
   });
 });
+
+describe("a box side in a narrow rail", () => {
+  it("lets every side's row take the rail's width again", () => {
+    // The block sides' fixed 3.5rem stayed on in the narrow fallback, where
+    // every side is a labelled row: those two rows were crushed while the
+    // other two stretched.
+    expect(FLAT).toContain(
+      `@container nx-inspector-fields (max-width: 18rem) { ${BOX} { display: flex;`
+    );
+    const fallback = FLAT.slice(
+      FLAT.lastIndexOf("@container nx-inspector-fields (max-width: 18rem)")
+    );
+    expect(fallback).toContain(
+      `${BOX} > [data-side] { inline-size: auto; justify-self: stretch; }`
+    );
+  });
+});

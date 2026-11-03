@@ -2096,6 +2096,12 @@
     grid-row: auto;
     min-height: 0;
   }
+
+  /* An empty reset slot draws nothing stacked, not a blank row. */
+  .nx-inspector__field.nx-inspector__field--exposed
+    > .nx-inspector__exposed-reset-slot:empty {
+    display: none;
+  }
 }
 
 /*
@@ -6427,6 +6433,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
   .nx-style-inspector__side-box::before {
     display: none;
+  }
+
+  /* Each side a row as wide as the rail, the block sides' cell width undone. */
+  .nx-style-inspector__side-box > [data-side] {
+    inline-size: auto;
+    justify-self: stretch;
   }
 
   .nx-spacing-box__caption {

@@ -86,3 +86,13 @@ describe("a placement's row on the inspector grid", () => {
     ).toContain("grid-column: 3");
   });
 });
+
+describe("a placement's row in a narrow rail", () => {
+  it("draws no blank row for a reset slot with nothing in it", () => {
+    // Stacked, the empty slot kept its control height: a blank row and a gap
+    // under every field the page had not changed.
+    expect(FLAT).toContain(
+      ".nx-inspector__field.nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot:empty { display: none; }"
+    );
+  });
+});
