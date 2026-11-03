@@ -184,6 +184,9 @@ async function search(
   return (await response.json()) as PagesSearchResponse;
 }
 
+/** How many roles this file has made, for names that stay short. */
+let rolesMade = 0;
+
 describe.each(getConfiguredTestDialects())(
   "the pages search (%s)",
   (dialect: TestDialect) => {
@@ -237,6 +240,12 @@ describe.each(getConfiguredTestDialects())(
 
       /** A key whose role holds exactly the permissions named. */
       async function keyHolding(slugs: string[]): Promise<string> {
+        // Numbered rather than spelled from the permissions, so the role's
+        // name stays inside the roles table's length on Postgres and MySQL,
+        // which refuse a longer one (SQLite doesn't check). Tagged by file,
+        // so two files sharing a database never name the same role.
+        rolesMade += 1;
+        const roleTag = `ps-${rolesMade}`;
         const ids = slugs.map(slug => {
           const found = seeded.items.find(item => item.slug === slug);
           if (found === undefined) {
@@ -246,8 +255,8 @@ describe.each(getConfiguredTestDialects())(
         });
         const role = await direct.roles.create({
           data: {
-            name: `Role ${slugs.join(" ")}`,
-            slug: `r-${slugs.join("-")}`,
+            name: `Role ${roleTag}`,
+            slug: `r-${roleTag}`,
             permissionIds: ids,
           },
         });
@@ -431,21 +440,33 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("the order across collections", () => {
+      // Each database orders titles by its own collation (code point on
+      // SQLite, a locale's rules on PostgreSQL and MySQL), and the route
+      // merges those orders without re-sorting them. So the invariant on every
+      // dialect is that asking for fewer rows answers a prefix of asking for
+      // more; the exact titles are pinned on SQLite, where code-point order is
+      // the true order the merge compares by.
+      const titles = (answer: { items: { title: string }[] }) =>
+        answer.items.map(item => item.title);
+
       it("never ranks a row the database's limit cut above one it kept", async () => {
-        // Articles answer "Qx Zulu" for a limit of one and cut "qx apple".
-        // Any order that would put "qx apple" first must not then answer
-        // "Qx mango", which it would rank after the article it never read.
+        // Articles answer their first title for a limit of one and cut the
+        // rest. A merge that ranked a cut row above a kept one would answer a
+        // first row the full listing doesn't start with.
         const first = await search({ q: "qx", limit: "1" }, reader);
-        expect(first.items.map(item => item.title)).toEqual(["Qx Zulu"]);
+        const all = await search({ q: "qx", limit: "3" }, reader);
+        expect(titles(first)).toEqual(titles(all).slice(0, 1));
+        if (dialect === "sqlite") expect(titles(first)).toEqual(["Qx Zulu"]);
       });
 
       it("answers the same order however many rows are asked for", async () => {
         const all = await search({ q: "qx", limit: "3" }, reader);
-        expect(all.items.map(item => item.title)).toEqual([
-          "Qx Zulu",
-          "Qx mango",
-          "qx apple",
-        ]);
+        const two = await search({ q: "qx", limit: "2" }, reader);
+        expect(titles(all)).toHaveLength(3);
+        expect(titles(two)).toEqual(titles(all).slice(0, 2));
+        if (dialect === "sqlite") {
+          expect(titles(all)).toEqual(["Qx Zulu", "Qx mango", "qx apple"]);
+        }
       });
     });
 

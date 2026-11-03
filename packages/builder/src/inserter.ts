@@ -367,6 +367,48 @@ export type { PlacementTarget } from "@nextlyhq/blocks-engine";
 export type InsertTarget = PlacementTarget;
 
 /**
+ * The props a block is placed with: its defaults, overlaid by its example.
+ *
+ * The one answer for "what a block starts as", for the inserter that places
+ * it and for anything that must tell an author's own values from a block's
+ * starting ones (Getting started's "Write something"). Spread, so the caller
+ * owns its copy and cannot reach back into the definition.
+ */
+function insertionProps(
+  definition: Pick<AnyBlockDefinition, "defaultProps" | "example">
+): Record<string, unknown> {
+  return {
+    ...(definition.defaultProps ?? {}),
+    ...(definition.example?.props ?? {}),
+  };
+}
+
+/** The props a block is placed with under one of its variations. */
+function variationProps(
+  base: Record<string, unknown>,
+  variation: { readonly props?: object }
+): Record<string, unknown> {
+  return { ...base, ...(variation.props ?? {}) };
+}
+
+/**
+ * Every set of props a block can be placed with: its own, then each
+ * variation's. The candidates the inserter offers, for anything that must
+ * tell an author's values from ones a block was placed with.
+ */
+export function insertionPropSets(
+  definition: Pick<AnyBlockDefinition, "defaultProps" | "example" | "editor">
+): Record<string, unknown>[] {
+  const base = insertionProps(definition);
+  return [
+    base,
+    ...(definition.editor?.variations ?? []).map(variation =>
+      variationProps(base, variation)
+    ),
+  ];
+}
+
+/**
  * Build the offerable list from block definitions.
  *
  * Takes definitions rather than reading the registry, matching how the engine
@@ -396,7 +438,7 @@ export function catalogFrom(
       editor?.keywords === undefined || editor.keywords.length === 0
         ? [labelOf(definition)]
         : editor.keywords;
-    // The block's DEFAULTS, overlaid by its EXAMPLE.
+    // The block's DEFAULTS, overlaid by its EXAMPLE: see `insertionProps`.
     //
     // Defaults alone are what an author was getting, and they are deliberately
     // empty: `core/heading` defaults to `text: ""`, `core/text` to `text: ""`,
@@ -414,10 +456,7 @@ export function catalogFrom(
     //
     // Spread rather than referenced, so the entry owns its copy and the clone
     // taken at insert time cannot reach back into the definition.
-    const defaults = {
-      ...(definition.defaultProps ?? {}),
-      ...(definition.example?.props ?? {}),
-    };
+    const defaults = insertionProps(definition);
 
     entries.push({
       kind: "block",
@@ -459,7 +498,7 @@ export function catalogFrom(
         // plugin authors can actually write against.
         icon: editor?.icon,
         version: definition.version,
-        props: { ...defaults, ...(variation.props ?? {}) },
+        props: variationProps(defaults, variation),
       });
     }
   }

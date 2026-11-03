@@ -18,6 +18,7 @@ import {
   navigateTo,
   readPluginRoute,
   useDocumentIdentity,
+  useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   AlertDialog,
@@ -69,7 +70,8 @@ const STATE_WORDS: Readonly<Record<NonNullable<PageItem["state"]>, string>> = {
 /** The Pages panel as the editor mounts it, and its request to open Settings. */
 export interface PagesPanelMount {
   /** Draws the panel. */
-  renderPagesPanel: () => React.ReactNode;
+  /** Draws the panel; `unsavedWork` is whether the editor holds unsaved work. */
+  renderPagesPanel: (state: { unsavedWork: boolean }) => React.ReactNode;
   /** Sent to the shell, which opens Settings once per new count. */
   settingsRequest: { readonly count: number } | undefined;
   /** The page being edited, or null before it has been saved. */
@@ -102,8 +104,12 @@ export function usePagesPanel(
   return {
     currentPage,
     settingsRequest,
-    renderPagesPanel: () => (
-      <PagesPanel current={currentPage} onOpenSettings={openSettings} />
+    renderPagesPanel: ({ unsavedWork }) => (
+      <PagesPanel
+        current={currentPage}
+        unsavedWork={unsavedWork}
+        onOpenSettings={openSettings}
+      />
     ),
   };
 }
@@ -117,16 +123,22 @@ function arrivedForSettings(): boolean {
 interface PagesPanelProps {
   /** The page being edited, so its row is marked and its actions act here. */
   current: PageReference | null;
+  /** Whether the editor holds work not yet saved. */
+  unsavedWork: boolean;
   /** Opens this page's Settings dialog. */
   onOpenSettings: () => void;
 }
 
 function PagesPanel({
   current,
+  unsavedWork,
   onOpenSettings,
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const list = usePagesList(query);
+  // The page being edited, as the editor knows it now: a save since the list
+  // was read can have given it unpublished changes the list doesn't show.
+  const liveStatus = useDocumentStatus();
   const [deleting, setDeleting] = React.useState<PageItem | null>(null);
   const [problem, setProblem] = React.useState<string | null>(null);
 
@@ -177,6 +189,8 @@ function PagesPanel({
           list={list}
           query={query}
           current={current}
+          unsavedWork={unsavedWork}
+          liveStatus={liveStatus}
           actions={{ ...act, remove: setDeleting }}
         />
       </div>
@@ -378,11 +392,15 @@ function PageList({
   list,
   query,
   current,
+  unsavedWork,
+  liveStatus,
   actions,
 }: {
   list: PagesList;
   query: string;
   current: PageReference | null;
+  unsavedWork: boolean;
+  liveStatus: LiveStatus;
   actions: RowActions;
 }): React.JSX.Element {
   if (list.state === "failed") {
@@ -426,6 +444,8 @@ function PageList({
                 key={`${page.collection}:${page.id}`}
                 page={page}
                 editing={isCurrent(page, current)}
+                unsavedWork={unsavedWork}
+                liveStatus={liveStatus}
                 actions={actions}
               />
             ))}
@@ -482,10 +502,16 @@ function Chip({ children }: { children: string }): React.JSX.Element {
 function PageRow({
   page,
   editing,
+  unsavedWork,
+  liveStatus,
   actions,
 }: {
   page: PageItem;
   editing: boolean;
+  /** Whether the editor holds unsaved work, which only this page's row has. */
+  unsavedWork: boolean;
+  /** The editor's own status for the page being edited. */
+  liveStatus: LiveStatus;
   actions: RowActions;
 }): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
@@ -533,6 +559,8 @@ function PageRow({
       <RowMenu
         page={page}
         editing={editing}
+        unsavedHere={editing && unsavedWork}
+        liveStatus={editing ? liveStatus : null}
         actions={actions}
         onRename={() => (editing ? actions.settings(page) : setRenaming(true))}
       />
@@ -540,25 +568,43 @@ function PageRow({
   );
 }
 
+/** The editor's status for the document it has open, or null when it has none. */
+type LiveStatus = ReturnType<typeof useDocumentStatus>;
+
 /** A row's ⋯ menu, shown when the row is hovered or holds focus. */
 function RowMenu({
   page,
   editing,
+  unsavedHere,
+  liveStatus,
   actions,
   onRename,
 }: {
   page: PageItem;
   editing: boolean;
+  /** Whether this is the page being edited, with work not yet saved. */
+  unsavedHere: boolean;
+  /** The editor's status for this page, when it is the one being edited. */
+  liveStatus: LiveStatus;
   actions: RowActions;
   onRename: () => void;
 }): React.JSX.Element {
-  // A copy is made from the PUBLISHED page, so it cannot yet copy a draft,
-  // nor the unpublished changes of a changed page: it would copy something
-  // other than what the author sees.
-  const unpublished =
-    page.status === "draft" ||
-    page.state === "changed" ||
-    page.pendingChange === true;
+  // A copy is made from the stored page: a never-published draft as it is,
+  // and a published page as published, so newer unpublished changes are left
+  // behind; and never from the editor's unsaved work. Said under Duplicate,
+  // so the author knows what the copy holds.
+  // The page being edited reads the editor's status, which follows a save
+  // made since the list was read; every other row reads the list.
+  const copiesPublished =
+    liveStatus !== null
+      ? liveStatus.status === "published" && liveStatus.hasWorkingDraft
+      : page.status !== "draft" &&
+        (page.state === "changed" || page.pendingChange === true);
+  const copyNote = copiesPublished
+    ? "Copies the published version, without your unpublished changes."
+    : unsavedHere
+      ? "Copies the last saved version, without your unsaved changes."
+      : null;
   // Rename starts once the menu has CLOSED. Started while it closes, the
   // menu's focus return pulls focus out of the new field, whose blur then
   // ends the rename before anything was typed.
@@ -595,10 +641,13 @@ function RowMenu({
         >
           Rename
         </DropdownMenuItem>
-        {unpublished ? (
-          <UnavailableItem reason="Publish it first to duplicate it.">
+        {copyNote !== null ? (
+          <NotedItem
+            note={copyNote}
+            onSelect={() => void actions.duplicate(page)}
+          >
             Duplicate
-          </UnavailableItem>
+          </NotedItem>
         ) : (
           <DropdownMenuItem onSelect={() => void actions.duplicate(page)}>
             Duplicate
@@ -612,12 +661,13 @@ function RowMenu({
             either leave the author on a page that no longer exists or, when
             its unsaved work asks first, delete a page they chose to keep. */}
         {editing ? (
-          <UnavailableItem
-            reason="Open another page to delete this one."
+          <NotedItem
+            unavailable
+            note="Open another page to delete this one."
             className="text-destructive focus:text-destructive"
           >
             Delete…
-          </UnavailableItem>
+          </NotedItem>
         ) : (
           <DropdownMenuItem
             className="text-destructive focus:text-destructive"
@@ -632,42 +682,52 @@ function RowMenu({
 }
 
 /**
- * A menu item the author cannot use on this page, kept in the arrow-key order
- * and described by its reason, so a keyboard or screen reader user reaches it
- * and hears why. A `disabled` item is skipped without a word. The reason is
- * also drawn as a muted second line, so a pointer user sees it too. Choosing
- * it does nothing and leaves the menu open.
+ * A menu item with a note under it: why it can't be used on this page, or
+ * what it will do. The note is a muted second line for a pointer user, and the
+ * item's description for a keyboard or screen reader user.
+ *
+ * An unavailable item stays in the arrow-key order, where a `disabled` one is
+ * skipped without a word; choosing it does nothing and leaves the menu open.
  */
-function UnavailableItem({
-  reason,
+function NotedItem({
+  note,
+  unavailable = false,
   className,
+  onSelect,
   children,
 }: {
-  reason: string;
+  note: string;
+  unavailable?: boolean;
   className?: string;
+  onSelect?: () => void;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const reasonId = React.useId();
+  const noteId = React.useId();
   return (
     <>
       <DropdownMenuItem
-        aria-disabled="true"
-        aria-describedby={reasonId}
+        {...(unavailable ? { "aria-disabled": "true" as const } : {})}
+        aria-describedby={noteId}
         className={`items-start ${className ?? ""}`}
-        onSelect={event => event.preventDefault()}
+        onSelect={event => {
+          if (unavailable) event.preventDefault();
+          else onSelect?.();
+        }}
       >
         <span className="flex flex-col gap-0.5">
-          <span className="opacity-50">{children}</span>
+          <span className={unavailable ? "opacity-50" : undefined}>
+            {children}
+          </span>
           {/* Seen, not read: assistive technology hears the description, so
               the item's name stays the action alone. */}
           <span aria-hidden="true" className="text-xs text-muted-foreground">
-            {reason}
+            {note}
           </span>
         </span>
       </DropdownMenuItem>
       {/* Hidden, yet still read as the item's description. */}
-      <span id={reasonId} hidden>
-        {reason}
+      <span id={noteId} hidden>
+        {note}
       </span>
     </>
   );

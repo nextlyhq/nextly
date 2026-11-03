@@ -57,14 +57,21 @@ let refetches = 0;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  useSingleDocument: () => ({
+// The stored style arrives through the editor's one read of the plugin's
+// route; that read's own request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
     ...readAnswer,
     refetch: async () => {
       refetches += 1;
-      return {};
+      return { isError: false };
     },
   }),
+}));
+
+// No `useSingleDocument` here: the editor must not read the Single, which an
+// author without Design's permission is refused, so a read of it fails.
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // The site's breakpoints go through Settings' route, answered like the
   // Single's own update so one switch drives both.
   writePluginRoute: async (write: unknown) => {
@@ -224,6 +231,9 @@ describe("writing one section", () => {
     });
     expect(routeWrites).toEqual([]);
     expect(writes).toEqual([{ fonts: [] }]);
+    // Nothing invalidates the route's read for a Single write, so the writer
+    // asks it again, or the canvas would keep drawing the old style.
+    expect(refetches).toBe(1);
   });
 
   it("serializes against the other studios through one mutation scope", () => {

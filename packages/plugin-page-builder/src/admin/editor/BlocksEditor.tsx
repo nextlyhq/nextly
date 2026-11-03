@@ -77,6 +77,7 @@ import {
   type SharePreview,
   type ShareSeoFields,
 } from "./share-preview";
+import { SiteLayoutNote } from "./site-canvas";
 import {
   ConnectStyleHistoryContext,
   RemountOnStyleReplay,
@@ -309,7 +310,7 @@ function editorTopBar(
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
+        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
           document's leading action with its other ways to publish on its
@@ -516,6 +517,10 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     showEmptyElements,
     openInsertPanel,
     locale,
+    canvasSource,
+    canvasFallback,
+    onCanvasFallback,
+    canvasDir,
   } = view;
   return (
     <>
@@ -554,6 +559,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
         and confirm.
       */}
       <RepairNotice editor={editor} />
+      {/*
+        Whether the page is drawn inside the site's own layout, and why not
+        when it is not: without the site's stylesheets the canvas can differ
+        from the published page.
+      */}
+      <SiteLayoutNote fallback={canvasFallback} />
       {siteStylePending ||
       siteStyleError !== null ||
       componentLibrary.state === "pending" ? (
@@ -577,8 +588,14 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             zoom={zoom}
             onScale={setAppliedScale}
             title={pageTitle}
-            // The language being edited, for a screen reader in the frame.
+            // The language being edited, for a screen reader in the frame, and
+            // the way it is written.
             lang={locale}
+            dir={canvasDir}
+            // The site's canvas route, where the site serves one, so the page
+            // is drawn inside the site's own layout and stylesheets.
+            source={canvasSource}
+            onSourceFallback={onCanvasFallback}
             showEmptyElements={showEmptyElements}
             overlay={
               <>

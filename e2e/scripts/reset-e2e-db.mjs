@@ -7,12 +7,21 @@
 // things rests on it never being pointed at a database anyone wanted, and a
 // glob here — or a path assembled from an env var — is how that stops being
 // true.
+//
+// On PostgreSQL and MySQL (`E2E_DB_DIALECT`) it also creates the run's own
+// database, empty (`support/server-database.mjs`), named by
+// `support/e2e-database.mjs` and never by the environment, so the server boots
+// on an empty database the run made.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { e2eDatabase } from "../support/e2e-database.mjs";
+import { recreateServerDatabase } from "../support/server-database.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(HERE, "..", "..", "apps", "playground", "data");
+const PLAYGROUND_DIR = path.resolve(HERE, "..", "..", "apps", "playground");
+const DATA_DIR = path.join(PLAYGROUND_DIR, "data");
 
 // sqlite in WAL mode keeps two sidecar files. Leaving them behind restores
 // pages from the previous run into a database meant to be empty.
@@ -30,6 +39,9 @@ const FILES = [
 const DEV_DB = "nextly.db";
 
 async function main() {
+  const database = e2eDatabase({ port: Number(process.env.PORT) });
+  if (database.dialect !== "sqlite") await recreateServerDatabase(database);
+
   await fs.mkdir(DATA_DIR, { recursive: true });
 
   for (const name of FILES) {

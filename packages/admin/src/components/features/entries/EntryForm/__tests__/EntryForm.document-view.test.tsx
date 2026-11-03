@@ -90,6 +90,7 @@ import {
   useHostedDocumentActions,
   useHostedRecoveryPoint,
 } from "../DocumentActionsContext";
+import { DocumentSaveIndicator } from "../DocumentSurfaceControls";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
 import {
@@ -639,6 +640,66 @@ describe("EntryForm with a document view", () => {
       documentView: { component: STATUS_VIEW, onExit },
     });
     expect(screen.getByTestId("status")).toHaveTextContent("published");
+  });
+
+  it("makes the offer in the save chip of a view that draws one, and draws no banner", async () => {
+    // One save state: the chip says "Unsaved changes" and makes the offer,
+    // so a banner above the editor would say it a second time.
+    const CHIP_VIEW = "@acme/pb/admin#Chip";
+    function ChipView(): ReactElement {
+      useEffect(() => {
+        mounted();
+      }, []);
+      return <DocumentSaveIndicator />;
+    }
+    registerComponent(CHIP_VIEW, ChipView);
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    expect(screen.queryByRole("status", { name: /recovery/i })).toBeNull();
+    expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    expect(
+      await screen.findByText(/you have unsaved changes from/i)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    // The same restore the banner runs: the view goes, the values change,
+    // and a fresh view reads them.
+    expect(restore).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the offer when the chip says Not now, and offers nothing more this session", async () => {
+    const CHIP_VIEW = "@acme/pb/admin#ChipDismiss";
+    registerComponent(CHIP_VIEW, () => <DocumentSaveIndicator />);
+    const dismiss = vi.fn();
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      dismiss,
+      restore,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Not now" })
+    );
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(restore).not.toHaveBeenCalled();
   });
 
   it("hands the view the document's recovery point, so its save state reads it as the header's does", () => {
