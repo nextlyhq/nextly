@@ -40,8 +40,14 @@ describe("the placement's header", () => {
   it("draws its mark in the component colour, as Layers draws a placement", () => {
     // Grey, the mark read as any block's; the component colour says this is
     // a placement of a component before the description is read.
+    // On the icon itself: the tile's colour does not reach it past the icon's
+    // own muted rule.
+    expect(
+      ruleBody(
+        ".nx-inspector[data-instance] .nx-block-card__icon .nx-block-icon"
+      )
+    ).toContain("color: var(--nx-builder-component)");
     const mark = ruleBody(".nx-inspector[data-instance] .nx-block-card__icon");
-    expect(mark).toContain("color: var(--nx-builder-component)");
     expect(mark).toContain(
       "background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent)"
     );

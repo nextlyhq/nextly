@@ -1058,6 +1058,10 @@
  */
 .nx-inspector[data-instance] .nx-block-card__icon {
   background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent);
+}
+
+/* On the icon itself, past its own muted colour, as Layers does. */
+.nx-inspector[data-instance] .nx-block-card__icon .nx-block-icon {
   color: var(--nx-builder-component);
 }
 
