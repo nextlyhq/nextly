@@ -160,7 +160,8 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
    page; its links and forms are inert. The region is one focus stop: its
    badge says where it comes from at rest, and a click or Enter opens the tag
    with the way to edit it. The badge and tag are the admin's words, so they
-   read the admin's tokens, which the frame hands the page as values. */
+   read the admin's tokens, which the frame hands those elements alone as
+   values. */
 .nx-canvas-region {
   position: relative;
   cursor: default;

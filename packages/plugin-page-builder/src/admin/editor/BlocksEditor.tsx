@@ -27,7 +27,6 @@ import {
   CanvasMarks,
   DropIndicator,
   DropRefusal,
-  EditorCommandPalette,
   EmptyContainerAppenders,
   InspectorPanel,
   RepairNotice,
@@ -68,6 +67,7 @@ import {
   useEditorPanels,
   type EditorPanels,
 } from "./editor-panels";
+import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
 import { PreviewButton } from "./preview-button";
 import { SettingsDialog } from "./settings-dialog";
@@ -275,6 +275,9 @@ function editorTopBar(view: EditorView): {
           what it describes. Reserved only where the bar has the room: below
           1400px it takes what it shows, as the device labels give way there,
           so the end column never runs into the zoom. */}
+        {/* First in the group, as the agreed bar has it: one search for
+          blocks, the page, other pages and commands, also on ⌘K. */}
+        <SearchButton onOpen={() => view.search.setOpen(true)} />
         <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
@@ -728,6 +731,22 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
   );
 }
 
+/**
+ * What the editor's search adds from: the Add panel's own sources, and the
+ * container whose "+" opened Add, so a search row adds where the panel would.
+ */
+function searchInsertSources(
+  panels: EditorPanels
+): NonNullable<React.ComponentProps<typeof EditorSearch>["insert"]> {
+  return {
+    components: panels.offered.components,
+    componentDefinitions: panels.offered.definitions,
+    ...(panels.insertInside === undefined
+      ? {}
+      : { inside: panels.insertInside }),
+  };
+}
+
 function EditorBody<TFieldValues extends FieldValues>({
   initialValue,
   kinds,
@@ -937,7 +956,15 @@ function EditorBody<TFieldValues extends FieldValues>({
             while the button exists — would give the editor two ways out that
             behave differently.
           */}
-          <EditorCommandPalette editor={editor} onExit={done} />
+          <EditorSearch
+            editor={editor}
+            onExit={done}
+            canvas={canvas.canvasElement}
+            // The Add panel's own sources, so search offers what it offers.
+            insert={searchInsertSources(panels)}
+            open={panels.search.open}
+            onOpenChange={panels.search.setOpen}
+          />
           {editorCanvasRegion(view)}
           {/*
             Rendered inside the verbs provider so the form and the button that

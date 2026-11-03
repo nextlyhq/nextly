@@ -278,6 +278,13 @@ export { blockLabel } from "./inserter";
  * show, whichever surface asked.
  */
 export { revealNode } from "./reveal-node";
+/**
+ * A binding as a person reads it on this platform ("⌘K" on a Mac, "Ctrl+K"
+ * elsewhere), for a host drawing a shortcut hint beside its own control.
+ *
+ * @experimental
+ */
+export { keyHint } from "./key-hint";
 
 /**
  * @experimental Whether the editor may move or delete a block the author has

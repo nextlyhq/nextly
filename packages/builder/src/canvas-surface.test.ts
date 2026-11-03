@@ -300,11 +300,15 @@ describe("the editing colours drawn on the page", () => {
         "outline-color"
       )
     ).toBe("var(--nx-builder-component)");
+    expect(
+      declared(ruleFor('.nx-canvas-mark[data-mark="exposed"]'), "outline")
+    ).toBe("1px dashed var(--nx-builder-component)");
     const marks = [
       SELECTED,
       ".nx-drop-indicator",
       ".nx-drop-indicator::before",
       '.nx-canvas-mark[data-mark="drop-parent"]',
+      '.nx-canvas-mark[data-mark="exposed"]',
       ".nx-spacing-handles__handle::before",
     ];
     for (const selector of marks) {

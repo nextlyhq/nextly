@@ -265,6 +265,34 @@ test.describe("a placement's exposed fields", () => {
     const { pageId } = await seed(page, [placement("p1")]);
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
+    // The exposed parts of the selected placement wear their own outline; the
+    // component's own text does not.
+    await expect(await headline(page, "p1")).toHaveAttribute(
+      "data-nx-exposed",
+      ""
+    );
+    // The heading is also the placement's selected root: it keeps the solid
+    // selection ring rather than trading it for the dashed one. The marks are
+    // drawn over the canvas frame, one dashed mark per exposed part that is
+    // not selected.
+    const root = await canvasRoot(page);
+    // The button's exposed link is the part that is not selected.
+    const unselected = await root
+      .locator("[data-nx-exposed]:not([data-nx-selected])")
+      .count();
+    expect(unselected).toBeGreaterThan(0);
+    await expect(
+      page.locator('.nx-canvas-mark[data-mark="selected"]')
+    ).not.toHaveCount(0);
+    await expect(
+      page.locator('.nx-canvas-mark[data-mark="exposed"]')
+    ).toHaveCount(unselected);
+    await expect(
+      (await canvasRoot(page))
+        .locator('[data-nx-instance="p1"]')
+        .filter({ hasText: "Made with care" })
+        .last()
+    ).not.toHaveAttribute("data-nx-exposed", /.*/);
 
     const headlineField = page.getByRole("textbox", { name: "Headline" });
     await headlineField.fill("From the panel");

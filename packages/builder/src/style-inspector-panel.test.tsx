@@ -3249,6 +3249,20 @@ describe("a read-only design", () => {
     ).toBeNull();
   });
 
+  it("leaves the editor around the More menu in the accessibility tree", async () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register({ effects: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "More effects properties" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("leaves every control editable on a block nothing locks", () => {
     // The positive control for the case above.
     register({ effects: true });

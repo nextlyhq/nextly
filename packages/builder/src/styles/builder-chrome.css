@@ -1482,9 +1482,11 @@
   color: var(--nx-muted-foreground);
 }
 
+/* The accent fill with its own foreground: a site's brand accent replaces the
+   fill, and the page's foreground on it can fail contrast in either mode. */
 .nx-style-inspector__more:hover,
 .nx-style-inspector__more:focus-visible {
-  color: var(--nx-foreground);
+  color: var(--nx-accent-foreground);
   background: var(--nx-accent);
 }
 
@@ -1758,6 +1760,16 @@
  */
 .nx-canvas-mark[data-clipped] {
   box-shadow: none;
+}
+
+/*
+ * The parts of a selected component placement an author can edit: its exposed
+ * values, dashed in the component colour, so they stand apart from the
+ * component's own design around them.
+ */
+.nx-canvas-mark[data-mark="exposed"] {
+  outline: 1px dashed var(--nx-builder-component);
+  outline-offset: 2px;
 }
 
 .nx-canvas-mark[data-mark="drop-parent"] {

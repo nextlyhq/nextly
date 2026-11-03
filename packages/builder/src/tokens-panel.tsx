@@ -615,7 +615,9 @@ function AddButton({
     );
   }
   return (
-    <DropdownMenu>
+    // Not modal: a modal menu marks the editor around it aria-hidden while
+    // its controls stay focusable (axe: aria-hidden-focus).
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"

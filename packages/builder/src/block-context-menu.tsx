@@ -274,7 +274,10 @@ export function BlockContextMenu({
   );
 
   return (
-    <ContextMenu onOpenChange={opened}>
+    // Not modal: a modal menu marks the editor around it aria-hidden while its
+    // controls stay focusable (axe: aria-hidden-focus). Escape, a click
+    // outside and Tab still close it.
+    <ContextMenu modal={false} onOpenChange={opened}>
       <ContextMenuTrigger asChild>
         <div
           style={TRANSPARENT_WRAPPER}

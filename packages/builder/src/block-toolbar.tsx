@@ -487,7 +487,9 @@ function MoreMenu({
   run: (action: ToolbarAction) => void;
 }): React.JSX.Element {
   return (
-    <DropdownMenu>
+    // Not modal, as the block's other menus: a modal menu marks the editor
+    // around it aria-hidden while its controls stay focusable.
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"

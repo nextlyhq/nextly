@@ -83,7 +83,9 @@ describe("the canvas frame", () => {
     // In the frame's document, not the editor's.
     expect(document.querySelector(".nx-canvas")).toBeNull();
     // The frame's own sheet travels with the page, the base reset first.
-    const sheet = inside.querySelector("style")?.textContent ?? "";
+    const sheet =
+      inside.querySelector("style:not([data-nx-page-chrome-tokens])")
+        ?.textContent ?? "";
     expect(sheet).toContain("html, body { margin: 0; padding: 0; }");
   });
 
@@ -185,7 +187,7 @@ describe("the canvas frame", () => {
     expect(root?.hasAttribute("data-nx-empty-elements")).toBe(false);
   });
 
-  it("hands the page the admin's tokens its in-page chrome reads, and again when the theme changes", async () => {
+  it("hands the region chrome the admin's tokens, scoped to it, and again when the theme changes", async () => {
     /*
      * jsdom does not inherit custom properties into a computed style, so the
      * value where the frame sits is stated for the frame directly, as a
@@ -200,7 +202,11 @@ describe("the canvas frame", () => {
         return {
           ...style,
           getPropertyValue: (name: string) =>
-            name === "--nx-builder-border" ? border : "",
+            name === "--nx-builder-border"
+              ? border
+              : name === "--font-sans"
+                ? "Inter"
+                : "",
         } as CSSStyleDeclaration;
       }
     );
@@ -209,21 +215,43 @@ describe("the canvas frame", () => {
     );
     const frame = frameIn(container);
     loadPage(frame);
-    const root = frame.contentDocument?.documentElement;
-    expect(root?.style.getPropertyValue("--nx-builder-border")).toBe(
+    const page = frame.contentDocument;
+    /** The value a token is handed for elements matching `selector`. */
+    const handed = (selector: string, token: string): string | undefined => {
+      for (const sheet of Array.from(page?.styleSheets ?? [])) {
+        for (const rule of Array.from(sheet.cssRules)) {
+          if (!(rule instanceof CSSStyleRule)) continue;
+          if (rule.selectorText !== selector) continue;
+          const value = rule.style.getPropertyValue(token);
+          if (value !== "") return value;
+        }
+      }
+      return undefined;
+    };
+    const words = ".nx-canvas-region__badge, .nx-canvas-region__tag";
+    expect(handed(words, "--nx-builder-border")).toBe("rgb(1, 2, 3)");
+    expect(handed(words, "--font-sans")).toBe("Inter");
+    expect(handed(".nx-canvas-region", "--nx-builder-border")).toBe(
       "rgb(1, 2, 3)"
     );
+    // The admin's face stays on its own words: the page's root, and the
+    // region's site content, keep the site's own value of a shared name.
+    expect(handed(".nx-canvas-region", "--font-sans")).toBe(undefined);
+    expect(page?.documentElement.style.getPropertyValue("--font-sans")).toBe(
+      ""
+    );
+    expect(
+      page?.documentElement.style.getPropertyValue("--nx-builder-border")
+    ).toBe("");
     // A token the editor does not declare is not invented.
-    expect(root?.style.getPropertyValue("--nx-builder-accent")).toBe("");
+    expect(handed(words, "--nx-builder-accent")).toBe(undefined);
 
-    // The admin switches its theme on its own root; the page follows.
+    // The admin switches its theme on its own root; the chrome follows.
     border = "rgb(4, 5, 6)";
     await act(async () => {
       document.documentElement.classList.add("dark");
     });
-    expect(root?.style.getPropertyValue("--nx-builder-border")).toBe(
-      "rgb(4, 5, 6)"
-    );
+    expect(handed(words, "--nx-builder-border")).toBe("rgb(4, 5, 6)");
     document.documentElement.classList.remove("dark");
     vi.restoreAllMocks();
   });
@@ -260,7 +288,13 @@ describe("the canvas frame", () => {
     loadPage(frame);
     const inside = frame.contentDocument;
     expect(inside?.querySelectorAll(".nx-canvas")).toHaveLength(1);
-    expect(inside?.querySelectorAll("style")).toHaveLength(1);
+    // The frame's sheet, and the one handing the region chrome its tokens.
+    expect(
+      inside?.querySelectorAll("style:not([data-nx-page-chrome-tokens])")
+    ).toHaveLength(1);
+    expect(
+      inside?.querySelectorAll("style[data-nx-page-chrome-tokens]")
+    ).toHaveLength(1);
     expect(container.querySelectorAll("iframe")).toHaveLength(1);
   });
 

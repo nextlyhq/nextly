@@ -22,6 +22,7 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 import { Canvas } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
+import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 
 /**
  * The selection ring and its halo are drawn for EVERY selected rendering, by
@@ -241,6 +242,34 @@ describe("selection marks", () => {
     expect(
       halosIn(container).map(mark => mark.hasAttribute("data-locked"))
     ).toEqual([true, false]);
+  });
+
+  it("marks a placement's exposed parts, but not one that is selected", async () => {
+    const { container } = render(
+      <Canvas
+        document={leaves}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="a"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    const exposedIn = () =>
+      container.querySelectorAll('.nx-canvas-mark[data-mark="exposed"]');
+    const node = (id: string) =>
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="${id}"]`);
+    // What the inspector writes for a selected placement's exposed values.
+    act(() => {
+      node("a")?.setAttribute(EXPOSED_ATTRIBUTE, "");
+      node("b")?.setAttribute(EXPOSED_ATTRIBUTE, "");
+    });
+    // The selected element keeps its ring alone; the other gets the dash.
+    await waitFor(() => expect(exposedIn()).toHaveLength(1));
+    act(() => {
+      node("b")?.removeAttribute(EXPOSED_ATTRIBUTE);
+    });
+    await waitFor(() => expect(exposedIn()).toHaveLength(0));
   });
 
   it("draws only the part of a block its clipping ancestor leaves visible", async () => {

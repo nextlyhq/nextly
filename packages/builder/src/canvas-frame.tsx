@@ -483,38 +483,81 @@ function usePageMarkers(
 
 /**
  * The admin's tokens the chrome drawn INSIDE the page reads: a Layout region's
- * badge and tag, which are the admin's words on the site's page.
+ * badge and tag, which are the admin's words on the site's page, and the
+ * region's own edge and faded content.
  *
  * The frame's document loads none of the admin's stylesheets, so these are
- * handed in as values, read where the frame sits in the editor.
+ * handed in as values, read where the frame sits in the editor. Each set is
+ * written onto the region chrome that reads it and nowhere above, because a
+ * custom property inherits: on the page's root, the admin's `--font-sans` or
+ * `--radius-sm` would replace a site's own value of the same name across the
+ * whole page. The region box takes only the editor's own names, since what it
+ * holds is the site's content.
  */
-const PAGE_CHROME_TOKENS = [
-  "--nx-builder-border",
-  "--nx-builder-surface-raised",
-  "--nx-builder-text",
-  "--nx-builder-text-muted",
-  "--nx-builder-accent",
-  "--nx-builder-region-opacity",
-  "--nx-builder-scheme",
-  "--radius-sm",
-  "--text-xs",
-  "--font-sans",
-] as const;
+const PAGE_CHROME_TOKENS: readonly {
+  readonly selector: string;
+  readonly tokens: readonly string[];
+}[] = [
+  {
+    selector: ".nx-canvas-region",
+    tokens: ["--nx-builder-border", "--nx-builder-accent"],
+  },
+  {
+    selector: ".nx-canvas-region__content",
+    tokens: ["--nx-builder-region-opacity"],
+  },
+  {
+    selector: ".nx-canvas-region__badge, .nx-canvas-region__tag",
+    tokens: [
+      "--nx-builder-border",
+      "--nx-builder-surface-raised",
+      "--nx-builder-text",
+      "--nx-builder-text-muted",
+      "--nx-builder-accent",
+      "--nx-builder-scheme",
+      "--radius-sm",
+      "--text-xs",
+      "--font-sans",
+    ],
+  },
+];
 
-/** Copy each token's value where the frame sits onto the page's root. */
-function handTokens(frame: HTMLIFrameElement, root: HTMLElement): void {
+/** Marks the frame's sheet that carries the handed tokens. */
+const PAGE_TOKENS_ATTRIBUTE = "data-nx-page-chrome-tokens";
+
+/**
+ * Write each token's value where the frame sits onto the region chrome that
+ * reads it, through the style rules of one sheet of the editor's own. Set
+ * through the rules' declarations rather than as text, so a value is taken
+ * as a value and can never close the rule it sits in.
+ */
+function handTokens(frame: HTMLIFrameElement, page: Document): void {
   const view = frame.ownerDocument.defaultView;
   if (view === null) return;
   const from = view.getComputedStyle(frame);
-  for (const token of PAGE_CHROME_TOKENS) {
-    const value = from.getPropertyValue(token).trim();
-    if (value === "") root.style.removeProperty(token);
-    else root.style.setProperty(token, value);
+  let holder = page.head.querySelector(`style[${PAGE_TOKENS_ATTRIBUTE}]`);
+  if (holder === null) {
+    holder = page.createElement("style");
+    holder.setAttribute(PAGE_TOKENS_ATTRIBUTE, "");
+    page.head.append(holder);
+  }
+  const sheet = (holder as HTMLStyleElement).sheet;
+  if (sheet === null) return;
+  while (sheet.cssRules.length > 0) sheet.deleteRule(0);
+  for (const { selector, tokens } of PAGE_CHROME_TOKENS) {
+    const rule =
+      sheet.cssRules[sheet.insertRule(`${selector} {}`, sheet.cssRules.length)];
+    if (rule === undefined || !("style" in rule)) continue;
+    const declarations = (rule as CSSStyleRule).style;
+    for (const token of tokens) {
+      const value = from.getPropertyValue(token).trim();
+      if (value !== "") declarations.setProperty(token, value);
+    }
   }
 }
 
 /**
- * Hand the page the admin's tokens its in-page chrome reads, and again
+ * Hand the page's region chrome the admin's tokens it reads, and again
  * whenever the admin's theme changes: the admin switches it by a class or an
  * attribute on its own root or body, or the system's contrast preference
  * moves the border and muted text.
@@ -524,11 +567,10 @@ function usePageTokens(
   page: Document | null
 ): void {
   useIsomorphicLayoutEffect(() => {
-    const root = page?.documentElement;
     const host = frame?.ownerDocument;
     const view = host?.defaultView;
-    if (frame == null || root == null || host == null || view == null) return;
-    const hand = () => handTokens(frame, root);
+    if (frame == null || page == null || host == null || view == null) return;
+    const hand = () => handTokens(frame, page);
     hand();
     const watch = new view.MutationObserver(hand);
     for (const target of [host.documentElement, host.body]) {
@@ -543,6 +585,7 @@ function usePageTokens(
     return () => {
       watch.disconnect();
       contrast?.removeEventListener("change", hand);
+      page.head.querySelector(`style[${PAGE_TOKENS_ATTRIBUTE}]`)?.remove();
     };
   }, [frame, page]);
 }

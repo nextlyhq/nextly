@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * The marks drawn over blocks: the selection, and during a drag the container
- * a drop would land in or the one refusing it.
+ * The marks drawn over blocks: the selection, the editable parts of a selected
+ * component placement, and during a drag the container a drop would land in or
+ * the one refusing it.
  *
  * The canvas decides WHICH elements are marked and says so with attributes on
  * them (`useCanvasMarkers` in `canvas.tsx`): every rendering of a selected
@@ -35,6 +36,7 @@ import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
 } from "./canvas-geometry-watch";
+import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
@@ -48,7 +50,7 @@ import {
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
-  readonly kind: "selected" | "drop-parent" | "drop-refused";
+  readonly kind: "selected" | "exposed" | "drop-parent" | "drop-refused";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
   readonly secondary: boolean;
   /** A component placement, drawn in the component colour. */
@@ -151,7 +153,7 @@ function marksOf(element: HTMLElement): readonly Mark[] {
   const found: Mark[] = [];
   root
     .querySelectorAll(
-      `[${SELECTED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
+      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
     )
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
@@ -167,6 +169,11 @@ function marksOf(element: HTMLElement): readonly Mark[] {
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
         });
+      }
+      // An exposed part that is itself selected keeps its ring alone: one
+      // element draws one outline, and the ring says more there.
+      if (marked.hasAttribute(EXPOSED_ATTRIBUTE) && selected === null) {
+        found.push({ ...outline, ...plain, kind: "exposed" });
       }
       if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
         found.push({ ...outline, ...plain, kind: "drop-parent" });
