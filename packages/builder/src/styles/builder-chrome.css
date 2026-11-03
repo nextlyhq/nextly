@@ -3970,6 +3970,15 @@
   background-color: color-mix(in srgb, var(--nx-chart-4) 22%, transparent);
 }
 
+/*
+ * A margin that is the container's gap rather than the block's own, in the
+ * padding hue of the container it belongs to, so the band reads as space the
+ * parent put there. The chip names the container.
+ */
+.nx-spacing-overlay__band[data-gap]::before {
+  background-color: color-mix(in srgb, var(--nx-chart-3) 22%, transparent);
+}
+
 .nx-spacing-overlay__band[data-box="padding"]::before {
   background-color: color-mix(in srgb, var(--nx-chart-3) 22%, transparent);
 }
