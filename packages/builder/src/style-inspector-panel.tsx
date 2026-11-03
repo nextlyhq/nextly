@@ -105,7 +105,11 @@ import {
 import type { InspectorSectionKey } from "./inspector-sections";
 import { layerLabel } from "./layers";
 import type { BuilderOp } from "./ops";
-import { useCanvasTokenMode } from "./prefers-dark";
+import {
+  CanvasTokenModeProvider,
+  useCanvasTokenMode,
+  useCanvasTokenModeAt,
+} from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import type { SideOrientation } from "./side-orientation";
 import { stateLabel } from "./state-switcher";
@@ -619,9 +623,10 @@ function StyleInspectorBody({
   const [chosenForms, setChosenForms] = React.useState<Record<string, number>>(
     {}
   );
-  // The canvas's own mode, its theme marker first and the device after, so
-  // every control here shows the values the canvas is drawing.
-  const prefersDark = useCanvasTokenMode() === "dark";
+  // The mode the selected block is drawn in, its nearest theme marker first
+  // and the device after, read once here and handed to every control below.
+  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  const prefersDark = tokenMode === "dark";
   /*
    * What the browser is applying, or `undefined` when nobody can say.
    *
@@ -762,40 +767,42 @@ function StyleInspectorBody({
   };
 
   return (
-    <div className="nx-style-inspector">
-      {/*
-       * Above the sections, because applying a class is the frequent action and
-       * it decides what the controls below are even editing. Webflow puts its
-       * selector field at the top of the Style panel for the same reason.
-       */}
-      <PanelClasses
-        readOnlyReason={readOnlyReason}
-        editor={editor}
-        nodeId={inspected.nodeId}
-        library={classLibrary}
-        libraryAbsence={classLibraryAbsence}
-        onCreateClass={onCreateClass}
-      />
-      <NoStyleProperties count={inspected.sections.length} />
-      <Accordion
-        type="single"
-        collapsible
-        value={open}
-        onValueChange={setOpenGroup}
-      >
-        {inspected.sections.map(section => (
-          <StyleSectionItem
-            // Keyed by node AND group: a bare group would let React reuse one
-            // block's inputs for the next block's same-named section, so a field
-            // would keep the previous block's uncommitted text.
-            key={`${inspected.nodeId}:${section.key}`}
-            section={section}
-            readOnlyReason={readOnlyReason}
-            {...surroundings}
-          />
-        ))}
-      </Accordion>
-    </div>
+    <CanvasTokenModeProvider value={tokenMode}>
+      <div className="nx-style-inspector">
+        {/*
+         * Above the sections, because applying a class is the frequent action and
+         * it decides what the controls below are even editing. Webflow puts its
+         * selector field at the top of the Style panel for the same reason.
+         */}
+        <PanelClasses
+          readOnlyReason={readOnlyReason}
+          editor={editor}
+          nodeId={inspected.nodeId}
+          library={classLibrary}
+          libraryAbsence={classLibraryAbsence}
+          onCreateClass={onCreateClass}
+        />
+        <NoStyleProperties count={inspected.sections.length} />
+        <Accordion
+          type="single"
+          collapsible
+          value={open}
+          onValueChange={setOpenGroup}
+        >
+          {inspected.sections.map(section => (
+            <StyleSectionItem
+              // Keyed by node AND group: a bare group would let React reuse one
+              // block's inputs for the next block's same-named section, so a field
+              // would keep the previous block's uncommitted text.
+              key={`${inspected.nodeId}:${section.key}`}
+              section={section}
+              readOnlyReason={readOnlyReason}
+              {...surroundings}
+            />
+          ))}
+        </Accordion>
+      </div>
+    </CanvasTokenModeProvider>
   );
 }
 

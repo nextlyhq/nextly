@@ -43,6 +43,8 @@ const LINE_HEIGHT = (shapeOf("lineHeight").of as StyleLeaf[])[1] as StyleLeaf;
 const PADDING_START = (shapeOf("padding").sides as Record<string, StyleLeaf>)
   .blockStart as StyleLeaf;
 const GAP = shapeOf("gap") as unknown as StyleLeaf;
+const MARGIN_START = (shapeOf("margin").sides as Record<string, StyleLeaf>)
+  .blockStart as StyleLeaf;
 /** The single-radius arm of `borderRadius`. */
 const RADIUS = (shapeOf("borderRadius").of as StyleLeaf[])[0] as StyleLeaf;
 const WIDTH = shapeOf("width") as unknown as StyleLeaf;
@@ -217,5 +219,46 @@ describe("a variable's sample", () => {
     expect(lengthInPx("0")).toBe(0);
     expect(lengthInPx("50%")).toBeUndefined();
     expect(lengthInPx("clamp(1rem, 2vw, 3rem)")).toBeUndefined();
+  });
+});
+
+describe("what a field offers: only what it accepts", () => {
+  /**
+   * Each variable's KIND fits the fields below; what separates them is the
+   * VALUE: padding refuses a negative length, margin takes one, and opacity
+   * stops at 1. A filter by kind and family alone offers all of them.
+   */
+  const VALUES: SiteTokenSet = {
+    tokens: [
+      { name: "space.pull", kind: "dimension", values: { light: "-8px" } },
+      {
+        name: "space.fluid",
+        kind: "dimension",
+        values: { light: "calc(1rem + 2vw)" },
+      },
+      { name: "number.half", kind: "number", values: { light: "0.5" } },
+      { name: "number.lots", kind: "number", values: { light: "1.5" } },
+    ],
+  };
+  const offered = (leaf: StyleLeaf): string[] =>
+    variablesFor(leaf, VALUES).map(token => token.name);
+
+  it("offers a negative length to margin and not to padding", () => {
+    expect(offered(MARGIN_START)).toContain("space.pull");
+    expect(offered(PADDING_START)).not.toContain("space.pull");
+  });
+
+  it("offers opacity only numbers it accepts", () => {
+    expect(offered(OPACITY)).toContain("number.half");
+    expect(offered(OPACITY)).not.toContain("number.lots");
+  });
+
+  it("keeps a value it cannot judge here, such as calc()", () => {
+    expect(offered(PADDING_START)).toContain("space.fluid");
+  });
+
+  it("does not take a refused variable's name as typed", () => {
+    expect(tokenForTypedName(PADDING_START, VALUES, "pull")).toBeUndefined();
+    expect(tokenForTypedName(MARGIN_START, VALUES, "pull")).toBe("space.pull");
   });
 });

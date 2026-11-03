@@ -64,12 +64,14 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isTokenRef,
+  leafAcceptsValue,
   locateNode,
   parseColor,
   resolveSiteTokens,
   STYLE_CATALOG,
   tokenCustomProperty,
   tokenDisplayLabel,
+  trimCssWhitespace,
   tokenIdentity,
   type BlockNode,
   type ContrastResult,
@@ -84,6 +86,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
+import { CSS_NUMBER } from "./style-numeric";
 import { lengthFamilyOf, type LengthFamily } from "./tokens-studio";
 
 /**
@@ -212,8 +215,47 @@ export function variablesFor(
       // the radii. A type size and its line height share a name, and a
       // spacing step and a radius often do ("Md"), so a list of every length
       // named one variable twice; any other length takes every length.
-      madeFor(token, leaf)
+      madeFor(token, leaf) &&
+      // A variable whose value the field would refuse, such as a negative
+      // length for a padding or 1.5 for an opacity, is not offered: picked,
+      // it would be stored and then dropped by the browser with no refusal.
+      valueFits(token, leaf)
   );
+}
+
+/**
+ * Whether the leaf accepts this variable's value, in the mode asked for, by
+ * the engine's own rule for the leaf, the one a typed value goes through.
+ *
+ * Kept wherever this cannot judge: a value through a function (`calc()`,
+ * `clamp()`, `var()`) resolves only on the page, and a value whose kind is not
+ * the leaf's own (a length offered on a line height's number form, which the
+ * field writes as its length form) is the other form's to judge.
+ */
+function valueFits(token: SiteVariable, leaf: StyleLeaf): boolean {
+  if (token.value.includes("(")) return true;
+  if (!judgedAt(token.kind, leaf.kind)) return true;
+  const text = trimCssWhitespace(token.value);
+  // A number variable holds its number as text; the leaf takes a number.
+  const value =
+    leaf.kind === "number" && CSS_NUMBER.test(text) ? Number(text) : text;
+  return leafAcceptsValue(leaf, value);
+}
+
+/** Whether a variable of this kind is written in the form this leaf judges. */
+function judgedAt(kind: TokenKind, leafKind: StyleLeaf["kind"]): boolean {
+  switch (leafKind) {
+    case "dimension":
+      return kind === "dimension";
+    case "number":
+      return kind === "number" || kind === "fontWeight";
+    case "color":
+      return kind === "color";
+    case "cssValue":
+      return true;
+    default:
+      return false;
+  }
 }
 
 /** Whether a variable belongs to the family this leaf's field offers. */

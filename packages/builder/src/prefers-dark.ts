@@ -52,16 +52,21 @@ export function usePrefersDark(): boolean {
 }
 
 /**
- * The mode the canvas shows site variables in: the one its nearest
- * `data-nx-theme` marker names, else the device's preference.
+ * The mode the canvas shows site variables in where the selected block is
+ * drawn: the `data-nx-theme` marker nearest that block's element, which a
+ * marker nested inside the page can set, else the one nearest the canvas
+ * root, else the device's preference.
  *
  * THE one answer for every inspector control that shows a variable's value,
  * the colour picker's swatches, the variables list and its chip, and what a
  * typed variable name may match, so none of them shows or accepts a value of
- * the mode the canvas is not drawing. The device alone was the answer before,
- * and a canvas pinned dark on a light device showed the light values.
+ * the mode the selected block is not drawn in.
+ *
+ * Asked ONCE, by the Style panel, which hands the answer to its controls
+ * through {@link CanvasTokenModeProvider}: a subscription per control would
+ * repeat the same reading, on every change to the canvas, once per field.
  */
-export function useCanvasTokenMode(): TokenMode {
+export function useCanvasTokenModeAt(selectedId: string | null): TokenMode {
   const prefersDark = usePrefersDark();
   const doc = useCanvasFrame().document;
   const marker = React.useSyncExternalStore(
@@ -70,7 +75,7 @@ export function useCanvasTokenMode(): TokenMode {
         doc === null ? () => undefined : watchMarkers(doc, changed),
       [doc]
     ),
-    () => (doc === null ? null : canvasMarker(doc)),
+    () => (doc === null ? null : canvasMarker(doc, selectedId)),
     // A server render has no canvas, and the device decides, as it does
     // before the client's first answer.
     () => null
@@ -78,16 +83,43 @@ export function useCanvasTokenMode(): TokenMode {
   return marker ?? (prefersDark ? "dark" : "light");
 }
 
-/** The mode the marker nearest the canvas root names, or `null`. */
-function canvasMarker(doc: Document): TokenMode | null {
-  const root = doc.querySelector(`.${CANVAS_ROOT_CLASS}`);
-  return root === null ? null : nearestThemeMode(root);
+/** The mode the Style panel read, handed to its controls. */
+const CanvasTokenModeContext = React.createContext<TokenMode | null>(null);
+
+/** Hands the panel's one reading of the mode to every control inside it. */
+export const CanvasTokenModeProvider: React.Provider<TokenMode | null> =
+  CanvasTokenModeContext.Provider;
+
+/**
+ * The mode a control shows variables in, as its panel read it. Light outside
+ * a panel, which is what a document with no mode resolves.
+ */
+export function useCanvasTokenMode(): TokenMode {
+  return React.useContext(CanvasTokenModeContext) ?? "light";
+}
+
+/**
+ * The mode the marker nearest the selected block's element names, else the
+ * one nearest the canvas root, or `null` where no marker names one.
+ */
+function canvasMarker(
+  doc: Document,
+  selectedId: string | null
+): TokenMode | null {
+  const drawn =
+    selectedId === null
+      ? undefined
+      : [...doc.querySelectorAll("[data-nx-node]")].find(
+          element => element.getAttribute("data-nx-node") === selectedId
+        );
+  const at = drawn ?? doc.querySelector(`.${CANVAS_ROOT_CLASS}`);
+  return at === null ? null : nearestThemeMode(at);
 }
 
 /**
  * The listeners waiting on one document's markers, and the one observer that
- * serves them: a panel holds a control per field, and an observer each over
- * the whole canvas would repeat the same work once per field.
+ * serves them, so a second panel reading the same canvas adds a listener and
+ * not an observer.
  */
 const MARKER_WATCHERS = new WeakMap<
   Document,

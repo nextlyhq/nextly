@@ -698,3 +698,68 @@ describe("the source caption after a variable is picked", () => {
     expect(field().hasAttribute("data-provenance-quiet")).toBe(false);
   });
 });
+
+describe("one reading of the canvas's mode for the whole panel", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(window, "matchMedia");
+  });
+
+  it("asks the device once, however many fields the panel draws", async () => {
+    const asked = vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: asked,
+    });
+    mount({ typography: true, spacing: true, border: { radius: true } });
+    // Many fields, each with a ◇ or a typed-name match that reads the mode.
+    expect(
+      screen.getAllByRole("button", { name: /^Variables for/ }).length
+    ).toBeGreaterThan(4);
+    await waitFor(() => expect(asked).toHaveBeenCalled());
+    const scheme = asked.mock.calls.filter(([query]) =>
+      query.includes("prefers-color-scheme")
+    );
+    expect(scheme).toHaveLength(1);
+  });
+
+  it("reads the mode where the selected block is drawn, under a nested marker", async () => {
+    deviceIsDark(false);
+    const canvas = document.createElement("div");
+    canvas.className = "nx-canvas";
+    const nested = document.createElement("div");
+    nested.setAttribute("data-nx-theme", "dark");
+    const node = document.createElement("div");
+    node.setAttribute("data-nx-node", "a");
+    nested.append(node);
+    canvas.append(nested);
+    document.body.append(canvas);
+    try {
+      mount(
+        { typography: true },
+        {},
+        {
+          tokens: [
+            {
+              name: "font-size.mode",
+              kind: "dimension",
+              values: { light: "16px", dark: "24px" },
+            },
+          ],
+        }
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Variables for Font size" })
+      );
+      expect(
+        await screen.findByRole("option", { name: "Mode 24px" })
+      ).toBeDefined();
+    } finally {
+      canvas.remove();
+    }
+  });
+});
