@@ -8,6 +8,7 @@
  * missing the pages that fall back to the site's default Layout, and
  * reporting a bounded read as the whole answer.
  */
+import { MAX_COMPOSED_DEPTH } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -197,15 +198,48 @@ describe("the pages a change reaches", () => {
     }
   });
 
-  it("are a floor when the nesting goes deeper than a page composes", async () => {
-    // A chain of components each placing the last, longer than the composed
-    // depth, so the walk stops with a frontier left.
+  it("stop where the renderer stops composing: at its depth cap, exactly", async () => {
+    // c0 is the component edited; each c(i+1) places c(i), so c(i) holds it
+    // i deep. A page placing c(i) draws it at depth i, which the renderer
+    // composes only below its cap. Placed at the cap, it is not drawn there,
+    // so that page is not reached, and the count is still exact: a chain past
+    // the cap is not a read that stopped short.
     const placements: Placements = {};
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i <= MAX_COMPOSED_DEPTH + 2; i += 1) {
+      placements[`c${i}`] = {
+        components: [`c${i + 1}`],
+        pages: [`p${i}`],
+      };
+    }
+    await expect(
+      componentPageReach("c0", sources({ placements }))
+    ).resolves.toEqual({ documents: MAX_COMPOSED_DEPTH, complete: true });
+  });
+
+  it("count a Layout's pages only where it names a component holding it within the cap", async () => {
+    const placements: Placements = {};
+    for (let i = 0; i <= MAX_COMPOSED_DEPTH + 1; i += 1) {
       placements[`c${i}`] = { components: [`c${i + 1}`] };
     }
-    const reach = await componentPageReach("c0", sources({ placements }));
-    expect(reach.complete).toBe(false);
+    const reach = (named: string) =>
+      componentPageReach(
+        "c0",
+        sources({
+          placements,
+          layouts: [{ id: "main", components: [named] }],
+          defaultLayout: "main",
+          pages: [{ id: "p1", layout: null, noHeaderFooter: null }],
+        })
+      );
+    // A Layout draws its component at depth 0, so c(cap - 1) still draws c0.
+    await expect(reach(`c${MAX_COMPOSED_DEPTH - 1}`)).resolves.toEqual({
+      documents: 1,
+      complete: true,
+    });
+    await expect(reach(`c${MAX_COMPOSED_DEPTH}`)).resolves.toEqual({
+      documents: 0,
+      complete: true,
+    });
   });
 
   it("count an index row naming no document, which no one can name", async () => {

@@ -21,11 +21,12 @@
  * ## Why the answer may be a floor
  *
  * Every read here is bounded: the index read stops at its cap and reports it,
- * the walk up through components stops at the composition depth and at a
- * number of components, and the Layout and page reads stop at a number of
- * rows. Any bound reached, or an index that is not whole, makes the count a
- * floor, which the editor says as "at least". The count is never larger than
- * the truth.
+ * the walk up through components stops at a number of components, and the
+ * Layout and page reads stop at a number of rows. Any bound reached, or an
+ * index that is not whole, makes the count a floor, which the editor says as
+ * "at least". The count is never larger than the truth. The walk also stops
+ * at the renderer's composition depth, which is not a bound but the rule: a
+ * page holding the component deeper than that is not drawn with it.
  *
  * ## NOT a security boundary
  *
@@ -144,11 +145,16 @@ async function walkPlacements(
 ): Promise<ReadonlySet<string>> {
   const seen = new Set<string>([componentId]);
   let frontier: string[] = [componentId];
-  // One level per composed depth: a component nested deeper than the renderer
-  // composes is drawn on no page through that chain.
+  // One level per composed depth, by the renderer's own rule: the frontier at
+  // `depth` holds the edited component `depth` deep, and a page or a Layout
+  // draws it there only while `depth` is below the cap the renderer refuses
+  // at (`scope.depth >= maxComposedDepth`, defaulting to this constant).
+  // Past it the page is not reached at all, so the count stays exact, and the
+  // components found at the cap are dropped before the Layout step asks
+  // which Layouts name them.
   for (let depth = 0; frontier.length > 0; depth += 1) {
-    if (depth > MAX_COMPOSED_DEPTH) {
-      reached.complete = false;
+    if (depth >= MAX_COMPOSED_DEPTH) {
+      for (const tooDeep of frontier) seen.delete(tooDeep);
       break;
     }
     const listings = await sources.documentsUsingEach(frontier);
