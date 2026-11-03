@@ -691,6 +691,21 @@ export type {
  * carry into anything that names a format.
  */
 export { useUploadMedia } from "@nextlyhq/admin";
+/**
+ * A media item by id, as a query a component renders from: a thumbnail, a
+ * preview. The admin's own read of one item, cached by id.
+ *
+ * @experimental
+ */
+export { useMediaItem } from "@nextlyhq/admin";
+/**
+ * Read a media item by id from code that draws a page, outside a component's
+ * render. The same query as `useMediaItem`, so the two share one cache and
+ * one read in flight.
+ *
+ * @experimental
+ */
+export { useMediaResolver } from "@nextlyhq/admin";
 
 /**
  * @experimental The media library as a dialog a plugin can open: browse,
