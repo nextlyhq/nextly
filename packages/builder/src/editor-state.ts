@@ -368,6 +368,44 @@ interface CompositionCache {
   readonly ungatedComponents: UngatedComponentLookup | undefined;
 }
 
+/** A cache made for a library, whose gate-lifted lookup is in hand. */
+type FilledCache = CompositionCache & {
+  readonly ungatedComponents: UngatedComponentLookup;
+};
+
+/** Whether the cache was made for a library, rather than before any was held. */
+function isFilled(cache: CompositionCache): cache is FilledCache {
+  return cache.ungatedComponents !== undefined;
+}
+
+/**
+ * The cache made for these components and limits, made afresh when either
+ * changed, since every composition in it was made under both.
+ */
+function cacheFor(
+  cache: { current: CompositionCache },
+  components: ComponentLookup,
+  limits: DocumentLimits
+): FilledCache {
+  const held = cache.current;
+  if (
+    held.components === components &&
+    held.limits === limits &&
+    isFilled(held)
+  ) {
+    return held;
+  }
+  const fresh: FilledCache = {
+    components,
+    limits,
+    byDocument: new WeakMap(),
+    ungatedByDocument: new WeakMap(),
+    ungatedComponents: componentsWithConditionGatesLifted(components, limits),
+  };
+  cache.current = fresh;
+  return fresh;
+}
+
 /**
  * Compose through the cache, so each document is composed once.
  *
@@ -383,20 +421,8 @@ function composerFrom(
   components: ComponentLookup,
   limits: DocumentLimits
 ): Composer {
-  if (
-    cache.current.components !== components ||
-    cache.current.limits !== limits ||
-    cache.current.ungatedComponents === undefined
-  ) {
-    cache.current = {
-      components,
-      limits,
-      byDocument: new WeakMap(),
-      ungatedByDocument: new WeakMap(),
-      ungatedComponents: componentsWithConditionGatesLifted(components, limits),
-    };
-  }
-  const { byDocument, ungatedByDocument, ungatedComponents } = cache.current;
+  const current = cacheFor(cache, components, limits);
+  const { byDocument, ungatedByDocument, ungatedComponents } = current;
   const compose = (document: BlockDocument): ResolvedComposition => {
     let composed = byDocument.get(document);
     if (composed === undefined) {
