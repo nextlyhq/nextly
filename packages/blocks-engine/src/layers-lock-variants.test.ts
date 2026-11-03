@@ -141,4 +141,52 @@ describe("variantLockChanges", () => {
       expect.objectContaining({ label: "Hero", variant: "loud" }),
     ]);
   });
+
+  it("reaches a block locked inside a component it places behind a condition gate", () => {
+    // Gated, the nested placement is left unexpanded when drawn as served,
+    // but its relayed value is stored and served once the condition lifts.
+    const outer = (overrides: Record<string, string>) => ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "nested",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "promo" },
+          visibility: {
+            conditions: [[{ field: "title", op: "eq", value: "Home" }]],
+          },
+        },
+      ],
+      exposed: [
+        {
+          id: "headline",
+          label: "Headline",
+          nodeId: "nested",
+          propPath: "overrides.title",
+          type: "text",
+        },
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "nested",
+          propPath: "overrides.subtitle",
+          type: "text",
+        },
+      ],
+      variants: { loud: { label: "Loud", overrides } },
+    });
+    const components = new Map([["promo", component() as never]]);
+
+    expect(
+      variantLockChanges(outer({ headline: "Changed" }), undefined, {
+        components,
+      })
+    ).toEqual([expect.objectContaining({ label: "Hero", variant: "loud" })]);
+    // CONTROL: the relayed value for the free block is the variant's to set.
+    expect(
+      variantLockChanges(outer({ strap: "Sale" }), undefined, { components })
+    ).toEqual([]);
+  });
 });

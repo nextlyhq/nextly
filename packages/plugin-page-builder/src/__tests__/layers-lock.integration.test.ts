@@ -805,6 +805,64 @@ describe.each(getConfiguredTestDialects())(
         await expectRefusedNamingHero(outer({ headline: "Changed" }, "banner"));
       });
 
+      it("refuses a variant reaching the locked block through a component it places behind a condition gate", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const inner = await promo(t);
+        // The nested placement is gated, so drawn as served it is left
+        // unexpanded; the value the variant relays into it is still stored.
+        const outer = (overrides: Record<string, string>, slug: string) =>
+          t.nextly.create({
+            collection: COMPONENTS_SLUG,
+            data: {
+              title: slug,
+              slug,
+              content: {
+                formatVersion: DOCUMENT_FORMAT_VERSION,
+                kind: "component",
+                nodes: [
+                  {
+                    id: "nested",
+                    type: COMPONENT_INSTANCE_TYPE,
+                    version: 1,
+                    props: { componentId: inner },
+                    visibility: {
+                      conditions: [
+                        [{ field: "title", op: "eq", value: "Home" }],
+                      ],
+                    },
+                  },
+                ],
+                exposed: [
+                  {
+                    id: "headline",
+                    label: "Headline",
+                    nodeId: "nested",
+                    propPath: "overrides.title",
+                    type: "text",
+                  },
+                  {
+                    id: "strap",
+                    label: "Strap",
+                    nodeId: "nested",
+                    propPath: "overrides.subtitle",
+                    type: "text",
+                  },
+                ],
+                variants: { loud: { label: "Loud", overrides } },
+              },
+              status: "published",
+            },
+            overrideAccess: true,
+          });
+
+        // CONTROL: a relayed value for the free block saves.
+        await expect(
+          outer({ strap: "Sale" }, "free-banner")
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(outer({ headline: "Changed" }, "banner"));
+      });
+
       it("refuses it on an update too", async () => {
         const { update } = await storedPage([heading("loose")]);
         const id = await promo(current!);

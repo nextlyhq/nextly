@@ -19,13 +19,17 @@
  */
 import { componentLayersLocks } from "./component-layers-locks";
 import {
+  componentsWithConditionGatesLifted,
+  withConditionGatesLifted,
+} from "./condition-gates-lifted";
+import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   isComponentDocument,
   type BlockDocument,
 } from "./document";
 import { layersLockChanges, type LayersLockChange } from "./layers-lock-stored";
-import type { DocumentLimits } from "./limits";
+import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import {
   resolveComponentInstances,
@@ -58,6 +62,25 @@ export interface VariantDrawing {
    * drawn one places. Absent, nested placements draw as placeholders.
    */
   readonly components?: ComponentLookup;
+}
+
+/**
+ * The drawing with the library's gates lifted, and a lifting for the drawn
+ * components themselves, so every draw is of the composition a lock holds on.
+ */
+function ungatedDrawing(drawing: VariantDrawing): {
+  drawing: VariantDrawing;
+  lift: (component: BlockDocument) => BlockDocument;
+} {
+  const limits = drawing.limits ?? DEFAULT_LIMITS;
+  const components =
+    drawing.components === undefined
+      ? undefined
+      : componentsWithConditionGatesLifted(drawing.components, limits);
+  return {
+    drawing: { ...drawing, components },
+    lift: component => withConditionGatesLifted(component, limits) ?? component,
+  };
 }
 
 /** One component drawn as a placement choosing `variant` draws it. */
@@ -119,14 +142,16 @@ export function variantLockChanges(
   drawing: VariantDrawing = {}
 ): VariantLockChange[] {
   if (!isComponent(written)) return [];
-  const previous = isComponent(stored) ? stored : undefined;
-  const unselected = drawn(written, "", drawing);
+  const { drawing: ungated, lift } = ungatedDrawing(drawing);
+  const component = lift(written);
+  const previous = isComponent(stored) ? lift(stored) : undefined;
+  const unselected = drawn(component, "", ungated);
   const found: VariantLockChange[] = [];
   const reported = new Set<string>();
   for (const variant of variantNamesIn(written) ?? []) {
-    const choosing = drawn(written, variant, drawing);
+    const choosing = drawn(component, variant, ungated);
     const before =
-      previous === undefined ? undefined : drawn(previous, variant, drawing);
+      previous === undefined ? undefined : drawn(previous, variant, ungated);
     for (const change of layersLockChanges(choosing, unselected)) {
       if (reported.has(change.id)) continue;
       if (keptByStored(change, choosing, before)) continue;
