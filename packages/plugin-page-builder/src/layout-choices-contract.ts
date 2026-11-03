@@ -96,8 +96,9 @@ export interface LayoutChoice {
    * for one never published: everything about it is unpublished.
    *
    * Asked only of the two Layouts a page can be drawn inside, its selected
-   * one and the site's default, and true only for an author who may update
-   * that Layout: false for every other row.
+   * one and the site's default, and true only for a caller who may see that
+   * Layout's working draft (update or publish it), as the service decides:
+   * false for every other row.
    */
   readonly draftChangesNotLive: boolean;
   /**
@@ -132,7 +133,10 @@ export interface LayoutChoicesResponse {
      * collection the site actually has, renamed or not.
      */
     readonly layoutsCollection: string;
-    /** Whether the caller may update Layouts, which offers "Edit Layout". */
+    /**
+     * Whether the caller may update Layouts, which offers "Edit Layout". Only
+     * that: who is told of a draft is the service's decision, per row.
+     */
     readonly canUpdateLayouts: boolean;
     /**
      * Whether more Layouts match than the list holds: the picker then offers
@@ -141,9 +145,9 @@ export interface LayoutChoicesResponse {
     readonly more: boolean;
     /**
      * Facts about the region components of the selected Layout and the
-     * default, by id, telling of a draft only where the author may update
-     * the component. A region has draft changes when any component it draws
-     * does, nested ones included.
+     * default, by id, telling of a draft only to a caller who may see the
+     * component's working draft (update or publish it). A region has draft
+     * changes when any component it draws does, nested ones included.
      */
     readonly regionComponents: Readonly<Record<string, RegionComponentFacts>>;
     /**

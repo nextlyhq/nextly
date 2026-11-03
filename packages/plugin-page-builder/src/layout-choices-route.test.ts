@@ -47,7 +47,8 @@ interface Store {
   populated?: Record<string, unknown>;
   /**
    * The ids whose working draft the caller may see, as the service decides
-   * per row: a draft is overlaid only for a caller who may update that row.
+   * per row: a draft is overlaid only for a caller who may update or publish
+   * that row.
    * Every id when unstated.
    */
   updatable?: string[];
@@ -219,8 +220,8 @@ describe("readLayoutChoices", () => {
     const { meta } = await readLayoutChoices(context(false), nextly, asked());
     expect(meta.defaultLayout).toBe("main");
     expect(meta.canUpdateLayouts).toBe(false);
-    // The service shows a working draft only to a caller who may update the
-    // row, so this author is told of none.
+    // The service shows a working draft only to a caller who may update or
+    // publish the row, so this author is told of none.
     expect(meta.regionComponents).toEqual({
       header: { draftChangesNotLive: false },
     });

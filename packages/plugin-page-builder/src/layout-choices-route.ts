@@ -128,8 +128,8 @@ function hasPendingDraft(row: unknown): boolean {
  * batches. Draft facts need a read by id, since only that read overlays a
  * working draft, so they are asked only of the two Layouts a page can be drawn
  * inside and their components. Each is read as this author: the service shows
- * a working draft only to a caller who may update that row, so the read tells
- * anyone else nothing.
+ * a working draft only to a caller who may update or publish that row, so the
+ * read tells anyone else nothing.
  */
 export async function readLayoutChoices(
   ctx: LayoutChoicesContext,
@@ -198,7 +198,8 @@ export async function readLayoutChoices(
   // Asked of each focused row as this author, whatever the collection-wide
   // answer: a rule may let them update this Layout and not others, and only
   // a read of the row can apply it. The service overlays a working draft only
-  // for a caller who may update that row, so one who may not learns nothing.
+  // for a caller who may update or publish that row, the one rule for who sees
+  // a draft, so one who may do neither learns nothing.
   const drafts = await pendingDrafts(
     nextly,
     layouts,

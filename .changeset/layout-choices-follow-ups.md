@@ -31,7 +31,7 @@
 
 The page's Layout picker:
 
-- **Draft warning under row rules:** it warns of draft changes on a Layout, or a region's component, whenever the author may update that row, including under a row-filtered update rule. An author who may not is still told nothing.
+- **Draft warning under row rules:** it warns of draft changes on a Layout, or a region's component, whenever the author may see that row's working draft, which is the case when they may update or publish it, including under a row-filtered rule. An author who may do neither is still told nothing.
 - **Failed draft reads:** a draft read that fails for any reason other than access now fails the request, so the picker offers "Try again" rather than silently dropping the warning.
 - **Searching a long list:** a search lists only the Layouts whose title matches, so a search with no matches says "No Layouts match".
 
