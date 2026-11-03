@@ -17,14 +17,20 @@ export type {
   BlockHostPolicy,
   BlockRenderArgs,
   BlocksDataProvider,
+  BlocksDataProviderFactory,
+  BlocksFilter,
+  BlocksFilterOp,
+  BlocksPublicReader,
   BlocksQuery,
   BlocksResult,
+  DefaultDataProviderOptions,
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
   ResolvedMedia,
 } from "./context";
 export {
+  createDefaultDataProvider,
   createStandaloneContext,
   defineBlock,
   emptyDataProvider,
@@ -188,6 +194,11 @@ export type {
  */
 export { pruneHiddenNodes } from "./visibility";
 export { prepareDocumentForRead, rendersOwnMarkup } from "./prepare-document";
+/**
+ * @experimental The tree the renderer walks, placeholders included, for a
+ * surface listing a page's parts beside a picture of it.
+ */
+export { prepareDocumentAsDrawn } from "./prepare-document";
 export type { PrepareDocumentArgs } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";
@@ -262,6 +273,10 @@ export type {
   CompiledPageCss,
   ComponentPath,
   Condition,
+  // Reachable from `BlockDefinition.contentModel`, which a block author
+  // declares; a type reachable through a re-exported one but unnamed is a hole.
+  ContentKind,
+  ContentModel,
   DocumentFormatVersion,
   DocumentKind,
   DocumentLimits,
@@ -286,9 +301,21 @@ export type {
   // cannot write these down cannot annotate the call it is required to make.
   ComponentUnresolvedReason,
   DefinitionsById,
+  // A resolved node maps each exposed prop to the placement exposure feeding it.
+  PropExposure,
   ResolvedBlockNode,
   ResolvedDocument,
   UnresolvedInstance,
+  // Named by the composition and exposed-property types above: a resolution's
+  // options carry a work allowance, and an exposed property states its type,
+  // so a host typing either needs these without reaching into the engine.
+  ExposedPropertyType,
+  ResolveComponentOptions,
+  WorkAllowance,
+  // Named by the engine's insert of a locked subtree, which types above reach:
+  // where a block lands, and the block that lands there.
+  OpPosition,
+  Placed,
   StyleCompileContext,
   StyleOrigin,
   StyleState,
@@ -339,3 +366,15 @@ export {
   COMPONENT_DOCUMENT_FIELD,
   type ComponentSource,
 } from "./component-source";
+// The same discovery for a reader that needs the definitions themselves: the
+// page builder's Layout choices read a region's components, nested ones
+// included, at the posture the published route reads them.
+export { definitionsFor } from "./component-source";
+
+// How a page and the regions of its Layout share one site sheet and keep
+// their own styles apart: one answer for the published route and the editor's
+// canvas, so an author sees the cascade a visitor gets.
+export { layoutPartSheets, type PagePart, type PartSheet } from "./page-parts";
+// The area type `PagePart` names, re-exported so a consumer of this entry can
+// name it without a dependency on the engine.
+export type { RegionArea } from "@nextlyhq/blocks-engine";

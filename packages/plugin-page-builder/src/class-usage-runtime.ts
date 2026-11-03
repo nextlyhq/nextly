@@ -17,7 +17,7 @@ import type { ClassUsageDocumentStore } from "./class-usage-index-rebuild";
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageDocumentReader } from "./class-usage-write";
-import type { BackfillStateStore } from "./usage-backfill";
+import type { UsageRowReader } from "./usage-count";
 import type { GroupedUsageReader } from "./usage-index";
 
 /**
@@ -35,7 +35,8 @@ export interface ClassUsageDirectApi {
     where?: Record<string, unknown>;
     limit?: number;
     page?: number;
-    sort?: string;
+    /** One key or several in order, as the Direct API takes it. */
+    sort?: string | string[];
     locale?: string;
     fallbackLocale?: false | string;
     status?: "published" | "draft" | "all";
@@ -417,6 +418,37 @@ function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   return (row as Record<string, unknown>)[subject.field];
 }
 
+/** How many index rows one page of a batch usage read takes. */
+const USAGE_ROW_PAGE_SIZE = 500;
+
+/**
+ * The rows of one usage index a predicate matches, a page at a time, backed by
+ * the Direct API: what a batch usage read folds into documents.
+ *
+ * As the system, for the reason the grouped reader gives: the index denies
+ * every access rule it declares, so an untrusted read answers nothing, which
+ * reads as "used nowhere".
+ */
+export function usageRowReader(
+  nextly: ClassUsageDirectApi,
+  /** The index collection's RESOLVED slug, since an integrator may rename it. */
+  indexCollection: string
+): UsageRowReader {
+  return async args => {
+    const found = await nextly.find({
+      collection: indexCollection,
+      where: args.where,
+      page: args.page,
+      // The Direct API clamps a page at 500 rows, so asking for that many
+      // makes each page the whole page.
+      limit: USAGE_ROW_PAGE_SIZE,
+      depth: 0,
+      ...AS_THE_SYSTEM,
+    });
+    return { items: found.items, hasNext: found.meta.hasNext };
+  };
+}
+
 /**
  * A grouped reader over one usage index, backed by the Direct API.
  *
@@ -452,171 +484,57 @@ export function usageCountReader(
 }
 
 /**
- * How many recorded scopes one page of the progress read returns.
+ * A grouped reader over one of the plugin's OWN index collections, read with
+ * no site hook shaping the answer.
  *
- * The population is small by construction — one row per (collection, field,
- * locale, variant), so tens on a large site rather than thousands — but it is
- * PAGED anyway, because "small" is a property of today's configuration and a
- * single unpaged read that silently returns the server's default page would
- * report the scopes past it as outstanding. A backfill would then walk them
- * again on every tick, for ever, never reporting complete.
+ * Health asks this whether any document could not be read whole, and the
+ * answer decides whether every count is exact. Through the Direct API, a
+ * site's `beforeRead` filter or list-query filter on the index collection
+ * would hide the marker rows and the index would read as whole while it is
+ * not. `ctx.services.ownCollections` reads the collection this plugin
+ * declared as it is stored, as the system.
  */
-const PROGRESS_PAGE_SIZE = 200;
-
-/**
- * The backfill's progress record, backed by the Direct API.
- *
- * Read as the system for the reason every access to these tables is: the
- * collection denies every rule it declares, so a read respecting the acting
- * user answers an empty set — which reads as "no scope has been walked" and
- * sends the backfill round again from the start.
- */
-/**
- * Sort one page of progress rows into what counts and what must go.
- *
- * Its own function because classifying a row is a different job from paging a
- * collection, and it is the job carrying every branch: which generation a row
- * belongs to, whether its key is usable, whether it can be addressed for
- * deletion.
- *
- * Writes into the caller's collections rather than returning new ones, because
- * the caller is accumulating across pages and merging per page would allocate
- * two objects for every page of a walk that exists to be cheap.
- */
-/**
- * The id a stale progress row can be discarded by — or a refusal.
- *
- * REFUSED rather than skipped when the id is not a string. A stale row that
- * cannot be addressed cannot be deleted, so it outlives the discard, and the
- * next time a host's bounds return to its generation it is read as completed
- * progress over an index that another generation has since rebuilt. That is
- * the exact defect the discard exists to prevent, and the delete-failure path
- * below already refuses for the same reason; an unaddressable row is the same
- * outcome arriving one step earlier.
- */
-function staleRowId(row: { id?: unknown }): string {
-  if (typeof row.id === "string" && row.id.length > 0) return row.id;
-  throw new Error(
-    "[page-builder] the usage backfill found a progress row from another derivation with no readable id, so it cannot be discarded and would survive to be reused"
-  );
-}
-
-function sortProgressRows(
-  items: readonly unknown[],
-  generation: string,
-  keys: Set<string>,
-  stale: string[]
-): void {
-  for (const item of items) {
-    const row = item as {
-      scopeKey?: unknown;
-      generation?: unknown;
-      id?: unknown;
+export function ownIndexReader(
+  own: {
+    group(
+      slug: string,
+      options: { groupBy: string; where?: Record<string, unknown> }
+    ): Promise<{
+      buckets: { value: string | null; count: number }[];
+      truncated: boolean;
+    }>;
+  },
+  /** The index collection's RESOLVED slug, since an integrator may rename it. */
+  indexCollection: string
+): GroupedUsageReader {
+  return async args => {
+    const grouped = await own.group(indexCollection, {
+      groupBy: args.groupBy,
+      where: args.where,
+    });
+    return {
+      buckets: grouped.buckets.map(bucket => bucket.value),
+      truncated: grouped.truncated,
     };
-    if (row.generation !== generation) {
-      // Another generation's progress, which cannot be reused and must not be
-      // left to be reused later. Collected rather than deleted here, so the
-      // paging is not walking a collection it is mutating.
-      stale.push(staleRowId(row));
-      continue;
-    }
-    const key = row.scopeKey;
-    // A row whose key is not a string records nothing this can act on. Skipped
-    // rather than refused: the scope it meant to name is then simply
-    // outstanding, which costs a repeat walk and is the safe direction —
-    // treating it as a completed scope of unknown identity is what would leave
-    // a real scope permanently unwalked.
-    if (typeof key === "string" && key.length > 0) keys.add(key);
-  }
+  };
 }
 
-export function usageBackfillStateStore(
-  nextly: Pick<ClassUsageDirectApi, "find" | "create" | "delete">,
-  /** The progress collection's RESOLVED slug, since an integrator may rename it. */
-  stateCollection: string,
-  /**
-   * The derivation the current index is being built under.
-   *
-   * Rows from any other generation are DISCARDED, not merely ignored, and the
-   * first version of this got that wrong for a reason worth writing down: it
-   * kept them so that moving the bounds back would not cost a re-walk, on the
-   * grounds that progress recorded under the bounds a host returned to is still
-   * true.
-   *
-   * It is not. Progress is a claim about the INDEX, and the intervening
-   * generation mutated it — lowering `maxNodes` removes references beyond the
-   * new bound, so returning to the old one finds the old progress rows intact
-   * over an index those references are missing from, and reports an undercount
-   * as exact. Reusing them is only sound if the index snapshot is restored with
-   * them, which nothing does.
-   *
-   * So a generation transition costs a re-walk, in both directions. That is the
-   * price of the answer meaning anything.
-   */
-  generation: string
-): BackfillStateStore {
+/**
+ * An index store whose WRITES are fenced by a backfill run.
+ *
+ * Reads pass straight through. Each create and delete runs only while the run
+ * is still the current one, checked in a transaction of its own, so a pass a
+ * newer run replaced (the bounds moved, or a maintenance write failed) cannot
+ * land rows derived the old way after the new run has walked the document.
+ */
+export function fencedIndexStore(
+  store: ClassUsageIndexStore,
+  fenced: <T>(write: () => Promise<T>) => Promise<T>
+): ClassUsageIndexStore {
   return {
-    completed: async () => {
-      const keys = new Set<string>();
-      const stale: string[] = [];
-      for (let page = 1; ; page += 1) {
-        const result = await nextly.find({
-          collection: stateCollection,
-          // EVERY row, not only this generation's. The rows belonging to other
-          // generations are the ones that have to be removed, and a filtered
-          // read cannot see them — so it would leave them to be reused the next
-          // time a host moved the bounds back.
-          limit: PROGRESS_PAGE_SIZE,
-          page,
-          // Sorted so the pages partition the rows. An unsorted paged read has
-          // no defined order between pages, so a row can appear twice or not at
-          // all — and a key missed here is a scope walked again on every tick.
-          sort: "id",
-          depth: 0,
-          ...AS_THE_SYSTEM,
-        });
-        sortProgressRows(result.items, generation, keys, stale);
-        if (!result.meta.hasNext) break;
-      }
-
-      // AFTER the walk, for the reason the rebuild sweeps after its own: a
-      // delete during an offset-paged read shifts the rows behind it and the
-      // next page skips one.
-      //
-      // A failure PROPAGATES. The first version swallowed it, reasoning that a
-      // surviving stale row costs one repeat of this cleanup on the next pass —
-      // true only if the cleanup runs again BEFORE the bounds return to that
-      // row's generation, and nothing guarantees that ordering. A row that
-      // outlives the discard is then accepted as progress over an index the
-      // intervening generation changed, which is exactly the defect the discard
-      // exists to prevent.
-      //
-      // Failing the pass is cheap by comparison: the sweep is re-queued and the
-      // queue is durable, so refusing costs a tick and claims nothing.
-      for (const id of stale) {
-        try {
-          await nextly.delete({
-            collection: stateCollection,
-            id,
-            ...AS_THE_SYSTEM,
-          });
-        } catch (failure) {
-          throw new Error(
-            `[page-builder] the usage backfill could not discard stale progress row "${id}", so progress from another derivation would survive to be reused`,
-            { cause: failure }
-          );
-        }
-      }
-
-      return keys;
-    },
-    record: async key => {
-      await nextly.create({
-        collection: stateCollection,
-        data: { scopeKey: key, generation },
-        ...AS_THE_SYSTEM,
-      });
-    },
+    find: args => store.find(args),
+    create: args => fenced(() => store.create(args)),
+    delete: args => fenced(() => store.delete(args)),
   };
 }
 
@@ -673,7 +591,9 @@ export function usageRebuildDocumentStore(
       // Resuming after the last id seen removes the shift entirely: a deletion
       // behind the cursor cannot move anything across it, because position is
       // no longer what decides the next page.
-      if (args.page === 1) after = undefined;
+      // A new walk starts at its resume point, which is the cursor an earlier
+      // tick recorded, or the beginning.
+      if (args.page === 1) after = args.after;
       // The cursor is an id, so a walk ordered by anything else would resume at
       // a point in a different sequence. Refused rather than quietly falling
       // back to offsets, which is the behaviour this exists to remove.

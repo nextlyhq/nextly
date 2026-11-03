@@ -91,3 +91,22 @@ export function withValueAtPath(
 
   return root;
 }
+
+/**
+ * The value at a field's RHF path, read as {@link withValueAtPath} writes it:
+ * dotted segments, a numeric one indexing an array. Only a container's OWN
+ * entries are read, so a segment naming an inherited key answers undefined.
+ *
+ * @param values - the form's values, or a part of them
+ * @param path - the field's RHF path
+ */
+export function valueAtPath(values: unknown, path: string): unknown {
+  let cursor = values;
+  for (const segment of path.split(".").filter(part => part.length > 0)) {
+    if (typeof cursor !== "object" || cursor === null) return undefined;
+    const key = Array.isArray(cursor) ? Number(segment) : segment;
+    if (!Object.hasOwn(cursor, key)) return undefined;
+    cursor = (cursor as Record<string | number, unknown>)[key];
+  }
+  return cursor;
+}

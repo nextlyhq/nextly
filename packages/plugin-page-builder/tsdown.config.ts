@@ -45,6 +45,13 @@ export default defineConfig({
   sourcemap: true,
   minify: false,
   target: "es2022",
+  /*
+   * Stylesheets stay as imports. They are copied into `dist/styles` below, not
+   * bundled, so the admin entry's `import "../styles/editor.css"` has to reach
+   * the host's bundler as written — which then loads the copied file, resolving
+   * its `@import` of the builder's sheet as an app's own import of it would.
+   */
+  external: [/\.css$/],
   onSuccess() {
     // Copy the editor stylesheet.
     const src = join(process.cwd(), "src/styles");

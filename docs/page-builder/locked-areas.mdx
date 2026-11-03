@@ -28,11 +28,11 @@ export const hero = defineBlock({
 });
 ```
 
-| `lock`          | Blocks can be added or removed | Blocks can be moved | What can change                |
-| --------------- | ------------------------------ | ------------------- | ------------------------------ |
-| `"insert"`      | no                             | yes                 | content and design             |
-| `"all"`         | no                             | no                  | content and design             |
-| `"contentOnly"` | no                             | no                  | content only                   |
+| `lock`          | Blocks can be added or removed | Blocks can be moved | What can change                 |
+| --------------- | ------------------------------ | ------------------- | ------------------------------- |
+| `"insert"`      | no                             | yes                 | content and design              |
+| `"all"`         | no                             | no                  | content and design              |
+| `"contentOnly"` | no                             | no                  | content only                    |
 | `false`         | yes                            | yes                 | anything (the slot is unlocked) |
 
 A slot that declares no lock takes the lock of the slot its block sits in, so a locked
@@ -86,16 +86,78 @@ migrate the pages already stored.
 
 Changing a block's `defaultProps` doesn't lock existing pages out. Inside a
 `"contentOnly"` slot, a save may keep any value the page already stores in the same
-place, or put it back as the block now starts. Only a third value is refused. A page
-saved for the first time, a single, and a localized blocks field are measured against
-the starting blocks alone.
+place, or put it back as the block now starts. Only a third value is refused. This
+holds for a single as for a collection's page. A localized blocks field keeps what the
+same language already stores, never another language's value. A page saved for the
+first time, a language saving its first value, and a blocks field inside a field group
+are measured against the starting blocks alone. So a stored field-group value whose
+`"contentOnly"` child kept an older value is refused on its next save: put that child
+back as the block now starts, and the save goes through.
 A page placing a component keeps what the component itself holds.
+
+## A block locked in Layers
+
+An author can also lock one block in Layers. That lock is different from a slot's: it
+is a convenience that anyone who may edit the page can lift, not a rule a block
+declares, and it covers the block and everything inside it. While a block is locked,
+nothing may change it or anything inside it, its name included; it can't be moved or
+deleted, and neither can a block that holds it; and nothing can be moved out of it or
+added to it. Changing only the lock is always allowed.
+
+Every save is held to it, the API's and an agent's included. A save is compared with
+the page as stored, its working draft where there is one: a block locked there may
+not change, move or disappear, and the save is refused with the code
+`layers-lock-changed`, naming the block. A save that empties the whole field, by
+setting it to `null`, is refused the same way while the page holds a locked block, on
+the data the save's hooks leave: a hook that empties the field is refused as the
+caller would be. A block added before a locked one, or a block removed from before it,
+shifts its position without moving it, so that is allowed. A reorder is read as the
+fewest blocks moved that explain it: moving another block across the locked one is that block's move and is
+allowed, while moving the locked block past more of its neighbours than would have to move
+round it is a move of the locked block, and refused. The same holds for a block that
+holds it. The editor asks the same question of a move before it is made. To change or
+move a locked block, send it unlocked in the same save.
+
+A known limit: a script or API write can swap a locked block with the block next to it,
+since that looks the same as the neighbour moving; the editor refuses it.
+
+Deleting is the exception. A locked block can't be deleted in the same save that
+unlocks it, and neither can a block that holds it: unlock it and save first, then
+delete it in a second save. The editor says so: until the unlock is saved, Delete is
+greyed with "Save first: this block is still locked on the saved page."
+
+In the editor, a locked block shows a lock in Layers and "Locked" on its toolbar. Every
+block inside it shows "Locked by" the block's name, and its controls are read-only.
+Moving, deleting or changing any of them is refused before it happens, with the reason:
+in Layers, on the canvas, on the toolbar, from the keyboard and in the inspector. A
+click still selects a locked block, so you can unlock it from the block's menu.
+
+Some saves can't be checked, and are kept with a line in the server log saying so:
+
+- a blocks field inside a group or a repeater, whose stored value can't be read;
+- a localized blocks field whose language can't be read yet.
 
 ## Components and locks
 
 A lock inside a component holds on every page that places it. A placement cannot use an
 exposed field or an exposed slot to change what the lock holds, and such a page is
 refused, naming the placement.
+
+A block locked in Layers inside a component holds on every page that places it too. A
+placement's value for an exposed field, or its content for an exposed slot, cannot
+change it, even on a placement a visibility condition hides, and the save is refused
+with `layers-lock-changed`, naming the block. A page cannot unlock it: remove the value, or
+unlock the block in the component. A value a page already stores is kept, so locking a
+block after pages gave it values refuses only a new one. A component's variant is held
+the same way: a variant that sets a value on a block the component locks is refused when
+the component is created or saved, naming the block and the variant, including a lock
+the same save adds and a block locked inside a component it places. A page that chooses a
+variant hiding or changing such a block is refused as a value would be.
+
+In the editor, the field that drives such a block is read-only on the placement, with "Set
+by the component" and its name, and where to change it. Double-clicking its text on the
+canvas says the same rather than opening it for editing. A field held by a
+`"contentOnly"` area is read-only the same way, with that area's reason.
 
 A component cannot add an exposed field that drives something a `"contentOnly"` lock
 holds, since no placement could change it. Expose a content field instead, remove the

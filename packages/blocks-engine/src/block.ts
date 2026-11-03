@@ -9,6 +9,7 @@
  * return type is opaque here and narrowed by the React binding package. That is
  * what keeps this package dependency-free and usable from any runtime.
  */
+import type { ContentModel } from "./content-model";
 import type { BlockNode, BlockPart, NodeStyles } from "./document";
 import type { MigrationMap } from "./migration";
 
@@ -24,6 +25,17 @@ export interface BlockIsland {
    */
   reason: string;
 }
+
+/**
+ * How deep a list's `item` schemas nest before the editor stops drawing them:
+ * a list of records holding lists, and so on, this many levels down. Any
+ * reader that walks item schemas the editor draws (which relation targets a
+ * search may read, for one) walks exactly this far, so what is drawn and what
+ * is allowed cannot disagree.
+ *
+ * @experimental
+ */
+export const ITEM_SCHEMA_MAX_DEPTH = 4;
 
 /**
  * A prop's schema entry. Structural on purpose: the engine only needs each
@@ -62,6 +74,26 @@ export interface PropSchema {
    * configuration. Registration refuses any other value, naming the prop.
    */
   role?: "content";
+  /**
+   * What an author calls the prop, in plain words: "Image", "Alt text",
+   * "Open in a new tab". The editor's controls are labelled with it, and fall
+   * back to the prop's name, spaced and capitalised, when it is left out.
+   *
+   * For an on/off prop, say what "on" does ("Open by default"), since the
+   * control is a switch and its label is the whole of what it explains.
+   */
+  label?: string;
+  /**
+   * What an author calls each of a select's `options`, keyed by the stored
+   * value: `{ lazy: "Load when near the screen" }`. An option left out is
+   * shown as its value. The stored value never changes with its name.
+   */
+  optionLabels?: Readonly<Record<string, string>>;
+  /**
+   * For a `media` prop, the kinds of file the picker offers, as an `accept`
+   * list (`image/*`), so an image is never given a PDF to draw.
+   */
+  accept?: string;
   [option: string]: unknown;
 }
 
@@ -193,6 +225,7 @@ export const BLOCK_ICONS = [
   // Content
   "heading",
   "text",
+  "rich-text",
   "list",
   "quote",
   "code",
@@ -215,6 +248,8 @@ export const BLOCK_ICONS = [
   "user",
   "cart",
   "star",
+  // A component the site made, so the Add panel can say what it is at a glance.
+  "component",
 ] as const;
 
 /**
@@ -564,6 +599,23 @@ export interface BlockDefinition<
    */
   rendersNothing?(this: void, props: P): boolean;
   /**
+   * What this block is as HTML content for these props, and what it lets sit
+   * beneath it: a Card with its link on is interactive and refuses anything
+   * interactive inside it; a Section rendered as a footer refuses another
+   * footer. The editor and the server both read it through the one placement
+   * rule, so a block whose settings change its HTML is judged by what it
+   * renders, not by its name.
+   *
+   * Optional. A block that declares nothing is flow content accepting flow
+   * content, which is what it was treated as before this existed.
+   *
+   * Pure and synchronous, like {@link BlockDefinition.rendersNothing}, and for
+   * the same reasons; a throw or a malformed answer is read as undeclared.
+   *
+   * @experimental Settles with the editor's placement rule.
+   */
+  contentModel?(this: void, props: P): ContentModel;
+  /**
    * What this block contributes to the page's metadata when the entry's own
    * SEO fields are blank.
    *
@@ -706,6 +758,7 @@ export interface AnyBlockDefinition
     | "localized"
     | "render"
     | "rendersNothing"
+    | "contentModel"
     | "seo"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
@@ -714,6 +767,8 @@ export interface AnyBlockDefinition
   localized?: string[];
   render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
   rendersNothing?(this: void, props: object): boolean;
+  /** Widened for the reason `rendersNothing` is: read with stored props. */
+  contentModel?(this: void, props: object): ContentModel;
   /**
    * Widened for the same reason as the members above, and it was the one member
    * that was missed.

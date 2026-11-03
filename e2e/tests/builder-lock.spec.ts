@@ -26,6 +26,7 @@ import {
 } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { canvasFrame } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.usersRoles] });
@@ -38,7 +39,7 @@ function heading(id: string, text: string) {
 }
 
 function block(page: Page, id: string) {
-  return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
+  return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
 /**
@@ -158,10 +159,11 @@ test.describe("two editors on one page", () => {
       // Drawn read-only now, outside the editor's canvas, and WITH the edit:
       // the page the banner promises, not the one from before it. Read by
       // text, since the read-only page is the published renderer and carries
-      // none of the canvas's node markers.
-      const main = page.locator("main");
-      await expect(main.getByText("First", { exact: true })).toBeVisible();
-      await expect(main.getByText("Second", { exact: true })).toHaveCount(0);
+      // none of the canvas's node markers; asked of the drawn page alone,
+      // because the section list beneath it names each section by its text.
+      const drawn = page.locator('main [data-slot="page-miniature-surface"]');
+      await expect(drawn.getByText("First", { exact: true })).toBeVisible();
+      await expect(drawn.getByText("Second", { exact: true })).toHaveCount(0);
 
       // Taking it back reopens the editor from the form, edit and all.
       await page.getByRole("button", { name: "Take it back" }).click();

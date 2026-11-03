@@ -132,6 +132,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     TokensPanel: nothing,
     OnboardingChecklist: nothing,
@@ -195,8 +196,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
+  // No preview here: the surrounding editor offers none.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   useDocumentIdentity: () => null,
   navigateTo: vi.fn(),
@@ -237,6 +246,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useBeforeDocumentAction: (handler: () => void) => {
     beforeStore = handler;
   },
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () =>
     React.useSyncExternalStore(
       listener => {
@@ -547,9 +559,12 @@ describe("a colleague taking the document over", () => {
     // unmounts, after the page that replaces it has read the field, so a page
     // drawn in the same commit showed the work from before it while the form
     // held the edit: the screen contradicting the banner above it.
-    // Read by the count the card states: the edit is one block, and the page
-    // from before it was empty, which the card says in words of its own.
-    await waitFor(() => expect(container.textContent).toContain("1 block"));
+    // Read by what the card says: the page from before the edit was empty,
+    // which the card says in words of its own, and the edit holds a block, so
+    // the card offers its preview instead.
+    await waitFor(() =>
+      expect(container.textContent).toContain("Live preview")
+    );
     expect(container.textContent).not.toContain("Nothing here yet");
     // Into this browser\'s form only. Nothing left the editor through its
     // exit, and nothing here saves.
