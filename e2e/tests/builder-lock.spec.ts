@@ -176,6 +176,7 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
     await freeDocument(page.request, "homepage");
     await openBuilder(page);
     await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
+    await claimedBy(page.request, await homepage(page));
 
     const other = await secondEditor(browser, page, baseURL);
     try {

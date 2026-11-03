@@ -9,7 +9,8 @@
  *
  * B's read of the entry after the gain is held until the test lets it go, so
  * the form is seen read-only while the latest version is on its way, and then
- * editable with A's value. Two browser contexts signed in as two users: the
+ * editable with A's value. When that read fails, B's form stays, read-only,
+ * and B can try again. Two browser contexts signed in as two users: the
  * lock is held per user, so one user in two tabs is one holder.
  *
  * @module tests/entry-lock-fresh-copy
@@ -88,6 +89,36 @@ async function saveAsA(page: Page, id: string): Promise<void> {
   expect((await saved).ok(), "A's save must be stored").toBe(true);
 }
 
+/**
+ * Fail the page's reads of the entry, as an unreachable server would, until
+ * the returned stop is called.
+ */
+async function failEntryReads(page: Page, id: string) {
+  const read = new RegExp(`${ENTRIES}/${id}(?:\\?|$)`);
+  let failing = true;
+  await page.route(read, async route => {
+    if (!failing || route.request().method() !== "GET") {
+      return route.continue();
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          message: "The server could not be reached.",
+          requestId: "e2e",
+        },
+      }),
+    });
+  });
+  return {
+    stop: () => {
+      failing = false;
+    },
+  };
+}
+
 test.describe(
   "an editor who gains an entry starts from the saved copy",
   { tag: EVERY_DIALECT },
@@ -157,5 +188,53 @@ test.describe(
         }
       });
     }
+
+    test("B stays read-only, and can try again, when the saved value cannot be loaded after B takes over", async ({
+      page,
+      browser,
+      baseURL,
+    }) => {
+      const id = await createPost(page);
+      await gotoAdmin(page, `/collections/posts/${id}`);
+      await expect(excerpt(page)).toBeEditable({ timeout: 30_000 });
+      expect(
+        await claimedBy(page.request, {
+          scopeKind: "collection",
+          slug: "posts",
+          entryId: id,
+        })
+      ).not.toBe(SECOND_EDITOR);
+
+      const other = await secondEditor(browser, page, baseURL);
+      try {
+        await gotoAdmin(other.page, `/collections/posts/${id}`);
+        await expect(
+          other.page.getByText(/is editing this document/)
+        ).toBeVisible({ timeout: 30_000 });
+        await saveAsA(page, id);
+
+        // B's reads of the entry fail from here until the test lets them
+        // through, as they would with the server out of reach.
+        const failing = await failEntryReads(other.page, id);
+        await other.page.getByRole("button", { name: "Take over" }).click();
+
+        // The editor stays, read-only over the copy from before, and says so;
+        // it is not replaced by the page's "couldn't be loaded" error.
+        await expect(
+          other.page.getByText(/couldn't load the latest version/)
+        ).toBeVisible({ timeout: 45_000 });
+        await expect(excerpt(other.page)).toHaveValue(BEFORE);
+        await expect(excerpt(other.page)).not.toBeEditable();
+
+        failing.stop();
+        await other.page.getByRole("button", { name: "Try again" }).click();
+        await expect(excerpt(other.page)).toHaveValue(SAVED, {
+          timeout: 30_000,
+        });
+        await expect(excerpt(other.page)).toBeEditable();
+      } finally {
+        await other.context.close();
+      }
+    });
   }
 );

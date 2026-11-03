@@ -52,6 +52,36 @@ async function holdSingleReads(page: Page) {
   return { asked, release };
 }
 
+/**
+ * Fail the page's reads of the Single's document, as an unreachable server
+ * would, until the returned stop is called.
+ */
+async function failSingleReads(page: Page) {
+  const read = new RegExp(`${SINGLE_API}(?:\\?|$)`);
+  let failing = true;
+  await page.route(read, async route => {
+    if (!failing || route.request().method() !== "GET") {
+      return route.continue();
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          message: "The server could not be reached.",
+          requestId: "e2e",
+        },
+      }),
+    });
+  });
+  return {
+    stop: () => {
+      failing = false;
+    },
+  };
+}
+
 test.describe(
   "an editor who gains a Single starts from the saved copy",
   { tag: EVERY_DIALECT },
@@ -148,5 +178,55 @@ test.describe(
         }
       });
     }
+
+    test("B stays read-only, and can try again, when the saved value cannot be loaded after B takes over", async ({
+      page,
+      browser,
+      baseURL,
+    }) => {
+      const saved = `Saved by A ${uniqueTag()}`;
+      await gotoAdmin(page, "/singles/site-settings");
+      await expect(tagline(page)).toBeEditable({ timeout: 30_000 });
+      expect(
+        await claimedBy(page.request, {
+          scopeKind: "single",
+          slug: "site-settings",
+          entryId,
+        })
+      ).not.toBe(SECOND_EDITOR);
+
+      const other = await secondEditor(browser, page, baseURL);
+      try {
+        await gotoAdmin(other.page, "/singles/site-settings");
+        await expect(
+          other.page.getByText(/is editing this document/)
+        ).toBeVisible({ timeout: 30_000 });
+        // Saved outside A's form: what B is kept from is the point here.
+        const stored = await page.request.patch(SINGLE_API, {
+          data: { tagline: saved },
+        });
+        expect(stored.ok(), await stored.text()).toBe(true);
+
+        const failing = await failSingleReads(other.page);
+        await other.page.getByRole("button", { name: "Take over" }).click();
+
+        // The editor stays, read-only over the copy from before, and says so;
+        // it is not replaced by the page's "couldn't be loaded" error.
+        await expect(
+          other.page.getByText(/couldn't load the latest version/)
+        ).toBeVisible({ timeout: 45_000 });
+        await expect(tagline(other.page)).toHaveValue(before);
+        await expect(tagline(other.page)).not.toBeEditable();
+
+        failing.stop();
+        await other.page.getByRole("button", { name: "Try again" }).click();
+        await expect(tagline(other.page)).toHaveValue(saved, {
+          timeout: 30_000,
+        });
+        await expect(tagline(other.page)).toBeEditable();
+      } finally {
+        await other.context.close();
+      }
+    });
   }
 );
