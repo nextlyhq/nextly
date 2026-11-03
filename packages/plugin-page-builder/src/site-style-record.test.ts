@@ -8,6 +8,7 @@ import {
   checkStoredFonts,
   checkStoredTokens,
   readSiteStyleRecord,
+  referableClassIds,
   unreadableStoredFonts,
 } from "./site-style-record";
 
@@ -928,5 +929,32 @@ describe("judging the write against the tier it will be merged with", () => {
     );
 
     expect(result.issues).toEqual([]);
+  });
+});
+
+describe("referableClassIds", () => {
+  const entry = (n: number, slug = `c${n}`) => ({
+    id: `id-${n}`,
+    slug,
+    orderIndex: n,
+    styles: {},
+  });
+  const library = Array.from({ length: MAX_NAMED_CLASSES }, (_, n) => entry(n));
+
+  it("leaves out a class past the compiler's cap, as the compiler does", () => {
+    const ids = referableClassIds([...library, entry(MAX_NAMED_CLASSES)]);
+    expect(ids.has(`id-${MAX_NAMED_CLASSES - 1}`)).toBe(true);
+    expect(ids.has(`id-${MAX_NAMED_CLASSES}`)).toBe(false);
+  });
+
+  it("keeps an in-cap class whose slug an entry past the cap also claims", () => {
+    // Capped BEFORE the claim rules run: the entry past the cap is never
+    // read, so it cannot take the slug from the class the compiler applies.
+    const ids = referableClassIds([
+      ...library,
+      { ...entry(MAX_NAMED_CLASSES, "c0"), orderIndex: -1 },
+    ]);
+    expect(ids.has("id-0")).toBe(true);
+    expect(ids.has(`id-${MAX_NAMED_CLASSES}`)).toBe(false);
   });
 });

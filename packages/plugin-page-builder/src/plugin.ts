@@ -1,6 +1,5 @@
 import {
   DEFAULT_LIMITS,
-  usableNamedClasses,
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
@@ -39,6 +38,7 @@ import {
   classUsageDocumentRowReader,
   ownIndexReader,
   usageCountReader,
+  usageRowReader,
 } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -127,6 +127,7 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
+import { referableClassIds } from "./site-style-record";
 import {
   loadSiteStyle,
   SITE_STYLE_SLUG,
@@ -139,7 +140,7 @@ import {
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
-import { listDocumentsUsing } from "./usage-count";
+import { listDocumentsUsingEach } from "./usage-count";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -1041,9 +1042,9 @@ export const pageBuilder = (
             defaults: configStyle,
             slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
           });
-          return new Set(
-            usableNamedClasses(style.classes ?? []).map(entry => entry.id)
-          );
+          // Capped and resolved as the compiler reads the library, so a page
+          // may reference exactly the classes it applies.
+          return referableClassIds(style.classes ?? []);
         },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
@@ -1471,14 +1472,15 @@ export const pageBuilder = (
                   classUsageIndex,
                   index
                 ),
-              documentsUsing: async (classId, health) =>
-                listDocumentsUsing({
+              // One bounded read for a whole page of styles.
+              documentsUsingEach: async (classIds, health) =>
+                listDocumentsUsingEach({
                   index: classUsageIndex,
-                  read: usageCountReader(
+                  rows: usageRowReader(
                     await requireInstalled().nextly(),
                     index
                   ),
-                  referenceId: classId,
+                  referenceIds: classIds,
                   health,
                 }),
               // Every other collection with a page builder field holds pages,

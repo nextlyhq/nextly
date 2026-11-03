@@ -747,8 +747,9 @@ export interface SharedStylesUsageResponse {
 /**
  * Where the Design panel lists the documents a shared style is used on, read
  * as the caller: documents the caller may not read are counted, not named.
- * The answer is the canonical list envelope; `meta.hiddenCount` counts the
- * unreadable documents and `meta.total` every document the index names.
+ * The answer is the canonical list envelope, paged twenty at a time with
+ * `?page=` from 1: `meta.total` and the pages count the documents the caller
+ * may read, and `meta.hiddenCount` the ones it may not.
  *
  * @experimental Settles when the Shared styles tab ships.
  */
@@ -756,6 +757,15 @@ export const SHARED_STYLE_WHERE_USED_ROUTE_PATH = "/shared-styles/where-used";
 
 /** The most documents one where-used answer names. */
 export const SHARED_STYLE_WHERE_USED_MAX = 20;
+
+/** The query parameter naming which page of a where-used list, from 1. */
+export const SHARED_STYLE_PAGE_PARAM = "page";
+
+/**
+ * The last page a where-used read may ask for: the most documents one usage
+ * listing can name, twenty to a page.
+ */
+export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
 
 /** One document a shared style is used on, as the where-used list names it. */
 export interface SharedStyleUseItem {

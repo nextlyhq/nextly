@@ -18,6 +18,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  classOverrideOf,
   resolveSiteStyle,
   tokenOverrideOf,
   tokenSaveOutcome,
@@ -379,5 +380,28 @@ describe("the engine's own defaults are editable without being stored wholesale"
     expect(
       resolved.tokens.find(t => t.name === "color.primary")?.values.light
     ).toBe(baseline.tokens.find(t => t.name === "color.primary")?.values.light);
+  });
+});
+
+describe("classOverrideOf", () => {
+  const configured = {
+    id: "c-card",
+    slug: "card",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#111111" } } },
+  };
+
+  it("drops an untouched copy of a configured class", () => {
+    expect(classOverrideOf([configured], [configured])).toEqual([]);
+  });
+
+  it("keeps an override that only names the class, or only locks it", () => {
+    // The name and the lock are what an author changes on a shared style the
+    // site's code supplies; a comparison blind to them would drop the
+    // override and lose the change on save.
+    const named = { ...configured, label: "Card" };
+    const locked = { ...configured, locked: true as const };
+    expect(classOverrideOf([configured], [named])).toEqual([named]);
+    expect(classOverrideOf([configured], [locked])).toEqual([locked]);
   });
 });

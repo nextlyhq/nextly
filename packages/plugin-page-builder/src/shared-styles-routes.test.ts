@@ -55,18 +55,25 @@ function usageOf(
   complete = true
 ) {
   const asked: string[] = [];
+  const batches: (readonly string[])[] = [];
   const source: SharedStyleUsageSource = {
     health: vi.fn(async () => health),
-    documentsUsing: async id => {
-      asked.push(id);
-      return {
-        collections: uses[id] ?? [],
-        complete: complete && health.coversExistingDocuments,
-      };
+    documentsUsingEach: async ids => {
+      batches.push(ids);
+      asked.push(...ids);
+      return new Map(
+        ids.map(id => [
+          id,
+          {
+            collections: Object.hasOwn(uses, id) ? (uses[id] ?? []) : [],
+            complete: complete && health.coversExistingDocuments,
+          },
+        ])
+      );
     },
     kindOf: collection => KINDS[collection] ?? "pages",
   };
-  return { source, asked };
+  return { source, asked, batches };
 }
 
 const post = (body: unknown) =>
@@ -261,6 +268,41 @@ describe("how widely shared styles are used", () => {
     expect(source.health).toHaveBeenCalledTimes(1);
   });
 
+  it("asks the index about a whole page of styles in one read", async () => {
+    const { source, batches } = usageOf(WHOLE);
+    const many = Array.from({ length: 50 }, (_, n) => `c-${n}`);
+    const answer = await readSharedStyleUsage(
+      usageRequest(...many),
+      caller(false),
+      source
+    );
+    expect(batches).toEqual([many]);
+    expect(Object.keys(answer.styles)).toHaveLength(50);
+  });
+
+  it("answers for an id named like an object's own machinery", async () => {
+    // A class id is any bounded string, so `__proto__` is one an author could
+    // store; a plain object would swallow it as its prototype.
+    const { source } = usageOf(
+      WHOLE,
+      Object.fromEntries([
+        ["__proto__", [{ collection: "pages", documents: ["p1"] }]],
+      ])
+    );
+    const answer = await readSharedStyleUsage(
+      usageRequest("__proto__", "constructor"),
+      caller(false),
+      source
+    );
+    expect(Object.keys(answer.styles).sort()).toEqual([
+      "__proto__",
+      "constructor",
+    ]);
+    expect(JSON.parse(JSON.stringify(answer)).styles.__proto__).toMatchObject({
+      documents: 1,
+    });
+  });
+
   it("refuses more than one page of rows, and none", async () => {
     const { source } = usageOf(WHOLE);
     const many = Array.from({ length: 51 }, (_, n) => `c-${n}`);
@@ -298,7 +340,7 @@ describe("where a shared style is used", () => {
     expect(body).toEqual({
       items: [{ id: "p1", title: "Home", collection: "pages", kind: "pages" }],
       meta: {
-        total: 3,
+        total: 1,
         page: 1,
         limit: 20,
         totalPages: 1,
@@ -309,25 +351,63 @@ describe("where a shared style is used", () => {
     });
   });
 
-  it("names at most twenty, and says more remain", async () => {
-    const documents = Array.from({ length: 300 }, (_, n) => `p${n}`);
-    const { source } = usageOf(WHOLE, {
-      "c-card": [{ collection: "pages", documents }],
+  describe("a style used on many documents", () => {
+    const documents = Array.from({ length: 45 }, (_, n) => `p${n}`);
+    const named = async (_c: string, ids: readonly string[]) =>
+      ids.map(id => ({ id, title: id }));
+    const page = async (query: string) => {
+      const { source } = usageOf(WHOLE, {
+        "c-card": [{ collection: "pages", documents }],
+      });
+      const response = await readSharedStyleUses(
+        new Request(`http://local/shared-styles/where-used?id=c-card${query}`),
+        source,
+        named
+      );
+      return (await response.json()) as {
+        items: { id: string }[];
+        meta: Record<string, unknown>;
+      };
+    };
+
+    it("names twenty on the first page, and says more remain", async () => {
+      const body = await page("");
+      expect(body.items.map(item => item.id)).toEqual(documents.slice(0, 20));
+      expect(body.meta).toEqual({
+        total: 45,
+        page: 1,
+        limit: 20,
+        totalPages: 3,
+        hasNext: true,
+        hasPrev: false,
+        hiddenCount: 0,
+      });
     });
-    const readNamed = vi.fn(async (_c: string, ids: readonly string[]) =>
-      ids.map(id => ({ id, title: id }))
-    );
-    const body = (await (
-      await readSharedStyleUses(whereUsed, source, readNamed)
-    ).json()) as { items: unknown[]; meta: Record<string, unknown> };
-    expect(body.items).toHaveLength(20);
-    expect(body.meta).toMatchObject({
-      total: 300,
-      hasNext: true,
-      hiddenCount: 0,
+
+    it("names the next twenty on page 2", async () => {
+      const body = await page("&page=2");
+      expect(body.items.map(item => item.id)).toEqual(documents.slice(20, 40));
+      expect(body.meta).toMatchObject({
+        page: 2,
+        totalPages: 3,
+        hasNext: true,
+        hasPrev: true,
+      });
     });
-    // Reading stopped once the list was full: one batch, not three.
-    expect(readNamed).toHaveBeenCalledTimes(1);
+
+    it("names the rest on the last page", async () => {
+      const body = await page("&page=3");
+      expect(body.items.map(item => item.id)).toEqual(documents.slice(40));
+      expect(body.meta).toMatchObject({ hasNext: false, hasPrev: true });
+    });
+
+    it("refuses a page that is not a positive whole number", async () => {
+      for (const query of ["&page=0", "&page=two", "&page=1.5"]) {
+        expect(await refusal(page(query))).toMatchObject({
+          code: "VALIDATION_ERROR",
+        });
+      }
+    });
   });
 
   it("says the list may be short while the index is not whole", async () => {
