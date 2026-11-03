@@ -31,8 +31,6 @@ export interface HostProgress {
 
 /** The progress table's operations. */
 export interface ProgressStore {
-  /** The documents a run recorded as finished (`rewritten` or `unchanged`). */
-  finished(runId: string): Promise<ReadonlySet<string>>;
   /** Every document a run recorded, in no particular order. */
   all(runId: string): Promise<readonly HostProgress[]>;
   /** Record one document's state, replacing what was recorded. */
@@ -44,8 +42,8 @@ export interface ProgressStore {
   ): Promise<void>;
   /**
    * A document holding a reference to one of these components was written
-   * while its run was open: mark it pending and send the run back to its
-   * converting walk, so it is read again whichever write committed last.
+   * while its `delete` run was open: mark it pending and send the run back to
+   * its converting walk, so it is read again whichever write committed last.
    */
   requeue(componentIds: readonly string[], documentKey: string): Promise<void>;
 }
@@ -104,12 +102,6 @@ export function progressStore(
   return {
     all,
     record,
-    finished: async runId =>
-      new Set(
-        (await all(runId))
-          .filter(row => row.state === "rewritten" || row.state === "unchanged")
-          .map(row => row.documentKey)
-      ),
     requeue: async (componentIds, documentKey) => {
       if (componentIds.length === 0) return;
       const r = db.table(componentDeletions);
@@ -117,7 +109,9 @@ export function progressStore(
         .select(componentDeletions)
         .where(inArray(r.componentId, [...componentIds]))
         .all();
-      for (const run of runs) {
+      // Only a delete run fences references, so only its documents are
+      // re-queued for holding one.
+      for (const run of runs.filter(row => row.purpose !== "strip-retired")) {
         await record(run.id, documentKey, "pending");
         await db
           .update(componentDeletions, { phase: "converting", cursor: null })

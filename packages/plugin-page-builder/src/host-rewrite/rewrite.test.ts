@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { HostAddress, HostStep, StepOutcome } from "./contract";
+import type { HostAddress, HostStep, LeftHost, StepOutcome } from "./contract";
 import type { DeletionRun, RunPhase } from "./fence";
 import type { HostState } from "./progress";
 import {
@@ -41,6 +41,8 @@ interface StoredHost {
   published: Value | null;
   draft: Value | null;
   live: boolean;
+  /** The public state a live row is stored in. */
+  state: string;
   access: HostAccess;
 }
 
@@ -53,6 +55,7 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
         published: host.published ?? null,
         draft: host.draft ?? null,
         live: host.live ?? false,
+        state: host.state ?? "published",
         access: host.access ?? "write",
       },
     ])
@@ -77,6 +80,8 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
     cursor: null,
   };
   const progress = new Map<string, HostState>();
+  const reasons = new Map<string, string | undefined>();
+  const outside: LeftHost[] = [];
   const writes: HostWrite[] = [];
   const hooks = {
     /** Called before each write; may throw (a crash) or edit the host. */
@@ -99,17 +104,16 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
       },
     },
     progress: {
-      finished: async () =>
-        new Set(
-          [...progress]
-            .filter(
-              ([, state]) => state === "rewritten" || state === "unchanged"
-            )
-            .map(([key]) => key)
-        ),
-      record: async (_run, key, state) => {
+      record: async (_run, key, state, reason) => {
         progress.set(key, state);
+        reasons.set(key, reason);
       },
+      all: async () =>
+        [...progress].map(([documentKey, state]) => ({
+          documentKey,
+          state,
+          reason: reasons.get(documentKey) ?? null,
+        })),
     },
     source: {
       async *documents(cursor) {
@@ -120,7 +124,7 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
       },
       cursorOf: document => document.hosts[0]?.host.id ?? "",
       hinted: async () => [],
-      outside: async () => [],
+      outside: async () => outside,
     },
     read: async host => {
       const held = stored.get(host.id ?? "");
@@ -137,13 +141,15 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
           held.draft === null
             ? null
             : ({ kind: "value", value: structuredClone(held.draft) } as const),
-        live: held.live,
+        liveState: held.live ? held.state : null,
       };
       hooks.afterRead(host.id ?? "");
       return read;
     },
     write: async (write): Promise<WriteResult> => {
       hooks.beforeWrite(write);
+      // The write's own access gate, judging this entry.
+      if (denied.has(write.host.id ?? "")) return { kind: "forbidden" };
       const held = stored.get(write.host.id ?? "");
       if (held === undefined) throw new Error("no such host");
       const now =
@@ -159,7 +165,6 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
       else held.draft = value;
       return { kind: "written" };
     },
-    may: async (action, host) => !denied.has(`${action}:${host.id ?? ""}`),
   };
 
   return {
@@ -169,6 +174,7 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
     writes,
     hooks,
     denied,
+    outside,
     run: () => run,
     setRun: (next: Partial<DeletionRun>) => {
       run = { ...run, ...next };
@@ -176,7 +182,7 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
   };
 }
 
-const args = { componentId: "card", step };
+const args = { componentId: "card", purpose: "delete" as const, step };
 
 /** Every host's live value, by id. */
 function liveOf(s: ReturnType<typeof site>): Record<string, Value | null> {
@@ -367,23 +373,83 @@ describe("rewriting every host of a component", () => {
     );
   });
 
-  it("leaves a host the person may not update or publish, writing nothing", async () => {
+  it("leaves a host the write's own gate refuses, and moves on", async () => {
     const s = site({
       a: { published: { copies: 1 } },
-      b: { published: { copies: 1 }, live: true },
+      b: { published: { copies: 1 } },
     });
-    s.denied.add("update:a");
-    s.denied.add("publish:b");
+    s.denied.add("a");
 
     const report = await rewriteHosts(s.deps, args);
 
-    expect(report.left.map(left => [left.host.id, left.reason])).toEqual(
-      expect.arrayContaining([
-        ["a", "not-permitted"],
-        ["b", "not-permitted"],
-      ])
+    expect(report.left.map(left => [left.host.id, left.reason])).toContainEqual(
+      ["a", "not-permitted"]
     );
-    expect(s.writes).toEqual([]);
+    expect(s.stored.get("a")?.published).toEqual({ copies: 1 });
+    expect(s.stored.get("b")?.published).toEqual({ copies: 0 });
+  });
+
+  it("asks no permission of its own: the write decides, even on a row a rule filters", async () => {
+    // Nothing is refused before the write is attempted, so a host whose rule
+    // admits this row is written rather than left on a collection-wide guess.
+    const s = site({ a: { published: { copies: 1 }, live: true } });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.rewritten.map(host => host.id)).toEqual(["a"]);
+  });
+
+  it("gets past a host left for good when its budget is one document a call", async () => {
+    const s = site({
+      a: { published: { copies: 1, refuse: true } },
+      b: { published: { copies: 1 } },
+      c: { published: { copies: 1 } },
+    });
+
+    let calls = 0;
+    let report = await rewriteHosts(s.deps, { ...args, maxDocuments: 1 });
+    while (!report.finished && calls < 10) {
+      calls += 1;
+      report = await rewriteHosts(s.deps, { ...args, maxDocuments: 1 });
+    }
+
+    expect(report.finished).toBe(true);
+    expect(s.stored.get("b")?.published).toEqual({ copies: 0 });
+    expect(s.stored.get("c")?.published).toEqual({ copies: 0 });
+  });
+
+  it("publishes a live row again in the public state it was read in", async () => {
+    const s = site({
+      a: { published: { copies: 1 }, live: true, state: "featured" },
+    });
+
+    await rewriteHosts(s.deps, args);
+
+    expect(s.writes[0]).toMatchObject({
+      mode: "publish",
+      publishAs: "featured",
+    });
+  });
+
+  it("records what blocks it outside the walk before it is done, for later calls", async () => {
+    const s = site({ a: { published: { copies: 0 } } });
+    s.outside.push({
+      host: { kind: "collection", slug: "layouts", id: "l1", path: ["areas"] },
+      reason: "layout",
+      detail: "Main",
+    });
+
+    const first = await rewriteHosts(s.deps, args);
+    const later = await rewriteHosts(s.deps, args);
+
+    expect(first.finished).toBe(true);
+    expect(s.run().phase).toBe("done");
+    expect(later.left).toEqual([
+      {
+        host: { kind: "collection", slug: "layouts", id: "l1", path: [] },
+        reason: "layout",
+      },
+    ]);
   });
 
   it("leaves a host the step refuses, and one it cannot read", async () => {

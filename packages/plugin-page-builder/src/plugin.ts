@@ -845,23 +845,78 @@ function rewriteInstallFor(
   };
 }
 
+/** A Single as the rewrite walks it: its slug, its fields, its master switch. */
+interface SingleWithBlocks {
+  slug: string;
+  fields?: unknown;
+  localized?: boolean;
+}
+
 /**
- * Every live Single whose declaration holds a blocks field, with its fields,
- * or `undefined` when the registry cannot be read whole. Orphaned code-first
- * rows are left out, as `singlesHoldBlocks` leaves them out.
+ * Every live Single whose declaration holds a blocks field, with its fields
+ * and its localization master switch, or `undefined` when the registry cannot
+ * be read whole. Orphaned code-first rows are left out, as `singlesHoldBlocks`
+ * leaves them out.
  */
 async function singlesDeclaringBlocks(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
-): Promise<{ slug: string; fields?: unknown }[] | undefined> {
+): Promise<SingleWithBlocks[] | undefined> {
   const declared = declaredSingleSlugs(ctx);
-  const found: { slug: string; fields?: unknown }[] = [];
+  const configured = configuredSingles(ctx);
+  const localizedSite = (ctx.config.localization?.locales.length ?? 0) > 0;
+  const found: SingleWithBlocks[] = [];
   for await (const rows of singlesRegistryPages(ctx)) {
     if (rows === UNREADABLE_PAGE) return undefined;
     const page = singlesDeclaringBlocksIn(rows, declared);
     if (page === undefined) return undefined;
-    found.push(...page);
+    for (const single of page) {
+      found.push(
+        withLocalization(single, configured.get(single.slug), localizedSite)
+      );
+    }
   }
   return found;
+}
+
+/**
+ * A Single with the switch that decides which languages store its blocks.
+ *
+ * Read from the Single's own declaration in code, with its fields, because the
+ * registry's listing carries neither the master switch nor a field's own
+ * `localized` flag. A Single made in the admin has no declaration here, so
+ * whether it is translated cannot be told: on a site with languages it is
+ * walked in every one of them, which reads a shared value once per language
+ * and converts it once, rather than missing a translation.
+ */
+function withLocalization(
+  single: { slug: string; fields?: unknown },
+  declaration: { fields?: unknown; localized?: unknown } | undefined,
+  localizedSite: boolean
+): SingleWithBlocks {
+  if (declaration !== undefined) {
+    return {
+      slug: single.slug,
+      fields: declaration.fields ?? single.fields,
+      localized: declaration.localized === true,
+    };
+  }
+  return { ...single, localized: localizedSite };
+}
+
+/** The Singles declared in code, by slug, as the site's config states them. */
+function configuredSingles(ctx: {
+  config?: { singles?: unknown };
+}): ReadonlyMap<string, { fields?: unknown; localized?: unknown }> {
+  const singles = ctx.config?.singles;
+  const bySlug = new Map<string, { fields?: unknown; localized?: unknown }>();
+  if (!Array.isArray(singles)) return bySlug;
+  for (const single of singles) {
+    const slug = (single as { slug?: unknown } | null)?.slug;
+    if (typeof slug === "string") {
+      bySlug.set(slug, single as { fields?: unknown; localized?: unknown });
+    }
+  }
+  return bySlug;
 }
 
 /**

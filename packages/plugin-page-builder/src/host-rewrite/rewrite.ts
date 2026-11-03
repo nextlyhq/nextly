@@ -21,17 +21,19 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-import type {
-  HostAddress,
-  HostForm,
-  HostStep,
-  LeftHost,
-  LeftReason,
-  RewriteReport,
-  StepOutcome,
+import {
+  documentKeyOf,
+  hostOfDocumentKey,
+  type HostAddress,
+  type HostForm,
+  type HostStep,
+  type LeftHost,
+  type LeftReason,
+  type RewriteReport,
+  type StepOutcome,
 } from "./contract";
-import type { DeletionRun, FenceStore } from "./fence";
-import type { ProgressStore } from "./progress";
+import type { DeletionRun, FenceStore, RunPurpose } from "./fence";
+import type { HostState, ProgressStore } from "./progress";
 import { scannedOutcomes } from "./scan";
 import { storedHash } from "./stored-hash";
 
@@ -79,8 +81,12 @@ export interface HostRead {
   readonly published: ReadValue;
   /** The pending working draft's value, or `null` when there is none. */
   readonly draft: ReadValue | null;
-  /** Whether the live row is published, so writing it means publishing. */
-  readonly live: boolean;
+  /**
+   * The public state the live row is in, as stored (`published`, or whatever
+   * the collection's workflow calls a public state), or `null` when the row is
+   * not public. Writing a public row means publishing it again in that state.
+   */
+  readonly liveState: string | null;
 }
 
 /** Reads one host's stored forms, as the system. Throws when it cannot. */
@@ -92,6 +98,8 @@ export interface HostWrite {
   readonly value: unknown;
   /** `publish` puts the value live; `save` stores it as the form it was read from. */
   readonly mode: "save" | "publish";
+  /** The public state a `publish` keeps the row in: the one it was read in. */
+  readonly publishAs?: string;
   /** The form the value was computed from, and its hash. */
   readonly expected: { readonly form: HostForm; readonly hash: string };
 }
@@ -106,26 +114,26 @@ export type WriteResult =
 /** Makes one write as the person the run belongs to. */
 export type HostWriter = (write: HostWrite) => Promise<WriteResult>;
 
-/** Whether the person the run belongs to may do this to a host. */
-export type HostPermission = (
-  action: "update" | "publish",
-  host: HostAddress
-) => Promise<boolean>;
-
 /** Everything a run is walked with. */
 export interface RewriteDeps {
   readonly fence: Pick<FenceStore, "runFor" | "advance">;
-  readonly progress: Pick<ProgressStore, "finished" | "record">;
+  readonly progress: Pick<ProgressStore, "record" | "all">;
   readonly source: HostSource;
   readonly read: HostReader;
+  /**
+   * Makes each write as the person the run belongs to. Whether they may update
+   * (or publish) a host is decided by that write's own access gate, which has
+   * the entry in hand; a refusal leaves the host as `not-permitted`.
+   */
   readonly write: HostWriter;
-  readonly may: HostPermission;
 }
 
 /** What one call of {@link rewriteHosts} is asked to do. */
 export interface RewriteArgs {
   /** The component whose run this is; its run must be open. */
   readonly componentId: string;
+  /** Which of the component's runs: a `delete` run, or a `strip-retired` one. */
+  readonly purpose: RunPurpose;
   readonly step: HostStep;
   /** How many times one host is read again after a concurrent edit. */
   readonly maxAttempts?: number;
@@ -179,7 +187,7 @@ export async function rewriteHosts(
   deps: RewriteDeps,
   args: RewriteArgs
 ): Promise<RewriteReport> {
-  const run = await deps.fence.runFor(args.componentId);
+  const run = await deps.fence.runFor(args.componentId, args.purpose);
   if (run === null) {
     throw NextlyError.notFound({
       logContext: {
@@ -195,11 +203,26 @@ export async function rewriteHosts(
     tally: { rewritten: [], unchanged: [], left: [], caught: [], visited: 0 },
   };
   if (args.dryRun === true) return report(walk, await dryWalk(walk));
-  if (run.phase === "done") return report(walk, true);
+  if (run.phase === "done") {
+    walk.tally.left.push(...(await recordedLeft(deps, run)));
+    return report(walk, true);
+  }
   if (run.phase === "converting" && !(await convertingWalk(walk))) {
     return report(walk, false);
   }
   return report(walk, await finalWalk(walk));
+}
+
+/**
+ * Whether a recorded state means the converting walk need not visit the
+ * document again: `rewritten`, `unchanged` or `left`. A left document is
+ * settled for that walk because visiting it again changes nothing until its
+ * author acts, and a budgeted run that kept revisiting one would never get past
+ * it. Only `pending`, a document a write re-queued, is visited again. The final
+ * walk reads every document regardless, left ones included.
+ */
+function settlesConverting(state: HostState): boolean {
+  return state !== "pending";
 }
 
 /** The report a call answers with. */
@@ -236,7 +259,11 @@ async function dryWalk(walk: Walk): Promise<boolean> {
  */
 async function convertingWalk(walk: Walk): Promise<boolean> {
   const { deps, run } = walk;
-  const skip = new Set(await deps.progress.finished(run.id));
+  const skip = new Set(
+    (await deps.progress.all(run.id))
+      .filter(row => settlesConverting(row.state))
+      .map(row => row.documentKey)
+  );
   const visitOnce = async (document: HostDocument): Promise<boolean> => {
     if (skip.has(document.key)) return true;
     if (spent(walk)) return false;
@@ -276,8 +303,49 @@ async function finalWalk(walk: Walk): Promise<boolean> {
       return false;
     }
   }
-  walk.tally.left.push(...(await deps.source.outside()));
+  // Recorded BEFORE the run is marked done, so a later call, or a reader of
+  // its progress, sees what still blocks it even when this call's own report
+  // is lost.
+  const outside = await deps.source.outside();
+  for (const left of outside) {
+    await deps.progress.record(
+      run.id,
+      documentKeyOf(left.host),
+      "left",
+      left.reason
+    );
+  }
+  walk.tally.left.push(...outside);
   return deps.fence.advance(run.id, "final", "done", null);
+}
+
+/** The documents a finished run recorded as left, as its later calls report them. */
+async function recordedLeft(
+  deps: RewriteDeps,
+  run: DeletionRun
+): Promise<LeftHost[]> {
+  return (await deps.progress.all(run.id)).flatMap(row => {
+    if (row.state !== "left") return [];
+    const host = hostOfDocumentKey(row.documentKey);
+    return host === undefined
+      ? []
+      : [{ host, reason: leftReasonOf(row.reason) }];
+  });
+}
+
+/** A recorded reason, read strictly; one this cannot name reads as unreadable. */
+function leftReasonOf(reason: string | null): LeftReason {
+  const known: readonly LeftReason[] = [
+    "refused",
+    "pending-draft",
+    "not-permitted",
+    "unreadable",
+    "unaddressable",
+    "changed",
+    "write-refused",
+    "layout",
+  ];
+  return known.find(name => name === reason) ?? "unreadable";
 }
 
 /** One document: every host in it, then its recorded state. */
@@ -355,8 +423,6 @@ async function attemptHost(
   if (candidate.access !== "write") {
     return { kind: "left", reason: "unaddressable" };
   }
-  const permitted = await permittedTo(walk.deps.may, decision.write);
-  if (permitted !== undefined) return permitted;
   if (!writes) return written(decision);
   return writtenBy(await walk.deps.write(decision.write), decision);
 }
@@ -383,23 +449,6 @@ function written(decision: Extract<Decision, { kind: "write" }>): HostResult {
     : { kind: "rewritten" };
 }
 
-/**
- * The refusal when the person the run belongs to may not make this write, or
- * `undefined` when they may. Asked before the write, as every precondition is.
- */
-async function permittedTo(
-  may: HostPermission,
-  write: HostWrite
-): Promise<HostResult | undefined> {
-  if (!(await may("update", write.host))) {
-    return { kind: "left", reason: "not-permitted" };
-  }
-  if (write.mode === "publish" && !(await may("publish", write.host))) {
-    return { kind: "left", reason: "not-permitted" };
-  }
-  return undefined;
-}
-
 /** What one read of a host says to do, by its forms and how it is reached. */
 async function decide(
   step: HostStep,
@@ -423,7 +472,7 @@ async function decideLive(
   if (read.published.kind === "absent") {
     return { kind: "done", result: { kind: "unchanged" } };
   }
-  const form: HostForm = read.live ? "published" : "draft";
+  const form: HostForm = read.liveState === null ? "draft" : "published";
   const outcome = await step(read.published.value, {
     host: candidate.host,
     form,
@@ -438,7 +487,9 @@ async function decideLive(
     write: {
       host: candidate.host,
       value: outcome.value,
-      mode: read.live ? "publish" : "save",
+      ...(read.liveState === null
+        ? { mode: "save" as const }
+        : { mode: "publish" as const, publishAs: read.liveState }),
       expected: { form, hash: await storedHash(read.published.value) },
     },
   };
@@ -513,7 +564,10 @@ async function scannedHost(
   read: HostRead
 ): Promise<HostResult> {
   const forms: { form: HostForm; value: ReadValue }[] = [
-    { form: read.live ? "published" : "draft", value: read.published },
+    {
+      form: read.liveState === null ? "draft" : "published",
+      value: read.published,
+    },
     ...(read.draft === null
       ? []
       : [{ form: "draft" as const, value: read.draft }]),

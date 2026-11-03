@@ -5,14 +5,14 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261103_012528_584_create_component_deletions",
+  name: "20261103_031439_104_create_component_rewrite_runs",
   schemaVersion: 2,
-  checksum: "2e5f7cef7f3e903c5ed53edd86aa3a45127db8b59a86d21bc244b7de6bfc1b64",
+  checksum: "47b63ebd2b748380258d1fab7b54c79cf199624524da560fa9e26b14f82c26c0",
   dialects: {
     postgresql: {
       up: [
         'CREATE TABLE "page_builder__component_deletion_hosts" (\n  "id" text PRIMARY KEY NOT NULL,\n  "deletion_id" bpchar(36) NOT NULL,\n  "host_key" text NOT NULL,\n  "state" text NOT NULL,\n  "reason" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01" ON "page_builder__component_deletion_hosts" ("deletion_id", "host_key")',
-        'CREATE TABLE "page_builder__component_deletions" (\n  "id" text PRIMARY KEY NOT NULL,\n  "component_id" text NOT NULL,\n  "started_by" text NOT NULL,\n  "phase" text NOT NULL DEFAULT \'converting\',\n  "cursor" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletions_component_id" ON "page_builder__component_deletions" ("component_id")',
+        'CREATE TABLE "page_builder__component_deletions" (\n  "id" text PRIMARY KEY NOT NULL,\n  "component_id" text NOT NULL,\n  "purpose" text NOT NULL,\n  "started_by" text NOT NULL,\n  "phase" text NOT NULL DEFAULT \'converting\',\n  "cursor" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletions_component_id_purpo_1mlwby6" ON "page_builder__component_deletions" ("component_id", "purpose")',
       ],
       down: [
         'DROP TABLE "page_builder__component_deletions" CASCADE',
@@ -22,7 +22,7 @@ export default {
     mysql: {
       up: [
         "CREATE TABLE `page_builder__component_deletion_hosts` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `deletion_id` char(36) NOT NULL,\n  `host_key` varchar(512) NOT NULL,\n  `state` varchar(16) NOT NULL,\n  `reason` varchar(64)\n);\nCREATE UNIQUE INDEX `uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01` ON `page_builder__component_deletion_hosts` (`deletion_id`, `host_key`)",
-        "CREATE TABLE `page_builder__component_deletions` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `component_id` varchar(255) NOT NULL,\n  `started_by` varchar(255) NOT NULL,\n  `phase` varchar(16) NOT NULL DEFAULT 'converting',\n  `cursor` varchar(1024)\n);\nCREATE UNIQUE INDEX `uq_page_builder__component_deletions_component_id` ON `page_builder__component_deletions` (`component_id`)",
+        "CREATE TABLE `page_builder__component_deletions` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `component_id` varchar(255) NOT NULL,\n  `purpose` varchar(32) NOT NULL,\n  `started_by` varchar(255) NOT NULL,\n  `phase` varchar(16) NOT NULL DEFAULT 'converting',\n  `cursor` varchar(1024)\n);\nCREATE UNIQUE INDEX `uq_page_builder__component_deletions_component_id_purpo_1mlwby6` ON `page_builder__component_deletions` (`component_id`, `purpose`)",
       ],
       down: [
         "DROP TABLE `page_builder__component_deletions`",
@@ -32,7 +32,7 @@ export default {
     sqlite: {
       up: [
         'CREATE TABLE "page_builder__component_deletion_hosts" (\n  "id" text PRIMARY KEY NOT NULL,\n  "deletion_id" text NOT NULL,\n  "host_key" text NOT NULL,\n  "state" text NOT NULL,\n  "reason" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01" ON "page_builder__component_deletion_hosts" ("deletion_id", "host_key")',
-        'CREATE TABLE "page_builder__component_deletions" (\n  "id" text PRIMARY KEY NOT NULL,\n  "component_id" text NOT NULL,\n  "started_by" text NOT NULL,\n  "phase" text NOT NULL DEFAULT \'converting\',\n  "cursor" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletions_component_id" ON "page_builder__component_deletions" ("component_id")',
+        'CREATE TABLE "page_builder__component_deletions" (\n  "id" text PRIMARY KEY NOT NULL,\n  "component_id" text NOT NULL,\n  "purpose" text NOT NULL,\n  "started_by" text NOT NULL,\n  "phase" text NOT NULL DEFAULT \'converting\',\n  "cursor" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletions_component_id_purpo_1mlwby6" ON "page_builder__component_deletions" ("component_id", "purpose")',
       ],
       down: [
         'DROP TABLE "page_builder__component_deletions"',
@@ -142,6 +142,11 @@ export default {
               nullable: false,
             },
             {
+              name: "purpose",
+              type: "text",
+              nullable: false,
+            },
+            {
               name: "started_by",
               type: "text",
               nullable: false,
@@ -160,8 +165,8 @@ export default {
           ],
           indexes: [
             {
-              name: "uq_page_builder__component_deletions_component_id",
-              columns: ["component_id"],
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
               unique: true,
             },
           ],
@@ -310,6 +315,11 @@ export default {
               nullable: false,
             },
             {
+              name: "purpose",
+              type: "varchar(32)",
+              nullable: false,
+            },
+            {
               name: "started_by",
               type: "varchar(255)",
               nullable: false,
@@ -328,8 +338,8 @@ export default {
           ],
           indexes: [
             {
-              name: "uq_page_builder__component_deletions_component_id",
-              columns: ["component_id"],
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
               unique: true,
             },
           ],
@@ -477,6 +487,11 @@ export default {
               nullable: false,
             },
             {
+              name: "purpose",
+              type: "text",
+              nullable: false,
+            },
+            {
               name: "started_by",
               type: "text",
               nullable: false,
@@ -495,8 +510,8 @@ export default {
           ],
           indexes: [
             {
-              name: "uq_page_builder__component_deletions_component_id",
-              columns: ["component_id"],
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
               unique: true,
             },
           ],

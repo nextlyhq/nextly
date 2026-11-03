@@ -23,7 +23,6 @@ import { HOST_CHANGED, writeExpecting } from "./expectations";
 import type {
   HostCandidate,
   HostDocument,
-  HostPermission,
   HostReader,
   HostSource,
   HostWriter,
@@ -40,7 +39,7 @@ export interface RewriteDirectApi extends LayoutGuardDirectApi {
     slug: string;
     createIfMissing: false;
     draft?: boolean;
-    status?: "all";
+    status?: "all" | "published";
     locale?: string;
     fallbackLocale?: false;
     depth?: number;
@@ -78,7 +77,16 @@ export interface RewriteSite {
   readonly resolveCollection: (slug: string) => Promise<unknown>;
   /** Every Single holding blocks, with its fields, or `undefined` when unreadable. */
   readonly singles: () => Promise<
-    readonly { readonly slug: string; readonly fields?: unknown }[] | undefined
+    | readonly {
+        readonly slug: string;
+        readonly fields?: unknown;
+        /**
+         * The Single's localization master switch, which a blocks field with
+         * no flag of its own inherits; every language is walked when it is on.
+         */
+        readonly localized?: boolean;
+      }[]
+    | undefined
   >;
   /** The site's configured languages. */
   readonly locales: () => readonly string[];
@@ -92,8 +100,6 @@ export interface RewriteSite {
   readonly componentId: string;
   /** Who the writes are made as, resolved from the caller's own request. */
   readonly identity: () => Promise<WriteIdentity>;
-  /** Whether the caller may do this to a collection or Single, by its slug. */
-  readonly can: (action: string, resource: string) => Promise<boolean>;
 }
 
 /** Where the walk is: a group (collections, then Singles), a slug, an id. */
@@ -325,8 +331,12 @@ async function layoutsNaming(site: RewriteSite): Promise<LeftHost[]> {
 export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
   return async host => {
     const nextly = await site.nextly();
-    const live = await readRow(nextly, host, false);
-    const pending = await readRow(nextly, host, true);
+    // Whether the row is public is asked of core's own lifecycle filter: a
+    // read bounded to `published` answers every state the collection's
+    // workflow calls public, so no state name is compared here.
+    const shown = await readRow(nextly, host, "public");
+    const live = shown ?? (await readRow(nextly, host, "all"));
+    const pending = await readRow(nextly, host, "draft");
     const draft =
       pending !== null && pending._isWorkingDraft === true
         ? valueAt(pending, host.path)
@@ -334,16 +344,25 @@ export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
     return {
       published: live === null ? { kind: "absent" } : valueAt(live, host.path),
       draft,
-      live: live?.status === "published",
+      // A row with no lifecycle has no state to keep: it is saved, not
+      // published.
+      liveState:
+        shown !== null && typeof shown.status === "string"
+          ? shown.status
+          : null,
     };
   };
 }
 
-/** One form of a host's row, or `null` when there is none. */
+/**
+ * One read of a host's row, or `null` when there is none: `all` reads the
+ * main row in any state, `public` only in a state the workflow calls public,
+ * and `draft` overlays a pending working draft where there is one.
+ */
 async function readRow(
   nextly: RewriteDirectApi,
   host: HostAddress,
-  draft: boolean
+  read: "all" | "public" | "draft"
 ): Promise<Record<string, unknown> | null> {
   const inLocale =
     host.locale === undefined
@@ -352,9 +371,9 @@ async function readRow(
   const shared = {
     depth: 0,
     overrideAccess: true,
-    status: "all" as const,
+    status: read === "public" ? ("published" as const) : ("all" as const),
     ...inLocale,
-    ...(draft ? { draft: true } : {}),
+    ...(read === "draft" ? { draft: true } : {}),
   };
   try {
     const row =
@@ -407,7 +426,9 @@ export function siteHostWriter(
     }
     const data: Record<string, unknown> = {
       [field]: write.value,
-      ...(write.mode === "publish" ? { status: "published" } : {}),
+      // Published again in the public state it was read in, which is the one
+      // its workflow already chose.
+      ...(write.publishAs === undefined ? {} : { status: write.publishAs }),
     };
     const nextly = await site.nextly();
     const identity = await site.identity();
@@ -459,11 +480,4 @@ function writeFailure(error: unknown): WriteResult {
         .filter(message => message !== "")
         .join(" ") || error.message,
   };
-}
-
-/** Whether the person running the rewrite may update (or publish) a host. */
-export function siteHostPermission(
-  site: Pick<RewriteSite, "can">
-): HostPermission {
-  return (action, host) => site.can(action, host.slug);
 }

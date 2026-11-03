@@ -29,11 +29,10 @@ import { readingAsUser } from "../library-route";
 
 import { componentDeleteStep } from "./component-delete-step";
 import type { RewriteReport, StoredForm } from "./contract";
-import { fenceStore, type DeletionRun } from "./fence";
+import { fenceStore, type DeletionRun, type RunPurpose } from "./fence";
 import { progressStore, type HostProgress } from "./progress";
 import { rewriteHosts } from "./rewrite";
 import {
-  siteHostPermission,
   siteHostReader,
   siteHostSource,
   siteHostWriter,
@@ -44,11 +43,12 @@ import {
 export const COMPONENT_DELETE_REWRITE_SERVICE = "componentDeleteRewrite";
 
 /** The person a rewrite runs as: the caller of the route that started it. */
-export type RewriteCaller = Pick<PluginRouteContext, "caller">;
+export type RewriteCaller = Pick<PluginRouteContext, "caller" | "user">;
 
 /** One call of the rewrite. */
 export interface ComponentDeleteRewriteArgs {
   readonly componentId: string;
+  /** The caller of this request; it must be the person who opened the run. */
   readonly caller: RewriteCaller;
   /** How many documents this call may visit before it stops to resume later. */
   readonly maxDocuments?: number;
@@ -61,20 +61,32 @@ export interface ComponentDeleteRewriteArgs {
 /**
  * The service.
  *
+ * Every write of a run is made as the person who opened it. The run records
+ * who that is, and a call from anybody else is refused, so a second person
+ * reaching the same open run can neither borrow the first one's access nor
+ * lend theirs.
+ *
  * @experimental
  */
 export interface ComponentDeleteRewriteService {
-  /** Open the run for a component, which fences it; see `FenceStore.open`. */
+  /**
+   * Open the run for a component and purpose as this caller; a `delete` run
+   * fences the component. See `FenceStore.open`.
+   */
   open(
     componentId: string,
-    startedBy: string
+    caller: RewriteCaller,
+    purpose?: RunPurpose
   ): Promise<{ readonly opened: boolean; readonly run: DeletionRun }>;
-  /** Rewrite the component's hosts, resuming where the run stopped. */
+  /** Rewrite the component's hosts for its `delete` run, resuming where it stopped. */
   rewrite(args: ComponentDeleteRewriteArgs): Promise<RewriteReport>;
-  /** What the run recorded about each document, or nothing when none is open. */
-  progress(componentId: string): Promise<readonly HostProgress[]>;
-  /** Close the run, which lifts the fence. */
-  close(componentId: string): Promise<void>;
+  /** What a run recorded about each document, or nothing when none is open. */
+  progress(
+    componentId: string,
+    purpose?: RunPurpose
+  ): Promise<readonly HostProgress[]>;
+  /** Close a run, which lifts a `delete` run's fence. */
+  close(componentId: string, purpose?: RunPurpose): Promise<void>;
 }
 
 /** What the installed plugin hands the service. */
@@ -82,10 +94,7 @@ export interface RewriteInstall {
   readonly db: PluginDatabase;
   readonly dialect: Parameters<typeof fenceStore>[1];
   /** The site, without the parts that belong to one run. */
-  readonly site: Omit<
-    RewriteSite,
-    "componentId" | "identity" | "can" | "hints"
-  >;
+  readonly site: Omit<RewriteSite, "componentId" | "identity" | "hints">;
   /** The documents the usage index says place a component. */
   readonly hints: (
     componentId: string
@@ -95,6 +104,33 @@ export interface RewriteInstall {
   readonly limits: () => DocumentLimits;
 }
 
+/**
+ * Who a caller is, as a run records it: `user:<id>` for a signed-in person,
+ * `api-key:<id>` for a key, which is judged on its own scope rather than its
+ * owner's and so is a different person to a run. Refused for a request with
+ * no caller.
+ */
+function runStarterOf(caller: RewriteCaller): string {
+  const who = caller.caller;
+  if (who === null) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "host-rewrite-no-caller" },
+    });
+  }
+  return who.authMethod === "api-key" && who.apiKeyId !== undefined
+    ? `api-key:${who.apiKeyId}`
+    : `user:${userIdOf(caller)}`;
+}
+
+/** The signed-in user's id, which a route's caller always carries. */
+function userIdOf(caller: RewriteCaller): string {
+  const id = caller.user?.id;
+  if (id !== undefined && id !== "") return id;
+  throw NextlyError.forbidden({
+    logContext: { reason: "host-rewrite-no-user" },
+  });
+}
+
 /** The service over the installed plugin, resolved per call. */
 export function componentDeleteRewriteService(
   install: () => RewriteInstall
@@ -102,13 +138,28 @@ export function componentDeleteRewriteService(
   const fence = () => fenceStore(install().db, install().dialect);
   const progress = () => progressStore(install().db, install().dialect);
   return {
-    open: (componentId, startedBy) => fence().open(componentId, startedBy),
-    close: componentId => fence().close(componentId),
-    progress: async componentId => {
-      const run = await fence().runFor(componentId);
+    open: (componentId, caller, purpose = "delete") =>
+      fence().open(componentId, purpose, runStarterOf(caller)),
+    close: (componentId, purpose = "delete") =>
+      fence().close(componentId, purpose),
+    progress: async (componentId, purpose = "delete") => {
+      const run = await fence().runFor(componentId, purpose);
       return run === null ? [] : progress().all(run.id);
     },
-    rewrite: args => rewriteAsCaller(install(), fence(), progress(), args),
+    rewrite: async args => {
+      const run = await fence().runFor(args.componentId, "delete");
+      // A precondition, so before any host is read: the run's writes are its
+      // starter's, and nobody else's request may make them.
+      if (run !== null && run.startedBy !== runStarterOf(args.caller)) {
+        throw NextlyError.forbidden({
+          logContext: {
+            reason: "host-rewrite-not-the-starter",
+            componentId: args.componentId,
+          },
+        });
+      }
+      return rewriteAsCaller(install(), fence(), progress(), args);
+    },
   };
 }
 
@@ -119,18 +170,11 @@ function rewriteAsCaller(
   progress: ReturnType<typeof progressStore>,
   args: ComponentDeleteRewriteArgs
 ): Promise<RewriteReport> {
-  const caller = args.caller.caller;
-  if (caller === null) {
-    throw NextlyError.forbidden({
-      logContext: { reason: "host-rewrite-no-caller" },
-    });
-  }
   const site: RewriteSite = {
     ...installed.site,
     componentId: args.componentId,
     hints: () => installed.hints(args.componentId),
     identity: () => readingAsUser(args.caller),
-    can: (action, resource) => caller.can(action, resource),
   };
   const limits = installed.limits();
   return rewriteHosts(
@@ -140,10 +184,10 @@ function rewriteAsCaller(
       source: siteHostSource(site),
       read: siteHostReader(site),
       write: siteHostWriter(site),
-      may: siteHostPermission(site),
     },
     {
       componentId: args.componentId,
+      purpose: "delete",
       step: componentDeleteStep({
         componentId: args.componentId,
         definitions: (ids, form) =>

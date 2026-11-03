@@ -40,11 +40,23 @@ export const COMPONENT_BEING_DELETED = "COMPONENT_BEING_DELETED";
 /** Which walk a run is on. */
 export type RunPhase = "converting" | "final" | "done";
 
+/**
+ * What a run is for. Only a `delete` run fences new references: the component
+ * is about to go, so a copy added now would be one nobody converts. A
+ * `strip-retired` run removes values of fields the component no longer
+ * exposes, and a new copy of the component is no obstacle to that.
+ */
+export type RunPurpose = "delete" | "strip-retired";
+
 /** One run, as its row stores it. */
 export interface DeletionRun {
   readonly id: string;
   readonly componentId: string;
-  /** The id of the person who started it, who every write is made as. */
+  readonly purpose: RunPurpose;
+  /**
+   * Who started it, and so who every write is made as: `user:<id>` or
+   * `api-key:<id>`.
+   */
   readonly startedBy: string;
   readonly phase: RunPhase;
   /** Where the final walk stopped, or `null` before it started. */
@@ -59,15 +71,17 @@ export type FencedComponents =
 /** The runs' own table, through the plugin's database surface. */
 export interface FenceStore {
   /**
-   * Open the run for a component, which fences it. `opened` is false when a
-   * run for it already exists (started by anybody), and that run is answered.
+   * Open the run for a component and purpose; a `delete` run fences the
+   * component. `opened` is false when that run already exists (started by
+   * anybody), and that run is answered.
    */
   open(
     componentId: string,
+    purpose: RunPurpose,
     startedBy: string
   ): Promise<{ readonly opened: boolean; readonly run: DeletionRun }>;
-  /** The run for a component, or `null` when none is open. */
-  runFor(componentId: string): Promise<DeletionRun | null>;
+  /** The run for a component and purpose, or `null` when none is open. */
+  runFor(componentId: string, purpose: RunPurpose): Promise<DeletionRun | null>;
   /**
    * Move a run from one phase to another, with where its final walk stopped.
    * Answers false, changing nothing, when the run is no longer in `from`: a
@@ -79,10 +93,10 @@ export interface FenceStore {
     to: RunPhase,
     cursor: string | null
   ): Promise<boolean>;
-  /** Every component a run is open for. */
+  /** Every component a `delete` run is open for. */
   fenced(): Promise<ReadonlySet<string>>;
-  /** Close a run, which lifts its fence, and drop its progress. */
-  close(componentId: string): Promise<void>;
+  /** Close a run, which lifts a `delete` run's fence, and drop its progress. */
+  close(componentId: string, purpose: RunPurpose): Promise<void>;
 }
 
 /** The dialect, as `ctx.dialect` names it. */
@@ -93,10 +107,20 @@ function phaseOf(value: string): RunPhase {
   return value === "final" || value === "done" ? value : "converting";
 }
 
+/**
+ * A stored purpose, read strictly. Anything else reads as `delete`, the one
+ * that fences: a row nobody can classify keeps refusing new references rather
+ * than letting them through.
+ */
+function purposeOf(value: string): RunPurpose {
+  return value === "strip-retired" ? value : "delete";
+}
+
 /** A run row as this module hands it out. */
 function runOf(row: {
   id: string;
   componentId: string;
+  purpose: string;
   startedBy: string;
   phase: string;
   cursor: string | null;
@@ -104,10 +128,19 @@ function runOf(row: {
   return {
     id: row.id,
     componentId: row.componentId,
+    purpose: purposeOf(row.purpose),
     startedBy: row.startedBy,
     phase: phaseOf(row.phase),
     cursor: row.cursor,
   };
+}
+
+/** Both conditions, as one. `and` is typed as possibly empty; two never are. */
+function both(
+  first: NonNullable<ReturnType<typeof and>>,
+  second: NonNullable<ReturnType<typeof and>>
+): NonNullable<ReturnType<typeof and>> {
+  return and(first, second) ?? first;
 }
 
 /** The fence store over the plugin's own `ctx.db`. */
@@ -115,22 +148,28 @@ export function fenceStore(
   db: Pick<PluginDatabase, "transaction" | "select" | "table" | "update">,
   dialect: Dialect
 ): FenceStore {
-  const runFor = async (componentId: string): Promise<DeletionRun | null> => {
-    const r = db.table(componentDeletions);
+  // Resolved per call: reading the fence needs no column handle at all.
+  const columns = () => db.table(componentDeletions);
+  const runFor = async (
+    componentId: string,
+    purpose: RunPurpose
+  ): Promise<DeletionRun | null> => {
+    const r = columns();
     const row = await db
       .select(componentDeletions)
-      .where(eq(r.componentId, componentId))
+      .where(both(eq(r.componentId, componentId), eq(r.purpose, purpose)))
       .first();
     return row === null ? null : runOf(row);
   };
 
   return {
     runFor,
-    open: async (componentId, startedBy) => {
+    open: async (componentId, purpose, startedBy) => {
       try {
         const run = await db.transaction(tx =>
           tx.insertReturning(componentDeletions, {
             componentId,
+            purpose,
             startedBy,
             phase: "converting",
           })
@@ -139,37 +178,41 @@ export function fenceStore(
       } catch (error) {
         // The unique key refused a second run: the one that won is the run.
         if (!isUniqueViolation(dialect, error)) throw error;
-        const held = await runFor(componentId);
+        const held = await runFor(componentId, purpose);
         if (held === null) throw error;
         return { opened: false, run: held };
       }
     },
     advance: async (runId, from, to, cursor) => {
-      const r = db.table(componentDeletions);
-      const where = and(eq(r.id, runId), eq(r.phase, from));
-      if (where === undefined) return false;
       // Every move writes a phase or a cursor it did not hold before, so the
       // count is the rows matched on MySQL too, which counts changed rows.
+      const r = columns();
       const moved = await db
         .update(componentDeletions, { phase: to, cursor })
-        .where(where);
+        .where(both(eq(r.id, runId), eq(r.phase, from)));
       return moved > 0;
     },
     fenced: async () => {
+      // Every open run, filtered here: the table holds one row per run in
+      // flight, and a purpose read strictly fences when it cannot be told.
       const rows = await db.select(componentDeletions).all();
-      return new Set(rows.map(row => row.componentId));
+      return new Set(
+        rows
+          .filter(row => purposeOf(row.purpose) === "delete")
+          .map(row => row.componentId)
+      );
     },
-    close: async componentId =>
+    close: async (componentId, purpose) =>
       db.transaction(async tx => {
-        const r = tx.table(componentDeletions);
+        const t = tx.table(componentDeletions);
         const run = await tx
           .select(componentDeletions)
-          .where(eq(r.componentId, componentId))
+          .where(both(eq(t.componentId, componentId), eq(t.purpose, purpose)))
           .first();
         if (run === null) return;
         const h = tx.table(componentDeletionHosts);
         await tx.delete(componentDeletionHosts).where(eq(h.deletionId, run.id));
-        await tx.delete(componentDeletions).where(eq(r.id, run.id));
+        await tx.delete(componentDeletions).where(eq(t.id, run.id));
       }),
   };
 }

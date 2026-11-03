@@ -39,6 +39,7 @@ import { COMPONENTS_SLUG } from "../collections/components";
 import { asDocument } from "../component-store-source";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { documentKeyOf, type RewriteReport } from "../host-rewrite/contract";
+import type { DeletionRun, RunPurpose } from "../host-rewrite/fence";
 import {
   COMPONENT_DELETE_REWRITE_SERVICE,
   type ComponentDeleteRewriteService,
@@ -129,6 +130,22 @@ function harness(
       routes: [
         {
           method: "POST",
+          path: "/open",
+          handler: async (req, ctx) => {
+            const body = (await req.json()) as {
+              componentId: string;
+              purpose?: RunPurpose;
+            };
+            const opened = await service().open(
+              body.componentId,
+              ctx,
+              body.purpose
+            );
+            return Response.json(opened);
+          },
+        },
+        {
+          method: "POST",
           path: "/rewrite",
           handler: async (req, ctx) => {
             const body = (await req.json()) as {
@@ -160,7 +177,23 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(switches: Switches = {}) {
+    /** The grants every author here holds. */
+    const AUTHOR_GRANTS = [
+      "read-notes",
+      "update-notes",
+      "read-pages",
+      "update-pages",
+      "publish-pages",
+      "read-components",
+    ];
+
+    async function boot(
+      switches: Switches = {},
+      site: {
+        singles?: unknown[];
+        localization?: { locales: string[]; defaultLocale: string };
+      } = {}
+    ) {
       const plugin = pageBuilder();
       const service = () =>
         plugin.contributes?.services?.[
@@ -179,20 +212,32 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as never,
         ],
+        ...(site.singles === undefined
+          ? {}
+          : { singles: site.singles as never }),
+        ...(site.localization === undefined
+          ? {}
+          : { localization: site.localization }),
       });
       const t = current;
       // The first user is the super admin; it is made and never acts.
       await person(t, "owner");
-      const author = await person(t, "author");
-      await grant(t, author, [
-        "read-notes",
-        "update-notes",
-        "read-pages",
-        "update-pages",
-        "publish-pages",
-        "read-components",
-      ]);
-      return { t, svc: service(), author, cookie: await sessionOf(t, author) };
+      const singleSlugs = (site.singles ?? []).map(
+        single => (single as { slug: string }).slug
+      );
+      const anAuthor = async (name: string) => {
+        const id = await person(t, name);
+        await grant(t, id, AUTHOR_GRANTS, singleSlugs);
+        return { id, cookie: await sessionOf(t, id) };
+      };
+      const author = await anAuthor("author");
+      return {
+        t,
+        svc: service(),
+        author: author.id,
+        cookie: author.cookie,
+        anAuthor,
+      };
     }
 
     async function person(t: TestNextly, name: string): Promise<string> {
@@ -204,16 +249,29 @@ describe.each(getConfiguredTestDialects())(
       return created.item.id;
     }
 
-    async function grant(t: TestNextly, userId: string, slugs: string[]) {
+    async function grant(
+      t: TestNextly,
+      userId: string,
+      slugs: string[],
+      singles: string[] = []
+    ) {
       const permissions = await t.nextly.permissions.find({ limit: 500 });
       const ids = slugs.map(slug => {
         const found = permissions.items.find(item => item.slug === slug);
         if (found === undefined) throw new Error(`${slug} is not seeded`);
         return found.id;
       });
+      // Every permission seeded for each Single, whatever its actions are.
+      for (const single of singles) {
+        const own = permissions.items.filter(item =>
+          item.slug.endsWith(`-${single}`)
+        );
+        if (own.length === 0) throw new Error(`no permission for ${single}`);
+        ids.push(...own.map(item => item.id));
+      }
       const role = await t.nextly.roles.create({
         data: {
-          name: "Rewrite author",
+          name: `Rewrite author ${String(Math.random()).slice(2, 10)}`,
           // Not `author`, which a fresh site already seeds.
           slug: `rewrite-author-${String(Math.random()).slice(2, 10)}`,
           permissionIds: ids,
@@ -247,8 +305,32 @@ describe.each(getConfiguredTestDialects())(
       cookie: string,
       body: { componentId: string; maxDocuments?: number }
     ): Promise<{ status: number; report: RewriteReport }> {
+      const answered = await post(cookie, "rewrite", body);
+      return {
+        status: answered.status,
+        report: answered.body as RewriteReport,
+      };
+    }
+
+    /** Open a run through the harness route, as whoever `cookie` signs in. */
+    async function open(
+      cookie: string,
+      componentId: string,
+      purpose?: RunPurpose
+    ): Promise<{ opened: boolean; run: DeletionRun }> {
+      const answered = await post(cookie, "open", { componentId, purpose });
+      expect(answered.status, JSON.stringify(answered.body)).toBe(200);
+      return answered.body as { opened: boolean; run: DeletionRun };
+    }
+
+    /** One POST to a harness route. */
+    async function post(
+      cookie: string,
+      route: "open" | "rewrite",
+      body: unknown
+    ): Promise<{ status: number; body: unknown }> {
       const handlers = createDynamicHandlers();
-      const url = `${ORIGIN}/api/plugins/${HARNESS}/rewrite`;
+      const url = `${ORIGIN}/api/plugins/${HARNESS}/${route}`;
       const response = await handlers.POST(
         new Request(url, {
           method: "POST",
@@ -262,14 +344,14 @@ describe.each(getConfiguredTestDialects())(
         }),
         {
           params: Promise.resolve({
-            params: ["plugins", ...HARNESS.split("/"), "rewrite"],
+            params: ["plugins", ...HARNESS.split("/"), route],
           }),
         }
       );
       const text = await response.text();
       return {
         status: response.status,
-        report: (text === "" ? {} : JSON.parse(text)) as RewriteReport,
+        body: text === "" ? {} : (JSON.parse(text) as unknown),
       };
     }
 
@@ -350,13 +432,13 @@ describe.each(getConfiguredTestDialects())(
       nodes.map(node => (node.props as { text?: unknown }).text);
 
     it("opens one run however many start it at once, and fences new references", async () => {
-      const { t, svc } = await boot();
+      const { t, svc, cookie } = await boot();
       const cardId = await card(t);
       const holding = await note(t, "Holding", [copyOf("i1", cardId)]);
 
       const opened = await Promise.all([
-        svc.open(cardId, "first"),
-        svc.open(cardId, "second"),
+        open(cookie, cardId),
+        open(cookie, cardId),
       ]);
 
       expect(opened.filter(one => one.opened)).toHaveLength(1);
@@ -383,13 +465,13 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps an author's edit committed between the rewrite's read and its write", async () => {
       const switches: Switches = {};
-      const { t, svc, cookie } = await boot(switches);
+      const { t, cookie } = await boot(switches);
       const cardId = await card(t);
       const id = await note(t, "Note", [
         heading("own", "Own"),
         copyOf("i1", cardId),
       ]);
-      await svc.open(cardId, "author");
+      await open(cookie, cardId);
 
       // The author saves the moment the rewrite has read the note.
       switches.onNoteRead = async readId => {
@@ -417,10 +499,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps an author's edit committed after the rewrite converted the note", async () => {
       const switches: Switches = {};
-      const { t, svc, cookie } = await boot(switches);
+      const { t, cookie } = await boot(switches);
       const cardId = await card(t);
       const id = await note(t, "Note", [copyOf("i1", cardId)]);
-      await svc.open(cardId, "author");
+      await open(cookie, cardId);
 
       // The author's save is judged while the note still holds the copy, and
       // commits after the rewrite has converted it.
@@ -461,14 +543,14 @@ describe.each(getConfiguredTestDialects())(
 
     it("resumes after a crash mid-run without skipping a note", async () => {
       const switches: Switches = {};
-      const { t, svc, cookie } = await boot(switches);
+      const { t, cookie } = await boot(switches);
       const cardId = await card(t);
       const ids = [
         await note(t, "One", [copyOf("i1", cardId)]),
         await note(t, "Two", [copyOf("i1", cardId)]),
         await note(t, "Three", [copyOf("i1", cardId)]),
       ];
-      await svc.open(cardId, "author");
+      await open(cookie, cardId);
       switches.crashOn = ids[1];
 
       const crashed = await rewrite(cookie, { componentId: cardId });
@@ -486,10 +568,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("does not let a forged progress row skip the final walk", async () => {
-      const { t, svc, cookie } = await boot();
+      const { t, cookie } = await boot();
       const cardId = await card(t);
       const id = await note(t, "Note", [copyOf("i1", cardId)]);
-      const { run } = await svc.open(cardId, "author");
+      const { run } = await open(cookie, cardId);
       // A row no walk wrote, claiming the note is already converted.
       await t.adapter.insert("page_builder__component_deletion_hosts", {
         id: globalThis.crypto.randomUUID(),
@@ -508,7 +590,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("converts a published page's pending draft and reports its live row", async () => {
-      const { t, svc, cookie } = await boot();
+      const { t, cookie } = await boot();
       const cardId = await card(t);
       const created = await t.nextly.create({
         collection: "pages",
@@ -530,7 +612,7 @@ describe.each(getConfiguredTestDialects())(
         },
         overrideAccess: true,
       });
-      await svc.open(cardId, "author");
+      await open(cookie, cardId);
 
       const reports = await rewriteToTheEnd(cookie, cardId);
       const final = reports.at(-1);
@@ -545,6 +627,107 @@ describe.each(getConfiguredTestDialects())(
       expect(copies(draft, cardId)).toBe(0);
       expect(texts(draft)).toEqual(["Card title", "Draft edit"]);
       expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+    });
+
+    it("refuses a rewrite asked for by anybody but the person who opened the run", async () => {
+      const { t, cookie, anAuthor } = await boot();
+      const cardId = await card(t);
+      const id = await note(t, "Note", [copyOf("i1", cardId)]);
+      await open(cookie, cardId);
+      const other = await anAuthor("other");
+
+      // The same grants, a different person: the run's writes are not theirs.
+      const refused = await rewrite(other.cookie, { componentId: cardId });
+      // And the person whose run it is reaching it second is answered the run
+      // as it was opened, not a run of their own.
+      const reopened = await open(other.cookie, cardId);
+
+      expect(refused.status).toBe(403);
+      expect(reopened.opened).toBe(false);
+      expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(1);
+      // CONTROL: the person who opened it may.
+      await rewriteToTheEnd(cookie, cardId);
+      expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(0);
+    });
+
+    it("walks every language of a translated Single", async () => {
+      const HOME = "home";
+      const { t, cookie } = await boot(
+        {},
+        {
+          singles: [
+            {
+              slug: HOME,
+              localized: true,
+              // Stored per language: the registry's listing drops this flag,
+              // so it is read from the Single's declaration.
+              fields: [{ name: "content", type: BLOCKS_TYPE, localized: true }],
+            },
+          ],
+          localization: { locales: ["en", "de"], defaultLocale: "en" },
+        }
+      );
+      const cardId = await card(t);
+      await t.nextly.updateSingle({
+        slug: HOME,
+        locale: "en",
+        data: { content: pageDoc([heading("en", "English")]) },
+        overrideAccess: true,
+      });
+      // The copy is only in German, which the default language never shows.
+      await t.nextly.updateSingle({
+        slug: HOME,
+        locale: "de",
+        data: {
+          content: pageDoc([heading("de", "Deutsch"), copyOf("i1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      await open(cookie, cardId);
+
+      await rewriteToTheEnd(cookie, cardId);
+
+      const read = async (locale: string) =>
+        (asDocument(
+          (
+            (await t.nextly.findSingle({
+              slug: HOME,
+              locale,
+              fallbackLocale: false,
+              overrideAccess: true,
+              depth: 0,
+            })) as unknown as Record<string, unknown>
+          ).content
+        )?.nodes ?? []) as Node[];
+      const german = await read("de");
+      expect(copies(german, cardId)).toBe(0);
+      expect(texts(german)).toEqual(["Deutsch", "Card title"]);
+      expect(texts(await read("en"))).toEqual(["English"]);
+    });
+
+    it("keeps a strip run and a delete run of one component apart, and only the delete run fences", async () => {
+      const { t, svc, cookie } = await boot();
+      const cardId = await card(t);
+      const id = await note(t, "Note", [copyOf("i1", cardId)]);
+
+      const strip = await open(cookie, cardId, "strip-retired");
+      // A strip run fences nothing: a new copy may still be added.
+      await expect(
+        note(t, "During strip", [copyOf("i1", cardId)])
+      ).resolves.toEqual(expect.any(String));
+      const remove = await open(cookie, cardId, "delete");
+      await expect(
+        note(t, "During delete", [copyOf("i1", cardId)])
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+      await rewriteToTheEnd(cookie, cardId);
+
+      expect(remove.run.id).not.toBe(strip.run.id);
+      expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(0);
+      expect(await svc.progress(cardId, "strip-retired")).toEqual([]);
+      expect(
+        (await svc.progress(cardId, "delete")).map(row => row.documentKey)
+      ).toContain(documentKeyOf({ kind: "collection", slug: NOTES, id }));
     });
   }
 );
