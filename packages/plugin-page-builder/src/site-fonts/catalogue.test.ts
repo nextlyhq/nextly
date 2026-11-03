@@ -203,6 +203,58 @@ describe("parseCatalogueStats", () => {
     expect(stats?.get("inter")).toBe(2_400_000);
   });
 
+  it("reads the total from two families exactly as GET /v1/stats answered them", () => {
+    // Copied verbatim from https://api.fontsource.org/v1/stats on 2026-11-03,
+    // whose whole answer (about 590 KB) keys 2,123 families by id. The
+    // static, variable and total figures all differ, so a read of the wrong
+    // one, or of a field the answer does not have, gives another number.
+    const live = {
+      inter: {
+        static: {
+          npmDownloadMonthly: 7209595,
+          npmDownloadTotal: 79537744,
+          jsDelivrHitsMonthly: 149841880,
+          jsDelivrHitsTotal: 266676192,
+        },
+        variable: {
+          npmDownloadMonthly: 7871827,
+          npmDownloadTotal: 35765761,
+          jsDelivrHitsMonthly: 349284410,
+          jsDelivrHitsTotal: 352746729,
+        },
+        total: {
+          npmDownloadMonthly: 15081422,
+          npmDownloadTotal: 115303505,
+          jsDelivrHitsMonthly: 499126290,
+          jsDelivrHitsTotal: 619422921,
+        },
+      },
+      lora: {
+        static: {
+          npmDownloadMonthly: 242453,
+          npmDownloadTotal: 2593672,
+          jsDelivrHitsMonthly: 13270057,
+          jsDelivrHitsTotal: 14541573,
+        },
+        variable: {
+          npmDownloadMonthly: 174844,
+          npmDownloadTotal: 546155,
+          jsDelivrHitsMonthly: 9268536,
+          jsDelivrHitsTotal: 9299429,
+        },
+        total: {
+          npmDownloadMonthly: 417297,
+          npmDownloadTotal: 3139827,
+          jsDelivrHitsMonthly: 22538593,
+          jsDelivrHitsTotal: 23841002,
+        },
+      },
+    };
+    const stats = parseCatalogueStats(live);
+    expect(stats?.get("inter")).toBe(15081422);
+    expect(stats?.get("lora")).toBe(417297);
+  });
+
   it("reads nothing from an answer that is not an object of families", () => {
     expect(parseCatalogueStats([STATS])).toBeUndefined();
     expect(parseCatalogueStats("2400000")).toBeUndefined();
