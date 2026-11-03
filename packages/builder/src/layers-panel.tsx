@@ -117,6 +117,7 @@ import { LayerRowMenu, type RowMenuItem } from "./layer-row-menu";
 import {
   ancestorIds,
   filterLayers,
+  layerLabel,
   layersOf,
   UNNAMED_COMPONENT,
   type ComponentTitleOf,
@@ -454,7 +455,9 @@ function LayerRow({
       className="nx-layer-row"
       {...(node.component ? { "data-component": "" } : {})}
       // Dimmed where the canvas shows nothing of it, with the word beside.
-      {...(node.hiddenHere ? { "data-hidden": "" } : {})}
+      {...(node.hiddenHere === true || node.hiddenWith !== undefined
+        ? { "data-hidden": "" }
+        : {})}
       // The block in hand, faded where it sits as the canvas fades its own
       // drag source; the same attribute, so the two read as one gesture.
       {...(node.id === view.draggingId ? { [DRAG_SOURCE_ATTRIBUTE]: "" } : {})}
@@ -487,10 +490,16 @@ function LayerRow({
 function RowFacts({ node }: { node: LayerNode }): React.JSX.Element {
   return (
     <>
-      {node.hiddenHere ? (
+      {node.hiddenHere === true ? (
         // A word, on screen and read out: hidden on the device shown.
         <span className="nx-layer-row__hidden">Hidden</span>
-      ) : null}
+      ) : node.hiddenWith === undefined ? null : (
+        // Hidden because the block around it is, which is where it is shown
+        // again: named, as an inherited lock names its block.
+        <span className="nx-layer-row__hidden" data-inherited="">
+          Hidden with {node.hiddenWith}
+        </span>
+      )}
       {/* Both locks in the row's own ink, so each reads against the row in
           every state it can be in. A lock held from a block around it is
           quieter by weight, a thinner stroke, never by a fainter colour; both
@@ -508,7 +517,9 @@ function RowFacts({ node }: { node: LayerNode }): React.JSX.Element {
           lock="inherited"
         />
       )}
-      {node.breakpointHidden && !node.hiddenHere ? (
+      {node.breakpointHidden &&
+      node.hiddenHere !== true &&
+      node.hiddenWith === undefined ? (
         <Badge icon={<EyeOff size={12} />} text="Hidden at some screen sizes" />
       ) : null}
       {node.conditional ? (
@@ -529,41 +540,69 @@ function RowActions({
   node: LayerNode;
   view: RowView;
 }): React.JSX.Element {
-  // No eye on a block a lock holds: the lock refuses the change.
-  const eye =
-    view.deviceName !== undefined &&
-    !node.locked &&
-    node.lockedBy === undefined;
   return (
     <span className="nx-layer-row__actions">
-      {eye ? (
-        <RowAction
-          id={node.id}
-          action="toggle-hidden"
-          title={`${node.hiddenHere ? "Show" : "Hide"} on ${view.deviceName ?? ""}`}
-          pinned={node.hiddenHere}
-          onAct={view.onAct}
-        >
-          {node.hiddenHere ? <EyeOff size={14} /> : <Eye size={14} />}
-        </RowAction>
-      ) : null}
-      {/* The block's own lock; one held from around it is lifted there. */}
-      {node.lockedBy !== undefined ? null : (
-        <RowAction
-          id={node.id}
-          action="toggle-lock"
-          title={node.locked ? "Unlock" : "Lock"}
-          pinned={node.locked}
-          onAct={view.onAct}
-        >
-          {node.locked ? (
-            <Lock size={14} strokeWidth={2.5} />
-          ) : (
-            <LockOpen size={14} />
-          )}
-        </RowAction>
-      )}
+      <RowEye node={node} view={view} />
+      <RowPadlock node={node} view={view} />
     </span>
+  );
+}
+
+/**
+ * The row's eye. Not on a block a lock holds, which refuses the change, nor
+ * on one hidden with the block around it, which is shown again there.
+ */
+function RowEye({
+  node,
+  view,
+}: {
+  node: LayerNode;
+  view: RowView;
+}): React.JSX.Element | null {
+  const { deviceName } = view;
+  const offered =
+    deviceName !== undefined &&
+    !node.locked &&
+    node.lockedBy === undefined &&
+    node.hiddenWith === undefined;
+  if (!offered) return null;
+  const hidden = node.hiddenHere === true;
+  return (
+    <RowAction
+      id={node.id}
+      action="toggle-hidden"
+      title={`${hidden ? "Show" : "Hide"} on ${deviceName}`}
+      pinned={hidden}
+      onAct={view.onAct}
+    >
+      {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
+    </RowAction>
+  );
+}
+
+/** The row's padlock: the block's own lock; one held from around it is lifted there. */
+function RowPadlock({
+  node,
+  view,
+}: {
+  node: LayerNode;
+  view: RowView;
+}): React.JSX.Element | null {
+  if (node.lockedBy !== undefined) return null;
+  return (
+    <RowAction
+      id={node.id}
+      action="toggle-lock"
+      title={node.locked ? "Unlock" : "Lock"}
+      pinned={node.locked}
+      onAct={view.onAct}
+    >
+      {node.locked ? (
+        <Lock size={14} strokeWidth={2.5} />
+      ) : (
+        <LockOpen size={14} />
+      )}
+    </RowAction>
   );
 }
 
@@ -707,6 +746,70 @@ function RowShortcuts({
   return null;
 }
 
+/**
+ * The name of the nearest block around `id` hidden on the device being
+ * edited, or `undefined` when none is.
+ */
+function hiddenAround(
+  editor: EditorState,
+  id: string,
+  device: NonNullable<LayersPanelProps["device"]>
+): string | undefined {
+  const around = ancestorIds(editor.document, id)
+    .map(each => findNode(editor.document.nodes, each))
+    .filter(
+      (node): node is NonNullable<typeof node> =>
+        node !== undefined &&
+        hiddenOnDevice(node.visibility, device.breakpoints, device.id)
+    );
+  const nearest = around[around.length - 1];
+  return nearest === undefined ? undefined : layerLabel(nearest);
+}
+
+/**
+ * A row chosen here scrolls the canvas to its block, on every choice: a row
+ * chosen again after the canvas was scrolled away scrolls back, though the
+ * selection did not change. A frame later, once the selection has reached
+ * the canvas: a hidden block is drawn only once it is selected.
+ */
+function useRevealChosen(
+  canvasRoot: LayersPanelProps["canvasRoot"]
+): (id: string) => void {
+  const latestCanvas = React.useRef(canvasRoot);
+  latestCanvas.current = canvasRoot;
+  return React.useCallback((id: string) => {
+    requestAnimationFrame(() => {
+      const root = latestCanvas.current;
+      if (root !== null && root !== undefined) revealNode(root, id);
+    });
+  }, []);
+}
+
+/** The device the eye acts on, by the name the device buttons give it. */
+function deviceNameOf(device: LayersPanelProps["device"]): string | undefined {
+  if (device === undefined) return undefined;
+  return deviceLabel(device.breakpoints, device.id) ?? device.id;
+}
+
+/**
+ * The move legend's rows, from the binding table, so a rebound keystroke
+ * moves the hint with it. A binding this cannot spell is dropped rather than
+ * guessed at — see `keyHint` for why a wrong hint is worse than no hint.
+ * None until the platform is known, or where the host binds no moves.
+ */
+function moveHintsFor(
+  apple: boolean | null,
+  moveHints: boolean
+): { keys: string; shown: string; label: string; description: string }[] {
+  if (apple === null || !moveHints) return [];
+  return MOVE_KEYS.flatMap(({ keys, direction, description }) => {
+    const shown = keyHint(keys, apple);
+    return shown === null
+      ? []
+      : [{ keys, shown, label: DIRECTION_LABEL[direction], description }];
+  });
+}
+
 /** Whether the block is hidden on the device being edited. */
 function hiddenHere(
   editor: EditorState,
@@ -761,8 +864,8 @@ interface RowVerbs {
   readonly renamingId: string | null;
   readonly onRenamed: (id: string, name: string | null) => void;
   readonly act: (id: string, action: RowKeyAction) => void;
-  /** The row menu's own items, for the primary selection. */
-  readonly menuItems: () => readonly RowMenuItem[];
+  /** The row menu's own items, for the row the menu was opened on. */
+  readonly menuItems: (id: string | null) => readonly RowMenuItem[];
   /** What the last verb did, or why it was refused. */
   readonly notice: string;
 }
@@ -802,6 +905,11 @@ function useRowVerbs(
           return refusalOf([renameOp(id, "name")]);
         case "toggle-hidden": {
           if (on === undefined) return "";
+          // Hidden with a block around it: changing this one shows nothing.
+          const around = hiddenAround(now, id, on);
+          if (around !== undefined) {
+            return `Hidden with ${around}. Show ${around} on this device to show it.`;
+          }
           const op = toggleOnDeviceOp(now.document, id, on);
           return op === null ? "" : refusalOf([op]);
         }
@@ -851,40 +959,44 @@ function useRowVerbs(
     [scope]
   );
 
-  const menuItems = React.useCallback((): readonly RowMenuItem[] => {
-    const { editor: now, device: on } = latest.current;
-    const id = now.selectedId;
-    if (id === null) return [];
-    const node = findNode(now.document.nodes, id);
-    if (node === undefined) return [];
-    const items: RowMenuItem[] = [
-      {
-        id: "rename",
-        label: "Rename",
-        reason: reasonFor(id, "rename"),
-        keys: ROW_KEYS.rename,
-        run: () => act(id, "rename"),
-      },
-    ];
-    if (on !== undefined) {
-      const name = deviceLabel(on.breakpoints, on.id) ?? on.id;
+  const menuItems = React.useCallback(
+    (id: string | null): readonly RowMenuItem[] => {
+      const { editor: now, device: on } = latest.current;
+      if (id === null) return [];
+      const node = findNode(now.document.nodes, id);
+      if (node === undefined) return [];
+      const items: RowMenuItem[] = [
+        {
+          id: "rename",
+          label: "Rename",
+          reason: reasonFor(id, "rename"),
+          keys: ROW_KEYS.rename,
+          run: () => act(id, "rename"),
+        },
+      ];
+      if (on !== undefined) {
+        const name = deviceLabel(on.breakpoints, on.id) ?? on.id;
+        items.push({
+          id: "toggle-hidden",
+          label: hiddenHere(now, id, on)
+            ? `Show on ${name}`
+            : `Hide on ${name}`,
+          reason: reasonFor(id, "toggle-hidden"),
+          keys: ROW_KEYS["toggle-hidden"],
+          run: () => act(id, "toggle-hidden"),
+        });
+      }
       items.push({
-        id: "toggle-hidden",
-        label: hiddenHere(now, id, on) ? `Show on ${name}` : `Hide on ${name}`,
-        reason: reasonFor(id, "toggle-hidden"),
-        keys: ROW_KEYS["toggle-hidden"],
-        run: () => act(id, "toggle-hidden"),
+        id: "toggle-lock",
+        label: node.locked === true ? "Unlock" : "Lock",
+        reason: reasonFor(id, "toggle-lock"),
+        keys: ROW_KEYS["toggle-lock"],
+        run: () => act(id, "toggle-lock"),
       });
-    }
-    items.push({
-      id: "toggle-lock",
-      label: node.locked === true ? "Unlock" : "Lock",
-      reason: reasonFor(id, "toggle-lock"),
-      keys: ROW_KEYS["toggle-lock"],
-      run: () => act(id, "toggle-lock"),
-    });
-    return items;
-  }, [act, reasonFor]);
+      return items;
+    },
+    [act, reasonFor]
+  );
 
   return { renamingId, onRenamed, act, menuItems, notice };
 }
@@ -932,20 +1044,7 @@ export function LayersPanel({
   // outlining a block no row is under.
   React.useEffect(() => () => setHovered(null), [setHovered]);
 
-  /*
-   * A row chosen here scrolls the canvas to its block, on every choice: a row
-   * chosen again after the canvas was scrolled away scrolls back, though the
-   * selection did not change. A frame later, once the selection has reached
-   * the canvas: a hidden block is drawn only once it is selected.
-   */
-  const latestCanvas = React.useRef(canvasRoot);
-  latestCanvas.current = canvasRoot;
-  const revealChosen = React.useCallback((id: string) => {
-    requestAnimationFrame(() => {
-      const root = latestCanvas.current;
-      if (root !== null && root !== undefined) revealNode(root, id);
-    });
-  }, []);
+  const revealChosen = useRevealChosen(canvasRoot);
 
   // Recomputed each render rather than memoised. The tree is only valid against
   // the document it was read from, and every edit replaces that document — a
@@ -994,10 +1093,7 @@ export function LayersPanel({
   );
 
   const icons = React.useMemo(iconsByType, []);
-  const deviceName =
-    device === undefined
-      ? undefined
-      : (deviceLabel(device.breakpoints, device.id) ?? device.id);
+  const deviceName = deviceNameOf(device);
   const { renamingId, onRenamed, act } = rows;
   const nodes = React.useMemo(
     () =>
@@ -1044,28 +1140,9 @@ export function LayersPanel({
     setApple(detectApplePlatform());
   }, []);
 
-  /*
-   * Built from the binding table, so a rebound keystroke moves the hint with
-   * it. A binding this cannot spell is dropped rather than guessed at — see
-   * `keyHint` for why a wrong hint is worse than no hint.
-   */
+  // Built from the binding table; see `moveHintsFor`.
   const hints = React.useMemo(
-    () =>
-      apple === null || !moveHints
-        ? []
-        : MOVE_KEYS.flatMap(({ keys, direction, description }) => {
-            const shown = keyHint(keys, apple);
-            return shown === null
-              ? []
-              : [
-                  {
-                    keys,
-                    shown,
-                    label: DIRECTION_LABEL[direction],
-                    description,
-                  },
-                ];
-          }),
+    () => moveHintsFor(apple, moveHints),
     [apple, moveHints]
   );
 
@@ -1100,6 +1177,8 @@ export function LayersPanel({
           items={rows.menuItems}
           verbs={verbs}
           apple={apple}
+          // A touch's long press arms the row drag first; the menu claims it.
+          onOpen={drag.cancel}
         >
           <div
             ref={body}
@@ -1157,22 +1236,23 @@ export function LayersPanel({
         ))}
 
       {/*
-        Why a drop under the pointer is refused, spoken. Present from the first
+        Why a drop under the pointer is refused, or what a row verb did, spoken. Present from the first
         render, since a region that appears with its first message is often not
         announced at all. A `div` rather than the editor's `p` region, which is
         the keyboard moves' own and sits elsewhere in the editor.
       */}
       <div role="status" aria-live="polite" className="nx-sr-only">
-        {drag.announcement}
+        {drag.announcement === "" ? rows.notice : drag.announcement}
       </div>
 
       {shortcuts ? <RowShortcuts scope={body} act={act} /> : null}
 
       {/*
-        What a row's verb did, or why it could not: on screen as well as read
-        out, since a refused eye or rename otherwise changes nothing visible.
+        What a row's verb did, or why it could not, on screen: a refused eye or
+        rename otherwise changes nothing visible. Read out by the panel's one
+        live region above, so it is not announced twice.
       */}
-      <p role="status" aria-live="polite" className="nx-layers-panel__notice">
+      <p aria-hidden="true" className="nx-layers-panel__notice">
         {rows.notice}
       </p>
 

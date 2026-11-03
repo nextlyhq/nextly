@@ -293,8 +293,9 @@ export function CanvasMarks({
   const canvasFrame = useCanvasFrame();
   const hovered = useHoveredBlock();
   // Keyed by value, so a host handing a new array of the same ids on every
-  // render does not re-measure every block.
-  const revealedKey = revealed.join("\n");
+  // render does not re-measure every block. JSON, which spells any id
+  // unambiguously.
+  const revealedKey = JSON.stringify(revealed);
 
   const measure = React.useCallback(() => {
     const element = layer.current;
@@ -303,7 +304,7 @@ export function CanvasMarks({
         ? NO_MARKS
         : marksOf(element, {
             hovered,
-            revealed: revealedKey === "" ? NO_IDS : revealedKey.split("\n"),
+            revealed: JSON.parse(revealedKey) as string[],
           });
     setMarks(current => (sameMarks(current, next) ? current : next));
   }, [hovered, revealedKey]);

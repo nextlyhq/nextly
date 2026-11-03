@@ -142,6 +142,15 @@ async function rowAction(
   return row.locator(`[data-action="${action}"]`).first();
 }
 
+/** Open the Hero section's row, so the heading inside it has a row. */
+async function openHero(page: Page): Promise<void> {
+  const hero = layerRow(page, HERO).first();
+  if ((await hero.getAttribute("aria-expanded")) === "true") return;
+  await hero.locator(`[data-nx-layer="${HERO}"]`).click();
+  await hero.press("ArrowRight");
+  await expect(hero).toHaveAttribute("aria-expanded", "true");
+}
+
 function notice(page: Page) {
   return page.locator(".nx-layers-panel__notice");
 }
@@ -152,6 +161,7 @@ test("pointing at a row outlines its block, and choosing one scrolls to it", asy
   const { id } = await createPage(page);
   await openBuilder(page, id);
 
+  await openHero(page);
   const hovered = canvasLayer(page).locator(
     '.nx-canvas-mark[data-mark="hovered"]'
   );
@@ -244,6 +254,7 @@ test("a row renames by F2, by double-click and from its menu, and the name stays
   await openBuilder(page, id);
 
   // F2 on the focused row, Enter keeps the name.
+  await openHero(page);
   await layerRow(page, TITLE).locator(`[data-nx-layer="${TITLE}"]`).click();
   await layerRow(page, TITLE).press("F2");
   const field = page.getByRole("textbox", { name: "Rename Heading" });

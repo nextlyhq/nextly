@@ -455,7 +455,36 @@ describe("hiddenHere", () => {
     expect(on("mobile")).toBe(false);
   });
 
-  it("is false when no device is asked for", () => {
-    expect(layersOf(document)[0]?.hiddenHere).toBe(false);
+  it("is not said at all when no device is asked for", () => {
+    expect(layersOf(document)[0]?.hiddenHere).toBeUndefined();
+  });
+
+  it("names the hidden block a row is hidden with", () => {
+    const nested = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "core/box",
+          version: 1,
+          name: "Hero",
+          props: {},
+          visibility: { devices: { tablet: false } },
+          slots: {
+            children: [
+              { id: "in", type: "core/heading", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const [box] = layersOf(nested, undefined, {
+      breakpoints: site,
+      id: "tablet",
+    });
+    expect(box?.hiddenHere).toBe(true);
+    expect(box?.children[0]?.hiddenHere).toBe(false);
+    expect(box?.children[0]?.hiddenWith).toBe("Hero");
   });
 });

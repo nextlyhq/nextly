@@ -10,12 +10,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
-import {
-  revealDeviceHidden,
-  type BlockDocument,
-  type BreakpointSet,
-  type DocumentKind,
-} from "@nextlyhq/blocks-engine";
+import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
 import {
   prepareDocumentForRead,
   registeredBlocks,
@@ -47,7 +42,7 @@ import {
   MediaPickerDialog,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useMemo, useState, type ComponentProps, type JSX } from "react";
+import { useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
   useWatch,
@@ -76,7 +71,7 @@ import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
-import { revealedHidden } from "./reveal-hidden";
+import { useReveal, type Reveal } from "./reveal-hidden";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -124,51 +119,6 @@ type EditorView = EditorMount &
     /** What the canvas draws: the document, with selected hidden blocks shown. */
     reveal: Reveal;
   };
-
-/**
- * The document the canvas draws, and the selected blocks it shows although
- * the page hides them on the device being edited.
- */
-interface Reveal {
-  readonly document: BlockDocument;
-  readonly ids: readonly string[];
-}
-
-/**
- * A selected block the page hides on the device shown is drawn anyway, while
- * it is selected, so the author can see and edit what they chose in Layers.
- *
- * Editor-only by construction: the canvas draws the derived document and the
- * editor saves its own, so nothing lifted here reaches what is stored or
- * published. Derived again only when the document, the selection or the
- * device changes, so the canvas keeps its rendered tree otherwise.
- */
-function useReveal(
-  document: BlockDocument,
-  selected: readonly string[],
-  breakpoints: BreakpointSet | undefined,
-  device: string
-): Reveal {
-  const { lifted, shown } = revealedHidden(
-    document,
-    selected,
-    breakpoints,
-    device
-  );
-  // Keyed by value, so a selection that lifts the same blocks keeps the
-  // document the canvas draws, and with it the canvas's rendered tree.
-  const key = `${lifted.join("\n")}\u0000${shown.join("\n")}`;
-  return useMemo(() => {
-    const [liftedKey = "", shownKey = ""] = key.split("\u0000");
-    return {
-      document:
-        liftedKey === ""
-          ? document
-          : revealDeviceHidden(document, liftedKey.split("\n")),
-      ids: shownKey === "" ? [] : shownKey.split("\n"),
-    };
-  }, [document, key]);
-}
 
 /**
  * Whether the empty-container appender should be suppressed right now.

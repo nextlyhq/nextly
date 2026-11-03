@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * Which hidden blocks the canvas draws for a selection: the case that
  * separates it from a reading of the selected block alone is a visible
@@ -5,9 +7,10 @@
  * section is lifted too.
  */
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
+import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { revealedHidden } from "./reveal-hidden";
+import { revealedHidden, useReveal } from "./reveal-hidden";
 
 const SITE: BreakpointSet = {
   viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1024 }],
@@ -69,5 +72,38 @@ describe("revealedHidden", () => {
       lifted: [],
       shown: [],
     });
+  });
+});
+
+describe("useReveal", () => {
+  it("keeps an id holding a newline or a NUL whole", () => {
+    // Ids are any non-empty string, so a join and a split on either would
+    // turn this one id into two that name nothing.
+    const odd = "a\nb\u0000c";
+    const oddPage = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: odd,
+          type: "core/heading",
+          version: 1,
+          props: {},
+          visibility: { devices: { tablet: false } },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useReveal(oddPage, [odd], SITE, "tablet")
+    );
+    expect(result.current.ids).toEqual([odd]);
+    expect(result.current.document.nodes[0]?.visibility).toBeUndefined();
+  });
+
+  it("answers the same document while nothing is lifted", () => {
+    const { result } = renderHook(() =>
+      useReveal(page, ["free"], SITE, "tablet")
+    );
+    expect(result.current.document).toBe(page);
   });
 });

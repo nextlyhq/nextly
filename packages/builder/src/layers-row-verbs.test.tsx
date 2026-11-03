@@ -35,6 +35,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useEditorState, type EditorState } from "./editor-state";
 import { HoveredBlockProvider, useHoveredBlock } from "./hovered-block";
 import { rowKeyAction, toggleOnDeviceOp } from "./layer-row-actions";
+import { LayerRowMenu } from "./layer-row-menu";
 import { LayersPanel } from "./layers-panel";
 
 afterEach(() => {
@@ -210,6 +211,75 @@ describe("the eye", () => {
     const eye = action("a", "toggle-hidden");
     expect(eye?.tabIndex).toBe(-1);
     expect(eye?.getAttribute("aria-hidden")).toBe("true");
+  });
+});
+
+describe("a block inside a block hidden on the device", () => {
+  it("is dimmed, says what it is hidden with, and offers no eye", () => {
+    register();
+    render(
+      <Host
+        document={page(
+          node("box", "core/box", {
+            name: "Hero",
+            visibility: { devices: { tablet: false } },
+            slots: { children: [node("in", "core/heading")] },
+          })
+        )}
+      />
+    );
+    fireEvent.keyDown(row("box"), { key: "ArrowRight" });
+    expect(row("in").textContent).toContain("Hidden with Hero");
+    expect(
+      row("in").querySelector(".nx-layer-row")?.hasAttribute("data-hidden")
+    ).toBe(true);
+    expect(action("in", "toggle-hidden")).toBeNull();
+    // Its own block still offers it, to show both again.
+    expect(action("box", "toggle-hidden")?.getAttribute("title")).toBe(
+      "Show on Tablet"
+    );
+  });
+});
+
+describe("the row menu", () => {
+  it("acts on the row it was opened on, though another is the primary", () => {
+    register();
+    render(
+      <Host
+        document={page(
+          node("a", "core/heading", { name: "First" }),
+          node("b", "core/heading", { name: "Second" })
+        )}
+      />
+    );
+    act(() => editor().select("b"));
+    act(() => editor().select("a", "toggle"));
+    expect(editor().selectedId).toBe("a");
+    expect(editor().selection.ids).toContain("b");
+    fireEvent.contextMenu(row("b"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Rename/ }));
+    expect(screen.getByRole("textbox", { name: "Rename Second" })).toBeTruthy();
+  });
+});
+
+describe("LayerRowMenu", () => {
+  it("tells its host when it opens, so a held row drag gives the press up", () => {
+    const opened = vi.fn();
+    render(
+      <LayerRowMenu
+        rowOf={() => "a"}
+        selectedIds={["a"]}
+        select={() => undefined}
+        items={() => []}
+        verbs={undefined}
+        apple={false}
+        onOpen={opened}
+      >
+        <div data-testid="row">Row</div>
+      </LayerRowMenu>
+    );
+    fireEvent.contextMenu(screen.getByTestId("row"));
+    expect(opened).toHaveBeenCalledTimes(1);
   });
 });
 

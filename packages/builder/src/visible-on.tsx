@@ -39,6 +39,14 @@ export interface VisibleOnProps {
    * are held: a change resolved against a stand-in set is stored wrong.
    */
   readonly ready?: boolean;
+  /**
+   * Why a lock holds the block's design, which includes where it shows, or
+   * `undefined` while nothing does: the inspector's own reading, which holds
+   * every other design control.
+   */
+  readonly heldBy?: string | undefined;
+  /** The id of the element saying why, which held buttons point to. */
+  readonly reasonId?: string;
 }
 
 /** "Mobile", "Tablet and Mobile", "Desktop, Tablet and Mobile". */
@@ -53,6 +61,8 @@ export function VisibleOn({
   breakpoints,
   editing,
   ready = true,
+  heldBy,
+  reasonId,
 }: VisibleOnProps): React.JSX.Element | null {
   const labelId = React.useId();
   const node = findNode(editor.document.nodes, nodeId);
@@ -67,15 +77,9 @@ export function VisibleOn({
     ...option,
     visible: states.get(option.id) ?? true,
   }));
-  // Held whole when the block's locks refuse the change: the same question
-  // the store asks when the press is applied.
-  const firstOp = toggleOnDeviceOp(editor.document, nodeId, {
-    breakpoints,
-    id: devices[0]?.id ?? editing,
-  });
-  const held =
-    !ready ||
-    (firstOp !== null && editor.lockRefusalFor([firstOp]) !== undefined);
+  // Held whole while a lock holds the block's design, as every other design
+  // control is, and until the site's breakpoints are known.
+  const held = !ready || heldBy !== undefined;
   const hidden = devices.filter(device => !device.visible);
   const summary = !ready
     ? "Reading the site's breakpoints…"
@@ -85,7 +89,7 @@ export function VisibleOn({
         ? "Hidden on every device."
         : `Hidden on ${listed(hidden.map(device => device.label))}.`;
   return (
-    <div className="nx-inspector__field" data-content-control="visible-on">
+    <div className="nx-inspector__field" data-visible-on="">
       <p className="nx-inspector__field-name" id={labelId}>
         Visible on
       </p>
@@ -93,6 +97,9 @@ export function VisibleOn({
         className="nx-style-inspector__toggle nx-visible-on"
         role="group"
         aria-labelledby={labelId}
+        {...(heldBy === undefined || reasonId === undefined
+          ? {}
+          : { "aria-describedby": reasonId })}
       >
         {devices.map(device => {
           const Icon = tierIcon(device.preview);

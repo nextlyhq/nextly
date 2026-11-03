@@ -810,6 +810,8 @@ function ContentTab({
         breakpoints={breakpoints}
         editing={breakpoint}
         ready={breakpointsReady}
+        heldBy={designLocked}
+        reasonId={reasonId}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*

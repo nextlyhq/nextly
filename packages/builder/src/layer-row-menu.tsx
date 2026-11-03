@@ -52,11 +52,18 @@ export interface LayerRowMenuProps {
   /** Select one block, replacing the selection. */
   readonly select: (id: string) => void;
   /**
-   * The row's own verbs, for the selection as it now stands. Asked only
-   * while the menu is open: each item's reason is a lock question, and
-   * asking on every render of the panel would pay for a menu nobody opened.
+   * The row's own verbs, for the row the menu was opened on: with several
+   * blocks selected, Rename acts on the row pointed at, not on the primary
+   * selection. Asked only while the menu is open: each item's reason is a
+   * lock question, and asking on every render of the panel would pay for a
+   * menu nobody opened.
    */
-  readonly items: () => readonly RowMenuItem[];
+  readonly items: (id: string | null) => readonly RowMenuItem[];
+  /**
+   * Told when the menu opens, so a gesture that started on the same press
+   * gives way: a touch's long press first arms the row drag.
+   */
+  readonly onOpen?: () => void;
   /** The shared block verbs, when the host shares them. */
   readonly verbs: SharedBlockVerbs | undefined;
   /** Whether the reader's keyboard is Apple's, `null` until known. */
@@ -129,14 +136,16 @@ function SharedItems({
 /** The row's own verbs, read when the menu's content is drawn. */
 function OwnItems({
   items,
+  target,
   hint,
 }: {
-  items: () => readonly RowMenuItem[];
+  items: (id: string | null) => readonly RowMenuItem[];
+  target: string | null;
   hint: (keys: string | undefined) => string | null;
 }): React.JSX.Element {
   return (
     <>
-      {items().map(item => (
+      {items(target).map(item => (
         <Item
           key={item.id}
           label={item.label}
@@ -156,11 +165,14 @@ export function LayerRowMenu({
   items,
   verbs,
   apple,
+  onOpen,
   children,
 }: LayerRowMenuProps): React.JSX.Element {
   // The row the last press aimed at, kept until the menu opens: a touch's
   // long press opens the menu without a context event of its own.
   const pressed = React.useRef<string | null>(null);
+  // The row the open menu was opened on, which its own verbs act on.
+  const [target, setTarget] = React.useState<string | null>(null);
   const note = React.useCallback(
     (event: React.SyntheticEvent) => {
       pressed.current = isElement(event.target) ? rowOf(event.target) : null;
@@ -171,10 +183,14 @@ export function LayerRowMenu({
     (next: boolean) => {
       const id = pressed.current;
       pressed.current = null;
+      if (next) {
+        setTarget(id);
+        onOpen?.();
+      }
       if (!next || id === null || selectedIds.includes(id)) return;
       select(id);
     },
-    [select, selectedIds]
+    [select, selectedIds, onOpen]
   );
   const hint = (keys: string | undefined): string | null =>
     keys === undefined || apple === null ? null : keyHint(keys, apple);
@@ -201,7 +217,7 @@ export function LayerRowMenu({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent aria-label="Layer actions">
-        <OwnItems items={items} hint={hint} />
+        <OwnItems items={items} target={target} hint={hint} />
         <SharedItems actions={others} verbs={verbs} />
         <SharedItems actions={deletion} verbs={verbs} />
       </ContextMenuContent>

@@ -38,9 +38,11 @@ let editorRef: EditorState | null = null;
 function Host({
   document,
   ready = true,
+  heldBy,
 }: {
   document: BlockDocument;
   ready?: boolean;
+  heldBy?: string;
 }): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
@@ -51,6 +53,7 @@ function Host({
       breakpoints={SITE}
       editing="tablet"
       ready={ready}
+      heldBy={heldBy}
     />
   );
 }
@@ -130,7 +133,7 @@ describe("VisibleOn", () => {
   });
 
   it("is held on a locked block", () => {
-    render(<Host document={withDevices(undefined, true)} />);
+    render(<Host document={withDevices(undefined, true)} heldBy="Locked." />);
     expect(
       screen.getByRole("button", { name: "Desktop" }).hasAttribute("disabled")
     ).toBe(true);

@@ -128,7 +128,14 @@ export interface LayerNode {
    * canvas shows: the row is drawn dimmed with a "Hidden" badge. Only known
    * when the tree was asked for a device.
    */
-  readonly hiddenHere: boolean;
+  readonly hiddenHere?: boolean;
+  /**
+   * The name of the block hidden on the device being edited that this one
+   * sits inside, when it is not hidden itself: a visitor on that device sees
+   * none of what the block holds, so the row says it is hidden with it, and
+   * where it is shown again.
+   */
+  readonly hiddenWith?: string;
   readonly children: readonly LayerNode[];
 }
 
@@ -208,16 +215,24 @@ export function layersOf(
   componentTitle?: ComponentTitleOf,
   device?: LayersDevice
 ): LayerNode[] {
-  // `heldBy` is the nearest locked block above, carried down the walk so the
-  // tree is read once rather than climbed per row.
+  // `heldBy` is the nearest locked block above and `hiddenBy` the nearest
+  // block hidden on the device, carried down the walk so the tree is read once
+  // rather than climbed per row.
   const walk = (
     nodes: readonly BlockNode[],
-    heldBy: string | undefined
+    heldBy: string | undefined,
+    hiddenBy: string | undefined
   ): LayerNode[] =>
     nodes.map(node => {
       const label = layerLabel(node, undefined, componentTitle);
       const locked = node.locked === true;
       const name = authoredName(node);
+      // Asked of the engine's per-device reading, the cascade the published
+      // stylesheet is compiled from, so a row says hidden exactly where a
+      // visitor on that device sees nothing.
+      const hiddenHere =
+        device !== undefined &&
+        hiddenOnDevice(node.visibility, device.breakpoints, device.id);
       return {
         id: node.id,
         type: node.type,
@@ -228,12 +243,10 @@ export function layersOf(
         ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),
         conditional: hasConditions(node),
         breakpointHidden: hiddenAtSomeBreakpoint(node),
-        // Asked of the engine's per-device reading, the cascade the published
-        // stylesheet is compiled from, so a row says hidden exactly where a
-        // visitor on that device sees nothing.
-        hiddenHere:
-          device !== undefined &&
-          hiddenOnDevice(node.visibility, device.breakpoints, device.id),
+        ...(device === undefined ? {} : { hiddenHere }),
+        ...(hiddenHere || hiddenBy === undefined
+          ? {}
+          : { hiddenWith: hiddenBy }),
         // Declaration order across every slot the node holds. `Object.values`
         // preserves insertion order for string keys, which is the order the
         // document was written in — so the tree matches the document rather
@@ -241,12 +254,13 @@ export function layersOf(
         // is this block's own when it has one.
         children: walk(
           Object.values(node.slots ?? {}).flat(),
-          locked ? label : heldBy
+          locked ? label : heldBy,
+          hiddenHere ? label : hiddenBy
         ),
       };
     });
 
-  return walk(document.nodes, undefined);
+  return walk(document.nodes, undefined, undefined);
 }
 
 /**
