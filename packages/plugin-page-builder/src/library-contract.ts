@@ -707,6 +707,14 @@ export interface ComponentFactsResponse {
    * answer, or the caller may not read the component.
    */
   readonly reach: { readonly count: number; readonly complete: boolean } | null;
+  /**
+   * How many distinct pages and Singles a change to the component reaches:
+   * placed on them directly, through another component, or through a Layout
+   * wrapping them (the site's default included). What the banner over the
+   * component's own view says; `complete` false makes it a floor. `null` when
+   * it could not be counted, or the caller may not read the component.
+   */
+  readonly pages: { readonly count: number; readonly complete: boolean } | null;
 }
 
 /**
