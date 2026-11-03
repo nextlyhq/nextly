@@ -86,6 +86,27 @@ export interface SharedStyleUsesPage {
   readonly complete: boolean;
 }
 
+/**
+ * A removal the host refused, with whether the route said the style is still
+ * used (its in-use refusal) rather than refusing for another reason, such as
+ * a lock or a count no longer whole.
+ */
+export interface SharedStyleRefusal {
+  readonly reason: string;
+  readonly inUse: boolean;
+}
+
+/**
+ * A host's answer to a removal as a refusal, or nothing when it was stored.
+ * Words alone are a refusal that does not say the style is used.
+ */
+export function sharedStyleRefusalOf(
+  answer: string | SharedStyleRefusal | undefined
+): SharedStyleRefusal | undefined {
+  if (answer === undefined) return undefined;
+  return typeof answer === "string" ? { reason: answer, inUse: false } : answer;
+}
+
 /** One shared style as the tab lists it. */
 export interface SharedStyleRow {
   readonly id: string;
@@ -308,13 +329,53 @@ export interface SharedStyleTile {
   readonly darkUnreadable: boolean;
 }
 
+/** Which end of the scale a colour sits at, where that can be told. */
+type Lightness = "light" | "dark" | undefined;
+
+/** OKLCH and OKLab lead with lightness, as a number from 0 to 1 or a percentage. */
+const OK_LIGHTNESS = /^okl(?:ch|ab)\(\s*([\d.]+)(%?)/i;
+
 /**
- * Whether text drawn with `fg` on `bg` reads, by the contrast verdict the
- * colour field shows ({@link contrastOf}). A pair it cannot measure reads.
+ * Whether a colour is light or dark: by the contrast verdict where it can
+ * measure it (nearer black or white), else from what the value states, an
+ * OKLCH or OKLab lightness or the keywords `white` and `black`, else unknown.
+ * The verdict's parser reads hex and rgb() only, and a preview may hold any
+ * colour CSS takes.
  */
-function readable(fg: string | undefined, bg: string | undefined): boolean {
+function lightnessOf(colour: string): Lightness {
+  const onBlack = contrastOf(colour, "#000000", undefined);
+  const onWhite = contrastOf(colour, "#ffffff", undefined);
+  if (onBlack !== undefined && onWhite !== undefined) {
+    return onBlack.ratio >= onWhite.ratio ? "light" : "dark";
+  }
+  return statedLightness(colour.trim().toLowerCase());
+}
+
+/** The lightness a colour the verdict cannot read states in its own text. */
+function statedLightness(text: string): Lightness {
+  if (text === "white") return "light";
+  if (text === "black") return "dark";
+  const ok = OK_LIGHTNESS.exec(text);
+  if (ok === null) return undefined;
+  const lightness = Number(ok[1]) / (ok[2] === "%" ? 100 : 1);
+  if (!Number.isFinite(lightness)) return undefined;
+  // About where text on it reads equally well in black or in white.
+  return lightness >= 0.6 ? "light" : "dark";
+}
+
+/**
+ * Whether text drawn with `fg` on `bg` reads: by the contrast verdict the
+ * colour field shows ({@link contrastOf}) where it can measure the pair;
+ * else a light colour on a dark one reads and two at the same end do not;
+ * else unknown. Unknown is never taken as readable.
+ */
+function readability(fg: string, bg: string): boolean | undefined {
   const verdict = contrastOf(fg, bg, undefined);
-  return verdict === undefined || verdict.ratio >= READABLE_RATIO;
+  if (verdict !== undefined) return verdict.ratio >= READABLE_RATIO;
+  const text = lightnessOf(fg);
+  const ground = lightnessOf(bg);
+  if (text === undefined || ground === undefined) return undefined;
+  return text !== ground;
 }
 
 /**
@@ -336,7 +397,7 @@ function readableText(
     sharedStylePageTile(ENGINE_TOKENS, "dark").color,
   ];
   return candidates.find(
-    colour => colour !== undefined && readable(colour, background)
+    colour => colour !== undefined && readability(colour, background) === true
   );
 }
 
@@ -356,7 +417,7 @@ export function sharedStyleTile(
   const shown = sharedStylePageTile(tokens, mode);
   const darkUnreadable =
     mode === "dark" &&
-    !readable(
+    unreadablePair(
       preview.color ?? shown.color,
       preview.backgroundColor ?? shown.backgroundColor
     );
@@ -371,6 +432,19 @@ export function sharedStyleTile(
     specimen: text === undefined ? preview : { ...preview, color: text },
     darkUnreadable,
   };
+}
+
+/**
+ * Whether a pair is not shown to read: under the bar, or one this cannot
+ * judge, which is drawn on the light page rather than risked blank. A pair
+ * missing a colour (no site variables) has nothing to judge.
+ */
+function unreadablePair(
+  fg: string | undefined,
+  bg: string | undefined
+): boolean {
+  if (fg === undefined || bg === undefined) return false;
+  return readability(fg, bg) !== true;
 }
 
 /** What a marked tile says, in its tooltip and the row's accessible name. */
@@ -573,9 +647,23 @@ export const SHARED_STYLE_RENAME_PENDING =
 export const SHARED_STYLE_COUNTING_NOTE =
   "Some pages are still being counted, so the numbers are minimums and no style can be called unused or removed yet.";
 
-/** What the Unused filter says in place of rows while counts are floors. */
-export const SHARED_STYLE_UNUSED_WHILE_COUNTING =
-  "Some pages are still being counted, so no style can be called unused yet.";
+/**
+ * The note while counts are floors for good: content the index cannot reach
+ * keeps them so, so it promises no wait.
+ */
+export const SHARED_STYLE_UNCOUNTABLE_NOTE =
+  "Some pages can't be counted, so these numbers are minimums.";
+
+/** Why Remove unused waits when counts are floors for good. */
+export const SHARED_STYLE_UNCOUNTABLE_REMOVAL =
+  "Some pages can't be counted, so no shared style can be removed.";
+
+/**
+ * What Unused says when every page is counted but some style's count was cut
+ * short, and it holds every row back.
+ */
+export const SHARED_STYLE_UNUSED_UNCERTAIN =
+  "Some uses could not all be counted, so no style can be called unused yet.";
 
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =

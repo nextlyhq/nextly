@@ -417,11 +417,13 @@ describe("counts", () => {
       styles: {},
     }));
     let reads = 0;
+    const asked: (readonly string[])[] = [];
     const base = accessOf().access;
     const access: SharedStylesAccess = {
       ...base,
       usage: vi.fn(async (ids: readonly string[]) => {
         reads += 1;
+        asked.push(ids);
         const whole = reads > 1;
         return {
           whole,
@@ -447,8 +449,9 @@ describe("counts", () => {
     } finally {
       vi.useRealTimers();
     }
-    // The first batch's floors were asked about again.
-    expect(reads).toBeGreaterThan(2);
+    // The first batch's floors were asked about again: a read after the
+    // timer names a style from it, not only the already-whole second batch.
+    expect(asked.slice(2).some(ids => ids.includes("c-0"))).toBe(true);
   });
 
   it("re-reads a host that does not say whether it is counting, a bounded number of times", async () => {
@@ -507,12 +510,26 @@ describe("counts", () => {
     } finally {
       vi.useRealTimers();
     }
-    // The floor note still says the numbers are minimums.
+    // The floor note says the numbers are minimums, promising no wait.
     expect(
       screen.getByText(
-        "Some pages are still being counted, so these numbers are minimums."
+        "Some pages can't be counted, so these numbers are minimums."
       )
     ).toBeTruthy();
+    expect(screen.queryByText(/still being counted/)).toBeNull();
+  });
+
+  it("says once, without a wait, why Unused holds rows back when the count cannot finish", async () => {
+    const { access } = accessOf({ whole: false, counting: false });
+    await panel({ library: [CARD, HERO, OLD], access });
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Show" })).getByRole("button", {
+        name: /^Unused/,
+      })
+    );
+    expect(
+      screen.getAllByText(/^Some pages/).map(note => note.textContent)
+    ).toEqual(["Some pages can't be counted, so these numbers are minimums."]);
   });
 
   it("asks again while counting, and shows the whole count once it is done", async () => {
@@ -690,12 +707,10 @@ describe("the filters", () => {
     await panel({ library: [CARD, HERO, OLD], access });
     pick(/^Unused/);
     expect(shownRows()).toEqual(["c-old"]);
-    // Hero is held back, and the note says why.
-    expect(
-      screen.getByText(
-        "Some pages are still being counted, so no style can be called unused yet."
-      )
-    ).toBeTruthy();
+    // Hero is held back, but every page is counted: no note says otherwise
+    // over the proven row listed.
+    expect(screen.queryByText(/can be called unused/)).toBeNull();
+    expect(screen.queryByText(/^Some pages/)).toBeNull();
   });
 
   it("says nothing about counting when no row under Unused is held back", async () => {
@@ -1004,7 +1019,7 @@ describe("removing one style", () => {
     const styles: Record<string, SharedStyleReach> = {};
     const { access, usageReads } = accessOf({
       styles,
-      remove: async () => refusal,
+      remove: async () => ({ reason: refusal, inUse: true }),
     });
     await panel({ access });
     const details = await open(/^Old note/, "Old note");
@@ -1037,7 +1052,10 @@ describe("removing one style", () => {
   it('does not say the index\'s "Not used anywhere" over a refusal that says it is used', async () => {
     const refusal =
       "Still used on Home and 2 more. Remove it from those pages first.";
-    const { access } = accessOf({ remove: async () => refusal });
+    // The route's explicit in-use refusal, as the host reports it.
+    const { access } = accessOf({
+      remove: async () => ({ reason: refusal, inUse: true }),
+    });
     await panel({ access });
     const details = await open(/^Old note/, "Old note");
     // CONTROL: before the refusal the index's sentence is there.
@@ -1066,6 +1084,8 @@ describe("removing one style", () => {
     });
     expect(within(details).getByRole("alert").textContent).toBe(refusal);
     expect(usageReads).toEqual([["c-old"]]);
+    // A lock says nothing of use, so the index's sentence stays.
+    expect(within(details).getByText("Not used anywhere")).toBeTruthy();
     // Read again, it is still used by nothing, so it stays under Unused.
     fireEvent.keyDown(details, { key: "Escape" });
     fireEvent.click(

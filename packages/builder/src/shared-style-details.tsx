@@ -24,11 +24,13 @@ import {
   sharedStyleDeclares,
   sharedStyleKindName,
   sharedStyleRemoval,
+  sharedStyleRefusalOf,
   sharedStyleSlug,
   sharedStyleUse,
   SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_RENAME_PENDING,
   type BlocksOnThisPage,
+  type SharedStyleRefusal,
   type SharedStyleRemoval,
   type SharedStyleReach,
   type SharedStyleRow,
@@ -85,7 +87,7 @@ export function SharedStyleDetails(
   // The server's words for a removal it refused. Kept here, above the
   // removal, so they stay whatever the usage read again says of the row,
   // and the confirmation that said nothing uses it is gone.
-  const [refused, setRefused] = React.useState<string | null>(null);
+  const [refused, setRefused] = React.useState<SharedStyleRefusal | null>(null);
   return (
     <div className="nx-vars-editor__body nx-shared-styles__details">
       {/* Kept at the top while the rest scrolls inside the window's height. */}
@@ -120,7 +122,7 @@ export function SharedStyleDetails(
         <p className="nx-shared-styles__meta">Set in your site&rsquo;s code</p>
       ) : null}
       {refused !== null ? (
-        <Refusal refusal={refused} />
+        <Refusal refusal={refused.reason} />
       ) : readOnly || access === undefined ? null : (
         <Removal
           removal={removal}
@@ -129,8 +131,8 @@ export function SharedStyleDetails(
           access={access}
           heldBy={heldBy}
           onRemoved={props.onRemoved}
-          onRefused={reason => {
-            setRefused(reason);
+          onRefused={refusal => {
+            setRefused(refusal);
             props.onRefused();
           }}
         />
@@ -146,10 +148,12 @@ export function SharedStyleDetails(
  */
 function sentenceBeside(
   props: SharedStyleDetailsProps,
-  refused: string | null
+  refused: SharedStyleRefusal | null
 ): string {
+  // Only the route's in-use refusal contradicts the index: a lock, or a
+  // count no longer whole, says nothing of use, so the sentence stays.
   const counted = sharedStyleUse(props.blocks, props.reach) === "used";
-  return refused !== null && !counted ? "" : props.sentence;
+  return refused?.inUse === true && !counted ? "" : props.sentence;
 }
 
 /** Whether the popover shows a control a pending rename holds: Lock or Remove. */
@@ -515,8 +519,8 @@ function RemoveOne({
   id: string;
   name: string;
   access: SharedStylesAccess;
-  /** The server refused, in its words. */
-  onRefused: (reason: string) => void;
+  /** The server refused: its words, and whether it said the style is used. */
+  onRefused: (refusal: SharedStyleRefusal) => void;
   /**
    * While a rename is stored: the id of the words saying Remove waits, since
    * it writes the whole list of styles too.
@@ -528,13 +532,20 @@ function RemoveOne({
   const { busy, refusal, run } = useRefusableWrite();
   const held = heldBy !== undefined;
   const remove = async (): Promise<void> => {
-    let said: string | undefined;
+    let said: SharedStyleRefusal | undefined;
     const stored = await run(async () => {
-      said = await access.remove([id]);
-      return said;
+      said = sharedStyleRefusalOf(await access.remove([id]));
+      return said?.reason;
     });
     if (stored) onRemoved();
-    else onRefused(said ?? "This shared style could not be removed.");
+    else {
+      onRefused(
+        said ?? {
+          reason: "This shared style could not be removed.",
+          inUse: false,
+        }
+      );
+    }
   };
   return (
     <>

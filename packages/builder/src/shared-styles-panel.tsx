@@ -60,6 +60,7 @@ import {
   isUnused,
   renameSharedStyle,
   sharedStyleFilterEmpty,
+  sharedStyleRefusalOf,
   sharedStyleTile,
   SHARED_STYLE_DARK_UNREADABLE,
   sharedStyleUse,
@@ -74,11 +75,14 @@ import {
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   SHARED_STYLE_RENAME_PENDING,
   SHARED_STYLE_COUNTING_NOTE,
-  SHARED_STYLE_UNUSED_WHILE_COUNTING,
+  SHARED_STYLE_UNCOUNTABLE_NOTE,
+  SHARED_STYLE_UNCOUNTABLE_REMOVAL,
+  SHARED_STYLE_UNUSED_UNCERTAIN,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
   type SharedStyleFilter,
   type SharedStyleReach,
+  type SharedStyleRefusal,
   type SharedStyleRow,
   type SharedStyleTile,
   type SharedStylesUsage,
@@ -106,8 +110,15 @@ export interface SharedStylesAccess {
   ) => Promise<SharedStyleUsesPage>;
   /** Lock or unlock a style. Resolves to the refusal, or nothing. */
   readonly lock: (id: string, locked: boolean) => Promise<string | undefined>;
-  /** Remove unused styles, at most fifty. Resolves to the refusal, or nothing. */
-  readonly remove: (ids: readonly string[]) => Promise<string | undefined>;
+  /**
+   * Remove unused styles, at most fifty. Resolves to the refusal, or nothing:
+   * its words, or its words and whether it said the style is still used. A
+   * host answering words alone keeps working; the tab then takes no refusal
+   * as saying the style is used.
+   */
+  readonly remove: (
+    ids: readonly string[]
+  ) => Promise<string | SharedStyleRefusal | undefined>;
 }
 
 /** The blocks on the open page carrying each style, by id. */
@@ -264,10 +275,8 @@ export function SharedStylesPanel({
 
   const usageOf = (row: SharedStyleRow) =>
     sharedStyleUse(pageBlocksOf(pageBlocks, row.id), usage.styles.get(row.id));
-  const notes = countingNotes(
-    unusedWithheld(filter, found, usageOf),
-    usage.whole
-  );
+  const reason = floorReason(usage.whole, usage.counting);
+  const notes = countingNotes(unusedWithheld(filter, found, usageOf), reason);
   const filtered = found.filter(row =>
     inSharedStyleFilter(row, filter, usageOf(row))
   );
@@ -328,7 +337,7 @@ export function SharedStylesPanel({
             rows={rows}
             offered={!readOnly && access !== undefined}
             access={access}
-            whole={usage.whole}
+            reason={reason}
             held={held}
             saidInNote={notes.one}
             blocksOf={blocksOf}
@@ -379,7 +388,7 @@ export function SharedStylesPanel({
           />
         </section>
         {/* Said by the one counting note when that is showing. */}
-        <FloorNote whole={notes.floorWhole} />
+        <FloorNote note={notes.floor} />
       </div>
     </div>
   );
@@ -540,14 +549,14 @@ function issueBesideList(
   return issue === null || issue.id === openId ? null : issue.reason;
 }
 
-/** The note under the list while every count is a floor. */
+/** The note under the list while every count is a floor, in its reason's words. */
 function FloorNote({
-  whole,
+  note,
 }: {
-  whole: boolean | undefined;
+  note: string | undefined;
 }): React.JSX.Element | null {
-  if (whole !== false) return null;
-  return <p className="nx-vars__note">{SHARED_STYLE_NOT_WHOLE_NOTE}</p>;
+  if (note === undefined) return null;
+  return <p className="nx-vars__note">{note}</p>;
 }
 
 /** The read-only line, a usage read that failed, and a refused rename. */
@@ -582,28 +591,51 @@ function PanelNotes({
 }
 
 /**
- * Which notes the tab says while counting. When Unused holds rows back and
- * every count is a floor, ONE note says all three things (minimums, nothing
- * certainly unused, nothing removable yet) rather than three paragraphs that
- * each begin the same way.
+ * Why the tab's counts are floors: the site is still being counted (or may
+ * be), or it cannot be counted in full, so they stay floors. Undefined while
+ * every page is counted, whatever one style's own count says.
+ */
+type FloorReason = "counting" | "permanent" | undefined;
+
+function floorReason(
+  whole: boolean | undefined,
+  counting: "yes" | "unknown" | "no"
+): FloorReason {
+  if (whole !== false) return undefined;
+  return counting === "no" ? "permanent" : "counting";
+}
+
+/**
+ * Which notes the tab says about floors, in their reason's words. When Unused
+ * holds rows back while every count is a floor, ONE note says it all rather
+ * than three paragraphs that each begin the same way. Rows held back while
+ * every page is counted (one style's count cut short) get no such note: the
+ * proven rows are listed, and nothing is waiting.
  */
 function countingNotes(
   withheld: boolean,
-  whole: boolean | undefined
+  reason: FloorReason
 ): {
   withheld: boolean;
   one: boolean;
   /** The one note's words, when it is showing. */
   note: string | undefined;
-  /** What the floor note reads: nothing while the one note says it. */
-  floorWhole: boolean | undefined;
+  /** The floor note's words: nothing while the one note says it. */
+  floor: string | undefined;
 } {
-  const one = withheld && whole === false;
+  const one = withheld && reason !== undefined;
+  const words =
+    reason === "permanent"
+      ? {
+          one: SHARED_STYLE_UNCOUNTABLE_NOTE,
+          floor: SHARED_STYLE_UNCOUNTABLE_NOTE,
+        }
+      : { one: SHARED_STYLE_COUNTING_NOTE, floor: SHARED_STYLE_NOT_WHOLE_NOTE };
   return {
     withheld,
     one,
-    note: one ? SHARED_STYLE_COUNTING_NOTE : undefined,
-    floorWhole: one ? undefined : whole,
+    note: one ? words.one : undefined,
+    floor: one || reason === undefined ? undefined : words.floor,
   };
 }
 
@@ -617,6 +649,33 @@ function unusedWithheld(
   usageOf: (row: SharedStyleRow) => "used" | "unused" | undefined
 ): boolean {
   return filter === "unused" && found.some(row => usageOf(row) === undefined);
+}
+
+/**
+ * Unused while it holds rows back: why, then the rows proven unused. The
+ * counting note carries the id Remove unused points at; without one, the
+ * words say a count was cut short.
+ */
+function WithheldList({
+  note,
+  listed,
+  children,
+}: {
+  note: string | undefined;
+  listed: boolean;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <>
+      <p
+        className="nx-vars__empty"
+        id={note === undefined ? undefined : "nx-shared-styles-withheld"}
+      >
+        {note ?? SHARED_STYLE_UNUSED_UNCERTAIN}
+      </p>
+      {listed ? <ul className="nx-vars__list">{children}</ul> : null}
+    </>
+  );
 }
 
 /** The rows, or what to say when there are none or none match. */
@@ -646,19 +705,15 @@ function StyleList({
   note: string | undefined;
   children: React.ReactNode;
 }): React.JSX.Element {
-  if (withheld && rows.length > 0) {
+  if (
+    withheld &&
+    rows.length > 0 &&
+    (note !== undefined || found.length === 0)
+  ) {
     return (
-      <>
-        <p
-          className="nx-vars__empty"
-          id={note === undefined ? undefined : "nx-shared-styles-withheld"}
-        >
-          {note ?? SHARED_STYLE_UNUSED_WHILE_COUNTING}
-        </p>
-        {found.length === 0 ? null : (
-          <ul className="nx-vars__list">{children}</ul>
-        )}
-      </>
+      <WithheldList note={note} listed={found.length > 0}>
+        {children}
+      </WithheldList>
     );
   }
   if (rows.length === 0) {
@@ -711,6 +766,8 @@ interface UsageState {
    * Undefined until a read has answered.
    */
   readonly whole: boolean | undefined;
+  /** Whether floors among them may still become whole; see {@link countingOf}. */
+  readonly counting: "yes" | "unknown" | "no";
   readonly mayLock: boolean;
   readonly failed: boolean;
   /** Ask about these styles again, as after a removal the server refused. */
@@ -869,6 +926,7 @@ function useUsage(
   return {
     styles: state.styles,
     whole,
+    counting,
     mayLock: state.mayLock,
     failed: state.failed,
     reread,
@@ -1155,10 +1213,11 @@ function RowContent({
  * a rename is stored, since a removal writes the whole list of styles too.
  */
 function removeUnusedWait(
-  whole: boolean | undefined,
+  reason: FloorReason,
   held: boolean
 ): string | undefined {
-  if (whole === false) return SHARED_STYLE_NOT_WHOLE_REMOVAL;
+  if (reason === "counting") return SHARED_STYLE_NOT_WHOLE_REMOVAL;
+  if (reason === "permanent") return SHARED_STYLE_UNCOUNTABLE_REMOVAL;
   return held ? SHARED_STYLE_RENAME_PENDING : undefined;
 }
 
@@ -1178,7 +1237,7 @@ function RemoveUnusedHead({
   rows,
   offered,
   access,
-  whole,
+  reason,
   held,
   saidInNote,
   blocksOf,
@@ -1188,7 +1247,8 @@ function RemoveUnusedHead({
   /** False for a role that may not change the site's design. */
   offered: boolean;
   access: SharedStylesAccess | undefined;
-  whole: boolean | undefined;
+  /** Why the counts are floors, which decides why removal waits. */
+  reason: FloorReason;
   /** A rename is being stored, so a removal, which writes the whole list, waits. */
   held: boolean;
   /**
@@ -1203,7 +1263,7 @@ function RemoveUnusedHead({
   // A locked style refuses removal, and one in code cannot be removed here.
   const candidates = rows.filter(row => !row.locked && !row.inCode);
   const shown = offered && access !== undefined && candidates.length > 0;
-  const wait = removeUnusedWait(whole, held);
+  const wait = removeUnusedWait(reason, held);
   return (
     <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverAnchor asChild>
@@ -1394,7 +1454,10 @@ function ConfirmUnused({
     let rest = left;
     while (rest.length > 0) {
       const batch = rest.slice(0, PAGE_SIZE);
-      if (!(await run(() => access.remove(batch.map(row => row.id))))) return;
+      const write = async () =>
+        sharedStyleRefusalOf(await access.remove(batch.map(row => row.id)))
+          ?.reason;
+      if (!(await run(write))) return;
       rest = rest.slice(PAGE_SIZE);
       setLeft(rest);
       setRemoved(gone => gone + batch.length);

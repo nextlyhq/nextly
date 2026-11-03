@@ -273,6 +273,42 @@ describe("a row's tile in dark mode", () => {
     expect(tile.page).toEqual(LIGHT_PAGE);
   });
 
+  it("passes over text that clears 3:1 but not 4.5:1 for one that clears 4.5:1", () => {
+    // The site's light text is a mid grey: about 3.5:1 on white, enough for
+    // large text and not for the small "Aa". Its dark text fails outright,
+    // so the engine's light text, past 4.5:1, is the one chosen.
+    const grey = {
+      tokens: [
+        {
+          name: "color.text",
+          kind: "color" as const,
+          values: { light: "#8a8a8a", dark: "#f5f5f5" },
+        },
+      ],
+    };
+    expect(ratio("#8a8a8a", "#ffffff")).toBeGreaterThan(3);
+    expect(ratio("#8a8a8a", "#ffffff")).toBeLessThan(4.5);
+    const tile = sharedStyleTile(grey, "light", { backgroundColor: "#ffffff" });
+    expect(tile.specimen.color).toBe("#111827");
+    expect(ratio(tile.specimen.color, "#ffffff")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("does not count a background it cannot measure as readable", () => {
+    // `white` and oklch are valid CSS the contrast verdict cannot read. The
+    // page's near-white text must not be taken as readable on them.
+    for (const backgroundColor of ["white", "oklch(0.98 0 0)"]) {
+      const tile = sharedStyleTile(tokens, "dark", { backgroundColor });
+      expect(tile.specimen.color).toBe("#111827");
+      expect(tile.darkUnreadable).toBe(true);
+      expect(tile.page).toEqual(LIGHT_PAGE);
+    }
+    // A dark one it cannot measure gets light text.
+    const night = sharedStyleTile(tokens, "light", {
+      backgroundColor: "oklch(0.2 0.02 260)",
+    });
+    expect(night.specimen.color).toBe("#f9fafb");
+  });
+
   it("never marks a tile in light mode", () => {
     expect(
       sharedStyleTile(tokens, "light", { color: "#112233" }).darkUnreadable
