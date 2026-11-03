@@ -69,6 +69,7 @@ import {
   convertTimestampsToCamelCase,
 } from "../../../shared/lib/case-conversion";
 import { refusalIssues } from "../../../shared/lib/denied-change";
+import { detachData } from "../../../shared/lib/detach";
 import {
   validateEntryData,
   type ValidationIssue,
@@ -3655,7 +3656,7 @@ export class SingleMutationService extends BaseService {
                 }),
                 // As written: the field groups were lifted out of it before.
                 // A copy of its own, as the save prepares instances in place.
-                payload: structuredClone({
+                payload: detachData({
                   ...currentData,
                   ...attemptComponentFields,
                 }),

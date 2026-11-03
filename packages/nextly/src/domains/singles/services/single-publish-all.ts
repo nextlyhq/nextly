@@ -103,6 +103,7 @@ import {
 import {
   type ComponentFieldResolver,
   resolveComponentFieldMap,
+  stripSingleComponentTags,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -1220,11 +1221,14 @@ export class SinglePublishAllService extends BaseService {
         draft.locale,
         access,
         // The whole pending change, published: what the instances' validators
-        // are handed as the write. Its field groups are the untagged values
-        // written, not the snapshot's tagged ones.
+        // are handed as the write, without the markers only a snapshot
+        // carries, nested ones included.
         {
-          ...((draft.snapshot ?? {}) as Record<string, unknown>),
-          ...components,
+          ...stripSingleComponentTags(
+            (draft.snapshot ?? {}) as Record<string, unknown>,
+            plan.fieldConfigs,
+            componentFields
+          ),
           status: "published",
         }
       );
