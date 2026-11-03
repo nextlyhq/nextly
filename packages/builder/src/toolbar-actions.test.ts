@@ -617,8 +617,9 @@ describe("detach, duplicate and update a pattern", () => {
     );
 
     expect(actionOf(actions, "duplicate-component").enabled).toBe(false);
+    // A placement reads as a component, not as the engine's word for one.
     expect(actionOf(actions, "duplicate-component").reason).toBe(
-      "Component instance is locked."
+      "Component is locked."
     );
   });
 

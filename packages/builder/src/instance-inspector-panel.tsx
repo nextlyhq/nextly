@@ -35,6 +35,7 @@ import {
   isUnsetOverride,
   neededFor,
   richTextToPlainText,
+  type ComponentDocument,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -66,6 +67,7 @@ import {
 } from "./instance-inspector";
 import { refusalAnnouncement } from "./move-refusal";
 import { useStoredDraft } from "./stored-draft";
+import { VariantPicker } from "./variant-picker";
 
 /**
  * What the row's badge says for each source.
@@ -141,12 +143,15 @@ export function InstanceInspectorPanel({
   inspection,
   editor,
   verbs,
+  definition,
   canvasRoot,
 }: {
   inspection: InstanceInspection;
   editor: EditorState;
   /** The shared block verbs for the card's menu, as a block's card gets. */
   verbs?: CardVerbs | undefined;
+  /** The definition the placement resolves against, for its variant picker. */
+  definition?: ComponentDocument | undefined;
   /**
    * The canvas's root, where the placement's exposed parts are marked; the
    * page's document when the host names none. Scoped so a canvas drawn in a
@@ -237,6 +242,13 @@ export function InstanceInspectorPanel({
         </p>
       ) : null}
 
+      <VariantPicker
+        editor={editor}
+        nodeId={inspection.nodeId}
+        definition={definition}
+        disabled={inspection.identity.locked}
+      />
+
       {!inspection.definitionFound ? (
         /*
          * The same state the canvas draws as could-not-be-loaded, in words. A
@@ -297,14 +309,12 @@ export function InstanceInspectorPanel({
 
 /**
  * The variant this placement uses, as a phrase after "Component", or nothing.
- * A variant the component no longer offers is said to be gone, since the
- * placement then shows the component's own values.
+ * A variant the component no longer offers is said once, by the variant
+ * picker's notice beside its Clear, rather than here as well.
  */
 function variantPhrase(variant: InstanceInspection["variant"]): string {
-  if (variant === undefined) return "";
-  return variant.label === undefined
-    ? " · variant removed, showing defaults"
-    : ` · ${variant.label} variant`;
+  if (variant?.label === undefined) return "";
+  return ` · ${variant.label} variant`;
 }
 
 /**

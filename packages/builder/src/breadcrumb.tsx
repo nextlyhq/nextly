@@ -33,7 +33,7 @@ import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
 import { firstInlineProp } from "./inline-target";
 import { keyHint } from "./key-hint";
-import { pathTo } from "./layers";
+import { pathTo, type ComponentTitleOf } from "./layers";
 
 export interface SelectionBreadcrumbProps {
   /** The editor whose selection this describes and changes. */
@@ -49,6 +49,11 @@ export interface SelectionBreadcrumbProps {
     readonly goUp?: boolean;
     readonly commandPalette?: boolean;
   };
+  /**
+   * A component's title by id, so a selected placement reads as what the
+   * author placed. The library holds the titles, and the host read it.
+   */
+  componentTitle?: ComponentTitleOf;
 }
 
 /** One crumb: a block, or the page itself at the trail's root. */
@@ -61,6 +66,7 @@ interface Crumb {
 export function SelectionBreadcrumb({
   editor,
   hints = {},
+  componentTitle,
 }: SelectionBreadcrumbProps): React.JSX.Element {
   /*
    * The page first, always, then the selected block's ancestors.
@@ -69,7 +75,7 @@ export function SelectionBreadcrumb({
    * undo can remove the selected node), the trail is the page alone, marked
    * as the current position: the bar always says where the author is.
    */
-  const path = pathTo(editor.document, editor.selectedId);
+  const path = pathTo(editor.document, editor.selectedId, componentTitle);
   // Keys in two namespaces: a block's id is any unique string, "page"
   // among them, so the root crumb cannot share their key space.
   const crumbs: Crumb[] = [

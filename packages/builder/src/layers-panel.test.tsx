@@ -129,10 +129,12 @@ function Host({
   document,
   keys = "bound",
   regions,
+  componentTitle,
 }: {
   document: BlockDocument;
   keys?: "bound" | "disabled" | "absent";
   regions?: React.ComponentProps<typeof LayersPanel>["regions"];
+  componentTitle?: React.ComponentProps<typeof LayersPanel>["componentTitle"];
 }): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
@@ -148,6 +150,7 @@ function Host({
       editor={editor}
       moveHints={keys === "bound"}
       regions={regions}
+      componentTitle={componentTitle}
     />
   );
 }
@@ -181,6 +184,53 @@ function rows(): string[] {
 }
 
 describe("LayersPanel", () => {
+  it("names a component placement by its component's title, and finds it by it", () => {
+    register();
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("hero", "nextly/component-instance", {
+                props: { componentId: "cmp-hero" },
+              }),
+              node("other", "nextly/component-instance", {
+                props: { componentId: "cmp-gone" },
+              }),
+            ],
+          } as BlockDocument
+        }
+        componentTitle={id => (id === "cmp-hero" ? "Hero banner" : undefined)}
+      />
+    );
+
+    // Named, and marked as a component in words as well as by its mark, so the
+    // title is not mistaken for a block's own name. The fallback is already
+    // the word, so it carries no second one.
+    const label = (id: string) =>
+      window.document.querySelector(`[data-nx-layer="${id}"]`)?.textContent;
+    const tags = () =>
+      [...window.document.querySelectorAll(".nx-layer-row__tag")].map(
+        tag => tag.textContent
+      );
+    expect(label("hero")).toBe("Hero banner");
+    expect(label("other")).toBe("Component");
+    expect(tags()).toEqual(["component"]);
+    expect(
+      window.document.querySelectorAll(".nx-layer-row[data-component]")
+    ).toHaveLength(2);
+
+    React.act(() => {
+      fireEvent.change(screen.getByLabelText("Search layers"), {
+        target: { value: "hero" },
+      });
+    });
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    expect(label("hero")).toBe("Hero banner");
+  });
+
   it("says how to reorder, in the keys this platform carries", () => {
     /*
      * The bindings already work while this panel holds focus — the tree takes

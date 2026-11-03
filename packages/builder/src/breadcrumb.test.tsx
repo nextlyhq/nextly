@@ -113,6 +113,37 @@ function hint(): string | null {
 }
 
 describe("SelectionBreadcrumb", () => {
+  it("names a selected component placement by its component's title", () => {
+    // The engine's type for a placement reads "Component instance", which
+    // names the mechanism rather than what the author placed.
+    function PlacementHost(): React.JSX.Element {
+      const editor = useEditorState({
+        initialDocument: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            node("hero", "nextly/component-instance", {
+              props: { componentId: "cmp-hero" },
+            }),
+          ],
+        } as BlockDocument,
+      });
+      editorRef = editor;
+      return (
+        <SelectionBreadcrumb
+          editor={editor}
+          componentTitle={id => (id === "cmp-hero" ? "Hero banner" : undefined)}
+        />
+      );
+    }
+    render(<PlacementHost />);
+    React.act(() => {
+      editorRef?.select("hero");
+    });
+
+    expect(crumbs()).toEqual(["Page", "Hero banner"]);
+  });
+
   it("reads the page first, then outermost, and ends with the selected block", () => {
     register();
     render(<Host />);

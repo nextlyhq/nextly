@@ -46,6 +46,7 @@ import type { SavedComponent } from "./inserter";
 import { lockSourceOf, type BlockIdentity, type LockView } from "./inspector";
 import { lockRefusalWording } from "./lock-refusal";
 import type { BuilderOp, NodePatch } from "./ops";
+import { instanceProps, storedComponentId } from "./placement-props";
 
 /**
  * The exposed types this inspector can draw a control for.
@@ -382,36 +383,6 @@ function composedNodesOf(
     }
   }
   return found;
-}
-
-/**
- * The component id the node stores, or an empty string for a node that names
- * none.
- *
- * Read defensively: a stored document can hold anything the database
- * returned, and a `componentId` that is not a string must not reach a lookup
- * typed for one. An empty id resolves to no definition, which the panel then
- * says.
- */
-function storedComponentId(node: BlockNode): string {
-  const id = instanceProps(node).componentId;
-  return typeof id === "string" ? id : "";
-}
-
-/**
- * The instance's props as a record, or an empty one.
- *
- * A stored document can hold an instance whose `props` is missing or is not a
- * record — an import, a hook, a hand edit — and the canvas draws it as a
- * malformed placeholder rather than failing. Selecting that placeholder must
- * not throw either, so every read of an instance's props here goes through
- * this one guard, which is how the resolver reads them too.
- */
-function instanceProps(node: BlockNode): Record<string, unknown> {
-  const props: unknown = node.props;
-  return typeof props === "object" && props !== null && !Array.isArray(props)
-    ? (props as Record<string, unknown>)
-    : {};
 }
 
 /** The resolver's rows, as the panel draws them. */

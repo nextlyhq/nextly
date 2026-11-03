@@ -33,7 +33,11 @@ import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
-import { ownIndexReader, usageCountReader } from "./class-usage-runtime";
+import {
+  classUsageDocumentRowReader,
+  ownIndexReader,
+  usageCountReader,
+} from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
@@ -121,6 +125,7 @@ import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
+import { variantUseRoute } from "./variant-use-route";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -1297,6 +1302,27 @@ export const pageBuilder = (
               (await store.of([id])).get(id) ?? { properties: [], slots: [] }
             );
           },
+        }),
+        // How many placements chose one of a component's variants, for the
+        // dialog that confirms deleting it: the usage index lists the hosts,
+        // and each host's stored forms are walked as the system.
+        variantUseRoute({
+          store: componentStoreOf(opts),
+          hosts: () => composition?.hostsOf,
+          readForm: async (host, form) => {
+            const row = await classUsageDocumentRowReader(
+              await requireInstalled().nextly()
+            )({
+              entity: host.slug,
+              entityKey: host.id,
+              locale: "",
+              variant: form,
+            });
+            return row !== null && typeof row === "object"
+              ? (row as Record<string, unknown>)[host.field]
+              : undefined;
+          },
+          limits: opts.limits ?? DEFAULT_LIMITS,
         }),
         // Save a selection as a component, or convert it into one. Here
         // rather than left to the collection API for the reason the pattern
