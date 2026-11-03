@@ -86,19 +86,53 @@ function isWorkingDraft(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Whether page `id` is confirmed gone: listed again as the system, asking for
+ * nothing but its id, and not there. A check that itself fails confirms
+ * nothing.
+ */
+export async function confirmedGone(
+  nextly: Pick<Nextly, "find">,
+  pages: string,
+  id: string
+): Promise<boolean> {
+  try {
+    const found = await nextly.find({
+      collection: pages,
+      where: { id: { equals: id } },
+      status: "all",
+      limit: 1,
+      depth: 0,
+      select: { id: true },
+      overrideAccess: true,
+    });
+    return found.items.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * `read`, or `null` when the page it reads was deleted in the meantime: a page
- * listed by one read can be gone by the next. Only a missing page reads as
- * nothing; any other failure is raised, so a fault is never taken for an
+ * listed by one read can be gone by the next. A not-found answer can also come
+ * from the page's own read hooks, about something the page relates to, so it
+ * reads as nothing only once `gone` confirms the page itself is absent; any
+ * other answer, that one included, is raised, so a fault is never taken for an
  * absent page.
  */
-export async function unlessGone<T>(read: Promise<T>): Promise<T | null> {
+export async function unlessGone<T>(
+  read: Promise<T>,
+  gone: () => Promise<boolean>
+): Promise<T | null> {
   try {
     return await read;
   } catch (error) {
-    if (NextlyError.isCode(error, "NOT_FOUND")) return null;
+    if (NextlyError.isCode(error, "NOT_FOUND") && (await gone())) return null;
     throw error;
   }
 }
+
+/** A page whose draft read failed though the page is still there. */
+const UNCHECKED = Symbol("unchecked");
 
 /**
  * How many working drafts are read at once. A draft is read only by id, so a
@@ -117,8 +151,9 @@ async function workingDraftsNaming(
   collection: string,
   pages: readonly { id: string; title: string }[],
   layoutId: string
-): Promise<{ id: string; title: string }[]> {
+): Promise<{ naming: { id: string; title: string }[]; unchecked: boolean }> {
   const naming: { id: string; title: string }[] = [];
+  let unchecked = false;
   for (let at = 0; at < pages.length; at += DRAFT_READS_AT_ONCE) {
     const batch = pages.slice(at, at + DRAFT_READS_AT_ONCE);
     const drafts = await Promise.all(
@@ -130,11 +165,18 @@ async function workingDraftsNaming(
             draft: true,
             depth: 0,
             overrideAccess: true,
-          })
-        )
+          }),
+          () => confirmedGone(nextly, collection, page.id)
+        ).catch((error: unknown) => {
+          // Not found, yet still there: unread, so the scan cannot say
+          // nothing names the Layout.
+          if (NextlyError.isCode(error, "NOT_FOUND")) return UNCHECKED;
+          throw error;
+        })
       )
     );
     drafts.forEach((draft, index) => {
+      if (draft === UNCHECKED) unchecked = true;
       const page = batch[index];
       if (
         page !== undefined &&
@@ -145,7 +187,7 @@ async function workingDraftsNaming(
       }
     });
   }
-  return naming;
+  return { naming, unchecked };
 }
 
 /**
@@ -259,17 +301,15 @@ export async function scanLayoutReferences(args: {
           toRead.push({ id, title: textOf(row, "title") });
         }
       }
-      for (const draft of await workingDraftsNaming(
-        nextly,
-        pages,
-        toRead,
-        layoutId
-      )) {
+      const drafts = await workingDraftsNaming(nextly, pages, toRead, layoutId);
+      for (const draft of drafts.naming) {
         found.set(draft.id, { ...draft, place: "draft" });
       }
-      // Incomplete only when a row went unread: on this page past the budget,
-      // or on a page after it.
-      return unread > 0 || (spent >= budget && hasNext) ? "stop" : undefined;
+      // Incomplete when a row went unread: on this page past the budget, on a
+      // page after it, or a page still there whose draft could not be read.
+      return drafts.unchecked || unread > 0 || (spent >= budget && hasNext)
+        ? "stop"
+        : undefined;
     },
   });
   return { references: [...found.values()], complete: draftsDone };

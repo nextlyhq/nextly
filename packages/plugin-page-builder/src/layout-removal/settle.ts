@@ -126,6 +126,37 @@ export async function undoUnpublishIfPagesNameIt(
 }
 
 /**
+ * Clear `layoutId` from one page, answering whether it did. A page that can't
+ * be read or written is logged and left, so it does not stop the others being
+ * cleared; the page's own after-write look, or the site default it draws,
+ * covers it.
+ */
+async function clearOne(
+  deps: SettleDeps,
+  pageId: string,
+  layoutId: string
+): Promise<boolean> {
+  try {
+    return await clearPageReference(
+      deps.nextly,
+      deps.pagesSlug,
+      pageId,
+      layoutId
+    );
+  } catch (error) {
+    deps.warn(
+      "[page-builder] a page a Layout removal left on that Layout could not be cleared",
+      {
+        pageId,
+        layoutId,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+    return false;
+  }
+}
+
+/**
  * Clear the Layout from every page a write in flight left on it: the scan
  * once more, after the removal's own write, clearing each unpublished page and
  * each working draft that names it (`clearPageReference`). A live row is left,
@@ -149,14 +180,7 @@ async function clearPagesLeftOnIt(
         live.push(reference);
         continue;
       }
-      if (
-        await clearPageReference(
-          deps.nextly,
-          deps.pagesSlug,
-          reference.id,
-          removal.layoutId
-        )
-      ) {
+      if (await clearOne(deps, reference.id, removal.layoutId)) {
         deps.warn(
           "[page-builder] a page write in flight was cleared to the site default because its Layout is being removed",
           {

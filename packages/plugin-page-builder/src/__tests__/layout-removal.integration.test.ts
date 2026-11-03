@@ -24,6 +24,7 @@ process.env.NEXTLY_SECRET =
 
 import {
   definePlugin,
+  NextlyError,
   text,
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
@@ -509,6 +510,36 @@ describe.each(getConfiguredTestDialects())(
           expect(relationId(stored?.layout)).toBe(other);
         }
       );
+
+      it("refuses when a page that exists can't be read, never reading it as gone", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "published" });
+        // Only the working draft names the Layout.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: home,
+          data: { layout: other },
+          overrideAccess: true,
+        });
+        // A read hook answers not found for the page's working draft (the one
+        // read that names the Layout), as one that looks up something the
+        // page relates to can: the page itself is still there.
+        t.hooks.register("afterRead", PAGES_SLUG, async context => {
+          const doc = (context as { data?: Record<string, unknown> }).data;
+          if (relationId(doc) === home && relationId(doc?.layout) === other) {
+            throw NextlyError.notFound();
+          }
+        });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(409);
+        expect(told(answer)).toContain("Not every page could be checked");
+        expect((await layoutRow(t, other))?.status).toBe("published");
+        expect(await fence().removalOf(other)).toBeNull();
+      });
 
       it("refuses the site's default, saying to choose another first", async () => {
         const t = await boot();

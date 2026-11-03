@@ -57,7 +57,7 @@ import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
 
-import { unlessGone } from "./layout-references";
+import { confirmedGone, unlessGone } from "./layout-references";
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
 import { pageLayoutRefusal, type FencedLayoutState } from "./words";
 
@@ -85,7 +85,7 @@ interface PageHookContext {
 }
 
 /** The Direct API calls the page side makes. */
-type PageReads = Pick<Nextly, "findByID" | "update">;
+type PageReads = Pick<Nextly, "find" | "findByID" | "update">;
 
 /** What the guard needs. */
 export interface PageReferenceGuardArgs {
@@ -133,7 +133,7 @@ function directApiOf(hook: PageHookContext): PageReads | null {
 
 /** The page as it stands: its working draft when it has one, else its row. */
 async function currentPage(
-  nextly: Pick<Nextly, "findByID">,
+  nextly: Pick<Nextly, "find" | "findByID">,
   pages: string,
   id: string
 ): Promise<Record<string, unknown> | null> {
@@ -144,7 +144,8 @@ async function currentPage(
       draft: true,
       depth: 0,
       overrideAccess: true,
-    })
+    }),
+    () => confirmedGone(nextly, pages, id)
   );
   return typeof read === "object" && read !== null
     ? (read as Record<string, unknown>)
@@ -247,7 +248,8 @@ export async function clearPageReference(
       id: pageId,
       data: { layout: null },
       overrideAccess: true,
-    })
+    }),
+    () => confirmedGone(nextly, pages, pageId)
   );
   return cleared !== null;
 }

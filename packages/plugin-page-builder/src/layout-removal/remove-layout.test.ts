@@ -892,11 +892,47 @@ describe("a page deleted while the scan reads it", () => {
     const findByID = api.findByID.bind(api);
     return Object.assign(Object.create(api) as object, {
       findByID: async (args: Parameters<typeof api.findByID>[0]) => {
-        if (args.id === gone) throw NextlyError.notFound();
+        if (args.id === gone) {
+          s.pages = s.pages.filter(page => page.id !== gone);
+          throw NextlyError.notFound();
+        }
         return findByID(args);
       },
     }) as typeof api;
   }
+
+  /**
+   * The Direct API over `s`, where reading `page` by id answers not found
+   * though the page is still there, as a read hook about something it relates
+   * to can.
+   */
+  function unreadable(s: Site, page: string) {
+    const api = directApi(s);
+    const findByID = api.findByID.bind(api);
+    return Object.assign(Object.create(api) as object, {
+      findByID: async (args: Parameters<typeof api.findByID>[0]) => {
+        if (args.id === page) throw NextlyError.notFound();
+        return findByID(args);
+      },
+    }) as typeof api;
+  }
+
+  it("says the scan is incomplete when a page still there can't be read", async () => {
+    const s = site();
+    s.pages.push(
+      { id: "p1", title: "Unreadable", status: "published", layout: null },
+      { id: "p2", title: "Kept", status: "published", layout: null }
+    );
+    s.pageDrafts.set("p1", { id: "p1", layout: "landing" });
+
+    const scan = await scanLayoutReferences({
+      nextly: unreadable(s, "p1"),
+      pages: "pages",
+      layoutId: "landing",
+    });
+
+    expect(scan.complete).toBe(false);
+  });
 
   it("reads on past it, still finding a later page's working draft", async () => {
     const s = site();
