@@ -39,10 +39,10 @@ import {
   type SchemaEventRow,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   consentToCover,
   describeDeletion,
-  isInteractiveTerminal,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
@@ -769,10 +769,9 @@ async function planAndGuard(
     deps,
     agreed === undefined
   );
-  if (targets.length === 0)
-    return { planned: [], deletions: [], declined: false };
+  if (targets.length === 0) return { planned: [], deletions: [] };
   const planned = await planRollback(targets, deps, reads);
-  if (deps.options.dryRun) return { planned, deletions: [], declined: false };
+  if (deps.options.dryRun) return { planned, deletions: [] };
 
   // Guards — evaluated up front for every target, before executing anything.
   for (const p of planned) {
@@ -796,7 +795,7 @@ async function planAndGuard(
       sources.set(deletion, p.filename);
     }
   }
-  const answer = await judgeRunDeletions({
+  await judgeRunDeletions({
     sources,
     consent,
     agreed,
@@ -804,11 +803,7 @@ async function planAndGuard(
     askToDelete: deps.askToDelete,
     warn: line => deps.logger.warn(line),
   });
-  return {
-    planned,
-    deletions: [...sources.keys()],
-    declined: answer === "declined",
-  };
+  return { planned, deletions: [...sources.keys()] };
 }
 
 /**
@@ -869,8 +864,6 @@ async function downDeletions(
 interface GuardedPlan {
   planned: PlannedDown[];
   deletions: Deletion[];
-  /** The terminal was asked and said no: nothing is rolled back. */
-  declined: boolean;
 }
 
 export async function migrateDownCore(
@@ -942,11 +935,6 @@ export async function migrateDownCore(
       }
       deps.logger.info(p.downSql);
     }
-    return { rolledBack: [] };
-  }
-
-  if (guarded.declined) {
-    deps.logger.info("Nothing was rolled back.");
     return { rolledBack: [] };
   }
 
@@ -1327,7 +1315,7 @@ export async function runMigrateDown(
               }),
           }
         : {}),
-      interactive: isInteractiveTerminal(),
+      interactive: canPrompt(),
       askToDelete: askToDeleteInTerminal,
     });
 

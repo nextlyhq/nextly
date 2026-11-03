@@ -21,7 +21,6 @@ import {
 import {
   type UseBuilderChecklistResult,
   CHECKLIST_STORAGE_KEY,
-  ClassManagerPanel,
   ComponentsPanel,
   InsertPanel,
   LayersPanel,
@@ -64,6 +63,7 @@ import {
   offerableFaces,
   offerableTokens,
   renderedTokens,
+  SharedStylesStudio,
   TokensStudio,
   VariablesTab,
 } from "./site-style-studios";
@@ -94,7 +94,7 @@ function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
 
 /**
  * Every left panel the editor can fill today: Add, Layers, Pages, the site's
- * Components, and Design with the site's variables, classes and fonts.
+ * Components, and Design with the site's variables, shared styles and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
@@ -487,17 +487,27 @@ export function editorPanelRenderer({
   storedSiteStyle,
   unreadableStoredFonts,
   classes,
-  documentClasses,
+  pageClassBlocks,
   classSummaryContext,
   requestPanel,
   insertInside,
   pages,
+  canvasRender,
+  editedBreakpoint,
+  canvasElement,
+  layerVerbs,
   documentDirty,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
   documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
+  /**
+   * The block verbs the verbs provider shares, for the Layers row menu: drawn
+   * in the shell's panel region, outside the provider, so they are handed
+   * across as the inspector's card menu has them.
+   */
+  layerVerbs?: React.ComponentProps<typeof LayersPanel>["verbs"];
   /** "Edit component", which the Components panel offers on each row. */
   componentView: Pick<ComponentView, "onEditComponent">;
 } & Pick<
@@ -510,7 +520,15 @@ export function editorPanelRenderer({
     | "unreadableStoredFonts"
     | "classes"
   > &
-  Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
+  Pick<
+    CanvasInputs,
+    | "drag"
+    | "pageClassBlocks"
+    | "classSummaryContext"
+    | "canvasRender"
+    | "editedBreakpoint"
+    | "canvasElement"
+  > &
   Pick<
     EditorPanels,
     "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
@@ -588,6 +606,25 @@ export function editorPanelRenderer({
           // Its titles come with the read, so a placement of a component
           // the panel does not offer (the one being edited) is still named.
           componentTitle={offered.titleOf}
+          // The device the eye hides on: the one being edited, against the
+          // breakpoints the canvas is compiled with. Withheld until the
+          // site's stored breakpoints have been read: until then the set in
+          // hand is the config's defaults, and a hide written against it
+          // could resolve differently against the site's own.
+          {...(siteStylePending || siteStyleError !== null
+            ? {}
+            : {
+                device: {
+                  breakpoints: canvasRender.styleContext.breakpoints,
+                  id: editedBreakpoint,
+                },
+              })}
+          // Inside the shell's shortcut provider, so the row keys register
+          // with it and Help lists them.
+          shortcuts
+          // A row chosen there scrolls its block into view here.
+          canvasRoot={canvasElement}
+          {...(layerVerbs === undefined ? {} : { verbs: layerVerbs })}
         />
       ),
       // Read when the panel is drawn, as every other entry reads its inputs,
@@ -614,31 +651,18 @@ export function editorPanelRenderer({
           tabs={{
             variables: () => <VariablesTab />,
             classes: () => (
-              <ClassManagerPanel
-                absence={classes.absence}
-                pendingSlugs={classes.pendingSlugs}
-                documentClassIds={documentClasses.ids}
-                /*
-                      Whether that walk reached the whole document. It stops at the
-                      node ceiling, and a class applied past it is missing from the
-                      list — which the panel must not read as "not on this page".
-                    */
-                documentScan={documentClasses.complete ? "complete" : "partial"}
-                library={classes.library}
+              <SharedStylesStudio
+                classes={classes}
+                pageBlocks={pageClassBlocks}
                 styleContext={classSummaryContext}
-                onRename={classes.rename}
-                currentRenameAttempt={classes.currentRenameAttempt}
-                /*
-                      No `usage`, and no `onDelete`. The usage index is a
-                      collection and this surface has no read for one, so the panel
-                      reports that nothing was read rather than reporting an empty
-                      index — which would say every class is unused. Deleting needs
-                      that same reach plus a write stripping the class from every
-                      document holding it, so it is withheld entirely rather than
-                      offered as a control that cannot keep its promise.
-                    */
                 suppliedClassIds={configSiteStyle?.classes?.map(
                   entry => entry.id
+                )}
+                // The same variables the Fonts tab reads, as the canvas draws.
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
                 )}
               />
             ),

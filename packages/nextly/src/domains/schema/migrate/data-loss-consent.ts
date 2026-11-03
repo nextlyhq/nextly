@@ -390,8 +390,8 @@ export type DataLossVerdict =
       kind: "refused";
       /**
        * `not-covered`: a consent naming targets was given and leaves some
-       * deletion out. `needs-consent`: none covers it, and no terminal is
-       * there to ask.
+       * deletion out. `needs-consent`: none covers it, and nobody can be
+       * asked (no terminal, `CI` set, or `--non-interactive`).
        */
       reason: "not-covered" | "needs-consent";
       /** The refusal, naming each deletion left out and the consent that covers it. */
@@ -489,7 +489,7 @@ export async function judgeDataLoss(args: {
     reason: "needs-consent",
     uncovered,
     message:
-      `Deleting data needs consent, and no terminal is attached to ask. This would delete:\n` +
+      `Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive). This would delete:\n` +
       `${lines(uncovered).join("\n")}\n` +
       `Nothing was changed. To consent: ${consentHint(uncovered, consent, flag)}.`,
   };
@@ -523,9 +523,4 @@ export async function countDeletions(
     }
   }
   return counted;
-}
-
-/** Whether a person is there to answer: a terminal on both ends. */
-export function isInteractiveTerminal(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }

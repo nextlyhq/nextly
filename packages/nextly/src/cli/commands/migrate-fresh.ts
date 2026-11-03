@@ -30,8 +30,6 @@
  * ```
  */
 
-import { createInterface } from "node:readline";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 import { sql, type SQL } from "drizzle-orm";
@@ -41,14 +39,16 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
-  isInteractiveTerminal,
+  ACCEPT_DATA_LOSS_ENV,
   judgeDataLoss,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
-import { dataLossRefusal, exitWithError } from "../errors";
+import { exitWithError } from "../errors";
+import { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -62,9 +62,11 @@ import {
 } from "../utils/command-prerequisites";
 import {
   readDataLossConsent,
+  requireConsented,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
+import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import { commandRun } from "./command-run";
 import { runMigrate } from "./migrate";
@@ -94,6 +96,11 @@ export interface MigrateFreshCommandOptions {
    * @default false
    */
   seed?: boolean;
+
+  /**
+   * Refused whenever it is given: it never consents to deleting data.
+   */
+  yes?: boolean;
 }
 
 /**
@@ -139,6 +146,10 @@ export async function runMigrateFresh(
 
   logger.header("Migrate Fresh");
 
+  // `--yes` is refused before anything is read or reached, whatever else is
+  // given, so a run that meant it as consent changes nothing.
+  if (options.yes) exitWithError(logger, yesIsNotConsent());
+
   // Step 1: Validate database environment
   logger.debug("Validating database environment...");
   const dbValidation = requireDatabaseEnv(logger);
@@ -172,12 +183,12 @@ export async function runMigrateFresh(
   logger.warn("All data will be permanently lost.");
 
   // The data-loss consent decides, before the database is touched: covered,
-  // the run proceeds; at a terminal, it asks; otherwise it refuses at once
-  // rather than waiting on input nobody will give. What it deletes is every
-  // table, which no list of tables can be said to cover.
-  let verdict: Awaited<ReturnType<typeof judgeDataLoss>>;
+  // the run proceeds; where a person can be asked, it asks; otherwise it
+  // refuses at once rather than waiting on input nobody will give. A no at
+  // the prompt ends the run with exit 1, as a refusal does. What it deletes
+  // is every table, which no list of tables can be said to cover.
   try {
-    verdict = await judgeDataLoss({
+    const verdict = await judgeDataLoss({
       deletions: [
         { kind: "unnamed", description: "every table in the database" },
       ],
@@ -187,20 +198,14 @@ export async function runMigrateFresh(
         earlierFlags: options.force ? ["migrate:fresh --force"] : [],
         warn: message => logger.warn(message),
       }),
-      interactive: isInteractiveTerminal(),
-      ask: question => confirmDestructiveAction(`${question} (yes/no): `),
+      interactive: canPrompt(),
+      // A yes deletes; Ctrl+C ends the run with exit 130 (`askYesInTerminal`).
+      ask: question => askYesInTerminal(`${question} (yes/no): `),
       print: line => logger.warn(line),
     });
+    requireConsented(verdict);
   } catch (error) {
     exitWithError(logger, error);
-  }
-  if (verdict.kind === "declined") {
-    logger.newline();
-    logger.info("Operation cancelled.");
-    process.exit(0);
-  }
-  if (verdict.kind === "refused") {
-    exitWithError(logger, dataLossRefusal(verdict));
   }
 
   // Step 4: Connect to database
@@ -557,25 +562,16 @@ async function dropTable(
   await adapter.executeQuery(query);
 }
 
-// ============================================================================
-// Confirmation Helper
-// ============================================================================
-
 /**
- * Prompt user for confirmation of destructive action
+ * The refusal of `migrate:fresh --yes`: it answers other commands' questions,
+ * and deleting every table takes the data-loss consent, never `--yes`.
  */
-async function confirmDestructiveAction(prompt: string): Promise<boolean> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise(resolve => {
-    rl.question(prompt, answer => {
-      rl.close();
-      const normalizedAnswer = answer.toLowerCase().trim();
-      resolve(normalizedAnswer === "yes" || normalizedAnswer === "y");
-    });
+function yesIsNotConsent(): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: `--yes does not consent to deleting data: give --accept-data-loss (or ${ACCEPT_DATA_LOSS_ENV}).`,
+    why: "Nothing was changed. migrate:fresh deletes every table, which only the data-loss consent allows.",
+    next: `Run \`nextly migrate:fresh --accept-data-loss\` (or set ${ACCEPT_DATA_LOSS_ENV}=1) in place of --yes.`,
+    context: { reason: "yes-is-not-consent" },
   });
 }
 

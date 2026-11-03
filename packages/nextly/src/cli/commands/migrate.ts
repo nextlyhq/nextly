@@ -60,11 +60,11 @@ import {
   appliedChecksums,
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
   describeDeletion,
-  isInteractiveTerminal,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
@@ -1984,7 +1984,9 @@ async function judgeFileDeletions(
   )) {
     for (const deletion of deletions) sources.set(deletion, `${file.name}.sql`);
   }
-  const answer = await judgeRunDeletions({
+  // A refusal, or a no at the terminal (`DATA_LOSS_DECLINED`, exit 1),
+  // throws before anything changes.
+  await judgeRunDeletions({
     sources,
     consent,
     agreed,
@@ -1992,15 +1994,7 @@ async function judgeFileDeletions(
     askToDelete: deps.askToDelete,
     warn: line => deps.logger.warn(line),
   });
-  const deletions = [...sources.keys()];
-  if (answer === "declined") {
-    const files = [...new Set(sources.values())];
-    throw NextlyError.invalidInput({
-      message: `${files.join(", ")} ${files.length === 1 ? "deletes" : "delete"} data and the deletion was declined, so \`nextly migrate\` applied nothing.`,
-      logContext: { files, reason: "data-loss-declined" },
-    });
-  }
-  return [...(agreed ?? []), ...deletions];
+  return [...(agreed ?? []), ...sources.keys()];
 }
 
 /**
@@ -2032,7 +2026,7 @@ function commandLineConsent(
 ): Pick<MigrateCoreDeps, "consent" | "interactive" | "askToDelete"> {
   return {
     consent: migrateConsent(options, m => logger.warn(m)),
-    interactive: isInteractiveTerminal(),
+    interactive: canPrompt(),
     askToDelete: askToDeleteInTerminal,
   };
 }

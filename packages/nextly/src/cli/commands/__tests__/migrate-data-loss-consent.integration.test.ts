@@ -86,6 +86,8 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
       interactive?: boolean;
       answer?: boolean;
       asked?: string[];
+      /** Every line the run prints as a warning, the listing included. */
+      printed?: string[];
     } = {}
   ) {
     return migrateCore({
@@ -94,7 +96,15 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
       db: adapter.getDrizzle(),
       adapter: adapter as never,
       migrationsDir,
-      logger,
+      logger:
+        extra.printed === undefined
+          ? logger
+          : {
+              ...logger,
+              warn: (line: string) => {
+                extra.printed?.push(line);
+              },
+            },
       lockMode: "wait",
       lockWaitMs: 30_000,
       consent,
@@ -177,6 +187,17 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     expect(NextlyError.is(error)).toBe(true);
     expect(await databaseState()).toEqual(before);
     return (error as NextlyError).publicMessage;
+  }
+
+  /** A run a person declined at the terminal: the shared code, and nothing changed. */
+  async function declinedUnchanged(work: () => Promise<unknown>) {
+    const before = await databaseState();
+    const error = await work().then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+    expect(NextlyError.is(error) && error.code).toBe("DATA_LOSS_DECLINED");
+    expect(await databaseState()).toEqual(before);
   }
 
   it("refuses a dropped table without consent, naming the file and the table, and applies with consent naming it", async () => {
@@ -289,10 +310,9 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
 
   it("stops with nothing changed when the person at the terminal declines", async () => {
     file([`DROP TABLE ${posts}`], []);
-    const message = await refusedUnchanged(() =>
+    await declinedUnchanged(() =>
       migrate(NO_CONSENT, { interactive: true, answer: false })
     );
-    expect(message).toContain("declined");
     expect(
       (await migrate(NO_CONSENT, { interactive: true, answer: true })).applied
     ).toBe(1);
@@ -305,12 +325,14 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     const first = file([`DROP TABLE ${other}`], []);
     const second = file([`DELETE FROM ${posts}`], []);
     const asked: string[] = [];
-    const message = await refusedUnchanged(() =>
-      migrate(NO_CONSENT, { interactive: true, answer: false, asked })
+    const printed: string[] = [];
+    await declinedUnchanged(() =>
+      migrate(NO_CONSENT, { interactive: true, answer: false, asked, printed })
     );
     expect(asked).toHaveLength(1);
-    expect(message).toContain(first);
-    expect(message).toContain(second);
+    // The one listing names both files, each above what it deletes.
+    expect(printed).toContain(`  ${first}:`);
+    expect(printed).toContain(`  ${second}:`);
     expect(
       (await migrate(NO_CONSENT, { interactive: true, answer: true, asked }))
         .applied

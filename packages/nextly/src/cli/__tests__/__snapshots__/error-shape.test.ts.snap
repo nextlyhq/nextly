@@ -35,7 +35,7 @@ exports[`a command that ends with an error > names a missing configuration file,
 `;
 
 exports[`a rollback refused for want of consent > ends with what it would delete and the consent that allows it, running nothing 1`] = `
-"✗ Deleting data needs consent, and no terminal is attached to ask.
+"✗ Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
   Why:  This would delete:
         20261020_120000_add_summary.sql:
         - column dc_posts.summary
@@ -571,6 +571,14 @@ exports[`each code, as a command ends with it > CORE_DESTRUCTIVE_CHANGE_DECLINED
   Docs: https://nextlyhq.com/docs/cli/errors/core-destructive-change-declined  (CORE_DESTRUCTIVE_CHANGE_DECLINED)"
 `;
 
+exports[`each code, as a command ends with it > CORE_DESTRUCTIVE_NEEDS_TERMINAL 1`] = `
+"✗ This confirmation needs a terminal, so nothing was changed.
+  Why:  \`--reconcile-core\` asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or \`--non-interactive\` was given, or \`CI\` is set). The changes it would make:
+        - drops column 'nextly_users.legacy_role'
+  Next: Run \`nextly upgrade --reconcile-core\` again at a terminal, and confirm each change once you have checked its data is not needed.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-destructive-needs-terminal  (CORE_DESTRUCTIVE_NEEDS_TERMINAL)"
+`;
+
 exports[`each code, as a command ends with it > CORE_SCHEMA_APPLY_FAILED 1`] = `
 "✗ Core schema apply failed.
   Why:  column "role" of relation "nextly_users" contains null values
@@ -608,12 +616,19 @@ exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_NOT_COVERED 1`
 `;
 
 exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_REQUIRED 1`] = `
-"✗ Deleting data needs consent, and no terminal is attached to ask.
+"✗ Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
   Why:  This would delete:
         - column dc_posts.summary (42 non-empty values)
         Nothing was changed.
   Next: To consent: --accept-data-loss=dc_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts.summary).
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > DATA_LOSS_DECLINED 1`] = `
+"✗ Nothing was changed: the deletion was not confirmed.
+  Why:  The prompt that listed what would be deleted was not answered yes.
+  Next: Run the command again and confirm, or give --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS) to consent without being asked.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-declined  (DATA_LOSS_DECLINED)"
 `;
 
 exports[`each code, as a command ends with it > DATABASE_ADAPTER_MISSING 1`] = `
@@ -746,6 +761,13 @@ exports[`each code, as a command ends with it > I18N_RESTORE_KIND_INVALID 1`] = 
   Why:  \`--kind\` says which kind of entity the slug names, when more than one kind has it.
   Next: Pass \`--kind collection\`, \`--kind single\` or \`--kind field-group\`, or leave \`--kind\` out when the slug names one entity.
   Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-kind-invalid  (I18N_RESTORE_KIND_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > INIT_ANSWERS_REQUIRED 1`] = `
+"✗ Nextly was not initialized, and nothing was written.
+  Why:  \`nextly init\` asks where collections go and whether to add an example, and no terminal is attached to ask (or \`--non-interactive\` was given, or \`CI\` is set).
+  Next: Run \`nextly init --yes\` to use the defaults.
+  Docs: https://nextlyhq.com/docs/cli/errors/init-answers-required  (INIT_ANSWERS_REQUIRED)"
 `;
 
 exports[`each code, as a command ends with it > INPUT_REFUSED 1`] = `
@@ -1622,6 +1644,13 @@ exports[`each code, as a command ends with it > SETUP_TOKEN_SET_BY_ENV 1`] = `
   Why:  A token set by NEXTLY_SETUP_TOKEN is read from the environment, not stored in the install's database.
   Next: Change the variable where it is set.
   Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)"
+`;
+
+exports[`each code, as a command ends with it > SYNC_CONFIRMATION_REQUIRED 1`] = `
+"✗ \`db:sync --promote posts\` changed nothing: it asks before it changes anything.
+  Why:  No terminal is attached to ask (or \`--non-interactive\` was given, or \`CI\` is set), and \`--yes\` was not given.
+  Next: Run \`nextly db:sync --promote posts --yes\` to answer it yes.
+  Docs: https://nextlyhq.com/docs/cli/errors/sync-confirmation-required  (SYNC_CONFIRMATION_REQUIRED)"
 `;
 
 exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
