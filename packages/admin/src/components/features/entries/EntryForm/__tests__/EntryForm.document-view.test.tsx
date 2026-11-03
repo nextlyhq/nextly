@@ -714,13 +714,17 @@ describe("EntryForm with a document view", () => {
     const stored = { id: "e1", title: "Hello", layout: { nodes: ["stored"] } };
     const RESTORING_VIEW = "@acme/pb/admin#Restoring";
     const applied = vi.fn<(value: unknown) => boolean>();
+    const snapshot = { title: "Recovered", layout: { nodes: ["recovered"] } };
+    /** The form, so the recovery's restore can do what the real one does. */
+    const formOf: { reset?: (values: unknown, options: object) => void } = {};
 
     function RestoringView(): ReactElement {
       useEffect(() => {
         mounted();
       }, []);
       useDocumentRestore(value => applied(value));
-      const { watch } = useFormContext();
+      const { watch, reset } = useFormContext();
+      formOf.reset = reset as never;
       return (
         <>
           <p>title: {String(watch("title"))}</p>
@@ -729,17 +733,19 @@ describe("EntryForm with a document view", () => {
       );
     }
 
-    function offerRecovery(dismiss = vi.fn(), restore = vi.fn()) {
+    function offerRecovery() {
+      // As the recovery's own restore does: the snapshot into the form, kept
+      // dirty against the stored defaults.
+      const restore = vi.fn(() => {
+        formOf.reset?.(snapshot, { keepDefaultValues: true });
+      });
       recovery.current = {
         ...recovery.current,
-        offer: {
-          savedAt: new Date(),
-          snapshot: { title: "Recovered", layout: { nodes: ["recovered"] } },
-        },
-        dismiss,
+        offer: { savedAt: new Date(), snapshot },
+        dismiss: vi.fn(),
         restore,
       };
-      return { dismiss, restore };
+      return { restore };
     }
 
     function open() {
@@ -759,20 +765,20 @@ describe("EntryForm with a document view", () => {
       // The view applies its own field as an edit it can undo; drawing it
       // afresh would start its history again.
       applied.mockReturnValue(true);
-      const { dismiss, restore } = offerRecovery();
+      const { restore } = offerRecovery();
       open();
       expect(mounted).toHaveBeenCalledTimes(1);
 
       await userEvent.click(screen.getByRole("button", { name: "Restore" }));
 
       expect(applied).toHaveBeenCalledWith({ nodes: ["recovered"] });
+      // The recovery's own restore, so the offer is accepted one way.
+      expect(restore).toHaveBeenCalledTimes(1);
       expect(screen.getByText("title: Recovered")).toBeInTheDocument();
       // The view's field keeps what the view holds: its own edit writes it.
       expect(
         screen.getByText(`layout: ${JSON.stringify({ nodes: ["stored"] })}`)
       ).toBeInTheDocument();
-      expect(dismiss).toHaveBeenCalledTimes(1);
-      expect(restore).not.toHaveBeenCalled();
       expect(mounted).toHaveBeenCalledTimes(1);
     });
 

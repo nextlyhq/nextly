@@ -93,6 +93,20 @@ describe("restoreAsEdit", () => {
     expect(result.current.undoDepth).toBe(0);
   });
 
+  it("declines a recovered page whose media index differs, and changes nothing", () => {
+    // No edit changes the index, so the recovered blocks would be saved
+    // under the current one; the full restore keeps the recovered index.
+    const stored = { ...page([box("a")]), assets: { mediaIds: ["m1"] } };
+    const recovered = { ...page([box("c")]), assets: { mediaIds: ["m2"] } };
+    const { result } = editorOn(stored);
+    let applied = true;
+    act(() => {
+      applied = restoreAsEdit(result.current, recovered, ["page"]);
+    });
+    expect(applied).toBe(false);
+    expect(ids(result.current.document)).toEqual(["a"]);
+  });
+
   it("declines a value that isn't a document", () => {
     const { result } = editorOn(page([box("a")]));
     expect(restoreAsEdit(result.current, "not a page", ["page"])).toBe(false);

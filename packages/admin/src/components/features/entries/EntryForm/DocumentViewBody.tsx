@@ -223,23 +223,22 @@ function useRestoreInView(
   fieldPath: string | undefined,
   registry: DocumentRestoreRegistry
 ): () => boolean {
-  const { offer, dismiss } = recovery;
+  const { offer, restore } = recovery;
   return useCallback(() => {
     const handler = registry.current;
     if (handler === null || offer === null || fieldPath === undefined) {
       return false;
     }
     const snapshot = offer.snapshot as Record<string, unknown>;
-    if (!handler(valueAtPath(snapshot, fieldPath))) return false;
-    // The view's field keeps what the view holds; the view writes the
-    // restored value through its own edit. `keepDefaultValues`, so the form
-    // stays dirty: the recovered values are not what the server holds.
     const held = form.getValues(fieldPath);
-    form.reset(snapshot, { keepDefaultValues: true });
+    if (!handler(valueAtPath(snapshot, fieldPath))) return false;
+    // The recovery's own restore, so a view and the form accept an offer the
+    // same way; then the view's field takes back what the view holds, since
+    // the view writes the restored value through its own edit.
+    restore();
     form.setValue(fieldPath, held, { shouldDirty: true });
-    dismiss();
     return true;
-  }, [registry, offer, fieldPath, form, dismiss]);
+  }, [registry, offer, fieldPath, form, restore]);
 }
 
 /** The value at a dotted form path (`hero.body`, `sections.0.body`), if any. */

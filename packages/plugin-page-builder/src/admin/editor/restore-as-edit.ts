@@ -29,15 +29,17 @@ function hasNodes(value: unknown): value is { nodes: unknown[] } {
 }
 
 /**
- * Whether two documents' settings are the same. Compared as stored: no edit
- * changes a document's settings, so a restore that would is declined rather
- * than half applied.
+ * Whether two documents carry the same envelope beside their blocks: their
+ * settings and their media index. Compared as stored. No edit changes either
+ * (the op layer keeps the current document's), so a restore that would is
+ * declined rather than half applied: recovered blocks saved under the current
+ * media index would leave the media they use unprotected.
  */
-function sameSettings(
-  a: BlockDocument["settings"],
-  b: BlockDocument["settings"]
-): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+function sameEnvelope(a: BlockDocument, b: BlockDocument): boolean {
+  return (
+    JSON.stringify(a.settings ?? null) === JSON.stringify(b.settings ?? null) &&
+    JSON.stringify(a.assets ?? null) === JSON.stringify(b.assets ?? null)
+  );
 }
 
 /**
@@ -45,8 +47,8 @@ function sameSettings(
  * recovered blocks placed in order. Atomic, so it lands whole or not at all.
  *
  * Declines (false) a value that isn't a document of the field's kinds, one of
- * another kind than the page, one whose settings differ, and one the editor
- * refuses (a lock, say). The admin then restores the old way.
+ * another kind than the page, one whose settings or media index differ, and
+ * one the editor refuses (a lock, say). The admin then restores the old way.
  *
  * @param editor - the editor's state: its document and its batch apply
  * @param value - the field's value in the recovery point, unparsed
@@ -62,7 +64,7 @@ export function restoreAsEdit(
   const next = documentFrom(value, kinds);
   const current = editor.document;
   if (next.kind !== current.kind) return false;
-  if (!sameSettings(next.settings, current.settings)) return false;
+  if (!sameEnvelope(next, current)) return false;
   const ops: BuilderOp[] = [
     ...current.nodes.map(node => ({ kind: "remove" as const, id: node.id })),
     ...next.nodes.map((node, index) => ({
