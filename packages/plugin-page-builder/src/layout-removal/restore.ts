@@ -173,29 +173,34 @@ async function restoreDraft(
   }
 }
 
-/** The address a restored Layout is created under: its own, else the next free. */
-function slugFor(base: string, attempt: number): string {
-  return attempt === 0 ? base : `${base}-${String(attempt + 1)}`;
+/**
+ * The addresses a restored Layout may be created under, in order: its own,
+ * the numbered ones after it, and last one named for its removal, which only
+ * a Layout created to block it would hold.
+ */
+function slugsFor(base: string, token: string): string[] {
+  const numbered = Array.from({ length: SLUG_ATTEMPTS }, (_, attempt) =>
+    attempt === 0 ? base : `${base}-${String(attempt + 1)}`
+  );
+  return [...numbered, `${base}-${token.slice(0, 8)}`];
 }
 
 /** Create the Layout from the copy, published, under the first free address. */
 async function createFromCopy(
   deps: RestoreDeps,
-  copy: LayoutCopy
+  copy: LayoutCopy,
+  token: string
 ): Promise<string> {
   const base =
     typeof copy.live.slug === "string" && copy.live.slug !== ""
       ? copy.live.slug
       : "restored-layout";
-  for (let attempt = 0; ; attempt += 1) {
+  const slugs = slugsFor(base, token);
+  for (const [attempt, slug] of slugs.entries()) {
     try {
       const created = await deps.nextly.create({
         collection: deps.slugs.layouts,
-        data: {
-          ...authored(copy.live),
-          slug: slugFor(base, attempt),
-          status: "published",
-        },
+        data: { ...authored(copy.live), slug, status: "published" },
         overrideAccess: true,
       });
       const id = relationId(created.item);
@@ -203,8 +208,39 @@ async function createFromCopy(
       return id;
     } catch (error) {
       if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-      if (attempt + 1 >= SLUG_ATTEMPTS) throw error;
+      if (attempt + 1 >= slugs.length) throw error;
     }
+  }
+  throw NextlyError.internal();
+}
+
+/**
+ * Create the restored Layout, or, when every address it could take is held,
+ * put the row back at the step it was claimed from. Nothing was created then,
+ * so the copy is kept and a later repair or sweep tries again; leaving the
+ * row at `restoring` would have the sweep settle it and drop the only copy.
+ */
+async function createOrRelease(
+  deps: RestoreDeps,
+  removal: LayoutRemoval,
+  copy: LayoutCopy
+): Promise<string> {
+  try {
+    return await createFromCopy(deps, copy, removal.token);
+  } catch (error) {
+    if (NextlyError.isCode(error, "DUPLICATE")) {
+      await deps.store.advance({
+        layoutId: removal.layoutId,
+        token: removal.token,
+        from: "restoring",
+        to: removal.step,
+      });
+      deps.warn(
+        "[page-builder] a deleted default Layout could not be restored, since every address it could take is held by another Layout; its copy is kept and the restore will be tried again",
+        { removedLayout: removal.layoutId }
+      );
+    }
+    throw error;
   }
 }
 
@@ -229,7 +265,7 @@ export async function restoreFromCopy(
   });
   if (!claimed) return null;
 
-  const restored = await createFromCopy(deps, copy);
+  const restored = await createOrRelease(deps, removal, copy);
   if (copy.draft !== null) await restoreDraft(deps, restored, copy);
   // Re-read just before writing: a newer choice of default made meanwhile is
   // kept, and the restored Layout is then simply one more Layout.

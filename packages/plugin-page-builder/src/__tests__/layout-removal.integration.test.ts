@@ -1472,6 +1472,56 @@ describe.each(getConfiguredTestDialects())(
         });
       }
 
+      it("keeps the copy when every address a restore could take is taken, and restores once one is free", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        // Every address the restore tries: the Layout's own, the numbered
+        // ones after it, and the one named for its removal.
+        const taken = [
+          "other",
+          "other-2",
+          "other-3",
+          "other-4",
+          "other-5",
+          "other-stopped0",
+        ];
+        const holders: string[] = [];
+        for (const [at, slug] of taken.entries()) {
+          holders.push(await layout(t, `Holder ${String(at)}`, slug));
+        }
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+
+        await expect(ensure(t)).rejects.toThrow();
+        await settleLayoutRemovals({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          store: fence(),
+          warn: () => {},
+          now: () => new Date(Date.now() + 10 * 60_000),
+        });
+
+        const kept = await fence().removalOf(other);
+        expect(kept?.copy).not.toBeNull();
+        expect(kept?.settledAt).toBeNull();
+
+        // An address comes free, and the next repair restores the Layout. Published
+        // in the same write, so the live row moves rather than a working draft.
+        await t.nextly.update({
+          collection: LAYOUTS_SLUG,
+          id: String(holders[0]),
+          data: { slug: "elsewhere", status: "published" },
+          overrideAccess: true,
+        });
+        expect(await ensure(t)).toBe("restored");
+        const restored = String((await settingsOf(t)).defaultLayout);
+        expect(await layoutRow(t, restored)).toMatchObject({
+          title: "Other",
+          slug: "other",
+        });
+      });
+
       it("restores the default from the copy under a new id", async () => {
         const t = await boot();
         const other = await layout(t, "Other", "other");
