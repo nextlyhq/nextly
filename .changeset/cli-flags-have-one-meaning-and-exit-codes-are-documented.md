@@ -72,3 +72,6 @@ New:
   instead of waiting.
 - A misspelt flag or command is refused with the nearest one suggested, on
   every command, `media` and `permissions:cleanup` included.
+- Ctrl+C at a prompt of a `nextly` command ends the run with exit 130; it is
+  no longer taken as a no. Inside `next dev`, Ctrl+C at a schema prompt still
+  cancels only that change and the server keeps running.
