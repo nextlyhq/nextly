@@ -160,7 +160,7 @@ describe("the editor's surfaces read the catalogue", () => {
       )
     ).toBeTruthy();
     expect(
-      screen.getByText("«sharedstyles» you make from a block show here.")
+      screen.getByText("«sharedStyles» you make from a block show here.")
     ).toBeTruthy();
   });
 
