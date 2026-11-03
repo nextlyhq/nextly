@@ -94,7 +94,8 @@ function RailItem({
             ITEM_CLASS,
             pressed === true
               ? "bg-[color:var(--nx-builder-accent)] text-[color:var(--nx-builder-accent-text)]"
-              : "text-[color:var(--nx-builder-text-muted)] hover:bg-[color:var(--nx-builder-surface-raised)]"
+              : // A soft wash of the text colour on hover, quiet in both schemes.
+                "text-[color:var(--nx-builder-text-muted)] hover:bg-[color-mix(in_oklch,var(--nx-builder-text)_8%,transparent)] hover:text-[color:var(--nx-builder-text)]"
           )}
           {...data}
         >
