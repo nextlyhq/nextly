@@ -55,6 +55,7 @@ import {
   withoutSelfPatterns,
   type ComponentGraph,
 } from "./offered-library";
+import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
 import {
   FontsPanelWithUpload,
   offerableFaces,
@@ -67,16 +68,21 @@ import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
 /**
- * Every left panel the editor can fill today: Add, Layers, the site's
- * Components, and Design with the site's variables, classes and fonts. Pages
- * is not built.
+ * Every left panel the editor can fill today: Add, Layers, Pages, the site's
+ * Components, and Design with the site's variables, classes and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
  * would reserve space and shrink the canvas to show it, which is why this
  * grows one entry at a time rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["add", "layers", "components", "design"] as const;
+const AVAILABLE_PANELS = [
+  "add",
+  "layers",
+  "pages",
+  "components",
+  "design",
+] as const;
 
 /**
  * The insert panel, with this site's saved patterns.
@@ -384,9 +390,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
+  // The Pages panel, and the request its rows send to open Settings.
+  const pages = usePagesPanel(mount.initialDocument.kind === "page");
   return {
     entryFields,
     search: { open: searchOpen, setOpen: setSearchOpen },
+    pages,
     checklist,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
@@ -417,6 +426,7 @@ export type EditorPanels = OfferedLibrary &
     layersRegions: readonly LayersRegionRow[];
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
+    pages: PagesPanelMount;
   };
 
 /**
@@ -446,6 +456,7 @@ export function editorPanelRenderer({
   classSummaryContext,
   requestPanel,
   insertInside,
+  pages,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
@@ -464,7 +475,7 @@ export function editorPanelRenderer({
   Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "insertInside"
+    "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -541,6 +552,9 @@ export function editorPanelRenderer({
           componentTitle={offered.titleOf}
         />
       ),
+      // Read when the panel is drawn, as every other entry reads its inputs,
+      // so drawing another panel never needs the Pages panel's mount.
+      pages: () => pages.renderPagesPanel(),
       design: () => (
         <DesignPanel
           view={view}

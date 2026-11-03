@@ -69,6 +69,7 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { SettingsDialog } from "./settings-dialog";
 import {
@@ -235,7 +236,11 @@ const COMPONENT_READ_NOTES: Readonly<
  * history and state at the start, the devices in the centre, and Preview and
  * the document's actions at the end.
  */
-function editorTopBar(view: EditorView): {
+function editorTopBar(
+  view: EditorView,
+  /** The page's title as the form has it now, and the field being edited. */
+  page: { title: string | undefined; field: string }
+): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
   topBarEnd: React.JSX.Element;
@@ -253,8 +258,24 @@ function editorTopBar(view: EditorView): {
   return {
     topBar: (
       <>
-        <HistoryButtons editor={editor} inline={inline} />
+        {/* As the agreed bar has it: the title as a switcher, the status,
+            then undo and redo. */}
+        <PageTitleSwitcher
+          title={page.title ?? ""}
+          current={
+            view.pages.currentPage === null
+              ? null
+              : {
+                  ...view.pages.currentPage,
+                  field: page.field,
+                  title: page.title ?? "",
+                }
+          }
+          userId={view.userId}
+          onAllPages={() => view.requestPanel("pages")}
+        />
         <DocumentStatusPill isDirty={documentDirty} />
+        <HistoryButtons editor={editor} inline={inline} />
       </>
     ),
     topBarCenter: (
@@ -944,10 +965,9 @@ function EditorBody<TFieldValues extends FieldValues>({
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
-        {...editorTopBar(view)}
-        // The document's title, read-only, as the author has it in the form
-        // right now. Nothing for a document with no title field.
-        title={page.title}
+        // The title is the top bar's switcher, so the shell draws none.
+        {...editorTopBar(view, { title: page.title, field: name })}
+        openSettingsRequest={view.pages.settingsRequest}
         renderSettings={editorSettings(view, page)}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states

@@ -43,12 +43,9 @@ const ACCEPT_DATA_LOSS_FLAG = "--accept-data-loss";
 /** The consent's environment spelling. */
 export const ACCEPT_DATA_LOSS_ENV = "NEXTLY_ACCEPT_DATA_LOSS";
 
-/** What `--accept-data-loss` says in every command's help. */
-export const ACCEPT_DATA_LOSS_HELP =
-  "Consent to deleting data. Alone it covers every deletion and lists each " +
-  "one first; given tables and table.column pairs " +
-  "(--accept-data-loss=posts,pages.summary) it covers only those. " +
-  "Same as NEXTLY_ACCEPT_DATA_LOSS.";
+// What `--accept-data-loss` says in every command's help, defined in a module
+// that imports nothing so declaring a command does not load these checks.
+export { ACCEPT_DATA_LOSS_HELP } from "./data-loss-consent-help";
 
 /** A spelling of the consent from before there was one, honoured with a notice. */
 export type EarlierSpelling =

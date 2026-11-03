@@ -477,6 +477,71 @@ describe("Settings, as the host's dialog", () => {
     expect(handed.at(-1)?.returnFocus()).toBe(item);
   });
 
+  it("opens from a host's request once per count, and not again on a re-render", () => {
+    const { renderSettings } = settingsHost();
+    const { rerender } = renderShell({
+      renderSettings,
+      openSettingsRequest: { count: 1 },
+    });
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    // The same request again is not a new one: closed stays closed.
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 1 }}
+      />
+    );
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 2 }}
+      />
+    );
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+  });
+
+  it("holds a request that arrives while the window is too narrow, and opens once it fits", async () => {
+    // A dialog there would trap focus over the notice and its way out. Read
+    // from what the shell hands the host: a real dialog portals out of the
+    // hidden regions, so "open" is the trap whatever this stand-in shows.
+    const { handed, renderSettings } = settingsHost();
+    const shell = (request?: { count: number }) => (
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        {...(request === undefined ? {} : { openSettingsRequest: request })}
+      />
+    );
+    const request = { count: 1 };
+    const { rerender } = render(shell());
+    act(() => stubContainerFits(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("navigation", { name: "Editor panels" })
+      ).toBeNull()
+    );
+
+    const before = handed.length;
+    rerender(shell(request));
+    await new Promise(settle => setTimeout(settle, 20));
+    expect(handed.slice(before).some(dialog => dialog.open)).toBe(false);
+
+    act(() => stubContainerFits(true));
+    rerender(shell(request));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    );
+  });
+
   it("closes when the editor gives way to its narrow-window notice", async () => {
     const { renderSettings } = settingsHost();
     renderShell({ renderSettings });

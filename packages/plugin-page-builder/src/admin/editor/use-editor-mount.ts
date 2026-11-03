@@ -477,6 +477,7 @@ export function useEditorMount(
     makeComponent,
     componentVerbs: makeComponent.verbs,
     preferenceStore,
+    userId,
     componentFacts,
     componentVariants,
   };
@@ -502,6 +503,8 @@ export type EditorMount = {
   componentVerbs: ComponentVerbsHost;
   /** Where the shell keeps the signed-in author's preferences. */
   preferenceStore: NonNullable<BuilderShellProps["store"]>;
+  /** The signed-in author, whose recent pages the title switcher shows. */
+  userId: string | null;
   /** What the inspector is told about the component being edited, if any. */
   componentFacts: ComponentFieldsHost | undefined;
   /** What the variants section is told about the component, if any. */
