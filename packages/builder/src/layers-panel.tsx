@@ -78,6 +78,7 @@ import * as React from "react";
 import { BlockIconMark } from "./block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
@@ -401,8 +402,8 @@ export function LayersPanel({
         <Input
           value={query}
           onChange={event => setQuery(event.target.value)}
-          placeholder="Search layers"
-          aria-label="Search layers"
+          placeholder={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
+          aria-label={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
         />
       </div>
 
@@ -420,7 +421,7 @@ export function LayersPanel({
         >
           <TreeView
             className={LAYERS_TREE_CLASS}
-            aria-label="Layers"
+            aria-label={EDITOR_WORDS.layers}
             nodes={nodes}
             selectedId={editor.selectedId}
             // The panel shows what the canvas shows. Passing only the primary

@@ -104,6 +104,7 @@ import {
   type RefusalWording,
 } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import {
   blockLabel,
   blockSourceFor,
@@ -285,10 +286,16 @@ export interface InsertPanelProps {
 /** The panel's two tabs: blocks and the site's components, and patterns. */
 type PanelTab = "blocks" | "sections";
 
+/** Each tab's own word, as a sentence reads it, from the editor's words. */
+const TAB_WORDS: Readonly<Record<PanelTab, string>> = {
+  blocks: EDITOR_WORDS.blocks.toLowerCase(),
+  sections: EDITOR_WORDS.sections.toLowerCase(),
+};
+
 /** What the search says it searches, per tab. */
 const SEARCH_PLACEHOLDERS: Readonly<Record<PanelTab, string>> = {
-  blocks: "Search blocks and components",
-  sections: "Search sections",
+  blocks: `Search ${TAB_WORDS.blocks} and ${EDITOR_WORDS.components.toLowerCase()}`,
+  sections: `Search ${TAB_WORDS.sections}`,
 };
 
 /** Which tab an entry is offered in. Patterns are Sections; the rest Blocks. */
@@ -1117,7 +1124,7 @@ export function InsertPanel({
     onInsert?.(first.node);
   };
 
-  const header = <h2 className="nx-insert-panel__title">Add</h2>;
+  const header = <h2 className="nx-insert-panel__title">{EDITOR_WORDS.add}</h2>;
   const firstPlace = candidates[0];
   if (firstPlace === undefined) {
     // Only an `inside` can leave no place: the container it names is gone
@@ -1338,8 +1345,8 @@ export function InsertPanel({
         className="nx-insert-panel__tabs"
       >
         <TabsList className="nx-insert-panel__tablist">
-          <TabsTrigger value="blocks">Blocks</TabsTrigger>
-          <TabsTrigger value="sections">Sections</TabsTrigger>
+          <TabsTrigger value="blocks">{EDITOR_WORDS.blocks}</TabsTrigger>
+          <TabsTrigger value="sections">{EDITOR_WORDS.sections}</TabsTrigger>
         </TabsList>
         {/* One tab panel per tab, so each trigger controls an element that
             exists. A closed tab panel renders none of its children, so the
@@ -1361,7 +1368,7 @@ export function InsertPanel({
  */
 function groupHeading(category: string, tab: PanelTab): string {
   return tab === "sections" && category === UNCATEGORISED
-    ? "More sections"
+    ? `More ${TAB_WORDS.sections}`
     : categoryHeading(category);
 }
 
@@ -1674,12 +1681,9 @@ function placementAt(
 /** What the list says when it shows nothing: the tab is empty, or the query matched nothing. */
 function emptyStateText(tab: PanelTab, query: string): string {
   const searched = query.trim();
-  if (tab === "sections") {
-    return searched === ""
-      ? "No sections are saved yet."
-      : `No sections match "${searched}".`;
-  }
-  return searched === ""
-    ? "No blocks can be added here."
-    : `No blocks match "${searched}".`;
+  const word = TAB_WORDS[tab];
+  if (searched !== "") return `No ${word} match "${searched}".`;
+  return tab === "sections"
+    ? `No ${word} are saved yet.`
+    : `No ${word} can be added here.`;
 }
