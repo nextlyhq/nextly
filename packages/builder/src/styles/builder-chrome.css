@@ -307,7 +307,7 @@
   line-height: var(--nx-builder-line-height);
 }
 
-.nx-builder-topbar :is(button, [role="button"], [role="radio"], input) {
+.nx-builder-topbar :where(button, input) {
   font-size: var(--nx-builder-font-size);
 }
 
