@@ -264,7 +264,10 @@ test.describe("shared styles on a block", () => {
     await colourField(page).fill(BLACK.hex);
     await colourField(page).press("Enter");
     await chip(page, "Card").click();
-    await expect(field).toContainText("Set on this block · Move to Card");
+    // The words, then the action on its own line.
+    await expect(
+      field.locator('[data-shared-line="move"] [data-shared-line-text]')
+    ).toHaveText("Set on this block");
     const moved = styleWrite(page);
     await field.getByRole("button", { name: "Move Colour to Card" }).click();
     await moved;
