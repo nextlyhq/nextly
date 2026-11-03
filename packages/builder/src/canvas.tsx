@@ -32,23 +32,30 @@
 import {
   findNode,
   PAGE_ROOT_CLASS,
-  previewContainerName,
+  parseColor,
   previewStateClass,
+  relativeLuminance,
+  resolveSiteTokens,
+  resolveTokenPrefix,
   statePropagatesToAncestors,
   STYLE_STATES,
+  tokenCustomProperty,
+  tokenIdentity,
   walkNodes,
   type BlockDocument,
-  type BreakpointSet,
+  type Rgb,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
   INSTANCE_ATTRIBUTE,
+  layoutPartSheets,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
-  previewContainerStyle,
   sharedStyleInputs,
+  type PagePart,
+  type PageRendererProps,
+  type PartSheet,
 } from "@nextlyhq/blocks-react";
-import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import {
   BlockEnvironmentProvider,
   type BlockEnvironment,
@@ -64,12 +71,25 @@ import {
   useState,
 } from "react";
 
+import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
-import { offeredTiers } from "./canvas-width";
-import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
+import { useCanvasFrame } from "./canvas-frame-context";
+import { guardCanvasNavigation } from "./canvas-link-guard";
+import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
+import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
-import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import {
+  canvasContentRect,
+  canvasScroller,
+  overlaySpaceOf,
+  scrollEventTarget,
+  visibleBandOf,
+} from "./geometry-dom";
+import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { useNearestThemeMarker } from "./nearest-theme";
+import { RefusalNotice } from "./refusal-notice";
+import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -108,6 +128,24 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
  */
 export const LOCKED_ATTRIBUTE = "data-nx-locked";
 
+/** How a block is locked in Layers: by its own lock, or by one around it. */
+export type LockMark = "own" | "inherited";
+
+/**
+ * Every locked block's mark, from one walk: a block's own lock, else the lock
+ * of a block it sits inside, carried down rather than climbed per block.
+ */
+export function lockMarksOf(document: BlockDocument): Map<string, LockMark> {
+  const marks = new Map<string, LockMark>();
+  walkNodes(document.nodes, (node, parent) => {
+    if (isLocked(node)) marks.set(node.id, "own");
+    else if (parent !== undefined && marks.has(parent.id)) {
+      marks.set(node.id, "inherited");
+    }
+  });
+  return marks;
+}
+
 /**
  * Marks every element drawing the block currently being dragged.
  *
@@ -140,21 +178,267 @@ export const DROP_PARENT_ATTRIBUTE = "data-nx-drop-parent";
  */
 export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
 
+// Defined in its own module so the region frames drawn inside the canvas can
+// mark themselves as chrome without importing the canvas back.
+export { CHROME_ATTRIBUTE } from "./canvas-chrome";
+
 /**
- * Marks editor chrome drawn over the page, which is not part of the page.
+ * The site tokens the canvas page is drawn from, by IDENTITY as the default
+ * token set declares them, mapped to the custom property the stylesheet reads
+ * each from, with the value it falls back to where the token is undeclared.
  *
- * A click on the canvas background CLEARS the selection, and the overlay sits
- * inside the canvas root — so without this a press on any control drawn over
- * the page resolves to "no node" and deselects the very block that control
- * acts on. The floating toolbar would run its action and then watch itself
- * disappear.
- *
- * An attribute rather than each overlay calling `stopPropagation`: the rule
- * belongs to what chrome IS, and the version where every new overlay has to
- * remember it is the version where the next one does not. The drop indicator
- * needs no marker only because it takes no pointer events at all.
+ * Set inline on the canvas root because the property each points at depends on
+ * the prefix the site's tokens are emitted under, which only the site sheet
+ * knows. An identity rather than a display name, so a site that renamed a
+ * token still resolves: the property is built from the identity. The
+ * fallbacks are the browser's own defaults, which is what a published page
+ * shows where nothing paints.
  */
-export const CHROME_ATTRIBUTE = "data-nx-chrome";
+const SITE_SURFACE_TOKENS = [
+  ["--nx-canvas-site-font", "font.body", "system-ui"],
+  ["--nx-canvas-site-ground", "color.background", "Canvas"],
+  ["--nx-canvas-site-ink", "color.text", "CanvasText"],
+] as const;
+
+/** The token the page's ground is drawn from, by identity. */
+const SITE_GROUND_TOKEN = "color.background";
+
+/**
+ * The largest relative luminance a ground can have and still be dark: the
+ * point where white text and black text contrast with it equally.
+ */
+const DARK_GROUND_LUMINANCE = 0.179;
+
+/** What the canvas root needs from the site sheet to draw the page as the site. */
+interface SiteSurface {
+  /** The custom properties naming the site's tokens, under its prefix. */
+  readonly style: Record<`--${string}`, string>;
+  /** Whether the site's background token has a DARK value. */
+  readonly darkGround: boolean;
+  /** Whether every value of the site's background token is fully opaque. */
+  readonly opaqueGround: boolean;
+}
+
+/**
+ * The site's own surface tokens, as the canvas root carries them, or undefined
+ * when the host serves no site sheet.
+ *
+ * The prefix is the one the renderer compiles the sheet under:
+ * `sharedStyleInputs` reconciles the site's own prefixes with the route
+ * context's, exactly as `PageRenderer` does before emitting the sheet, and
+ * `resolveTokenPrefix` gives what is actually written. The token set is the
+ * one the sheet emits — the site's own layered over the defaults by
+ * `resolveSiteTokens` — so whether the ground has a dark value is asked of the
+ * same tokens the page draws with.
+ *
+ * The site sheet applies dark values with the device (or a dark marker), for
+ * every site. The scheme goes dark only where those values include a dark
+ * ground, so a site whose dark set leaves the background light keeps a light
+ * page and light native controls.
+ */
+function siteSurface(
+  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  siteStyles: NonNullable<PageRendererProps["siteStyles"]>
+): SiteSurface | undefined {
+  if (typeof siteStyles !== "object") return undefined;
+  const stated = sharedStyleInputs(
+    render?.styleContext,
+    siteStyles
+  ).tokenPrefix;
+  const { prefix } = resolveTokenPrefix(stated ?? undefined);
+  const style: Record<`--${string}`, string> = {};
+  for (const [property, token, fallback] of SITE_SURFACE_TOKENS) {
+    style[property] = `var(${tokenCustomProperty(token, prefix)}, ${fallback})`;
+  }
+  const tokens = resolveSiteTokens(siteStyles.tokens);
+  const values = tokens.tokens.find(
+    token => tokenIdentity(token) === SITE_GROUND_TOKEN
+  )?.values;
+  const ground = values?.dark;
+  return {
+    style,
+    darkGround: ground !== undefined && isDarkGround(ground),
+    opaqueGround:
+      values !== undefined &&
+      [values.light, values.dark].every(
+        value => value === undefined || alphaOf(value.trim()) === 1
+      ),
+  };
+}
+
+/**
+ * Whether a token value is a dark ground. A value this engine cannot read as a
+ * colour — a named colour, `oklch()`, a reference to another property — says
+ * nothing about how light it is, so it is not called dark: the canvas keeps the
+ * page's light default rather than switching every native control to a dark
+ * scheme over what may be a light ground.
+ */
+function isDarkGround(value: string): boolean {
+  const luminance = groundLuminance(value.trim());
+  return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
+}
+
+/**
+ * One numeric colour component, with its percentage sign if it has one: an
+ * optional sign, a decimal, an optional exponent, an optional `%`.
+ *
+ * The SAME grammar as the engine's `NUMERIC_COMPONENT` in `contrast.ts`, which
+ * reads `rgb()` and does not export it; mirrored here for the two syntaxes the
+ * engine does not read, so a component is a number in all of them alike.
+ * Matched whole rather than parsed with `parseFloat`, which reads a prefix and
+ * stops — `5e-1` would read as 5 and `12abc` as 12.
+ */
+const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
+
+/** A component as a number, and whether it was a percentage. */
+function numericOf(
+  part: string | undefined
+): { value: number; percent: boolean } | undefined {
+  if (part === undefined) return undefined;
+  const match = NUMERIC_COMPONENT.exec(part);
+  if (match === null) return undefined;
+  const value = Number.parseFloat(part);
+  return Number.isFinite(value)
+    ? { value, percent: match[1] === "%" }
+    : undefined;
+}
+
+/** A component as a 0–1 fraction: a percentage of 100, or a number of `scale`. */
+function fractionOf(
+  part: string | undefined,
+  scale: number
+): number | undefined {
+  const parsed = numericOf(part);
+  if (parsed === undefined) return undefined;
+  const fraction = parsed.value / (parsed.percent ? 100 : scale);
+  // Clamped, as CSS Color 4 clamps alpha, lightness and saturation.
+  return Math.min(1, Math.max(0, fraction));
+}
+
+/**
+ * An `oklch()` or `hsl()`/`hsla()` call, split into its colour components and
+ * its alpha: after a `/` in the modern syntax, the fourth comma-separated
+ * component in the legacy one. `undefined` for anything else, or a call whose
+ * shape is neither.
+ */
+function colourFunction(text: string): ColourCall | undefined {
+  const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
+  const body = call[2] ?? "";
+  return body.includes(",") ? legacyCall(name, body) : modernCall(name, body);
+}
+
+/** A colour function's name, colour components and alpha, as written. */
+interface ColourCall {
+  readonly name: "oklch" | "hsl";
+  readonly components: readonly string[];
+  readonly alpha: string | undefined;
+}
+
+/**
+ * The legacy, comma-separated form: `hsl(h, s%, l%)` or `hsla(h, s%, l%, a)`.
+ * Only `hsl()` has one, and it takes no slash.
+ */
+function legacyCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  if (name === "oklch" || body.includes("/")) return undefined;
+  const parts = body.split(",").map(part => part.trim());
+  if (parts.length !== 3 && parts.length !== 4) return undefined;
+  return { name, components: parts.slice(0, 3), alpha: parts[3] };
+}
+
+/** The modern, space-separated form, with an optional `/ alpha` after it. */
+function modernCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  const [channels, alpha, ...rest] = body.split("/");
+  if (rest.length > 0) return undefined;
+  const parts = (channels ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(part => part !== "");
+  if (parts.length !== 3) return undefined;
+  return { name, components: parts, alpha: alpha?.trim() };
+}
+
+/**
+ * A colour's alpha, 0–1, or `undefined` when it cannot be told.
+ *
+ * Hex and `rgb()` from the engine's parser; `oklch()` and `hsl()` from their
+ * own alpha component, 1 when they state none. A bare colour keyword is opaque
+ * — every named colour is — except `transparent`, and a keyword this cannot
+ * place, such as `currentColor`, is unknown, as is a reference or a function
+ * this does not read.
+ */
+function alphaOf(text: string): number | undefined {
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return rgb.a;
+  const call = colourFunction(text);
+  if (call !== undefined) {
+    return call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
+  }
+  if (!/^[a-z]+$/i.test(text)) return undefined;
+  const keyword = text.toLowerCase();
+  if (keyword === "transparent") return 0;
+  return keyword === "currentcolor" ? undefined : 1;
+}
+
+/**
+ * The relative luminance of a ground colour, or `undefined` when it cannot be
+ * told. Hex and `rgb()` go through the engine's own parser. `oklch()`, which
+ * Tailwind themes write, carries perceptual lightness directly: its L cubed is
+ * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
+ * which shadcn-style themes write, converts to rgb by the standard formula.
+ *
+ * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
+ * surface behind it, which the canvas cannot see either. So any alpha below 1,
+ * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground — and
+ * so is an alpha this cannot read.
+ */
+function groundLuminance(text: string): number | undefined {
+  if (alphaOf(text) !== 1) return undefined;
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return relativeLuminance(rgb);
+  const call = colourFunction(text);
+  if (call === undefined) return undefined;
+  const [first, second, third] = call.components;
+  if (call.name === "oklch") {
+    // L is a number in 0–1, or a percentage.
+    const lightness = fractionOf(first, 1);
+    return lightness === undefined ? undefined : lightness ** 3;
+  }
+  // Hue as a number, in degrees if it says so; saturation and lightness as
+  // percentages, or the bare numbers CSS Color 4 also accepts for them.
+  const hue = numericOf(first?.replace(/deg$/i, ""));
+  const saturation = fractionOf(second, 100);
+  const lightness = fractionOf(third, 100);
+  if (
+    hue === undefined ||
+    hue.percent ||
+    saturation === undefined ||
+    lightness === undefined
+  ) {
+    return undefined;
+  }
+  return relativeLuminance(hslToRgb(hue.value, saturation, lightness));
+}
+
+/** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
+function hslToRgb(hue: number, saturation: number, lightness: number): Rgb {
+  const h = ((hue % 360) + 360) % 360;
+  const a = saturation * Math.min(lightness, 1 - lightness);
+  const channel = (n: number): number => {
+    const k = (n + h / 30) % 12;
+    return Math.round(
+      (lightness - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255
+    );
+  };
+  return { r: channel(0), g: channel(8), b: channel(4), a: 1 };
+}
 
 /** Whether an event started inside editor chrome rather than inside the page. */
 /**
@@ -177,7 +461,9 @@ export function contextMenuTargetOf(
   root: Element
 ): string | null {
   if (isEditableTarget(target) || isChrome(target)) return null;
-  if (!(target instanceof Element)) return null;
+  // By node kind rather than `instanceof Element`: a press inside a canvas
+  // mounted in an iframe targets an element that window built.
+  if (!isElement(target)) return null;
   const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
   if (owner === null) return null;
   /*
@@ -213,7 +499,7 @@ export function contextMenuTargetOf(
  * block again rather than text.
  */
 function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
+  if (!isElement(target)) return false;
   const editable = target.closest("[contenteditable]");
   return (
     editable !== null && editable.getAttribute("contenteditable") !== "false"
@@ -221,10 +507,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function isChrome(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(`[${CHROME_ATTRIBUTE}]`) !== null
-  );
+  return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
 }
 
 /**
@@ -254,7 +537,8 @@ function isChrome(target: EventTarget | null): boolean {
  * lands on the wrong node with nothing to indicate it.
  */
 export function nodeIdFromEvent(target: EventTarget | null): string | null {
-  if (!(target instanceof Element)) return null;
+  // Any realm's element, for the reason `contextMenuTargetOf` gives.
+  if (!isElement(target)) return null;
   const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
   if (owner === null) return null;
   // Inside THIS canvas, not merely inside something carrying the attribute. A
@@ -381,467 +665,6 @@ export function nodeElement(root: HTMLElement, id: string): Element | null {
 }
 
 /**
- * Every element the renderer marked as a node, in document order.
- *
- * Beside {@link nodeElement} because both answer from the same marker, and a
- * caller that needs all of them should not walk the tree with its own selector.
- *
- * Chrome drawn INSIDE the canvas root carries no node marker, so it is excluded
- * by construction rather than by a filter that would have to be kept in step
- * with whatever chrome arrives next.
- */
-export function nodeElements(root: HTMLElement): readonly Element[] {
-  const found: Element[] = [];
-  // `forEach` for the reason given in `nodeElement`: a `NodeList` is only
-  // iterable under a lib this package does not compile with.
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    found.push(element);
-  });
-  return found;
-}
-
-/**
- * The observed entry's inline size, across the shapes `ResizeObserver` has had.
- *
- * `contentBoxSize` was specified as a SEQUENCE, and Firefox shipped it as a
- * single object first; both shapes are still reachable, and polyfills predating
- * it expose only `contentRect`. Read as an array alone, every one of those
- * reports `undefined` on every notification — and the caller cannot tell that
- * from "nothing has been measured yet", so the canvas would apply tablet rules
- * while the inspector stayed on the base tier and the author's edits landed in
- * a breakpoint they were not looking at.
- *
- * `contentRect` is the right fallback rather than a lesser one: like
- * `contentBoxSize` it is a LAYOUT size, so the editor's canvas zoom does not
- * scale it — which `getBoundingClientRect()` would, reporting what a reader
- * sees rather than what a container query resolves against. `builder-shell.tsx`
- * measures on the same property for the same reason. It carries `width` rather
- * than an inline size, so the two agree only in a horizontal writing mode; the
- * admin is one, and the sequence shape above is preferred wherever it exists.
- */
-function inlineSizeOf(entry: ResizeObserverEntry): number | undefined {
-  const box: unknown = entry.contentBoxSize;
-  const first: unknown = Array.isArray(box) ? box[0] : box;
-  const inline = (first as ResizeObserverSize | undefined)?.inlineSize;
-  if (typeof inline === "number") return inline;
-  const width = entry.contentRect?.width;
-  return typeof width === "number" ? width : undefined;
-}
-
-/**
- * Report a box's real inline size to its owner whenever it changes.
- *
- * `ResizeObserver` rather than a resize listener on the window: the box changes
- * width when the inspector opens, when a rail panel is toggled and when the
- * pane is dragged, none of which resize the window. A window listener would
- * report the same number across all three.
- */
-function useReportedInlineWidth(
-  box: React.RefObject<HTMLElement | null>,
-  report: ((width: number | undefined) => void) | undefined
-): void {
-  /*
-   * The reporter is held in a ref, and the effect does NOT depend on it.
-   *
-   * A host writing `onMeasured={w => setWidth(w)}` inline hands a new function
-   * on every render. Depended on directly, every real measurement would update
-   * the parent, produce a new identity, tear the observer down — reporting
-   * `undefined` from the cleanup, as if the canvas had gone — and build a new
-   * one that immediately reports the real width again. The derived tier
-   * oscillates and the observer churn can sustain a render loop, on a host that
-   * did nothing wrong.
-   *
-   * So the effect keys on whether a reporter EXISTS, which is the only part of
-   * it that changes what the observer should do.
-   */
-  const latest = useRef(report);
-  useEffect(() => {
-    latest.current = report;
-  }, [report]);
-  const measuring = report !== undefined;
-  useEffect(() => {
-    const element = box.current;
-    if (element === null || !measuring) return;
-    // Guarded by CALLABILITY rather than presence: jsdom defines the global on
-    // some setups without a working constructor, so a property test passes and
-    // the construction throws.
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
-      const entry = entries[0];
-      if (entry === undefined) return;
-      latest.current?.(inlineSizeOf(entry));
-    });
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-      /*
-       * The box is gone, so the last number it reported describes nothing.
-       *
-       * Left standing, a caller goes on deriving a tier from a width no
-       * element has — and the editor unmounts this canvas whenever the site's
-       * stored styles stop being readable, which a cached query can do on a
-       * refocus long after the first measurement. The inspector would keep
-       * writing into whichever tier the stale width implied, with no preview
-       * box on screen and the control that sets it disabled.
-       *
-       * `undefined` is the honest report and the one the caller already
-       * handles: nothing has been observed.
-       */
-      latest.current?.(undefined);
-    };
-  }, [box, measuring]);
-}
-
-/**
- * The width of the REGION the canvas has been given, or `undefined` until it
- * has been measured.
- *
- * The canvas's own parent, which the canvas does not own — the same dependency
- * `min-height: 100%` already has, and for the same reason: how much room there
- * is is a fact about the surface hosting the editor, not about the document.
- *
- * Measured rather than passed, so a host cannot state a region that disagrees
- * with the one it laid out. A number a caller supplies is a second answer to a
- * question the box can be asked directly, and the two would first disagree when
- * a rail is toggled — exactly when the scale has to change.
- *
- * `clientWidth` is not used, and the difference is load-bearing: it is an
- * integer, so a fractional region rounds and the scale derived from it leaves
- * the painted box a fraction wide of the space, which reads as a hairline of
- * background down one edge that moves as the pane is dragged.
- *
- * Observed only while `scaling`, so a canvas that fills its region builds no
- * observer at all — there is nothing for it to answer, and one that exists
- * anyway fires on every pane drag for a number nobody reads.
- */
-/**
- * The nearest ancestor that actually lays the canvas out.
- *
- * NOT `parentElement`, which is the DOM parent and not necessarily the element
- * whose width the canvas is fitted into. `display: contents` leaves a node in
- * the tree while generating no box at all, so its children are laid out by ITS
- * parent — and a `ResizeObserver` on one reports an inline size of zero.
- * Measured in a browser: a boxless wrapper inside a 911px container observes
- * `0` while the container observes `911`.
- *
- * That is not hypothetical here. The block context menu wraps the canvas in
- * Radix's trigger and gives it `display: contents` deliberately, so a `span`
- * around a block box does not change the layout it is meant to be transparent
- * over. Measuring through it made `canvasScale` see a region of zero, take its
- * identity branch, and report a fit of `1` forever: an author who pinned Tablet
- * at 1024 was editing at the region's own width with the control still showing
- * Tablet selected, and no width readout to contradict it.
- *
- * Written as a WALK rather than as a check for that one wrapper. The wrapper
- * arrived legitimately and nothing connected it to a measurement two files
- * away; the next one would do the same. Skipping every boxless ancestor is the
- * property the measurement actually needs.
- *
- * `display: none` is deliberately NOT skipped past — it is boxless too, but its
- * children generate no box either, so there is no canvas being laid out
- * anywhere and the honest answer is the hidden ancestor itself, whose zero
- * leaves the scale at its identity.
- */
-function layoutRegionOf(element: HTMLElement | null): HTMLElement | null {
-  const view = element?.ownerDocument.defaultView ?? null;
-  if (view === null) return null;
-  for (
-    let node = element?.parentElement ?? null;
-    node !== null;
-    node = node.parentElement
-  ) {
-    if (view.getComputedStyle(node).display !== "contents") return node;
-  }
-  return null;
-}
-
-function useRegionWidth(
-  box: React.RefObject<HTMLElement | null>,
-  scaling: boolean
-): number | undefined {
-  const [width, setWidth] = useState<number | undefined>(undefined);
-  useEffect(() => {
-    if (!scaling) return;
-    const region = layoutRegionOf(box.current);
-    if (region === null) return;
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
-      const entry = entries[0];
-      if (entry === undefined) return;
-      setWidth(inlineSizeOf(entry));
-    });
-    observer.observe(region);
-    return () => {
-      observer.disconnect();
-      // The region is gone, so its last width describes nothing. Reported as
-      // absent, the scale falls back to 1 — which is the identity, and the
-      // only answer that cannot place the canvas somewhere nobody can see.
-      setWidth(undefined);
-    };
-  }, [box, scaling]);
-  return width;
-}
-
-/**
- * How much the canvas must be shrunk for the width it was asked for to fit.
- *
- * `1` whenever the request already fits, which is the ordinary case and must
- * stay pixel-exact: a canvas showing a tier narrower than its region is not
- * simulating anything and has nothing to gain from being resampled.
- *
- * Never above 1. A region wider than the request means the box is simply
- * narrower than the space, which the auto margins centre; magnifying it would
- * show the author a page larger than life and make every measurement they take
- * from the screen wrong in the flattering direction.
- *
- * `1` for an unmeasured or nonsensical region as well. This runs before the
- * first measurement on every mount, and a scale derived from `undefined` — or
- * from a region of zero, which a collapsed pane reports — is either `NaN` or
- * infinite, neither of which fails loudly: both produce a canvas that is
- * present, painted nowhere, and impossible to aim at.
- */
-export function canvasScale(
-  requested: number | undefined,
-  region: number | undefined,
-  zoom: CanvasZoom = FIT_ZOOM
-): number {
-  /*
-   * A chosen scale is not derived from anything, which is the whole of what
-   * choosing means. It is answered before the guards below because those exist
-   * to make a FIT computable — an unmeasured region cannot be fitted to, and a
-   * fixed scale never needed it.
-   */
-  if (zoom.kind === "fixed") {
-    // A host can build this value directly, so it has not necessarily been
-    // through the storage guard. An unusable one falls back to fitting rather
-    // than being painted: an invalid `zoom` declaration is dropped by the
-    // browser and an enormous one puts the page beyond reach of the control
-    // that would undo it.
-    const usable = usableScale(zoom.scale);
-    if (usable !== null) return usable;
-  }
-  if (requested === undefined || region === undefined) return 1;
-  if (!(requested > 0) || !(region > 0)) return 1;
-  return Math.min(1, region / requested);
-}
-
-/** A width the box is given, in whichever of the two forms it is given in. */
-type BoxWidth = { width: string } | { maxWidth: string };
-
-/**
- * A width, and the centring that travels with it.
- *
- * The centring is not a property of any one of the shapes below — it is a
- * property of HAVING a width. A box told how wide to be is narrower than the
- * region it sits in, and a narrow box parked against the left edge reads as a
- * layout that has broken rather than as a viewport being simulated.
- *
- * Stated here rather than at each `return` because it was previously stated at
- * one of them. The other three set a width and omitted the margin, so the
- * canvas centred while fitting and jumped to the left edge the moment an author
- * chose a scale — the same tier, the same width, alignment deciding itself on
- * which branch produced it. Taking a width only through this function is what
- * makes that disagreement unspellable rather than merely fixed.
- *
- * The one branch that sets NO width does not call this, and must not: a box
- * with no width fills the region, so there is no free space, and an author
- * reading the canvas root would find a margin that governs nothing.
- *
- * `marginInline` rather than a flex or grid alignment on the region, because
- * the margin resolves against whatever free space exists at the time. Measured
- * across the range this canvas paints at: at half scale a 912px region gives
- * 228px each side, and above 1 the box is wider than the region, the free space
- * is negative, and the margins resolve to zero — so the overflow scrolls from
- * the left edge with nothing clipped, which is what an author magnifying to
- * inspect something needs. No branch on the scale is required to get both.
- */
-function centred(width: BoxWidth): React.CSSProperties {
-  return { ...width, marginInline: "auto" };
-}
-
-/**
- * The canvas root's own style: the container the sheet queries, the width the
- * box is asked to show, and the scale that makes that width fit.
- *
- * Two shapes, because a request that fits and a request that does not are
- * different situations rather than one with a parameter.
- *
- * WHERE IT FITS, the width is a MAXIMUM. Every width here is centred — see
- * `centred` above for why that belongs to the width rather than to the branch.
- *
- * WHERE IT DOES NOT, the width is EXACT and a transform shrinks the box until
- * it does. That is the only way the widest tier stays editable at all: the
- * region is around 912px on the supported 1280px shell, so a site whose widest
- * bound is 1024 has no width an author can ask for that puts the box above it,
- * and the unconditional tier becomes unreachable. Capping the width there does
- * not simulate a 1280px viewport — it simulates a 912px one and reports the
- * wrong tier with confidence.
- *
- * `zoom` rather than a transform, which is the opposite of what it looks like
- * it should be and was measured both ways. Both keep the container queries
- * resolving at the REQUESTED width — neither changes the width the box is laid
- * out at, so `offsetWidth` and `contentBoxSize` still report 1280 — and both
- * leave `getBoundingClientRect` answering in painted pixels.
- *
- * They differ in what the SCROLL CONTAINER sees, and only `zoom` is usable
- * there. A transform is paint-time, so the canvas section still reserves the
- * unscaled layout box: measured in a 912x400 region at 0.7125, a transform
- * leaves 368px of blank horizontal scroll, and compensating its height to fill
- * the region adds 161px of blank vertical scroll — a tail an author, or drag
- * autoscroll, can travel into until the page is off screen. `zoom` participates
- * in layout, so the section reserves the painted box and both tails are zero.
- *
- * That participation is the very thing that argued against it: `zoom`'s
- * documented weakness is inconsistency in how it interacts with other layout
- * features, and this canvas is all layout — overlays, drop targets,
- * hit-testing. But not participating is what produces two scroll defects that a
- * measured wrapper would then exist to undo, and the properties those readers
- * actually depend on were measured directly and hold.
- */
-function previewBoxStyle(
-  preview: CanvasPreview | undefined,
-  scale: number,
-  chosen: boolean
-): React.CSSProperties {
-  /*
-   * A CHOSEN scale applies with no preview at all.
-   *
-   * Previewing needs a container name and a site that declares viewport tiers;
-   * a site with neither — which the default configuration is — has no preview
-   * object, and returning nothing here left the zoom control moving a number
-   * on screen and changing nothing. How large the canvas draws is not a
-   * property of whether a viewport is being simulated.
-   */
-  if (preview === undefined) {
-    return chosen
-      ? { ...centred({ width: `calc(100% * ${scale})` }), zoom: scale }
-      : {};
-  }
-  const container = previewContainerStyle(preview.container);
-  /*
-   * No requested width means the box fills the region, which is the widest
-   * tier and the state the editor opens in. There is nothing to FIT there —
-   * the box is already the region — but a chosen scale still applies: it
-   * magnifies or shrinks what is drawn and the region scrolls, which is the
-   * whole of what an author asked for. Returning early here left the control
-   * reporting a number that changed nothing at the tier it is used at most.
-   */
-  if (preview.width === undefined) {
-    if (!chosen) return container;
-    /*
-     * The width is PINNED before zooming, and that is the whole of this branch.
-     *
-     * `zoom` participates in layout, so it divides the logical width the
-     * container queries resolve against: at 200% a 911px region became 455px
-     * and the canvas silently started previewing the MOBILE tier. An author
-     * magnifying to look closely at something was shown a different layout
-     * instead — measured on screen, where the tier readout changed with the
-     * zoom.
-     *
-     * Fixing the box at the width it had leaves the queries resolving against
-     * that same width whatever the scale, so magnifying magnifies and nothing
-     * else moves. Without a measured region there is nothing to pin, and the
-     * scale is left off rather than applied against a width that would shift.
-     */
-    return {
-      ...container,
-      // `100%` resolves against the containing block in this element's OWN
-      // coordinates, which `zoom` has already divided by the scale — so a
-      // plain full width comes out at `region / scale` logically. Multiplying
-      // it back restores the width the box had, and the scale then paints it
-      // larger without moving what the queries resolve against. No measurement
-      // is involved, so there is no observer to disagree with the layout.
-      ...centred({ width: `calc(100% * ${scale})` }),
-      zoom: scale,
-    };
-  }
-  /*
-   * A FIT that needs no shrinking is left unzoomed and centred, which is the
-   * shape a canvas showing a page at its own size has always had.
-   *
-   * A CHOSEN scale is applied whatever its value, including 1 and above. The
-   * two are not the same request: fitting to 1 means "it already fits", while
-   * choosing 1 means "draw it at actual size and let the region clip" — and at
-   * anything above 1 there is no reading of `maxWidth` that magnifies.
-   */
-  if (!chosen && scale >= 1) {
-    return { ...container, ...centred({ maxWidth: `${preview.width}px` }) };
-  }
-  /*
-   * Reached two ways, and only one of them has slack to centre.
-   *
-   * FITTING, the scale is derived from the region, so the box paints at exactly
-   * the region's width and the margins resolve to zero — measured, 912px into
-   * 912px. CHOSEN, the scale is the author's and owes the region nothing: a
-   * 375px tier at any scale at all paints narrower than the region it sits in,
-   * which is the case that was left against the left edge.
-   */
-  return {
-    ...container,
-    ...centred({ width: `${preview.width}px` }),
-    zoom: scale,
-  };
-}
-
-/**
- * The canvas root's surface: what it queries, how wide it is asked to be, how
- * far it must shrink for that width to fit, and what it ended up being.
- *
- * One decision rather than several statements in the component, because they
- * are not independent. Three numbers describe this box — the width an author
- * asked for, the room the region has, and the width the box ended up with — and
- * only the first is chosen. The scale is DERIVED from the first two and the
- * third is REPORTED from the result, so there is no stored value that can
- * disagree with any other. Kept apart, a component holds all three and each can
- * be updated without the rest.
- */
-function useCanvasSurface(
-  root: React.RefObject<HTMLElement | null>,
-  preview: CanvasPreview | undefined,
-  zoom: CanvasZoom,
-  onScale: ((scale: number) => void) | undefined
-): React.CSSProperties {
-  // What the box GOT, reported outward to whoever asked.
-  useReportedInlineWidth(root, preview?.onMeasured);
-  // What the box has ROOM for, read inward to decide how far it must shrink.
-  // Observed only where a width was asked for: a canvas filling its region has
-  // nothing to scale, and an observer that exists to answer a question nobody
-  // asked still fires on every pane drag.
-  const region = useRegionWidth(root, preview?.width !== undefined);
-  const scale = canvasScale(preview?.width, region, zoom);
-  /*
-   * Reported through a ref, keyed on the scale and on whether anyone is
-   * listening — never on the reporter's identity.
-   *
-   * A host writing `onScale={s => setView({ ...view, scale: s })}` inline hands
-   * a new function every render. Depended on directly, each report updates the
-   * host, the update produces a new identity, and the new identity reports
-   * again: a render loop on a host that did nothing wrong.
-   *
-   * Existence is a dependency because it changes the answer. A host that wires
-   * the reporter after its first render — one resolving `onScale` from state,
-   * or a shell whose control mounts late — would otherwise hear nothing until
-   * the scale next moved, and sit on a stale number in the meantime.
-   */
-  const latestScaleReport = useRef(onScale);
-  useEffect(() => {
-    latestScaleReport.current = onScale;
-  }, [onScale]);
-  const reportingScale = onScale !== undefined;
-  useEffect(() => {
-    latestScaleReport.current?.(scale);
-  }, [reportingScale, scale]);
-  /*
-   * CHOSEN means a scale the author asked for AND this canvas can paint at.
-   * A refused one has already fallen back to fitting above, so treating it as
-   * chosen here would apply the fit's own scale as though it were a choice —
-   * writing `zoom: 1` onto a canvas that should carry no zoom at all.
-   */
-  const chosen = zoom.kind === "fixed" && usableScale(zoom.scale) !== null;
-  return previewBoxStyle(preview, scale, chosen);
-}
-
-/**
  * Mark the selected elements on the rendered tree.
  *
  * Applied AFTER the renderer has produced them, rather than asked of
@@ -866,7 +689,7 @@ function useCanvasMarkers(
   page: React.ReactNode,
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
-  lockedIds: ReadonlySet<string>
+  lockedIds: ReadonlyMap<string, LockMark>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -1001,7 +824,11 @@ function useCanvasMarkers(
         // rather than from the document per element: this walk re-runs on every
         // change to the rendered tree, and a tree search per element would make
         // that quadratic on a large page.
-        setFlag(element, LOCKED_ATTRIBUTE, id !== null && lockedIds.has(id));
+        setMark(
+          element,
+          LOCKED_ATTRIBUTE,
+          id === null ? undefined : lockedIds.get(id)
+        );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
         }
@@ -1145,6 +972,20 @@ function ownedByCanvas(element: Element, container: HTMLElement): boolean {
  * rule, and four copies of it are four chances for the guard to be dropped
  * from whichever copy is edited next.
  */
+/**
+ * Set an attribute to a value, or remove it for `undefined`, writing only when
+ * it changes, for the reason {@link setFlag} gives.
+ */
+function setMark(
+  element: Element,
+  attribute: string,
+  value: string | undefined
+): void {
+  if (element.getAttribute(attribute) === (value ?? null)) return;
+  if (value === undefined) element.removeAttribute(attribute);
+  else element.setAttribute(attribute, value);
+}
+
 function setFlag(element: Element, attribute: string, wanted: boolean): void {
   if (wanted === element.hasAttribute(attribute)) return;
   if (wanted) element.setAttribute(attribute, "");
@@ -1277,249 +1118,6 @@ function useCanvasPointer(
   };
 }
 
-/**
- * A canvas showing the page inside a resizable box rather than at the browser's
- * own width.
- *
- * The container is REQUIRED and the rest is not, because it is what makes the
- * other two mean anything: the editor canvas is not an iframe, so the sheet is
- * emitted into the admin document and `@media` asks the WINDOW. Only a sheet
- * compiled against a container name has rules this box can answer.
- */
-export interface CanvasPreview {
-  /**
-   * The container name the sheet was compiled against.
-   *
-   * Passed through {@link previewContainerStyle}, which supplies the
-   * `container-type` alongside the name: a named container left at the default
-   * `normal` is not a size-query container, so every rule the preview compile
-   * emitted stays inactive while the sheet is valid and the name matches.
-   */
-  container: string;
-  /**
-   * The width to lay the box out at, in CSS pixels, or absent to fill the
-   * region.
-   *
-   * HONOURED, whatever the region can hold. A region narrower than the tier
-   * being asked for does not cap it — the box is laid out at this width and
-   * PAINTED smaller, so what the container queries resolve against is the tier
-   * that was asked for rather than the one the region happens to imply.
-   *
-   * It was a maximum, and capping is what made the unconditional tier
-   * unreachable: the region is around 912px on the supported 1280px shell, so
-   * against a site bounding tablet at 1024 no requested width could ever put
-   * the box above it. A capped box does not simulate the viewport asked for; it
-   * simulates the region's own width while reporting the wrong tier.
-   *
-   * So this is the LAYOUT and query width. The painted width is this times the
-   * scale the canvas derives, and it is not reported: nothing outside needs it,
-   * and a second width on this object is a second thing to disagree.
-   */
-  width?: number;
-  /**
-   * The box's MEASURED inline size, reported whenever it changes.
-   *
-   * Still reported rather than derived from {@link CanvasPreview.width}, even
-   * though a requested width is now honoured. They are different numbers
-   * whenever none was requested — the box then takes the region, and the region
-   * is not something the host states — and they are different again for the
-   * render before the first measurement arrives. A caller reading the request
-   * would name a tier for a box nobody has looked at.
-   *
-   * A LAYOUT size, which is the one the container queries answer to. It is not
-   * the painted width: a canvas scaled to fit is drawn smaller than it is laid
-   * out, and reporting what a reader sees would name the tier the region
-   * implies rather than the tier the page is being compiled against — the
-   * confident-wrong-answer this whole preview mechanism exists to remove.
-   *
-   * `undefined` until the first measurement, which is a real state rather than
-   * a default: nothing has been observed yet, and a caller must not report a
-   * tier as live on the strength of a box nobody has looked at.
-   */
-  onMeasured?: (width: number | undefined) => void;
-}
-
-/**
- * The breakpoints the compile will actually run against, or `undefined` when
- * nothing will be compiled at all.
- *
- * ASKED of the renderer rather than worked out here. `sharedStyleInputs` is the
- * function `PageRenderer` itself reconciles with, so this reads the answer the
- * render will use instead of a second one that happens to agree.
- *
- * That distinction is not theoretical, because the rule has more in it than it
- * looks. The site tier wins for `breakpoints`, the route wins for
- * `previewContainer`, and both skip only `undefined` — so a stated `null`
- * survives, where a nullish coalesce would discard it. Three separate ways to
- * be wrong, none of them visible from the inputs, and each one produces a
- * canvas that compiles against a different set of tiers than the page does.
- *
- * `undefined` still means exactly what it did: neither binding site stated a
- * set, which is `siteStyles={false}` beside a stored artifact carrying no style
- * context.
- */
-function compiledBreakpoints(
-  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
-  siteStyles: NonNullable<PageRendererProps["siteStyles"]>
-): BreakpointSet | undefined {
-  const stated = sharedStyleInputs(
-    render?.styleContext,
-    // `false` is a host serving no site sheet, which states no breakpoints —
-    // not a sheet whose breakpoints are absent.
-    typeof siteStyles === "object" ? siteStyles : undefined
-  ).breakpoints;
-  /*
-   * A stated NULL collapses to `undefined` HERE, and only here.
-   *
-   * It had to survive the reconciliation, which is where it means something: a
-   * site stating null defines no viewport tiers, and that outranks a route
-   * context which has some. By this line that contest is over, and what is left
-   * is a canvas asking whether there are tiers to preview. There are not, which
-   * is what `undefined` says to every reader below.
-   *
-   * Collapsed any EARLIER — inside the reconciler, or with a nullish coalesce
-   * over the two tiers — the null loses to the route's set and the canvas
-   * previews a tier the renderer left on base. That is the defect this
-   * function's own docblock names, and it is why the null reaches this far.
-   */
-  return stated ?? undefined;
-}
-
-/**
- * Whether this canvas is previewing at all, and under what name.
- *
- * Asked once, here, so the sheet, the box and the measurement cannot disagree
- * about it. Two things make a preview inert despite a caller asking for one,
- * and they fail the same way — the box constrains and measures while the rules
- * still answer to the WINDOW, so a caller deriving an edit target from the
- * measurement writes to a tier the canvas is not displaying.
- *
- * A REFUSED name is the first: `previewContainerName` turns down an empty,
- * reserved, malformed or oversized value, and the compile falls back to
- * published `@media`.
- *
- * NOWHERE TO BIND is the second, and the name is perfectly good in that one.
- * There are exactly two binding sites — the page tier's style context and the
- * site tier's sheet — and a caller can legitimately have neither:
- * `siteStyles={false}` opts out of the shared sheet, and a stored artifact
- * arrives with no style context.
- *
- * NOTHING TO SIMULATE is the third. A preview compile rewrites every
- * CONTAINER-axis rule to `@container nx-not-previewable (width < 0px)`, which
- * matches nothing — the engine refusing a question a preview box cannot answer,
- * and the right trade when there are viewport tiers to gain in exchange. With
- * no emitted viewport tier the same price buys nothing: a container-only site
- * would have every one of its breakpoints stop matching here while they keep
- * working on the published page. Decided in the component rather than at one
- * mount, so every consumer of this API keeps published mode for that set.
- */
-function activePreview(
-  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
-  siteStyles: NonNullable<PageRendererProps["siteStyles"]>,
-  preview: CanvasPreview | undefined
-): CanvasPreview | undefined {
-  const container = previewContainerName(preview?.container);
-  if (preview === undefined || container === undefined) return undefined;
-  const breakpoints = compiledBreakpoints(render, siteStyles);
-  // Undefined here IS "nowhere to bind": the two binding sites are the only
-  // places a breakpoint set can come from, so their absence is one condition
-  // rather than two that have to be kept in step.
-  if (breakpoints === undefined) return undefined;
-  return offeredTiers(breakpoints).length === 0
-    ? undefined
-    : { ...preview, container };
-}
-
-/**
- * The renderer's inputs, made to agree with the box the canvas establishes.
- *
- * BOTH tiers, from one hook, because they are one decision read twice. A page's
- * node styles and a site's named classes each emit their own breakpoint rules
- * and each carry their own `previewContainer`; bound on only one, a class's
- * tablet rule stays an `@media` answered by the WINDOW while the node's tablet
- * rule became a `@container` answered by the box — so narrowing the canvas
- * moves one and not the other, and a block styled by a class does not respond.
- *
- * The container is written IN rather than asked for: it and the container this
- * element establishes are the same fact, and a caller holding two places to say
- * it has two chances to say it differently. Overwritten rather than defaulted,
- * so a host supplying a different name is corrected instead of believed.
- */
-function usePreviewedInputs(
-  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
-  siteStyles: NonNullable<PageRendererProps["siteStyles"]>,
-  preview: CanvasPreview | undefined
-): {
-  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
-  sheet: NonNullable<PageRendererProps["siteStyles"]>;
-  /**
-   * The preview that is actually in force, or `undefined` when none is.
-   *
-   * A NAME the compiler refuses is not a preview. `previewContainerName` turns
-   * down an empty, reserved, malformed or oversized value, and the compile then
-   * falls back to published `@media` — so a box that went on constraining and
-   * measuring itself would resize without changing a single tier, and a caller
-   * deriving an edit target from the measurement would write to a breakpoint
-   * the canvas is not displaying. That is the same confident-wrong-answer the
-   * whole mechanism exists to remove, arrived at through the refusal path.
-   *
-   * Normalised HERE and nowhere else, so the sheet, the box and the measurement
-   * cannot disagree about whether this canvas is previewing at all.
-   */
-  active: CanvasPreview | undefined;
-} {
-  const active = activePreview(render, siteStyles, preview);
-  /*
-   * Keyed on the container NAME, not on the preview object.
-   *
-   * `preview.width` changes on every switcher selection and an inline
-   * `onMeasured` changes on every render, and neither alters a single emitted
-   * rule — but depending on the object rebuilds these inputs, which rebuilds
-   * the rendered page, which recompiles the document and the site sheet
-   * synchronously. On a large document that is the cost of a whole compile per
-   * width change, and continuous resizing pays it per frame.
-   *
-   * The box's own inputs travel outside this memo, in `active`, where being a
-   * fresh object costs nothing: the style is recomputed from it directly and
-   * the measurement effect keys on whether a reporter EXISTS rather than on its
-   * identity.
-   */
-  const container = active?.container;
-  const compiled = useMemo(() => {
-    if (container === undefined) {
-      return { rendered: render, sheet: siteStyles };
-    }
-    return {
-      /*
-       * `styleContext` absent is left alone: without it the renderer compiles
-       * no per-node sheet, so there are no page rules for a container to
-       * answer.
-       */
-      rendered:
-        render?.styleContext === undefined
-          ? render
-          : {
-              ...render,
-              styleContext: {
-                ...render.styleContext,
-                previewContainer: container,
-              },
-            },
-      /*
-       * `false` is a real value — a host saying it serves NO site sheet — and
-       * spreading it would turn that refusal into an object carrying a
-       * container name and nothing else, compiling an empty sheet where the
-       * caller asked for none.
-       */
-      sheet:
-        typeof siteStyles === "object"
-          ? { ...siteStyles, previewContainer: container }
-          : siteStyles,
-    };
-  }, [render, siteStyles, container]);
-  return { ...compiled, active };
-}
-
 export interface CanvasProps {
   /** The document being edited. */
   document: BlockDocument;
@@ -1576,23 +1174,6 @@ export interface CanvasProps {
    * the module docblock for why this one is not optional.
    */
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>;
-  /**
-   * The preview box this canvas establishes, or absent to render at the
-   * region's own width against a published sheet.
-   *
-   * One object rather than three props, for the reason
-   * {@link CanvasProps.dragHandlers} is one: the set cannot then be PARTIALLY
-   * wired, and every partial wiring here fails silently. A width without a
-   * container resizes a box whose sheet still queries the window, so the page
-   * reflows and not one breakpoint changes. A container nobody observes leaves
-   * the surface that owns the box unable to say which tier is live.
-   *
-   * The container also travels INTO the compile from here rather than being
-   * asked for twice: `render.styleContext.previewContainer` is overwritten with
-   * `container`, so the box the queries are written against and the box this
-   * element establishes cannot be different names.
-   */
-  preview?: CanvasPreview;
   /**
    * The PRIMARY selected node's id, or null when the selection is empty.
    *
@@ -1657,26 +1238,6 @@ export interface CanvasProps {
    */
   drag?: CanvasDragState;
   /**
-   * The layout scale this canvas applies to the page it lays out.
-   *
-   * Defaults to fitting, so a host that offers no zoom control never has to
-   * name a scale.
-   */
-  zoom?: CanvasZoom;
-  /**
-   * The scale the canvas is actually painting at, reported as it changes.
-   *
-   * On the CANVAS rather than on {@link CanvasProps.preview}, because the
-   * scale is not a property of previewing a viewport: a site that declares no
-   * tiers has no preview at all and is still laid out at some scale.
-   *
-   * Reported rather than exposed as state for the reason the width is: a
-   * control computing its own would be a second answer to what is on screen,
-   * and the two would disagree for the frame after a panel opens — which is
-   * the moment worth naming.
-   */
-  onScale?: (scale: number) => void;
-  /**
    * Raised when a double-click lands on the page.
    *
    * Separate from `onSelect` because the two gestures mean different things and
@@ -1687,14 +1248,31 @@ export interface CanvasProps {
    */
   onDoubleClick?: (event: React.MouseEvent<HTMLDivElement>) => void;
   /**
-   * Editor chrome drawn ABOVE the page — the drop indicator today.
+   * Editor chrome drawn ABOVE the page, for a canvas sharing the editor's
+   * document.
    *
    * Inside the root rather than beside it, because the overlay is positioned in
    * the canvas's own content coordinates and the root is what establishes them.
    * Rendered after the page so it paints on top without needing a stacking
    * context of its own.
+   *
+   * A canvas in a `CanvasFrame` takes no overlay here: its chrome is the
+   * frame's `overlay`, drawn in the editor's document over the frame, where
+   * the site's CSS cannot reach it.
    */
   overlay?: React.ReactNode;
+  /**
+   * The regions of the page's Layout, drawn locked around the page: a header
+   * before it, a footer after it, as a visitor gets them.
+   *
+   * Drawn inside the canvas root, as part of what the canvas renders, so any
+   * surface the canvas is mounted on carries them with the page. They share
+   * the page's one site sheet and its previewed breakpoints, each compiled
+   * under a scope of its own (`layoutPartSheets`), so the canvas shows the
+   * cascade the published route serves. Absent or empty, the canvas draws the
+   * page exactly as it always has.
+   */
+  regions?: readonly CanvasRegion[];
 }
 
 /**
@@ -1740,7 +1318,8 @@ function drawnRefusal(
   drag: CanvasDragState | undefined
 ): CanvasDragState["refusal"] {
   if (drag === undefined || drag.target !== null) return null;
-  return drag.refusal;
+  // A drag state built without a refusal at all reads as none.
+  return drag.refusal ?? null;
 }
 
 /**
@@ -1771,8 +1350,18 @@ function DropRefusalNotice({
 }): React.JSX.Element {
   const notice = useRef<HTMLDivElement | null>(null);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  // Whether the canvas is in the editor's frame, whose viewport scrolls it,
+  // and the zoom, which moves the region on screen while nothing in the frame
+  // changes.
+  const canvasFrame = useCanvasFrame();
+  const framed = canvasFrame.frame !== null;
   const { parentId } = refusal;
-  const { headline, remedy } = refusalWording(refusal, movingType, regionType);
+  // One wording per rule: a lock's from the function every lock refusal uses,
+  // a nesting refusal's from the drag's own.
+  const { headline, remedy } =
+    "lock" in refusal
+      ? lockRefusalWording(refusal.lock)
+      : refusalWording(refusal, movingType, regionType);
 
   /*
    * Measured BEFORE the browser paints, not after.
@@ -1789,8 +1378,21 @@ function DropRefusalNotice({
   useIsomorphicLayoutEffect(() => {
     const element = notice.current;
     if (element === null) return;
-    const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) return;
+    /*
+     * The canvas the notice is drawn over and the space it is drawn in: inside
+     * the root over a canvas sharing the editor's document, or in the layer
+     * over the canvas's frame, where the root's coordinates are scaled to the
+     * zoom and the notice keeps its own size. The clamp below is worked out in
+     * the root's coordinates and only the result is placed.
+     */
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    const { root } = space;
+    const scroller = canvasScroller(root, framed);
+    const place = (point: { x: number; y: number }): void => {
+      const placed = space.place({ ...point, width: 0, height: 0 });
+      setAt({ x: placed.x, y: placed.y });
+    };
     const measure = (): void => {
       // The root itself when the refusal is at the page level: there is no
       // container node to point at, which is the whole of what
@@ -1816,23 +1418,28 @@ function DropRefusalNotice({
        * are not looking. A very tall container scrolled past does the same.
        *
        * The scroller defines "visible": the shell scrolls an ancestor rather than
-       * the canvas, and its rectangle measured in this canvas's own content
-       * coordinates is exactly the band on screen.
+       * the canvas, and in a frame of its own the frame's viewport scrolls it.
+       * The same scroller this effect listens to below, so what is measured
+       * and what is heard cannot be two different elements, and its visible
+       * part measured in this canvas's own content coordinates is exactly the
+       * band on screen.
        */
-      const within = scrollableAncestor(root);
-      if (within === null) {
-        setAt({ x: rect.x, y: rect.y });
+      if (scroller === null) {
+        place({ x: rect.x, y: rect.y });
         return;
       }
-      const band = canvasContentRect(within, root);
+      const band = visibleBandOf(scroller, root);
       const inset = 12;
-      const lowest = band.y + band.height - inset - element.offsetHeight;
+      // The notice's height in the root's coordinates: drawn at its own size
+      // over a frame painted at another.
+      const height = space.sizeOf(element).height / space.scale;
+      const lowest = band.y + band.height - inset - height;
       const top = band.y + inset;
       // A band shorter than the message puts `lowest` above its own top, which
       // makes the range inverted rather than narrow. Taking the top there keeps
       // the message on screen instead of pinning it to a bound derived from a
       // height that does not fit.
-      setAt({
+      place({
         x: rect.x,
         y: lowest < top ? top : Math.max(top, Math.min(rect.y, lowest)),
       });
@@ -1850,13 +1457,15 @@ function DropRefusalNotice({
      * explanation would sit still and the page would leave.
      *
      * Passive, because this only reads geometry, and on the SCROLLER rather
-     * than the canvas: the canvas does not scroll, its ancestor does.
+     * than the canvas: the canvas does not scroll, its ancestor does — or, in
+     * a frame of its own, the frame's viewport, whose scroll is dispatched at
+     * the frame's document rather than at any element.
      */
-    const scroller = scrollableAncestor(root);
     if (scroller === null) return;
-    scroller.addEventListener("scroll", measure, { passive: true });
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", measure, { passive: true });
     return () => {
-      scroller.removeEventListener("scroll", measure);
+      source.removeEventListener("scroll", measure);
     };
     /*
      * Re-measured when the WORDING changes, not merely when the container does.
@@ -1872,39 +1481,386 @@ function DropRefusalNotice({
      * is a property of the text: two regions producing identical sentences need
      * no re-measure, and one region whose list changed does.
      */
-  }, [parentId, headline, remedy]);
+  }, [parentId, headline, remedy, framed, canvasFrame]);
 
   return (
-    <div
+    <RefusalNotice
       ref={notice}
       className="nx-drop-refusal"
-      // Chrome drawn over the page rather than part of it, so hit-testing and
-      // the style inspector both skip it.
-      {...{ [CHROME_ATTRIBUTE]: "" }}
       style={at === null ? undefined : { left: at.x, top: at.y }}
       /*
        * NOT announced, matching {@link DropIndicator} rather than differing
        * from it: this describes a POINTER gesture, and a live region here
-       * would speak to someone who is not the one dragging.
-       *
-       * The spoken counterpart is `keyboard-actions`, which refuses a move the
-       * nesting rule forbids and announces the same reason and remedy through
-       * its own live region. `keyboardMovePosition` stays purely positional —
-       * it answers where a block goes, never whether it may — so the question
-       * is asked by the wiring on both routes, of one function.
-       *
-       * Which is why announcing here would be wrong rather than redundant: it
-       * would put the sentence on a pointer gesture, spoken to someone who is
-       * not the one dragging.
+       * would speak to someone who is not the one dragging. The spoken
+       * counterpart is `keyboard-actions`, which refuses a move the nesting
+       * rule forbids and announces the same reason and remedy through its own
+       * live region, asked of the same wording function.
        */
-      aria-hidden="true"
-    >
-      <span className="nx-drop-refusal__why">{headline}</span>
-      {remedy === null ? null : (
-        <span className="nx-drop-refusal__takes">{remedy}</span>
-      )}
-    </div>
+      headline={headline}
+      remedy={remedy}
+    />
   );
+}
+
+/**
+ * Why the block being dragged cannot land where it is, drawn over the
+ * container that refused it, or nothing while there is no refusal to draw.
+ *
+ * Chrome like the drop line, so it goes where the chrome goes: the overlay of
+ * the `CanvasFrame` the canvas is drawn in, in the editor's document, or the
+ * canvas's own `overlay` over a canvas sharing that document.
+ *
+ * @experimental
+ */
+export function DropRefusal({
+  drag,
+  document,
+}: {
+  /** What the pointer means, from `useCanvasDrag`, as the canvas is given it. */
+  drag: CanvasDragState | undefined;
+  /** The document the canvas is drawing, which names the refusing block. */
+  document: BlockDocument;
+}): JSX.Element | null {
+  const refusal = drawnRefusal(drag);
+  if (refusal === null) return null;
+  const { parentId } = refusal;
+  return (
+    <DropRefusalNotice
+      refusal={refusal}
+      movingType={drag?.draggingBlockName ?? ""}
+      /*
+       * The container's TYPE, resolved from the document the canvas is
+       * drawing. The refusal names the node; what an author reads is the
+       * block's name, and the document is the only place that mapping exists.
+       */
+      regionType={
+        parentId === undefined
+          ? undefined
+          : findNode(document.nodes, parentId)?.type
+      }
+    />
+  );
+}
+
+/**
+ * The canvas root's style, with the scale the page is painted at published as
+ * `--nx-canvas-zoom`.
+ *
+ * Chrome drawn inside the page (a Layout region's badge and tag) is scaled
+ * with everything else when the frame is painted smaller or larger, which
+ * makes its words unreadable on a zoomed-out canvas. Reading the factor back
+ * lets that chrome undo it and stay at the admin's own size, without each
+ * piece measuring the canvas.
+ */
+function withCanvasScale(
+  style: React.CSSProperties | undefined,
+  scale: number
+): React.CSSProperties {
+  return { ...style, "--nx-canvas-zoom": scale } as React.CSSProperties;
+}
+
+/** A region of the page's Layout, with how it treats the site sheet. */
+interface DrawnRegion {
+  region: CanvasRegion;
+  sheet: PartSheet;
+}
+
+/** The page and the regions drawn around it, each with its sheet inputs. */
+interface LayoutParts {
+  page: PartSheet;
+  header: DrawnRegion | undefined;
+  footer: DrawnRegion | undefined;
+}
+
+/**
+ * The page and the regions around it, each with its site-sheet inputs.
+ *
+ * Asked of `layoutPartSheets`, the answer the published route uses, so the
+ * first part drawn emits the site sheet and each part compiles under its own
+ * scope. `undefined` when there is no region to draw.
+ */
+function useLayoutParts(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+): LayoutParts | undefined {
+  return useMemo(
+    () => layoutPartsOf(regions, rendered, sheet),
+    [regions, rendered, sheet]
+  );
+}
+
+/** {@link useLayoutParts}'s answer, computed. */
+function layoutPartsOf(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+): LayoutParts | undefined {
+  const header = regions?.find(region => region.area === "header");
+  const footer = regions?.find(region => region.area === "footer");
+  if (header === undefined && footer === undefined) return undefined;
+  const parts = drawingOrder(header !== undefined, footer !== undefined);
+  const sheets = layoutPartSheets({
+    parts,
+    styleContext: rendered?.styleContext,
+    siteStyles: sheet,
+    pageScope: pageScopeOf(rendered),
+  });
+  const sheetFor = (part: PagePart): PartSheet =>
+    sheets[parts.indexOf(part)] ?? {};
+  return {
+    page: sheetFor("page"),
+    header: drawnRegion(header, sheetFor),
+    footer: drawnRegion(footer, sheetFor),
+  };
+}
+
+/** The parts in the order they are drawn: header, page, footer. */
+function drawingOrder(hasHeader: boolean, hasFooter: boolean): PagePart[] {
+  return [
+    ...(hasHeader ? (["header"] as const) : []),
+    "page",
+    ...(hasFooter ? (["footer"] as const) : []),
+  ];
+}
+
+/** The scope the page's own styles compile under, when it states one. */
+function pageScopeOf(
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined
+): string | undefined {
+  const scope = rendered?.styles?.scope;
+  return typeof scope === "string" ? scope : undefined;
+}
+
+/** One region with its sheet inputs, or nothing for a region not drawn. */
+function drawnRegion(
+  region: CanvasRegion | undefined,
+  sheetFor: (part: PagePart) => PartSheet
+): DrawnRegion | undefined {
+  return region === undefined
+    ? undefined
+    : { region, sheet: sheetFor(region.area) };
+}
+
+/**
+ * The page between its Layout's header and footer, as the canvas draws them.
+ *
+ * Each region is drawn in the page's environment, so a header block that
+ * measures itself or listens is told the frame the canvas draws in, as the
+ * page is. Without regions it is the page alone, exactly as before.
+ */
+function RegionsAround({
+  drawn,
+  rendered,
+  environment,
+  children,
+}: {
+  drawn: LayoutParts | undefined;
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  environment: BlockEnvironment | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const frame = (part: DrawnRegion | undefined) =>
+    part === undefined ? null : (
+      <BlockEnvironmentProvider value={environment}>
+        <CanvasRegionFrame
+          region={part.region}
+          rendered={rendered}
+          sheet={part.sheet}
+        />
+      </BlockEnvironmentProvider>
+    );
+  return (
+    <>
+      {frame(drawn?.header)}
+      {children}
+      {frame(drawn?.footer)}
+    </>
+  );
+}
+
+/**
+ * The document and window the canvas draws in, held where nothing walking an
+ * object's own keys can reach them.
+ *
+ * The value is a prop of the environment provider, and React's development
+ * build describes every changed prop for its performance panel by walking the
+ * object's own enumerable keys a few levels down. A plain `{ document, window }`
+ * leads that walk into the window, whose own keys include each child frame —
+ * and a page with an Embed block has one in an opaque origin, where reading
+ * anything throws a `SecurityError`. It threw while React was running the
+ * commit's effects, so the effects after it never ran: the canvas stopped
+ * measuring its region, and the device and zoom controls stopped moving it.
+ *
+ * Private fields behind getters are not own enumerable keys, so the walk finds
+ * nothing to enter, while `environment.window` reads exactly as before.
+ */
+class CanvasEnvironment implements BlockEnvironment {
+  readonly #document: Document;
+  readonly #window: Window;
+
+  constructor(document: Document, view: Window) {
+    this.#document = document;
+    this.#window = view;
+  }
+
+  get document(): Document {
+    return this.#document;
+  }
+
+  get window(): Window {
+    return this.#window;
+  }
+}
+
+/**
+ * The canvas root, published to both of its readers, and guarded.
+ *
+ * ONE assignment site for both publications.
+ *
+ * They are two APIs because they answer two questions — `rootRef` is read in
+ * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
+ * so a reader can REACT to the canvas arriving, which a ref cannot express
+ * because assigning `.current` changes no dependency. Neither can serve the
+ * other's caller.
+ *
+ * But two effects deciding what the element is could drift: an edit to one is
+ * invisible to the other, and the two would then hand out different answers
+ * with nothing to report it. One effect, one element, published twice.
+ *
+ * After paint rather than through a merged ref callback: the element is the
+ * same for the life of the mount, and one assignment here is easier to follow
+ * than a callback keeping two refs agreeing.
+ */
+function usePublishedRoot(
+  root: React.RefObject<HTMLDivElement | null>,
+  rootRef: CanvasProps["rootRef"],
+  onRoot: CanvasProps["onRoot"]
+): void {
+  useEffect(() => {
+    const element = root.current;
+    if (rootRef !== undefined) rootRef.current = element;
+    onRoot?.(element);
+    return () => {
+      if (rootRef !== undefined) rootRef.current = null;
+      onRoot?.(null);
+    };
+  }, [root, rootRef, onRoot]);
+
+  // A link or form the page draws selects its block here and never takes the
+  // editor anywhere: see `canvas-link-guard`. Same element, same lifetime as
+  // the effect above, so it is installed once per mount.
+  useEffect(() => {
+    const element = root.current;
+    return element === null
+      ? undefined
+      : guardCanvasNavigation(element, `[${CHROME_ATTRIBUTE}]`);
+  }, [root]);
+}
+
+/**
+ * What is marked as selected, and the pointer handlers that select.
+ *
+ * The primary alone is marked when a host has not adopted the set yet, which
+ * keeps every existing caller correct without a change. A drag's own pointer
+ * down runs first, so its behaviour is exactly what it was.
+ */
+function useSelectionPointer({
+  selectedIds,
+  selectedId,
+  onSelect,
+  onDoubleClick,
+  dragPointerDown,
+}: {
+  selectedIds: CanvasProps["selectedIds"];
+  selectedId: string | null;
+  onSelect: CanvasProps["onSelect"];
+  onDoubleClick: CanvasProps["onDoubleClick"];
+  dragPointerDown:
+    | ((event: React.PointerEvent<HTMLDivElement>) => void)
+    | undefined;
+}) {
+  const marked = useMemo(
+    () => markedIds(selectedIds, selectedId),
+    [selectedIds, selectedId]
+  );
+  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const canvasPointerDown = pointer.onPointerDown;
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragPointerDown?.(event);
+      canvasPointerDown(event);
+    },
+    [canvasPointerDown, dragPointerDown]
+  );
+  return { marked, pointer, pointerDown };
+}
+
+/**
+ * The document and window the blocks are drawn in, for block code that
+ * measures itself or listens (`useBlockEnvironment`). Read from the canvas
+ * root's OWN document rather than the globals, so the answer is the frame's
+ * once the canvas renders inside one, with nothing here to change.
+ * `undefined` until the root has mounted, which the hook passes on rather
+ * than falling back to the admin page. Built as a `CanvasEnvironment` rather
+ * than an object literal; see there for why.
+ */
+function useCanvasEnvironment(
+  root: React.RefObject<HTMLDivElement | null>
+): BlockEnvironment | undefined {
+  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
+    undefined
+  );
+  useEffect(() => {
+    const view = root.current?.ownerDocument.defaultView;
+    if (root.current === null || view == null) return;
+    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
+  }, [root]);
+  return environment;
+}
+
+/**
+ * The page, drawn, and the regions of its Layout around it.
+ *
+ * The parts in drawing order, each with how it treats the site sheet:
+ * `undefined` when there are no regions, so a canvas without a Layout renders
+ * exactly as it did.
+ */
+function useDrawnPage({
+  regions,
+  rendered,
+  sheet,
+  document,
+  environment,
+}: {
+  regions: readonly CanvasRegion[] | undefined;
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  sheet: NonNullable<PageRendererProps["siteStyles"]>;
+  document: BlockDocument;
+  environment: BlockEnvironment | undefined;
+}): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
+  const drawn = useLayoutParts(regions, rendered, sheet);
+  const page = useMemo(
+    () => (
+      <BlockEnvironmentProvider value={environment}>
+        <PageRenderer
+          {...rendered}
+          document={document}
+          siteStyles={sheet}
+          {...drawn?.page}
+          // What makes the hit-testing above possible at all. The renderer emits
+          // the node attribute only when asked, because a PUBLISHED page should
+          // not carry an editor's addressing — so the canvas asks and a route
+          // does not. Spread first and set here deliberately: a caller passing
+          // `nodeAttribute: false` through `render` would silently disable
+          // selection for the whole canvas.
+          nodeAttribute
+        />
+      </BlockEnvironmentProvider>
+    ),
+    [rendered, document, sheet, environment, drawn]
+  );
+  return { drawn, page };
 }
 
 export function Canvas({
@@ -1920,119 +1876,42 @@ export function Canvas({
   className,
   dragHandlers,
   drag,
-  zoom = FIT_ZOOM,
-  onScale,
   onDoubleClick,
   overlay,
-  preview,
+  regions,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
+  usePublishedRoot(root, rootRef, onRoot);
 
-  /*
-   * ONE assignment site for both publications.
-   *
-   * They are two APIs because they answer two questions — `rootRef` is read in
-   * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
-   * so a reader can REACT to the canvas arriving, which a ref cannot express
-   * because assigning `.current` changes no dependency. Neither can serve the
-   * other's caller.
-   *
-   * But two effects deciding what the element is could drift: an edit to one is
-   * invisible to the other, and the two would then hand out different answers
-   * with nothing to report it. One effect, one element, published twice.
-   *
-   * After paint rather than through a merged ref callback: the element is the
-   * same for the life of the mount, and one assignment here is easier to follow
-   * than a callback keeping two refs agreeing.
-   */
-  useEffect(() => {
-    const element = root.current;
-    if (rootRef !== undefined) rootRef.current = element;
-    onRoot?.(element);
-    return () => {
-      if (rootRef !== undefined) rootRef.current = null;
-      onRoot?.(null);
-    };
-  }, [rootRef, onRoot]);
+  const { marked, pointer, pointerDown } = useSelectionPointer({
+    selectedIds,
+    selectedId,
+    onSelect,
+    onDoubleClick,
+    dragPointerDown: dragHandlers?.onPointerDown,
+  });
 
-  /*
-   * What to mark. The primary alone when a host has not adopted the set yet,
-   * which keeps every existing caller correct without a change.
-   */
-  const marked = useMemo(
-    () => markedIds(selectedIds, selectedId),
-    [selectedIds, selectedId]
-  );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
-  const dragPointerDown = dragHandlers?.onPointerDown;
-  const canvasPointerDown = pointer.onPointerDown;
-  const pointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      dragPointerDown?.(event);
-      canvasPointerDown(event);
-    },
-    [canvasPointerDown, dragPointerDown]
-  );
+  useNearestThemeMarker(root);
+  const surface = siteSurface(render, siteStyles);
+  // The scale the page is painted at, for chrome drawn inside it to undo.
+  const canvasScale = useCanvasFrame().scale;
 
-  // Keyed on the document identity so a re-render for an unrelated reason —
-  // a selection change, a hover — does not rebuild the rendered tree.
-  const { rendered, sheet, active } = usePreviewedInputs(
-    render,
-    siteStyles,
-    preview
-  );
-
-  const boxStyle = useCanvasSurface(root, active, zoom, onScale);
-
-  /*
-   * The document and window the blocks are drawn in, for block code that
-   * measures itself or listens (`useBlockEnvironment`). Read from the canvas
-   * root's OWN document rather than the globals, so the answer is the frame's
-   * once the canvas renders inside one, with nothing here to change.
-   * `undefined` until the root has mounted, which the hook passes on rather
-   * than falling back to the admin page.
-   */
-  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
-    undefined
-  );
-  useEffect(() => {
-    const view = root.current?.ownerDocument.defaultView;
-    if (root.current === null || view == null) return;
-    setEnvironment({ document: root.current.ownerDocument, window: view });
-  }, []);
-
-  const page = useMemo(
-    () => (
-      <BlockEnvironmentProvider value={environment}>
-        <PageRenderer
-          {...rendered}
-          document={document}
-          siteStyles={sheet}
-          // What makes the hit-testing above possible at all. The renderer emits
-          // the node attribute only when asked, because a PUBLISHED page should
-          // not carry an editor's addressing — so the canvas asks and a route
-          // does not. Spread first and set here deliberately: a caller passing
-          // `nodeAttribute: false` through `render` would silently disable
-          // selection for the whole canvas.
-          nodeAttribute
-        />
-      </BlockEnvironmentProvider>
-    ),
-    [rendered, document, sheet, environment]
-  );
+  const environment = useCanvasEnvironment(root);
+  const { drawn, page } = useDrawnPage({
+    regions,
+    rendered: render,
+    sheet: siteStyles,
+    document,
+    environment,
+  });
 
   /*
    * The locked nodes, collected in ONE traversal per document rather than asked
    * per element inside the marker walk, which re-runs on every change to the
-   * rendered tree.
+   * rendered tree: `own` for a block locked itself, `inherited` for one inside
+   * a locked block, which the lock covers too.
    */
-  const lockedIds = useMemo(() => {
-    const ids = new Set<string>();
-    walkNodes(document.nodes, node => {
-      if (isLocked(node)) ids.add(node.id);
-    });
-    return ids;
-  }, [document]);
+  const lockedIds = useMemo(() => lockMarksOf(document), [document]);
 
   useCanvasMarkers(
     root,
@@ -2044,11 +1923,8 @@ export function Canvas({
     lockedIds
   );
 
-  // Bound once rather than called per prop: three calls would be three chances
-  // for the narrowing to be spelt differently, and the last one needed a
-  // non-null assertion to type-check at all.
+  // The refusal the cursor shows, asked of the same rule the notice draws by.
   const refusalDrawn = drawnRefusal(drag);
-  const refusedParentId = refusalDrawn?.parentId;
 
   return (
     <div
@@ -2058,13 +1934,36 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={boxStyle}
+      style={withCanvasScale(surface?.style, canvasScale)}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and
       // a single name meaning both is the kind of thing that reads correctly
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
+      /*
+       * Whether the site's dark values include a dark ground. They apply with
+       * the device, or under a dark marker, exactly as the site sheet applies
+       * them, and the stylesheet pairs this with both to switch the SCHEME:
+       * Canvas, CanvasText and native controls. Absent when the dark values
+       * keep a light ground, or the host serves no site sheet.
+       */
+      data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
+      /*
+       * `data-nx-site-theme`, the mode the nearest theme marker above names,
+       * is written onto this element by `useNearestThemeMarker` before paint,
+       * not rendered here: see that hook.
+       */
+      /*
+       * Whether the site's ground is fully opaque, in every mode. Only then
+       * does the rendered page carry the ground as well as the canvas: painted
+       * twice, an opaque ground looks exactly as it does once, while a
+       * translucent one would darken where the layers overlap. See the page
+       * root's rule in `builder-chrome.css` for why the page wants it.
+       */
+      data-nx-site-ground-opaque={
+        surface?.opaqueGround === true ? "" : undefined
+      }
       /*
        * What the pointer means, for the cursor.
        *
@@ -2092,25 +1991,10 @@ export function Canvas({
       {...dragHandlers}
       onPointerDown={pointerDown}
     >
-      {page}
+      <RegionsAround drawn={drawn} rendered={render} environment={environment}>
+        {page}
+      </RegionsAround>
       {overlay}
-      {refusalDrawn === null ? null : (
-        <DropRefusalNotice
-          refusal={refusalDrawn}
-          movingType={drag?.draggingBlockName ?? ""}
-          /*
-           * The container's TYPE, resolved from the document the canvas is
-           * already drawing. The refusal names the node; what an author reads
-           * is the block's name, and the document is the only place that
-           * mapping exists.
-           */
-          regionType={
-            refusedParentId === undefined
-              ? undefined
-              : findNode(document.nodes, refusedParentId)?.type
-          }
-        />
-      )}
     </div>
   );
 }

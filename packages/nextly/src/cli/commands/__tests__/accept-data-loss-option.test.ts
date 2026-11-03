@@ -75,6 +75,7 @@ afterEach(() => {
 describe("--accept-data-loss on every command that deletes data", () => {
   it.each([
     [["db:sync"]],
+    [["migrate"]],
     [["migrate:down"]],
     [["migrate:fresh"]],
     [["prune"]],

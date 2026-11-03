@@ -5,7 +5,6 @@
  */
 
 import * as telemetry from "@nextlyhq/telemetry";
-import type { Command } from "commander";
 
 import { CLI_VERSION } from "../program";
 
@@ -28,59 +27,45 @@ async function withTelemetry(fn: () => void | Promise<void>): Promise<void> {
   }
 }
 
-export function registerTelemetryCommand(program: Command): void {
-  const cmd = program
-    .command("telemetry")
-    .description("Manage anonymous CLI telemetry");
+/** The action of `nextly telemetry status`, loaded when it runs. */
+export async function telemetryStatusAction(): Promise<void> {
+  await withTelemetry(() => {
+    const status = telemetry.getStatus();
+    if (!status.disabled) {
+      console.log(
+        "Telemetry is enabled. See https://nextlyhq.com/docs/telemetry"
+      );
+      return;
+    }
+    const reasonText = status.reason
+      ? (REASONS[status.reason] ?? status.reason)
+      : "unknown";
+    console.log(`Telemetry is disabled (${reasonText}).`);
+  });
+}
 
-  cmd
-    .command("status")
-    .description("Show whether telemetry is enabled and why")
-    .action(async () => {
-      await withTelemetry(() => {
-        const status = telemetry.getStatus();
-        if (!status.disabled) {
-          console.log(
-            "Telemetry is enabled. See https://nextlyhq.com/docs/telemetry"
-          );
-          return;
-        }
-        const reasonText = status.reason
-          ? (REASONS[status.reason] ?? status.reason)
-          : "unknown";
-        console.log(`Telemetry is disabled (${reasonText}).`);
-      });
-    });
+/** The action of `nextly telemetry enable`, loaded when it runs. */
+export async function telemetryEnableAction(): Promise<void> {
+  await withTelemetry(() => {
+    telemetry.setEnabled(true);
+    console.log("Telemetry enabled. Thanks for helping improve Nextly.");
+  });
+}
 
-  cmd
-    .command("enable")
-    .description("Enable telemetry for this user")
-    .action(async () => {
-      await withTelemetry(() => {
-        telemetry.setEnabled(true);
-        console.log("Telemetry enabled. Thanks for helping improve Nextly.");
-      });
-    });
+/** The action of `nextly telemetry disable`, loaded when it runs. */
+export async function telemetryDisableAction(): Promise<void> {
+  await withTelemetry(() => {
+    telemetry.setEnabled(false);
+    console.log("Telemetry disabled.");
+  });
+}
 
-  cmd
-    .command("disable")
-    .description("Disable telemetry for this user")
-    .action(async () => {
-      await withTelemetry(() => {
-        telemetry.setEnabled(false);
-        console.log("Telemetry disabled.");
-      });
-    });
-
-  cmd
-    .command("reset")
-    .description("Reset the anonymous ID and re-show the first-run notice")
-    .action(async () => {
-      await withTelemetry(() => {
-        telemetry.resetConsent();
-        console.log(
-          "Telemetry consent reset. The first-run notice will show again."
-        );
-      });
-    });
+/** The action of `nextly telemetry reset`, loaded when it runs. */
+export async function telemetryResetAction(): Promise<void> {
+  await withTelemetry(() => {
+    telemetry.resetConsent();
+    console.log(
+      "Telemetry consent reset. The first-run notice will show again."
+    );
+  });
 }

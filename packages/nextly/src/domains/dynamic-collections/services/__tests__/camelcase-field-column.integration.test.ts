@@ -26,6 +26,9 @@ import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect
 interface SaveResult {
   success: boolean;
   message?: string;
+  code?: string;
+  /** A validation refusal's per-field reasons, which the wire carries as `data.errors`. */
+  publicData?: { errors?: unknown };
 }
 
 /** The handler a Builder create or save reaches, from the admin API and the Direct API alike. */
@@ -283,8 +286,18 @@ describeEachDialect("a field named with capitals", (dialect: TestDialect) => {
       { name: "meta_title", type: "text" },
     ]);
     expect(created.success, JSON.stringify(created)).toBe(false);
-    // The reason, so a refusal for anything else does not pass for this one.
-    expect(created.message).toMatch(/both column meta_title/);
+    // The reason, so a refusal for anything else does not pass for this one. A validation
+    // refusal's message is the generic one; the sibling rule names the pair and the column
+    // in its per-field errors.
+    expect(created.code).toBe("VALIDATION_ERROR");
+    expect(created.publicData?.errors).toEqual([
+      {
+        path: "fields",
+        code: "FIELD_NAME_DUPLICATE",
+        message:
+          "Collection 'clash': fields 'metaTitle' and 'meta_title' at the top level would both become the column 'meta_title'. Rename one of them.",
+      },
+    ]);
     expect(await current.adapter.tableExists("dc_clash")).toBe(false);
     expect(await stored("clash")).toBeNull();
   });

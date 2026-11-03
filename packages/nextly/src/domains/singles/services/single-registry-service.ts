@@ -535,7 +535,10 @@ export class SingleRegistryService extends BaseRegistryService<
       assertNoNewSiblingClashes(
         { kind: "single", slug },
         data.fields,
-        existing.fields ?? []
+        existing.fields ?? [],
+        // The configuration's sync writes `define*` output, with its added system fields;
+        // every other caller writes fields as it was sent.
+        options?.source === "code" ? { definedInCode: "single" } : {}
       );
     }
 

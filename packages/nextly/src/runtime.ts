@@ -47,6 +47,7 @@ export {
   registerNextCacheRevalidator,
   nextlyTags,
   nextlySingleTags,
+  nextlySiteSettingsTags,
   entryIdTag,
   cachedFind,
   registerCachedRead,
@@ -119,6 +120,47 @@ export type {
 // `nextly` reader, as a per-tenant setup must, this resolves the GLOBAL
 // singleton and not that reader. Pass the reader for those.
 export { requireNextly } from "./direct-api/nextly";
+
+// The reader a published page's lists read through: published entries and
+// public fields only, whatever the list asks. `@experimental` until the page
+// builder's data lists ship on it.
+export {
+  createPublicReader,
+  toPublicFind,
+  toPublicFindSingle,
+  PUBLIC_FILTER_OPS,
+} from "./runtime/routing/public-reader";
+export type {
+  PublicCountQuery,
+  PublicFilter,
+  PublicFilterOp,
+  PublicReader,
+  PublicReaderBinding,
+  PublicReaderDeclarations,
+  PublicReaderSource,
+  PublicReadQuery,
+  PublicReadResult,
+  PublicSingleQuery,
+  PublicSingleResult,
+  PublicSource,
+  PublicSourceReader,
+} from "./runtime/routing/public-reader";
+
+// What a binding on a published page reads besides a list, `@experimental`
+// with the reader: the site settings through their public allowlist (a write
+// to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
+// is checked against, as the anonymous visitor may read them. Both load the
+// service container inside the call, so importing this entry loads neither.
+export {
+  readPublicSiteSettings,
+  type PublicSiteSettings,
+} from "./runtime/site-settings-read";
+export {
+  bindingFieldShapes,
+  type BindingFieldShape,
+  type BindingFieldShapesOptions,
+  type BindingSourceRef,
+} from "./runtime/routing/binding-field-shapes";
 
 export {
   resolveContent,

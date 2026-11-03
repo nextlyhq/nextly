@@ -55,3 +55,58 @@ export function useMayCreatePattern(): boolean {
   });
   return read.data?.mayCreate ?? true;
 }
+
+/**
+ * Whether this author may make a component from a selection: create and
+ * publish on the component store. Permissive while the answer is in flight,
+ * for the reason the pattern verb is: the route refuses a caller without the
+ * grants either way, and a verb dimmed on every mount would hide one the
+ * author holds.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export function useMayCreateComponent(): boolean {
+  const read = usePluginRoute<PatternCapabilityResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: CAPABILITY_ROUTE_PATH,
+    staleTime: 0,
+  });
+  return read.data === undefined ? true : read.data.mayCreateComponent === true;
+}
+
+/**
+ * Whether this author may replace a pattern's content from a selection.
+ * Permissive while in flight, for the reason the verbs above are.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export function useMayUpdatePattern(): boolean {
+  const read = usePluginRoute<PatternCapabilityResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: CAPABILITY_ROUTE_PATH,
+    staleTime: 0,
+  });
+  return read.data === undefined ? true : read.data.mayUpdatePattern === true;
+}
+
+/**
+ * Where this author may open a component in its own view, or `undefined`
+ * while that is not known or they may not.
+ *
+ * CLOSED while the read is in flight, the opposite of the verbs above,
+ * because what it gates is different: an offer to open a view the author may
+ * not use leads to a screen that refuses them, while a moment's wait before
+ * the offer appears costs nothing. The answer shares the pattern verb's read.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export function useComponentEditing():
+  | { readonly collection: string; readonly field: string }
+  | undefined {
+  const read = usePluginRoute<PatternCapabilityResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: CAPABILITY_ROUTE_PATH,
+    staleTime: 0,
+  });
+  return read.data?.componentEditing ?? undefined;
+}

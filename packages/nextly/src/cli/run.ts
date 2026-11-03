@@ -1,6 +1,7 @@
 /**
- * One CLI run, from its arguments: the mode and its environment files first,
- * then the program.
+ * One CLI run, from its arguments: the program, which reads the mode and its
+ * environment files just before a command's action, and loads that command's
+ * work after them.
  *
  * The entry point is this and nothing else, so a test that drives a command
  * through `runCli` takes the same path a shell does.
@@ -8,24 +9,22 @@
  * @module cli/run
  */
 
-import { loadCliEnvironment } from "./environment";
+import { loadProgramEnvironment } from "./environment";
+import { createProgram } from "./program";
 
 /**
  * Runs the CLI for `argv` (`process.argv` from the entry point).
  *
- * The environment is read before any application module is imported, and the
- * program is imported dynamically for that reason: those modules may read
- * `process.env` as they load, and a configuration evaluated by a command must
- * see the run's mode as `NODE_ENV`. Static imports would be evaluated first.
+ * The program declares every command without loading its work. The mode and
+ * the environment files are read in its `preAction` hook (`beforeAction`),
+ * which only a command's action reaches, and before that command's work is
+ * imported: that code may read `process.env` as it loads, and a configuration
+ * it evaluates must see the run's mode as `NODE_ENV`. `--help`, `--version`
+ * and an unknown command read neither. The error reporting is imported only
+ * for a run that fails.
  */
 export async function runCli(argv: readonly string[]): Promise<void> {
-  loadCliEnvironment(argv);
-
-  const { createProgram } = await import("./program");
-  const { reportCliError } = await import("./errors/index");
-  const telemetry = await import("@nextlyhq/telemetry");
-
-  const program = createProgram();
+  const program = createProgram({ beforeAction: loadProgramEnvironment });
 
   try {
     await program.parseAsync([...argv]);
@@ -34,6 +33,7 @@ export async function runCli(argv: readonly string[]): Promise<void> {
     // message or stack. Wrapped so a telemetry failure can never mask the
     // underlying user-visible error.
     try {
+      const telemetry = await import("@nextlyhq/telemetry");
       telemetry.capture("command_failed", {
         command: argv[2] ?? "unknown",
         duration_ms: 0,
@@ -53,6 +53,7 @@ export async function runCli(argv: readonly string[]): Promise<void> {
       typeof error.code === "string" &&
       error.code.startsWith("commander.");
     if (!commanderError) {
+      const { reportCliError } = await import("./errors/index");
       const globals = program.opts<{ verbose?: boolean }>();
       reportCliError(error, { verbose: globals.verbose === true });
     }

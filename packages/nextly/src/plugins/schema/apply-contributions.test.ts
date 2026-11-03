@@ -763,6 +763,181 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     });
   });
 
+  it("records which plugin added each field to an entity it does not own, a transform's included", () => {
+    // What a full uninstall of the plugin takes with it: the fold's ledgers
+    // are the one record of who declared a field a transform added.
+    const config = cfg({
+      collections: [collFields("posts", [field("title")])],
+    });
+    const plugins = [
+      plugin("fx", {
+        collections: [coll("fx-notes")],
+        transforms: [
+          {
+            target: "posts",
+            transform: entity => ({
+              ...entity,
+              fields: [
+                ...((entity.fields as FieldConfig[] | undefined) ?? []),
+                relField("fxNote", "fx-notes"),
+              ],
+            }),
+          },
+        ],
+      }),
+      plugin("sso", {
+        extend: [{ target: "posts", fields: [field("ssoId")] }],
+      }),
+    ];
+
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      config,
+      plugins
+    );
+
+    // CONTROL: the app's own field is nobody's to take.
+    expect(fieldsAddedByPlugins.get("posts")).toEqual(
+      new Map([
+        ["fxNote", "fx"],
+        ["ssoId", "sso"],
+      ])
+    );
+    expect(fieldsAddedByPlugins.has("fx-notes")).toBe(false);
+  });
+
+  it("records a field a transform put inside another owner's group by its whole path", () => {
+    // The app's `settings` group, and the app's own field in it, stay the
+    // app's: only the field fx nested there goes with fx.
+    const config = cfg({
+      collections: [
+        collFields("posts", [groupField("settings", [field("theme")])]),
+      ],
+    });
+    const plugins = [
+      plugin("fx", {
+        collections: [coll("fx-notes")],
+        transforms: [
+          {
+            target: "posts",
+            transform: entity => ({
+              ...entity,
+              fields: ((entity.fields as FieldConfig[] | undefined) ?? []).map(
+                outer =>
+                  (outer as { name?: string }).name === "settings"
+                    ? groupField("settings", [
+                        ...((outer as { fields?: FieldConfig[] }).fields ?? []),
+                        relField("fxNote", "fx-notes"),
+                      ])
+                    : outer
+              ),
+            }),
+          },
+        ],
+      }),
+    ];
+
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      config,
+      plugins
+    );
+
+    expect(fieldsAddedByPlugins.get("posts")).toEqual(
+      new Map([["settings.fxNote", "fx"]])
+    );
+  });
+
+  /** fx's transform: takes the app's `note` out, puts `moved` in `settings`. */
+  const movingNote = (moved: FieldConfig) =>
+    plugin("fx", {
+      collections: [coll("fx-notes")],
+      transforms: [
+        {
+          target: "posts",
+          transform: entity => ({
+            ...entity,
+            fields: ((entity.fields as FieldConfig[] | undefined) ?? [])
+              .filter(outer => (outer as { name?: string }).name !== "note")
+              .map(outer =>
+                (outer as { name?: string }).name === "settings"
+                  ? groupField("settings", [
+                      ...((outer as { fields?: FieldConfig[] }).fields ?? []),
+                      moved,
+                    ])
+                  : outer
+              ),
+          }),
+        },
+      ],
+    });
+  const postsWithNote = () =>
+    cfg({
+      collections: [
+        collFields("posts", [
+          relField("note", "fx-notes"),
+          groupField("settings", [field("theme")]),
+        ]),
+      ],
+    });
+
+  it("keeps a field a transform moved into the owner's group its owner's", () => {
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      postsWithNote(),
+      [movingNote(relField("note", "fx-notes"))]
+    );
+
+    expect(fieldsAddedByPlugins.get("posts")).toBeUndefined();
+  });
+
+  it("keeps a field a transform moved its owner's though a different field took its old path", () => {
+    // A text `note` takes the path the app's relationship left: the path is
+    // still there, but the field that stayed at it is not the one before.
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      postsWithNote(),
+      [
+        plugin("fx", {
+          collections: [coll("fx-notes")],
+          transforms: [
+            {
+              target: "posts",
+              transform: entity => ({
+                ...entity,
+                fields: [
+                  ...((entity.fields as FieldConfig[] | undefined) ?? [])
+                    .filter(
+                      outer => (outer as { name?: string }).name !== "note"
+                    )
+                    .map(outer =>
+                      (outer as { name?: string }).name === "settings"
+                        ? groupField("settings", [
+                            ...((outer as { fields?: FieldConfig[] }).fields ??
+                              []),
+                            relField("note", "fx-notes"),
+                          ])
+                        : outer
+                    ),
+                  field("note"),
+                ],
+              }),
+            },
+          ],
+        }),
+      ]
+    );
+
+    expect(fieldsAddedByPlugins.get("posts")).toBeUndefined();
+  });
+
+  it("does not count a new field its own while the transform took one of the owner's away", () => {
+    // `fxNote` may be the app's `note` renamed as it moved: it cannot be
+    // told from an addition, so it is not counted the plugin's.
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      postsWithNote(),
+      [movingNote(relField("fxNote", "fx-notes"))]
+    );
+
+    expect(fieldsAddedByPlugins.get("posts")).toBeUndefined();
+  });
+
   it("refuses a transform naming an entity nothing declares", () => {
     // Doing nothing silently means the plugin appears installed and simply
     // has no effect, which is the hardest kind of "working" to diagnose.
