@@ -18,7 +18,11 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
+import {
+  TokensPanel,
+  useVariablesHeader,
+  type TokensPanelProps,
+} from "./tokens-panel";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
   Partial<Pick<TokensPanelProps, "currentTokens" | "onChange">>;
@@ -145,6 +149,40 @@ describe("the rows", () => {
       within(slot).getByRole("button", { name: "Import or export" })
     ).toBeDefined();
     slot.remove();
+  });
+
+  it("leaves its header to a host that draws one for the whole panel, and previews the host's mode", () => {
+    // The host keeps the header across its own tabs, so the panel must take
+    // the mode from it and draw no second switch or menu of its own.
+    function Host(): React.JSX.Element {
+      const header = useVariablesHeader({
+        onChange: () => undefined,
+        currentTokens: () => SITE,
+        readOnly: false,
+      });
+      return (
+        <>
+          <div data-testid="host-header">{header.controls}</div>
+          <TokensPanel
+            tokens={SITE}
+            onChange={() => undefined}
+            currentTokens={() => SITE}
+            header={header}
+          />
+        </>
+      );
+    }
+    render(<Host />);
+    expect(screen.getAllByRole("group", { name: "Preview" })).toHaveLength(1);
+    expect(
+      screen.getAllByRole("button", { name: "Import or export" })
+    ).toHaveLength(1);
+    const hosted = screen.getByTestId("host-header");
+    fireEvent.click(within(hosted).getByRole("button", { name: "Dark" }));
+    const swatch = row(/^Brand/).querySelector(
+      ".nx-vars__swatch--main"
+    ) as HTMLElement;
+    expect(swatch.style.getPropertyValue("--nx-swatch")).toBe("#8fa7ff");
   });
 
   it("shows one line with an Add type size action when there are no type sizes", () => {

@@ -2040,13 +2040,13 @@
 }
 
 /*
- * A colour row: the swatch that opens the picker, then whatever holds the value.
+ * A colour row: for a value, the swatch that opens the picker and the field
+ * holding the value; for a variable, one control naming it, then Clear.
  *
- * The two things that can hold it are named rather than found by position, for
- * the reason the unit menu above records: a literal puts an input here and a
- * token reference puts a name and a Clear button, so `:nth-child(2)` sizes
- * whichever happens to be second and matches the wrong element as soon as the
- * row is composed differently.
+ * What takes the width is named rather than found by position, for the reason
+ * the unit menu above records: `:nth-child(2)` sizes whichever happens to be
+ * second and matches the wrong element as soon as the row is composed
+ * differently.
  */
 .nx-style-inspector__colour {
   display: flex;
@@ -2055,7 +2055,21 @@
 }
 
 .nx-style-inspector__colour input,
-.nx-style-inspector__colour-token {
+.nx-style-inspector__colour-pick {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A variable shown as itself: its swatch, its name, and the list's chevron. */
+.nx-style-inspector__colour-pick {
+  justify-content: flex-start;
+}
+
+.nx-style-inspector__colour-pick > .nx-vars__swatch {
+  flex: none;
+}
+
+.nx-style-inspector__colour-pick > .nx-font-pick__value {
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -2125,14 +2139,6 @@
   outline-offset: 1px;
 }
 
-/* The token's name, beside the swatch, where a literal would show its field. */
-.nx-style-inspector__colour-token {
-  overflow: hidden;
-  font-size: var(--text-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /*
  * The contrast readout, under the row it describes.
  *
@@ -2161,9 +2167,92 @@
   color: var(--nx-destructive);
 }
 
-/* Sized to the picker rather than to the trigger it hangs from. */
-.nx-style-inspector__picker {
-  width: auto;
+/*
+ * The colour picker's surface: the site's colour variables, then Custom
+ * colour, which opens the raw picker in place. Wide enough for the raw picker
+ * rather than sized to the trigger it hangs from; two classes, to outrank the
+ * popover's own width and padding.
+ */
+[data-slot="popover-content"].nx-style-inspector__picker {
+  display: flex;
+  flex-direction: column;
+  width: 18rem;
+  padding: 0;
+}
+
+.nx-style-inspector__variables {
+  display: flex;
+  flex-direction: column;
+  max-height: 16rem;
+  min-height: 0;
+}
+
+/* A list long enough to search keeps its full height while a search narrows
+   it, so the popover does not shrink and jump to the trigger's other side
+   under the author's typing. */
+.nx-style-inspector__variables:has(.nx-font-pick__search) {
+  height: 16rem;
+}
+
+/* A variable as the Variables tab draws it: swatch, name, light and dark. */
+.nx-style-inspector__variable {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nx-style-inspector__variable-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nx-style-inspector__no-variables {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+}
+
+.nx-style-inspector__custom {
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-style-inspector__custom-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-style-inspector__custom-toggle:hover {
+  background: var(--nx-muted);
+}
+
+.nx-style-inspector__custom-toggle:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -2px;
+}
+
+.nx-style-inspector__custom-toggle > svg {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-style-inspector__custom-toggle[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.nx-style-inspector__custom-body {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.75rem;
 }
 
 /*
@@ -5046,12 +5135,23 @@ fieldset.nx-inspector__fields {
   font-weight: 600;
 }
 
+/* Category and order share the first line, each half of it, or all of it
+   when there is no order to choose; the preview text has the second. */
 .nx-fonts-catalogue__filters {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--nx-border);
+}
+
+.nx-fonts-catalogue__choices {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nx-fonts-catalogue__choices > * {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .nx-fonts-catalogue__filters input {
@@ -5169,8 +5269,13 @@ fieldset.nx-inspector__fields {
   cursor: pointer;
 }
 
+/* The row Enter picks: a fill and an inner ring, since a fill alone is too
+   faint against the list to find by keyboard. An outline, so it sits beside
+   the current row's bar (a shadow) rather than replacing it. */
 .nx-font-pick__option[aria-selected="true"] {
   background: var(--nx-muted);
+  outline: 1px solid var(--nx-ring);
+  outline-offset: -1px;
 }
 
 .nx-font-pick__option[data-current] {

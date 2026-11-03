@@ -65,6 +65,7 @@ import {
   offerableTokens,
   renderedTokens,
   TokensStudio,
+  VariablesTab,
 } from "./site-style-studios";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
@@ -595,18 +596,23 @@ export function editorPanelRenderer({
       design: () => (
         <DesignPanel
           view={view}
+          // The studio surrounds every tab, so the header it draws stays the
+          // same whichever is open.
+          frame={designTabs => (
+            <TokensStudio
+              merged={offerableTokens(
+                canvasSiteStyle,
+                siteStylePending,
+                siteStyleError
+              )}
+              supplied={configSiteStyle?.tokens}
+              pending={siteStylePending}
+            >
+              {designTabs}
+            </TokensStudio>
+          )}
           tabs={{
-            variables: () => (
-              <TokensStudio
-                merged={offerableTokens(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                supplied={configSiteStyle?.tokens}
-                pending={siteStylePending}
-              />
-            ),
+            variables: () => <VariablesTab />,
             classes: () => (
               <ClassManagerPanel
                 absence={classes.absence}
