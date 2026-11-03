@@ -264,7 +264,9 @@ function unknownLayoutView(
       NONE_OPTION,
     ],
     value: layoutValue(named),
-    why: `${UNKNOWN_LAYOUT}: the published page uses whatever it resolves to`,
+    // Said plainly, without guessing which of the two it is, and with what the
+    // author can do about it.
+    why: "You can't see this Layout. It may have been deleted, or you may not have access to it. Choose another Layout to change it.",
     readOnly: false,
     effective: null,
   };

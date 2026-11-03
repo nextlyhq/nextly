@@ -113,7 +113,7 @@ describe("the page's Layout picker", () => {
     );
     expect(view.options[0]?.label).toBe("Site default (Main)");
     expect(view.why).toBe(
-      "A Layout you can't view, or one that was deleted: the published page uses whatever it resolves to"
+      "You can't see this Layout. It may have been deleted, or you may not have access to it. Choose another Layout to change it."
     );
     // Nothing of it is drawn.
     expect(view.effective).toBeNull();
