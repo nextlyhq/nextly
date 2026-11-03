@@ -50,10 +50,15 @@ const OUT_OF_SCOPE = /^--(?:nx|site)-/;
 /**
  * Properties a component sets inline on the element that reads them, at
  * runtime, so no stylesheet declares them. Radix's Popover writes
- * `--radix-popover-trigger-width` on its content, sized to the trigger.
+ * `--radix-popover-trigger-width` on its content, sized to the trigger, and
+ * its Accordion writes `--radix-accordion-content-height` on each panel
+ * while it opens and closes, measured from the panel's content.
  * Named one by one: a prefix would also excuse a mistyped theme token.
  */
-const SET_AT_RUNTIME = new Set(["--radix-popover-trigger-width"]);
+const SET_AT_RUNTIME = new Set([
+  "--radix-popover-trigger-width",
+  "--radix-accordion-content-height",
+]);
 
 /** A `var()` naming only a custom property, with no fallback after it. */
 const READ_WITHOUT_FALLBACK = /var\(\s*(--[\w-]+)\s*\)/g;

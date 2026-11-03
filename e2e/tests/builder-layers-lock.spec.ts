@@ -28,6 +28,7 @@ import {
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasLayer } from "./support/canvas-frame";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
@@ -108,11 +109,7 @@ async function storedNodes(
   request: APIRequestContext,
   id: string
 ): Promise<Record<string, unknown>[]> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: Record<string, unknown>[] } }[];
-  };
-  return body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  return await storedPageNodes(request, ENTRIES, id);
 }
 
 async function openBuilder(page: Page, id: string): Promise<void> {

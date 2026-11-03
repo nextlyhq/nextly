@@ -810,8 +810,12 @@ test.describe("chrome drawn over the frame stays on the block", () => {
 test.describe("a drag from the Add panel into the frame", () => {
   test.describe.configure({ timeout: 240_000 });
 
+  // A gap of the first block's own, since blocks at the page's top level
+  // carry no margin and nothing between them spaces them apart.
   const NODES = [
-    text("one", "The first block"),
+    text("one", "The first block", {
+      base: { base: { margin: { blockEnd: "24px" } } },
+    }),
     text("two", "The second block"),
   ];
 
