@@ -24,6 +24,7 @@ import {
   registryNestingSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -180,6 +181,36 @@ async function seedSwing(t: TestNextly): Promise<string> {
 
 const LIMITS = { ...DEFAULT_LIMITS, maxDepth: 4 };
 
+/** A field type whose validator records the write it is shown. */
+const PROBE_TYPE = "payload-probe";
+
+function payloadProbe(seen: Record<string, unknown>[]) {
+  return definePlugin({
+    name: "@test/payload-probe",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: {
+      fieldTypes: [
+        {
+          type: PROBE_TYPE,
+          storage: "text",
+          component: "@test/payload-probe/admin#Probe",
+          // Asked for an empty value too, so a held save that leaves the
+          // probe unset still shows what it was handed.
+          validateEmpty: true,
+          validate: (
+            _value: unknown,
+            args: { data: Record<string, unknown> }
+          ) => {
+            seen.push(args.data);
+            return true as const;
+          },
+        },
+      ],
+    },
+  } as never);
+}
+
 describe.each(getConfiguredTestDialects())(
   "a field-group instance held in a working draft (%s)",
   (dialect: TestDialect) => {
@@ -192,20 +223,15 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         dialect,
         // A small depth limit, so a too-deep page stays short.
-        plugins: [pageBuilder({ limits: LIMITS })],
+        plugins: [pageBuilder({ limits: LIMITS }), payloadProbe(seen)],
         fieldGroups: [
           defineFieldGroup({
             slug: "herobox",
             fields: [
-              text({
-                name: "title",
-                // What a field inside the instance is shown as the write.
-                validate: (_value: unknown, args: { data: unknown }) => {
-                  seen.push(args.data as Record<string, unknown>);
-                  return true;
-                },
-              } as never),
+              text({ name: "title" }),
               blocks("content"),
+              // A plugin field type's validator is shown the write's payload.
+              { name: "probe", type: PROBE_TYPE } as never,
             ],
           }),
         ],
@@ -316,14 +342,21 @@ describe.each(getConfiguredTestDialects())(
       const id = await livePoster();
       seen.length = 0;
       expect(
-        await refusalCodes(hold(id, { title: "Held", content: pageOf([]) }))
+        await refusalCodes(
+          hold(id, { title: "Held", content: pageOf([]), probe: "seen" })
+        )
       ).toEqual([]);
-      const shown = seen.at(-1);
-      expect(shown).toBeDefined();
-      expect(Object.hasOwn(shown ?? {}, "status")).toBe(false);
-      // The host's own title was not sent, so it is not shown as sent.
-      expect(Object.hasOwn(shown ?? {}, "title")).toBe(false);
-      expect(shown?.hero).toMatchObject({ title: "Held" });
+      // Each pass that shows the write: the ones carrying the instance by
+      // its host field's name. A pass judging the instance's own row shows
+      // the instance, which has a title of its own.
+      const keys = JSON.stringify(seen.map(data => Object.keys(data)));
+      expect(seen.length, keys).toBeGreaterThan(0);
+      for (const shown of seen) {
+        expect(Object.hasOwn(shown, "status"), keys).toBe(false);
+        // The host's own title was not sent, so it is not shown as sent.
+        expect(Object.hasOwn(shown, "title"), keys).toBe(false);
+        expect(shown.hero, keys).toMatchObject({ title: "Held" });
+      }
     });
 
     it("refuses a held save whose instance composes past the limit in every form", async () => {
