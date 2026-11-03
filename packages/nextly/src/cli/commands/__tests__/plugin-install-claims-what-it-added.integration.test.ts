@@ -8,7 +8,11 @@
  * two leaves the module recorded applied and nothing claimed. Each run of
  * the install must leave the plugin owning its own table AND the elements
  * it added to the other plugin's table, the second time as much as the
- * first, since the run after a stop skips the module it recorded.
+ * first, since the run after a stop skips the module it recorded. And an
+ * install applying a later module that stops adding them must retire those
+ * claims, or a column of the same name the other plugin adds afterwards is
+ * read as the first plugin's, and the other plugin's next module is refused
+ * as drift.
  *
  * Only the config is faked: the adapter is a real one over a throwaway
  * database, and both plugins' modules come from the real generator.
@@ -21,13 +25,20 @@ import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import type { SchemaHook } from "../../../domains/schema/extension/draft";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { contributedElementsOf } from "../../../domains/schema/migrate-create/app-stream";
-import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
+import {
+  buildBlankPluginMigration,
+  buildPluginMigration,
+} from "../../../domains/schema/migrate-create/generate-plugin";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
-import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  migrationChecksum,
+  type PluginMigration,
+} from "../../../domains/schema/migrate/plugin/plugin-migration";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import type { TableSpec } from "../../../domains/schema/pipeline/diff/types";
 import { MYSQL_MIGRATE_LOCK_NAME } from "../../../domains/schema/pipeline/locks";
+import { generateStatements } from "../../../domains/schema/pipeline/sql-templates";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -177,6 +188,135 @@ async function generateModules(): Promise<{
 
 let modules: { host: PluginMigration; adder: PluginMigration } | undefined;
 
+/** The host's table with a column of its own named as the adder's was. */
+const itemsWithExtra = defineTable("items", {
+  id: col.id(),
+  label: col.shortText({ nullable: true }),
+  extra: col.shortText({ nullable: true }),
+});
+/** And then with that column indexed. */
+const itemsIndexed = defineTable(
+  "items",
+  {
+    id: col.id(),
+    label: col.shortText({ nullable: true }),
+    extra: col.shortText({ nullable: true }),
+  },
+  { indexes: [{ columns: ["extra"] }] }
+);
+
+/** The host's table as the host alone declares it, for every dialect. */
+async function hostTablesAt(
+  table: ReturnType<typeof defineTable>
+): Promise<ByDialect<TableSpec[]>> {
+  const out = {} as ByDialect<TableSpec[]>;
+  for (const dialect of ALL) {
+    const built = await buildExtensionSchema({
+      dialect,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([[HOST, "hs"]]),
+      plugins: [{ owner: { kind: "plugin", id: HOST }, tables: [table] }],
+    });
+    out[dialect] = built.specs.filter(spec => spec.name === "hs__items");
+  }
+  return out;
+}
+
+/**
+ * The modules shipped later: the adder's second, which stops adding to the
+ * host's table, and the host's second and third, which add a column of its
+ * own of the same name and then index it.
+ */
+async function generateLaterModules(first: {
+  host: PluginMigration;
+  adder: PluginMigration;
+}): Promise<{
+  adder: PluginMigration;
+  hostColumn: PluginMigration;
+  hostIndex: PluginMigration;
+}> {
+  const adderTables = {} as ByDialect<TableSpec[]>;
+  const none = {} as ByDialect<TableSpec[]>;
+  const contributions = {} as NonNullable<
+    Parameters<typeof buildPluginMigration>[0]["contributions"]
+  >;
+  const drops = {} as ByDialect<string[]>;
+  const baseline = await hostTablesAt(items);
+  for (const dialect of ALL) {
+    const both = await compile(dialect, true);
+    adderTables[dialect] = both.specs.filter(spec => spec.name === "ad__marks");
+    none[dialect] = [];
+    contributions[dialect] = {};
+    // The drop the generator leaves to the author, written by the production
+    // DDL: the index the adder added, then its column.
+    const added = both.specs.find(spec => spec.name === "hs__items");
+    const index = added?.indexes?.find(one => one.columns.includes("extra"));
+    const column = added?.columns.find(one => one.name === "extra");
+    if (!index || !column)
+      throw new Error("the added elements were not compiled");
+    drops[dialect] = generateStatements(
+      [
+        { type: "drop_index", tableName: "hs__items", index },
+        {
+          type: "drop_column",
+          tableName: "hs__items",
+          columnName: "extra",
+          columnType: column.type,
+        },
+      ],
+      dialect,
+      baseline[dialect]
+    );
+  }
+  // Blank, as `migrate:create --plugin --blank` writes one for a deliberate
+  // drop, which records the change, with that drop as its SQL.
+  const blank = buildBlankPluginMigration({
+    pluginName: ADDER,
+    schemaVersion: 2,
+    name: "stop-extending",
+    now: new Date(Date.UTC(2026, 10, 3, 11, 0, 0)),
+    tablesByDialect: adderTables,
+    contributedByDialect: none,
+    contributedBaselineByDialect: baseline,
+    contributions,
+    existing: [first.adder],
+  });
+  const { checksum: _blank, ...content } = {
+    ...blank,
+    dialects: {
+      postgresql: { up: drops.postgresql, down: [] },
+      mysql: { up: drops.mysql, down: [] },
+      sqlite: { up: drops.sqlite, down: [] },
+    },
+  };
+  const adder = { ...content, checksum: migrationChecksum(content) };
+  const hostColumn = buildPluginMigration({
+    pluginName: HOST,
+    schemaVersion: 2,
+    name: "extra",
+    now: new Date(Date.UTC(2026, 10, 3, 12, 0, 0)),
+    tablesByDialect: await hostTablesAt(itemsWithExtra),
+    existing: [first.host],
+  });
+  if (!hostColumn)
+    throw new Error("the host's column module was not generated");
+  const hostIndex = buildPluginMigration({
+    pluginName: HOST,
+    schemaVersion: 3,
+    name: "extra-index",
+    now: new Date(Date.UTC(2026, 10, 3, 13, 0, 0)),
+    tablesByDialect: await hostTablesAt(itemsIndexed),
+    existing: [first.host, hostColumn.module],
+  });
+  if (!hostIndex) throw new Error("the host's index module was not generated");
+  return {
+    adder,
+    hostColumn: hostColumn.module,
+    hostIndex: hostIndex.module,
+  };
+}
+
 describe.each(getConfiguredTestDialects())(
   "the ownership a plugin install records (%s)",
   dialect => {
@@ -193,6 +333,21 @@ describe.each(getConfiguredTestDialects())(
       });
       run.dialect = dialect;
       run.adapter = handle.adapter;
+      configure({
+        hostTable: items,
+        hostMigrations: [modules.host],
+        adderExtends: true,
+        adderMigrations: [modules.adder],
+      });
+    });
+
+    /** The two plugins as the config declares them now. */
+    function configure(at: {
+      hostTable: ReturnType<typeof defineTable>;
+      hostMigrations: PluginMigration[];
+      adderExtends: boolean;
+      adderMigrations: PluginMigration[];
+    }): void {
       run.plugins = [
         {
           name: HOST,
@@ -200,8 +355,8 @@ describe.each(getConfiguredTestDialects())(
           contributes: {
             schema: {
               prefix: "hs",
-              tables: [items],
-              migrations: [modules.host],
+              tables: [at.hostTable],
+              migrations: at.hostMigrations,
             },
           },
         },
@@ -213,13 +368,22 @@ describe.each(getConfiguredTestDialects())(
             schema: {
               prefix: "ad",
               tables: [marks],
-              extend: [addToItems],
-              migrations: [modules.adder],
+              ...(at.adderExtends ? { extend: [addToItems] } : {}),
+              migrations: at.adderMigrations,
             },
           },
         },
       ];
-    });
+    }
+
+    async function columnsOf(table: string): Promise<string[]> {
+      const rows = (await handle.adapter.executeQuery(
+        dialect === "sqlite"
+          ? `SELECT name FROM pragma_table_info('${table}')`
+          : `SELECT column_name AS name FROM information_schema.columns WHERE table_name = '${table}'${dialect === "mysql" ? " AND table_schema = DATABASE()" : " AND table_schema = current_schema()"}`
+      )) as Array<Record<string, unknown>>;
+      return rows.map(row => String(row.name ?? row.NAME)).sort();
+    }
 
     afterEach(async () => {
       vi.restoreAllMocks();
@@ -356,6 +520,36 @@ describe.each(getConfiguredTestDialects())(
         ].sort()
       );
       expect(await claimsOf(HOST)).toEqual(["table hs__items v1"]);
+    });
+
+    it("retires what a later module stops adding, so the other plugin's own column of that name is not drift", async () => {
+      if (!modules) throw new Error("modules were not generated");
+      await install(HOST);
+      await install(ADDER);
+      const later = await generateLaterModules(modules);
+
+      // The adder ships a module that stops adding to the host's table.
+      configure({
+        hostTable: items,
+        hostMigrations: [modules.host],
+        adderExtends: false,
+        adderMigrations: [modules.adder, later.adder],
+      });
+      await install(ADDER);
+      expect(await columnsOf("hs__items")).not.toContain("extra");
+
+      // Then the host adds a column of its own by that name, and indexes it.
+      configure({
+        hostTable: itemsIndexed,
+        hostMigrations: [modules.host, later.hostColumn, later.hostIndex],
+        adderExtends: false,
+        adderMigrations: [modules.adder, later.adder],
+      });
+      await install(HOST);
+
+      expect(await columnsOf("hs__items")).toContain("extra");
+      expect(await claimsOf(ADDER)).toEqual(["table ad__marks v2"]);
+      expect(await claimsOf(HOST)).toEqual(["table hs__items v3"]);
     });
   }
 );
