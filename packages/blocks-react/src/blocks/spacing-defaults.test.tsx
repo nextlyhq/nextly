@@ -219,15 +219,20 @@ describe("a sheet stored by the compiler before this spacing", () => {
     } as PageStyles;
   }
 
-  it("is not served on a read with no compile context", () => {
+  it("is recompiled with the new spacing on a read with no compile context", () => {
     const served = resolvePageStyles(
       STORED_DOC,
       storedByV3(),
       undefined,
       resolver
     );
+    // Not the stored sheet, and not withheld: a fresh compile carrying the
+    // heading's new flush margins.
     expect(served.css).not.toContain("1.5em");
-    // Classes survive, so the blocks still carry the names the sheet uses.
+    expect(served.css).toContain(
+      `.${PAGE_ROOT_CLASS} :where(h2) { font-size: 1.75em; font-weight: 700; line-height: 1.2; margin-block-end: 0; margin-block-start: 0 }`
+    );
+    expect(served.sharedInputsId?.startsWith("v4:")).toBe(true);
     expect(Object.keys(served.classes)).toContain("t");
   });
 

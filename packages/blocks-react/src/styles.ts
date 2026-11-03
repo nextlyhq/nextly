@@ -1310,9 +1310,15 @@ export function resolvePageStylesWithTrace(
     };
   }
   if (styles && untrusted && styleContext === undefined) {
-    return {
-      styles: { ...normalizeStoredStyles(styles, document).styles, css: "" },
-    };
+    return untrustedWithoutContext(
+      document,
+      styles,
+      blocks,
+      drawsNothing,
+      options,
+      compiledUnderAnotherEncoding,
+      compiledUnderAnotherPolicy
+    );
   }
   if (compileContext) {
     // Compiled with the context built above rather than the caller's, for the
@@ -1328,6 +1334,65 @@ export function resolvePageStylesWithTrace(
       classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
     },
   };
+}
+
+/**
+ * The breakpoints a compile with no site states: none, so every rule is
+ * written at the base width.
+ */
+const NO_SITE_BREAKPOINTS = { viewport: [], container: [] };
+
+/**
+ * What a read with no compile context serves for a stored sheet it cannot
+ * trust as it stands.
+ *
+ * Withheld, keeping the classes, for every reason but one: a sheet the
+ * compiler before the current stamp encoding wrote. That one describes rules
+ * the compiler no longer writes (the outer margins blocks used to carry);
+ * serving it keeps them for good, and withholding it leaves the page
+ * unstyled. So it is compiled again from the document under the compiler's
+ * own defaults: no site breakpoints, the block defaults and child gaps from
+ * `blocks`, the typographic baseline, and the artifact's own scope so a page
+ * drawn beside another stays isolated.
+ *
+ * What only the site could supply is not there to compile with: a value an
+ * author set at a breakpoint other than the base one, and a named class's
+ * styles (the class library is site configuration). Those are left out, with
+ * the compiler's own warnings, and the base styling of every node is kept.
+ *
+ * Not recompiled when the sheet was ALSO compiled under another fetch policy:
+ * this read has no predicate to judge its URLs by, so it withholds as before.
+ */
+function untrustedWithoutContext(
+  document: BlockDocument,
+  styles: PageStyles,
+  blocks: BlockResolver,
+  drawsNothing: (node: BlockNode) => boolean,
+  options: ResolveStyleOptions,
+  underAnotherEncoding: boolean,
+  underAnotherPolicy: boolean
+): ResolvedPageStyles {
+  const withheld = {
+    styles: { ...normalizeStoredStyles(styles, document).styles, css: "" },
+  };
+  if (!underAnotherEncoding || underAnotherPolicy) return withheld;
+  const context = compileContextFor(
+    {
+      breakpoints: NO_SITE_BREAKPOINTS,
+      ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+    },
+    document,
+    blocks,
+    drawsNothing,
+    options.storedDocument
+  );
+  if (context === undefined) return withheld;
+  return compileToStyles(
+    document,
+    context,
+    options,
+    sharedStyleInputsId(context)
+  );
 }
 
 /**
