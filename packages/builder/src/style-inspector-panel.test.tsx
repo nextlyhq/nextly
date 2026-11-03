@@ -644,7 +644,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("12px");
+    ).toBe("12");
     // The same side of a DIFFERENT property is empty, which is what says the
     // read is addressed rather than by leaf name.
     expect(
@@ -801,7 +801,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("4px");
+    ).toBe("4");
   });
 
   it("offers every form the catalog declares, so an unset union is authorable", () => {
@@ -1104,12 +1104,13 @@ describe("controls", () => {
   it("hints at a value in words short enough to read inside the field", () => {
     // A hint cut off mid-word ("16px or 50%, or xx-sm…") tells the author
     // less than a short one. Keywords stay valid to type; the hint shows the
-    // form a value takes, not every value it may take.
+    // form a value takes, not every value it may take. A length shows its
+    // unit beside the field, so its hint is the number alone.
     mount({ typography: true, color: true });
 
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
-    ).toBe("16px or 50%");
+    ).toBe("16");
     expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
@@ -1702,7 +1703,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(field).toHaveProperty("value", "0px");
+    expect(field).toHaveProperty("value", "0");
   });
 
   it("offers a unit menu only where the value is one measurement", () => {
@@ -1795,7 +1796,7 @@ describe("what the arrow keys do and do not claim", () => {
     });
     // One op, not a commit of the draft followed by a step of the result.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(field).toHaveProperty("value", "21px");
+    expect(field).toHaveProperty("value", "21");
   });
 
   it("leaves an arrow to the IME while a composition is in progress", () => {
@@ -1923,6 +1924,44 @@ describe("a length field's unit", () => {
     );
   });
 
+  it("shows a stored length's number in the field and its unit in the suffix", () => {
+    // "240px" in the field beside "px" said the unit twice.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "2rem" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.value).toBe("2");
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    // A new number keeps the stored unit, not px.
+    fireEvent.change(width, { target: { value: "3" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"3rem"'
+    );
+  });
+
+  it("steps the number with the arrow keys in the unit shown", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "10px" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.keyDown(fieldsOf("width").getByLabelText("Width"), {
+      key: "ArrowUp",
+    });
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"11px"'
+    );
+  });
+
+  it("hints at a number alone while the unit is shown beside it", () => {
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.placeholder).toBe("16");
+  });
+
   it("offers the property's keywords after its units", () => {
     const editor = mount({ dimensions: true });
     fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
@@ -1994,7 +2033,7 @@ describe("a side or a corner, in plain words", () => {
     const top = document.querySelector<HTMLInputElement>(
       '[data-property="border"] input'
     );
-    expect(top?.placeholder).toBe("1px");
+    expect(top?.placeholder).toBe("1");
   });
 
   it("names a radius's corners Top left and the rest", () => {

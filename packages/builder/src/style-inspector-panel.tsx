@@ -155,6 +155,7 @@ import {
 } from "./style-inspector";
 import {
   CSS_NUMBER,
+  measurementOf,
   measurementOfText,
   steppedValue,
   toggleOptionsFor,
@@ -4700,6 +4701,7 @@ function NumericField({
   const compact = React.useContext(CompactSides);
   const unitMenu = useFieldUnit({
     leaf: control.leaf,
+    stored,
     draft,
     setDraft,
     onCommit,
@@ -4730,8 +4732,20 @@ function NumericField({
         invalid={describedBy !== undefined}
         // A bare number takes the unit the field shows: "24" is 24px.
         onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
+        // The unit shown in the suffix is left out of the field: "2" beside
+        // "rem", and a number alone as the hint.
+        {...(showUnits
+          ? {
+              display: (text: string) => withoutUnit(text, unit),
+              fallbackHint: bareNumberHint(control),
+            }
+          : {})}
         onStep={(draft, delta) => {
-          const next = steppedValue(control.leaf, draft, delta);
+          const next = steppedValue(
+            control.leaf,
+            withDefaultUnit(control.leaf, draft, unit) ?? draft,
+            delta
+          );
           // `undefined` means this value cannot be stepped or the result would
           // be refused, so the key does nothing rather than writing a value the
           // document then rejects.
@@ -4787,6 +4801,30 @@ function NumericField({
   );
 }
 
+/** The leaf's own hint as a number alone, for a field showing its unit: "16", "1". */
+function bareNumberHint(control: StyleControl): string {
+  return /^-?[\d.]+/.exec(placeholderFor(control))?.[0] ?? "";
+}
+
+/** A measurement's unit, or `undefined` for none or a bare number. */
+function unitOf(
+  measurement: ReturnType<typeof measurementOfText>
+): string | undefined {
+  return measurement === undefined || measurement.unit === ""
+    ? undefined
+    : measurement.unit;
+}
+
+/** A length's text without the unit shown beside it: "2rem" beside "rem" reads "2". */
+function withoutUnit(text: string, unit: string): string {
+  const trimmed = trimCssWhitespace(text);
+  const number = trimmed.slice(0, trimmed.length - unit.length);
+  return trimmed.toLowerCase().endsWith(unit.toLowerCase()) &&
+    CSS_NUMBER.test(number)
+    ? number
+    : text;
+}
+
 /**
  * The unit a length field shows and a bare number takes: the one the draft
  * already carries, else the one the author last chose, else the leaf's first
@@ -4800,11 +4838,13 @@ function NumericField({
  */
 function useFieldUnit({
   leaf,
+  stored,
   draft,
   setDraft,
   onCommit,
 }: {
   leaf: StyleLeaf;
+  stored: StyleValue | undefined;
   draft: string;
   setDraft: (value: string) => void;
   onCommit: (value: StyleValue | null) => CommitOutcome;
@@ -4819,8 +4859,19 @@ function useFieldUnit({
   const measurement = measurementOfText(draft);
   const units = unitChoicesFor(leaf);
   const keywords = leaf.kind === "dimension" ? (leaf.keywords ?? []) : [];
-  const written = measurement?.unit === "" ? undefined : measurement?.unit;
-  const unit = written ?? chosen ?? units[0] ?? "px";
+  const inherited = React.useContext(InheritedValue);
+  // The unit the draft says, else the one just chosen, else the stored
+  // value's, else the inherited value's, so a new number keeps the unit the
+  // author sees; px only when nothing says another.
+  const unit =
+    unitOf(measurement) ??
+    chosen ??
+    unitOf(measurementOf(stored)) ??
+    unitOf(
+      inherited === undefined ? undefined : measurementOfText(inherited)
+    ) ??
+    units[0] ??
+    "px";
   const isKeyword = keywords.includes(draft);
   const write = (value: string) => {
     if (onCommit(value) !== "refused") setDraft(value);
@@ -4863,6 +4914,8 @@ function TextField({
   invalid,
   onCommit,
   onStep,
+  display,
+  fallbackHint,
 }: {
   id: string;
   control: StyleControl;
@@ -4900,10 +4953,20 @@ function TextField({
    * than read from the store, so a step lands on what the author is looking at.
    */
   onStep?: (draft: string, delta: number) => string | null;
+  /**
+   * How the draft and the hint read in the field, where a unit shown beside
+   * it is left out of both ("2" beside "rem"). The draft itself, which is
+   * what commits and steps, is unchanged.
+   */
+  display?: (text: string) => string;
+  /** The hint while nothing applies, in place of the leaf's own. */
+  fallbackHint?: string;
 }): React.JSX.Element {
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
-  const hint = useUnsetHint(compact ? "–" : placeholderFor(control));
+  const hint = useUnsetHint(
+    compact ? "–" : (fallbackHint ?? placeholderFor(control))
+  );
   const commit = () => {
     if (draft === storedText(stored)) return;
     // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
@@ -4926,8 +4989,8 @@ function TextField({
   return (
     <Input
       id={id}
-      value={draft}
-      placeholder={hint}
+      value={display === undefined ? draft : display(draft)}
+      placeholder={display === undefined ? hint : display(hint)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
