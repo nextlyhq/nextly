@@ -39,6 +39,34 @@ function hasOwnColumn(field: FieldDefinition): boolean {
 }
 
 /**
+ * What a field the save makes required has in its way: its column as the live table holds it
+ * (before any rename in this save), `null` for a column created now (every row), or undefined
+ * when nothing can be in its way: not required, no column of its own, already required, a column
+ * the table does not have yet (left to its own refusal), or one created holding a value.
+ */
+function columnToCount(
+  field: FieldDefinition,
+  args: {
+    previousOf: (field: FieldDefinition) => FieldDefinition | undefined;
+    addedColumnBackfill: (field: FieldDefinition) => string | null;
+    presentColumns: ReadonlySet<string>;
+  }
+): { column: string | null } | undefined {
+  if (field.required !== true || !hasOwnColumn(field)) return undefined;
+  const previous = args.previousOf(field);
+  if (previous !== undefined && hasOwnColumn(previous)) {
+    if (previous.required === true) return undefined;
+    const held = toSnakeCase(previous.name);
+    return args.presentColumns.has(held) ? { column: held } : undefined;
+  }
+  // Added, or moved onto the row from another table: a column created now. One whose type gives
+  // the existing rows a value leaves none of them empty.
+  return args.addedColumnBackfill(field) === null
+    ? { column: null }
+    : undefined;
+}
+
+/**
  * The refusals for a save of `entity`'s table, one per field the save makes required over rows
  * holding no value in it, in the order the fields are declared. Empty when no row is in the way.
  *
@@ -80,34 +108,18 @@ export async function requiredColumnSaveRefusals(args: {
 
   const breaks: RequiredColumnBreak[] = [];
   for (const field of args.newFields) {
-    if (field.required !== true || !hasOwnColumn(field)) continue;
-    const previous = args.previousOf(field);
-    if (previous !== undefined && hasOwnColumn(previous)) {
-      if (previous.required === true) continue;
-      // Counted under the column as the live table has it, before any rename in this save.
-      const held = toSnakeCase(previous.name);
-      if (!args.presentColumns.has(held)) continue;
-      const nulls = await count(held, field.name);
-      if (nulls > 0) {
-        breaks.push({
-          entity: args.entity,
-          field: field.name,
-          count: nulls,
-          added: false,
-        });
-      }
-      continue;
-    }
-    // Added, or moved onto the row from another table: a column created now. One whose type
-    // gives the existing rows a value leaves none of them empty.
-    if (args.addedColumnBackfill(field) !== null) continue;
-    rows ??= await count(null, field.name);
-    if (rows > 0) {
+    const target = columnToCount(field, args);
+    if (target === undefined) continue;
+    const found =
+      target.column === null
+        ? (rows ??= await count(null, field.name))
+        : await count(target.column, field.name);
+    if (found > 0) {
       breaks.push({
         entity: args.entity,
         field: field.name,
-        count: rows,
-        added: true,
+        count: found,
+        added: target.column === null,
       });
     }
   }

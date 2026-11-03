@@ -112,6 +112,73 @@ function fieldNameOf(
   );
 }
 
+/** The events a change makes a column NOT NULL by that no answer fills first. */
+function unansweredEvents(
+  events: readonly ClassifierEvent[],
+  resolutions: readonly Resolution[]
+): RequiredColumnEvent[] {
+  const answered = new Set(
+    resolutions.filter(r => FILLING_ANSWERS.has(r.kind)).map(r => r.eventId)
+  );
+  return events.filter(
+    (e): e is RequiredColumnEvent =>
+      (e.kind === "add_not_null_with_nulls" ||
+        e.kind === "add_required_field_no_default") &&
+      !answered.has(e.id)
+  );
+}
+
+/** The rows in an event's way, by parent for a field group; a count that fails refuses. */
+async function countEvent(
+  db: unknown,
+  dialect: SupportedDialect,
+  event: RequiredColumnEvent,
+  owner: Owner | undefined
+): Promise<Awaited<ReturnType<typeof countRowsBreakingNotNull>>> {
+  try {
+    return await countRowsBreakingNotNull(db, dialect, {
+      table: event.tableName,
+      // An added column holds null in every existing row.
+      column:
+        event.kind === "add_required_field_no_default"
+          ? null
+          : event.columnName,
+      byParent: owner?.entity.kind === "fieldGroup",
+    });
+  } catch (cause) {
+    // A count that fails cannot say the change is safe: refused before anything runs.
+    throw requiredColumnUncountedError({
+      table: event.tableName,
+      field: owner
+        ? fieldNameOf(owner, event.columnName, dialect)
+        : event.columnName,
+      cause,
+    });
+  }
+}
+
+/**
+ * A field group's users with the rows each holds, in a stable order; a parent table nothing
+ * registers is still counted in the total, unnamed.
+ */
+function namedUsers(
+  byParentTable: ReadonlyMap<string, number>,
+  owners: ReadonlyMap<string, Owner>,
+  registry: ReadonlyMap<string, RequiredColumnEntity>
+): Array<RequiredColumnEntity & { count: number }> {
+  return [...byParentTable]
+    .flatMap(([table, count]) => {
+      const entity =
+        owners.get(table.toLowerCase())?.entity ??
+        registry.get(table.toLowerCase());
+      return entity ? [{ ...entity, count }] : [];
+    })
+    .sort(
+      (a, b) =>
+        KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.slug.localeCompare(b.slug)
+    );
+}
+
 /**
  * The entity each table belongs to, from the registries. A field group's Builder apply knows only
  * the field group, so the collections and Singles holding its rows are named from their registry
@@ -167,84 +234,43 @@ export async function refuseRequiredColumnsOverNulls(args: {
   fieldGroupRegistryTable?: string;
 }): Promise<void> {
   const { db, dialect } = args;
-  const answered = new Set(
-    args.resolutions
-      .filter(r => FILLING_ANSWERS.has(r.kind))
-      .map(r => r.eventId)
-  );
-  const unanswered = args.events.filter(
-    (e): e is RequiredColumnEvent =>
-      (e.kind === "add_not_null_with_nulls" ||
-        e.kind === "add_required_field_no_default") &&
-      !answered.has(e.id)
-  );
+  const unanswered = unansweredEvents(args.events, args.resolutions);
   if (unanswered.length === 0) return;
 
   const owners = ownersByTable(args.desired);
   // Read once, and only when a field group's rows have to be named.
-  let registry: Map<string, RequiredColumnEntity> | undefined;
+  let registry: Promise<Map<string, RequiredColumnEntity>> | undefined;
+  const readRegistry = () =>
+    (registry ??= registryEntitiesByTable(
+      db,
+      dialect,
+      args.fieldGroupRegistryTable
+    ));
   const breaks: RequiredColumnBreak[] = [];
 
   for (const event of unanswered) {
     const added = event.kind === "add_required_field_no_default";
     const owner = owners.get(event.tableName.toLowerCase());
-    const byParent = owner?.entity.kind === "fieldGroup";
-    let counted: Awaited<ReturnType<typeof countRowsBreakingNotNull>>;
-    try {
-      counted = await countRowsBreakingNotNull(db, dialect, {
-        table: event.tableName,
-        // An added column holds null in every existing row.
-        column: added ? null : event.columnName,
-        byParent,
-      });
-    } catch (cause) {
-      // A count that fails cannot say the change is safe: refused before anything runs.
-      throw requiredColumnUncountedError({
-        table: event.tableName,
-        field: owner
-          ? fieldNameOf(owner, event.columnName, dialect)
-          : event.columnName,
-        cause,
-      });
-    }
-    const { total, byParentTable } = counted;
-    if (total === 0) continue;
+    const counted = await countEvent(db, dialect, event, owner);
+    if (counted.total === 0) continue;
     if (owner === undefined) {
       // A table outside the entities (a plugin's, an extension's) is named by its table and column.
       breaks.push({
         entity: { kind: "table", slug: event.tableName },
         field: event.columnName,
-        count: total,
+        count: counted.total,
         added,
       });
       continue;
     }
-    let users: (RequiredColumnEntity & { count: number })[] | undefined;
-    if (byParent) {
-      registry ??= await registryEntitiesByTable(
-        db,
-        dialect,
-        args.fieldGroupRegistryTable
-      );
-      const named = registry;
-      users = [...byParentTable]
-        .flatMap(([table, count]) => {
-          const entity =
-            owners.get(table.toLowerCase())?.entity ??
-            named.get(table.toLowerCase());
-          // A parent table nothing registers is still counted in the total, unnamed.
-          return entity ? [{ ...entity, count }] : [];
-        })
-        .sort(
-          (a, b) =>
-            KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
-            a.slug.localeCompare(b.slug)
-        );
-    }
+    const users =
+      owner.entity.kind === "fieldGroup"
+        ? namedUsers(counted.byParentTable, owners, await readRegistry())
+        : undefined;
     breaks.push({
       entity: owner.entity,
       field: fieldNameOf(owner, event.columnName, dialect),
-      count: total,
+      count: counted.total,
       added,
       ...(users ? { users } : {}),
     });

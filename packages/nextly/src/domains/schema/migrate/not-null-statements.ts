@@ -135,6 +135,47 @@ const SERIAL_TYPES = new Set([
   "BIGSERIAL",
 ]);
 
+/**
+ * Which column of `table` an `INSERT INTO __new_t [(cols)] SELECT items FROM t` copies into each
+ * column of the twin (`null` for an item that is not a plain column), or undefined when the copy
+ * is not a plain one from `table` alone, which is not read.
+ */
+function rebuildCopyColumns(
+  rest: readonly StatementToken[],
+  definitions: readonly ColumnDefinition[],
+  table: string
+): Map<string, string | null> | undefined {
+  let into = definitions.map(d => d.name);
+  let query = rest;
+  const listed = parenthesised(rest);
+  if (listed !== undefined) {
+    into = itemsOf(listed).map(item => plainName(item) ?? "");
+    query = rest.slice(listed.length + 2);
+  }
+  if (query[0] !== "SELECT") return undefined;
+  const from = query.lastIndexOf("FROM");
+  if (from === -1) return undefined;
+  const items = itemsOf(query.slice(1, from));
+  const source = new StatementCursor(query.slice(from + 1));
+  if (source.name() !== table) return undefined;
+  if (source.isWord(",") || source.isWord("JOIN")) return undefined;
+  const everyColumn =
+    items.length === 1 && items[0].length === 1 && items[0][0] === "*";
+  return new Map(
+    into.map((name, i) => [
+      name,
+      everyColumn ? name : (plainName(items[i] ?? []) ?? null),
+    ])
+  );
+}
+
+/** A multi-table UPDATE (`UPDATE a JOIN b`, `UPDATE a, b`) writes tables its first name is not. */
+function updatesSeveralTables(rest: readonly StatementToken[]): boolean {
+  const set = rest.indexOf("SET");
+  const head = set === -1 ? rest : rest.slice(0, set);
+  return head.includes("JOIN") || head.includes(",");
+}
+
 /** The rebuild twin SQLite copies a table into (`sqliteTableRebuildStatements`). */
 const REBUILD_PREFIX = "__new_";
 
@@ -312,6 +353,31 @@ class UnitReader {
     word: string,
     index: number
   ): void {
+    if (!this.readRowWriteLead(cursor, word)) {
+      this.anyWritten = true;
+      return;
+    }
+    const target = cursor.name();
+    if (target === undefined) {
+      this.anyWritten = true;
+      return;
+    }
+    this.state(target).written = true;
+    if (word === "TRUNCATE") {
+      this.readMoreTruncated(cursor);
+      return;
+    }
+    const rest = cursor.rest();
+    if (word === "UPDATE" && updatesSeveralTables(rest)) this.anyWritten = true;
+    if (word === "INSERT") this.readRebuildCopy(rest, target, index);
+  }
+
+  /**
+   * The words before a row write's table: its modifiers, SQLite's `OR <resolution>`, `INTO`,
+   * `FROM`, `TABLE`, PostgreSQL's `ONLY`. False when the table cannot be read from where it
+   * stands (MySQL's multi-table `DELETE a FROM a JOIN b` names its tables before FROM).
+   */
+  private readRowWriteLead(cursor: StatementCursor, word: string): boolean {
     for (const modifier of ROW_MODIFIERS) cursor.accept(modifier);
     // SQLite's `INSERT OR REPLACE` / `UPDATE OR IGNORE`: the word after OR is not the table.
     const resolution = cursor.peek(1);
@@ -321,36 +387,22 @@ class UnitReader {
     if (word === "INSERT" || word === "REPLACE" || word === "MERGE") {
       cursor.accept("INTO");
     } else if (word === "DELETE" && !cursor.accept("FROM")) {
-      // MySQL's multi-table `DELETE a FROM a JOIN b` names its tables before FROM.
-      this.anyWritten = true;
-      return;
+      return false;
     } else if (word === "TRUNCATE") {
       cursor.accept("TABLE");
     }
     // PostgreSQL's `DELETE FROM ONLY t` / `TRUNCATE ONLY t`.
     cursor.accept("ONLY");
-    const target = cursor.name();
-    if (target === undefined) {
-      this.anyWritten = true;
-      return;
+    return true;
+  }
+
+  /** `TRUNCATE a, b, ...`: each further table it empties. */
+  private readMoreTruncated(cursor: StatementCursor): void {
+    while (cursor.accept(",")) {
+      const next = cursor.name();
+      if (next === undefined) this.anyWritten = true;
+      else this.state(next).written = true;
     }
-    this.state(target).written = true;
-    if (word === "TRUNCATE") {
-      while (cursor.accept(",")) {
-        const next = cursor.name();
-        if (next === undefined) this.anyWritten = true;
-        else this.state(next).written = true;
-      }
-      return;
-    }
-    const rest = cursor.rest();
-    if (word === "UPDATE") {
-      // A multi-table UPDATE (`UPDATE a JOIN b`, `UPDATE a, b`) writes tables this does not read.
-      const set = rest.indexOf("SET");
-      const head = set === -1 ? rest : rest.slice(0, set);
-      if (head.includes("JOIN") || head.includes(",")) this.anyWritten = true;
-    }
-    if (word === "INSERT") this.readRebuildCopy(rest, target, index);
   }
 
   /**
@@ -368,28 +420,8 @@ class UnitReader {
     const definitions = this.created.get(twin);
     if (definitions === undefined || !twin.startsWith(REBUILD_PREFIX)) return;
     const table = twin.slice(REBUILD_PREFIX.length);
-    let into = definitions.map(d => d.name);
-    let query = rest;
-    const listed = parenthesised(rest);
-    if (listed !== undefined) {
-      into = itemsOf(listed).map(item => plainName(item) ?? "");
-      query = rest.slice(listed.length + 2);
-    }
-    if (query[0] !== "SELECT") return;
-    const from = query.lastIndexOf("FROM");
-    if (from === -1) return;
-    const items = itemsOf(query.slice(1, from));
-    const source = new StatementCursor(query.slice(from + 1));
-    if (source.name() !== table) return;
-    if (source.isWord(",") || source.isWord("JOIN")) return;
-    const everyColumn =
-      items.length === 1 && items[0].length === 1 && items[0][0] === "*";
-    const copied = new Map(
-      into.map((name, i) => [
-        name,
-        everyColumn ? name : (plainName(items[i] ?? []) ?? null),
-      ])
-    );
+    const copied = rebuildCopyColumns(rest, definitions, table);
+    if (copied === undefined) return;
     for (const definition of definitions) {
       if (!definition.notNull) continue;
       if (copied.has(definition.name)) {
@@ -481,66 +513,93 @@ class UnitReader {
     table: string,
     index: number
   ): string | undefined {
-    const state = this.state(table);
-    if (clause.accept("ADD")) {
-      const first = clause.peek();
-      if (typeof first === "string" && NON_COLUMN_WORDS.has(first)) {
-        return undefined;
-      }
-      clause.accept("COLUMN");
-      clause.acceptCondition();
-      const column = clause.name();
-      if (column === undefined) return undefined;
-      const definition = readDefinition(column, clause.rest());
-      if (definition.notNull && !definition.hasValue) {
-        this.change(index, table, null, column);
-      }
-      state.columns.set(column, null);
-      if (definition.hasValue) state.addedEmpty.delete(column);
-      else state.addedEmpty.add(column);
-      return undefined;
-    }
-    if (clause.accept("ALTER")) {
-      clause.accept("COLUMN");
-      const column = clause.name();
-      if (column !== undefined && clause.accept("SET", "NOT", "NULL")) {
-        this.change(index, table, column, column);
-      }
-      return undefined;
-    }
-    if (clause.accept("MODIFY")) {
-      clause.accept("COLUMN");
-      const column = clause.name();
-      if (
-        column !== undefined &&
-        readDefinition(column, clause.rest()).notNull
-      ) {
-        this.change(index, table, column, column);
-      }
-      return undefined;
-    }
-    if (clause.accept("CHANGE")) {
-      clause.accept("COLUMN");
-      const from = clause.name();
-      const to = clause.name();
-      if (from === undefined || to === undefined) return undefined;
-      if (readDefinition(to, clause.rest()).notNull) {
-        this.change(index, table, from, to);
-      }
-      this.renameColumn(state, from, to);
-      return undefined;
-    }
-    if (clause.accept("RENAME")) return this.readRename(clause, table, state);
-    if (clause.accept("DROP")) {
-      clause.accept("COLUMN");
-      clause.acceptCondition();
-      const column = clause.name();
-      if (column !== undefined) {
-        state.columns.set(column, null);
-        state.addedEmpty.delete(column);
-      }
-    }
+    // One reader per clause kind; a RENAME may rename the table, so it answers the new name.
+    if (clause.accept("ADD")) this.readAddClause(clause, table, index);
+    else if (clause.accept("ALTER"))
+      this.readAlterColumnClause(clause, table, index);
+    else if (clause.accept("MODIFY"))
+      this.readModifyClause(clause, table, index);
+    else if (clause.accept("CHANGE"))
+      this.readChangeClause(clause, table, index);
+    else if (clause.accept("RENAME"))
+      return this.readRename(clause, table, this.state(table));
+    else if (clause.accept("DROP")) this.readDropClause(clause, table);
     return undefined;
+  }
+
+  /** `ADD [COLUMN] c <definition>`: a NOT NULL column with no value breaks every row. */
+  private readAddClause(
+    clause: StatementCursor,
+    table: string,
+    index: number
+  ): void {
+    const first = clause.peek();
+    if (typeof first === "string" && NON_COLUMN_WORDS.has(first)) return;
+    clause.accept("COLUMN");
+    clause.acceptCondition();
+    const column = clause.name();
+    if (column === undefined) return;
+    const definition = readDefinition(column, clause.rest());
+    if (definition.notNull && !definition.hasValue) {
+      this.change(index, table, null, column);
+    }
+    const state = this.state(table);
+    state.columns.set(column, null);
+    if (definition.hasValue) state.addedEmpty.delete(column);
+    else state.addedEmpty.add(column);
+  }
+
+  /** `ALTER [COLUMN] c SET NOT NULL`. */
+  private readAlterColumnClause(
+    clause: StatementCursor,
+    table: string,
+    index: number
+  ): void {
+    clause.accept("COLUMN");
+    const column = clause.name();
+    if (column !== undefined && clause.accept("SET", "NOT", "NULL")) {
+      this.change(index, table, column, column);
+    }
+  }
+
+  /** `MODIFY [COLUMN] c <definition> NOT NULL`. */
+  private readModifyClause(
+    clause: StatementCursor,
+    table: string,
+    index: number
+  ): void {
+    clause.accept("COLUMN");
+    const column = clause.name();
+    if (column !== undefined && readDefinition(column, clause.rest()).notNull) {
+      this.change(index, table, column, column);
+    }
+  }
+
+  /** `CHANGE [COLUMN] old new <definition>`: the old column's rows, the new one required. */
+  private readChangeClause(
+    clause: StatementCursor,
+    table: string,
+    index: number
+  ): void {
+    clause.accept("COLUMN");
+    const from = clause.name();
+    const to = clause.name();
+    if (from === undefined || to === undefined) return;
+    if (readDefinition(to, clause.rest()).notNull) {
+      this.change(index, table, from, to);
+    }
+    this.renameColumn(this.state(table), from, to);
+  }
+
+  /** `DROP [COLUMN] c`: the column is gone, so a later one of its name is the unit's own. */
+  private readDropClause(clause: StatementCursor, table: string): void {
+    clause.accept("COLUMN");
+    clause.acceptCondition();
+    const column = clause.name();
+    if (column === undefined) return;
+    const state = this.state(table);
+    state.columns.set(column, null);
+    state.addedEmpty.delete(column);
   }
 
   /**

@@ -112,66 +112,103 @@ export async function judgeRequiredColumnTargets(
 ): Promise<RequiredColumnBreak[]> {
   const breaks: RequiredColumnBreak[] = [];
   for (const target of targets) {
-    // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
-    // judged too, and named by its table and column.
-    const owner = facts.owners.owner(target.table);
-    const table = owner?.table ?? target.table;
-    const live = facts.live(table, target.column);
-    if (live === undefined) continue;
-    // A column added NOT NULL that the table already has (`ADD COLUMN IF NOT EXISTS`) is skipped
-    // by the database, so it breaks no row; without IF NOT EXISTS the statement fails on its own.
-    if (
-      target.column === null &&
-      facts.live(table, target.required) !== undefined
-    ) {
-      continue;
-    }
-    if (target.column !== null && !live.nullable) continue;
-    let rows: RowsBreakingNotNull;
-    try {
-      rows = await facts.count({
-        table,
-        column: target.column === null ? null : (live.name ?? target.column),
-        byParent: owner?.fieldGroup === true,
-      });
-    } catch (cause) {
-      throw requiredColumnUncountedError({
-        table,
-        field: target.required,
-        cause,
-      });
-    }
-    if (rows.total === 0) continue;
-    if (owner === undefined) {
-      breaks.push({
-        entity: { kind: "table", slug: table },
-        field: target.required,
-        count: rows.total,
-        added: target.column === null,
-      });
-      continue;
-    }
-    const field =
-      owner.fieldsByColumn.get(target.required) ??
-      (target.column === null
-        ? undefined
-        : owner.fieldsByColumn.get(target.column)) ??
-      target.required;
-    // A field group's users with the rows each holds; a row whose parent table the registry does
-    // not name is still counted in the total.
-    const users = [...rows.byParentTable].flatMap(([table, count]) => {
-      const holder = facts.owners.holder(table);
-      return holder === undefined ? [] : [{ ...holder, count }];
-    });
-    breaks.push({
-      entity: owner.entity,
-      field,
-      count: rows.total,
-      added: target.column === null,
-      ...(owner.fieldGroup ? { users } : {}),
-    });
+    const found = await judgeTarget(target, facts);
+    if (found !== undefined) breaks.push(found);
   }
   return breaks;
+}
+
+/** One column's break, or undefined when no row is in its way. */
+async function judgeTarget(
+  target: RequiredColumnTarget,
+  facts: RequiredColumnFacts
+): Promise<RequiredColumnBreak | undefined> {
+  // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
+  // judged too, and named by its table and column.
+  const owner = facts.owners.owner(target.table);
+  const table = owner?.table ?? target.table;
+  const live = facts.live(table, target.column);
+  if (live === undefined || breaksNoRow(target, table, live, facts)) {
+    return undefined;
+  }
+  const rows = await countTarget(target, table, live, owner, facts);
+  if (rows.total === 0) return undefined;
+  const added = target.column === null;
+  if (owner === undefined) {
+    return {
+      entity: { kind: "table", slug: table },
+      field: target.required,
+      count: rows.total,
+      added,
+    };
+  }
+  const field =
+    owner.fieldsByColumn.get(target.required) ??
+    (target.column === null
+      ? undefined
+      : owner.fieldsByColumn.get(target.column)) ??
+    target.required;
+  return {
+    entity: owner.entity,
+    field,
+    count: rows.total,
+    added,
+    ...(owner.fieldGroup ? { users: usersOf(rows, facts) } : {}),
+  };
+}
+
+/**
+ * Whether the change cannot break a row whatever the table holds: a column added NOT NULL that
+ * the table already has (`ADD COLUMN IF NOT EXISTS`, which the database then skips; without IF
+ * NOT EXISTS the statement fails on its own), or a column already NOT NULL.
+ */
+function breaksNoRow(
+  target: RequiredColumnTarget,
+  table: string,
+  live: { nullable: boolean },
+  facts: RequiredColumnFacts
+): boolean {
+  if (target.column === null) {
+    return facts.live(table, target.required) !== undefined;
+  }
+  return !live.nullable;
+}
+
+/** The rows in the way, counted; a count that fails refuses, naming the table. */
+async function countTarget(
+  target: RequiredColumnTarget,
+  table: string,
+  live: { name?: string },
+  owner: TableOwner | undefined,
+  facts: RequiredColumnFacts
+): Promise<RowsBreakingNotNull> {
+  try {
+    return await facts.count({
+      table,
+      column: target.column === null ? null : (live.name ?? target.column),
+      byParent: owner?.fieldGroup === true,
+    });
+  } catch (cause) {
+    throw requiredColumnUncountedError({
+      table,
+      field: target.required,
+      cause,
+    });
+  }
+}
+
+/**
+ * A field group's users with the rows each holds; a row whose parent table the registry does not
+ * name is still counted in the total.
+ */
+function usersOf(
+  rows: RowsBreakingNotNull,
+  facts: RequiredColumnFacts
+): Array<RequiredColumnEntity & { count: number }> {
+  return [...rows.byParentTable].flatMap(([table, count]) => {
+    const holder = facts.owners.holder(table);
+    return holder === undefined ? [] : [{ ...holder, count }];
+  });
 }
 
 /** A registry row's `fields`, which a dialect returns as JSON text or as the parsed value. */
@@ -325,7 +362,7 @@ export function requiredColumnMigrationRefusal(
  * statement of the file writes rows for, counted under the names it had before the file, and
  * skipped where the file itself created its table or column. Reads nothing when there is none.
  */
-export async function requiredColumnBreaksBeforeRun(
+async function requiredColumnBreaksBeforeRun(
   db: unknown,
   dialect: SupportedDialect,
   statements: readonly string[]
