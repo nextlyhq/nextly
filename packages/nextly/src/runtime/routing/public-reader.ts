@@ -26,6 +26,7 @@ import { runDetachedFromRequest } from "../../auth/caller-scope";
 import type { Nextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ListResult } from "../../direct-api/types/shared";
+import { filterShapeProblems } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors/nextly-error";
 
 /** The operators a list's filter row may use, each meaning the same on every database. */
@@ -269,54 +270,6 @@ function assertFieldName(
   }
 }
 
-function isScalar(value: unknown): value is FilterScalar {
-  return (
-    typeof value === "string" ||
-    typeof value === "boolean" ||
-    (typeof value === "number" && Number.isFinite(value))
-  );
-}
-
-/**
- * Whether a row's value is the kind its operator takes. `in` needs a value
- * to match; an empty `not_in` excludes nothing and is a well-formed list.
- */
-function valueFits(op: PublicFilterOp, value: unknown): boolean {
-  if (op === "in" || op === "not_in") {
-    return (
-      Array.isArray(value) &&
-      value.every(isScalar) &&
-      (op === "not_in" || value.length > 0)
-    );
-  }
-  if (op === "exists") return typeof value === "boolean";
-  // Ordering and text matching compare a value; true or false has no order
-  // and is no text, so only the equality operators take one.
-  if (ORDERED_OR_TEXT.has(op)) {
-    return (
-      typeof value === "string" ||
-      (typeof value === "number" && Number.isFinite(value))
-    );
-  }
-  return isScalar(value);
-}
-
-const ORDERED_OR_TEXT: ReadonlySet<PublicFilterOp> = new Set([
-  "gt",
-  "gte",
-  "lt",
-  "lte",
-  "contains",
-]);
-
-/** What {@link valueFits} wants, in words, for the refusal. */
-function expectedValue(op: PublicFilterOp): string {
-  if (op === "in") return "a list of at least one value";
-  if (op === "not_in") return "a list of values";
-  if (ORDERED_OR_TEXT.has(op)) return "a number or text";
-  return op === "exists" ? "true or false" : "one value";
-}
-
 /** One filter row as core's `where`, refused when it is not well formed. */
 function toCondition(row: PublicFilter): Record<string, unknown> {
   assertFieldName(row.field, "A filter");
@@ -326,13 +279,17 @@ function toCondition(row: PublicFilter): Record<string, unknown> {
       `"${String(row.op)}" is not a filter operator. Use one of: ${PUBLIC_FILTER_OPS.join(", ")}.`
     );
   }
-  if (!valueFits(row.op, row.value)) {
+  const condition = { [row.field]: { [CORE_OP[row.op]]: row.value } };
+  // Judged by core's own table of what each operator takes, so the reader
+  // cannot accept a value that `find` then refuses, or refuse one it reads.
+  const [problem] = filterShapeProblems(condition);
+  if (problem !== undefined) {
     refuse(
       "value-invalid",
-      `The value for "${row.field}" ${row.op} must be ${expectedValue(row.op)}.`
+      `The value for "${row.field}" ${row.op} is not one it takes: ${problem.message}`
     );
   }
-  return { [row.field]: { [CORE_OP[row.op]]: row.value } };
+  return condition;
 }
 
 function toWhere(filters: readonly PublicFilter[] | undefined) {
