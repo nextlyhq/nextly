@@ -32,7 +32,8 @@ export const EDITOR_PROPERTIES: readonly AcceptanceProperty[] = [
   },
   {
     n: 3,
-    property: "Escape clears the selection",
+    property:
+      "Escape goes up to the block holding the selection, and clears it at the top",
     greenIn: "selection",
     status: "covered",
   },
