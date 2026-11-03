@@ -10,6 +10,13 @@ import {
 } from "./document";
 import { variantLockChanges } from "./layers-lock-variants";
 
+/** The changes a judged answer holds; an unchecked one fails the case. */
+function judgedChanges(...args: Parameters<typeof variantLockChanges>) {
+  const answer = variantLockChanges(...args);
+  if (answer.kind !== "judged") throw new Error("expected a judged answer");
+  return answer.changes;
+}
+
 const heading = (id: string, extra: Partial<BlockNode> = {}): BlockNode => ({
   id,
   type: "core/heading",
@@ -61,7 +68,7 @@ function component(
 describe("variantLockChanges", () => {
   it("refuses a variant that sets a value on the locked block, naming it", () => {
     expect(
-      variantLockChanges(component({ dark: { title: "Changed" } }), component())
+      judgedChanges(component({ dark: { title: "Changed" } }), component())
     ).toEqual([
       expect.objectContaining({
         kind: "changed",
@@ -73,20 +80,20 @@ describe("variantLockChanges", () => {
 
   it("accepts a variant that sets a value on a free block", () => {
     expect(
-      variantLockChanges(component({ dark: { subtitle: "Sale" } }), component())
+      judgedChanges(component({ dark: { subtitle: "Sale" } }), component())
     ).toEqual([]);
   });
 
   it("keeps a variant the stored component already gave the locked block", () => {
     const stored = component({ dark: { title: "Changed" } });
     expect(
-      variantLockChanges(component({ dark: { title: "Changed" } }), stored)
+      judgedChanges(component({ dark: { title: "Changed" } }), stored)
     ).toEqual([]);
   });
 
   it("accepts the change in the write that unlocks the block", () => {
     expect(
-      variantLockChanges(
+      judgedChanges(
         component({ dark: { title: "Changed" } }, false),
         component()
       )
@@ -96,16 +103,16 @@ describe("variantLockChanges", () => {
   it("refuses a lock this same write adds to a block an existing variant sets", () => {
     const stored = component({ dark: { title: "Changed" } }, false);
     expect(
-      variantLockChanges(component({ dark: { title: "Changed" } }), stored)
+      judgedChanges(component({ dark: { title: "Changed" } }), stored)
     ).toEqual([expect.objectContaining({ label: "Hero", variant: "dark" })]);
   });
 
   it("judges a new component's variants against it drawn with none", () => {
     expect(
-      variantLockChanges(component({ dark: { title: "Changed" } }), undefined)
+      judgedChanges(component({ dark: { title: "Changed" } }), undefined)
     ).toEqual([expect.objectContaining({ label: "Hero", variant: "dark" })]);
     expect(
-      variantLockChanges(component({ dark: { subtitle: "Sale" } }), undefined)
+      judgedChanges(component({ dark: { subtitle: "Sale" } }), undefined)
     ).toEqual([]);
   });
 
@@ -136,8 +143,8 @@ describe("variantLockChanges", () => {
     };
     const components = new Map([["promo", component() as never]]);
 
-    expect(variantLockChanges(outer, undefined)).toEqual([]);
-    expect(variantLockChanges(outer, undefined, { components })).toEqual([
+    expect(judgedChanges(outer, undefined)).toEqual([]);
+    expect(judgedChanges(outer, undefined, { components })).toEqual([
       expect.objectContaining({ label: "Hero", variant: "loud" }),
     ]);
   });
@@ -180,13 +187,58 @@ describe("variantLockChanges", () => {
     const components = new Map([["promo", component() as never]]);
 
     expect(
-      variantLockChanges(outer({ headline: "Changed" }), undefined, {
+      judgedChanges(outer({ headline: "Changed" }), undefined, {
         components,
       })
     ).toEqual([expect.objectContaining({ label: "Hero", variant: "loud" })]);
     // CONTROL: the relayed value for the free block is the variant's to set.
     expect(
-      variantLockChanges(outer({ strap: "Sale" }), undefined, { components })
+      judgedChanges(outer({ strap: "Sale" }), undefined, { components })
     ).toEqual([]);
+  });
+
+  describe("charged to a shared work allowance", () => {
+    /** A component of `size` blocks offering `count` variants. */
+    const many = (size: number, count: number) => ({
+      ...component(),
+      nodes: [
+        ...component().nodes,
+        ...Array.from({ length: size }, (_, i) => heading(`b${String(i)}`)),
+      ],
+      variants: Object.fromEntries(
+        Array.from({ length: count }, (_, i) => [
+          `v${String(i)}`,
+          { label: `V${String(i)}`, overrides: { subtitle: String(i) } },
+        ])
+      ),
+    });
+
+    it("charges every draw to the allowance it is handed", () => {
+      const work = { left: 1_000_000 };
+      const answer = variantLockChanges(many(50, 10), many(50, 10), { work });
+
+      expect(answer).toEqual({ kind: "judged", changes: [] });
+      // The written component drawn once with no variant, then written and
+      // stored drawn per variant: at least one entry each, of 52 blocks.
+      expect(1_000_000 - work.left).toBeGreaterThanOrEqual(21 * 52);
+    });
+
+    it("answers unchecked once the allowance is spent, rather than judging a prefix", () => {
+      const work = { left: 52 * 5 };
+
+      expect(variantLockChanges(many(50, 10), undefined, { work })).toEqual({
+        kind: "unchecked",
+      });
+      // CONTROL: a variant changing the locked block after the allowance
+      // would run out is not passed as judged.
+      const late = many(50, 10);
+      late.variants.v9 = {
+        label: "V9",
+        overrides: { title: "Changed" },
+      } as never;
+      expect(
+        variantLockChanges(late, undefined, { work: { left: 52 * 5 } })
+      ).toEqual({ kind: "unchecked" });
+    });
   });
 });

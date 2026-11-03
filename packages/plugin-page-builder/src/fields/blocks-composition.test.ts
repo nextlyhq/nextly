@@ -2225,3 +2225,35 @@ describe("a placement's variant on a page write", () => {
     ).toEqual([]);
   });
 });
+
+describe("a component's variants judged against its Layers locks", () => {
+  /** A component of `size` blocks, the first locked, offering `count` variants. */
+  const offering = (size: number, count: number) =>
+    component(
+      Array.from({ length: size }, (_, i) =>
+        i === 0 ? { ...node("t0"), locked: true } : node(`t${String(i)}`)
+      ),
+      {
+        variants: Object.fromEntries(
+          Array.from({ length: count }, (_, i) => [
+            `v${String(i)}`,
+            { label: `V${String(i)}`, overrides: {} },
+          ])
+        ),
+      }
+    );
+
+  it("charges every variant drawn to the save's allowance, refusing as unchecked once it is spent", async () => {
+    const { readStored } = storeOf({});
+
+    // CONTROL: the same blocks with a few variants are judged and pass.
+    expect(
+      await judge(offering(2000, 3), write(readStored, COMPONENTS))
+    ).toEqual([]);
+    // Each variant is drawn whole, 2,000 blocks a draw: 140 of them spend
+    // more than the allowance one save shares across its compositions.
+    expect(
+      codes(await judge(offering(2000, 140), write(readStored, COMPONENTS)))
+    ).toEqual(["COMPOSITION_UNCHECKED"]);
+  });
+});

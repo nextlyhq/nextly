@@ -1120,6 +1120,7 @@ export {
   variantLockChanges,
   type VariantDrawing,
   type VariantLockChange,
+  type VariantLocksAnswer,
 } from "./layers-lock-variants";
 export {
   componentLayersLocks,

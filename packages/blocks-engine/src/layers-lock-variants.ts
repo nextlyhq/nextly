@@ -35,6 +35,7 @@ import {
   resolveComponentInstances,
   variantNamesIn,
   type ComponentLookup,
+  type WorkAllowance,
 } from "./resolve-instances";
 
 /** A broken lock, and the variant whose values break it. */
@@ -62,6 +63,26 @@ export interface VariantDrawing {
    * drawn one places. Absent, nested placements draw as placeholders.
    */
   readonly components?: ComponentLookup;
+  /**
+   * The allowance the caller's save shares across its compositions. Every
+   * draw is charged to it, and once it is spent the answer is unchecked
+   * rather than judged on the variants drawn so far.
+   */
+  readonly work?: WorkAllowance;
+}
+
+/** What judging a component's variants against its locks found. */
+export type VariantLocksAnswer =
+  /** Each locked block a variant changes, with the variant; often none. */
+  | { readonly kind: "judged"; readonly changes: readonly VariantLockChange[] }
+  /** The work allowance ran out before every variant was drawn. */
+  | { readonly kind: "unchecked" };
+
+const UNCHECKED: VariantLocksAnswer = { kind: "unchecked" };
+
+/** Whether the drawing's allowance is spent, so a draw may have stopped short. */
+function spent({ work }: VariantDrawing): boolean {
+  return work !== undefined && work.left <= 0;
 }
 
 /**
@@ -87,7 +108,7 @@ function ungatedDrawing(drawing: VariantDrawing): {
 function drawn(
   component: BlockDocument,
   variant: string,
-  { limits, components }: VariantDrawing
+  { limits, components, work }: VariantDrawing
 ): BlockDocument {
   const host: BlockDocument = {
     formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -107,7 +128,10 @@ function drawn(
       has: id => id === SELF || components?.has(id) === true,
       get: id => (id === SELF ? component : components?.get(id)),
     },
-    limits === undefined ? {} : { limits }
+    {
+      ...(limits === undefined ? {} : { limits }),
+      ...(work === undefined ? {} : { work }),
+    }
   ).document;
 }
 
@@ -129,9 +153,35 @@ function keptByStored(
 }
 
 /**
+ * Draw the component choosing each of its variants, and the stored form
+ * choosing the same one, handing each pair to `visit`. False once the
+ * allowance is spent, before every variant was drawn.
+ */
+function eachVariantDrawn(
+  component: BlockDocument,
+  previous: BlockDocument | undefined,
+  drawing: VariantDrawing,
+  visit: (
+    variant: string,
+    choosing: BlockDocument,
+    before: BlockDocument | undefined
+  ) => void
+): boolean {
+  for (const variant of variantNamesIn(component) ?? []) {
+    const choosing = drawn(component, variant, drawing);
+    const before =
+      previous === undefined ? undefined : drawn(previous, variant, drawing);
+    if (spent(drawing)) return false;
+    visit(variant, choosing, before);
+  }
+  return true;
+}
+
+/**
  * Every block the written component locks that one of its variants changes,
- * outermost first, once per block. Empty when the written value is not a
- * component, or no variant changes a locked block.
+ * outermost first, once per block. None when the written value is not a
+ * component, or no variant changes a locked block; unchecked when the
+ * drawing's work allowance ran out first.
  *
  * @param written - the component as the write would store it
  * @param stored - the component it replaces, or `undefined` for a create
@@ -140,24 +190,28 @@ export function variantLockChanges(
   written: unknown,
   stored: unknown,
   drawing: VariantDrawing = {}
-): VariantLockChange[] {
-  if (!isComponent(written)) return [];
+): VariantLocksAnswer {
+  if (!isComponent(written)) return { kind: "judged", changes: [] };
   const { drawing: ungated, lift } = ungatedDrawing(drawing);
   const component = lift(written);
   const previous = isComponent(stored) ? lift(stored) : undefined;
   const unselected = drawn(component, "", ungated);
+  if (spent(ungated)) return UNCHECKED;
   const found: VariantLockChange[] = [];
   const reported = new Set<string>();
-  for (const variant of variantNamesIn(written) ?? []) {
-    const choosing = drawn(component, variant, ungated);
-    const before =
-      previous === undefined ? undefined : drawn(previous, variant, ungated);
-    for (const change of layersLockChanges(choosing, unselected)) {
-      if (reported.has(change.id)) continue;
-      if (keptByStored(change, choosing, before)) continue;
-      reported.add(change.id);
-      found.push({ ...change, variant });
+  const whole = eachVariantDrawn(
+    component,
+    previous,
+    ungated,
+    (variant, choosing, before) => {
+      for (const change of layersLockChanges(choosing, unselected)) {
+        if (reported.has(change.id) || keptByStored(change, choosing, before)) {
+          continue;
+        }
+        reported.add(change.id);
+        found.push({ ...change, variant });
+      }
     }
-  }
-  return found;
+  );
+  return whole ? { kind: "judged", changes: found } : UNCHECKED;
 }

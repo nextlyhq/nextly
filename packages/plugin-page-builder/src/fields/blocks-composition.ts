@@ -294,6 +294,10 @@ export async function compositionIssues(
   const source = storedComponentSource(write, setup.store);
   const self = componentSaved(write, args.path, setup.store);
   const report = issueReport(args.path);
+  // ONE allowance for every composition this save performs, the variant draws
+  // and the loop check included, so the bound is on the save rather than on
+  // each check.
+  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
   if (savesComponent(write, args.path, setup.store)) {
     await judgeLockedExposures(document, write, setup, report);
     await judgeVariantLocks({
@@ -301,12 +305,10 @@ export async function compositionIssues(
       args,
       setup,
       read: documentReader(source, true),
+      work,
       report,
     });
   }
-  // ONE allowance for every composition this save performs, the loop check
-  // included, so the bound is on the save rather than on each check.
-  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
 
   if (self !== undefined) {
     const cycle = await componentCycleRefusal({
@@ -396,7 +398,9 @@ function savesComponent(
  * component the written and stored forms place, so a variant reaching a block
  * locked inside a nested component is seen. A variant the stored component
  * already drew the same way is kept. A localized field whose language store
- * is not ready is kept unjudged, as the page's own locks are.
+ * is not ready is kept unjudged, as the page's own locks are. Every variant
+ * drawn is charged to the save's allowance, and a save that spends it is
+ * refused as unchecked, as its placed locks are.
  */
 async function judgeVariantLocks(args: {
   document: BlockDocument;
@@ -404,9 +408,10 @@ async function judgeVariantLocks(args: {
     Partial<Pick<PluginFieldValidateArgs, "field">>;
   setup: CompositionSetup;
   read: BoundedReader;
+  work: WorkAllowance;
   report: Report;
 }): Promise<void> {
-  const { document, setup, read, report } = args;
+  const { document, setup, read, work, report } = args;
   const { path, write, field } = args.args;
   if ((variantNamesIn(document) ?? []).length === 0) return;
   const stored = await readStoredForms(write, path, [true], isLocalized(field));
@@ -417,12 +422,17 @@ async function judgeVariantLocks(args: {
     read,
     setup.limits
   );
-  const changes = variantLockChanges(document, newest, {
+  const answer = variantLockChanges(document, newest, {
     limits: setup.limits,
     components: lookupOf(library),
+    work,
   });
+  if (answer.kind === "unchecked") {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
   const label = fieldLabel(field, path);
-  for (const change of changes) {
+  for (const change of answer.changes) {
     report.add(LAYERS_LOCK_CHANGED, `${label}: ${variantLockMessage(change)}`);
   }
 }
