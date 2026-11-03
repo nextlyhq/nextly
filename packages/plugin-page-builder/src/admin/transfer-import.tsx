@@ -64,6 +64,7 @@ import {
   type TransferFile,
 } from "../transfer/transfer-contract";
 
+import { focusAfterClose } from "./library-dialog";
 import { refusalMessage } from "./save-pattern-client";
 
 /** The mutation envelope the import route answers with. */
@@ -153,10 +154,8 @@ export function TransferImport(): React.JSX.Element {
       {file === null ? null : (
         <ImportDialog
           file={file}
-          onClose={() => {
-            setFile(null);
-            opener.current?.focus();
-          }}
+          onClose={() => setFile(null)}
+          returnFocusTo={() => opener.current}
         />
       )}
     </div>
@@ -167,9 +166,12 @@ export function TransferImport(): React.JSX.Element {
 function ImportDialog({
   file,
   onClose,
+  returnFocusTo,
 }: {
   file: TransferFile;
   onClose: () => void;
+  /** Where focus goes once the dialog closes: the button that opened it. */
+  returnFocusTo: () => HTMLElement | null;
 }): React.JSX.Element {
   const [choices, setChoices] = React.useState<ImportChoices>({});
   const [preview, setPreview] = React.useState<ImportPreview | null>(null);
@@ -255,7 +257,10 @@ function ImportDialog({
         if (!open && !importing) onClose();
       }}
     >
-      <DialogContent className="nx-pb-transfer flex max-h-[85vh] flex-col">
+      <DialogContent
+        className="nx-pb-transfer flex max-h-[85vh] flex-col"
+        onCloseAutoFocus={focusAfterClose(returnFocusTo)}
+      >
         <DialogHeader>
           <DialogTitle>{`Import "${title}"`}</DialogTitle>
           <DialogDescription>
@@ -285,6 +290,7 @@ function ImportDialog({
           ) : (
             <PreviewBody
               preview={preview}
+              choices={choices}
               onConflict={conflictChoice}
               onBreakpoint={breakpointChoice}
               disabled={importing}
@@ -315,11 +321,14 @@ function ImportDialog({
 
 function PreviewBody({
   preview,
+  choices,
   onConflict,
   onBreakpoint,
   disabled,
 }: {
   preview: ImportPreview;
+  /** The choices made, shown at once while the server is asked again. */
+  choices: ImportChoices;
   onConflict: (key: string, choice: ImportConflictChoice) => void;
   onBreakpoint: (id: string, choice: ImportBreakpointChoice) => void;
   disabled: boolean;
@@ -390,6 +399,7 @@ function PreviewBody({
               <ConflictRow
                 key={conflict.key}
                 conflict={conflict}
+                choice={choices.conflicts?.[conflict.key] ?? conflict.choice}
                 onChoose={onConflict}
                 disabled={disabled}
               />
@@ -414,6 +424,7 @@ function PreviewBody({
               <BreakpointRow
                 key={entry.fileId}
                 entry={entry}
+                choice={choices.breakpoints?.[entry.fileId] ?? entry.choice}
                 onChoose={onBreakpoint}
                 disabled={disabled}
               />
@@ -440,10 +451,12 @@ function PreviewBody({
 
 function ConflictRow({
   conflict,
+  choice,
   onChoose,
   disabled,
 }: {
   conflict: ImportConflict;
+  choice: ImportConflictChoice;
   onChoose: (key: string, choice: ImportConflictChoice) => void;
   disabled: boolean;
 }): React.JSX.Element {
@@ -455,11 +468,11 @@ function ConflictRow({
           {conflict.name}
         </span>
         <span className="nx-pb-transfer__kind">
-          {KIND_WORDS[conflict.kind][0]}
+          {sentenceCase(KIND_WORDS[conflict.kind][0])}
         </span>
       </div>
       <RadioGroup
-        value={conflict.choice}
+        value={choice}
         aria-labelledby={`${id}-name`}
         onValueChange={value =>
           onChoose(conflict.key, value as ImportConflictChoice)
@@ -486,10 +499,12 @@ function ConflictRow({
 
 function BreakpointRow({
   entry,
+  choice,
   onChoose,
   disabled,
 }: {
   entry: ImportUnmatchedBreakpoint;
+  choice: ImportBreakpointChoice | undefined;
   onChoose: (id: string, choice: ImportBreakpointChoice) => void;
   disabled: boolean;
 }): React.JSX.Element {
@@ -511,7 +526,7 @@ function BreakpointRow({
         </span>
       </div>
       <RadioGroup
-        value={entry.choice ?? ""}
+        value={choice ?? ""}
         aria-labelledby={`${id}-name`}
         aria-required
         onValueChange={value =>
@@ -589,6 +604,11 @@ function summary(preview: ImportPreview): string {
     counted(undecided, "breakpoint to decide", "breakpoints to decide"),
   ].filter(part => part !== "");
   return parts.length === 0 ? "Nothing new to add." : parts.join(" · ");
+}
+
+/** "shared style" as "Shared style", for a label standing on its own. */
+function sentenceCase(words: string): string {
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function counted(n: number, one: string, many = `${one}s`): string {

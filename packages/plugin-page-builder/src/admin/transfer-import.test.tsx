@@ -157,6 +157,15 @@ describe("TransferImport", () => {
       (screen.getByRole("button", { name: "Import" }) as HTMLButtonElement)
         .disabled
     ).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Import from file" })
+      )
+    );
   });
 
   it("waits for a breakpoint choice, asks the server again with it, and never offers what is not allowed", async () => {
@@ -203,9 +212,23 @@ describe("TransferImport", () => {
         .disabled
     ).toBe(true);
 
+    let held: () => void = () => undefined;
+    const answering = answer;
+    answer = body =>
+      new Promise(resolve => {
+        held = () => resolve(answering(body));
+      });
     await userEvent.click(
       screen.getByRole("radio", { name: "Drop its styles and hide settings" })
     );
+    // Shown chosen at once, before the server has answered again.
+    expect(
+      screen
+        .getByRole("radio", { name: "Drop its styles and hide settings" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+    await waitFor(() => expect(sent).toHaveLength(2));
+    held();
 
     await waitFor(() =>
       expect(sent.at(-1)).toEqual({

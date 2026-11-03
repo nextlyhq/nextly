@@ -146,7 +146,10 @@ test.describe("moving items between sites as files", () => {
     await gotoAdmin(page, "/collections/components");
 
     // Export from the row's own actions.
-    const row = page.getByRole("row").filter({ hasText: seeded.title });
+    // A clickable row is drawn as a button, so it is found by the link it holds.
+    const row = page.locator("tr", {
+      has: page.getByRole("link", { name: seeded.title }),
+    });
     await row.getByRole("button", { name: "Row actions" }).click();
     const downloading = page.waitForEvent("download");
     await page.getByRole("menuitem", { name: "Export" }).click();
