@@ -26,7 +26,11 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
+import {
+  BUILDER_VIEW_COMPONENT,
+  BUILDER_VIEW_PATH,
+  REMOVE_LAYOUT_ACTION_COMPONENT,
+} from "./builder-view";
 import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
@@ -66,6 +70,10 @@ import { componentActionRoutes } from "./component-actions-route";
 import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
+import {
+  componentPageReach,
+  sitePageReachSources,
+} from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
@@ -96,6 +104,8 @@ import {
 } from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
+import { layoutFenceFloor } from "./layout-removal/page-reference-guard";
+import { removeLayoutRoute } from "./layout-removal/remove-route";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   type SharedStyleUsageKind,
@@ -162,9 +172,11 @@ import { variantUseRoute } from "./variant-use-route";
  */
 function pagesOptions(
   opts: PageBuilderOptions,
-  configStyle: SiteStyleData
+  configStyle: SiteStyleData,
+  validateLayout: PagesCollectionOptions["validateLayout"]
 ): PagesCollectionOptions {
   return {
+    ...(validateLayout === undefined ? {} : { validateLayout }),
     ...(opts.pagePreviewPath === undefined
       ? {}
       : { previewPath: opts.pagePreviewPath }),
@@ -1296,7 +1308,15 @@ export const pageBuilder = (
       // A single table discriminated by a column would leave both behind one
       // permission and could not declare a slug unique per kind.
       collections: [
-        pagesCollection(pagesOptions(opts, configStyle)),
+        pagesCollection(
+          pagesOptions(
+            opts,
+            configStyle,
+            // Read per write through the holder `init` fills: the field is
+            // declared before the plugin is installed.
+            layoutFenceFloor(() => defaultLayoutSetup?.removals)
+          )
+        ),
         patternsCollection(),
         componentsCollection(),
         layoutsCollection(),
@@ -1395,6 +1415,51 @@ export const pageBuilder = (
               ),
             });
           },
+          // How many pages a change reaches, for the banner over the view:
+          // through other components by the same index, and through the
+          // Layouts wrapping pages, read live, the site's default included.
+          countPages: ctx => async id => {
+            const index =
+              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+              COMPONENT_USAGE_INDEX_SLUG;
+            const host = requireInstalled();
+            const rows = usageRowReader(await host.nextly(), index);
+            const health = await usageHealthService(requireInstalled).read(
+              componentUsageIndex,
+              index
+            );
+            // Imported at call time, as the Layout choices route does, so the
+            // entry stays free of the runtime graph.
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            return componentPageReach(
+              id,
+              sitePageReachSources({
+                nextly: await getCachedNextly(),
+                slugs: {
+                  layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                  settings:
+                    ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+                    PAGE_BUILDER_SETTINGS_SLUG,
+                },
+                pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                componentsCollection:
+                  componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                notPages: new Set([
+                  ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                  ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                ]),
+                documentsUsingEach: componentIds =>
+                  listDocumentsUsingEach({
+                    index: componentUsageIndex,
+                    rows,
+                    referenceIds: componentIds,
+                    health,
+                  }),
+              })
+            );
+          },
           // The ids a published removal retired, from the store the write
           // hooks record them in. Where those hooks are not registered (the
           // host renders components from a source of its own), nothing is
@@ -1480,6 +1545,11 @@ export const pageBuilder = (
         // preconditions (the Layout is published, the caller may publish
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
+        // Remove Layout: the one way a Layout is deleted or unpublished, fenced
+        // and checked so no page and not the site's default is taken from
+        // under it. The Layout's own delete and unpublish refuse every write
+        // that does not come through here.
+        removeLayoutRoute(),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the
@@ -1625,6 +1695,11 @@ export const pageBuilder = (
             label: "Page Builder",
           },
         ],
+        // "Remove Layout…" in a Layout's document bar, beside History: the one
+        // way an author deletes or unpublishes a Layout, since the form's own
+        // delete and unpublish are refused. The slot is offered to every entry
+        // form; the component draws only on a saved Layout's own.
+        entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
         menu: [
           {
             label: "Patterns",
@@ -1645,20 +1720,13 @@ export const pageBuilder = (
             icon: "PanelsTopLeft",
           },
         ],
-        // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.
-        //
-        // Both named components this package no longer ships: a schema-builder
-        // toggle for turning a collection into a page-builder one, and a
-        // per-entry Normal / Page Builder switch. They belonged to an editor
-        // that stored its own document format, so the choice they offered was
-        // between two storage shapes rather than between two ways of editing
-        // one.
-        //
-        // A slot is registered by SPECIFIER, so nothing type-checks the name:
-        // pointing at a component that is not exported resolves to nothing at
-        // render time, in the admin, at the moment an author opens the form.
-        // Declaring them is therefore worse than omitting them — the admin
-        // reserves the slot either way and only the populated case works.
+        // No `schemaBuilderSlot`. It named a component this package no longer
+        // ships: a schema-builder toggle for turning a collection into a
+        // page-builder one, from an editor that stored its own document
+        // format. A slot is registered by SPECIFIER, so nothing type-checks
+        // the name: pointing at a component that is not exported resolves to
+        // nothing at render time. The toolbar slot above names one this entry
+        // registers (`admin/index.ts`).
       },
     },
   });

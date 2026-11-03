@@ -361,6 +361,9 @@ export {
   // own value. Two implementations of that order agree until a variant rule
   // changes in one of them.
   instanceExposure,
+  // A component's own tree as one of its variants draws it, ids kept, for
+  // the editor's canvas to preview the variant open in the component's view.
+  variantPreview,
   // What a supplied definition has to be before the resolver inlines it.
   // Published because the editor's inspector draws from the same lookup the
   // canvas resolves against, and must refuse exactly what the canvas refuses.
@@ -918,6 +921,10 @@ export {
   // one and a literal in the other would be one contract with two spellings,
   // and the half that drifted would simply stop matching rather than fail.
   CONTENT_WIDTH_CLASS,
+  // The marker a container spacing its children wears: the compiler keys the
+  // gap's rules on it, a block repeating its slot puts it on each wrapper, and
+  // an editor takes it off to ask whether a margin is the gap.
+  CHILD_GAP_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,

@@ -12,7 +12,7 @@
  * command reads.
  *
  * What separates the correct command from the broken one is the second file
- * existing: a `migrate:create` that compares only tables exits 2 ("no changes")
+ * existing: a `migrate:create` that compares only tables exits 0 ("no changes")
  * on each edit below and writes nothing.
  */
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -32,6 +32,7 @@ import {
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
 import { loadedDialect } from "../../../database/dialect-tables";
@@ -152,9 +153,11 @@ async function migrateCreate(config: unknown, name: string): Promise<void> {
   clock += 1;
   vi.setSystemTime(new Date(Date.UTC(2026, 9, 28, 12, 0, 0, clock)));
   const { context, said } = command();
+  // As `--non-interactive` does: no rename is asked about.
+  setNonInteractive(true);
   const code = await exiting(() =>
-    runMigrateCreate(name, { cwd: dir, nonInteractive: true }, context)
-  );
+    runMigrateCreate(name, { cwd: dir }, context)
+  ).finally(() => setNonInteractive(false));
   expect(code, said.join("\n")).toBeUndefined();
 }
 

@@ -193,6 +193,36 @@ describe("who may read the site style through the editor's route", () => {
     ).toBe(false);
   });
 
+  it("asks the update questions at type level, so a row-filtered right counts", async () => {
+    // A caller whose update on pages is limited by a row filter: plain `can`
+    // answers no, the type-level question (`anyEntry`) answers yes.
+    const ctx = context([]);
+    const typeLevel: { action: string; anyEntry: boolean }[] = [];
+    const filtered = {
+      ...ctx,
+      caller: {
+        can: async (
+          action: string,
+          resource: string,
+          options?: { anyEntry?: boolean }
+        ) => {
+          typeLevel.push({ action, anyEntry: options?.anyEntry === true });
+          return (
+            action === "update" &&
+            resource === PAGES_SLUG &&
+            options?.anyEntry === true
+          );
+        },
+      },
+    };
+    expect(await mayReadSiteStyle(filtered, {})).toBe(true);
+    // Design's read is still asked plainly: it names one document.
+    expect(typeLevel).toEqual([
+      { action: "read", anyEntry: false },
+      { action: "update", anyEntry: true },
+    ]);
+  });
+
   it("refuses a caller who may only read what the builder edits", async () => {
     expect(
       await mayReadSiteStyle(

@@ -190,3 +190,36 @@ export function physicalSideName(
       return undefined;
   }
 }
+
+/** Whether a key names one of the four logical sides. */
+export function isLogicalSide(key: string): key is LogicalSide {
+  return (LOGICAL_SIDES as readonly string[]).includes(key);
+}
+
+/**
+ * A corner's plain name, "top left" or "bottom right", for an element whose
+ * axes make it one: the block side, then the inline side, each named as
+ * {@link physicalSideName} names it.
+ *
+ * @param corner - the logical corner, block side first (`startEnd`)
+ * @param axes - the edited element's writing mode and direction
+ * @returns the corner in plain words, or `undefined` in a vertical mode
+ */
+export function physicalCornerName(
+  corner: string,
+  axes: SideOrientation
+): string | undefined {
+  const match = /^(start|end)(Start|End)$/.exec(corner);
+  if (match === null) return undefined;
+  const block = physicalSideName(
+    match[1] === "start" ? "blockStart" : "blockEnd",
+    axes
+  );
+  const inline = physicalSideName(
+    match[2] === "Start" ? "inlineStart" : "inlineEnd",
+    axes
+  );
+  return block === undefined || inline === undefined
+    ? undefined
+    : `${block} ${inline}`;
+}

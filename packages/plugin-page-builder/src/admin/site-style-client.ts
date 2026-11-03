@@ -33,6 +33,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
 import {
+  apiErrorMessage,
   readPluginRoute,
   useUpdateSingleDocument,
   validationIssues,
@@ -189,6 +190,18 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
       issues[issue.path] = issue.message;
   }
   return issues;
+}
+
+/**
+ * A route's refusal in its own words: every reason it gave, a field named or
+ * not, else its message, else `fallback` for a rejection that said nothing.
+ *
+ * The SDK's `apiErrorMessage`, the admin's one rule for this, rather than the
+ * per-section reading above: that one keys reasons by field and so drops one
+ * naming none, which left "Validation failed." where the reason belonged.
+ */
+export function refusalWords(reason: unknown, fallback: string): string {
+  return apiErrorMessage(reason, fallback);
 }
 
 /**
@@ -497,11 +510,7 @@ export function useFontCatalogueClient(): {
       } catch (reason) {
         // The route's own words: which value the family does not offer, or
         // that the catalogue did not answer.
-        const named = Object.values(issuesFromRejection(reason));
-        if (named.length > 0) return named.join(" ");
-        return reason instanceof Error
-          ? reason.message
-          : "This font could not be added.";
+        return refusalWords(reason, "This font could not be added.");
       }
       await refetch();
       return undefined;

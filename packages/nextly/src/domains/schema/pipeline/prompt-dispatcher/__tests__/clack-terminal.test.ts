@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setCancelEndsRun } from "../../../migrate/can-prompt";
 import type {
   ClassifierEvent,
   RenameCandidate,
@@ -7,14 +8,17 @@ import type {
 } from "../../pushschema-pipeline-interfaces";
 import {
   ClackTerminalPromptDispatcher,
+  PromptCancelledError,
   TTYRequiredError,
 } from "../clack-terminal";
+import { ttyRequiredDetail } from "../errors";
 
 // Spy hooks for the @clack/prompts entry points the dispatcher uses.
 // We mock the module so tests can drive prompt outcomes deterministically
 // without an actual terminal.
 const mockSelect = vi.fn();
 const mockConfirm = vi.fn();
+const mockText = vi.fn();
 const mockNote = vi.fn();
 const mockIntro = vi.fn();
 const mockOutro = vi.fn();
@@ -25,6 +29,7 @@ const mockIsCancel = vi.fn(
 vi.mock("@clack/prompts", () => ({
   select: (...args: unknown[]) => mockSelect(...args),
   confirm: (...args: unknown[]) => mockConfirm(...args),
+  text: (...args: unknown[]) => mockText(...args),
   note: (...args: unknown[]) => mockNote(...args),
   intro: (...args: unknown[]) => mockIntro(...args),
   outro: (...args: unknown[]) => mockOutro(...args),
@@ -507,21 +512,6 @@ describe("ClackTerminalPromptDispatcher - TTY available", () => {
     expect(result.confirmedRenames).toEqual([]);
   });
 
-  it("user cancels mid-prompt; throws PromptCancelledError", async () => {
-    mockSelect.mockResolvedValueOnce(Symbol.for("clack:cancel"));
-
-    const dispatcher = new ClackTerminalPromptDispatcher();
-
-    await expect(
-      dispatcher.dispatch({
-        candidates: [candidate("title", "name")],
-        events: [],
-        classification: "destructive",
-        channel: "terminal",
-      })
-    ).rejects.toThrow(/cancel/i);
-  });
-
   it("multiple candidates with shrinking pool: each rename consumes its drop+add", async () => {
     // 2 drops (title, body) + 2 adds (name, summary) = up to 4 candidates.
     // First prompt: pick rename:name for title. Second prompt for body
@@ -815,11 +805,173 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
   });
 });
 
+describe("ClackTerminalPromptDispatcher - a cancel exits 130 under a nextly command", () => {
+  /** What `process.exit` was asked for, thrown so the dispatch goes no further. */
+  class Exited extends Error {
+    constructor(readonly code: number | string | null | undefined) {
+      super(`process.exit(${String(code)})`);
+    }
+  }
+  const CANCEL = Symbol.for("clack:cancel");
+  const tty = {
+    stdin: Object.getOwnPropertyDescriptor(process.stdin, "isTTY"),
+    stdout: Object.getOwnPropertyDescriptor(process.stdout, "isTTY"),
+  };
+
+  beforeEach(() => {
+    for (const stream of [process.stdin, process.stdout]) {
+      Object.defineProperty(stream, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+    }
+    vi.stubEnv("CI", undefined);
+    vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", undefined);
+    vi.stubEnv("NEXTLY_ALLOW_CODE_FIRST_DROPS", undefined);
+    vi.clearAllMocks();
+    mockSelect.mockReset();
+    mockConfirm.mockReset();
+    mockText.mockReset();
+    vi.spyOn(process, "exit").mockImplementation(code => {
+      throw new Exited(code);
+    });
+    // As the program's hook turns it on for every `nextly` command.
+    setCancelEndsRun(true);
+  });
+
+  afterEach(() => {
+    setCancelEndsRun(false);
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    for (const [stream, was] of [
+      [process.stdin, tty.stdin],
+      [process.stdout, tty.stdout],
+    ] as const) {
+      if (was) Object.defineProperty(stream, "isTTY", was);
+      else delete (stream as { isTTY?: boolean }).isTTY;
+    }
+  });
+
+  const typeChange = {
+    id: "type_change:dc_posts.views",
+    kind: "type_change" as const,
+    tableName: "dc_posts",
+    columnName: "views",
+    fromType: "text",
+    toType: "integer",
+    perDialectWarning: { pg: "pg", mysql: "mysql", sqlite: "sqlite" },
+    applicableResolutions: [] as ResolutionKind[],
+  } as unknown as ClassifierEvent;
+
+  const notNull = {
+    id: "add_not_null_with_nulls:dc_posts.summary",
+    kind: "add_not_null_with_nulls" as const,
+    tableName: "dc_posts",
+    columnName: "summary",
+    nullCount: 2,
+    tableRowCount: 9,
+    applicableResolutions: [
+      "provide_default",
+      "make_optional",
+      "abort",
+    ] as ResolutionKind[],
+  } as unknown as ClassifierEvent;
+
+  const dispatch = (args: {
+    candidates?: RenameCandidate[];
+    events?: ClassifierEvent[];
+  }) =>
+    new ClackTerminalPromptDispatcher(() => {}).dispatch({
+      candidates: args.candidates ?? [],
+      events: args.events ?? [],
+      classification: "interactive",
+      channel: "terminal",
+    });
+
+  it("at a rename prompt", async () => {
+    mockSelect.mockResolvedValueOnce(CANCEL);
+    await expect(
+      dispatch({ candidates: [candidate("title", "name")] })
+    ).rejects.toMatchObject({ code: 130 });
+  });
+
+  it("at the drop question", async () => {
+    mockConfirm.mockResolvedValueOnce(CANCEL);
+    await expect(
+      dispatch({ events: [dropEvent("excerpt")] })
+    ).rejects.toMatchObject({ code: 130 });
+  });
+
+  it("at a type change's question", async () => {
+    mockConfirm.mockResolvedValueOnce(CANCEL);
+    await expect(dispatch({ events: [typeChange] })).rejects.toMatchObject({
+      code: 130,
+    });
+  });
+
+  it("at a NOT NULL question", async () => {
+    mockSelect.mockResolvedValueOnce(CANCEL);
+    await expect(dispatch({ events: [notNull] })).rejects.toMatchObject({
+      code: 130,
+    });
+  });
+
+  it("at a default value's question", async () => {
+    mockSelect.mockResolvedValueOnce("provide_default");
+    mockText.mockResolvedValueOnce(CANCEL);
+    await expect(dispatch({ events: [notNull] })).rejects.toMatchObject({
+      code: 130,
+    });
+  });
+
+  it("while a no, or 'Cancel everything', still stops the apply without exiting", async () => {
+    mockConfirm.mockResolvedValueOnce(false);
+    await expect(dispatch({ events: [typeChange] })).resolves.toMatchObject({
+      proceed: false,
+    });
+    mockSelect.mockResolvedValueOnce("abort");
+    await expect(dispatch({ events: [notNull] })).resolves.toMatchObject({
+      proceed: false,
+    });
+    mockConfirm.mockResolvedValueOnce(false);
+    await expect(
+      dispatch({ events: [dropEvent("excerpt")] })
+    ).resolves.toMatchObject({ proceed: false });
+    expect(process.exit).not.toHaveBeenCalled();
+  });
+
+  // Inside the app's dev server (`next dev`), nothing turns the flag on: a
+  // cancel stops only this apply, and the server keeps running.
+  it("but inside the dev server cancels only this apply, without exiting", async () => {
+    setCancelEndsRun(false);
+    mockSelect.mockResolvedValueOnce(CANCEL);
+    await expect(
+      dispatch({ candidates: [candidate("title", "name")] })
+    ).rejects.toBeInstanceOf(PromptCancelledError);
+    mockConfirm.mockResolvedValueOnce(CANCEL);
+    await expect(
+      dispatch({ events: [dropEvent("excerpt")] })
+    ).rejects.toBeInstanceOf(PromptCancelledError);
+    expect(process.exit).not.toHaveBeenCalled();
+  });
+});
+
 describe("TTYRequiredError", () => {
-  it("includes a clear actionable message", () => {
+  it("says nobody can be asked, and why, around its detail", () => {
     const err = new TTYRequiredError("test reason");
-    expect(err.message).toMatch(/TTY/i);
+    expect(err.message).toContain(
+      "nobody can be asked (no terminal, CI, or --non-interactive)"
+    );
+    expect(err.message).toContain(" test reason ");
+    expect(err.message).toContain("nextly migrate:create");
     expect(err.name).toBe("TTYRequiredError");
+  });
+
+  it("gives back its detail alone, and any other message as it is", () => {
+    expect(
+      ttyRequiredDetail(new TTYRequiredError("Rename a to b?\n- x").message)
+    ).toBe("Rename a to b?\n- x");
+    expect(ttyRequiredDetail("  something else  ")).toBe("something else");
   });
 
   it("is instanceof Error", () => {

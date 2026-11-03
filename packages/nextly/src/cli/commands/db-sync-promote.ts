@@ -9,18 +9,39 @@ import { appendFileSync, existsSync } from "node:fs";
 
 import * as p from "@clack/prompts";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import { exitWithError } from "../errors";
-import { promoteCollectionNotFound } from "../errors/areas/sync";
+import {
+  promoteCollectionNotFound,
+  syncConfirmationRequired,
+} from "../errors/areas/sync";
 import type { CommandContext } from "../program";
+import { answered } from "../utils/prompt-cancelled";
 
 import { openCollectionRegistry } from "./db-sync-registry";
+
+/**
+ * Whether `db:sync --yes` was given, answering the confirmation of
+ * `--promote` and `--demote` (neither is a data-loss consent). It arrives
+ * with the run's options, which the command's context carries.
+ */
+export function confirmationAnswered(context: CommandContext): boolean {
+  const options: Record<string, unknown> = { ...context.options };
+  return options.yes === true;
+}
 
 export async function runPromote(
   slug: string,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+
+  // Its confirmation cannot be asked and `--yes` did not answer it: stop
+  // before the database is opened, so nothing is changed.
+  if (!confirmationAnswered(context) && !canPrompt()) {
+    exitWithError(logger, syncConfirmationRequired("--promote", slug));
+  }
 
   // 1. Database wiring, shared with --demote, so a missing or unreachable
   // database ends with the same errors as the rest of db:sync.
@@ -36,27 +57,35 @@ export async function runPromote(
   const fields = (record.fields ?? []) as unknown[];
   const code = serializeCollection({ slug, fields: fields as never[] });
 
-  // 4. User confirmation flow.
-  const action = await p.select({
-    message: `Preview generated code for '${slug}'. Action?`,
-    options: [
-      { value: "preview", label: "Show preview" },
-      { value: "accept", label: "Append to nextly.config.ts" },
-      { value: "decline", label: "Cancel" },
-    ],
-  });
+  // 4. User confirmation flow. `--yes` answers it: append, without asking.
+  // Ctrl+C at either prompt ends the run with exit 130 (`answered`); choosing
+  // Cancel, or a no, is the declined promote below.
+  const action = confirmationAnswered(context)
+    ? "accept"
+    : await answered(
+        await p.select({
+          message: `Preview generated code for '${slug}'. Action?`,
+          options: [
+            { value: "preview", label: "Show preview" },
+            { value: "accept", label: "Append to nextly.config.ts" },
+            { value: "decline", label: "Cancel" },
+          ],
+        })
+      );
 
-  if (p.isCancel(action) || action === "decline") {
+  if (action === "decline") {
     logger.info("Promote cancelled.");
     return;
   }
 
   if (action === "preview") {
     p.note(code, "Generated code");
-    const confirm = await p.confirm({
-      message: "Append this to nextly.config.ts and delete the UI record?",
-    });
-    if (p.isCancel(confirm) || !confirm) {
+    const confirm = await answered(
+      await p.confirm({
+        message: "Append this to nextly.config.ts and delete the UI record?",
+      })
+    );
+    if (!confirm) {
       logger.info("Promote cancelled.");
       return;
     }
