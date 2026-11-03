@@ -14,6 +14,8 @@
 "@nextlyhq/storage-s3": patch
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-page-builder": patch
 "@nextlyhq/plugin-seo": patch
@@ -40,3 +42,8 @@ colleague's work.
 The first claim on opening a document still unlocks at once, and an editor who
 takes back a document they were displaced from keeps their unsaved changes on
 screen as before.
+
+Any failed read of a document already on screen, such as the read after a save,
+now keeps the editor and its unsaved changes, read-only with "Try again",
+instead of replacing it with the page's "couldn't be loaded" error. That error
+now shows only when the document never loaded.
