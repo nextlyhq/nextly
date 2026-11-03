@@ -18,6 +18,10 @@ import type { VersionsConfig } from "../../schemas/versions/types";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 
 import { workflowProblems } from "./define-workflow";
+import {
+  PUBLISH_WITHOUT_REVIEW,
+  workflowPermissionActions,
+} from "./permissions";
 import type { Workflow } from "./types";
 
 /**
@@ -82,16 +86,60 @@ function attachmentProblems(
 /** The problems with each attachment of one kind of target. */
 function targetProblems(
   targets: readonly WorkflowTarget[],
-  root: "collections" | "singles"
+  root: "collections" | "singles",
+  slugs: ReadonlySet<string>
 ): AttachmentProblem[] {
-  return targets.flatMap(target =>
-    target.workflow === undefined
-      ? []
-      : attachmentProblems(
-          { ...target, workflow: target.workflow },
-          `${root}.${target.slug}.workflow`
-        )
-  );
+  return targets.flatMap(target => {
+    if (target.workflow === undefined) return [];
+    const path = `${root}.${target.slug}.workflow`;
+    const problems = attachmentProblems(
+      { ...target, workflow: target.workflow },
+      path
+    );
+    return problems.length > 0
+      ? problems
+      : permissionProblems(target.workflow, target.slug, path, slugs);
+  });
+}
+
+/** The longest slug a permission stores (`permissions.slug`). */
+const MAX_PERMISSION_SLUG_LENGTH = 100;
+
+/**
+ * Why the permissions the workflow seeds on `slug` cannot be stored as their own (see
+ * `workflowPermissionActions`):
+ *
+ * - a slug too long for `permissions.slug`;
+ * - `publish-without-review-<slug>` is also how `publish-<slug>` spells the publish permission of
+ *   an entity named `without-review-<slug>`, and permission slugs are unique, so the two would be
+ *   one row and a grant of either would be a grant of both.
+ */
+function permissionProblems(
+  workflow: Workflow,
+  slug: string,
+  path: string,
+  slugs: ReadonlySet<string>
+): AttachmentProblem[] {
+  const problems: AttachmentProblem[] = [];
+  const twin = `without-review-${slug}`;
+  if (slugs.has(twin)) {
+    problems.push({
+      path,
+      code: "workflow_permission_collides",
+      message: `\`${PUBLISH_WITHOUT_REVIEW}-${slug}\` would also be the publish permission of \`${twin}\`; rename one of the two before attaching a workflow to \`${slug}\`.`,
+    });
+  }
+  for (const action of workflowPermissionActions(workflow)) {
+    const permission = `${action}-${slug}`;
+    if (permission.length > MAX_PERMISSION_SLUG_LENGTH) {
+      problems.push({
+        path,
+        code: "workflow_permission_too_long",
+        message: `\`${permission}\` is too long to store as a permission: shorten the step's action or the slug to at most ${String(MAX_PERMISSION_SLUG_LENGTH)} characters together.`,
+      });
+    }
+  }
+  return problems;
 }
 
 /**
@@ -145,9 +193,13 @@ export function workflowAttachmentsOf(config: {
 }): WorkflowAttachments[] {
   const collections = config.collections ?? [];
   const singles = config.singles ?? [];
+  // Every entity's slug, which a seeded permission's slug must not collide with.
+  const slugs = new Set(
+    [...collections, ...singles].map(target => target.slug)
+  );
   const problems = [
-    ...targetProblems(collections, "collections"),
-    ...targetProblems(singles, "singles"),
+    ...targetProblems(collections, "collections", slugs),
+    ...targetProblems(singles, "singles", slugs),
   ];
   const attached = collect(collections, singles, problems);
   if (problems.length > 0) {
