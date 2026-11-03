@@ -864,6 +864,59 @@ describe.each(getConfiguredTestDialects())(
         expect((await layoutRow(t, other))?.status).toBe("published");
       });
 
+      it("takes its copy again when another plugin's field changed after the copy, in the same stored second", async () => {
+        const t = await boot([taglinePlugin()]);
+        const { cookie } = await owner(t);
+        const created = await t.nextly.create({
+          collection: LAYOUTS_SLUG,
+          data: {
+            title: "Other",
+            slug: "other",
+            areas: [],
+            status: "published",
+            tagline: "Before",
+          },
+          overrideAccess: true,
+        });
+        const other = String(created.item.id);
+        const table = await tableOf(t, LAYOUTS_SLUG);
+        // Right after the removal reads its copy, an edit lands that changes
+        // only the extension field and leaves the stored timestamp as it was.
+        let edited = false;
+        t.hooks.register("afterRead", LAYOUTS_SLUG, async () => {
+          if (edited) return;
+          if ((await fence().removalOf(other))?.step !== "checked") return;
+          edited = true;
+          await t.adapter.update(
+            table,
+            { tagline: "Edited meanwhile" },
+            { and: [{ column: "id", op: "=", value: other }] }
+          );
+        });
+        // A promotion racing the delete, so the Layout comes back from the
+        // copy the delete was finally admitted with.
+        let promoted = false;
+        t.hooks.register("beforeDelete", LAYOUTS_SLUG, async context => {
+          if (
+            promoted ||
+            relationId((context as { data?: unknown }).data) !== other
+          )
+            return;
+          promoted = true;
+          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(edited).toBe(true);
+        expect(told(answer)).toBe(KEPT_AS_DEFAULT);
+        const restored = String((await settingsOf(t)).defaultLayout);
+        expect(await layoutRow(t, restored)).toMatchObject({
+          title: "Other",
+          tagline: "Edited meanwhile",
+        });
+      });
+
       it("restores a Layout deleted under a promotion that committed after the removal's last look, under a new id, and points the default at it", async () => {
         const t = await boot();
         const { cookie } = await owner(t);
@@ -1320,13 +1373,17 @@ describe.each(getConfiguredTestDialects())(
 
     /** The pages table, as the registry resolved it. */
     async function pagesTable(t: TestNextly): Promise<string> {
+      return tableOf(t, PAGES_SLUG);
+    }
+
+    async function tableOf(t: TestNextly, slug: string): Promise<string> {
       const registry = t.getService("collectionRegistryService") as unknown as {
         getCollectionBySlug(
           slug: string
         ): Promise<{ tableName: string } | null>;
       };
-      const table = (await registry.getCollectionBySlug(PAGES_SLUG))?.tableName;
-      if (table === undefined) throw new Error("no pages table");
+      const table = (await registry.getCollectionBySlug(slug))?.tableName;
+      if (table === undefined) throw new Error(`no ${slug} table`);
       return table;
     }
 

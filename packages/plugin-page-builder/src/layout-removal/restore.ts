@@ -35,7 +35,7 @@ import {
   type DefaultLayoutSlugs,
 } from "../default-layout/store";
 
-import { areaRows } from "./layout-copy";
+import { authoredOf } from "./layout-copy";
 import type { LayoutCopy, LayoutRemoval, LayoutRemovalStore } from "./store";
 
 /** How many addresses a restore tries when its own is taken. */
@@ -50,51 +50,6 @@ export interface RestoreDeps {
   readonly store: LayoutRemovalStore;
   readonly slugs: DefaultLayoutSlugs;
   readonly warn: (message: string, meta?: Record<string, unknown>) => void;
-}
-
-/**
- * The columns a stored Layout row carries that the system writes, never an
- * author: its id, its timestamps and its lifecycle. A restore leaves them to
- * the write it makes. Keys starting with `_` (a read's own bookkeeping, such as
- * `_isWorkingDraft`) are left off too.
- */
-const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
-  "id",
-  "status",
-  "createdAt",
-  "updatedAt",
-  "created_at",
-  "updated_at",
-  "firstPublishedAt",
-  "first_published_at",
-  "publishedAt",
-  "published_at",
-]);
-
-/**
- * The authored fields of a stored Layout row, as a write takes them: the whole
- * row less what the system writes, so fields another plugin added to Layouts
- * come back with it. The address is left to each caller, which knows whether
- * the row's own is still free.
- */
-function authored(row: Record<string, unknown>): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(row)) {
-    if (SYSTEM_FIELDS.has(key) || key === "slug" || key.startsWith("_")) {
-      continue;
-    }
-    fields[key] = value;
-  }
-  // Read through `areaRows`, so a copy holding the repeater as SQLite's JSON
-  // text keeps its areas as the other dialects' copies do.
-  fields.areas = areaRows(row).map(area => {
-    if (typeof area !== "object" || area === null) return area;
-    // A repeater row's own id belongs to the deleted Layout's rows.
-    const rest: Record<string, unknown> = { ...area };
-    delete rest.id;
-    return rest;
-  });
-  return fields;
 }
 
 /**
@@ -115,7 +70,7 @@ export async function republishFromCopy(
     collection: deps.slugs.layouts,
     id: layoutId,
     data: {
-      ...(copy === null ? {} : authored(copy.live)),
+      ...(copy === null ? {} : authoredOf(copy.live)),
       ...(typeof slug === "string" && slug !== "" ? { slug } : {}),
       status: "published",
     },
@@ -162,14 +117,14 @@ async function restoreDraft(
       ...(context === undefined ? {} : { context }),
     });
   try {
-    await save({ ...authored(draft), ...(slug === null ? {} : { slug }) });
+    await save({ ...authoredOf(draft), ...(slug === null ? {} : { slug }) });
   } catch (error) {
     if (slug === null || !NextlyError.isCode(error, "DUPLICATE")) throw error;
     deps.warn(
       "[page-builder] a restored Layout's working draft kept its published address, since another Layout holds the one the draft chose",
       { restoredLayout: restored, slug }
     );
-    await save(authored(draft));
+    await save(authoredOf(draft));
   }
 }
 
@@ -200,7 +155,7 @@ async function createFromCopy(
     try {
       const created = await deps.nextly.create({
         collection: deps.slugs.layouts,
-        data: { ...authored(copy.live), slug, status: "published" },
+        data: { ...authoredOf(copy.live), slug, status: "published" },
         overrideAccess: true,
       });
       const id = relationId(created.item);

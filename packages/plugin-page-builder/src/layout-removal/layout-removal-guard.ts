@@ -15,8 +15,9 @@
  * - the Layout's fence row holds that token, at its `final` step;
  * - the row's action is this write's (a delete, or an unpublish);
  * - the Layout still has the version the row's copy was taken at, its live
- *   row and its working draft both. A Layout edited after the copy is refused
- *   with a reason the removal recognises, and it takes the copy again.
+ *   row and its working draft both, read again through the reader the copy
+ *   was taken with. A Layout edited after the copy is refused; the removal
+ *   reads the version again, finds it moved, and takes the copy again.
  *
  * ## Registered after the default guard
  *
@@ -66,7 +67,7 @@ import {
   type UnpublishHookContext,
 } from "../unpublish-write";
 
-import { versionOf, workingDraftOf, type CopyReads } from "./layout-copy";
+import { readLayoutCopy, type CopyReads } from "./layout-copy";
 import {
   holdsTheLayout,
   type LayoutRemoval,
@@ -268,17 +269,23 @@ async function claimedRemoval(
     : null;
 }
 
-/** Whether the Layout still has the version its copy was taken at. */
+/**
+ * Whether the Layout still has the version its copy was taken at. Read again
+ * through the same reader the copy was taken with (`readLayoutCopy`), never
+ * from the hook's own row: that is the stored row as the database names it,
+ * and a version over every authored field is only comparable between two
+ * reads of the same shape.
+ */
 async function stillAsCopied(
   hook: LayoutHookContext,
   layouts: string,
-  live: Record<string, unknown>,
+  id: string,
   removal: LayoutRemoval
 ): Promise<boolean> {
   const nextly = directApiOf(hook);
   if (nextly === null) return false;
-  const draft = await workingDraftOf(nextly, layouts, removal.layoutId);
-  return (await versionOf(live, draft)) === removal.copyVersion;
+  const now = await readLayoutCopy(nextly, layouts, id);
+  return now !== null && now.version === removal.copyVersion;
 }
 
 /** Let the write through only by the rule in the module docblock. */
@@ -298,14 +305,7 @@ async function admitRemoval(args: {
   const removal =
     id === null ? null : await claimedRemoval(hook, store, id, action);
   if (removal === null) throw refusal("layout-removal-not-through-remove", id);
-  if (
-    !(await stillAsCopied(
-      hook,
-      layouts,
-      live as Record<string, unknown>,
-      removal
-    ))
-  ) {
+  if (!(await stillAsCopied(hook, layouts, removal.layoutId, removal))) {
     throw refusal(VERSION_MOVED, id);
   }
 }

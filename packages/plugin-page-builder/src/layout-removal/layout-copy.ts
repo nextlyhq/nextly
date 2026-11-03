@@ -2,8 +2,9 @@
  * A Layout's copy and its version: what a removal records at its final step,
  * and what the guard compares before it lets the delete or unpublish through.
  *
- * The version is a digest of the two rows' authored content and `updatedAt`,
- * the live row's and the working draft's. Any change to either moves it, so a
+ * The version is a digest of the two rows' authored content ({@link authoredOf},
+ * the projection a restore writes back) and `updatedAt`, the live row's and the
+ * working draft's. Any change to either moves it, so a
  * Layout edited after the copy was taken no longer matches, and the removal
  * takes the copy again rather than deleting an edit its copy does not hold.
  *
@@ -35,7 +36,7 @@ function textOf(row: Record<string, unknown>, key: string): string {
  * it over in: an array, or JSON text as SQLite stores a repeater. Anything
  * else reads as no rows.
  */
-export function areaRows(row: Record<string, unknown>): unknown[] {
+function areaRows(row: Record<string, unknown>): unknown[] {
   let areas: unknown = row.areas;
   if (typeof areas === "string") {
     try {
@@ -48,29 +49,78 @@ export function areaRows(row: Record<string, unknown>): unknown[] {
 }
 
 /**
- * The Layout's areas as `[area, component id]` pairs, whichever shape the read
- * handed them over in: an array, or JSON text as SQLite stores a repeater, each
- * component as its id or as its row.
+ * The columns a stored Layout row carries that the system writes, never an
+ * author: its id, its timestamps, its lifecycle and who made it. Keys starting
+ * with `_` (a read's own bookkeeping, such as `_isWorkingDraft`) are left off
+ * too.
  */
-function areasOf(row: Record<string, unknown>): [string, string][] {
-  return areaRows(row).map(entry => {
-    const area = entry as { area?: unknown; component?: unknown } | null;
-    return [
-      typeof area?.area === "string" ? area.area : "",
-      relationId(area?.component) ?? "",
-    ];
+const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
+  "id",
+  "status",
+  "createdAt",
+  "updatedAt",
+  "created_at",
+  "updated_at",
+  "createdBy",
+  "created_by",
+  "firstPublishedAt",
+  "first_published_at",
+  "publishedAt",
+  "published_at",
+]);
+
+/**
+ * The authored fields of a Layout row, as a write takes them: the whole row
+ * less what the system writes, so fields another plugin added to Layouts are
+ * kept. The one projection both a restore writes back and a version is taken
+ * over, so a field a restore would bring back is one whose edit moves the
+ * version. The address is left out: each restore sets its own, and a version
+ * adds it beside this.
+ *
+ * `areas` is read through `areaRows`, so SQLite's JSON text reads as the other
+ * dialects' arrays; each row's own id is dropped, since it belongs to the rows
+ * it was read from, and each component is named by its id.
+ */
+export function authoredOf(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (SYSTEM_FIELDS.has(key) || key === "slug" || key.startsWith("_")) {
+      continue;
+    }
+    fields[key] = value;
+  }
+  fields.areas = areaRows(row).map(area => {
+    if (typeof area !== "object" || area === null) return area;
+    const rest: Record<string, unknown> = { ...area };
+    delete rest.id;
+    const component = relationId(rest.component);
+    if (component !== null) rest.component = component;
+    return rest;
   });
+  return fields;
 }
 
-/** What a version is taken over: the row's authored content and its stamp. */
+/** `value` with every object's keys in order, so equal content prints equally. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map(key => [key, canonical((value as Record<string, unknown>)[key])])
+  );
+}
+
+/** What a version is taken over: the row's authored content, address, state and stamp. */
 function contentOf(row: Record<string, unknown> | null): unknown {
   if (row === null) return null;
   return [
-    textOf(row, "title"),
+    canonical(authoredOf(row)),
     textOf(row, "slug"),
-    textOf(row, "description"),
     textOf(row, "status"),
-    areasOf(row),
     stamp(row),
   ];
 }
@@ -108,7 +158,7 @@ function workingDraft(value: unknown): Record<string, unknown> | null {
 }
 
 /** The Layout's working draft, read as the system, or `null` when it has none. */
-export async function workingDraftOf(
+async function workingDraftOf(
   nextly: Pick<Nextly, "findByID">,
   layouts: string,
   id: string

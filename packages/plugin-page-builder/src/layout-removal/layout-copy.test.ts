@@ -28,6 +28,14 @@ describe("a Layout's version", () => {
     expect(await versionOf(edited, null)).not.toBe(await versionOf(live, null));
   });
 
+  it("moves when another plugin's field changes within the same stored second", async () => {
+    const before = { ...live, tagline: "Before" };
+    const after = { ...live, tagline: "Edited meanwhile" };
+    expect(await versionOf(after, null)).not.toBe(
+      await versionOf(before, null)
+    );
+  });
+
   it("moves when only the working draft's content changes", async () => {
     const draft = { ...live, title: "Draft one" };
     const later = { ...live, title: "Draft two" };

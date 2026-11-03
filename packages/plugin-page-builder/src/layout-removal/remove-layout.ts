@@ -46,10 +46,7 @@ import {
   type PageReference,
   type PersonReads,
 } from "./layout-references";
-import {
-  LAYOUT_REMOVAL_CONTEXT_KEY,
-  VERSION_MOVED,
-} from "./layout-removal-guard";
+import { LAYOUT_REMOVAL_CONTEXT_KEY } from "./layout-removal-guard";
 import type { RestoreDeps } from "./restore";
 import {
   settleRemoval,
@@ -335,12 +332,20 @@ async function write(
   }
 }
 
-/** Whether the guard refused because the Layout changed since the copy. */
-function versionMoved(error: unknown): boolean {
-  return (
-    NextlyError.isCode(error, "CONFLICT") &&
-    error.logContext?.reason === VERSION_MOVED
-  );
+/**
+ * Whether a refused write was refused because the Layout changed since the
+ * copy: the Layout read again has another version. Decided by reading, not by
+ * the refusal's own details, which core replaces on the way out of a hook.
+ */
+async function movedSinceTheCopy(
+  deps: RemoveLayoutDeps,
+  layoutId: string,
+  version: string,
+  error: unknown
+): Promise<boolean> {
+  if (!NextlyError.isCode(error, "CONFLICT")) return false;
+  const now = await readLayoutCopy(deps.nextly, deps.slugs.layouts, layoutId);
+  return now !== null && now.version !== version;
 }
 
 /**
@@ -392,7 +397,7 @@ async function copyThenRemove(
       await write(deps, request, token);
       return;
     } catch (error) {
-      if (!versionMoved(error)) {
+      if (!(await movedSinceTheCopy(deps, layoutId, taken.version, error))) {
         await passOnUnlessItLanded(deps, request, error);
         return;
       }

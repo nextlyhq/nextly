@@ -90,12 +90,19 @@ function guard(stored: LayoutRemoval | null) {
 /** A caller's transaction, as the hook context hands it over. */
 const TX = { transaction: "caller" };
 
-/** A Direct API answering the working-draft read with `draft`. */
-function reader(draft: Record<string, unknown> | null = null) {
+/**
+ * A Direct API answering the Layout's read with `live` and the working-draft
+ * read with `draft`.
+ */
+function reader(
+  draft: Record<string, unknown> | null = null,
+  live: Record<string, unknown> = LIVE
+) {
   return {
     nextly: {
+      find: async () => ({ items: [{ ...live }], meta: { hasNext: false } }),
       findByID: async () =>
-        draft === null ? { ...LIVE } : { ...draft, _isWorkingDraft: true },
+        draft === null ? { ...live } : { ...draft, _isWorkingDraft: true },
     },
   };
 }

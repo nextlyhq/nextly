@@ -17,10 +17,7 @@ import { describe, expect, it } from "vitest";
 import type { DefaultLayoutDirectApi } from "../default-layout/store";
 
 import { readableTitles, scanLayoutReferences } from "./layout-references";
-import {
-  LAYOUT_REMOVAL_CONTEXT_KEY,
-  VERSION_MOVED,
-} from "./layout-removal-guard";
+import { LAYOUT_REMOVAL_CONTEXT_KEY } from "./layout-removal-guard";
 import { removeLayout, type RemoveLayoutDeps } from "./remove-layout";
 import { settleLayoutRemovals } from "./settle";
 import {
@@ -587,8 +584,31 @@ describe("a write that committed and then failed", () => {
 });
 
 describe("a Layout that changes while it is removed", () => {
+  // As core hands a hook's refusal back: a conflict whose own details are
+  // replaced on the way out, so the removal decides by reading the Layout.
   const moved = () =>
-    NextlyError.conflict({ logContext: { reason: VERSION_MOVED } });
+    NextlyError.conflict({
+      logContext: {
+        legacyMessage: "Use Remove Layout… on the Layout's screen",
+      },
+    });
+
+  it("passes on a refusal that changed nothing, rather than taking the copy again", async () => {
+    const s = site();
+    let writes = 0;
+    s.onLayoutWrite = () => {
+      writes += 1;
+      throw moved();
+    };
+    const d = deps(s);
+
+    const error = await refusal(remove(d));
+
+    expect(NextlyError.isCode(error, "CONFLICT")).toBe(true);
+    expect(writes).toBe(1);
+    expect(s.layouts.has("landing")).toBe(true);
+    expect(d.store.rows.size).toBe(0);
+  });
 
   it("takes the copy again and removes it", async () => {
     const s = site();
@@ -621,7 +641,15 @@ describe("a Layout that changes while it is removed", () => {
 
   it("gives up after three copies, saying to try again, and takes the fence down", async () => {
     const s = site();
+    let edits = 0;
+    // Every write meets an edit made since its copy.
     s.onLayoutWrite = () => {
+      edits += 1;
+      s.layoutDrafts.set("landing", {
+        id: "landing",
+        title: `Edited ${String(edits)}`,
+        updatedAt: "2026-11-01T11:00:00.000Z",
+      });
       throw moved();
     };
     const d = deps(s);
