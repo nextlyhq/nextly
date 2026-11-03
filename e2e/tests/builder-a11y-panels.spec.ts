@@ -73,14 +73,16 @@ async function createPage(request: APIRequestContext): Promise<string> {
 }
 
 async function openEditor(page: Page, scheme: "light" | "dark"): Promise<void> {
-  if (scheme === "dark") {
-    await page.addInitScript(
-      ([key, value]) => window.localStorage.setItem(key, value),
-      ["nextly-theme", "dark"] as const
-    );
-  }
+  // Without motion, so a scan reads each control's settled colours rather
+  // than a frame of the rail's 120ms fade between two of them.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   const id = await createPage(page.request);
-  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+  // The admin's own theme switch, which also waits for the scheme to apply.
+  await gotoAdmin(
+    page,
+    `/collections/pages/${id}/builder?field=content`,
+    scheme
+  );
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });

@@ -12,7 +12,7 @@
  * with a control that the same scan finds an authored collection, so a page
  * that drew no links at all cannot pass.
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
@@ -20,9 +20,9 @@ import { test } from "./support/test";
 /** The builder's internal collections, by the slug prefix they share. */
 const INTERNAL = "nx_pb_";
 
-/** Every link target on the page, read from the document. */
-async function linkTargets(page: Page): Promise<string[]> {
-  return page
+/** Every link target inside `scope`, read from the document. */
+async function linkTargets(scope: Locator): Promise<string[]> {
+  return scope
     .locator("a[href]")
     .evaluateAll(links => links.map(link => link.getAttribute("href") ?? ""));
 }
@@ -30,23 +30,33 @@ async function linkTargets(page: Page): Promise<string[]> {
 test.describe("the page builder's internal collections", () => {
   test("have no link in the admin's navigation", async ({ page }) => {
     await gotoAdmin(page, "/collections/pages");
-    const targets = await linkTargets(page);
+    // The sidebars list the collections after they mount, so they are
+    // scanned once they list an authored one: the control that they drew.
+    const sidebars = page.getByRole("complementary");
+    await expect(
+      sidebars.getByRole("link", { name: "Pages", exact: true })
+    ).toBeVisible();
 
-    // The control: the navigation links to an authored collection.
-    expect(targets.some(target => target.includes("/collections/pages"))).toBe(
-      true
-    );
+    const targets = await linkTargets(sidebars);
     expect(targets.filter(target => target.includes(INTERNAL))).toEqual([]);
   });
 
-  test("have no link on the dashboard", async ({ page }) => {
+  test("have no link or name on the dashboard", async ({ page }) => {
     await gotoAdmin(page, "/");
-    // Settled: the dashboard draws its cards after it reads the counts.
-    await expect(page.locator("main")).toBeVisible();
-    const targets = await linkTargets(page);
+    // The dashboard says it is loading until its cards arrive, and is
+    // scanned once a card has drawn: the control that there is a dashboard.
+    const dashboard = page.locator("main");
+    await expect(
+      dashboard.locator('[data-testid="widget-grid-loading"]')
+    ).toHaveCount(0);
+    await expect(
+      dashboard.locator('[data-testid="widget-card-header"]').first()
+    ).toBeVisible();
 
-    expect(targets.some(target => target.includes("/collections/"))).toBe(true);
+    const targets = await linkTargets(dashboard);
     expect(targets.filter(target => target.includes(INTERNAL))).toEqual([]);
-    await expect(page.getByText(/usage backfill|class usage/i)).toHaveCount(0);
+    await expect(
+      dashboard.getByText(/usage backfill|class usage|component usage/i)
+    ).toHaveCount(0);
   });
 });
