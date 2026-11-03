@@ -63,6 +63,9 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  *   Builder's, which a production build turns off.
  * - `builder-field-gates`, `builder-runtime-collection`, `builder-nested-field`:
  *   each makes its collection through the Schema Builder's own calls.
+ * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
+ *   which only a development server may reach; a production server rightly
+ *   refuses it.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -75,6 +78,7 @@ const DEV_SPECS = [
   "**/builder-nested-field.spec.ts",
   "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
+  "**/builder-fonts.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */

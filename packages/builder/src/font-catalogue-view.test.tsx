@@ -447,6 +447,25 @@ describe("adding a family", () => {
     });
   });
 
+  it("does not take an uploaded static cut for the variable file", async () => {
+    view(catalogue(), {
+      onSite: [
+        {
+          family: "Inter",
+          src: [{ url: "/api/media/inter-400/raw" }],
+          weight: "400",
+          style: "normal",
+          source: { kind: "upload" },
+        },
+      ],
+    });
+    const editor = await openAdd(/^Inter/);
+    // The variable file covers 100 to 900, which the site doesn't have.
+    expect(
+      within(editor).getByRole("button", { name: "Add 1 more style" })
+    ).toBeTruthy();
+  });
+
   it("adds a family that comes only in italic", async () => {
     const add = vi.fn(async (_request: CatalogueAddRequest) => undefined);
     const molle: CatalogueFamilyView = {

@@ -19,6 +19,7 @@
  * @module font-family-field
  */
 import {
+  GENERIC_FONT_FAMILIES,
   isTokenRef,
   readFamilyList,
   resolveSiteTokens,
@@ -105,13 +106,34 @@ const GROUPS: ReadonlyArray<{ group: ChoiceGroup; heading: string }> = [
   { group: "system", heading: "System" },
 ];
 
-/** The families every browser resolves, in the words an author reads. */
+/** The generic families in an author's words, the common ones first. */
+const GENERIC_LABELS: Readonly<Record<string, string>> = {
+  "system-ui": "System UI",
+  "sans-serif": "Sans serif",
+  serif: "Serif",
+  monospace: "Monospace",
+  cursive: "Cursive",
+  fantasy: "Fantasy",
+  "ui-sans-serif": "System sans serif",
+  "ui-serif": "System serif",
+  "ui-monospace": "System monospace",
+  "ui-rounded": "System rounded",
+  math: "Math",
+  emoji: "Emoji",
+  fangsong: "Fangsong",
+};
+
+/**
+ * The families every browser resolves: exactly the generic keywords the
+ * engine accepts, so no value it stores reads as unknown here. One without
+ * words of its own is shown as written.
+ */
 const SYSTEM: ReadonlyArray<{ label: string; value: string }> = [
-  { label: "System UI", value: "system-ui" },
-  { label: "Sans serif", value: "sans-serif" },
-  { label: "Serif", value: "serif" },
-  { label: "Monospace", value: "monospace" },
-];
+  ...Object.keys(GENERIC_LABELS).filter(value =>
+    GENERIC_FONT_FAMILIES.includes(value)
+  ),
+  ...GENERIC_FONT_FAMILIES.filter(value => !(value in GENERIC_LABELS)),
+].map(value => ({ label: GENERIC_LABELS[value] ?? value, value }));
 
 /** How many entries the list holds before it offers a search. */
 const SEARCH_FROM = 8;

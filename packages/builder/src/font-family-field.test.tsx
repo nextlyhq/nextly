@@ -112,14 +112,23 @@ describe("FontFamilyField", () => {
     expect(headings).toEqual(["Font variables", "On this site", "System"]);
     expect(optionsIn(list, "Font variables")).toContain("Heading font");
     expect(optionsIn(list, "On this site")).toEqual(["Inter", "Lora"]);
+    // Every generic family the engine accepts, the common ones first.
     expect(optionsIn(list, "System")).toEqual([
       "System UI",
       "Sans serif",
       "Serif",
       "Monospace",
+      "Cursive",
+      "Fantasy",
+      "System sans serif",
+      "System serif",
+      "System monospace",
+      "System rounded",
+      "Math",
+      "Emoji",
+      "Fangsong",
     ]);
     expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
   it("draws each family in itself", () => {
@@ -183,7 +192,9 @@ describe("FontFamilyField", () => {
 
   it("moves through the options with the arrow keys, picks with Enter and closes with Escape", async () => {
     const onCommit = mount();
-    const list = open();
+    open();
+    // The list is long enough to offer its search, which carries the keys.
+    const list = screen.getByRole("combobox");
     const first = list.getAttribute("aria-activedescendant");
     expect(first).not.toBeNull();
     fireEvent.keyDown(list, { key: "ArrowDown" });
@@ -196,10 +207,10 @@ describe("FontFamilyField", () => {
     expect(list.getAttribute("aria-activedescendant")).toBe(first);
     fireEvent.keyDown(list, { key: "End" });
     fireEvent.keyDown(list, { key: "Enter" });
-    expect(onCommit).toHaveBeenCalledWith("monospace");
+    expect(onCommit).toHaveBeenCalledWith("fangsong");
 
-    const again = open();
-    fireEvent.keyDown(again, { key: "Escape" });
+    open();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
     // The popover hands focus back once it has unmounted, a tick later.
     await waitFor(() => expect(document.activeElement).toBe(trigger()));

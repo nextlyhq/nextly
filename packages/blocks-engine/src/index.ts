@@ -815,6 +815,7 @@ export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {
+  GENERIC_FONT_FAMILIES,
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,

@@ -443,11 +443,24 @@ function presentStyles(
   const present = new Set<string>();
   for (const face of site?.faces ?? []) {
     const style = face.style === "italic" ? "italic" : "normal";
-    const weight = family.variable ? "variable" : (face.weight ?? "400").trim();
+    // The weight as stored, so a static 400 is never taken for the variable
+    // file's whole range; the planner compares faces the same way.
+    const weight = (face.weight ?? "400").trim().replace(/\s+/g, " ");
     const subset = face.source?.subset ?? family.defSubset;
     present.add(`${weight}|${style}|${subset}`);
   }
   return present;
+}
+
+/** A cut as a stored face declares its weight: a variable file its range. */
+function declaredWeight(
+  family: CatalogueFamilyView,
+  cut: number | "variable"
+): string {
+  if (cut !== "variable") return String(cut);
+  const low = Math.min(...family.weights);
+  const high = Math.max(...family.weights);
+  return low === high ? String(low) : `${String(low)} ${String(high)}`;
 }
 
 /** What the add button says, and whether it can be pressed. */
@@ -508,7 +521,7 @@ function addSelection(
   const held = (cut: number | "variable", style: string): boolean =>
     chosenSubsets.length > 0 &&
     chosenSubsets.every(subset =>
-      present.has(`${String(cut)}|${style}|${subset}`)
+      present.has(`${declaredWeight(family, cut)}|${style}|${subset}`)
     );
   const cuts: Array<number | "variable"> = family.variable
     ? ["variable"]

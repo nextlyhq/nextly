@@ -229,6 +229,34 @@ describe("planFontAdd", () => {
     ]);
   });
 
+  it("counts only the files it would download against the cap", () => {
+    // Latin is on the site already; the editor still names it, because its
+    // held boxes stay checked. Only the Cyrillic files are new.
+    const stored: FontFaceDef[] = [400, 700].map(weight => ({
+      family: "Lora",
+      src: [{ url: `/api/media/l${String(weight)}/raw`, format: "woff2" }],
+      weight: String(weight),
+      style: "normal",
+      unicodeRange: "U+0000-00FF",
+    }));
+    const plan = planFontAdd(
+      {
+        id: "lora",
+        weights: [400, 700],
+        styles: ["normal"],
+        subsets: ["cyrillic", "latin"],
+      },
+      LORA,
+      { filesBase: FILES, maxFiles: 2 },
+      stored
+    );
+    expect(plan.files.map(file => file.fileName)).toEqual([
+      "lora-cyrillic-400-normal.woff2",
+      "lora-cyrillic-700-normal.woff2",
+    ]);
+    expect(plan.skipped).toBe(2);
+  });
+
   it("skips a face the site already has, however its family is spelled", () => {
     const stored: FontFaceDef = {
       family: "LORA",

@@ -377,6 +377,21 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("refuses a catalogue answer cut short, in its own words", async () => {
+      const t = await boot();
+      const cookie = await designer(t);
+      catalogue.on("/v1/fonts/lora", (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"id":"lora","fam');
+      });
+      const answer = await add(cookie);
+      expect(answer.status).toBe(503);
+      expect(JSON.stringify(answer.body)).toContain(
+        "Google Fonts sent something"
+      );
+      await expectNothingStored(t);
+    });
+
     it("downloads a variable family from the variable package's own release", async () => {
       const t = await boot();
       const cookie = await designer(t);

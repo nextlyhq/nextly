@@ -188,13 +188,9 @@ export function planFontAdd(
     throw invalid("id", NOT_IN_CATALOGUE);
   }
   checkOffered(request, meta);
+  // The request schema bounds this (9 weights, 2 styles, 4 scripts); the cap
+  // applies to the files left once faces the site has are skipped.
   const wanted = combinations(request);
-  if (wanted.length > limits.maxFiles) {
-    throw invalid(
-      "weights",
-      `That’s more styles than one add allows (${String(limits.maxFiles)}). Choose fewer weights or languages.`
-    );
-  }
   const files: PlannedFile[] = [];
   let skipped = 0;
   for (const want of wanted) {
@@ -228,6 +224,12 @@ export function planFontAdd(
       altText: `${meta.family} ${weight} ${want.style}, ${want.subset}. Google Fonts, ${meta.licence}.`,
       face,
     });
+  }
+  if (files.length > limits.maxFiles) {
+    throw invalid(
+      "weights",
+      `That’s more styles than one add allows (${String(limits.maxFiles)}). Choose fewer weights or languages.`
+    );
   }
   return { files, skipped };
 }

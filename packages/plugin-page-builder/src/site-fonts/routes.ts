@@ -270,20 +270,19 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
   ): Promise<Response> => {
     const fetch = fetchOf(ctx);
     const meta = parseFontMetadata(
-      JSON.parse(
-        new TextDecoder().decode(
-          await fetchFromCatalogue(
-            fetch,
-            new URL(`/v1/fonts/${request.id}`, fonts.api).href,
-            rules({
-              expect: "json",
-              maxBytes: METADATA_MAX_BYTES,
-              messages: ADD_MESSAGES,
-              signal,
-              notFound: notInCatalogue,
-            })
-          )
-        )
+      addJson(
+        await fetchFromCatalogue(
+          fetch,
+          new URL(`/v1/fonts/${request.id}`, fonts.api).href,
+          rules({
+            expect: "json",
+            maxBytes: METADATA_MAX_BYTES,
+            messages: ADD_MESSAGES,
+            signal,
+            notFound: notInCatalogue,
+          })
+        ),
+        fonts.api.host
       )
     );
     if (meta === undefined) throw notInCatalogue();
@@ -323,20 +322,19 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
     signal: AbortSignal
   ): Promise<string> => {
     const version = parseVariableVersion(
-      JSON.parse(
-        new TextDecoder().decode(
-          await fetchFromCatalogue(
-            fetch,
-            new URL(`/v1/version/${id}`, fonts.api).href,
-            rules({
-              expect: "json",
-              maxBytes: METADATA_MAX_BYTES,
-              messages: ADD_MESSAGES,
-              signal,
-              notFound: notInCatalogue,
-            })
-          )
-        )
+      addJson(
+        await fetchFromCatalogue(
+          fetch,
+          new URL(`/v1/version/${id}`, fonts.api).href,
+          rules({
+            expect: "json",
+            maxBytes: METADATA_MAX_BYTES,
+            messages: ADD_MESSAGES,
+            signal,
+            notFound: notInCatalogue,
+          })
+        ),
+        fonts.api.host
       )
     );
     if (version === undefined) throw notInCatalogue();
@@ -463,6 +461,22 @@ async function fontsFolder(
     return made.id;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * A json answer read during an add, or the add's refusal when it is not json
+ * at all: a body cut short or garbled reaches the author as the catalogue's
+ * fault, in the add's own words, rather than as an internal error.
+ */
+function addJson(bytes: Uint8Array, host: string): unknown {
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    throw NextlyError.serviceUnavailable({
+      publicMessage: ADD_MESSAGES.refused,
+      logContext: { reason: "catalogue-not-json", host },
+    });
   }
 }
 
