@@ -2,7 +2,11 @@ import { defineSingle, json } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import { pageBuilder } from "./plugin";
-import { siteStyleSingle } from "./site-style-storage";
+import {
+  loadSiteStyle,
+  readStoredSiteStyle,
+  siteStyleSingle,
+} from "./site-style-storage";
 
 /** A host no site in these tests allows. */
 const TRACKER = "https://tracker.example/p.png";
@@ -158,5 +162,40 @@ describe("the policy the plugin derives from remotePatterns", () => {
 
   it("asks nothing when the host configured no patterns", () => {
     expect(classesValidate(registeredSingle({}))(CLASSES)).toBe(true);
+  });
+});
+
+describe("reading the stored Site Style document", () => {
+  /** A reader that records what it was asked and answers one stored row. */
+  function recordingReader() {
+    const asked: unknown[] = [];
+    return {
+      asked,
+      nextly: {
+        findSingle: async (args: unknown) => {
+          asked.push(args);
+          return { id: "row-1", tokens: { tokens: [] } };
+        },
+      },
+    };
+  }
+
+  it("leaves the published render's read to the reader's own access posture", async () => {
+    // `loadSiteStyle` is published: a host handing it a reader that enforces
+    // access must keep that enforcement, so it names the Single and nothing
+    // more.
+    const { asked, nextly } = recordingReader();
+    await loadSiteStyle({ nextly });
+    expect(asked).toEqual([{ slug: "site-style" }]);
+  });
+
+  it("reads past the Single's permission only when the caller says so", async () => {
+    const { asked, nextly } = recordingReader();
+    await readStoredSiteStyle({ nextly });
+    await readStoredSiteStyle({ nextly, overrideAccess: true });
+    expect(asked).toEqual([
+      { slug: "site-style" },
+      { slug: "site-style", overrideAccess: true },
+    ]);
   });
 });

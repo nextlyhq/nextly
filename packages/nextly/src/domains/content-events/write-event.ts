@@ -32,6 +32,7 @@ import {
   ensureCoreContentEventKinds,
   type CoreContentEventKind,
 } from "./core-kinds";
+import type { ContentEventKind } from "./kinds";
 import {
   recordContentEvent,
   type ContentEventInput,
@@ -45,7 +46,12 @@ import {
  */
 export interface WriteEventInput {
   subject: ContentEventSubject;
-  kind: CoreContentEventKind;
+  /**
+   * A core kind by its key, or a kind another core feature registered
+   * itself (the document lock's takeover), so that feature's events take
+   * their actor from this one assembly too.
+   */
+  kind: CoreContentEventKind | Readonly<ContentEventKind>;
   /** Who made the write, as the write path resolved it. */
   actor: RequestActor;
   /**
@@ -140,7 +146,10 @@ export async function recordWriteEvent(
     tx,
     {
       subject: input.subject,
-      kind: CORE_CONTENT_EVENT_KINDS[input.kind].name,
+      kind:
+        typeof input.kind === "string"
+          ? CORE_CONTENT_EVENT_KINDS[input.kind].name
+          : input.kind.name,
       actor,
       parts: input.parts,
       fromState: input.fromState ?? null,

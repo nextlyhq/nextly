@@ -1,7 +1,7 @@
 /**
  * Inlining a linked component definition into the document that references it.
  *
- * A component INSTANCE is one node holding a reference, a variant name and a
+ * A component INSTANCE is one node holding a reference, a variant id and a
  * set of overrides. What a reader has to draw is the definition's whole tree,
  * with those overrides applied and the instance's own slot content in place of
  * the definition's. Turning the first into the second is this module.
@@ -55,6 +55,7 @@ import {
   type ComponentDocument,
   type NodeVisibility,
   type ExposedProperty,
+  type ExposedPropertyType,
   type OverrideValue,
 } from "./document";
 import { walkForest } from "./forest-walk";
@@ -69,6 +70,7 @@ import {
 } from "./limits";
 import { boundedLimit } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
+import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
 import { mintDomId, remapIdReferences } from "./tree";
@@ -162,7 +164,31 @@ export interface ResolvedBlockNode extends BlockNode {
    * nothing to act on.
    */
   unresolvedComponent?: ComponentUnresolvedReason;
+  /**
+   * Which of the placement's exposures feeds each prop of this node, as prop
+   * path to exposure id. Recorded only when a resolution asks for it
+   * ({@link ResolveComponentOptions.exposures}), so a page served to a reader
+   * never carries it.
+   *
+   * The editor's address for a value inside a component: the node itself is
+   * re-identified and absent from the stored page, so an edit on the canvas
+   * reaches the value through `instanceOf` and this id, and is written as the
+   * placement's own value. Only the HOST placement's component is mapped: a
+   * component nested inside it is reached through that component's own
+   * fields, never directly.
+   */
+  exposedProps?: Readonly<Record<string, PropExposure>>;
   slots?: Record<string, ResolvedBlockNode[]>;
+}
+
+/**
+ * The host placement's exposure that feeds one prop of a composed node: its
+ * id, which the placement's value is stored under, and its type, which says
+ * what an editor may write there (free text only through a `text` exposure).
+ */
+export interface PropExposure {
+  readonly id: string;
+  readonly type: ExposedPropertyType;
 }
 
 /** A document whose component instances have been resolved. */
@@ -242,6 +268,12 @@ export interface ResolveComponentOptions {
    * already bounds it. Omitted, a resolution is bounded by its limits alone.
    */
   work?: WorkAllowance;
+  /**
+   * Record on each composed node which exposure feeds each of its props
+   * ({@link ResolvedBlockNode.exposedProps}). For an editor only: a render
+   * leaves it off, and its output carries no map.
+   */
+  exposures?: boolean;
 }
 
 /** One instance that was left standing, and why. */
@@ -928,6 +960,7 @@ export function resolveComponentInstances(
     maxDepth: limits.maxDepth,
     maxNodes: limits.maxNodes,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
+    exposures: options.exposures === true,
     // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
     // document, and the composed tree IS the document every later pass walks —
     // the style compiler, the renderer, the SEO derivation. Starting a fresh
@@ -975,6 +1008,8 @@ interface ResolveRun {
    */
   maxNodes: number;
   maxComposedDepth: number;
+  /** Whether composed nodes record the exposures that feed them. */
+  exposures: boolean;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
   /**
@@ -1621,7 +1656,8 @@ function expandInstance(
   scope: ComposedScope,
   depth: number,
   presupplied?: Record<string, ResolvedBlockNode[]>,
-  owner?: string
+  owner?: string,
+  relay?: ReadonlyMap<string, PropExposure>
 ): ResolvedBlockNode[] {
   // Asked before anything else, including whether the instance is even well
   // formed. A gated node is not served, so composing it is work nobody
@@ -1670,6 +1706,7 @@ function expandInstance(
       depth,
       presupplied,
       owner,
+      relay,
     });
   } catch {
     // Everything that follows CONSUMES the definition — its nodes, their props,
@@ -1707,6 +1744,12 @@ interface InstancePlacement {
   depth: number;
   presupplied?: Record<string, ResolvedBlockNode[]>;
   owner?: string;
+  /**
+   * For a nested instance in editor mode: which of ITS exposures the host
+   * placement's component drives, by the host exposure's id. See
+   * {@link relayOf}.
+   */
+  relay?: ReadonlyMap<string, PropExposure>;
 }
 
 /**
@@ -1722,7 +1765,7 @@ function inlinedDefinition(
   componentId: string,
   placement: InstancePlacement
 ): ResolvedBlockNode[] | null {
-  const { run, scope, depth, presupplied, owner } = placement;
+  const { run, scope, depth, presupplied, owner, relay } = placement;
   // The instance node is REPLACED, so its own slot under the cap is freed for
   // what replaces it. Credited before the clone rather than after, or a
   // definition that exactly fills the remaining room is refused for needing
@@ -1737,12 +1780,19 @@ function inlinedDefinition(
   const supplied = owned
     ? suppliedSlots(instance, definition, run)
     : presupplied;
+  const plans = planEdits(definition, instance, supplied, !owned);
+  // The host placement's own exposures, and a nested instance's only where a
+  // host exposure drives them: its fields are reached through the host
+  // component's, so its nodes carry the HOST exposure's id or none.
+  if (run.exposures && (owner === undefined || relay !== undefined)) {
+    planExposedProps(definition, instance, plans, relay);
+  }
   const ctx: InlineContext = {
     run,
     scopeKey: instance.id,
     owner: owner ?? instance.id,
     domIds: new Map<string, string>(),
-    plans: planEdits(definition, instance, supplied, !owned),
+    plans,
     scope: {
       depth: scope.depth + 1,
       onPath: new Set(scope.onPath).add(componentId),
@@ -2349,6 +2399,8 @@ interface NodePlan {
   visible?: boolean;
   /** Instance content, keyed by the slot NAME on this node. */
   slots?: Map<string, PlannedSlot>;
+  /** Prop path to the host placement's exposure that feeds it, in editor mode. */
+  exposedProps?: Record<string, PropExposure>;
 }
 
 /**
@@ -2381,6 +2433,72 @@ function planEdits(
     planSlots(definition.slots, supplied, plans, composed);
   }
   return plans;
+}
+
+/**
+ * Record, on each planned node, which exposure feeds each of its props.
+ *
+ * One exposure per prop: where two point at the same prop, the one the page
+ * shows is the last declared that the placement or its variant sets, else the
+ * last declared, which is the order the writes apply in. An edit through any
+ * other would change a value nobody sees. A visibility exposure is mapped
+ * under `visibility`, with its type, so an editor can find the node it shows
+ * or hides.
+ */
+function planExposedProps(
+  definition: ComponentDocument,
+  instance: ResolvedBlockNode,
+  plans: Map<string, NodePlan>,
+  /** For a nested instance: its exposure ids to the host's that drive them. */
+  relay?: ReadonlyMap<string, PropExposure>
+): void {
+  const set = effectiveOverrides(definition, instance);
+  const chosen = new Map<string, { fed: PropExposure; set: boolean }>();
+  for (const property of usableExposures(definition.exposed)) {
+    const fed: PropExposure | undefined =
+      relay === undefined
+        ? { id: property.id, type: property.type }
+        : relay.get(property.id);
+    if (fed === undefined) continue;
+    // A visibility exposure drives the node, not a prop, so it is keyed by
+    // the node's own `visibility` whatever its stored path says.
+    const path =
+      property.type === "visibility" ? "visibility" : property.propPath;
+    if (property.nodeId === "" || !isUsablePropPath(path)) continue;
+    const key = `${property.nodeId}\u0000${path}`;
+    const isSet = set.has(property.id);
+    const held = chosen.get(key);
+    if (held !== undefined && held.set && !isSet) continue;
+    chosen.set(key, { fed, set: isSet });
+  }
+  for (const [key, { fed }] of chosen) {
+    const [nodeId = "", path = ""] = key.split("\u0000");
+    const plan = planFor(plans, nodeId);
+    plan.exposedProps = { ...plan.exposedProps, [path]: fed };
+  }
+}
+
+/**
+ * A nested instance's exposures that a host exposure drives, from the map the
+ * host planned on that instance's node: a host exposure aimed at the nested
+ * placement's `overrides.<id>` sets that exposure of the nested component, so
+ * an edit to what it shows is an edit to the host exposure. `undefined` when
+ * none is driven, which leaves the nested component's nodes unmapped.
+ */
+function relayOf(
+  fed: Readonly<Record<string, PropExposure>> | undefined
+): ReadonlyMap<string, PropExposure> | undefined {
+  if (fed === undefined) return undefined;
+  const relay = new Map<string, PropExposure>();
+  for (const path of Object.keys(fed)) {
+    const [head, inner, ...rest] = path.split(".");
+    if (head !== "overrides" || inner === undefined || rest.length > 0) {
+      continue;
+    }
+    const host = fed[path];
+    if (host !== undefined) relay.set(inner, host);
+  }
+  return relay.size === 0 ? undefined : relay;
 }
 
 /**
@@ -2450,6 +2568,11 @@ export interface InstanceExposure {
    * leaves every instance holding a value for it, and silently discarding
    * those makes an author's work disappear at the moment somebody else edits
    * the component — so the editor is told, and can say so.
+   *
+   * A RETIRED id is not among them. A designer removed that field, was told
+   * how much content it held, and confirmed it: its values are being taken
+   * out of every page, so showing one as recoverable would offer the author
+   * work that the next save strips.
    */
   readonly orphanedOverrideIds: readonly string[];
 }
@@ -2467,7 +2590,8 @@ export interface InstanceExposure {
  */
 export function instanceExposure(
   definition: ComponentDocument,
-  instance: BlockNode
+  instance: BlockNode,
+  retired?: RetiredExposures
 ): InstanceExposure {
   const overrides = effectiveOverrides(definition, instance);
   const declared = usableExposures(definition.exposed);
@@ -2486,11 +2610,80 @@ export function instanceExposure(
   );
 
   const exposedIds = new Set(declared.map(property => property.id));
+  const retiredIds = new Set(retired?.properties);
   const orphanedOverrideIds = [...overrides.keys()].filter(
-    id => !exposedIds.has(id)
+    id => !exposedIds.has(id) && !retiredIds.has(id)
   );
 
   return { properties, orphanedOverrideIds };
+}
+
+/**
+ * A component's own tree as one of its variants draws it: the variant's
+ * values written onto the definition's nodes, and the nodes it hides dropped,
+ * with every node keeping its id. For an editor previewing the variant open
+ * in the component's own view, where the canvas selects and edits by id, so
+ * the placement's scoped copy the resolver composes cannot stand in.
+ *
+ * Derived from the resolver's own pieces, as {@link instanceExposure} is: the
+ * overrides a placement choosing the variant puts in force, written with the
+ * same writer in the same order, and the same visibility decision. A variant
+ * the component does not define, or one setting nothing in force, answers the
+ * component itself.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export function variantPreview(
+  definition: ComponentDocument,
+  variant: string
+): ComponentDocument {
+  const chooser: BlockNode = {
+    id: "",
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { variant },
+  };
+  const overrides = effectiveOverrides(definition, chooser);
+  const applied = appliedWrites(usableExposures(definition.exposed), overrides);
+  if (applied.length === 0) return definition;
+  const props = finalProps(nodeIndex(definition.nodes), applied);
+  // The last in-force decision per node, as the plan for that node keeps it.
+  const visible = new Map<string, boolean>();
+  for (const { property, override } of applied) {
+    if (property.type !== "visibility") continue;
+    const decided = visibilityDecision(override.value);
+    if (decided !== undefined) visible.set(property.nodeId, decided);
+  }
+  return {
+    ...definition,
+    nodes: previewForest(definition.nodes, props, visible),
+  };
+}
+
+/** One forest of the preview: written props, hidden nodes dropped, ids kept. */
+function previewForest(
+  nodes: readonly BlockNode[],
+  props: ReadonlyMap<string, Record<string, unknown>>,
+  visible: ReadonlyMap<string, boolean>
+): BlockNode[] {
+  return nodes.flatMap(node => {
+    const shown = visible.get(node.id);
+    if (shown === false) return [];
+    const copy: BlockNode = { ...node };
+    const written = props.get(node.id);
+    if (written !== undefined) copy.props = written;
+    // Shown on purpose lifts the node's own gate, as the resolver does.
+    if (shown === true) delete copy.visibility;
+    if (node.slots !== undefined) {
+      copy.slots = Object.fromEntries(
+        Object.entries(node.slots).map(([name, inner]) => [
+          name,
+          previewForest(inner, props, visible),
+        ])
+      );
+    }
+    return [copy];
+  });
 }
 
 /** One in-force override, together with the exposure that carries it. */
@@ -3109,7 +3302,8 @@ function cloneDefinitionNode(
       ctx.scope,
       depth,
       slots ?? {},
-      ctx.owner
+      ctx.owner,
+      relayOf(plan?.exposedProps)
     );
   }
   return [scoped];
@@ -3508,6 +3702,13 @@ function scopeNode(
   if (plan?.visible === true) delete scoped.visibility;
   if (plan !== undefined && plan.props.length > 0) {
     scoped.props = editedProps(node.props, plan.props);
+  }
+  // Only this pass may say which exposure feeds a node, as with `instanceOf`:
+  // a map stored on a definition's node is dropped, and the one planned for
+  // this placement, if any, put in its place.
+  delete scoped.exposedProps;
+  if (plan?.exposedProps !== undefined) {
+    scoped.exposedProps = plan.exposedProps;
   }
   applyScopedDomIds(scoped, ctx);
   return scoped;

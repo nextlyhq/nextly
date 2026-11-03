@@ -19,7 +19,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { useFormContext } from "react-hook-form";
+import { useFormContext, useFormState } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -86,7 +86,11 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 
-import { useHostedDocumentActions } from "../DocumentActionsContext";
+import {
+  useHostedDocumentActions,
+  useHostedRecoveryPoint,
+} from "../DocumentActionsContext";
+import { DocumentSaveIndicator } from "../DocumentSurfaceControls";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
 import {
@@ -638,6 +642,85 @@ describe("EntryForm with a document view", () => {
     expect(screen.getByTestId("status")).toHaveTextContent("published");
   });
 
+  it("makes the offer in the save chip of a view that draws one, and draws no banner", async () => {
+    // One save state: the chip says "Unsaved changes" and makes the offer,
+    // so a banner above the editor would say it a second time.
+    const CHIP_VIEW = "@acme/pb/admin#Chip";
+    function ChipView(): ReactElement {
+      useEffect(() => {
+        mounted();
+      }, []);
+      return <DocumentSaveIndicator />;
+    }
+    registerComponent(CHIP_VIEW, ChipView);
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    expect(screen.queryByRole("status", { name: /recovery/i })).toBeNull();
+    expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    expect(
+      await screen.findByText(/you have unsaved changes from/i)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    // The same restore the banner runs: the view goes, the values change,
+    // and a fresh view reads them.
+    expect(restore).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the offer when the chip says Not now, and offers nothing more this session", async () => {
+    const CHIP_VIEW = "@acme/pb/admin#ChipDismiss";
+    registerComponent(CHIP_VIEW, () => <DocumentSaveIndicator />);
+    const dismiss = vi.fn();
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      dismiss,
+      restore,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Not now" })
+    );
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  it("hands the view the document's recovery point, so its save state reads it as the header's does", () => {
+    // Edits held only in a recovery point are not stored, and a view that
+    // draws the save state without the header must know they are there.
+    const RECOVERY_VIEW = "@acme/pb/admin#Recovery";
+    const offeredAt = new Date("2026-11-02T18:00:00Z");
+    function RecoveryView(): ReactElement {
+      const point = useHostedRecoveryPoint();
+      return <p>{point.pendingOfferAt?.toISOString() ?? "none"}</p>;
+    }
+    registerComponent(RECOVERY_VIEW, RecoveryView);
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: offeredAt, snapshot: { title: "Recovered" } },
+    };
+    renderView({ documentView: { component: RECOVERY_VIEW, onExit } });
+
+    expect(screen.getByText(offeredAt.toISOString())).toBeInTheDocument();
+  });
+
   it("lets the view run the document's save, with no header drawn, and hear how it went", async () => {
     const ACTIONS_VIEW = "@acme/pb/admin#Actions";
     const heard = vi.fn();
@@ -670,6 +753,48 @@ describe("EntryForm with a document view", () => {
       })
     );
     expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the view the stored value as the field's saved copy after the view runs a save", async () => {
+    // The page builder holds edits inside locked areas against the field's
+    // saved copy, read as the form's default value. A save the server
+    // rewrites must move that copy to what was STORED, not what was sent, or
+    // the editor judges the next edit against a page that no longer exists.
+    const STORED_VIEW = "@acme/pb/admin#Stored";
+    function StoredView(): ReactElement {
+      const { run } = useHostedDocumentActions();
+      const { control, register } = useFormContext();
+      const { defaultValues } = useFormState({ control, name: "title" });
+      return (
+        <>
+          <input aria-label="Page heading" {...register("title")} />
+          <output aria-label="Saved copy">
+            {String(defaultValues?.title)}
+          </output>
+          <button type="button" onClick={() => void run("save")}>
+            Save from the view
+          </button>
+        </>
+      );
+    }
+    registerComponent(STORED_VIEW, StoredView);
+    update.mockResolvedValue({
+      item: { id: "e1", title: "Hello world, as stored" },
+    });
+    const user = userEvent.setup();
+    renderView({ documentView: { component: STORED_VIEW, onExit } });
+    expect(screen.getByLabelText("Saved copy").textContent).toBe("Hello");
+
+    await user.type(screen.getByLabelText("Page heading"), " world");
+    await user.click(
+      screen.getByRole("button", { name: "Save from the view" })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Saved copy").textContent).toBe(
+        "Hello world, as stored"
+      )
+    );
   });
 
   it("keeps the ordinary editor when no view is routed", () => {
@@ -877,6 +1002,36 @@ describe("a field-type view on a document with two fields of its type", () => {
     expect(received).toHaveBeenLastCalledWith(
       expect.objectContaining({
         field: expect.objectContaining({ name: "layout", type: "blocks" }),
+        fieldPath: "layout",
+      })
+    );
+  });
+
+  it("hands a field inside a named group its path from the document's root", () => {
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=hero.body"
+    );
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "hero",
+            type: "group",
+            fields: [{ name: "body", type: "blocks" }],
+          },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    // The declaration keeps its own name; the path is how the form reaches it.
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "body", type: "blocks" }),
+        fieldPath: "hero.body",
       })
     );
   });

@@ -31,12 +31,14 @@
 
 import {
   findNode,
+  isRawColour,
   isTokenRef,
   trimCssWhitespace,
   walkNodes,
   type BreakpointId,
   type BreakpointSet,
   type ContrastResult,
+  type FontFaceDef,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
@@ -57,6 +59,10 @@ import {
   AccordionItem,
   AccordionTrigger,
   ColorPicker,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Input,
   Label,
   Popover,
@@ -67,17 +73,45 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@nextlyhq/ui";
+import { RotateCcw } from "lucide-react";
 import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
+import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
-import { fieldLabel } from "./inspector";
+import {
+  FontChoicesContext,
+  FontFamilyField,
+  fontFamilyShowable,
+  type FontChoices,
+} from "./font-family-field";
+import { IconChoiceField } from "./icon-choice-field";
+import {
+  designIsWritable,
+  designReadOnlyReason,
+  fieldLabel,
+  lockViewOf,
+} from "./inspector";
+import type { InspectorSectionKey } from "./inspector-sections";
 import type { BuilderOp } from "./ops";
+import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
+import {
+  alignmentGroupFor,
+  drawsIcons,
+  flowOf,
+  type Flow,
+} from "./style-alignment-icons";
+import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import {
   activeTokenMode,
   colourHexOf,
@@ -98,7 +132,17 @@ import type {
   StyleControlVariants,
 } from "./style-controls";
 import {
+  fontWeightOptions,
+  foldedControlFor,
+  lineHeightFromText,
+  lineHeightLeafFor,
+  storedKey,
+  type FoldedControl,
+  type FoldedOption,
+} from "./style-folded";
+import {
   inspectStyle,
+  type StyleInspectionOptions,
   type InspectedStyleProperty,
   type StyleSection,
   type StyleInspection,
@@ -121,7 +165,12 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
-import { sideBoxFor, sideOf, type SideBox } from "./style-sides";
+import {
+  physicalSideName,
+  sideBoxFor,
+  sideOf,
+  type SideBox,
+} from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
@@ -337,6 +386,12 @@ export interface StyleInspectorPanelProps {
    * to the selected node, which this panel already writes through the editor.
    */
   onCreateClass?: ClassSelectorProps["onCreateClass"];
+  /**
+   * The site's fonts, for the Font control. It lists only what the site can
+   * draw: its font variables, the families it has files for, and the system
+   * families. Absent, it lists the variables and the system families.
+   */
+  fonts?: FontChoices;
 }
 
 /**
@@ -443,6 +498,20 @@ function styleUnavailable(
 }
 
 /**
+ * The Style tab. The site's fonts reach the Font control through a context, so
+ * they are not handed down every section and row between here and there.
+ */
+export function StyleInspectorPanel(
+  props: StyleInspectorPanelProps
+): React.JSX.Element {
+  return (
+    <FontChoicesContext.Provider value={props.fonts}>
+      <StyleInspectorBody {...props} />
+    </FontChoicesContext.Provider>
+  );
+}
+
+/**
  * The class surface for the selected block, or nothing.
  *
  * Its own component rather than a conditional in the panel body: the panel is
@@ -467,6 +536,13 @@ function SelectedNodeClasses({
   libraryAbsence: ClassSelectorProps["libraryAbsence"];
   onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
 }): React.JSX.Element | null {
+  /*
+   * The editor as it stands NOW. A class creation resolves through the
+   * callback of the render that began it, and a lock set while it was in
+   * flight lives only in a later render's editor.
+   */
+  const live = React.useRef(editor);
+  live.current = editor;
   if (onCreateClass === undefined) return null;
   return (
     <ClassSelector
@@ -481,21 +557,28 @@ function SelectedNodeClasses({
       library={library}
       libraryAbsence={libraryAbsence}
       nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
-      onNodeClassesChange={classIds =>
+      onNodeClassesChange={classIds => {
+        const now = live.current;
+        // The lock is asked of the live document at the moment of the write,
+        // as a style value's write does: the store does not refuse an update
+        // to a block only because the block's own lock is set.
+        if (!designIsWritable(now.document, nodeId, lockViewOf(now))) {
+          return "refused";
+        }
         // `applyAll` answers null when the store refuses — a document at its
         // byte limit rejects an edit the class rules found perfectly valid.
         // Reported back so the selector keeps the draft rather than clearing
         // it as though the write had landed.
-        editor.applyAll([nodeClassesOp(nodeId, classIds)]) === null
+        return now.applyAll([nodeClassesOp(nodeId, classIds)]) === null
           ? "refused"
-          : "applied"
-      }
+          : "applied";
+      }}
       onCreateClass={onCreateClass}
     />
   );
 }
 
-export function StyleInspectorPanel({
+function StyleInspectorBody({
   editor,
   renderedTag,
   sideOrientation,
@@ -545,11 +628,27 @@ export function StyleInspectorPanel({
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
   // anywhere changes both the document and the values shown.
+  /*
+   * ONE subject for the whole panel, and one live-breakpoint set.
+   *
+   * Every control on this panel asks about the SAME node, so building either per
+   * control would walk the document per control — which is the cost this file's
+   * own comments say the indicator must not pay. The inspection reads it too,
+   * to judge which tier's controls show by the display the cascade applies.
+   *
+   * Recomputed each render rather than memoised, exactly as the inspection is:
+   * both are only valid against the document they were read from, and an edit
+   * anywhere changes the document and the values shown together.
+   */
+  const subject = selectedSubject(editor, cascade, renderedTag);
   const inspection = inspectStyle(editor.document, editor.selectedId, {
     ...policy,
     state,
     breakpoint,
     variantAt: (property, path) => chosenForms[formKey(property, path)],
+    media: rendersMedia(renderedTag),
+    breakpoints,
+    cascade: cascadeFor(cascade, subject),
   });
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -580,18 +679,6 @@ export function StyleInspectorPanel({
   const inspected = availability.inspection;
 
   /*
-   * ONE subject for the whole panel, and one live-breakpoint set.
-   *
-   * Every control on this panel asks about the SAME node, so building either per
-   * control would walk the document per control — which is the cost this file's
-   * own comments say the indicator must not pay.
-   *
-   * Recomputed each render rather than memoised, exactly as the inspection above
-   * is: both are only valid against the document they were read from, and an
-   * edit anywhere changes the document and the values shown together.
-   */
-  const subject = selectedSubject(editor, cascade, renderedTag);
-  /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
    * asking about one node at one address.
@@ -613,7 +700,17 @@ export function StyleInspectorPanel({
     onJumpToBreakpoint,
   });
 
-  const groups = inspected.sections.map(section => section.group);
+  /*
+   * Why the design is read-only, read from the document's own locks: the
+   * same answer the write path refuses by, so the controls drawn and the
+   * writes allowed cannot disagree.
+   */
+  const readOnlyReason = designReadOnlyReason(
+    editor.document,
+    inspected.nodeId,
+    lockViewOf(editor)
+  );
+  const groups = inspected.sections.map(section => section.key);
   // Held rather than left to the accordion, so the open section survives a
   // change of selection. Falling back to the first is what keeps it valid when
   // the newly selected block does not offer the section that was open — an
@@ -653,7 +750,8 @@ export function StyleInspectorPanel({
        * it decides what the controls below are even editing. Webflow puts its
        * selector field at the top of the Style panel for the same reason.
        */}
-      <SelectedNodeClasses
+      <PanelClasses
+        readOnlyReason={readOnlyReason}
         editor={editor}
         nodeId={inspected.nodeId}
         library={classLibrary}
@@ -672,8 +770,9 @@ export function StyleInspectorPanel({
             // Keyed by node AND group: a bare group would let React reuse one
             // block's inputs for the next block's same-named section, so a field
             // would keep the previous block's uncommitted text.
-            key={`${inspected.nodeId}:${section.group}`}
+            key={`${inspected.nodeId}:${section.key}`}
             section={section}
+            readOnlyReason={readOnlyReason}
             {...surroundings}
           />
         ))}
@@ -683,47 +782,9 @@ export function StyleInspectorPanel({
 }
 
 /**
- * Whether the viewer's system asks for a dark colour scheme.
- *
- * Read because a site on the `media` dark-mode strategy has its dark token
- * block wrapped in `@media (prefers-color-scheme:dark)`, so the canvas switches
- * with the system and nothing tells the panel. Resolving every token to its
- * light value regardless would paint swatches and report ratios for colours the
- * canvas is not showing.
- *
- * Starts `false` and subscribes after mount, so a server render and the first
- * client render agree — React discards a subtree whose two renders disagree,
- * which would take the whole Style tab with it. A viewer already in dark mode
- * sees one frame of light-mode swatches; the alternative is a hydration
- * mismatch, which is worse and harder to see.
- */
-function usePrefersDark(): boolean {
-  const [prefersDark, setPrefersDark] = React.useState(false);
-  React.useEffect(() => {
-    // Detected by CALLABILITY, not by presence. `"matchMedia" in window` is
-    // true under jsdom while the value is not a function, so the property test
-    // passes and the call throws — measured, and it took 85 tests down. A
-    // capability check has to ask the question the caller will ask.
-    if (
-      typeof window === "undefined" ||
-      typeof window.matchMedia !== "function"
-    ) {
-      return;
-    }
-    const query = window.matchMedia("(prefers-color-scheme: dark)");
-    setPrefersDark(query.matches);
-    const listen = (event: MediaQueryListEvent): void =>
-      setPrefersDark(event.matches);
-    query.addEventListener("change", listen);
-    return () => query.removeEventListener("change", listen);
-  }, []);
-  return prefersDark;
-}
-
-/**
  * The breakpoints whose rules the browser is applying right now.
  *
- * Modelled on {@link usePrefersDark} directly below it, and for the same reason:
+ * Modelled on `usePrefersDark` in `prefers-dark.ts`, and for the same reason:
  * a media query's state is a fact about the viewer that nothing in React tells
  * this panel, so it is read and then subscribed to.
  *
@@ -763,17 +824,19 @@ function useLiveBreakpoints(
   const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
     matchedBreakpoints(breakpoints, never, options)
   );
+  /*
+   * The CANVAS's window, a frame's when the canvas is in one. A frame is as
+   * wide as the device it previews, so its media queries are the ones the
+   * page's breakpoints answer to; the editor's window is as wide as the
+   * admin, and asking it reports the tiers of a screen nobody is previewing.
+   */
+  const view = useCanvasFrame().window;
   React.useEffect(() => {
     // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
     // records: `"matchMedia" in window` is true under jsdom while the value is
     // not a function, so the property test passes and the call throws.
-    if (
-      typeof window === "undefined" ||
-      typeof window.matchMedia !== "function"
-    ) {
-      return;
-    }
-    const ask = (query: string): boolean => window.matchMedia(query).matches;
+    if (view === null || typeof view.matchMedia !== "function") return;
+    const ask = (query: string): boolean => view.matchMedia(query).matches;
     const read = (): void =>
       setMatches(matchedBreakpoints(breakpoints, ask, options));
     read();
@@ -783,13 +846,13 @@ function useLiveBreakpoints(
      * query change event fires exactly when an answer here would differ.
      */
     const lists = breakpointQueries(breakpoints, options).map(query =>
-      window.matchMedia(query)
+      view.matchMedia(query)
     );
     for (const list of lists) list.addEventListener("change", read);
     return () => {
       for (const list of lists) list.removeEventListener("change", read);
     };
-  }, [breakpoints, options]);
+  }, [breakpoints, options, view]);
   /*
    * Previewing, the window is not the authority and the host is.
    *
@@ -881,9 +944,12 @@ interface StyleFieldSurroundings {
  */
 function SideBoxFrame({
   box,
+  ring,
   children,
 }: {
   box: SideBox;
+  /** Which ring of the spacing box this is, when it is one. */
+  ring?: "margin" | "padding";
   children: React.ReactNode;
 }): React.JSX.Element {
   if (!box.boxed || box.axes === undefined) return <>{children}</>;
@@ -892,6 +958,7 @@ function SideBoxFrame({
       className="nx-style-inspector__side-box"
       // Read by the stylesheet, which owns the arrangement.
       data-sides="logical"
+      data-ring={ring}
       /*
        * The EDITED ELEMENT's axes, so this grid's own placement resolves in
        * them: columns run along the inline axis and rows along the block axis,
@@ -917,9 +984,67 @@ function SideBoxFrame({
   );
 }
 
-/** One catalog group, as a section that opens onto its properties. */
+/**
+ * The elements whose content is an external resource the box fits, which is
+ * where the media fit properties show without being asked for. Not
+ * `<picture>`: it only chooses a source, and the `<img>` inside it is the
+ * element `object-fit` applies to.
+ */
+const REPLACED_ELEMENTS: ReadonlySet<string> = new Set([
+  "img",
+  "video",
+  "iframe",
+  "embed",
+  "object",
+  "canvas",
+]);
+
+/** Whether the block renders as one of {@link REPLACED_ELEMENTS}. */
+function rendersMedia(renderedTag: string | undefined): boolean {
+  return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
+}
+
+/**
+ * The class chips, and above them the reason when the design is read-only.
+ *
+ * A disabled fieldset rather than a flag on every control: it disables every
+ * native control inside at once, so a control added later cannot forget to be
+ * read-only.
+ */
+function PanelClasses({
+  readOnlyReason,
+  ...classes
+}: {
+  readOnlyReason: string | undefined;
+} & React.ComponentProps<typeof SelectedNodeClasses>): React.JSX.Element {
+  return (
+    <>
+      {readOnlyReason === undefined ? null : (
+        <p className="nx-inspector__note" data-read-only="style">
+          {readOnlyReason}
+        </p>
+      )}
+      <fieldset
+        className="nx-style-inspector__classes"
+        disabled={readOnlyReason !== undefined}
+      >
+        <SelectedNodeClasses {...classes} />
+      </fieldset>
+    </>
+  );
+}
+
+/**
+ * One section: its common properties, any that hold a value, and the rest
+ * behind "+ More".
+ *
+ * **The header marks a section that holds values** with a dot and the words
+ * "has values" for a screen reader, so an author can see which sections they
+ * have touched without opening each one, and the dot is never colour alone.
+ */
 function StyleSectionItem({
   section,
+  readOnlyReason,
   orientation,
   nodeId,
   state,
@@ -933,47 +1058,336 @@ function StyleSectionItem({
   onChooseForm,
 }: {
   section: StyleSection;
+  /** Why every control is read-only, which also withholds "+ More". */
+  readOnlyReason: string | undefined;
 } & StyleFieldSurroundings): React.JSX.Element {
-  // How many of this section's properties this node sets HERE, so an author can
-  // see which sections they have touched without opening each one.
-  const setCount = section.properties.filter(property => property.set).length;
+  const readOnly = readOnlyReason !== undefined;
+  /*
+   * What the author brought out from "+ More". Held here, by a section keyed
+   * by node and section, so it lasts while this block stays selected and
+   * starts empty for the next. Panel state, like the open section: what the
+   * author chose to look at, not anything the page stores — and a property
+   * holding a value shows whatever this says, so it can hide nothing set.
+   */
+  const [revealed, setRevealed] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const isRevealed = (property: string) => revealed.has(property);
+  const holdsValues = section.properties.some(property => property.set);
+  const shown = section.properties.filter(
+    property => property.common || isRevealed(property.property)
+  );
+  const more = section.properties.filter(
+    property => !property.common && !isRevealed(property.property)
+  );
+  const surroundings: StyleFieldSurroundings = {
+    orientation,
+    nodeId,
+    state,
+    breakpoint,
+    editor,
+    policy,
+    tokens,
+    prefersDark,
+    provenanceOf,
+    editing,
+    onChooseForm,
+  };
   return (
-    <AccordionItem value={section.group}>
-      <AccordionTrigger>
-        <span className="nx-style-inspector__section-label">
-          {section.label}
-        </span>
-        {setCount > 0 ? (
-          <span
-            className="nx-style-inspector__section-count"
-            aria-label={`${setCount} set`}
-          >
-            {setCount}
-          </span>
-        ) : null}
-      </AccordionTrigger>
+    <AccordionItem value={section.key} data-section={section.key}>
+      <SectionHeading label={section.label} holdsValues={holdsValues} />
       <AccordionContent>
-        <div className="nx-inspector__fields">
-          {section.properties.map(property => (
-            <StylePropertyFields
-              key={`${nodeId}:${property.property}`}
-              property={property}
-              orientation={orientation}
-              nodeId={nodeId}
-              state={state}
-              breakpoint={breakpoint}
-              editor={editor}
-              policy={policy}
-              tokens={tokens}
-              prefersDark={prefersDark}
-              provenanceOf={provenanceOf}
-              editing={editing}
-              onChooseForm={onChooseForm}
-            />
-          ))}
-        </div>
+        <SectionFields
+          sectionKey={section.key}
+          shown={shown}
+          readOnly={readOnly}
+          surroundings={surroundings}
+        />
+        {readOnly || more.length === 0 ? null : (
+          <MoreProperties
+            sectionLabel={section.label}
+            properties={more}
+            onReveal={property =>
+              setRevealed(current => new Set(current).add(property))
+            }
+          />
+        )}
       </AccordionContent>
     </AccordionItem>
+  );
+}
+
+/** A section's heading: its name, the dot when it holds values, the chevron. */
+function SectionHeading({
+  label,
+  holdsValues,
+}: {
+  label: string;
+  holdsValues: boolean;
+}): React.JSX.Element {
+  return (
+    // The panel's own class sets the heading's height and turns the shared
+    // chevron to point right while closed and down while open.
+    <AccordionTrigger className="nx-style-inspector__section-trigger">
+      <span className="nx-style-inspector__section-label">
+        {label}
+        {/* Beside the name it qualifies, as the design sets it. */}
+        {holdsValues ? (
+          <span className="nx-style-inspector__section-dot" data-has-values="">
+            <span aria-hidden="true" className="nx-style-inspector__dot" />
+            <span className="nx-sr-only">has values</span>
+          </span>
+        ) : null}
+      </span>
+    </AccordionTrigger>
+  );
+}
+
+/**
+ * A section's fields: the spacing box where the section draws one, then each
+ * shown property as before.
+ */
+function SectionFields({
+  sectionKey,
+  shown,
+  readOnly,
+  surroundings,
+}: {
+  sectionKey: InspectorSectionKey;
+  shown: readonly InspectedStyleProperty[];
+  readOnly: boolean;
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element {
+  const rings =
+    sectionKey === "spacing"
+      ? spacingRings(shown, surroundings.orientation)
+      : undefined;
+  return (
+    <fieldset className="nx-inspector__fields" disabled={readOnly}>
+      {rings === undefined ? null : (
+        <SpacingBox
+          margin={rings.margin}
+          padding={rings.padding}
+          surroundings={surroundings}
+        />
+      )}
+      {(rings?.rest ?? shown).map(property => (
+        <StylePropertyFields
+          key={`${surroundings.nodeId}:${property.property}`}
+          property={property}
+          {...surroundings}
+        />
+      ))}
+      {shown.length === 0 ? (
+        <p className="nx-inspector__note">
+          Nothing set here yet. Add a property from More.
+        </p>
+      ) : null}
+    </fieldset>
+  );
+}
+
+/** Margin and padding drawn as one box, and what the section shows besides. */
+interface SpacingRings {
+  readonly margin: InspectedStyleProperty | undefined;
+  readonly padding: InspectedStyleProperty;
+  readonly rest: readonly InspectedStyleProperty[];
+}
+
+/**
+ * Whether the spacing section draws its box model, and from which properties.
+ *
+ * Drawn when padding is shown, offered and drawn as a box, which needs the
+ * element's axes; margin joins as the outer ring under the same conditions.
+ * Anything else the section shows is drawn as before, beneath the box.
+ */
+function spacingRings(
+  shown: readonly InspectedStyleProperty[],
+  orientation: SideOrientation | undefined
+): SpacingRings | undefined {
+  const ring = (key: string) =>
+    shown.find(
+      property =>
+        property.property === key &&
+        property.offered &&
+        sideBoxFor(property.controls, orientation).boxed
+    );
+  const padding = ring("padding");
+  if (padding === undefined) return undefined;
+  const margin = ring("margin");
+  return {
+    margin,
+    padding,
+    rest: shown.filter(property => property !== padding && property !== margin),
+  };
+}
+
+/**
+ * Fields drawn compact: the spacing box's sides, which take a value typed
+ * with its unit, show no unit menu, and say "–" while unset rather than a
+ * hint there is no room for.
+ */
+const CompactSides = React.createContext(false);
+
+/**
+ * The spacing section as the design draws it: one box, margin the outer ring
+ * and padding the inner, around the element.
+ *
+ * Each side keeps its own field, so it commits on its own, undoes on its own,
+ * and shows where its value comes from, exactly as a side drawn in a row does.
+ * The box is the drawing alone.
+ */
+function SpacingBox({
+  margin,
+  padding,
+  surroundings,
+}: {
+  margin: InspectedStyleProperty | undefined;
+  padding: InspectedStyleProperty;
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element {
+  const inner = (
+    <SpacingRing
+      property={padding}
+      ring="padding"
+      surroundings={surroundings}
+    />
+  );
+  return (
+    <div className="nx-spacing-box">
+      <CompactSides.Provider value={true}>
+        {margin === undefined ? (
+          inner
+        ) : (
+          <SpacingRing
+            property={margin}
+            ring="margin"
+            surroundings={surroundings}
+          >
+            <div className="nx-spacing-box__centre">{inner}</div>
+          </SpacingRing>
+        )}
+      </CompactSides.Provider>
+    </div>
+  );
+}
+
+/** One ring of the spacing box: a property's four sides, and what it holds. */
+function SpacingRing({
+  property,
+  ring,
+  surroundings,
+  children,
+}: {
+  property: InspectedStyleProperty;
+  ring: "margin" | "padding";
+  surroundings: StyleFieldSurroundings;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  const { orientation, state, breakpoint } = surroundings;
+  const box = sideBoxFor(property.controls, orientation);
+  return (
+    <div
+      className="nx-style-inspector__property"
+      data-property={property.property}
+    >
+      <SideBoxFrame box={box} ring={ring}>
+        {/* Seen, not heard: every side's own name already says it. */}
+        <span className="nx-spacing-box__caption" aria-hidden="true">
+          {property.label}
+        </span>
+        {box.controls.map(control => {
+          const name = spacingSideName(property, box, control);
+          return (
+            <StyleControlField
+              key={[state, breakpoint, property.property, ...control.path].join(
+                "."
+              )}
+              control={control}
+              side={sideOf(box, control)}
+              label={name}
+              summary={undefined}
+              // The side's whole name, so its actions say "Reset Margin top"
+              // rather than naming the property twice.
+              propertyLabel={name}
+              clearOnly={control.withheld}
+              nodeId={surroundings.nodeId}
+              state={state}
+              breakpoint={breakpoint}
+              editor={surroundings.editor}
+              policy={surroundings.policy}
+              tokens={surroundings.tokens}
+              prefersDark={surroundings.prefersDark}
+              provenanceOf={surroundings.provenanceOf}
+              editing={surroundings.editing}
+            />
+          );
+        })}
+        {children}
+      </SideBoxFrame>
+    </div>
+  );
+}
+
+/**
+ * "Margin top": the property and the side in plain words, where the element's
+ * axes give the side a physical name, and the logical one where they do not.
+ */
+function spacingSideName(
+  property: InspectedStyleProperty,
+  box: SideBox,
+  control: StyleControl
+): string {
+  const side = sideOf(box, control);
+  const physical =
+    side === undefined || box.axes === undefined
+      ? undefined
+      : physicalSideName(side, box.axes);
+  const sideName =
+    physical ?? fieldLabel(control.path[control.path.length - 1] ?? "");
+  return `${property.label} ${sideName.toLowerCase()}`;
+}
+
+/**
+ * The section's "+ More": a menu of the properties it does not show yet.
+ *
+ * Choosing one shows its control; it stays shown for this block until the
+ * panel is left, and for good once it holds a value.
+ */
+function MoreProperties({
+  sectionLabel,
+  properties,
+  onReveal,
+}: {
+  sectionLabel: string;
+  properties: readonly InspectedStyleProperty[];
+  onReveal: (property: string) => void;
+}): React.JSX.Element {
+  return (
+    // Not modal: a modal menu marks the editor around it aria-hidden while
+    // its controls stay focusable (axe: aria-hidden-focus).
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="nx-style-inspector__more"
+          aria-label={`More ${sectionLabel.toLowerCase()} properties`}
+        >
+          + More
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {properties.map(property => (
+          <DropdownMenuItem
+            key={property.property}
+            onSelect={() => onReveal(property.property)}
+            title={property.summary}
+          >
+            {property.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -1009,6 +1423,9 @@ function StylePropertyFields({
    * only.
    */
   const box = sideBoxFor(property.controls, orientation);
+  const fold = property.offered
+    ? foldedControlFor(property.property)
+    : undefined;
   return (
     <div
       className="nx-style-inspector__property"
@@ -1039,7 +1456,12 @@ function StylePropertyFields({
         there.
       */}
       {(property.offered ? property.variants : [])
-        .filter(variant => variant.count > 1)
+        // A folded property's root form follows from its value; see
+        // `style-folded.ts`. Its other choices, if any, stay.
+        .filter(
+          variant =>
+            variant.count > 1 && (fold === undefined || variant.path.length > 0)
+        )
         .map(variant => (
           <FormChoice
             key={variant.path.join(".")}
@@ -1059,39 +1481,63 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      <SideBoxFrame box={box}>
-        {box.controls.map(control => (
-          <StyleControlField
-            // The ADDRESS, not just the position: a host switching state or
-            // breakpoint leaves this field mounted, and where the old and new
-            // addresses hold the same value — both unset, most often — the
-            // synchronisation effect does not run either. An unfinished draft
-            // from the base breakpoint would then commit into the hover state.
-            key={[state, breakpoint, property.property, ...control.path].join(
-              "."
-            )}
-            control={control}
-            side={sideOf(box, control)}
-            label={
-              many
-                ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                : property.label
-            }
-            summary={many ? undefined : property.summary}
-            propertyLabel={property.label}
-            clearOnly={!property.offered}
-            nodeId={nodeId}
-            state={state}
-            breakpoint={breakpoint}
-            editor={editor}
-            policy={policy}
-            tokens={tokens}
-            prefersDark={prefersDark}
-            provenanceOf={provenanceOf}
-            editing={editing}
-          />
-        ))}
-      </SideBoxFrame>
+      {/* The container's flow, which alignment icons are drawn in. */}
+      <AlignmentFlow.Provider
+        value={flowOf(
+          findNode(editor.document.nodes, nodeId)?.styles,
+          state,
+          breakpoint,
+          orientation
+        )}
+      >
+        {/* A folded union's one control, read where the value field is drawn;
+          see `style-folded.ts`. Its controls sit at the root, so the whole
+          property is the fold's. */}
+        <FoldedUnion.Provider
+          value={
+            fold === undefined
+              ? undefined
+              : { kind: fold, property: property.property }
+          }
+        >
+          <SideBoxFrame box={box}>
+            {box.controls.map(control => (
+              <StyleControlField
+                // The ADDRESS, not just the position: a host switching state or
+                // breakpoint leaves this field mounted, and where the old and new
+                // addresses hold the same value — both unset, most often — the
+                // synchronisation effect does not run either. An unfinished draft
+                // from the base breakpoint would then commit into the hover state.
+                key={[
+                  state,
+                  breakpoint,
+                  property.property,
+                  ...control.path,
+                ].join(".")}
+                control={control}
+                side={sideOf(box, control)}
+                label={
+                  many
+                    ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                    : property.label
+                }
+                summary={many ? undefined : property.summary}
+                propertyLabel={property.label}
+                clearOnly={!property.offered || control.withheld}
+                nodeId={nodeId}
+                state={state}
+                breakpoint={breakpoint}
+                editor={editor}
+                policy={policy}
+                tokens={tokens}
+                prefersDark={prefersDark}
+                provenanceOf={provenanceOf}
+                editing={editing}
+              />
+            ))}
+          </SideBoxFrame>
+        </FoldedUnion.Provider>
+      </AlignmentFlow.Provider>
     </div>
   );
 }
@@ -1246,6 +1692,7 @@ function StyleFieldLabel({
   id,
   htmlFor,
   readOnly,
+  focusOnly,
   title,
   label,
   answer,
@@ -1262,6 +1709,12 @@ function StyleFieldLabel({
    * left saying what it wants drawn rather than how to draw it.
    */
   readOnly: boolean;
+  /**
+   * Whether the control is a group of buttons. A label's `for` would CLICK
+   * a button, choosing or clearing a value; this label only moves focus to
+   * the element the id names, the group's tab stop.
+   */
+  focusOnly: boolean;
   title: string | undefined;
   label: string;
   answer: ProvenanceAnswer | undefined;
@@ -1269,7 +1722,19 @@ function StyleFieldLabel({
   descendant: string | undefined;
 }): React.JSX.Element {
   return (
-    <Label id={id} htmlFor={readOnly ? undefined : htmlFor} title={title}>
+    <Label
+      id={id}
+      htmlFor={readOnly || focusOnly ? undefined : htmlFor}
+      title={title}
+      {...(focusOnly && !readOnly
+        ? {
+            onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
+              event.currentTarget.ownerDocument
+                .getElementById(htmlFor)
+                ?.focus(),
+          }
+        : {})}
+    >
       <span className="nx-style-inspector__field-label-text">{label}</span>
       <ProvenanceDot
         answer={answer}
@@ -1419,13 +1884,14 @@ function StyleControlField({
         id={labelId}
         htmlFor={id}
         readOnly={readOnly}
+        focusOnly={drawsIcons(control.leaf)}
         title={summary}
         label={label}
         answer={answer}
         editing={editing}
         descendant={control.leaf.descendant}
       />
-      <ControlValue
+      <ControlOrFont
         id={id}
         labelledBy={labelId}
         control={control}
@@ -1445,6 +1911,8 @@ function StyleControlField({
         editing={editing}
         fieldId={id}
         onReset={() => commit(null)}
+        stored={stored}
+        readOnly={readOnly}
       />
       {issue === null ? null : (
         <p className="nx-inspector__error" id={errorId} role="alert">
@@ -1480,6 +1948,18 @@ function selectedSubject(
   // anyone reading a logged subject.
   if (subject === undefined || tag === undefined) return subject;
   return { ...subject, tag };
+}
+
+/**
+ * The cascade as the inspection reads it, or `undefined` where there is no
+ * cascade or no subject in it: both are needed to ask what applies here.
+ */
+function cascadeFor(
+  cascade: PageStyleCascade | undefined,
+  subject: StyleSubject | undefined
+): StyleInspectionOptions["cascade"] {
+  if (cascade === undefined || subject === undefined) return undefined;
+  return { trace: cascade.entries, subject };
 }
 
 /**
@@ -1608,6 +2088,8 @@ function BreakpointAction({
   editing,
   fieldId,
   onReset,
+  stored,
+  readOnly,
 }: {
   answer: ProvenanceAnswer | undefined;
   /**
@@ -1624,15 +2106,29 @@ function BreakpointAction({
   /** The field this control's actions write, passed on to {@link ResetAction}. */
   fieldId: string;
   onReset: () => void;
+  /** What this address stores: with no cascade, reset while it holds anything. */
+  stored: StyleValue | undefined;
+  /** A field drawn as a retained value, whose own Clear already resets it. */
+  readOnly: boolean;
 }): React.JSX.Element | null {
+  /*
+   * The row's one way back, so a list or an icon group needs no Clear of its
+   * own. With a cascade it follows the cascade's answer: a value authored at
+   * this tier is reset, revealing whatever shows through, and one arriving
+   * from another tier is a jump there.
+   *
+   * Where the cascade gives no answer for this row — none was supplied, or
+   * the tier being edited is one the canvas is not showing, so its values
+   * read as unset — a value stored at this address is still reset, unless the
+   * field is a retained value with a Clear of its own. What it reveals is not
+   * known there, so the reset does not claim it.
+   */
   const badge = answer?.badge;
-  // `none` is also refused below, by having no handler bound for it — this is
-  // the readable exit rather than the load-bearing one.
-  if (badge === undefined || badge.kind === "none") return null;
-  if (badge.kind === "authored") {
+  if (badge === undefined || badge.kind === "none") {
+    if (stored === undefined || readOnly) return null;
     return (
       <ResetAction
-        revealed={badge.revealed}
+        revealed="unknown"
         label={label}
         editing={editing}
         fieldId={fieldId}
@@ -1640,9 +2136,39 @@ function BreakpointAction({
       />
     );
   }
-  if (answer?.jump === undefined) return null;
+  if (badge.kind === "authored") {
+    return (
+      <ResetAction
+        revealed={badge.revealed ?? "unset"}
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  }
+  /*
+   * The value showing came from another tier. A value stored HERE as well is
+   * shadowed by it, and is still this row's to remove: the reset stays beside
+   * the jump, naming nothing it reveals, since what shows here once it is
+   * gone is the winning tier's business.
+   */
+  const reset =
+    stored === undefined || readOnly ? null : (
+      <ResetAction
+        revealed="unknown"
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  if (answer?.jump === undefined) return reset;
   return (
-    <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+    <>
+      {reset}
+      <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+    </>
   );
 }
 
@@ -1753,8 +2279,12 @@ const COMMITS_FOR = "data-nx-commits-for";
  */
 type PickerClose = "committed" | "superseded";
 
-/** The attributes marking a control as writing `fieldId`'s value itself. */
-function commitsFor(fieldId: string): Record<string, string> {
+/**
+ * The attributes marking a control as writing `fieldId`'s value itself.
+ *
+ * Exported with {@link supersedes} so the pair can be checked together.
+ */
+export function commitsFor(fieldId: string): Record<string, string> {
   return { [COMMITS_FOR]: fieldId };
 }
 
@@ -1764,9 +2294,15 @@ function commitsFor(fieldId: string): Record<string, string> {
  * Asked of the ancestor chain rather than of the target alone: the press lands
  * on whatever the control renders inside its button, and a control that puts a
  * span or an icon in there would otherwise stop making the promise.
+ *
+ * The target is classified by `dom-kind` rather than by `instanceof Element`,
+ * which answers only for elements this window built.
  */
-function supersedes(target: EventTarget | null, fieldId: string): boolean {
-  if (!(target instanceof Element)) return false;
+export function supersedes(
+  target: EventTarget | null,
+  fieldId: string
+): boolean {
+  if (!isElement(target)) return false;
   return (
     target.closest(`[${COMMITS_FOR}]`)?.getAttribute(COMMITS_FOR) === fieldId
   );
@@ -1779,52 +2315,52 @@ function ResetAction({
   fieldId,
   onReset,
 }: {
-  revealed: BreakpointSource | undefined;
+  /**
+   * What shows once this value is gone: another tier's value, nothing, or
+   * `"unknown"` where no ranking of the cascade covers this tier, which the
+   * names then leave unsaid rather than guess.
+   */
+  revealed: BreakpointSource | "unset" | "unknown";
   label: string;
   editing: EditedAddress;
   /** The field whose value this press writes. See {@link commitsFor}. */
   fieldId: string;
   onReset: () => void;
 }): React.JSX.Element {
-  const reveals =
-    revealed === undefined
-      ? "leaving it unset"
-      : `showing the value from ${sourceLabel(revealed)}`;
+  const at = `Reset ${label} at ${editing.labelOf(editing.breakpoint)}`;
+  const named =
+    revealed === "unknown"
+      ? at
+      : revealed === "unset"
+        ? `${at}, leaving it unset`
+        : `${at}, showing the value from ${sourceLabel(revealed)}`;
+  const tip =
+    revealed === "unknown"
+      ? "Reset"
+      : revealed === "unset"
+        ? "Reset to unset"
+        : `Reset to ${sourceLabel(revealed)}`;
   return (
-    <button
-      type="button"
-      className="nx-style-inspector__breakpoint-action"
-      data-action="reset"
-      /*
-       * This press writes THIS field's value, which a picker mid-gesture on it
-       * needs to know.
-       *
-       * The colour picker commits its draft when the popover closes, and
-       * pressing anything outside it closes the popover first — so without this
-       * one Reset gesture writes twice: the draft the author was discarding,
-       * then the clear. The first undo would then restore the very colour they
-       * pressed Reset to be rid of.
-       *
-       * Declared on the element rather than held as a ref by each picker,
-       * because the rule is about what a CONTROL does, not about which specific
-       * button a particular field happens to know.
-       */
-      {...commitsFor(fieldId)}
-      onClick={onReset}
-      aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
-    >
-      Reset
-      {/*
-       * `aria-hidden`, because the accessible name above already carries this
-       * sentence: read out twice it is a stutter rather than emphasis.
-       */}
-      <span
-        className="nx-style-inspector__breakpoint-reveals"
-        aria-hidden="true"
-      >
-        {revealed === undefined ? "to unset" : `to ${sourceLabel(revealed)}`}
-      </span>
-    </button>
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="nx-style-inspector__breakpoint-action"
+            data-action="reset"
+            {...commitsFor(fieldId)}
+            onClick={onReset}
+            aria-label={named}
+          >
+            {/* An icon at the row's end, where a "Reset to unset" line under
+                every set control made each one two rows. The words are its
+                tooltip and, in full, its name. */}
+            <RotateCcw size={14} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{tip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -1855,6 +2391,65 @@ function JumpAction({
     >
       Go to {where}
     </button>
+  );
+}
+
+/** No faces, as one value, so the Font control's list is not rebuilt each render. */
+const NO_FACES: readonly FontFaceDef[] = Object.freeze([]);
+
+/**
+ * The Font control where the leaf is `font-family`, chosen from what the site
+ * can draw before any other surface (a stored variable shows as the choice it
+ * is); every other value as {@link ControlValue} draws it. A value that can
+ * only be cleared stays that way.
+ */
+function ControlOrFont(
+  props: Parameters<typeof ControlValue>[0]
+): React.JSX.Element {
+  const fonts = React.useContext(FontChoicesContext);
+  const font = props.clearOnly ? null : fontControl({ ...props, fonts });
+  return font ?? <ControlValue {...props} />;
+}
+
+/**
+ * The Font control, for the `font-family` leaf: CHOSEN from what the site can
+ * draw rather than typed, since a typed family the site has no file for
+ * renders in whatever the reader's device has. `null` for any other leaf, or
+ * a stored value the picker cannot show.
+ */
+function fontControl({
+  id,
+  labelledBy,
+  control,
+  stored,
+  tokens,
+  fonts,
+  onCommit,
+}: {
+  id: string;
+  labelledBy: string;
+  control: Parameters<typeof ControlValue>[0]["control"];
+  stored: Parameters<typeof ControlValue>[0]["stored"];
+  tokens: Parameters<typeof ControlValue>[0]["tokens"];
+  fonts: FontChoices | undefined;
+  onCommit: Parameters<typeof ControlValue>[0]["onCommit"];
+}): React.JSX.Element | null {
+  const isFontFamily =
+    control.leaf.kind === "cssValue" &&
+    control.leaf.cssProperty === "font-family";
+  if (!isFontFamily || !fontFamilyShowable(stored)) return null;
+  const manage = fonts?.onManageFonts;
+  return (
+    <FontFamilyField
+      id={id}
+      labelledBy={labelledBy}
+      stored={stored}
+      tokens={tokens}
+      faces={fonts?.faces}
+      fromCode={fonts?.fromCode ?? NO_FACES}
+      onCommit={onCommit}
+      {...(manage === undefined ? {} : { onManageFonts: manage })}
+    />
   );
 }
 
@@ -1905,6 +2500,8 @@ function ControlValue({
         labelledBy={labelledBy}
         label={actionName}
         stored={stored}
+        // A value the Baseline gate no longer offers says why it is clear-only.
+        note={control.withheld ? BASELINE_WITHHELD_HINT : undefined}
         onClear={() => onCommit(null)}
       />
     );
@@ -2107,14 +2704,12 @@ function SelectField({
   id,
   control,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl & { leaf: Extract<StyleLeaf, { kind: "keyword" }> };
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2149,21 +2744,6 @@ function SelectField({
           ))}
         </SelectContent>
       </Select>
-      {/*
-          A select cannot offer "unset" as an item: an empty value is not a
-          choice the list can carry, and a sentinel standing for it would mean
-          two things at once. A button beside it clears, which is the same act
-          an emptied text field performs.
-        */}
-      {current === "" ? null : (
-        <button
-          type="button"
-          onClick={() => onCommit(null)}
-          aria-label={`Clear ${actionName}`}
-        >
-          Clear
-        </button>
-      )}
     </div>
   );
 }
@@ -2175,6 +2755,148 @@ function SelectField({
  * start, so two buttons called "Clear block start" name the same thing twice
  * and a screen-reader user cannot tell which style each removes.
  */
+/** A folded union's control, and the property it edits. */
+interface Fold {
+  readonly kind: FoldedControl;
+  readonly property: string;
+}
+
+/** The folded control the property being drawn takes, if it is folded. */
+const FoldedUnion = React.createContext<Fold | undefined>(undefined);
+
+/**
+ * One control for a union the author picks without naming its form: a list
+ * holding both forms' values, or a field that infers the form from the text.
+ */
+function FoldedField({
+  id,
+  fold,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  fold: Fold;
+  stored: StyleValue | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  if (fold.kind === "number-or-length") {
+    return (
+      <LengthOrNumberField
+        id={id}
+        stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  return (
+    <OptionSelect
+      id={id}
+      options={fontWeightOptions(stored)}
+      stored={stored}
+      describedBy={describedBy}
+      onCommit={onCommit}
+    />
+  );
+}
+
+/** A select over named options, each committing its own stored value. */
+function OptionSelect({
+  id,
+  options,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  options: readonly FoldedOption[];
+  stored: StyleValue | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const current = storedKey(stored) ?? "";
+  return (
+    <div className="nx-style-inspector__select">
+      <Select
+        value={current}
+        onValueChange={key => {
+          const chosen = options.find(option => option.key === key);
+          if (chosen !== undefined) onCommit(chosen.value);
+        }}
+      >
+        <SelectTrigger
+          id={id}
+          aria-describedby={describedBy}
+          aria-invalid={describedBy === undefined ? undefined : true}
+        >
+          <SelectValue placeholder="Not set" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(option => (
+            <SelectItem key={option.key} value={option.key}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/**
+ * A field taking a number or a length as typed: "1.5" is stored as a number,
+ * "24px" or "150%" as written. Committed on blur and on Enter, as every text
+ * field in the panel is, so one undo removes one value, not one character.
+ */
+function LengthOrNumberField({
+  id,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  stored: StyleValue | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const { draft, setDraft } = useDraft(stored);
+  const commit = () => {
+    if (draft === storedText(stored)) return;
+    if (onCommit(lineHeightFromText(draft)) === "unchanged") {
+      setDraft(storedText(stored));
+    }
+  };
+  return (
+    <Input
+      id={id}
+      value={draft}
+      placeholder="1.5, 24px or 150%"
+      aria-describedby={describedBy}
+      aria-invalid={describedBy === undefined ? undefined : true}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={event => {
+        if (commitOnEnter(event, commit)) return;
+        // An arrow steps the value as its kind steps, a number or a length,
+        // through the same rule as every numeric field.
+        const delta = arrowStep(event);
+        const leaf = delta === null ? undefined : lineHeightLeafFor(draft);
+        if (delta === null || leaf === undefined) return;
+        const next = steppedValue(
+          leaf,
+          lineHeightFromText(draft) ?? undefined,
+          delta
+        );
+        if (next === undefined) return;
+        event.preventDefault();
+        if (onCommit(next) !== "refused") setDraft(String(next));
+      }}
+    />
+  );
+}
+
 function actionNameFor(propertyLabel: string, label: string): string {
   return propertyLabel === label
     ? propertyLabel
@@ -2284,6 +3006,15 @@ function writeStyleValue({
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
+  /*
+   * Refused here as well as drawn read-only: the controls are disabled while a
+   * lock holds, but a lock set from Layers after the panel drew must stop the
+   * next write too, so the live document is asked at the moment of the write.
+   */
+  if (!designIsWritable(editor.document, nodeId, lockViewOf(editor))) {
+    setIssue("This block's design is locked, so it can't be changed here.");
+    return "refused";
+  }
   /*
    * A ONE-NODE BATCH, and the single write path for a style edit in this
    * builder.
@@ -2779,7 +3510,7 @@ function ColourField({
   const { draft, setDraft, edited, reset } = useDraft(stored);
 
   const reference = isTokenRef(stored) ? stored.$token : null;
-  const mode = activeTokenMode(tokens, prefersDark);
+  const mode = activeTokenMode(prefersDark);
   const choices = colourTokensFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
@@ -2962,6 +3693,7 @@ function ColourField({
         )}
       </div>
       <ContrastNote id={noteId} contrast={contrast} />
+      <RawColourNote stored={stored} />
     </>
   );
 }
@@ -3215,6 +3947,26 @@ function TokenName({
  * and compiling, and the author may have a reason. The same position
  * Gutenberg's contrast checker takes.
  */
+/**
+ * The note beside a colour written as a value rather than through a variable.
+ *
+ * Such a colour keeps its one value when the visitor's device prefers dark,
+ * where a variable carries both. Read from what is stored, so a picker gesture
+ * still in progress does not make it flicker.
+ */
+function RawColourNote({
+  stored,
+}: {
+  stored: StyleValue | undefined;
+}): React.JSX.Element | null {
+  if (!isRawColour(stored)) return null;
+  return (
+    <p className="nx-inspector__note">
+      Not adapted to dark mode. Choose a variable to follow light and dark.
+    </p>
+  );
+}
+
 function ContrastNote({
   id,
   contrast,
@@ -3251,6 +4003,25 @@ function ContrastNote({
           }`}
     </p>
   );
+}
+
+/** The edited container's flow; CSS's defaults until it is measured or read. */
+const AlignmentFlow = React.createContext<Flow>({
+  writingMode: "horizontal-tb",
+  rtl: false,
+  flex: false,
+  direction: "row",
+});
+
+/**
+ * The icon buttons a keyword control draws, when its property is one drawn as
+ * icons, in the flow of the container being edited.
+ */
+function useAlignmentGroup(control: StyleControl) {
+  const flow = React.useContext(AlignmentFlow);
+  return control.leaf.kind === "keyword"
+    ? alignmentGroupFor(control.leaf.cssProperty, control.leaf.values, flow)
+    : undefined;
 }
 
 /**
@@ -3298,6 +4069,34 @@ function ValueField({
   // Decided BEFORE the menu, because every keyword leaf resolves to the
   // `select` control kind — so a branch on that kind placed first would return
   // for all of them and the toggle could never be reached.
+  // Both read before any branch, as hooks must be.
+  const fold = React.useContext(FoldedUnion);
+  // Alignment and direction as icons that follow the container's flow.
+  const alignment = useAlignmentGroup(control);
+  if (fold !== undefined) {
+    return (
+      <FoldedField
+        id={id}
+        fold={fold}
+        stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  if (alignment !== undefined) {
+    return (
+      <IconChoiceField
+        id={id}
+        labelledBy={labelledBy}
+        group={alignment}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   const toggle = toggleOptionsFor(control.leaf);
   if (toggle !== undefined && toggleShows(toggle, stored)) {
     return (
@@ -3320,7 +4119,6 @@ function ValueField({
         id={id}
         control={{ ...control, leaf: control.leaf }}
         stored={stored}
-        actionName={actionName}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -3456,7 +4254,9 @@ function NumericField({
   // leaf with no units to offer never reaches this: `unitChoicesFor` answers
   // empty for anything that is not a dimension, so `line-height` as a number
   // has no menu to gain a unit from.
-  const showUnits = units.length > 0 && measurement !== undefined;
+  // Not in the spacing box, whose sides take the unit as typed.
+  const compact = React.useContext(CompactSides);
+  const showUnits = !compact && units.length > 0 && measurement !== undefined;
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
@@ -3591,6 +4391,8 @@ function TextField({
    */
   onStep?: (draft: string, delta: number) => string | null;
 }): React.JSX.Element {
+  // A side of the spacing box says "–" while unset: a hint would not fit.
+  const compact = React.useContext(CompactSides);
   const commit = () => {
     if (draft === storedText(stored)) return;
     // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
@@ -3614,7 +4416,7 @@ function TextField({
     <Input
       id={id}
       value={draft}
-      placeholder={placeholderFor(control)}
+      placeholder={compact ? "–" : placeholderFor(control)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
@@ -3824,20 +4626,22 @@ const FIXED_PLACEHOLDER: Partial<Record<StyleLeaf["kind"], string>> = {
   // literal here would also be a hardcoded colour, which this repository bans
   // outright — the rule reads source, not intent, and it is right to: a hex in
   // a placeholder is one copy away from a hex in a style.
-  color: "hex, rgb(), or a colour name",
+  // Short enough to read inside the field rather than cut off mid-word.
+  color: "Name, hex or rgb()",
   url: "https://…",
 };
 
-/** A length's hint, which depends on what the catalog lets this one hold. */
+/**
+ * A length's hint, which depends on what the catalog lets this one hold.
+ *
+ * The form alone, never the keyword list: a field shows about twenty
+ * characters, and a hint cut off mid-word ("16px or 50%, or xx-sm…") says
+ * less than a short one. The keywords stay valid to type.
+ */
 function dimensionHint(
   leaf: Extract<StyleLeaf, { kind: "dimension" }>
 ): string {
-  const units = leaf.allowPercentage === true ? "16px or 50%" : "16px";
-  // The catalog's helper always writes this field, and the TYPE leaves it
-  // optional — so a leaf assembled by hand, which every fixture in this package
-  // is, legitimately arrives without one.
-  const keywords = leaf.keywords ?? [];
-  return keywords.length > 0 ? `${units}, or ${keywords.join(", ")}` : units;
+  return leaf.allowPercentage === true ? "16px or 50%" : "16px";
 }
 
 /** A number's hint, which names its bounds when the catalog gives it both. */

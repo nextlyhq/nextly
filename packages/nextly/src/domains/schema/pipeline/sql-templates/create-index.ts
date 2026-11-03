@@ -18,9 +18,9 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { splitTopLevel } from "../diff/normalize-check";
-import type { IndexSpec } from "../diff/types";
+import type { IndexSpec, TableSpec } from "../diff/types";
 
-import type { QuoteIdentifier } from "./create-table-body";
+import { renderedType, type QuoteIdentifier } from "./create-table-body";
 import { unsupportedOperation } from "./foreign-key-action";
 
 /**
@@ -50,6 +50,43 @@ export interface CreateIndexOptions {
    * the statement rather than enforcing uniqueness nobody declared.
    */
   columnTypes?: ReadonlyMap<string, string>;
+}
+
+/**
+ * A table's column types as `columnTypes` takes them, each as its DDL renders it. Empty for a
+ * table the caller does not have, which indexes every column whole, as before the type was known.
+ *
+ * The one map every road hands the rule: a created table, a migration file's `add_index`, and the
+ * dev push's replay of one, so a column is keyed alike on each.
+ */
+export function tableColumnTypes(
+  table: TableSpec | undefined
+): ReadonlyMap<string, string> {
+  return new Map(table?.columns.map(c => [c.name, renderedType(c)]) ?? []);
+}
+
+/**
+ * `CREATE INDEX` for a plain index on one column of the given type, without a trailing semicolon.
+ *
+ * For the services that write a table's DDL from its fields (a collection, a component, the user
+ * extension table), so a MySQL TEXT/BLOB column is keyed by the same prefix the schema pipeline
+ * keys it by.
+ */
+export function columnIndexSql(
+  tableName: string,
+  indexName: string,
+  column: string,
+  columnType: string,
+  dialect: SupportedDialect,
+  q: QuoteIdentifier
+): string {
+  return createIndexSql(
+    tableName,
+    { name: indexName, columns: [column], unique: false },
+    dialect,
+    q,
+    { columnTypes: new Map([[column, columnType]]) }
+  );
 }
 
 /** A key that is a bare column name, quoted or not. */

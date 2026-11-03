@@ -64,6 +64,8 @@ export async function find<TSlug extends CollectionSlug>(
   const result = await ctx.collectionsHandler.listEntries({
     collectionName: args.collection,
     page: args.page,
+    offset: args.offset,
+    unknownSort: args.unknownSort,
     limit: args.limit,
     where: args.where,
     // From `args`, never from `config`: an exemption that `mergeConfig` could

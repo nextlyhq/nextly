@@ -25,6 +25,7 @@ type Mode = "development" | "production" | "test";
 const here = (file: string) =>
   pathToFileURL(fileURLToPath(new URL(file, import.meta.url))).href;
 const ENVIRONMENT = here("../environment.ts");
+const PROGRAM = here("../program.ts");
 const ADAPTER = here("../utils/adapter.ts");
 const requireHere = createRequire(import.meta.url);
 const NEXT_ENV = requireHere.resolve("@next/env");
@@ -82,9 +83,12 @@ interface CliReading {
 }
 
 /**
- * What the CLI reads in `folder` for `argv`: the environment step as the entry
- * point runs it, then the database check twice, as a command that validates
- * its settings more than once does, with the mode line captured.
+ * What the CLI reads in `folder` for `argv`: the program as the entry point
+ * builds it, with its environment step, parses `argv` and runs `probe`, a
+ * command that checks the database settings twice, as a command that
+ * validates them more than once does, with the mode line captured. Commander
+ * reads `--mode`, so every form it accepts reaches the environment step as it
+ * reaches a command.
  */
 function cliReads(
   folder: string,
@@ -92,13 +96,17 @@ function cliReads(
   env: NodeJS.ProcessEnv
 ): CliReading {
   const script = `
-    const { loadCliEnvironment, setModeLineWriter } = await import(${JSON.stringify(ENVIRONMENT)});
+    const { loadProgramEnvironment, setModeLineWriter } = await import(${JSON.stringify(ENVIRONMENT)});
+    const { createProgram } = await import(${JSON.stringify(PROGRAM)});
     const { validateDatabaseEnv } = await import(${JSON.stringify(ADAPTER)});
-    loadCliEnvironment(${JSON.stringify(["node", "nextly", ...argv])});
     const printed = [];
-    setModeLineWriter(line => printed.push(line));
-    validateDatabaseEnv();
-    validateDatabaseEnv();
+    const program = createProgram({ beforeAction: loadProgramEnvironment });
+    program.command("probe").allowExcessArguments().action(() => {
+      setModeLineWriter(line => printed.push(line));
+      validateDatabaseEnv();
+      validateDatabaseEnv();
+    });
+    await program.parseAsync(${JSON.stringify(["node", "nextly", ...argv])});
     process.stdout.write(JSON.stringify({
       nodeEnv: process.env.NODE_ENV,
       databaseUrl: process.env.DATABASE_URL,
@@ -108,7 +116,11 @@ function cliReads(
   const out = execFileSync(
     process.execPath,
     ["--import", TSX, "--input-type=module", "--eval", script],
-    { cwd: folder, env, encoding: "utf8" }
+    {
+      cwd: folder,
+      env: { ...env, NEXTLY_TELEMETRY_DISABLED: "1" },
+      encoding: "utf8",
+    }
   );
   return JSON.parse(out) as CliReading;
 }
@@ -140,7 +152,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
       ".env": "file:./from-env.db",
       ".env.local": "file:./from-env-local.db",
     });
-    const cli = cliReads(folder, ["migrate"], childEnv(undefined));
+    const cli = cliReads(folder, ["probe"], childEnv(undefined));
     expect(cli.databaseUrl).toBe(nextReads(folder, "development"));
     expect(cli.databaseUrl).toBe("file:./from-env-local.db");
     expect(cli.printed).toEqual([
@@ -157,7 +169,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     });
     const cli = cliReads(
       folder,
-      ["migrate"],
+      ["probe"],
       childEnv(undefined, "file:./from-process.db")
     );
     expect(cli.databaseUrl).toBe(
@@ -179,7 +191,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     "with NODE_ENV %s, runs in %s mode and reads that mode's file",
     (nodeEnv, mode) => {
       const folder = project(perMode);
-      const cli = cliReads(folder, ["migrate"], childEnv(nodeEnv));
+      const cli = cliReads(folder, ["probe"], childEnv(nodeEnv));
       expect(cli.databaseUrl).toBe(nextReads(folder, mode));
       expect(cli.databaseUrl).toBe(`file:./${mode}.db`);
       expect(cli.nodeEnv).toBe(mode);
@@ -193,7 +205,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     const folder = project(perMode);
     const cli = cliReads(
       folder,
-      ["migrate", "--mode", "production"],
+      ["probe", "--mode", "production"],
       childEnv("test")
     );
     expect(cli.databaseUrl).toBe(nextReads(folder, "production"));
@@ -206,23 +218,31 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     ]);
   });
 
-  it("reads --mode=<mode> written as one argument, and none after `--`", () => {
+  // Every form Commander accepts, read from its one option definition: the
+  // files are the ones the mode Commander parsed names.
+  it("reads --mode=<mode> written as one argument, the last of several, and none after `--`", () => {
     const folder = project(perMode);
     expect(
-      cliReads(folder, ["--mode=test", "migrate"], childEnv("production"))
-        .printed
+      cliReads(folder, ["--mode=test", "probe"], childEnv("production")).printed
     ).toEqual(["Mode: test (DATABASE_URL from .env.test)"]);
     expect(
       cliReads(
         folder,
-        ["migrate", "--", "--mode", "production"],
+        ["probe", "--mode", "production", "--mode=test"],
+        childEnv(undefined)
+      ).printed
+    ).toEqual(["Mode: test (DATABASE_URL from .env.test)"]);
+    expect(
+      cliReads(
+        folder,
+        ["probe", "--", "--mode", "production"],
         childEnv(undefined)
       ).printed
     ).toEqual(["Mode: development (DATABASE_URL from .env.development)"]);
   });
 
   it("names a database URL no file and no variable sets", () => {
-    const cli = cliReads(project({}), ["migrate"], childEnv(undefined));
+    const cli = cliReads(project({}), ["probe"], childEnv(undefined));
     expect(cli.databaseUrl).toBeUndefined();
     expect(cli.printed).toEqual(["Mode: development (DATABASE_URL not set)"]);
   });
@@ -233,7 +253,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     const script = `
       const { loadCliEnvironment, setModeLineWriter } = await import(${JSON.stringify(ENVIRONMENT)});
       const { createCliAdapter } = await import(${JSON.stringify(ADAPTER)});
-      loadCliEnvironment(["node", "nextly", "plugins", "install", "x", "--mode", "production"]);
+      loadCliEnvironment("production");
       const printed = [];
       setModeLineWriter(line => printed.push(line));
       // No URL anywhere, so it refuses before connecting.
@@ -258,7 +278,10 @@ describe("the --mode option and the mode line, through the program", () => {
     vi.resetModules();
     const environment = await import("../environment");
     const { createProgram } = await import("../program");
-    const program = createProgram()
+    const program = createProgram({
+      beforeAction: parsed =>
+        environment.loadProgramEnvironment(parsed, project({})),
+    })
       .exitOverride()
       .configureOutput({ writeErr: () => {}, writeOut: () => {} });
     program.command("probe").action(() => environment.announceMode());
@@ -267,8 +290,7 @@ describe("the --mode option and the mode line, through the program", () => {
 
   /** Runs `argv` with the program's environment loaded from an empty folder. */
   async function run(argv: string[]) {
-    const { environment, program } = await freshProgram();
-    environment.loadCliEnvironment(["node", "nextly", ...argv], project({}));
+    const { program } = await freshProgram();
     const stdout: string[] = [];
     const stderr: string[] = [];
     vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
