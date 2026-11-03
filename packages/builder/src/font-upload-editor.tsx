@@ -133,6 +133,9 @@ function useUploadForm(
     setFamily("");
     setFamilyAuthored(false);
     setWeight("400");
+    // The range too: the next variable file's bounds are its own.
+    setFrom("100");
+    setTo("900");
     setStyle("normal");
     // The rights are the next file's to confirm, not carried from this one.
     setRights(false);
