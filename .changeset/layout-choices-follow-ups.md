@@ -36,3 +36,5 @@ The page's Layout picker:
 - **Searching a long list:** a search lists only the Layouts whose title matches, so a search with no matches says "No Layouts match".
 
 On a page drawn inside its Layout, the part that emits the site sheet is now scoped like the others when a route states only the site's styles. Its rules no longer reach the page's or the footer's.
+
+`@nextlyhq/blocks-react` also re-exports the engine types `OpPosition` and `Placed`, which types it already exports refer to.
