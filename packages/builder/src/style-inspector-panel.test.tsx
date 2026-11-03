@@ -2480,7 +2480,7 @@ describe("where a control's value came from", () => {
      */
     mountWithTrace(undefined);
     expect(dotIn("color")).toBeNull();
-    expect(fieldsOf("color").getByLabelText("Color")).toBeTruthy();
+    expect(fieldsOf("color").getByLabelText("Colour")).toBeTruthy();
   });
 
   it("draws nothing when the trace cannot say WHICH control wrote it", () => {
@@ -2779,7 +2779,7 @@ describe("naming the place a value came from", () => {
         editing as never,
         "a:hover"
       )?.text
-    ).toBe("Inherited from the Link color control");
+    ).toBe("Inherited from the Link colour control");
   });
 
   it("still says 'this block' when the control's OWN rule won", () => {
@@ -2897,7 +2897,7 @@ describe("naming the place a value came from", () => {
           at({ property: "color", descendant: " a" }),
           "a:hover"
         )
-      ).toBe("From Link color");
+      ).toBe("From Link colour");
     });
   });
 });
@@ -3018,7 +3018,7 @@ describe("the action a control's breakpoint provenance earns", () => {
      * Block start" and a screen-reader user could not tell which style each
      * removes — the same reason the panel computes an action name for `Clear`.
      */
-    expect(label).toContain("Color");
+    expect(label).toContain("Colour");
     /*
      * The tier a reset falls back to is NAMED, not left to be guessed. The
      * unconditional tier is called what the device switcher calls it — the
