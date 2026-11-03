@@ -27,6 +27,7 @@ import {
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
+import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import {
@@ -465,6 +466,31 @@ export interface PageBuilderOptions {
   pagePreviewPath?: string;
 
   /**
+   * Where this application serves the editor's canvas route: the path of a
+   * route whose page is `PageBuilderCanvas` from
+   * `@nextlyhq/plugin-page-builder/canvas`, inside the layouts the site's
+   * pages are published in.
+   *
+   * **Setting this is what draws the canvas inside the site's own layout**, so
+   * its global stylesheets, fonts, header and footer show around the page
+   * being edited exactly as they do around the published page. There is no
+   * default, for the reason `pagePreviewPath` has none: the plugin cannot add
+   * a route to the application, and a defaulted path would load a page that is
+   * not there. Without it, the canvas draws on a blank page of the editor's own
+   * and says so.
+   *
+   * A path on this site only, such as `"/page-builder-canvas"`: the editor
+   * draws into the frame's document, which a browser allows on its own origin
+   * alone.
+   *
+   * A site whose pages sit under their language writes `{locale}` where the
+   * code goes, as in `"/{locale}/page-builder-canvas"`: the editor loads the
+   * route for the language being edited, and for the default language leaves
+   * the segment out, as most localized sites serve it.
+   */
+  canvasPath?: string;
+
+  /**
    * The viewport widths the pages preview offers.
    *
    * Defaults to **this site's own breakpoints**, read from the `site-style`
@@ -495,6 +521,66 @@ export interface PageBuilderOptions {
    * false }` turns the catalogue off; uploading a font file still works.
    */
   fonts?: PageBuilderFontOptions;
+}
+
+/**
+ * What the plugin publishes to the editor in the browser, as the admin's
+ * `clientConfig`, or nothing when the host stated none of it.
+ *
+ * The canvas runs in the browser, where a server-side option cannot reach it,
+ * so what it needs travels with the rest of the admin metadata: the media
+ * allowlist, the checklist, the canvas route, the site style, the document
+ * limits and whether there is a font catalogue. All of it is plain data that
+ * survives the trip, and the serializer rejects a future addition that does
+ * not.
+ *
+ * Sent only when the host said something. An always-present `clientConfig`
+ * would make every future reader distinguish "the host set this" from "the
+ * default is showing", which is what the absent key already says. Each key is
+ * written only where the host stated it, so a config with no key is one the
+ * host said nothing in.
+ */
+function adminClientConfig(
+  opts: PageBuilderOptions,
+  {
+    configStyle,
+    canvasPath,
+    fontsOff,
+  }: {
+    configStyle: SiteStyleData;
+    canvasPath: string | undefined;
+    fontsOff: boolean;
+  }
+): { clientConfig?: Record<string, unknown> } {
+  const clientConfig: Record<string, unknown> = {
+    // The Fonts tab offers no catalogue when the host turned it off, rather
+    // than one whose routes do not exist.
+    ...(fontsOff ? { fontCatalogue: false } : {}),
+    ...(opts.remotePatterns === undefined
+      ? {}
+      : { remotePatterns: opts.remotePatterns }),
+    ...(opts.checklist === undefined ? {} : { checklist: opts.checklist }),
+    // The canvas route's path, which the editor loads its frame from. A path,
+    // never a secret: the route serves an empty page.
+    ...(canvasPath === undefined ? {} : { canvasPath }),
+    // The RESOLVED defaults tier rather than the raw option, so the canvas and
+    // the validator read one answer. Plain data: tokens, fonts, classes and
+    // breakpoints all serialize, and none of it is secret — a published page
+    // emits it as CSS.
+    ...(opts.siteStyle === undefined ? {} : { siteStyle: configStyle }),
+    /*
+     * The bounds the renderer draws under, so the admin asks the same question
+     * the page answers. The classes manager walks the open document to say
+     * which classes a page applies, and a walk under different limits selects
+     * different nodes — reporting a class as absent from a page that renders
+     * it. Plain numbers, and nothing secret: the published page is drawn under
+     * them.
+     */
+    ...(opts.limits === undefined
+      ? {}
+      : { limits: jsonSafeLimits(opts.limits) }),
+  };
+  return Object.keys(clientConfig).length === 0 ? {} : { clientConfig };
 }
 
 /**
@@ -903,6 +989,8 @@ export const pageBuilder = (
   // The font catalogue's hosts and caps, refused at boot when unusable, and
   // what it adds to the plugin.
   const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
+  // The canvas route's path, refused at boot when it names another origin.
+  const canvasPath = canvasPathOption(opts.canvasPath);
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -1521,51 +1609,13 @@ export const pageBuilder = (
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
       admin: {
-        // The canvas needs the allowlist and runs in the browser, so it
-        // travels with the rest of the admin metadata. `remotePatterns` is
-        // plain data and survives the trip; the serializer rejects it if a
-        // future addition here does not.
-        // Sent only when the host said something. An always-present
-        // `clientConfig` would make every future reader distinguish "the host
-        // set this" from "the default is showing", which is what the absent
-        // key already says.
-        ...(opts.remotePatterns !== undefined ||
-        opts.checklist !== undefined ||
-        opts.limits !== undefined ||
-        opts.siteStyle !== undefined ||
-        fonts.off
-          ? {
-              clientConfig: {
-                // The Fonts tab offers no catalogue when the host turned it
-                // off, rather than one whose routes do not exist.
-                ...(fonts.off ? { fontCatalogue: false } : {}),
-                ...(opts.remotePatterns === undefined
-                  ? {}
-                  : { remotePatterns: opts.remotePatterns }),
-                ...(opts.checklist === undefined
-                  ? {}
-                  : { checklist: opts.checklist }),
-                // The RESOLVED defaults tier rather than the raw option, so
-                // the canvas and the validator read one answer. Plain data:
-                // tokens, fonts, classes and breakpoints all serialize, and
-                // none of it is secret — a published page emits it as CSS.
-                ...(opts.siteStyle === undefined
-                  ? {}
-                  : { siteStyle: configStyle }),
-                /*
-                 * The bounds the renderer draws under, so the admin asks the
-                 * same question the page answers. The classes manager walks the
-                 * open document to say which classes a page applies, and a walk
-                 * under different limits selects different nodes — reporting a
-                 * class as absent from a page that renders it. Plain numbers,
-                 * and nothing secret: the published page is drawn under them.
-                 */
-                ...(opts.limits === undefined
-                  ? {}
-                  : { limits: jsonSafeLimits(opts.limits) }),
-              },
-            }
-          : {}),
+        // What the editor in the browser needs of the options: see
+        // `adminClientConfig`.
+        ...adminClientConfig(opts, {
+          configStyle,
+          canvasPath,
+          fontsOff: fonts.off,
+        }),
         // The three LIBRARIES, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
