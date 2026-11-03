@@ -54,13 +54,16 @@ import {
   useRefusableWrite,
 } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
-import { HoldReason, SharedStyleDetails } from "./shared-style-details";
+import {
+  HoldReason,
+  removeSharedStylesThrough,
+  SharedStyleDetails,
+} from "./shared-style-details";
 import {
   inSharedStyleFilter,
   isUnused,
   renameSharedStyle,
   sharedStyleFilterEmpty,
-  sharedStyleRefusalOf,
   sharedStyleTile,
   SHARED_STYLE_DARK_UNREADABLE,
   sharedStyleUse,
@@ -110,15 +113,18 @@ export interface SharedStylesAccess {
   ) => Promise<SharedStyleUsesPage>;
   /** Lock or unlock a style. Resolves to the refusal, or nothing. */
   readonly lock: (id: string, locked: boolean) => Promise<string | undefined>;
+  /** Remove unused styles, at most fifty. Resolves to the refusal, or nothing. */
+  readonly remove: (ids: readonly string[]) => Promise<string | undefined>;
   /**
-   * Remove unused styles, at most fifty. Resolves to the refusal, or nothing:
-   * its words, or its words and whether it said the style is still used. A
-   * host answering words alone keeps working; the tab then takes no refusal
-   * as saying the style is used.
+   * `remove`, answering a refusal with its words and whether it said a style
+   * is still used. Optional: a host without it keeps working through
+   * `remove`, and the tab then takes no refusal as saying a style is used.
+   *
+   * @experimental Settles with the Shared styles tab.
    */
-  readonly remove: (
+  readonly removeWithReason?: (
     ids: readonly string[]
-  ) => Promise<string | SharedStyleRefusal | undefined>;
+  ) => Promise<SharedStyleRefusal | undefined>;
 }
 
 /** The blocks on the open page carrying each style, by id. */
@@ -1175,7 +1181,11 @@ function RowContent({
         data-dark-unreadable={tile.darkUnreadable ? "" : undefined}
       >
         <span
-          className="nx-vars__specimen nx-shared-styles__lead"
+          className={
+            tile.outlined
+              ? "nx-vars__specimen nx-shared-styles__lead nx-shared-styles__lead--outlined"
+              : "nx-vars__specimen nx-shared-styles__lead"
+          }
           style={tile.specimen}
         >
           Aa
@@ -1455,8 +1465,12 @@ function ConfirmUnused({
     while (rest.length > 0) {
       const batch = rest.slice(0, PAGE_SIZE);
       const write = async () =>
-        sharedStyleRefusalOf(await access.remove(batch.map(row => row.id)))
-          ?.reason;
+        (
+          await removeSharedStylesThrough(
+            access,
+            batch.map(row => row.id)
+          )
+        )?.reason;
       if (!(await run(write))) return;
       rest = rest.slice(PAGE_SIZE);
       setLeft(rest);

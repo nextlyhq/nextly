@@ -3,7 +3,7 @@
  * the search, and how widely a style is used, in words.
  */
 import { BASE_BREAKPOINT, type NamedClass } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   isUnused,
@@ -219,6 +219,8 @@ describe("a row's tile in dark mode", () => {
       page: LIGHT_PAGE,
       specimen: { color: "#112233" },
       darkUnreadable: true,
+      // It reads on the light page it falls back to.
+      outlined: false,
     });
   });
 
@@ -227,6 +229,7 @@ describe("a row's tile in dark mode", () => {
       page: DARK_PAGE,
       specimen: { color: "#e5e7eb" },
       darkUnreadable: false,
+      outlined: false,
     });
     // Its own background keeps dark text readable on the dark page.
     expect(
@@ -307,6 +310,60 @@ describe("a row's tile in dark mode", () => {
       backgroundColor: "oklch(0.2 0.02 260)",
     });
     expect(night.specimen.color).toBe("#f9fafb");
+  });
+
+  it("outlines text it cannot show reads on a colour it cannot measure", () => {
+    // No canvas here, so `navy` and hsl() stay unmeasurable: the "Aa" gets an
+    // outline in the page colour, visible on any background, rather than
+    // risk the same colour as its ground.
+    const navy = sharedStyleTile(tokens, "light", { backgroundColor: "navy" });
+    expect(navy.outlined).toBe(true);
+    expect(navy.specimen).toMatchObject({
+      WebkitTextStroke: "2px #ffffff",
+      paintOrder: "stroke fill",
+    });
+    const hsl = sharedStyleTile(tokens, "dark", {
+      backgroundColor: "hsl(220 60% 20%)",
+    });
+    expect(hsl.outlined).toBe(true);
+    expect(hsl.darkUnreadable).toBe(true);
+    // CONTROL: a pair it can measure, and that reads, is not outlined.
+    expect(
+      sharedStyleTile(tokens, "light", { color: "#112233" }).outlined
+    ).toBe(false);
+  });
+
+  it("measures a colour the browser can name, through a canvas", () => {
+    // A 2D context normalises any colour CSS takes; a fake one stands in for
+    // the browser's, knowing `navy`.
+    const known: Record<string, string> = {
+      "#000": "#000000",
+      "#fff": "#ffffff",
+      navy: "#000080",
+    };
+    class FakeCanvas {
+      getContext() {
+        let fill = "#000000";
+        return {
+          get fillStyle() {
+            return fill;
+          },
+          set fillStyle(value: string) {
+            fill = known[value] ?? fill;
+          },
+        };
+      }
+    }
+    vi.stubGlobal("OffscreenCanvas", FakeCanvas);
+    try {
+      const tile = sharedStyleTile(tokens, "light", {
+        backgroundColor: "navy",
+      });
+      expect(tile.specimen.color).toBe("#f9fafb");
+      expect(tile.outlined).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("never marks a tile in light mode", () => {

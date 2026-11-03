@@ -4884,6 +4884,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-radius: var(--radius-sm);
 }
 
+/* An "Aa" not shown to read on its background: an outline painted under its
+   fill, so it shows on any colour. The site's page colour overrides this
+   inline where the tab has it. */
+.nx-shared-styles__lead--outlined {
+  -webkit-text-stroke: 2px var(--nx-background);
+  paint-order: stroke fill;
+}
+
 .nx-shared-styles__lead {
   align-items: center;
   width: 100%;

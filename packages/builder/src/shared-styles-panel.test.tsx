@@ -80,6 +80,7 @@ function accessOf({
   styles = {},
   uses,
   remove = async () => undefined,
+  removeWithReason,
   lock = async () => undefined,
 }: {
   whole?: boolean;
@@ -89,6 +90,7 @@ function accessOf({
   styles?: Record<string, SharedStyleReach>;
   uses?: (id: string, page: number) => SharedStyleUsesPage;
   remove?: SharedStylesAccess["remove"];
+  removeWithReason?: SharedStylesAccess["removeWithReason"];
   lock?: SharedStylesAccess["lock"];
 } = {}) {
   const usageReads: (readonly string[])[] = [];
@@ -121,6 +123,9 @@ function accessOf({
     ),
     lock: vi.fn(lock),
     remove: vi.fn(remove),
+    ...(removeWithReason === undefined
+      ? {}
+      : { removeWithReason: vi.fn(removeWithReason) }),
   };
   return { access, usageReads };
 }
@@ -279,6 +284,30 @@ describe("the row's preview", () => {
       expect(specimen?.style.backgroundColor).toBe("rgb(255, 255, 255)");
       expect(specimen?.style.color).toBe("rgb(17, 24, 39)");
     });
+  });
+
+  it('outlines the "Aa" on a background it cannot measure', async () => {
+    const navy: NamedClass = {
+      id: "c-navy",
+      slug: "navy-band",
+      label: "Navy band",
+      orderIndex: 0,
+      styles: { base: { [BASE_BREAKPOINT]: { backgroundColor: "navy" } } },
+    };
+    await panel({ tokens: { tokens: [] }, library: [navy, CARD] });
+    const specimen = (name: RegExp) =>
+      row(name).querySelector<HTMLElement>(".nx-vars__specimen");
+    expect(
+      specimen(/^Navy band/)?.classList.contains(
+        "nx-shared-styles__lead--outlined"
+      )
+    ).toBe(true);
+    // CONTROL: a style shown to read draws with no outline.
+    expect(
+      specimen(/^Card, \.nx-c-card/)?.classList.contains(
+        "nx-shared-styles__lead--outlined"
+      )
+    ).toBe(false);
   });
 
   it("keeps the neutral tile when the site's variables are not to hand", async () => {
@@ -1019,7 +1048,7 @@ describe("removing one style", () => {
     const styles: Record<string, SharedStyleReach> = {};
     const { access, usageReads } = accessOf({
       styles,
-      remove: async () => ({ reason: refusal, inUse: true }),
+      removeWithReason: async () => ({ reason: refusal, inUse: true }),
     });
     await panel({ access });
     const details = await open(/^Old note/, "Old note");
@@ -1054,7 +1083,7 @@ describe("removing one style", () => {
       "Still used on Home and 2 more. Remove it from those pages first.";
     // The route's explicit in-use refusal, as the host reports it.
     const { access } = accessOf({
-      remove: async () => ({ reason: refusal, inUse: true }),
+      removeWithReason: async () => ({ reason: refusal, inUse: true }),
     });
     await panel({ access });
     const details = await open(/^Old note/, "Old note");

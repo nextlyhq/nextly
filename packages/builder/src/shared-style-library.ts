@@ -90,6 +90,8 @@ export interface SharedStyleUsesPage {
  * A removal the host refused, with whether the route said the style is still
  * used (its in-use refusal) rather than refusing for another reason, such as
  * a lock or a count no longer whole.
+ *
+ * @experimental Settles with the Shared styles tab.
  */
 export interface SharedStyleRefusal {
   readonly reason: string;
@@ -101,10 +103,9 @@ export interface SharedStyleRefusal {
  * Words alone are a refusal that does not say the style is used.
  */
 export function sharedStyleRefusalOf(
-  answer: string | SharedStyleRefusal | undefined
+  answer: string | undefined
 ): SharedStyleRefusal | undefined {
-  if (answer === undefined) return undefined;
-  return typeof answer === "string" ? { reason: answer, inUse: false } : answer;
+  return answer === undefined ? undefined : { reason: answer, inUse: false };
 }
 
 /** One shared style as the tab lists it. */
@@ -327,6 +328,57 @@ export interface SharedStyleTile {
    * shows the light page instead and says so.
    */
   readonly darkUnreadable: boolean;
+  /**
+   * The "Aa" is not shown to read on its background, a colour this cannot
+   * measure, so it carries an outline in the page's colour: visible on any
+   * background, without measuring it.
+   */
+  readonly outlined: boolean;
+}
+
+/** A canvas 2D context's colour slot, which is all the normaliser reads. */
+interface FillStyleSlot {
+  fillStyle: unknown;
+}
+
+/** The context colours are normalised through, by the constructor it came from. */
+let canvasSlot: { maker: unknown; slot: FillStyleSlot | null } | undefined;
+
+/**
+ * The browser's 2D context, when there is one: an `OffscreenCanvas`, which
+ * needs no document. Absent under a server render and in a test DOM, where
+ * colours stay as written.
+ */
+function fillStyleSlot(): FillStyleSlot | null {
+  if (typeof OffscreenCanvas === "undefined") return null;
+  if (canvasSlot?.maker !== OffscreenCanvas) {
+    canvasSlot = {
+      maker: OffscreenCanvas,
+      slot: new OffscreenCanvas(1, 1).getContext("2d"),
+    };
+  }
+  return canvasSlot.slot;
+}
+
+/**
+ * A colour as the browser resolves it, hex or rgba(), so the contrast verdict
+ * can read a name, hsl() or any other colour CSS takes: a 2D context's
+ * `fillStyle` normalises what it accepts and keeps its old value for what it
+ * does not, so the value is set over two different colours and kept only
+ * when both read back alike. The colour as written where there is no canvas.
+ */
+function resolvedColour(colour: string): string {
+  const slot = fillStyleSlot();
+  if (slot === null) return colour;
+  slot.fillStyle = "#000";
+  slot.fillStyle = colour;
+  const overBlack = slot.fillStyle;
+  slot.fillStyle = "#fff";
+  slot.fillStyle = colour;
+  const overWhite = slot.fillStyle;
+  return typeof overBlack === "string" && overBlack === overWhite
+    ? overBlack
+    : colour;
 }
 
 /** Which end of the scale a colour sits at, where that can be told. */
@@ -343,8 +395,9 @@ const OK_LIGHTNESS = /^okl(?:ch|ab)\(\s*([\d.]+)(%?)/i;
  * colour CSS takes.
  */
 function lightnessOf(colour: string): Lightness {
-  const onBlack = contrastOf(colour, "#000000", undefined);
-  const onWhite = contrastOf(colour, "#ffffff", undefined);
+  const resolved = resolvedColour(colour);
+  const onBlack = contrastOf(resolved, "#000000", undefined);
+  const onWhite = contrastOf(resolved, "#ffffff", undefined);
   if (onBlack !== undefined && onWhite !== undefined) {
     return onBlack.ratio >= onWhite.ratio ? "light" : "dark";
   }
@@ -370,7 +423,7 @@ function statedLightness(text: string): Lightness {
  * else unknown. Unknown is never taken as readable.
  */
 function readability(fg: string, bg: string): boolean | undefined {
-  const verdict = contrastOf(fg, bg, undefined);
+  const verdict = contrastOf(resolvedColour(fg), resolvedColour(bg), undefined);
   if (verdict !== undefined) return verdict.ratio >= READABLE_RATIO;
   const text = lightnessOf(fg);
   const ground = lightnessOf(bg);
@@ -427,10 +480,50 @@ export function sharedStyleTile(
     background !== undefined && preview.color === undefined
       ? readableText(background, page, tokens)
       : undefined;
+  const specimen = text === undefined ? preview : { ...preview, color: text };
+  const outlined = notShownToRead(preview, specimen, page);
   return {
     page,
-    specimen: text === undefined ? preview : { ...preview, color: text },
+    specimen: outlined ? outlinedSpecimen(specimen, page) : specimen,
     darkUnreadable,
+    outlined,
+  };
+}
+
+/**
+ * Whether a style that sets a colour is not shown to read on its tile: its
+ * text (or the page's) against its background (or the page's) is under the
+ * bar, or a pair this cannot judge. A style setting no colour draws as the
+ * page does.
+ */
+function notShownToRead(
+  preview: Readonly<Record<string, string>>,
+  specimen: Readonly<Record<string, string>>,
+  page: { backgroundColor?: string; color?: string }
+): boolean {
+  if (preview.color === undefined && preview.backgroundColor === undefined) {
+    return false;
+  }
+  const fg = specimen.color ?? page.color;
+  const bg = preview.backgroundColor ?? page.backgroundColor;
+  if (fg === undefined || bg === undefined) return true;
+  return readability(fg, bg) !== true;
+}
+
+/**
+ * The "Aa" with an outline painted under its fill, in the page's colour,
+ * which contrasts with the page's text. Without the site's page colour the
+ * tab's own class draws the outline from the editor's.
+ */
+function outlinedSpecimen(
+  specimen: Readonly<Record<string, string>>,
+  page: { backgroundColor?: string }
+): Readonly<Record<string, string>> {
+  if (page.backgroundColor === undefined) return specimen;
+  return {
+    ...specimen,
+    WebkitTextStroke: `2px ${page.backgroundColor}`,
+    paintOrder: "stroke fill",
   };
 }
 

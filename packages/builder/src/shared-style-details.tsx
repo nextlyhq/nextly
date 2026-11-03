@@ -23,8 +23,8 @@ import {
 import {
   sharedStyleDeclares,
   sharedStyleKindName,
-  sharedStyleRemoval,
   sharedStyleRefusalOf,
+  sharedStyleRemoval,
   sharedStyleSlug,
   sharedStyleUse,
   SHARED_STYLE_NOT_WHOLE_NOTE,
@@ -38,6 +38,20 @@ import {
   type SharedStyleUsesPage,
 } from "./shared-style-library";
 import type { SharedStylesAccess } from "./shared-styles-panel";
+
+/**
+ * Remove through the host, with the in-use signal where it gives one: its
+ * `removeWithReason`, else `remove`, whose words say nothing of use.
+ */
+export async function removeSharedStylesThrough(
+  access: SharedStylesAccess,
+  ids: readonly string[]
+): Promise<SharedStyleRefusal | undefined> {
+  if (access.removeWithReason !== undefined) {
+    return access.removeWithReason(ids);
+  }
+  return sharedStyleRefusalOf(await access.remove(ids));
+}
 
 /** How many documents one where-used page names. */
 const USES_PAGE = 20;
@@ -534,7 +548,7 @@ function RemoveOne({
   const remove = async (): Promise<void> => {
     let said: SharedStyleRefusal | undefined;
     const stored = await run(async () => {
-      said = sharedStyleRefusalOf(await access.remove([id]));
+      said = await removeSharedStylesThrough(access, [id]);
       return said?.reason;
     });
     if (stored) onRemoved();
