@@ -99,6 +99,7 @@ import {
   lockViewOf,
 } from "./inspector";
 import type { InspectorSectionKey } from "./inspector-sections";
+import { layerLabel } from "./layers";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
@@ -157,8 +158,8 @@ import {
 import {
   breakpointBadge,
   breakpointSource,
+  inheritedProvenance,
   propertiesWriting,
-  styleProvenance,
   type BreakpointBadge,
   type BreakpointSource,
   type StyleProvenance,
@@ -687,6 +688,10 @@ function StyleInspectorBody({
     state: inspected.state,
     breakpoint: inspected.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
+    nameOf: id => {
+      const node = findNode(editor.document.nodes, id);
+      return node === undefined ? undefined : layerLabel(node);
+    },
   };
   const provenanceOf = provenanceReader({
     cascade,
@@ -2051,7 +2056,7 @@ function provenanceReader({
      * of one trace would first disagree at exactly the boundaries the trace
      * exists to settle.
      */
-    const provenance = styleProvenance(query);
+    const provenance = inheritedProvenance(query);
     const badge = breakpointBadge(query, provenance, breakpoints);
     /*
      * Offered only for a tier a canvas can actually be taken to. A declaration
@@ -3255,7 +3260,7 @@ function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
     case "element":
       return `${origin.tag.toUpperCase()} defaults`;
     case "node":
-      return "an enclosing block";
+      return editing.nameOf?.(origin.id) ?? "an enclosing block";
   }
 }
 
@@ -3300,7 +3305,9 @@ function originSubject(
     case "element":
       return `the ${origin.tag} typography baseline`;
     case "node":
-      if (origin.id !== editing.nodeId) return "an enclosing block";
+      if (origin.id !== editing.nodeId) {
+        return editing.nameOf?.(origin.id) ?? "an enclosing block";
+      }
       return control ?? "this block";
   }
 }
@@ -3398,6 +3405,11 @@ export interface EditedAddress {
   readonly breakpoint: BreakpointId;
   /** A breakpoint's author-facing name, for saying which one a value came from. */
   readonly labelOf: (breakpoint: BreakpointId) => string;
+  /**
+   * A block's name as the Layers panel shows it, for saying which enclosing
+   * block a value came from. Absent, it is "an enclosing block".
+   */
+  readonly nameOf?: (nodeId: string) => string | undefined;
 }
 
 /**

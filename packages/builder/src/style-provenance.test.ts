@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   breakpointBadge,
   breakpointSource,
+  inheritedProvenance,
   styleProvenance,
   type BreakpointBadge,
   type StyleProvenanceQuery,
@@ -57,6 +58,107 @@ describe("the base tier's name", () => {
     } as unknown as BreakpointSet;
     expect(breakpointSource("base", set)?.label).toBe("Desktop");
     expect(breakpointSource("tablet", set)?.label).toBe("Tablet");
+  });
+});
+
+describe("a value an enclosing block passes down", () => {
+  /*
+   * CSS inheritance: an element with no colour of its own takes its parent's.
+   * The engine's ranking answers for rules that REACH an element, and a
+   * section's own colour reaches only the section, so the heading inside it
+   * read as unset while the canvas drew the section's colour on it.
+   */
+  function traceOf(
+    section: NodeStyles,
+    heading?: NodeStyles
+  ): readonly StyleTraceEntry[] {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "s1",
+          type: "core/section",
+          version: 1,
+          props: {},
+          styles: section,
+          slots: {
+            children: [
+              {
+                id: "h1",
+                type: "core/heading",
+                version: 1,
+                props: {},
+                ...(heading === undefined ? {} : { styles: heading }),
+              },
+            ],
+          },
+        },
+      ],
+    } as BlockDocument;
+    const compiled = compilePageCss(document, {
+      breakpoints: {
+        viewport: [{ id: "base", label: "Desktop" }],
+        container: [],
+      },
+      trace: true,
+    });
+    return compiled.trace ?? [];
+  }
+  const askHeading = (trace: readonly StyleTraceEntry[], cssProperty: string) =>
+    inheritedProvenance({
+      trace,
+      subject: {
+        nodeId: "h1",
+        blockType: "core/heading",
+        ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+      },
+      cssProperty,
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+
+  it("names the enclosing block an inheritable value comes from", () => {
+    const found = askHeading(
+      traceOf({ base: { base: { color: "#0000ff" } } }),
+      "color"
+    );
+    expect(found.kind).toBe("inherited");
+    if (found.kind !== "inherited") return;
+    expect(found.from).toEqual({ kind: "node", id: "s1" });
+    expect(found.entry.value).toBe("#0000ff");
+  });
+
+  it("passes down only what CSS passes down", () => {
+    // Padding is not inherited: a section's padding is not the heading's.
+    const found = askHeading(
+      traceOf({
+        base: {
+          base: {
+            padding: {
+              blockStart: "8px",
+              blockEnd: "8px",
+              inlineStart: "8px",
+              inlineEnd: "8px",
+            },
+          },
+        },
+      }),
+      "padding-block-start"
+    );
+    expect(found.kind).toBe("unset");
+  });
+
+  it("keeps the element's own value over its parent's", () => {
+    const found = askHeading(
+      traceOf(
+        { base: { base: { color: "#0000ff" } } },
+        { base: { base: { color: "#ff0000" } } }
+      ),
+      "color"
+    );
+    expect(found.kind).toBe("authored");
   });
 });
 

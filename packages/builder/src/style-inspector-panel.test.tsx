@@ -1932,6 +1932,54 @@ describe("where a control's value came from", () => {
     expect(sourceIn("fontWeight")).toBe("From .card");
   });
 
+  it("names the enclosing block an inherited colour comes from, as Layers does", () => {
+    // CSS inheritance: the box inside a "Hero" with a colour of its own takes
+    // the Hero's colour, and says so by the name the Layers panel shows.
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "acme/box",
+          version: 1,
+          name: "Hero",
+          props: {},
+          styles: { base: { [BASE_BREAKPOINT]: { color: "#123456" } } },
+          slots: {
+            children: [{ id: "a", type: "acme/box", version: 1, props: {} }],
+          },
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({
+                origin: { kind: "node", id: "outer" },
+                value: "#123456",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(sourceIn("color")).toBe("From Hero");
+    expect(dotIn("color")?.getAttribute("aria-label")).toBe(
+      "Inherited from Hero"
+    );
+    expect(
+      document
+        .querySelector('[data-property="color"] input')
+        ?.getAttribute("placeholder")
+    ).toBe("#123456");
+  });
+
   it("draws no source beside a value set here", () => {
     mountWithTrace([entry()]);
     expect(sourceIn("color")).toBeUndefined();

@@ -393,6 +393,99 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   return { kind: "inherited", entry: winner, from: winner.origin };
 }
 
+/**
+ * The CSS properties an element takes from its parent when nothing sets them
+ * on it — those CSS defines as inherited, whether or not the catalog writes
+ * each today, so a property added to the catalog is answered the day it lands.
+ */
+const INHERITED_PROPERTIES: ReadonlySet<string> = new Set([
+  "border-collapse",
+  "caption-side",
+  "caret-color",
+  "color",
+  "color-scheme",
+  "accent-color",
+  "cursor",
+  "direction",
+  "empty-cells",
+  "font-family",
+  "font-size",
+  "font-stretch",
+  "font-style",
+  "font-variant",
+  "font-weight",
+  "hyphens",
+  "letter-spacing",
+  "line-height",
+  "list-style-position",
+  "list-style-type",
+  "overflow-wrap",
+  "quotes",
+  "tab-size",
+  "text-align",
+  "text-indent",
+  "text-shadow",
+  "text-transform",
+  "visibility",
+  "white-space",
+  "word-break",
+  "word-spacing",
+  "writing-mode",
+]);
+
+/**
+ * {@link styleProvenance}, with CSS inheritance: an inheritable property
+ * nothing sets on this element is answered by the nearest enclosing block
+ * whose own value shows, asked through the same ranking at that block's
+ * address in its normal state.
+ *
+ * The ranking answers for rules that REACH an element, and a section's own
+ * colour reaches only the section, so without this a heading inside it read
+ * as unset while the canvas drew the section's colour on it. Asked of the
+ * trace rather than of the canvas's computed style, so the answer names where
+ * the value was written, which a computed value cannot say.
+ *
+ * Only for the element's own box: a control with a descendant selector styles
+ * something inside it, whose parent is not the enclosing block. An ambiguous
+ * answer on the way up stops the walk, since the next block's value would be
+ * named over one whose source is unknown.
+ */
+export function inheritedProvenance(
+  query: StyleProvenanceQuery
+): StyleProvenance {
+  const own = styleProvenance(query);
+  const descendant = query.descendant?.trim() ?? "";
+  if (
+    own.kind !== "unset" ||
+    descendant !== "" ||
+    !INHERITED_PROPERTIES.has(query.cssProperty)
+  ) {
+    return own;
+  }
+  // Outermost first, as the engine reads them; walked from the nearest.
+  const chain = query.subject.ancestors ?? [];
+  for (let at = chain.length - 1; at >= 0; at -= 1) {
+    const ancestor = chain[at];
+    if (ancestor === undefined) continue;
+    const found = styleProvenance({
+      ...query,
+      subject: { ...ancestor, ancestors: chain.slice(0, at) },
+      // The enclosing block's own value, as it shows while the element is in
+      // whichever state it is being edited in.
+      state: "base",
+    });
+    if (found.kind === "authored") {
+      return {
+        kind: "inherited",
+        entry: found.entry,
+        from: found.entry.origin,
+      };
+    }
+    if (found.kind !== "unset") return found;
+  }
+  return own;
+}
+
 /** Where a value a control is showing was authored, in breakpoint terms. */
 export interface BreakpointSource {
   /** The breakpoint's own id, as the trace records it. */
