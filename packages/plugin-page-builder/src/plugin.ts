@@ -1,6 +1,5 @@
 import {
   DEFAULT_LIMITS,
-  usableNamedClasses,
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
@@ -128,6 +127,7 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
+import { referableClassIds } from "./site-style-record";
 import {
   loadSiteStyle,
   SITE_STYLE_SLUG,
@@ -1042,9 +1042,9 @@ export const pageBuilder = (
             defaults: configStyle,
             slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
           });
-          return new Set(
-            usableNamedClasses(style.classes ?? []).map(entry => entry.id)
-          );
+          // Capped and resolved as the compiler reads the library, so a page
+          // may reference exactly the classes it applies.
+          return referableClassIds(style.classes ?? []);
         },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),

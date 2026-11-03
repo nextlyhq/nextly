@@ -30,6 +30,7 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isUsableNamedClass,
+  namedClassesRead,
   newStyleIssueBudget,
   resolveSiteTokens,
   tokenLabelIssue,
@@ -646,8 +647,8 @@ function mergedLibraryIssues(
   // The cap is applied BEFORE resolution, as an array prefix on the whole
   // library, so it is applied that way here too.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
-  const before = renderedIds(policy.defaults?.classes ?? []);
-  const after = renderedIds(merged);
+  const before = referableClassIds(policy.defaults?.classes ?? []);
+  const after = referableClassIds(merged);
 
   const issues: string[] = [];
   // A class the site used to render and no longer does. This write caused it,
@@ -672,13 +673,17 @@ function mergedLibraryIssues(
   return issues;
 }
 
-/** The ids a library actually renders, as the compiler resolves it. */
-function renderedIds(library: readonly NamedClass[]): Set<string> {
-  const read =
-    library.length > MAX_NAMED_CLASSES
-      ? library.slice(0, MAX_NAMED_CLASSES)
-      : library;
-  return new Set(usableNamedClasses(read).map(entry => entry.id));
+/**
+ * The ids a library actually renders, as the compiler resolves it: the part
+ * the compiler reads (its capped prefix), then the ordering and claim rules.
+ * These are also the classes a page may add a reference to.
+ */
+export function referableClassIds(
+  library: readonly NamedClass[]
+): ReadonlySet<string> {
+  return new Set(
+    usableNamedClasses(namedClassesRead(library)).map(entry => entry.id)
+  );
 }
 
 /**

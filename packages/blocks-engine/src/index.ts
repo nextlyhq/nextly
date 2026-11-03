@@ -964,6 +964,8 @@ export {
   // the later entry, which is four separate rules to get right by hand.
   usableNamedClasses,
   usableNamedClassPositions,
+  // The part of a library the compiler reads, before those rules run.
+  namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";
