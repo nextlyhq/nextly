@@ -2961,6 +2961,25 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(action("jump")).not.toBeNull();
   });
 
+  it("keeps the reset beside the jump when a value stored here is shadowed", () => {
+    /*
+     * Editing base while a live tablet declaration wins: the row's value
+     * comes from tablet, so it earns the jump, and base still stores a value
+     * the author can only remove from here. A list or an icon group has no
+     * Clear of its own, so without this reset that value is stuck.
+     */
+    const editor = mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt(BASE_BREAKPOINT), entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")).not.toBeNull();
+    expect(action("reset")).not.toBeNull();
+    fireEvent.click(action("reset") as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
   it("withholds the jump for a tier the canvas cannot be taken to", () => {
     /*
      * Two ids can carry one bound, and only the winner is offered as a choice —
