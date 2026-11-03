@@ -306,6 +306,26 @@ export function withUnit(
 }
 
 /**
+ * A length field's value as committed: a bare number takes the unit the field
+ * shows (px unless the author chose another), where "24" used to be refused
+ * as "not a length". Anything that already says its own unit, a keyword, an
+ * empty field, or a number the property would refuse even with the unit is
+ * left exactly as typed, so the write path judges it as before.
+ */
+export function withDefaultUnit(
+  leaf: StyleLeaf,
+  value: StyleValue | null,
+  unit: string
+): StyleValue | null {
+  if (leaf.kind !== "dimension" || typeof value !== "string") return value;
+  // CSS whitespace only, as every numeric field here reads it.
+  const text = trimCssWhitespace(value);
+  if (!CSS_NUMBER.test(text)) return value;
+  const next = `${text}${unit}`;
+  return accepts(leaf, next) ? next : value;
+}
+
+/**
  * The value one step away, or `undefined` when this value cannot be stepped or
  * the result would be refused.
  *

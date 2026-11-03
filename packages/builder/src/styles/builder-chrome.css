@@ -2069,6 +2069,59 @@
 }
 
 /*
+ * A length and its unit as ONE control: the box takes the border, background
+ * and focus ring, the field inside gives its own up, and the unit is a small
+ * muted suffix at the box's end ("24 px ▾"), where a second bordered menu
+ * beside the field read as two controls for one value.
+ */
+.nx-style-inspector__numeric:has(> .nx-style-inspector__unit) {
+  gap: 0;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+}
+
+/* A refused value marks the whole control, the field's own border given up. */
+.nx-style-inspector__numeric:has(> .nx-style-inspector__unit):has(
+    [aria-invalid="true"]
+  ) {
+  border-color: var(--nx-destructive);
+}
+
+.nx-style-inspector__numeric:has(> .nx-style-inspector__unit):focus-within {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -1px;
+}
+
+/*
+ * The number keeps four characters and the field's own padding however narrow
+ * the control column gets: "-0.035" or "1.25" has to be read whole, and below
+ * this the column grows to min-content rather than cutting the value.
+ */
+.nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child {
+  min-width: calc(4ch + 1.5rem);
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+/*
+ * Exactly its text: the menu's own `min-width` is given up here, so the suffix
+ * takes no width the number could use.
+ */
+.nx-style-inspector__numeric .nx-style-inspector__unit {
+  min-width: 0;
+  height: auto;
+  gap: 0.125rem;
+  padding-inline: 0.25rem 0.5rem;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/*
  * A colour row: for a value, the swatch that opens the picker and the field
  * holding the value; for a variable, one control naming it, then Clear.
  *
