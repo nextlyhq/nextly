@@ -2728,7 +2728,10 @@ describe("the action a control's breakpoint provenance earns", () => {
      * rather than a load-bearing one, and this case does not pretend to cover
      * it.
      */
-    mount({ stored: BASE_BREAKPOINT, entries: [], onJump: () => {} });
+    // Stored at another tier and nowhere in the trace, so the address being
+    // edited holds nothing: a value stored HERE earns a reset however the
+    // cascade reads it.
+    mount({ stored: "tablet", entries: [], onJump: () => {} });
 
     expect(action("reset")).toBeNull();
     expect(action("jump")).toBeNull();
@@ -2775,6 +2778,55 @@ describe("the action a control's breakpoint provenance earns", () => {
      * for this button.
      */
     expect(label).toContain("from base");
+  });
+
+  it("keeps the reset for a value stored at a tier the canvas is not showing", () => {
+    /*
+     * The panel can edit a tier the preview is not at. The cascade then reads
+     * the control as unset, which is true of what is DISPLAYED, while a value
+     * is stored at the address being edited. A list has no Clear of its own,
+     * so this reset is the one way to remove that value.
+     */
+    register({ layout: true });
+    const editor = editorFor(
+      documentOf({ base: { tablet: { display: "flex" } } } as NodeStyles)
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "display",
+                value: "flex",
+                state: "base",
+                breakpoint: "tablet",
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const reset = document.querySelector<HTMLElement>(
+      '[data-property="display"] [data-action="reset"]'
+    );
+    expect(reset).not.toBeNull();
+    // Named without saying what shows through: the cascade did not rank this
+    // tier, so "leaving it unset" could be false.
+    expect(reset?.getAttribute("aria-label")).toBe("Reset Display at Tablet");
+    fireEvent.click(reset as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
+      "flex"
+    );
   });
 
   it("names the action by its PROPERTY, not by the leaf alone", () => {

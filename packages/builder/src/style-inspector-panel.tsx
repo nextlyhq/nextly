@@ -2115,14 +2115,20 @@ function BreakpointAction({
    * The row's one way back, so a list or an icon group needs no Clear of its
    * own. With a cascade it follows the cascade's answer: a value authored at
    * this tier is reset, revealing whatever shows through, and one arriving
-   * from another tier is a jump there. With none, a value stored here is
-   * reset, unless the field is a retained value with a Clear of its own.
+   * from another tier is a jump there.
+   *
+   * Where the cascade gives no answer for this row — none was supplied, or
+   * the tier being edited is one the canvas is not showing, so its values
+   * read as unset — a value stored at this address is still reset, unless the
+   * field is a retained value with a Clear of its own. What it reveals is not
+   * known there, so the reset does not claim it.
    */
-  if (answer === undefined) {
+  const badge = answer?.badge;
+  if (badge === undefined || badge.kind === "none") {
     if (stored === undefined || readOnly) return null;
     return (
       <ResetAction
-        revealed={undefined}
+        revealed="unknown"
         label={label}
         editing={editing}
         fieldId={fieldId}
@@ -2130,12 +2136,10 @@ function BreakpointAction({
       />
     );
   }
-  const badge = answer.badge;
-  if (badge === undefined || badge.kind === "none") return null;
   if (badge.kind === "authored") {
     return (
       <ResetAction
-        revealed={badge.revealed}
+        revealed={badge.revealed ?? "unset"}
         label={label}
         editing={editing}
         fieldId={fieldId}
@@ -2143,7 +2147,7 @@ function BreakpointAction({
       />
     );
   }
-  if (answer.jump === undefined) return null;
+  if (answer?.jump === undefined) return null;
   return (
     <JumpAction source={badge.source} label={label} onJump={answer.jump} />
   );
@@ -2292,17 +2296,31 @@ function ResetAction({
   fieldId,
   onReset,
 }: {
-  revealed: BreakpointSource | undefined;
+  /**
+   * What shows once this value is gone: another tier's value, nothing, or
+   * `"unknown"` where no ranking of the cascade covers this tier, which the
+   * names then leave unsaid rather than guess.
+   */
+  revealed: BreakpointSource | "unset" | "unknown";
   label: string;
   editing: EditedAddress;
   /** The field whose value this press writes. See {@link commitsFor}. */
   fieldId: string;
   onReset: () => void;
 }): React.JSX.Element {
-  const reveals =
-    revealed === undefined
-      ? "leaving it unset"
-      : `showing the value from ${sourceLabel(revealed)}`;
+  const at = `Reset ${label} at ${editing.labelOf(editing.breakpoint)}`;
+  const named =
+    revealed === "unknown"
+      ? at
+      : revealed === "unset"
+        ? `${at}, leaving it unset`
+        : `${at}, showing the value from ${sourceLabel(revealed)}`;
+  const tip =
+    revealed === "unknown"
+      ? "Reset"
+      : revealed === "unset"
+        ? "Reset to unset"
+        : `Reset to ${sourceLabel(revealed)}`;
   return (
     <TooltipProvider delayDuration={300}>
       <Tooltip>
@@ -2313,7 +2331,7 @@ function ResetAction({
             data-action="reset"
             {...commitsFor(fieldId)}
             onClick={onReset}
-            aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
+            aria-label={named}
           >
             {/* An icon at the row's end, where a "Reset to unset" line under
                 every set control made each one two rows. The words are its
@@ -2321,11 +2339,7 @@ function ResetAction({
             <RotateCcw size={14} aria-hidden="true" />
           </button>
         </TooltipTrigger>
-        <TooltipContent>
-          {revealed === undefined
-            ? "Reset to unset"
-            : `Reset to ${sourceLabel(revealed)}`}
-        </TooltipContent>
+        <TooltipContent>{tip}</TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );
