@@ -19,6 +19,7 @@ import {
   removeMigrationsOf,
 } from "./support/runtime-collection";
 import { LOCK } from "./support/locks";
+import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
@@ -26,7 +27,7 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 
 function heading(page: Page, id: string) {
-  return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
+  return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
 test("opens a blocks field inside a named group by its path, and saves it there", async ({
@@ -103,6 +104,8 @@ test("opens a blocks field inside a named group by its path, and saves it there"
     await expect(
       page.getByRole("heading", { name: "Which field do you want to edit?" })
     ).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator(".nx-canvas")).toHaveCount(0);
+    // No canvas frame at all: a query for the canvas inside one would pass on
+    // an empty page.
+    await expect(page.locator(CANVAS_FRAME)).toHaveCount(0);
   }
 });

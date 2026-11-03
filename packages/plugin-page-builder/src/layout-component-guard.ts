@@ -122,10 +122,14 @@ export function registerLayoutComponentGuard(args: {
   // them sets is the status judged. It still runs before the write. A hook
   // a plugin cannot follow (an admin-configured `beforeChange`, or a field's
   // own hook on `status`) is judged by no plugin guard today.
-  args.ctx.hooks.on("beforeChange", args.componentsCollection, async context => {
-    if (!unpublishes(context)) return;
-    await refuseWhileALayoutNamesIt(args, context, UNPUBLISHING);
-  });
+  args.ctx.hooks.on(
+    "beforeChange",
+    args.componentsCollection,
+    async context => {
+      if (!unpublishes(context)) return;
+      await refuseWhileALayoutNamesIt(args, context, UNPUBLISHING);
+    }
+  );
 }
 
 /** How a refusal names the write it refuses. */

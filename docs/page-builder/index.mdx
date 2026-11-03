@@ -173,9 +173,14 @@ Desktop.
 - **Styles only.** What changes per breakpoint is what the Style tab sets. A block's
   content and settings are the same at every width.
 - **A width, not a device.** The device buttons choose a breakpoint and lay the canvas out
-  at its width; they do not show the page as a particular phone or tablet would. The canvas is not an iframe, so sizes in `vw` or `vh`, `@media`
-  rules you write yourself and code that reads the window's width follow the admin
-  window, not the canvas.
+  at its width; they do not show the page as a particular phone or tablet would. The canvas
+  is a frame of its own at that width, so sizes in `vw` or `vh`, `@media` rules you write
+  yourself and code that reads the window's width answer for the device, as they do on the
+  published page.
+- **Your site's global stylesheet is not loaded into the canvas yet.** The canvas has the
+  page's block styles and the site's shared styles, but rules from your app's own CSS
+  files, such as a `globals.css` that styles `h2` or `body`, do not reach it. Boxes size as
+  `border-box`, which most site resets set.
 - **Saved breakpoints reach a page only when its route reads them.** Breakpoints you save
   in the editor are stored in the plugin's `site-style` single. The route above compiles
   against the breakpoints it declares in `styleContext` and never reads that single, so a
@@ -269,8 +274,10 @@ loads:
 
 The editor's canvas draws your page with the same React renderer that serves it,
 `PageRenderer` from `@nextlyhq/blocks-react`. It is not pixel-identical to the published
-page: the canvas adds editing outlines and markers, and, not being an iframe, it answers
-viewport units and your own `@media` rules with the admin window's width.
+page: the editor draws its outlines and markers over the canvas, and your app's own global
+stylesheet is not loaded into it yet. The page is drawn in a frame of its own at the
+device's width, so viewport units and your own `@media` rules answer as they do when
+published, and neither the admin's styles nor the page's reach the other.
 
 ## Use it as a field instead
 

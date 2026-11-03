@@ -273,7 +273,7 @@ describe("issue-code vocabulary is stable and complete", () => {
     expect(placement?.path).toBe("/nodes/0/slots/default/0");
     expect(placement?.severity).toBe("error");
     // Names where the block WILL go, because that is the author's next action.
-    expect(placement?.message).toContain("goes inside Columns");
+    expect(placement?.message).toContain("goes inside a Columns.");
   });
 
   it("words a slot refusal the right way round, as the editor does", () => {
@@ -307,7 +307,7 @@ describe("issue-code vocabulary is stable and complete", () => {
 
     const refusal = issues.find(i => i.code === "not-allowed-in-slot");
     expect(refusal?.message).toBe(
-      "This slot does not take an Image. Takes Cell."
+      "An Image can't go here. This spot takes a Cell."
     );
   });
 
@@ -467,7 +467,7 @@ describe("issue-code vocabulary is stable and complete", () => {
     });
 
     const placement = issues.find(i => i.code === "restricted-at-root");
-    expect(placement?.message).toContain("goes inside Columns");
+    expect(placement?.message).toContain("goes inside a Columns.");
     expect(placement?.message).not.toContain("Somewhere else");
   });
 

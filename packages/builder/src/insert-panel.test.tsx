@@ -1672,7 +1672,7 @@ describe("the component tier", () => {
     openTab("Sections");
     const wrapped = tile("Wrapped column");
     expect(wrapped.getAttribute("data-refused")).toBe("true");
-    expect(describedBy(wrapped)).toContain("Column has to sit inside");
+    expect(describedBy(wrapped)).toContain("A Column has to go inside");
   });
 
   it("PLACES a pattern whose nested instance draws what the slot admits", () => {

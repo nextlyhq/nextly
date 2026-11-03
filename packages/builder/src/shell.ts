@@ -91,7 +91,33 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * from a server module while the writer lives behind the boundary — two halves
  * of one contract that could then be versioned apart.
  */
-export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
+export {
+  CANVAS_ROOT_CLASS,
+  Canvas,
+  DropRefusal,
+  nodeIdFromEvent,
+} from "./canvas";
+
+/**
+ * @experimental The frame the canvas is drawn in, and how the code around the
+ * canvas learns about it.
+ *
+ * `CanvasFrame` is both the component and the type `useCanvasFrame` answers
+ * with: what the frame is, its document and window, its painted scale and
+ * viewport, and the point mapping between it and the editor. The provider
+ * goes ABOVE the editor's shell, so the panels, the toolbar and the keys
+ * outside the canvas see the frame the canvas registers into it.
+ *
+ * `CanvasMarks` draws the selection and the drop container over the page.
+ */
+export {
+  CanvasFrame,
+  CANVAS_FRAME_TITLE_PREFIX,
+  canvasFrameTitle,
+} from "./canvas-frame";
+export type { CanvasFrameProps } from "./canvas-frame";
+export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
+export { CanvasMarks } from "./canvas-marks";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
@@ -108,7 +134,7 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
  * Alt+Arrow reach the page behind the dialog.
  */
 export { useModalKeyboardHold } from "./modal-keyboard-hold";
-export type { CanvasPreview, CanvasProps } from "./canvas";
+export type { CanvasProps } from "./canvas";
 // The regions of a page's Layout, drawn locked around the page on the canvas.
 export type { CanvasRegion } from "./canvas-regions";
 export { REGION_ATTRIBUTE } from "./canvas-regions";
@@ -144,6 +170,9 @@ export type {
 } from "./inspector-panel";
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./component-fields";
+// The banner over a component's own view: its name, its reach, and Back.
+export { ComponentBanner } from "./component-banner";
+export type { ComponentBannerProps } from "./component-banner";
 // And about its variants: how many placements chose one, for the delete dialog.
 export type { ComponentVariantsHost, VariantUse } from "./component-variants";
 
@@ -161,6 +190,8 @@ export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps, LibraryTierState } from "./insert-panel";
+export { ComponentsPanel } from "./components-panel";
+export type { ComponentsPanelProps } from "./components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the
 // panel because supplying `patterns` is impossible without it: a caller loads
 // rows from a plugin's collection and has to know which fields the palette
@@ -216,6 +247,7 @@ export {
   editedBreakpointAtWidth,
   editingBreakpointOf,
   offeredTiers,
+  previewHeight,
   previewWidth,
   selectableTiers,
   widthForBreakpoint,
@@ -555,21 +587,33 @@ export type {
 } from "./class-library";
 
 /**
- * The fonts panel, and the rules it draws from.
+ * The Design panel's Fonts tab, and the rules it draws from.
  *
- * A reader over the site's faces and its `fontFamily` tokens rather than an
- * editor: creating and renaming those tokens belongs to the tokens studio, and
- * the question this answers — whether a family a token names will actually
- * render — needs both lists at once, which is why neither the studio nor the
- * inspector can ask it.
+ * It lists the site's fonts and font variables, adds a font by uploading a
+ * file or through the host's Google Fonts catalogue, and removes one. Font
+ * variables are listed here and changed in Variables.
+ *
+ * @experimental The catalogue's shapes may change while the feature settles.
  */
 export { FontsPanel } from "./fonts-panel";
-export type { FontsPanelProps, FontFaceUpload } from "./fonts-panel";
-export { fontTokenRows, readStack, rowsNeedingAttention } from "./font-library";
+export type {
+  CatalogueAddRequest,
+  CatalogueFamilyView,
+  FontCatalogue,
+  FontsPanelProps,
+  FontFaceUpload,
+} from "./fonts-panel";
+export {
+  fontTokenRows,
+  readStack,
+  rowsNeedingAttention,
+  withoutFamily,
+} from "./font-library";
 export type {
   FamilyReading,
   FamilySource,
   FontTokenRow,
+  SiteFamily,
   StackReading,
 } from "./font-library";
 

@@ -172,49 +172,25 @@ export async function runI18nRestore(
   );
 }
 
-export function registerI18nRestoreCommand(program: Command): void {
-  program
-    .command("i18n:restore")
-    .description(
-      "Replay archived translations back onto an entity after a localization disable"
-    )
-    .requiredOption(
-      "--collection <slug>",
-      "Collection, single, or field group slug to restore"
-    )
-    .option(
-      "--kind <kind>",
-      "collection, single or field-group: which entity the slug names, when more than one has it"
-    )
-    .option(
-      "--locale <code>",
-      "Restore only this language (default: every archived language)"
-    )
-    .option(
-      "--field <name>",
-      "Restore only this field's archived values (default: every archived field)"
-    )
-    .option(
-      "--purge",
-      "Remove the replayed rows from the archive once restored",
-      false
-    )
-    .action(async (cmdOptions: I18nRestoreCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runI18nRestore(
-          {
-            ...cmdOptions,
-            config: globalOpts.config,
-            verbose: globalOpts.verbose,
-            quiet: globalOpts.quiet,
-            cwd: globalOpts.cwd,
-          },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/** The action of `nextly i18n:restore`, loaded when it runs. */
+export async function i18nRestoreAction(
+  cmdOptions: I18nRestoreCommandOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runI18nRestore(
+      {
+        ...cmdOptions,
+        config: globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

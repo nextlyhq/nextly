@@ -29,7 +29,9 @@ import { BLOCKS_FIELD_COMPONENT } from "../fields/blocksField";
 // literal would keep passing after the real call stopped happening — which is
 // precisely the defect this file exists to catch.
 const registered: Record<string, unknown> = {};
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   registerComponents: (map: Record<string, unknown>) => {
     Object.assign(registered, map);
   },

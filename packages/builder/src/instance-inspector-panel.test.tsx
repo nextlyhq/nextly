@@ -996,38 +996,38 @@ describe("a row a lock the component sets holds", () => {
   /** The heading is locked in the component; a second heading is free. */
   const lockedHeader = () =>
     header({
-    nodes: [
-      {
-        id: "h1",
-        type: "acme/heading",
-        version: 1,
-        locked: true,
-        props: { text: "Site name" },
-      },
-      {
-        id: "h2",
-        type: "acme/heading",
-        version: 1,
-        props: { text: "Strap" },
-      },
-    ],
-    exposed: [
-      {
-        id: "title",
-        label: "Title",
-        nodeId: "h1",
-        propPath: "text",
-        type: "text",
-      },
-      {
-        id: "strap",
-        label: "Strap",
-        nodeId: "h2",
-        propPath: "text",
-        type: "text",
-      },
-    ],
-  } as Partial<ComponentDocument>);
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/heading",
+          version: 1,
+          locked: true,
+          props: { text: "Site name" },
+        },
+        {
+          id: "h2",
+          type: "acme/heading",
+          version: 1,
+          props: { text: "Strap" },
+        },
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "h1",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "h2",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    } as Partial<ComponentDocument>);
 
   it("draws the reason under the field with a lock, and the label beside its field as a free row's", () => {
     const definition = lockedHeader();

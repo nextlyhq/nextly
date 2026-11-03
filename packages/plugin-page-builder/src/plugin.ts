@@ -102,6 +102,7 @@ import {
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pagesSearchRoute } from "./pages-search-route";
+import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
@@ -110,6 +111,11 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
@@ -467,6 +473,15 @@ export interface PageBuilderOptions {
    * Ignored without a `pagePreviewPath`: there is no preview to offer them on.
    */
   pagePreviewBreakpoints?: PreviewViewportsDeclaration | false;
+
+  /**
+   * Catalogue fonts in Design → Fonts. Adding one makes the SERVER download
+   * its files from the catalogue into the site's media, so published pages
+   * load fonts only from the site. The server reaches the two catalogue hosts
+   * (declared as this plugin's outbound hosts) and nothing else. `{ catalogue:
+   * false }` turns the catalogue off; uploading a font file still works.
+   */
+  fonts?: PageBuilderFontOptions;
 }
 
 /**
@@ -635,6 +650,24 @@ function isOrphanedSingle(
 
 /** How many registry rows one page of the collection listing asks for. */
 const REGISTRY_PAGE_SIZE = 100;
+
+/**
+ * What the font catalogue adds to the plugin: the two hosts its server may
+ * reach, its routes, and whether the host turned it off. Worked out once, so
+ * the plugin's definition spreads the parts rather than asking at each.
+ */
+function fontCatalogueParts(fonts: ReturnType<typeof resolveFontOptions>): {
+  off: boolean;
+  capabilities: { capabilities?: { net: { outbound: string[] } } };
+  routes: ReturnType<typeof siteFontRoutes>;
+} {
+  if (fonts === false) return { off: true, capabilities: {}, routes: [] };
+  return {
+    off: false,
+    capabilities: { capabilities: { net: { outbound: [...fonts.outbound] } } },
+    routes: siteFontRoutes({ fonts }),
+  };
+}
 
 /**
  * Every collection slug the registry holds, or `undefined` when it could not
@@ -854,6 +887,9 @@ export const pageBuilder = (
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
   const configStyle = resolveSiteStyle(opts.siteStyle);
+  // The font catalogue's hosts and caps, refused at boot when unusable, and
+  // what it adds to the plugin.
+  const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -889,6 +925,10 @@ export const pageBuilder = (
     category: "content",
     tags: ["page-builder", "blocks", "visual-editor"],
     enabled: opts.enabled,
+    // The catalogue's two hosts, the only ones the server may reach, so an
+    // add's downloads go through `ctx.fetch` and are listed where a reviewer
+    // reads them.
+    ...fonts.capabilities,
     admin: {
       // How the plugin names itself wherever the admin lists it. Without this
       // the dashboard section and the plugins list fall back to `meta.name`,
@@ -1252,6 +1292,9 @@ export const pageBuilder = (
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
+        // What the editor may offer this caller: saving a pattern, making a
+        // component or updating a pattern from a selection, and opening a
+        // component in its own view from the store definitions live in.
         patternCapabilityRoute(componentStoreOf(opts)),
         // What the component editor needs beside the component's own
         // document: the ids its live definition uses, and the count of
@@ -1348,6 +1391,10 @@ export const pageBuilder = (
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
         pagesSearchRoute(componentStoreOf(opts)),
+        // The Pages panel's writes: create, duplicate, rename and delete a
+        // page, each as the author asking, in exactly the collections the
+        // search lists.
+        ...pagesWriteRoutes(componentStoreOf(opts)),
         // The one write that chooses the site's default Layout. A route rather
         // than an edit to the settings Single, because choosing a default has
         // preconditions (the Layout is published, the caller may publish
@@ -1382,6 +1429,8 @@ export const pageBuilder = (
           defaults: configStyle,
           reconcile: () => usage.reconcile,
         }),
+        // Design → Fonts' catalogue: read it, and add a family to the site.
+        ...fonts.routes,
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,
@@ -1416,9 +1465,13 @@ export const pageBuilder = (
         ...(opts.remotePatterns !== undefined ||
         opts.checklist !== undefined ||
         opts.limits !== undefined ||
-        opts.siteStyle !== undefined
+        opts.siteStyle !== undefined ||
+        fonts.off
           ? {
               clientConfig: {
+                // The Fonts tab offers no catalogue when the host turned it
+                // off, rather than one whose routes do not exist.
+                ...(fonts.off ? { fontCatalogue: false } : {}),
                 ...(opts.remotePatterns === undefined
                   ? {}
                   : { remotePatterns: opts.remotePatterns }),

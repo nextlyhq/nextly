@@ -272,11 +272,19 @@ test.describe("a placement's exposed fields", () => {
       ""
     );
     // The heading is also the placement's selected root: it keeps the solid
-    // selection ring rather than trading it for the dashed one.
-    await expect(await headline(page, "p1")).toHaveCSS(
-      "outline-style",
-      "solid"
+    // selection ring rather than trading it for the dashed one. The marks are
+    // drawn over the canvas frame, so the ring is a mark there and no dashed
+    // mark is drawn over the heading.
+    await expect(await headline(page, "p1")).toHaveAttribute(
+      "data-nx-selected",
+      /.*/
     );
+    await expect(
+      page.locator('.nx-canvas-mark[data-mark="selected"]')
+    ).not.toHaveCount(0);
+    await expect(
+      page.locator('.nx-canvas-mark[data-mark="exposed"]')
+    ).toHaveCount(0);
     await expect(
       (await canvasRoot(page))
         .locator('[data-nx-instance="p1"]')
