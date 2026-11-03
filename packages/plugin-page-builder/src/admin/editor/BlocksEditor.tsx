@@ -459,7 +459,7 @@ function editorInspector(
       breakpoints={canvasRender.styleContext.breakpoints}
       // The set above is the config's defaults until the stored one is read,
       // so a per-device hide waits for it.
-      breakpointsReady={!siteStylePending && siteStyleError === null}
+      breakpointsStatus={siteStyleStatus(siteStylePending, siteStyleError)}
       // Which tier the Style tab writes to, and which tiers are live: the
       // canvas's answer rather than the panel's, as the frame's width is
       // what the page's media queries answer for.

@@ -27,6 +27,9 @@ import { deviceOptions, tierIcon } from "./breakpoint-switcher";
 import type { EditorState } from "./editor-state";
 import { toggleOnDeviceOp } from "./layer-row-actions";
 
+/** Whether the site's breakpoints are its own set yet, as the editor reads it. */
+export type BreakpointsStatus = "loading" | "unavailable" | "ready";
+
 export interface VisibleOnProps {
   readonly editor: EditorState;
   readonly nodeId: string;
@@ -35,10 +38,11 @@ export interface VisibleOnProps {
   /** The device being edited, marked among the others. */
   readonly editing: string;
   /**
-   * Whether `breakpoints` is the site's own set. Until it is, the buttons
-   * are held: a change resolved against a stand-in set is stored wrong.
+   * Whether `breakpoints` is the site's own set: while it is being read, or
+   * when the read failed, the buttons are held, since a change resolved
+   * against a stand-in set is stored wrong, and the sentence says which.
    */
-  readonly ready?: boolean;
+  readonly status?: BreakpointsStatus;
   /**
    * Why a lock holds the block's design, which includes where it shows, or
    * `undefined` while nothing does: the inspector's own reading, which holds
@@ -48,6 +52,15 @@ export interface VisibleOnProps {
   /** The id of the element saying why, which held buttons point to. */
   readonly reasonId?: string;
 }
+
+/** What the control says while it cannot be used, by why. */
+const STATUS_WORDS: Readonly<
+  Record<Exclude<BreakpointsStatus, "ready">, string>
+> = {
+  loading: "Reading the site's breakpoints…",
+  unavailable:
+    "The site's breakpoints could not be read, so where this block shows can't be changed here. Reload to try again.",
+};
 
 /** "Mobile", "Tablet and Mobile", "Desktop, Tablet and Mobile". */
 function listed(names: readonly string[]): string {
@@ -60,7 +73,7 @@ export function VisibleOn({
   nodeId,
   breakpoints,
   editing,
-  ready = true,
+  status = "ready",
   heldBy,
   reasonId,
 }: VisibleOnProps): React.JSX.Element | null {
@@ -79,15 +92,16 @@ export function VisibleOn({
   }));
   // Held whole while a lock holds the block's design, as every other design
   // control is, and until the site's breakpoints are known.
-  const held = !ready || heldBy !== undefined;
+  const held = status !== "ready" || heldBy !== undefined;
   const hidden = devices.filter(device => !device.visible);
-  const summary = !ready
-    ? "Reading the site's breakpoints…"
-    : hidden.length === 0
-      ? "Shown on every device."
-      : hidden.length === devices.length
-        ? "Hidden on every device."
-        : `Hidden on ${listed(hidden.map(device => device.label))}.`;
+  const summary =
+    status !== "ready"
+      ? STATUS_WORDS[status]
+      : hidden.length === 0
+        ? "Shown on every device."
+        : hidden.length === devices.length
+          ? "Hidden on every device."
+          : `Hidden on ${listed(hidden.map(device => device.label))}.`;
   return (
     <div className="nx-inspector__field" data-visible-on="">
       <p className="nx-inspector__field-name" id={labelId}>

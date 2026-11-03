@@ -10,14 +10,13 @@
  * @module reveal-hidden
  */
 import {
-  findNode,
   hiddenOnDevice,
   revealDeviceHidden,
   type BlockDocument,
+  type BlockNode,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import { ancestorIds } from "@nextlyhq/builder";
-import { useMemo } from "react";
+import * as React from "react";
 
 /** What the canvas lifts, and which selected blocks it shows because of it. */
 export interface RevealedHidden {
@@ -33,22 +32,34 @@ export function revealedHidden(
   breakpoints: BreakpointSet | undefined,
   device: string
 ): RevealedHidden {
-  const hidden = (id: string): boolean => {
-    const node = findNode(document.nodes, id);
-    return (
-      node !== undefined && hiddenOnDevice(node.visibility, breakpoints, device)
-    );
-  };
+  const wanted = new Set(selected);
   const lifted = new Set<string>();
   const shown: string[] = [];
-  for (const id of selected) {
-    if (findNode(document.nodes, id) === undefined) continue;
-    // The builder's own reading of the path, the one Layers opens by.
-    const path = [...ancestorIds(document, id), id].filter(hidden);
-    if (path.length === 0) continue;
-    shown.push(id);
-    path.forEach(each => lifted.add(each));
-  }
+  if (wanted.size === 0) return { lifted: [], shown };
+  /*
+   * ONE walk of the document, carrying the hidden blocks above each node, so
+   * a selection of thousands of blocks costs one pass rather than a path
+   * search per block. A block is drawn only if every block holding it is, so
+   * a selected block lifts each hidden block on its path, itself included.
+   */
+  const walk = (
+    nodes: readonly BlockNode[],
+    above: readonly string[]
+  ): void => {
+    for (const node of nodes) {
+      const path = hiddenOnDevice(node.visibility, breakpoints, device)
+        ? [...above, node.id]
+        : above;
+      if (wanted.has(node.id) && path.length > 0) {
+        shown.push(node.id);
+        path.forEach(id => lifted.add(id));
+      }
+      for (const children of Object.values(node.slots ?? {})) {
+        if (Array.isArray(children)) walk(children, path);
+      }
+    }
+  };
+  walk(document.nodes, []);
   return { lifted: [...lifted], shown };
 }
 
@@ -76,17 +87,22 @@ export function useReveal(
   breakpoints: BreakpointSet | undefined,
   device: string
 ): Reveal {
-  const { lifted, shown } = revealedHidden(
-    document,
-    selected,
-    breakpoints,
-    device
-  );
-  // Keyed by value, so a selection that lifts the same blocks keeps the
-  // document the canvas draws, and with it the canvas's rendered tree. JSON,
-  // which spells any id unambiguously, a newline or a NUL in one included.
-  const key = JSON.stringify([lifted, shown]);
-  return useMemo(() => {
+  // Derived only when what it reads changes: the document, the selection,
+  // the breakpoints or the device. The selection is keyed by value, as JSON,
+  // which spells any id unambiguously, so a host handing a new array of the
+  // same ids derives nothing again.
+  const selectedKey = JSON.stringify(selected);
+  const key = React.useMemo(() => {
+    const ids = JSON.parse(selectedKey) as string[];
+    const { lifted, shown } = revealedHidden(
+      document,
+      ids,
+      breakpoints,
+      device
+    );
+    return JSON.stringify([lifted, shown]);
+  }, [document, selectedKey, breakpoints, device]);
+  return React.useMemo(() => {
     const [liftedIds, shownIds] = JSON.parse(key) as [string[], string[]];
     return {
       document:

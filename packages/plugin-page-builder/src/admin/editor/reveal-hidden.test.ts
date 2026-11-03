@@ -75,6 +75,40 @@ describe("revealedHidden", () => {
   });
 });
 
+describe("revealedHidden on a large selection", () => {
+  it("reads the document once, not once per selected block", () => {
+    // Three thousand blocks, every one selected, as a Shift-range selection
+    // of a long page makes. A path search per block rebuilds the tree three
+    // thousand times; one walk is a few milliseconds. The bound is two orders
+    // of magnitude above the one walk, so it reads the shape of the work, not
+    // the machine.
+    const nodes = Array.from({ length: 3000 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/heading",
+      version: 1,
+      props: {},
+      ...(index % 2 === 0
+        ? { visibility: { devices: { tablet: false } } }
+        : {}),
+    }));
+    const big = {
+      formatVersion: 1,
+      kind: "page",
+      nodes,
+    } as unknown as BlockDocument;
+    const started = performance.now();
+    const result = revealedHidden(
+      big,
+      nodes.map(node => node.id),
+      SITE,
+      "tablet"
+    );
+    const took = performance.now() - started;
+    expect(result.shown).toHaveLength(1500);
+    expect(took).toBeLessThan(1000);
+  });
+});
+
 describe("useReveal", () => {
   it("keeps an id holding a newline or a NUL whole", () => {
     // Ids are any non-empty string, so a join and a split on either would

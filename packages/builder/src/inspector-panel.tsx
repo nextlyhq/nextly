@@ -102,7 +102,7 @@ import {
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
-import { VisibleOn } from "./visible-on";
+import { VisibleOn, type BreakpointsStatus } from "./visible-on";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -215,12 +215,13 @@ export interface InspectorPanelProps {
   /** The site's breakpoints, which decide which of those declarations are live. */
   breakpoints?: BreakpointSet;
   /**
-   * Whether `breakpoints` is the site's own set rather than the config's
-   * defaults standing in while the stored set is read. "Visible on" writes
-   * only once it is: a hide resolved against the wrong set is stored wrong.
-   * Defaults to `true`, for a host whose breakpoints are known up front.
+   * Whether `breakpoints` is the site's own set yet: `loading` while the
+   * config's defaults stand in for the stored set being read, `unavailable`
+   * when that read failed. "Visible on" writes only once it is `ready`: a
+   * hide resolved against the wrong set is stored wrong. Defaults to
+   * `ready`, for a host whose breakpoints are known up front.
    */
-  breakpointsReady?: boolean;
+  breakpointsStatus?: BreakpointsStatus;
   /**
    * The container the canvas compiled its breakpoints against, when it is
    * previewing rather than rendering at the browser's own width.
@@ -555,7 +556,7 @@ function SelectionInspector({
   inspectors,
   verbs,
   contentServices,
-  breakpointsReady = true,
+  breakpointsStatus = "ready",
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: Omit<
@@ -719,7 +720,7 @@ function SelectionInspector({
             fields={fields}
             breakpoints={styleOnly.breakpoints}
             breakpoint={breakpoint ?? BASE_BREAKPOINT}
-            breakpointsReady={breakpointsReady}
+            breakpointsStatus={breakpointsStatus}
           />
         </TabsContent>
 
@@ -757,7 +758,7 @@ function ContentTab({
   fields,
   breakpoints,
   breakpoint,
-  breakpointsReady,
+  breakpointsStatus,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -776,7 +777,7 @@ function ContentTab({
   /** The device being edited. */
   breakpoint: BreakpointId;
   /** Whether `breakpoints` is the site's own set yet. */
-  breakpointsReady: boolean;
+  breakpointsStatus: BreakpointsStatus;
 }): React.JSX.Element {
   // Whether the Advanced section is open, so the panel inside it can be told
   // when it stops being on screen and settle its draft.
@@ -809,7 +810,7 @@ function ContentTab({
         nodeId={block.nodeId}
         breakpoints={breakpoints}
         editing={breakpoint}
-        ready={breakpointsReady}
+        status={breakpointsStatus}
         heldBy={designLocked}
         reasonId={reasonId}
       />
