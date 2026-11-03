@@ -1032,6 +1032,60 @@ describe("converting a run into an instance", () => {
     expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
   });
 
+  it("refuses a run inside a locked block, which the remove would take out of it", () => {
+    // The lock covers the subtree: the run itself is unlocked, but removing it
+    // changes what its locked container protects, and the apply refuses that.
+    const doc = page([
+      node("section", { locked: true }, { children: [node("a"), node("b")] }),
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("destination-locked");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+
+  it("refuses a pattern put into a locked block, at any depth, as the apply would", () => {
+    const saved = {
+      id: "hero-pattern",
+      document: { ...page([node("p1")]), kind: "pattern" as const },
+    };
+    const doc = page([
+      node(
+        "section",
+        { locked: true },
+        { children: [node("column", {}, { children: [] })] }
+      ),
+      node("open", {}, { children: [] }),
+    ]);
+
+    for (const parentId of ["section", "column"]) {
+      const at = { parentId, slot: "children", index: 0 };
+      expect(planInsertPattern(doc, saved, at, anyParent).problem).toBe(
+        "destination-locked"
+      );
+      expect(() =>
+        applyOps(doc, [{ kind: "insert", node: node("p1"), at }])
+      ).toThrow();
+    }
+    // The control: the same pattern into an unlocked block is planned.
+    expect(
+      planInsertPattern(
+        doc,
+        saved,
+        { parentId: "open", slot: "children", index: 0 },
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+
   it("asks the nesting rule about the INSTANCE, not about what it replaces", () => {
     const instanceNeedsSection = {
       parentsOf: (type: string) =>

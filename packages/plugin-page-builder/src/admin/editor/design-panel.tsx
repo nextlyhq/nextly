@@ -16,19 +16,26 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/design-panel
  */
 import type { PanelView } from "@nextlyhq/builder";
+import { EDITOR_WORDS } from "@nextlyhq/builder/shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { RemountOnStyleReplay } from "./site-style-history";
 
-/** The panel's tabs, in the order the rail's Design item shows them. */
-const DESIGN_VIEWS = [
-  { value: "variables", label: "Variables" },
+/**
+ * The panel's tabs, in the order the rail's Design item shows them, named
+ * with the editor's words.
+ */
+const DESIGN_VIEWS: ReadonlyArray<{
+  readonly value: "variables" | "classes" | "fonts";
+  readonly label: string;
+}> = [
+  { value: "variables", label: EDITOR_WORDS.variables },
   // Stored as "classes", the value it has always had, so a remembered tab
   // still opens; only the words changed.
-  { value: "classes", label: "Shared styles" },
-  { value: "fonts", label: "Fonts" },
-] as const;
+  { value: "classes", label: EDITOR_WORDS.sharedStyles },
+  { value: "fonts", label: EDITOR_WORDS.fonts },
+];
 
 export type DesignView = (typeof DESIGN_VIEWS)[number]["value"];
 
@@ -69,7 +76,10 @@ export function DesignPanel({
   // re-renders this panel, and that is no reason to rebuild the open tab.
   const open = React.useMemo(() => tabs[current](), [tabs, current]);
   return (
-    <section className="nx-pb-design" aria-label="Design panel">
+    <section
+      className="nx-pb-design"
+      aria-label={`${EDITOR_WORDS.design} panel`}
+    >
       <Tabs
         value={current}
         onValueChange={view.choose}
@@ -77,10 +87,13 @@ export function DesignPanel({
       >
         <div className="nx-pb-design__head">
           <div className="nx-pb-design__title-row">
-            <h2 className="nx-pb-design__title">Design</h2>
+            <h2 className="nx-pb-design__title">{EDITOR_WORDS.design}</h2>
             <div className="nx-pb-design__actions" ref={setSlot} />
           </div>
-          <TabsList aria-label="Design" className="nx-pb-design__tabs">
+          <TabsList
+            aria-label={EDITOR_WORDS.design}
+            className="nx-pb-design__tabs"
+          >
             {DESIGN_VIEWS.map(entry => (
               <TabsTrigger
                 key={entry.value}

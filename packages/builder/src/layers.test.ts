@@ -309,3 +309,40 @@ describe("filterLayers", () => {
     expect(filterLayers(tree(), "zzz").roots).toEqual([]);
   });
 });
+
+describe("a lock in the tree", () => {
+  it("marks the rows inside a locked block with the name of the block that holds it", () => {
+    register();
+    const rows = layersOf(
+      documentOf([
+        node("hero", "core/heading", {
+          locked: true,
+          name: "Hero",
+          slots: {
+            children: [
+              node("inner", "core/heading", {
+                locked: true,
+                name: "Inner",
+                slots: { children: [node("deep", "core/heading")] },
+              }),
+            ],
+          },
+        }),
+        node("free", "core/heading"),
+      ])
+    );
+    const [hero, free] = rows;
+    const inner = hero?.children[0];
+    // A row locked itself says so and is held by nothing; the nearest lock
+    // above names a row that is not; a row nothing covers carries neither.
+    expect(hero).toMatchObject({ locked: true });
+    expect(hero?.lockedBy).toBeUndefined();
+    expect(inner).toMatchObject({ locked: true });
+    expect(inner?.lockedBy).toBeUndefined();
+    expect(inner?.children[0]).toMatchObject({
+      locked: false,
+      lockedBy: "Inner",
+    });
+    expect(free?.lockedBy).toBeUndefined();
+  });
+});

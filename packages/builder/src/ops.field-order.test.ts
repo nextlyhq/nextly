@@ -73,7 +73,9 @@ describe("a node's own fields are written in the declared order", () => {
         version: 1,
         props: {},
         name: "hello",
-        locked: true,
+        // Present but false: the key's place is what is under test, and a
+        // locked block would refuse the rename.
+        locked: false,
       },
     ]);
 
@@ -103,7 +105,9 @@ describe("a node's own fields are written in the declared order", () => {
       type: "core/box",
       version: 1,
       props: {},
-      locked: true,
+      // Present but false: the key's place is what is under test, and a
+      // locked block would refuse the rename.
+      locked: false,
       futureOne: 1,
       futureTwo: 2,
     } as unknown as BlockNode;
@@ -140,7 +144,9 @@ describe("a node's own fields are written in the declared order", () => {
       type: "core/box",
       version: 1,
       props: {},
-      locked: true,
+      // Present but false: the key's place is what is under test, and a
+      // locked block would refuse the rename.
+      locked: false,
     } as unknown as BlockNode;
     Object.defineProperty(hostile, "__proto__", {
       value: "carried",

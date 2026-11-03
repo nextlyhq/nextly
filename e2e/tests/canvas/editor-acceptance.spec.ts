@@ -254,6 +254,14 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     ]);
   },
   3: async page => {
+    // Up a level from a nested block, then cleared from the top.
+    await clickBlock(page, "ea-inner");
+    expect(await selection(page)).toEqual(["ea-inner"]);
+    await page.keyboard.press("Escape");
+    expect(await selection(page)).toEqual(["ea-section"]);
+    await page.keyboard.press("Escape");
+    expect(await selection(page)).toEqual([]);
+
     await clickBlock(page, "ea-first");
     expect(await selection(page)).toEqual(["ea-first"]);
     await page.keyboard.press("Escape");

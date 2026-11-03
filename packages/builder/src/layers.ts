@@ -52,8 +52,14 @@ export interface LayerNode {
   readonly type: string;
   /** The instance name if the author gave one, otherwise the block's name. */
   readonly label: string;
-  /** The author has asked the editor not to move or delete this block. */
+  /** The author has locked this block in Layers. */
   readonly locked: boolean;
+  /**
+   * The name of the block locked in Layers that this one sits inside, when it
+   * is not locked itself: a lock covers everything inside the block, so the
+   * row says it is held and by which block, where the lock is lifted.
+   */
+  readonly lockedBy?: string;
   /**
    * The block declares conditions, so whether it appears depends on the entry.
    *
@@ -121,22 +127,36 @@ export function layerLabel(
 
 /** The document as a tree of rows. */
 export function layersOf(document: BlockDocument): LayerNode[] {
-  const walk = (nodes: readonly BlockNode[]): LayerNode[] =>
-    nodes.map(node => ({
-      id: node.id,
-      type: node.type,
-      label: layerLabel(node),
-      locked: node.locked === true,
-      conditional: hasConditions(node),
-      breakpointHidden: hiddenAtSomeBreakpoint(node),
-      // Declaration order across every slot the node holds. `Object.values`
-      // preserves insertion order for string keys, which is the order the
-      // document was written in — so the tree matches the document rather than
-      // an alphabetical rearrangement of its regions.
-      children: walk(Object.values(node.slots ?? {}).flat()),
-    }));
+  // `heldBy` is the nearest locked block above, carried down the walk so the
+  // tree is read once rather than climbed per row.
+  const walk = (
+    nodes: readonly BlockNode[],
+    heldBy: string | undefined
+  ): LayerNode[] =>
+    nodes.map(node => {
+      const label = layerLabel(node);
+      const locked = node.locked === true;
+      return {
+        id: node.id,
+        type: node.type,
+        label,
+        locked,
+        ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),
+        conditional: hasConditions(node),
+        breakpointHidden: hiddenAtSomeBreakpoint(node),
+        // Declaration order across every slot the node holds. `Object.values`
+        // preserves insertion order for string keys, which is the order the
+        // document was written in — so the tree matches the document rather
+        // than an alphabetical rearrangement of its regions. The nearest lock
+        // is this block's own when it has one.
+        children: walk(
+          Object.values(node.slots ?? {}).flat(),
+          locked ? label : heldBy
+        ),
+      };
+    });
 
-  return walk(document.nodes);
+  return walk(document.nodes, undefined);
 }
 
 /**

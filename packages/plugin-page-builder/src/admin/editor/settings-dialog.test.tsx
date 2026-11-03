@@ -41,7 +41,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 // The section's own behaviour is the builder's to test; here it only says
 // when editing starts, as the real one does.
-vi.mock("@nextlyhq/builder/shell", () => ({
+vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
+  // The editor's real words, so the dialog's title reads as an author sees it.
+  EDITOR_WORDS: (
+    await importOriginal<typeof import("@nextlyhq/builder/shell")>()
+  ).EDITOR_WORDS,
   BreakpointManager: ({
     status,
     onEditingChange,

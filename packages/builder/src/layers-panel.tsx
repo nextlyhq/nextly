@@ -78,6 +78,7 @@ import * as React from "react";
 import { BlockIconMark } from "./block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
@@ -123,12 +124,18 @@ export interface LayersPanelProps {
 function Badge({
   icon,
   text,
+  lock,
 }: {
   icon: React.ReactNode;
   text: string;
+  /** For a lock badge: the block's own lock, or one it is held by. */
+  lock?: "own" | "inherited";
 }): React.JSX.Element {
   return (
-    <span className="nx-layer-row__badge">
+    <span
+      className="nx-layer-row__badge"
+      {...(lock === undefined ? {} : { "data-lock": lock })}
+    >
       {/*
         The icon is decorative and the word is the fact. A title attribute would
         reach a pointer and nothing else, and an icon alone announces as an
@@ -186,7 +193,23 @@ function rowOf(
         <span className="nx-layer-row__label" data-nx-layer={node.id}>
           {node.label}
         </span>
-        {node.locked ? <Badge icon={<Lock size={12} />} text="Locked" /> : null}
+        {/* Both locks in the row's own ink, so each reads against the row in
+            every state it can be in. A lock held from a block around it is
+            quieter by weight, a thinner stroke, never by a fainter colour; both
+            say so in words, and the inherited one names the block to unlock. */}
+        {node.locked ? (
+          <Badge
+            icon={<Lock size={12} strokeWidth={2.5} />}
+            text="Locked"
+            lock="own"
+          />
+        ) : node.lockedBy === undefined ? null : (
+          <Badge
+            icon={<Lock size={12} strokeWidth={1.25} />}
+            text={`Locked by ${node.lockedBy}`}
+            lock="inherited"
+          />
+        )}
         {node.breakpointHidden ? (
           <Badge
             icon={<EyeOff size={12} />}
@@ -379,8 +402,8 @@ export function LayersPanel({
         <Input
           value={query}
           onChange={event => setQuery(event.target.value)}
-          placeholder="Search layers"
-          aria-label="Search layers"
+          placeholder={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
+          aria-label={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
         />
       </div>
 
@@ -398,7 +421,7 @@ export function LayersPanel({
         >
           <TreeView
             className={LAYERS_TREE_CLASS}
-            aria-label="Layers"
+            aria-label={EDITOR_WORDS.layers}
             nodes={nodes}
             selectedId={editor.selectedId}
             // The panel shows what the canvas shows. Passing only the primary

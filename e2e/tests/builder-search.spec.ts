@@ -130,6 +130,24 @@ test.describe("the editor's search", () => {
     ]);
   });
 
+  test("keeps the search box where it is as the results change", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request, `Search pinned ${Date.now()}`);
+    await openBuilder(page, id);
+    await search(page, "he");
+    await expect(group(page, "Add").getByRole("option").first()).toBeVisible();
+    const input = palette(page).getByRole("combobox");
+    const many = await input.boundingBox();
+    await input.fill("xyzzy");
+    await expect(palette(page)).toContainText("Nothing matches");
+    const none = await input.boundingBox();
+    // Pinned near the top, as the agreed design has it: a dialog that
+    // re-centred would move the field by half the height the list lost.
+    expect(none?.y).toBe(many?.y);
+    expect(many?.y ?? 0).toBeLessThan(900 * 0.2);
+  });
+
   test("selects a block found on the page", async ({ page }) => {
     const id = await createPage(page.request, `Search jump ${Date.now()}`);
     await openBuilder(page, id);

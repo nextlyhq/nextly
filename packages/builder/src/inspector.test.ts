@@ -30,6 +30,7 @@ import {
   lockStatusOf,
   designIsWritable,
   designReadOnlyReason,
+  blockIsReadOnly,
 } from "./inspector";
 
 const base = {
@@ -620,6 +621,38 @@ describe("lockStatusOf and designIsWritable", () => {
     withHeading();
     expect(lockStatusOf(doc, "a").layers).toBe(true);
     expect(designIsWritable(doc, "a")).toBe(false);
+  });
+
+  it("reports a Layers lock held from the block around it, read-only, naming that block", () => {
+    // A lock covers everything inside the block: the child is not locked
+    // itself, yet nothing about it may change, and the inspector says which
+    // block holds the lock so the author knows where to lift it.
+    withHeading();
+    const doc = documentOf([
+      {
+        id: "outer",
+        type: "acme/heading",
+        version: 1,
+        props: {},
+        locked: true,
+        name: "Hero",
+        slots: {
+          children: [{ id: "a", type: "acme/heading", version: 1, props: {} }],
+        },
+      } as BlockNode,
+    ]);
+    expect(lockStatusOf(doc, "a")).toEqual({
+      layers: false,
+      inheritedFrom: "Hero",
+      slot: undefined,
+    });
+    expect(blockIsReadOnly(doc, "a")).toBe(true);
+    expect(propIsWritable(doc, "a", "text")).toBe(false);
+    expect(designReadOnlyReason(doc, "a")).toBe(
+      "Locked by Hero: this block is inside it, so it can't be moved, deleted or edited. Unlock Hero to change it."
+    );
+    // The block holding the lock reports its own, not an inherited one.
+    expect(lockStatusOf(doc, "outer").inheritedFrom).toBeUndefined();
   });
 
   it("names the block whose slot fixes a contentOnly area, and keeps its design read-only", () => {

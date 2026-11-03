@@ -1714,3 +1714,117 @@ describe("a step recorded from outside the document", () => {
     expect(result.current.canUndo).toBe(false);
   });
 });
+
+describe("a block locked in Layers, asked and applied", () => {
+  /** A locked section holding a heading, beside an unlocked block. */
+  function lockedPage(): BlockDocument {
+    return doc([
+      { ...node("hero", { children: [node("title")] }), locked: true },
+      node("loose"),
+    ]);
+  }
+
+  it("answers ahead of time, in the lock's words, for every way into it", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: lockedPage() })
+    );
+    const ask = result.current.lockRefusalFor;
+    // A block put into the locked one, a block inside it changed, and the
+    // locked block itself moved: the store's question answers each, where it
+    // answered nothing before because the op layer's refusal was swallowed.
+    expect(
+      ask([
+        {
+          kind: "move",
+          id: "loose",
+          to: { parentId: "hero", slot: "children", index: 0 },
+        },
+      ])
+    ).toMatchObject({ code: "layers-locked", relation: "destination" });
+    expect(
+      ask([{ kind: "update", id: "title", patch: { name: "Big" } }])
+    ).toMatchObject({ code: "layers-locked", relation: "around" });
+    expect(ask([{ kind: "move", id: "hero", to: { index: 2 } }])).toMatchObject(
+      { code: "layers-locked", relation: "self", verb: "move" }
+    );
+    // The control: an edit the lock does not cover is not refused for it.
+    expect(
+      ask([{ kind: "update", id: "loose", patch: { name: "Free" } }])
+    ).toBeUndefined();
+  });
+
+  it("tells the host why when it refuses an edit the lock covers", () => {
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: lockedPage(), onLockRefused })
+    );
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "title",
+          patch: { name: "Big" },
+        })
+      ).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sentence:
+          "This block is inside Box, which is locked. Unlock Box to change this block.",
+      })
+    );
+  });
+
+  it("refuses deleting a block the saved page still holds locked, until the unlock is saved", () => {
+    // Unlocked in the editor and not yet saved: a save would refuse to drop a
+    // block locked in what is stored, so the editor refuses the delete first,
+    // with the way forward. Once the unlock is saved, the delete goes through.
+    const opened = lockedPage();
+    const onLockRefused = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ stored }) =>
+        useEditorState({ initialDocument: opened, stored, onLockRefused }),
+      { initialProps: { stored: opened } }
+    );
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "hero",
+          patch: {},
+          unset: ["locked"],
+        })
+      ).not.toBeNull();
+    });
+    expect(
+      result.current.lockRefusalFor([{ kind: "remove", id: "hero" }])
+    ).toMatchObject({ code: "layers-locked-when-saved", relation: "self" });
+    act(() => {
+      expect(result.current.apply({ kind: "remove", id: "hero" })).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sentence:
+          "Save first: this block is still locked on the saved page. Save, then delete it.",
+      })
+    );
+    // A change to it, or a move, may ride in the same save as the unlock.
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "title",
+          patch: { name: "Big" },
+        })
+      ).not.toBeNull();
+    });
+
+    // Saved: the stored page now holds the unlock, so the delete is allowed.
+    rerender({ stored: result.current.document });
+    act(() => {
+      expect(
+        result.current.apply({ kind: "remove", id: "hero" })
+      ).not.toBeNull();
+    });
+  });
+});
