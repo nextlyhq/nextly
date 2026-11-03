@@ -33,6 +33,7 @@ import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
+import { placedComponentId } from "./instance-inspector";
 import {
   keyboardMovePosition,
   type MoveDirection,
@@ -195,6 +196,13 @@ export interface BlockActions {
    * opens a modal belongs to the host's own key map rather than to the canvas.
    */
   readonly saveAsPattern: () => void;
+  /**
+   * Open the selected placement's component in its own view, through the
+   * host. Like Save as pattern it runs no op: where the component opens, and
+   * whether this author may, are the host's. Silent for any other selection.
+   * Optional, so a host built before it keeps compiling.
+   */
+  readonly editComponent?: () => void;
   /**
    * Begin saving the selection as a component, or converting it into one.
    * Like `saveAsPattern`, these hand the gesture to the host, which owns the
@@ -395,6 +403,13 @@ export interface BlockKeyboardActionsOptions {
    */
   mayCreatePattern?: boolean;
   /**
+   * Open a placed component in its own view, given its id and the
+   * placement's node id. Supplied by the host, which knows where that view is
+   * and whether this author may update components; omitted, "Edit component"
+   * is not offered anywhere.
+   */
+  onEditComponent?: (componentId: string, nodeId: string) => void;
+  /**
    * Whether the bindings are live. Defaults to true.
    *
    * A host that mounts the canvas inside something modal turns them off rather
@@ -514,6 +529,7 @@ export function useBlockKeyboardActions({
   nesting,
   definitions,
   onSaveAsPattern,
+  onEditComponent,
   components,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
@@ -1129,7 +1145,8 @@ export function useBlockKeyboardActions({
         nestingSource,
         mayCreatePattern,
         editor.lockRefusalFor,
-        componentOffer
+        componentOffer,
+        onEditComponent !== undefined
       ),
     [
       editor.document,
@@ -1138,9 +1155,11 @@ export function useBlockKeyboardActions({
       nestingSource,
       mayCreatePattern,
       editor.lockRefusalFor,
+      onEditComponent,
       componentOffer,
     ]
   );
+  const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
 
   const actions = React.useMemo<BlockActions>(
     () => ({
@@ -1149,6 +1168,7 @@ export function useBlockKeyboardActions({
       duplicate: duplicateSelected,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
+      editComponent: editSelectedComponent,
       saveAsComponent: () => runComponentVerb("save-as-component"),
       convertToComponent: () => runComponentVerb("convert-to-component"),
       detachComponent: () => runComponentVerb("detach-component"),
@@ -1161,6 +1181,7 @@ export function useBlockKeyboardActions({
       duplicateSelected,
       selectParent,
       saveSelectionAsPattern,
+      editSelectedComponent,
       runComponentVerb,
     ]
   );
@@ -1195,6 +1216,25 @@ export function useBlockKeyboardActions({
 }
 
 /**
+ * The "Edit component" verb: hands the selected placement's component to the
+ * host, or does nothing for any other selection, or where no host answers.
+ */
+function useEditComponentVerb(
+  editor: EditorState,
+  onEditComponent: BlockKeyboardActionsOptions["onEditComponent"]
+): () => void {
+  return React.useCallback(() => {
+    if (onEditComponent === undefined) return;
+    const ids = editor.selection.ids;
+    if (ids.length !== 1) return;
+    const nodeId = ids[0];
+    if (nodeId === undefined) return;
+    const componentId = placedComponentId(editor.document, nodeId);
+    if (componentId !== undefined) onEditComponent(componentId, nodeId);
+  }, [editor.document, editor.selection.ids, onEditComponent]);
+}
+
+/**
  * The block holding `id`, read from the same trail the breadcrumb draws, or
  * nothing for a top-level block or a selection the document no longer holds.
  * "Select parent" and Escape both ask this, so they cannot name two parents.
@@ -1224,16 +1264,10 @@ function parentOf(
  * gets exactly what this rendered before.
  */
 export function BlockKeyboardActions({
-  editor,
-  enabled,
-  onEditText,
-  nesting,
-  definitions,
-  onSaveAsPattern,
-  mayCreatePattern,
-  components,
   onShareVerbs,
   children,
+  // Handed on whole, so an option the host left out stays out.
+  ...options
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
   /**
@@ -1248,16 +1282,7 @@ export function BlockKeyboardActions({
     nesting: rules,
     selectionActions: offered,
     depthMoves,
-  } = useBlockKeyboardActions({
-    editor,
-    enabled,
-    onSaveAsPattern,
-    ...(mayCreatePattern === undefined ? {} : { mayCreatePattern }),
-    ...(onEditText === undefined ? {} : { onEditText }),
-    ...(nesting === undefined ? {} : { nesting }),
-    ...(definitions === undefined ? {} : { definitions }),
-    ...(components === undefined ? {} : { components }),
-  });
+  } = useBlockKeyboardActions(options);
 
   /*
    * Shared from a layout effect, so a surface outside sees the verbs for the

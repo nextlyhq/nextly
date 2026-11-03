@@ -33,3 +33,14 @@ export function pageLockMessage(change: LayersLockChange): string {
 export function placedLockMessage(change: LayersLockChange): string {
   return `"${change.label}" is locked in Layers in a component this page places, and this write would ${whatItWouldDo(change)}. Remove the value or the content this page gives it, or unlock it in the component.`;
 }
+
+/**
+ * A component's variant that changes a block the component locks, naming the
+ * block and the variant: the variant is the component's own, so the way on
+ * is to change it or unlock the block.
+ */
+export function variantLockMessage(
+  change: LayersLockChange & { readonly variant: string }
+): string {
+  return `"${change.label}" is locked in Layers, and the variant "${change.variant}" would ${whatItWouldDo(change)}. Remove the variant's value for it, or unlock it in the same write.`;
+}

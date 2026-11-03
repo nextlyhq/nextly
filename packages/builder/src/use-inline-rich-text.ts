@@ -37,6 +37,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useCanvasFrame } from "./canvas-frame-context";
 import type { EditorState } from "./editor-state";
 import {
   INLINE_EDIT_DISCARDED,
@@ -52,6 +53,25 @@ import {
 } from "./inline-rich-text";
 import { namedTarget } from "./inline-target";
 import { editableElement, EDITING_ATTRIBUTE } from "./use-inline-text";
+
+/** What a pointer handed over with a `begin`: the element, and where it fell. */
+interface Handover {
+  readonly element: HTMLElement | null;
+  readonly point: CaretPoint | null;
+}
+
+const NO_HANDOVER: Handover = { element: null, point: null };
+
+/**
+ * The passage's element in the document the canvas is drawn in, or `null`
+ * when there is no document to search, as in a server render.
+ */
+function passageIn(
+  doc: Document | null,
+  editing: InlineRichTextEditing
+): HTMLElement | null {
+  return doc === null ? null : editableElement(doc, editing);
+}
 
 /** Where a point falls in a document's text, however this engine spells it. */
 interface CaretLocator {
@@ -227,6 +247,9 @@ export function useInlineRichText(
   onFinished?: InlineRichTextFinished
 ): UseInlineRichTextResult {
   const [editing, setEditing] = useState<InlineRichTextEditing | null>(null);
+  // The document the canvas is drawn in: the frame's when it is in one, where
+  // a keyboard caller's passage is found.
+  const canvasDocument = useCanvasFrame().document;
 
   /*
    * Read through refs inside the callbacks below rather than captured as
@@ -262,16 +285,14 @@ export function useInlineRichText(
   loadRef.current = load;
 
   /**
-   * The element a pointer handed over, used in place of searching for one.
+   * The element a pointer handed over, used in place of searching for one,
+   * and where the pointer fell on it. Both or neither: they come with one
+   * `begin` and are read together by the effect that follows it.
    *
-   * A ref rather than state: it is read once by the effect that follows the
-   * `begin` it came with, and re-rendering for it would be a render nobody
-   * needs.
+   * A ref rather than state: it is read once by that effect, and re-rendering
+   * for it would be a render nobody needs.
    */
-  const handed = useRef<HTMLElement | null>(null);
-
-  /** Where the pointer fell, when a pointer is what started the edit. */
-  const handedPoint = useRef<CaretPoint | null>(null);
+  const handed = useRef<Handover>(NO_HANDOVER);
 
   /** The live editor, the element it holds, and what to put back. */
   const mounted = useRef<{
@@ -462,8 +483,7 @@ export function useInlineRichText(
        */
       if (mounted.current !== null && commit().status === "refused")
         return false;
-      handed.current = element ?? null;
-      handedPoint.current = point ?? null;
+      handed.current = { element: element ?? null, point: point ?? null };
       setEditing({ nodeId: target.nodeId, prop: target.prop });
       return true;
     },
@@ -503,12 +523,12 @@ export function useInlineRichText(
     // supplies no loader edits plain text and simply never opens a passage.
     const fetch = loadRef.current;
     if (fetch === undefined) return;
-    if (globalThis.document === undefined) return;
     // The element the gesture landed on, when there was one. Searching the
-    // document is the fallback for a keyboard caller, which has no element.
-    const element =
-      handed.current ?? editableElement(globalThis.document, editing);
-    handed.current = null;
+    // canvas's document is the fallback for a keyboard caller, which has no
+    // element: the frame's when the canvas is in one.
+    const { element: given, point } = handed.current;
+    handed.current = NO_HANDOVER;
+    const element = given ?? passageIn(canvasDocument, editing);
     if (element === null) {
       // Nothing on screen carries this passage. The node may have been removed
       // between the request and this effect; dropping the edit is the honest
@@ -529,8 +549,6 @@ export function useInlineRichText(
      * still holds what the page rendered when the loader resolves, because this
      * is what replaces it.
      */
-    const point = handedPoint.current;
-    handedPoint.current = null;
     void fetch().then(
       live => {
         /*
@@ -703,7 +721,7 @@ export function useInlineRichText(
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [editing, cancel, commit, letGo, report]);
+  }, [editing, cancel, commit, letGo, report, canvasDocument]);
 
   return { editing, begin, commit, cancel };
 }

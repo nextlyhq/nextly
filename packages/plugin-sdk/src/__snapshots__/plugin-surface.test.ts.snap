@@ -144,6 +144,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "ValidationRuleValues (type)",
   "ValidationRulesEditor (value)",
   "ValidationRulesEditorProps (type)",
+  "WEB_FONT_FORMATS (value)",
   "Widget (value)",
   "WidgetBarChartGroup (type)",
   "WidgetBarChartProps (type)",

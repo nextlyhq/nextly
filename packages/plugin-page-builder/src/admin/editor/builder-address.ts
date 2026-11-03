@@ -121,6 +121,15 @@ export function sectionAddress(href: string, sectionId: string): string {
   return `${path}?${params.toString()}`;
 }
 
+/** The same address naming no section, for a return that opens at the top. */
+export function addressWithoutSection(href: string): string {
+  const [path = "", query = ""] = href.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.delete(SECTION_PARAM);
+  const rest = params.toString();
+  return rest === "" ? path : `${path}?${rest}`;
+}
+
 /**
  * The section an address's query names, or `undefined` where it names none.
  *

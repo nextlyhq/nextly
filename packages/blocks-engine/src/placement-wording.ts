@@ -110,45 +110,38 @@ export function placementRefusalWording(
     moving === undefined
       ? `${article(refused)} ${refused}`
       : `${article(moving)} ${moving} holding ${article(refused)} ${refused}`;
-  const Subject = subject.charAt(0).toUpperCase() + subject.slice(1);
+  const Subject = capitalised(subject);
   const region =
     context.regionType === undefined ? undefined : labelOf(context.regionType);
 
+  // The name rules say the same plain sentence on the canvas, in Layers and
+  // from the keyboard: what can't go here, and what does.
+  const goesInside = (list: string) =>
+    `${capitalised(withArticle(refused))} goes inside ${list}.`;
   switch (verdict.reason) {
     case "restricted-at-root":
       return {
         // Not "choose another container": there is none on screen that would
         // take it, so the only remedy is to create the nesting.
-        headline: `${refused} has to sit inside a container.`,
-        remedy: remedyFor(
-          verdict.permitted,
-          "or",
-          list => `${refused} goes inside ${list}`,
-          labelOf
-        ),
+        headline: `${Subject} has to go inside a container.`,
+        remedy: remedyFor(verdict.permitted, goesInside, labelOf),
       };
     case "wrong-parent":
       return {
         headline:
           region === undefined
-            ? `That container does not take ${subject}.`
-            : `${region} does not take ${subject}.`,
-        remedy: remedyFor(
-          verdict.permitted,
-          "or",
-          list => `${refused} goes inside ${list}`,
-          labelOf
-        ),
+            ? `${Subject} can't go here.`
+            : `${Subject} can't go inside this ${region}.`,
+        remedy: remedyFor(verdict.permitted, goesInside, labelOf),
       };
     case "not-allowed-in-slot":
       return {
-        // The slot refuses, not the block's parent: naming the parent here
+        // The spot refuses, not the block's parent: naming the parent here
         // would send the author to change the wrong thing.
-        headline: `This slot does not take ${subject}.`,
+        headline: `${Subject} can't go here.`,
         remedy: remedyFor(
           verdict.permitted,
-          "and",
-          list => `Takes ${list}`,
+          list => `This spot takes ${list}.`,
           labelOf
         ),
       };
@@ -175,20 +168,38 @@ export function placementRefusalWording(
   }
 }
 
-/** The second line naming what is permitted, or null when nothing is named. */
+/**
+ * The second line naming what is permitted, or null when nothing is named.
+ *
+ * Each block with its article and the choices joined by "or", "a Column or a
+ * Row", since any one of them would do; a namespace stays "any acme block".
+ */
 function remedyFor(
   permitted: readonly string[],
-  joiner: string,
   sentence: (list: string) => string,
   labelOf: (type: string) => string
 ): string | null {
   if (permitted.length === 0) return null;
   return sentence(
     asPermittedList(
-      permitted.map(entry => permittedLabel(entry, labelOf)),
-      joiner
+      permitted.map(entry =>
+        entry.endsWith("/*")
+          ? permittedLabel(entry, labelOf)
+          : withArticle(permittedLabel(entry, labelOf))
+      ),
+      "or"
     )
   );
+}
+
+/** A label with its article: "a Column", "an Image". */
+function withArticle(label: string): string {
+  return `${article(label)} ${label}`;
+}
+
+/** A phrase with its first letter capitalised, to open a sentence. */
+function capitalised(phrase: string): string {
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
 }
 
 /** The wording as one line, for a validation issue's message. */

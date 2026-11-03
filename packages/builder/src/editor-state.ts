@@ -28,11 +28,16 @@
  */
 
 import {
+  componentLayersLocks,
   componentUsageIn,
   compositionFaults,
   DEFAULT_LIMITS,
+  findNode,
+  heldBaselines,
+  keptForSameComponents,
   lockRefusal,
   lockRepairRule,
+  placedLockChanges,
   placementRefusal,
   placementRepairRule,
   planRepair as planDocumentRepair,
@@ -56,7 +61,7 @@ import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import {
   layersLockRefusalFor,
   lockRefusalWording,
-  savedLockRemovedBy,
+  savedLockBrokenBy,
   type LockEditRefusal,
   type LockRefusalFacts,
 } from "./lock-refusal";
@@ -256,6 +261,12 @@ export interface UseEditorStateArgs {
    */
   onLockRefused?: (refusal: LockEditRefusal) => void;
   /**
+   * A component's name by its id, for the refusal of an edit to a block the
+   * component locks: the page cannot unlock it, so the author is told whose
+   * it is. Absent, the refusal names no component.
+   */
+  componentName?: (componentId: string) => string | undefined;
+  /**
    * Where the locks an edit is held to are read: the block definitions and
    * nesting rules. Defaults to the live registry, so every host's editor holds
    * the locks its saves enforce.
@@ -387,6 +398,8 @@ interface LockJudgement {
   readonly limits: DocumentLimits;
   /** The composed page, for the locks a placement reaches inside a component. */
   readonly compose: Composer | undefined;
+  /** A component's name, for a refusal of a block it locks. */
+  readonly componentName: UseEditorStateArgs["componentName"];
 }
 
 /**
@@ -433,6 +446,68 @@ function lockBreakAdded(
 }
 
 /**
+ * A block a placed component locks in Layers that the edit changes through a
+ * placement, judged as a save judges it (`placedLockChanges`): the composed
+ * page against the same page with every placement as its component holds it,
+ * keeping a value the page already gave the block, before this edit or as
+ * last saved. Named by the component, since the page cannot unlock it.
+ */
+function componentLockAdded(
+  after: BlockDocument,
+  composedAfter: BlockDocument,
+  kept: readonly BlockDocument[],
+  {
+    compose,
+    limits,
+    componentName,
+  }: Pick<LockJudgement, "limits" | "componentName"> & { compose: Composer }
+): LockRefusalFacts | undefined {
+  // Asked of the as-held baseline, not of the page after the edit: an edit
+  // that hides or removes the locked block leaves no lock after it to find,
+  // but the page before it, or as saved, still draws one. A page none of
+  // whose forms draws a component lock composes nothing more.
+  const drawsLock = [composedAfter, ...kept].some(
+    form => componentLayersLocks(form.nodes, limits).size > 0
+  );
+  if (!drawsLock) return undefined;
+  const held = heldBaselines(after, limits).map(level => ({
+    form: compose(level.document).document,
+    placements: level.placements,
+  }));
+  const [change] = placedLockChanges(composedAfter, held, kept, limits);
+  if (change === undefined) return undefined;
+  return componentLockFacts(
+    componentNameOf(after, change.placementId, componentName)
+  );
+}
+
+/** The name of the component a page's placement draws, or "" when none is known. */
+function componentNameOf(
+  page: BlockDocument,
+  placementId: string | undefined,
+  componentName: LockJudgement["componentName"]
+): string {
+  const placement =
+    placementId === undefined ? undefined : findNode(page.nodes, placementId);
+  const componentId = (
+    placement?.props as { componentId?: unknown } | undefined
+  )?.componentId;
+  return typeof componentId === "string"
+    ? (componentName?.(componentId) ?? "")
+    : "";
+}
+
+/** A refusal for a block a component locks, named by the component. */
+function componentLockFacts(name: string): LockRefusalFacts {
+  return {
+    code: "layers-locked",
+    label: name,
+    relation: "component",
+    verb: "change",
+  };
+}
+
+/**
  * The lock break an edit adds to the composed page, judged by the engine's
  * `compositionFaults`, the check a save runs over the same composition.
  *
@@ -445,7 +520,7 @@ function composedLockAdded(
   after: BlockDocument,
   stored: BlockDocument,
   sources: LockSources,
-  { compose, limits }: LockJudgement
+  { compose, limits, componentName }: LockJudgement
 ): LockRefusalFacts | undefined {
   if (compose === undefined) return undefined;
   // A page placing no component has no composed break to add.
@@ -453,6 +528,19 @@ function composedLockAdded(
   if (placed.complete && placed.ids.length === 0) return undefined;
   const composedBefore = compose(before);
   const baselines = [composedBefore.document, compose(stored).document];
+  const composedAfter = compose(after);
+  // A value is kept only under the component that gave it: a placement this
+  // edit switches to another component is left out of the forms it keeps.
+  const kept = [before, stored].map((form, index) => {
+    const same = keptForSameComponents(after, form, limits);
+    return same === form ? baselines[index] : compose(same).document;
+  });
+  const held = componentLockAdded(after, composedAfter.document, kept, {
+    compose,
+    limits,
+    componentName,
+  });
+  if (held !== undefined) return held;
   const lockFaults = (host: BlockDocument, composition: ResolvedComposition) =>
     compositionFaults(host, composition, {
       definitions: sources.definitions,
@@ -461,7 +549,7 @@ function composedLockAdded(
       baselines,
     }).filter(fault => fault.lock !== undefined);
   const had = new Set(lockFaults(before, composedBefore).map(composedBreakKey));
-  const added = lockFaults(after, compose(after)).find(
+  const added = lockFaults(after, composedAfter).find(
     fault => !had.has(composedBreakKey(fault))
   );
   if (added?.lock === undefined) return undefined;
@@ -486,6 +574,7 @@ interface AtApply
     | "onLockRefused"
     | "locks"
     | "onPlacementRefused"
+    | "componentName"
   > {
   /** The document as last saved; the document as opened when none is given. */
   readonly stored: BlockDocument;
@@ -500,10 +589,12 @@ function atApply(
     | "locks"
     | "stored"
     | "onPlacementRefused"
+    | "componentName"
   >,
   opened: BlockDocument
 ): AtApply {
   return {
+    componentName: host.componentName,
     definitions: host.definitions,
     onRefused: host.onRefused,
     onLockRefused: host.onLockRefused,
@@ -553,14 +644,27 @@ function useLockQuestions(
   const definitions = locks?.definitions;
   const nesting = locks?.nesting;
   const lockRefusalFor = useCallback(
-    (ops: readonly BuilderOp[]): LockRefusalFacts | undefined =>
-      lockAnswerFor(latestDocument.current, ops, baseline, {
+    (ops: readonly BuilderOp[]): LockRefusalFacts | undefined => {
+      // Read at the question, as the apply reads it.
+      const componentName = composition.current.componentName;
+      return lockAnswerFor(latestDocument.current, ops, baseline, {
         locks: hostLocksOf(definitions, nesting),
         limits,
         compose: composerNow(),
-      }),
-    [latestDocument, limits, composerNow, baseline, definitions, nesting]
+        componentName,
+      });
+    },
+    [
+      latestDocument,
+      composition,
+      limits,
+      composerNow,
+      baseline,
+      definitions,
+      nesting,
+    ]
   );
+
   const planRepair = useCallback(
     (): RepairPlan =>
       // The lock rule first and the placement rule after it, so a block a
@@ -632,7 +736,7 @@ function refusedAsFresh(
     stored: BlockDocument;
     current: Pick<
       UseEditorStateArgs,
-      "definitions" | "onRefused" | "onLockRefused" | "locks"
+      "definitions" | "onRefused" | "onLockRefused" | "locks" | "componentName"
     >;
     limits: DocumentLimits;
     compose: Composer | undefined;
@@ -690,7 +794,7 @@ function lockAnswerFor(
  * Tell the host which Layers lock refused an edit, and answer whether one did.
  *
  * With `after` and `stored`, the edit applied and only the saved page's lock
- * on a block it deletes is asked (`savedLockRemovedBy`); without them, the
+ * on a block it deletes is asked (`savedLockBrokenBy`); without them, the
  * edit was refused by the op layer and the lock it broke is found again.
  */
 function reportLayersLock(
@@ -703,7 +807,7 @@ function reportLayersLock(
   const found =
     after === undefined || stored === undefined
       ? layersLockRefusalFor(before, ops)
-      : savedLockRemovedBy(before, after, stored, ops);
+      : savedLockBrokenBy(before, after, stored, ops);
   if (found === undefined) return false;
   onLockRefused?.({
     reason: "locked",
@@ -715,11 +819,16 @@ function reportLayersLock(
 
 /** The lock judgement from what the store reads at apply time. */
 function judgementOf(
-  current: Pick<UseEditorStateArgs, "locks">,
+  current: Pick<UseEditorStateArgs, "locks" | "componentName">,
   limits: DocumentLimits,
   compose: Composer | undefined
 ): LockJudgement {
-  return { locks: current.locks, limits, compose };
+  return {
+    locks: current.locks,
+    limits,
+    compose,
+    componentName: current.componentName,
+  };
 }
 
 /**
@@ -916,6 +1025,7 @@ export function useEditorState({
   locks,
   stored,
   onPlacementRefused,
+  componentName,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
@@ -929,6 +1039,7 @@ export function useEditorState({
     locks,
     stored,
     onPlacementRefused,
+    componentName,
   };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);

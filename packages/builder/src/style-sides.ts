@@ -157,3 +157,36 @@ export function sideOf(
   const side = control.path[0];
   return side === undefined ? undefined : (side as LogicalSide);
 }
+
+/**
+ * A side's plain name, "top" or "left", for an element whose axes make it one.
+ *
+ * Only for a horizontal writing mode, where the block axis runs top to bottom
+ * and the inline axis follows the direction, so a right-to-left element's
+ * inline start is its right. In a vertical mode the physical edge depends on
+ * more than this pair reads, so there is no plain name, and the caller keeps
+ * the logical one.
+ *
+ * @param side - the logical side
+ * @param axes - the edited element's writing mode and direction
+ * @returns "top", "right", "bottom" or "left", or `undefined`
+ */
+export function physicalSideName(
+  side: LogicalSide,
+  axes: SideOrientation
+): "top" | "right" | "bottom" | "left" | undefined {
+  if (axes.writingMode !== "horizontal-tb") return undefined;
+  const rtl = axes.direction === "rtl";
+  switch (side) {
+    case "blockStart":
+      return "top";
+    case "blockEnd":
+      return "bottom";
+    case "inlineStart":
+      return rtl ? "right" : "left";
+    case "inlineEnd":
+      return rtl ? "left" : "right";
+    default:
+      return undefined;
+  }
+}

@@ -38,6 +38,7 @@ import {
   type BreakpointId,
   type BreakpointSet,
   type ContrastResult,
+  type FontFaceDef,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
@@ -83,11 +84,18 @@ import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
+  FontChoicesContext,
+  FontFamilyField,
+  fontFamilyShowable,
+  type FontChoices,
+} from "./font-family-field";
+import {
   designIsWritable,
   designReadOnlyReason,
   fieldLabel,
   lockViewOf,
 } from "./inspector";
+import type { InspectorSectionKey } from "./inspector-sections";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
@@ -111,6 +119,15 @@ import type {
   StyleControlKind,
   StyleControlVariants,
 } from "./style-controls";
+import {
+  fontWeightOptions,
+  foldedControlFor,
+  lineHeightFromText,
+  lineHeightLeafFor,
+  storedKey,
+  type FoldedControl,
+  type FoldedOption,
+} from "./style-folded";
 import {
   inspectStyle,
   type StyleInspectionOptions,
@@ -136,7 +153,12 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
-import { sideBoxFor, sideOf, type SideBox } from "./style-sides";
+import {
+  physicalSideName,
+  sideBoxFor,
+  sideOf,
+  type SideBox,
+} from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
@@ -352,6 +374,12 @@ export interface StyleInspectorPanelProps {
    * to the selected node, which this panel already writes through the editor.
    */
   onCreateClass?: ClassSelectorProps["onCreateClass"];
+  /**
+   * The site's fonts, for the Font control. It lists only what the site can
+   * draw: its font variables, the families it has files for, and the system
+   * families. Absent, it lists the variables and the system families.
+   */
+  fonts?: FontChoices;
 }
 
 /**
@@ -458,6 +486,20 @@ function styleUnavailable(
 }
 
 /**
+ * The Style tab. The site's fonts reach the Font control through a context, so
+ * they are not handed down every section and row between here and there.
+ */
+export function StyleInspectorPanel(
+  props: StyleInspectorPanelProps
+): React.JSX.Element {
+  return (
+    <FontChoicesContext.Provider value={props.fonts}>
+      <StyleInspectorBody {...props} />
+    </FontChoicesContext.Provider>
+  );
+}
+
+/**
  * The class surface for the selected block, or nothing.
  *
  * Its own component rather than a conditional in the panel body: the panel is
@@ -524,7 +566,7 @@ function SelectedNodeClasses({
   );
 }
 
-export function StyleInspectorPanel({
+function StyleInspectorBody({
   editor,
   renderedTag,
   sideOrientation,
@@ -890,9 +932,12 @@ interface StyleFieldSurroundings {
  */
 function SideBoxFrame({
   box,
+  ring,
   children,
 }: {
   box: SideBox;
+  /** Which ring of the spacing box this is, when it is one. */
+  ring?: "margin" | "padding";
   children: React.ReactNode;
 }): React.JSX.Element {
   if (!box.boxed || box.axes === undefined) return <>{children}</>;
@@ -901,6 +946,7 @@ function SideBoxFrame({
       className="nx-style-inspector__side-box"
       // Read by the stylesheet, which owns the arrangement.
       data-sides="logical"
+      data-ring={ring}
       /*
        * The EDITED ELEMENT's axes, so this grid's own placement resolves in
        * them: columns run along the inline axis and rows along the block axis,
@@ -1022,44 +1068,29 @@ function StyleSectionItem({
   const more = section.properties.filter(
     property => !property.common && !isRevealed(property.property)
   );
+  const surroundings: StyleFieldSurroundings = {
+    orientation,
+    nodeId,
+    state,
+    breakpoint,
+    editor,
+    policy,
+    tokens,
+    prefersDark,
+    provenanceOf,
+    editing,
+    onChooseForm,
+  };
   return (
     <AccordionItem value={section.key} data-section={section.key}>
-      <AccordionTrigger>
-        <span className="nx-style-inspector__section-label">
-          {section.label}
-        </span>
-        {holdsValues ? (
-          <span className="nx-style-inspector__section-dot" data-has-values="">
-            <span aria-hidden="true" className="nx-style-inspector__dot" />
-            <span className="nx-sr-only">has values</span>
-          </span>
-        ) : null}
-      </AccordionTrigger>
+      <SectionHeading label={section.label} holdsValues={holdsValues} />
       <AccordionContent>
-        <fieldset className="nx-inspector__fields" disabled={readOnly}>
-          {shown.map(property => (
-            <StylePropertyFields
-              key={`${nodeId}:${property.property}`}
-              property={property}
-              orientation={orientation}
-              nodeId={nodeId}
-              state={state}
-              breakpoint={breakpoint}
-              editor={editor}
-              policy={policy}
-              tokens={tokens}
-              prefersDark={prefersDark}
-              provenanceOf={provenanceOf}
-              editing={editing}
-              onChooseForm={onChooseForm}
-            />
-          ))}
-          {shown.length === 0 ? (
-            <p className="nx-inspector__note">
-              Nothing set here yet. Add a property from More.
-            </p>
-          ) : null}
-        </fieldset>
+        <SectionFields
+          sectionKey={section.key}
+          shown={shown}
+          readOnly={readOnly}
+          surroundings={surroundings}
+        />
         {readOnly || more.length === 0 ? null : (
           <MoreProperties
             sectionLabel={section.label}
@@ -1072,6 +1103,237 @@ function StyleSectionItem({
       </AccordionContent>
     </AccordionItem>
   );
+}
+
+/** A section's heading: its name, the dot when it holds values, the chevron. */
+function SectionHeading({
+  label,
+  holdsValues,
+}: {
+  label: string;
+  holdsValues: boolean;
+}): React.JSX.Element {
+  return (
+    // The panel's own class sets the heading's height and turns the shared
+    // chevron to point right while closed and down while open.
+    <AccordionTrigger className="nx-style-inspector__section-trigger">
+      <span className="nx-style-inspector__section-label">
+        {label}
+        {/* Beside the name it qualifies, as the design sets it. */}
+        {holdsValues ? (
+          <span className="nx-style-inspector__section-dot" data-has-values="">
+            <span aria-hidden="true" className="nx-style-inspector__dot" />
+            <span className="nx-sr-only">has values</span>
+          </span>
+        ) : null}
+      </span>
+    </AccordionTrigger>
+  );
+}
+
+/**
+ * A section's fields: the spacing box where the section draws one, then each
+ * shown property as before.
+ */
+function SectionFields({
+  sectionKey,
+  shown,
+  readOnly,
+  surroundings,
+}: {
+  sectionKey: InspectorSectionKey;
+  shown: readonly InspectedStyleProperty[];
+  readOnly: boolean;
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element {
+  const rings =
+    sectionKey === "spacing"
+      ? spacingRings(shown, surroundings.orientation)
+      : undefined;
+  return (
+    <fieldset className="nx-inspector__fields" disabled={readOnly}>
+      {rings === undefined ? null : (
+        <SpacingBox
+          margin={rings.margin}
+          padding={rings.padding}
+          surroundings={surroundings}
+        />
+      )}
+      {(rings?.rest ?? shown).map(property => (
+        <StylePropertyFields
+          key={`${surroundings.nodeId}:${property.property}`}
+          property={property}
+          {...surroundings}
+        />
+      ))}
+      {shown.length === 0 ? (
+        <p className="nx-inspector__note">
+          Nothing set here yet. Add a property from More.
+        </p>
+      ) : null}
+    </fieldset>
+  );
+}
+
+/** Margin and padding drawn as one box, and what the section shows besides. */
+interface SpacingRings {
+  readonly margin: InspectedStyleProperty | undefined;
+  readonly padding: InspectedStyleProperty;
+  readonly rest: readonly InspectedStyleProperty[];
+}
+
+/**
+ * Whether the spacing section draws its box model, and from which properties.
+ *
+ * Drawn when padding is shown, offered and drawn as a box, which needs the
+ * element's axes; margin joins as the outer ring under the same conditions.
+ * Anything else the section shows is drawn as before, beneath the box.
+ */
+function spacingRings(
+  shown: readonly InspectedStyleProperty[],
+  orientation: SideOrientation | undefined
+): SpacingRings | undefined {
+  const ring = (key: string) =>
+    shown.find(
+      property =>
+        property.property === key &&
+        property.offered &&
+        sideBoxFor(property.controls, orientation).boxed
+    );
+  const padding = ring("padding");
+  if (padding === undefined) return undefined;
+  const margin = ring("margin");
+  return {
+    margin,
+    padding,
+    rest: shown.filter(property => property !== padding && property !== margin),
+  };
+}
+
+/**
+ * Fields drawn compact: the spacing box's sides, which take a value typed
+ * with its unit, show no unit menu, and say "–" while unset rather than a
+ * hint there is no room for.
+ */
+const CompactSides = React.createContext(false);
+
+/**
+ * The spacing section as the design draws it: one box, margin the outer ring
+ * and padding the inner, around the element.
+ *
+ * Each side keeps its own field, so it commits on its own, undoes on its own,
+ * and shows where its value comes from, exactly as a side drawn in a row does.
+ * The box is the drawing alone.
+ */
+function SpacingBox({
+  margin,
+  padding,
+  surroundings,
+}: {
+  margin: InspectedStyleProperty | undefined;
+  padding: InspectedStyleProperty;
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element {
+  const inner = (
+    <SpacingRing
+      property={padding}
+      ring="padding"
+      surroundings={surroundings}
+    />
+  );
+  return (
+    <div className="nx-spacing-box">
+      <CompactSides.Provider value={true}>
+        {margin === undefined ? (
+          inner
+        ) : (
+          <SpacingRing
+            property={margin}
+            ring="margin"
+            surroundings={surroundings}
+          >
+            <div className="nx-spacing-box__centre">{inner}</div>
+          </SpacingRing>
+        )}
+      </CompactSides.Provider>
+    </div>
+  );
+}
+
+/** One ring of the spacing box: a property's four sides, and what it holds. */
+function SpacingRing({
+  property,
+  ring,
+  surroundings,
+  children,
+}: {
+  property: InspectedStyleProperty;
+  ring: "margin" | "padding";
+  surroundings: StyleFieldSurroundings;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  const { orientation, state, breakpoint } = surroundings;
+  const box = sideBoxFor(property.controls, orientation);
+  return (
+    <div
+      className="nx-style-inspector__property"
+      data-property={property.property}
+    >
+      <SideBoxFrame box={box} ring={ring}>
+        {/* Seen, not heard: every side's own name already says it. */}
+        <span className="nx-spacing-box__caption" aria-hidden="true">
+          {property.label}
+        </span>
+        {box.controls.map(control => {
+          const name = spacingSideName(property, box, control);
+          return (
+            <StyleControlField
+              key={[state, breakpoint, property.property, ...control.path].join(
+                "."
+              )}
+              control={control}
+              side={sideOf(box, control)}
+              label={name}
+              summary={undefined}
+              // The side's whole name, so its actions say "Reset Margin top"
+              // rather than naming the property twice.
+              propertyLabel={name}
+              clearOnly={control.withheld}
+              nodeId={surroundings.nodeId}
+              state={state}
+              breakpoint={breakpoint}
+              editor={surroundings.editor}
+              policy={surroundings.policy}
+              tokens={surroundings.tokens}
+              prefersDark={surroundings.prefersDark}
+              provenanceOf={surroundings.provenanceOf}
+              editing={surroundings.editing}
+            />
+          );
+        })}
+        {children}
+      </SideBoxFrame>
+    </div>
+  );
+}
+
+/**
+ * "Margin top": the property and the side in plain words, where the element's
+ * axes give the side a physical name, and the logical one where they do not.
+ */
+function spacingSideName(
+  property: InspectedStyleProperty,
+  box: SideBox,
+  control: StyleControl
+): string {
+  const side = sideOf(box, control);
+  const physical =
+    side === undefined || box.axes === undefined
+      ? undefined
+      : physicalSideName(side, box.axes);
+  const sideName =
+    physical ?? fieldLabel(control.path[control.path.length - 1] ?? "");
+  return `${property.label} ${sideName.toLowerCase()}`;
 }
 
 /**
@@ -1149,6 +1411,9 @@ function StylePropertyFields({
    * only.
    */
   const box = sideBoxFor(property.controls, orientation);
+  const fold = property.offered
+    ? foldedControlFor(property.property)
+    : undefined;
   return (
     <div
       className="nx-style-inspector__property"
@@ -1179,7 +1444,12 @@ function StylePropertyFields({
         there.
       */}
       {(property.offered ? property.variants : [])
-        .filter(variant => variant.count > 1)
+        // A folded property's root form follows from its value; see
+        // `style-folded.ts`. Its other choices, if any, stay.
+        .filter(
+          variant =>
+            variant.count > 1 && (fold === undefined || variant.path.length > 0)
+        )
         .map(variant => (
           <FormChoice
             key={variant.path.join(".")}
@@ -1199,39 +1469,50 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      <SideBoxFrame box={box}>
-        {box.controls.map(control => (
-          <StyleControlField
-            // The ADDRESS, not just the position: a host switching state or
-            // breakpoint leaves this field mounted, and where the old and new
-            // addresses hold the same value — both unset, most often — the
-            // synchronisation effect does not run either. An unfinished draft
-            // from the base breakpoint would then commit into the hover state.
-            key={[state, breakpoint, property.property, ...control.path].join(
-              "."
-            )}
-            control={control}
-            side={sideOf(box, control)}
-            label={
-              many
-                ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                : property.label
-            }
-            summary={many ? undefined : property.summary}
-            propertyLabel={property.label}
-            clearOnly={!property.offered || control.withheld}
-            nodeId={nodeId}
-            state={state}
-            breakpoint={breakpoint}
-            editor={editor}
-            policy={policy}
-            tokens={tokens}
-            prefersDark={prefersDark}
-            provenanceOf={provenanceOf}
-            editing={editing}
-          />
-        ))}
-      </SideBoxFrame>
+      {/* A folded union's one control, read where the value field is drawn;
+          see `style-folded.ts`. Its controls sit at the root, so the whole
+          property is the fold's. */}
+      <FoldedUnion.Provider
+        value={
+          fold === undefined
+            ? undefined
+            : { kind: fold, property: property.property }
+        }
+      >
+        <SideBoxFrame box={box}>
+          {box.controls.map(control => (
+            <StyleControlField
+              // The ADDRESS, not just the position: a host switching state or
+              // breakpoint leaves this field mounted, and where the old and new
+              // addresses hold the same value — both unset, most often — the
+              // synchronisation effect does not run either. An unfinished draft
+              // from the base breakpoint would then commit into the hover state.
+              key={[state, breakpoint, property.property, ...control.path].join(
+                "."
+              )}
+              control={control}
+              side={sideOf(box, control)}
+              label={
+                many
+                  ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                  : property.label
+              }
+              summary={many ? undefined : property.summary}
+              propertyLabel={property.label}
+              clearOnly={!property.offered || control.withheld}
+              nodeId={nodeId}
+              state={state}
+              breakpoint={breakpoint}
+              editor={editor}
+              policy={policy}
+              tokens={tokens}
+              prefersDark={prefersDark}
+              provenanceOf={provenanceOf}
+              editing={editing}
+            />
+          ))}
+        </SideBoxFrame>
+      </FoldedUnion.Provider>
     </div>
   );
 }
@@ -1565,7 +1846,7 @@ function StyleControlField({
         editing={editing}
         descendant={control.leaf.descendant}
       />
-      <ControlValue
+      <ControlOrFont
         id={id}
         labelledBy={labelId}
         control={control}
@@ -2020,6 +2301,65 @@ function JumpAction({
   );
 }
 
+/** No faces, as one value, so the Font control's list is not rebuilt each render. */
+const NO_FACES: readonly FontFaceDef[] = Object.freeze([]);
+
+/**
+ * The Font control where the leaf is `font-family`, chosen from what the site
+ * can draw before any other surface (a stored variable shows as the choice it
+ * is); every other value as {@link ControlValue} draws it. A value that can
+ * only be cleared stays that way.
+ */
+function ControlOrFont(
+  props: Parameters<typeof ControlValue>[0]
+): React.JSX.Element {
+  const fonts = React.useContext(FontChoicesContext);
+  const font = props.clearOnly ? null : fontControl({ ...props, fonts });
+  return font ?? <ControlValue {...props} />;
+}
+
+/**
+ * The Font control, for the `font-family` leaf: CHOSEN from what the site can
+ * draw rather than typed, since a typed family the site has no file for
+ * renders in whatever the reader's device has. `null` for any other leaf, or
+ * a stored value the picker cannot show.
+ */
+function fontControl({
+  id,
+  labelledBy,
+  control,
+  stored,
+  tokens,
+  fonts,
+  onCommit,
+}: {
+  id: string;
+  labelledBy: string;
+  control: Parameters<typeof ControlValue>[0]["control"];
+  stored: Parameters<typeof ControlValue>[0]["stored"];
+  tokens: Parameters<typeof ControlValue>[0]["tokens"];
+  fonts: FontChoices | undefined;
+  onCommit: Parameters<typeof ControlValue>[0]["onCommit"];
+}): React.JSX.Element | null {
+  const isFontFamily =
+    control.leaf.kind === "cssValue" &&
+    control.leaf.cssProperty === "font-family";
+  if (!isFontFamily || !fontFamilyShowable(stored)) return null;
+  const manage = fonts?.onManageFonts;
+  return (
+    <FontFamilyField
+      id={id}
+      labelledBy={labelledBy}
+      stored={stored}
+      tokens={tokens}
+      faces={fonts?.faces}
+      fromCode={fonts?.fromCode ?? NO_FACES}
+      onCommit={onCommit}
+      {...(manage === undefined ? {} : { onManageFonts: manage })}
+    />
+  );
+}
+
 /**
  * The surface one value is shown through: read-only, a token, or editable.
  *
@@ -2339,6 +2679,164 @@ function SelectField({
  * start, so two buttons called "Clear block start" name the same thing twice
  * and a screen-reader user cannot tell which style each removes.
  */
+/** A folded union's control, and the property it edits. */
+interface Fold {
+  readonly kind: FoldedControl;
+  readonly property: string;
+}
+
+/** The folded control the property being drawn takes, if it is folded. */
+const FoldedUnion = React.createContext<Fold | undefined>(undefined);
+
+/**
+ * One control for a union the author picks without naming its form: a list
+ * holding both forms' values, or a field that infers the form from the text.
+ */
+function FoldedField({
+  id,
+  fold,
+  stored,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  fold: Fold;
+  stored: StyleValue | undefined;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  if (fold.kind === "number-or-length") {
+    return (
+      <LengthOrNumberField
+        id={id}
+        stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  return (
+    <OptionSelect
+      id={id}
+      options={fontWeightOptions(stored)}
+      stored={stored}
+      actionName={actionName}
+      describedBy={describedBy}
+      onCommit={onCommit}
+    />
+  );
+}
+
+/** A select over named options, each committing its own stored value. */
+function OptionSelect({
+  id,
+  options,
+  stored,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  options: readonly FoldedOption[];
+  stored: StyleValue | undefined;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const current = storedKey(stored) ?? "";
+  return (
+    <div className="nx-style-inspector__select">
+      <Select
+        value={current}
+        onValueChange={key => {
+          const chosen = options.find(option => option.key === key);
+          if (chosen !== undefined) onCommit(chosen.value);
+        }}
+      >
+        <SelectTrigger
+          id={id}
+          aria-describedby={describedBy}
+          aria-invalid={describedBy === undefined ? undefined : true}
+        >
+          <SelectValue placeholder="Not set" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(option => (
+            <SelectItem key={option.key} value={option.key}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {/* Cleared beside the list, as a keyword select is: an empty choice is
+          not one the list can carry. */}
+      {current === "" ? null : (
+        <button
+          type="button"
+          onClick={() => onCommit(null)}
+          aria-label={`Clear ${actionName}`}
+        >
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A field taking a number or a length as typed: "1.5" is stored as a number,
+ * "24px" or "150%" as written. Committed on blur and on Enter, as every text
+ * field in the panel is, so one undo removes one value, not one character.
+ */
+function LengthOrNumberField({
+  id,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  stored: StyleValue | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const { draft, setDraft } = useDraft(stored);
+  const commit = () => {
+    if (draft === storedText(stored)) return;
+    if (onCommit(lineHeightFromText(draft)) === "unchanged") {
+      setDraft(storedText(stored));
+    }
+  };
+  return (
+    <Input
+      id={id}
+      value={draft}
+      placeholder="1.5, 24px or 150%"
+      aria-describedby={describedBy}
+      aria-invalid={describedBy === undefined ? undefined : true}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={event => {
+        if (commitOnEnter(event, commit)) return;
+        // An arrow steps the value as its kind steps, a number or a length,
+        // through the same rule as every numeric field.
+        const delta = arrowStep(event);
+        const leaf = delta === null ? undefined : lineHeightLeafFor(draft);
+        if (delta === null || leaf === undefined) return;
+        const next = steppedValue(
+          leaf,
+          lineHeightFromText(draft) ?? undefined,
+          delta
+        );
+        if (next === undefined) return;
+        event.preventDefault();
+        if (onCommit(next) !== "refused") setDraft(String(next));
+      }}
+    />
+  );
+}
+
 function actionNameFor(propertyLabel: string, label: string): string {
   return propertyLabel === label
     ? propertyLabel
@@ -3492,6 +3990,19 @@ function ValueField({
   // Decided BEFORE the menu, because every keyword leaf resolves to the
   // `select` control kind — so a branch on that kind placed first would return
   // for all of them and the toggle could never be reached.
+  const fold = React.useContext(FoldedUnion);
+  if (fold !== undefined) {
+    return (
+      <FoldedField
+        id={id}
+        fold={fold}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   const toggle = toggleOptionsFor(control.leaf);
   if (toggle !== undefined && toggleShows(toggle, stored)) {
     return (
@@ -3650,7 +4161,9 @@ function NumericField({
   // leaf with no units to offer never reaches this: `unitChoicesFor` answers
   // empty for anything that is not a dimension, so `line-height` as a number
   // has no menu to gain a unit from.
-  const showUnits = units.length > 0 && measurement !== undefined;
+  // Not in the spacing box, whose sides take the unit as typed.
+  const compact = React.useContext(CompactSides);
+  const showUnits = !compact && units.length > 0 && measurement !== undefined;
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
@@ -3785,6 +4298,8 @@ function TextField({
    */
   onStep?: (draft: string, delta: number) => string | null;
 }): React.JSX.Element {
+  // A side of the spacing box says "–" while unset: a hint would not fit.
+  const compact = React.useContext(CompactSides);
   const commit = () => {
     if (draft === storedText(stored)) return;
     // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
@@ -3808,7 +4323,7 @@ function TextField({
     <Input
       id={id}
       value={draft}
-      placeholder={placeholderFor(control)}
+      placeholder={compact ? "–" : placeholderFor(control)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
@@ -4018,20 +4533,22 @@ const FIXED_PLACEHOLDER: Partial<Record<StyleLeaf["kind"], string>> = {
   // literal here would also be a hardcoded colour, which this repository bans
   // outright — the rule reads source, not intent, and it is right to: a hex in
   // a placeholder is one copy away from a hex in a style.
-  color: "hex, rgb(), or a colour name",
+  // Short enough to read inside the field rather than cut off mid-word.
+  color: "Name, hex or rgb()",
   url: "https://…",
 };
 
-/** A length's hint, which depends on what the catalog lets this one hold. */
+/**
+ * A length's hint, which depends on what the catalog lets this one hold.
+ *
+ * The form alone, never the keyword list: a field shows about twenty
+ * characters, and a hint cut off mid-word ("16px or 50%, or xx-sm…") says
+ * less than a short one. The keywords stay valid to type.
+ */
 function dimensionHint(
   leaf: Extract<StyleLeaf, { kind: "dimension" }>
 ): string {
-  const units = leaf.allowPercentage === true ? "16px or 50%" : "16px";
-  // The catalog's helper always writes this field, and the TYPE leaves it
-  // optional — so a leaf assembled by hand, which every fixture in this package
-  // is, legitimately arrives without one.
-  const keywords = leaf.keywords ?? [];
-  return keywords.length > 0 ? `${units}, or ${keywords.join(", ")}` : units;
+  return leaf.allowPercentage === true ? "16px or 50%" : "16px";
 }
 
 /** A number's hint, which names its bounds when the catalog gives it both. */

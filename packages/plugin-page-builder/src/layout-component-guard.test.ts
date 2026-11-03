@@ -383,7 +383,9 @@ describe("unpublishing a component a Layout still uses", () => {
     register(c.ctx);
     const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
 
-    await expect(c.update(updating({ status: "draft" }, nextly))).rejects.toThrow(
+    await expect(
+      c.update(updating({ status: "draft" }, nextly))
+    ).rejects.toThrow(
       /cannot be unpublished because the Layout "Marketing" uses it/
     );
   });

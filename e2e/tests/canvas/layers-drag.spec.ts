@@ -105,7 +105,9 @@ test.describe("moving blocks from Layers", () => {
 
     await page.mouse.up();
     await expect(reason).toHaveCount(0);
-    expect(await structure(page)).toEqual(["ld-card", "ld-button"]);
+    // Polled: the page in the canvas's frame is drawn again after the release,
+    // and a single reading can land between the two renders.
+    await expect.poll(() => structure(page)).toEqual(["ld-card", "ld-button"]);
   });
 
   test("a Layers row moves by keyboard, in and out", async ({ page }) => {

@@ -308,6 +308,32 @@ export interface FontSource {
   format?: string;
 }
 
+/**
+ * Where a self-hosted face came from, for the editor to say so.
+ *
+ * Metadata only: the stylesheet never reads it, so a face loads the same with
+ * or without it. `google` is a face the server downloaded from the Google
+ * Fonts catalogue into the site's media; `upload` is a file an author uploaded.
+ */
+export interface FontFaceOrigin {
+  kind: "google" | "upload";
+  /** The catalogue's id for the family, such as `inter`. */
+  id?: string;
+  /** The licence as the catalogue names it, such as `OFL-1.1`. */
+  licence?: string;
+  /**
+   * The catalogue's category: `sans-serif`, `serif`, `display`,
+   * `handwriting` or `monospace`. The generic family a picker stores after
+   * the name comes from it.
+   */
+  category?: string;
+  /**
+   * The catalogue's script the file covers, such as `latin`, so the editor
+   * can tell a face the site has from the same cut in another script.
+   */
+  subset?: string;
+}
+
 /** A `@font-face` a site self-hosts. */
 export interface FontFaceDef {
   family: string;
@@ -317,6 +343,8 @@ export interface FontFaceDef {
   /** Defaults to `swap`: text is readable while the file loads. */
   display?: string;
   unicodeRange?: string;
+  /** Where the face came from. Never emitted. */
+  source?: FontFaceOrigin;
 }
 
 /**
@@ -993,6 +1021,12 @@ export function validateFontFace(
     }
   }
 
+  if (face.source !== undefined && !usableOrigin(face.source)) {
+    fail(
+      `"${face.family}" says where it came from in a way that cannot be read.`
+    );
+  }
+
   for (const source of face.src) {
     const rejection = checkUrlValue(source.url, "raw");
     if (rejection !== null) {
@@ -1007,6 +1041,22 @@ export function validateFontFace(
   }
 
   return issues;
+}
+
+/**
+ * The longest word a face's origin may carry. A catalogue id, a licence name
+ * and a category are all short; this only stops data that is already wrong.
+ */
+const MAX_FONT_ORIGIN_LENGTH = 100;
+
+/** Whether a face's origin is one of the two kinds, with short words. */
+function usableOrigin(origin: FontFaceOrigin): boolean {
+  if (origin.kind !== "google" && origin.kind !== "upload") return false;
+  return [origin.id, origin.licence, origin.category, origin.subset].every(
+    word =>
+      word === undefined ||
+      (typeof word === "string" && word.length <= MAX_FONT_ORIGIN_LENGTH)
+  );
 }
 
 /**
@@ -1099,7 +1149,7 @@ export type TokenNamingProblem =
  * grammar decides what those keys may contain and its DEPTH decides how far the
  * reader has to descend to find the token underneath them.
  */
-export function labelProblem(name: unknown): TokenNamingProblem | undefined {
+function labelProblem(name: unknown): TokenNamingProblem | undefined {
   // Persisted settings reach here unvalidated, and `RegExp.test` COERCES: a
   // stored `123` becomes "123" and satisfies the grammar, after which the value
   // travels on as a number and throws where a string was assumed.
@@ -1128,7 +1178,7 @@ export function labelProblem(name: unknown): TokenNamingProblem | undefined {
  * subjects take different rules and a caller holding a bare string cannot be
  * relied on to say which it has.
  */
-export function identityProblem(
+function identityProblem(
   identity: unknown,
   field: "name" | "id"
 ): TokenNamingProblem | undefined {
