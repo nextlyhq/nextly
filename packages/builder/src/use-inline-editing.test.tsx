@@ -1986,7 +1986,7 @@ const HEADER_DEF: ComponentDocument = {
 
 describe("a double-click on a component's text", () => {
   /** A header placed once, its heading exposing `text` and not `kicker`. */
-  function placedHeader() {
+  function placedHeader(header: ComponentDocument = HEADER_DEF) {
     registerBlocks(
       [
         {
@@ -2003,7 +2003,6 @@ describe("a double-click on a component's text", () => {
       ] as never,
       { source: "use-inline-editing-test" }
     );
-    const header = HEADER_DEF;
     const page = {
       formatVersion: 1,
       kind: "page",
@@ -2073,6 +2072,21 @@ describe("a double-click on a component's text", () => {
 
     expect(editor.select).toHaveBeenCalledWith("p1");
     expect(onPartOf).toHaveBeenCalledWith("p1");
+    expect(result.current.editing).toBeNull();
+  });
+
+  it("on exposed text of a block the component locks, says whose it is by the held field", () => {
+    // The panel holds that field; the canvas does not open it either, and
+    // the host is told which field, so it says the field's reason.
+    const { result, editor, onPartOf } = placedHeader({
+      ...HEADER_DEF,
+      nodes: [{ ...HEADER_DEF.nodes[0]!, locked: true }],
+    });
+
+    act(() => result.current.onDoubleClick(doubleClickOn("text")));
+
+    expect(editor.select).toHaveBeenCalledWith("p1");
+    expect(onPartOf).toHaveBeenCalledWith("p1", "title");
     expect(result.current.editing).toBeNull();
   });
 

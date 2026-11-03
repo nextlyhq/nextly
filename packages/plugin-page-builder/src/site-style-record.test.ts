@@ -257,6 +257,35 @@ describe("checkStoredFonts", () => {
     expect(result.issues).toHaveLength(1);
     expect(result.value).toEqual([]);
   });
+
+  it("keeps where a face came from, so a re-save does not drop it", () => {
+    const source = {
+      kind: "google",
+      id: "inter",
+      licence: "OFL-1.1",
+      category: "sans-serif",
+    };
+    const result = checkStoredFonts([
+      {
+        family: "Inter",
+        src: [{ url: "/api/media/m1/raw", format: "woff2" }],
+        source,
+      },
+    ]);
+    expect(result.issues).toEqual([]);
+    expect(result.value?.[0]?.source).toEqual(source);
+  });
+
+  it("refuses a source that is not a record of words", () => {
+    const result = checkStoredFonts([
+      {
+        family: "Inter",
+        src: [{ url: "/api/media/m1/raw" }],
+        source: { kind: "google", id: 7 },
+      },
+    ]);
+    expect(result.issues).toHaveLength(1);
+  });
 });
 
 describe("unreadableStoredFonts", () => {

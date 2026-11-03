@@ -564,6 +564,25 @@ describe("sections", () => {
     expect(effects.textContent).not.toContain("has values");
   });
 
+  it("draws a section's dot beside its name, in a heading the panel styles as its own", () => {
+    // The dot belongs to the name, as the design sets it, not beside the
+    // chevron at the far end; and the trigger carries the panel's own class,
+    // which is what sets its height and the chevron's direction.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { margin: "8px" } },
+    } as NodeStyles;
+    mount({ spacing: true }, styles);
+
+    const spacing = screen.getByRole("button", { name: /Spacing/ });
+    expect(
+      spacing.classList.contains("nx-style-inspector__section-trigger")
+    ).toBe(true);
+    const label = spacing.querySelector(".nx-style-inspector__section-label");
+    expect(
+      label?.querySelector(".nx-style-inspector__section-dot")
+    ).toBeTruthy();
+  });
+
   it("shows a section's common properties and lists the rest under More", () => {
     mount({ effects: true });
 
@@ -952,17 +971,78 @@ describe("controls", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("names every ROOT form selector for its own property", () => {
+  it("names a ROOT form selector for its own property", () => {
     // A property whose shape is a union at the top draws one control and so no
-    // heading. `fontWeight`, `lineHeight` and `fontStyle` are all such unions,
-    // and a selector called "Form" three times over tells a screen-reader user
-    // nothing about which property it changes.
-    mount({ typography: true });
-    reveal("typography", "Font style");
+    // heading, so a selector called "Form" would tell a screen-reader user
+    // nothing about which property it changes. Typography's unions draw no
+    // form selector at all: their one control takes either form.
+    mount({ border: { radius: true } });
 
-    expect(screen.getByLabelText("Font weight form")).toBeDefined();
-    expect(screen.getByLabelText("Line height form")).toBeDefined();
-    expect(screen.getByLabelText("Font style form")).toBeDefined();
+    expect(screen.getByLabelText("Border radius form")).toBeDefined();
+  });
+
+  it("offers font weight as ONE list of named weights, with no form to choose first", () => {
+    // "Font weight form: Keyword" asked the author which kind of value they
+    // meant before letting them pick one. One list holds both kinds.
+    const editor = mount({ typography: true });
+
+    expect(screen.queryByLabelText("Font weight form")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Font weight"));
+    expect(screen.getByRole("option", { name: "Thin 100" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Black 900" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Lighter" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("option", { name: "Bold 700" }));
+    // Stored as the number, the numeric arm of the union.
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"fontWeight":700'
+    );
+  });
+
+  it("keeps a stored keyword weight visible in the list", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontWeight: "bold" } },
+    } as NodeStyles;
+    mount({ typography: true }, styles);
+
+    expect(screen.getByLabelText("Font weight").textContent).toContain("Bold");
+  });
+
+  it("takes a line height as typed, a number or a length, with no form to choose", () => {
+    const editor = mount({ typography: true });
+
+    expect(screen.queryByLabelText("Line height form")).toBeNull();
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "1.5" } });
+    fireEvent.blur(field);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":1.5'
+    );
+  });
+
+  it("stores a line height typed with a unit as that length", () => {
+    const editor = mount({ typography: true });
+
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "24px" } });
+    fireEvent.blur(field);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":"24px"'
+    );
+  });
+
+  it("hints at a value in words short enough to read inside the field", () => {
+    // A hint cut off mid-word ("16px or 50%, or xx-sm…") tells the author
+    // less than a short one. Keywords stay valid to type; the hint shows the
+    // form a value takes, not every value it may take.
+    mount({ typography: true, color: true });
+
+    expect(
+      (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
+    ).toBe("16px or 50%");
+    expect(
+      fieldsOf("color").getByPlaceholderText("Name, hex or rgb()")
+    ).toBeDefined();
   });
 
   it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
@@ -3085,6 +3165,78 @@ describe("a per-side property is drawn as a box", () => {
   const frameOf = (box: HTMLElement | null) =>
     box?.querySelector(".nx-style-inspector__side-box") as HTMLElement | null;
 
+  /** The one spacing box, margin around padding, in the element's axes. */
+  function mountSpacingBox(orientation: {
+    writingMode: string;
+    direction: string;
+  }) {
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel editor={editor} sideOrientation={orientation} />
+    );
+    return {
+      editor,
+      box: document.querySelector(".nx-spacing-box") as HTMLElement | null,
+    };
+  }
+
+  it("draws margin and padding as ONE box, padding inside margin", () => {
+    // The design's box model: margin the outer ring, padding the inner, the
+    // element in the middle, rather than two separate crosses of fields.
+    const { box } = mountSpacingBox(LTR);
+
+    expect(document.querySelectorAll(".nx-spacing-box")).toHaveLength(1);
+    const margin = box?.querySelector('[data-ring="margin"]');
+    const padding = margin?.querySelector('[data-ring="padding"]');
+    expect(padding).toBeTruthy();
+    expect(margin?.querySelectorAll(":scope > [data-side]")).toHaveLength(4);
+    expect(padding?.querySelectorAll(":scope > [data-side]")).toHaveLength(4);
+  });
+
+  it("names each side in plain words for the element's axes", () => {
+    // "Margin top" rather than "Block start": the box is drawn because the
+    // element's axes are known, and in them the sides have physical names.
+    const { box } = mountSpacingBox(LTR);
+    const within_ = within(box as HTMLElement);
+
+    expect(within_.getByLabelText("Margin top")).toBeDefined();
+    expect(within_.getByLabelText("Margin left")).toBeDefined();
+    expect(within_.getByLabelText("Padding right")).toBeDefined();
+    expect(within_.getByLabelText("Padding bottom")).toBeDefined();
+  });
+
+  it("mirrors the inline names on a right-to-left element", () => {
+    const { box } = mountSpacingBox({
+      writingMode: "horizontal-tb",
+      direction: "rtl",
+    });
+    const field = within(box as HTMLElement).getByLabelText("Padding right");
+
+    expect(field.closest("[data-side]")?.getAttribute("data-side")).toBe(
+      "inlineStart"
+    );
+  });
+
+  it("commits a side typed with its unit, and keeps each side compact", () => {
+    // No unit menu in the box: a side takes "12px" or "2rem" as typed, and a
+    // short dash says it is unset rather than a hint that cannot fit.
+    const { editor, box } = mountSpacingBox(LTR);
+    const field = within(box as HTMLElement).getByLabelText(
+      "Padding top"
+    ) as HTMLInputElement;
+
+    expect(box?.querySelector(".nx-style-inspector__unit")).toBeNull();
+    expect(field.placeholder).toBe("–");
+
+    fireEvent.change(field, { target: { value: "12px" } });
+    fireEvent.blur(field);
+
+    const ops = JSON.stringify(editor.applyAll.mock.calls[0]?.[0]);
+    expect(ops).toContain("padding");
+    expect(ops).toContain('"blockStart":"12px"');
+  });
+
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
      * The property the stylesheet places on. The heading, a form selector and
@@ -3339,5 +3491,58 @@ describe("a colour that does not follow light and dark", () => {
     expect(
       fieldsOf("color").queryByText(/Not adapted to dark mode/)
     ).toBeNull();
+  });
+});
+
+describe("the Font control", () => {
+  const INTER = {
+    family: "Inter",
+    src: [{ url: "/api/media/a/raw", format: "woff2" }],
+    weight: "100 900",
+    source: { kind: "google" as const, id: "inter", category: "sans-serif" },
+  };
+
+  function mountFonts(onManageFonts?: () => void) {
+    register({ typography: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        fonts={{ faces: [INTER], fromCode: [], onManageFonts }}
+      />
+    );
+    return editor;
+  }
+
+  it("is a list of the site's fonts, with no box to type a family into", () => {
+    mountFonts();
+    const field = fieldsOf("fontFamily");
+    expect(field.queryByRole("textbox")).toBeNull();
+    const control = field.getByRole("button", { name: /^Font, / });
+    expect(control.getAttribute("aria-haspopup")).toBe("listbox");
+  });
+
+  it("writes the family picked, with its generic after it", () => {
+    const editor = mountFonts();
+    fireEvent.click(
+      fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Inter" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '\\"Inter\\", sans-serif'
+    );
+  });
+
+  it("hands Design's fonts to the author who asks", () => {
+    const onManageFonts = vi.fn();
+    mountFonts(onManageFonts);
+    fireEvent.click(
+      fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add or manage fonts…" })
+    );
+    expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 });

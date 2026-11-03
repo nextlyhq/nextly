@@ -48,6 +48,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
   editorRef = null;
   dragging = null;
+  rowClicks = 0;
 });
 
 /**
@@ -94,6 +95,7 @@ function documentOf(nodes: BlockNode[]): BlockDocument {
 
 let editorRef: EditorState | null = null;
 let dragging: string | null = null;
+let rowClicks = 0;
 
 /** The editor's half in this document, the page's half portalled into the frame. */
 function Host({ frame }: { frame: HTMLIFrameElement }) {
@@ -122,6 +124,11 @@ function Host({ frame }: { frame: HTMLIFrameElement }) {
       <button
         type="button"
         data-testid="palette-row"
+        // The row's own insert, which a click on it runs: the click a drag's
+        // release can produce must never reach it.
+        onClick={() => {
+          rowClicks += 1;
+        }}
         onPointerDown={event =>
           drag.beginInsertDrag(event, {
             blockName: "test/heading",
@@ -479,6 +486,39 @@ describe("a drag while the frame reloads", () => {
       expect(dragging).toBeNull();
     } finally {
       // Before the cleanup unmounts the page from the replaced document.
+      for (const node of mounted) inner.body.append(node);
+    }
+  });
+});
+
+describe("a palette drag the frame's reload cancelled", () => {
+  it("inserts nothing when its pointer comes back to the row and lets go", async () => {
+    const { frame, inner, row } = renderFramed();
+    const mounted = Array.from(inner.body.childNodes);
+    press(row);
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 90 });
+    expect(dragging).toBe("test/heading");
+
+    await act(async () => {
+      await reloadFrame(frame);
+    });
+    try {
+      expect(dragging).toBeNull();
+      // The pointer, still down, comes back to the row and is released: the
+      // press and the release are one click on the row, which inserts.
+      fireEvent.pointerUp(row, { pointerId: 7, clientX: 300, clientY: 500 });
+      fireEvent.click(row);
+      expect(rowClicks).toBe(0);
+      expect(ids()).toEqual(["a", "b"]);
+      // Swallowed once: the author's next click on the row is theirs.
+      await act(async () => {
+        await new Promise(resolve => {
+          setTimeout(resolve, 0);
+        });
+      });
+      fireEvent.click(row);
+      expect(rowClicks).toBe(1);
+    } finally {
       for (const node of mounted) inner.body.append(node);
     }
   });

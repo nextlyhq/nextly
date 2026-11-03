@@ -56,7 +56,7 @@ describe("explaining a refused move", () => {
       ONLY_IN_BOX
     );
 
-    expect(wording?.headline).toMatch(/has to sit inside a container/i);
+    expect(wording?.headline).toMatch(/has to go inside a container/i);
     expect(wording?.remedy).toMatch(/goes inside/i);
   });
 
@@ -75,7 +75,7 @@ describe("explaining a refused move", () => {
       { parentsOf: () => ["acme/columns"] }
     );
 
-    expect(wording?.headline).toMatch(/does not take/i);
+    expect(wording?.headline).toMatch(/can't go inside this/i);
     expect(wording?.headline).toContain("Box");
   });
 });
@@ -105,9 +105,9 @@ it("refuses on the SLOT's allow-list, and names what the slot takes", () => {
     }
   );
 
-  expect(wording?.headline).toMatch(/this slot does not take/i);
+  expect(wording?.headline).toMatch(/can't go here/i);
   // "Takes" — a statement about the SLOT, which is true only for this reason.
-  expect(wording?.remedy).toMatch(/^Takes /);
+  expect(wording?.remedy).toMatch(/^This spot takes /);
   expect(wording?.remedy).toContain("Heading");
 });
 
@@ -204,7 +204,7 @@ describe("a component instance is judged by the ROOTS of what it draws", () => {
       DRAWS_HEADER
     );
 
-    expect(wording?.headline).toMatch(/has to sit inside a container/i);
+    expect(wording?.headline).toMatch(/has to go inside a container/i);
     expect(wording?.remedy).toContain("Box");
   });
 

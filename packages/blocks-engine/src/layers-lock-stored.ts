@@ -75,12 +75,38 @@ function idsOf(entries: readonly unknown[]): string[] {
 }
 
 /**
- * Whether a block keeps its place among the siblings that were there before:
- * the same of them before it, in stored and in written form.
+ * The length of the longest strictly increasing run that can be picked, in
+ * order, out of `values`: patience sorting, so a long sibling list costs
+ * n log n rather than the square a table would.
+ */
+function longestRising(values: readonly number[]): number {
+  const tails: number[] = [];
+  for (const value of values) {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if ((tails[middle] ?? 0) < value) low = middle + 1;
+      else high = middle;
+    }
+    tails[low] = value;
+  }
+  return tails.length;
+}
+
+/**
+ * Whether a block keeps its place among the siblings that were there before.
  *
  * Only siblings both forms hold are counted, so a block added beside it or one
- * removed shifts its index without moving it, while swapping it with a block
- * that was already there is a move.
+ * removed shifts its index without moving it. Among the rest, a reorder is
+ * read as the fewest blocks moved that explain it: the block keeps its place
+ * when keeping it still is one of those explanations, so moving a sibling
+ * across it, however far, is the sibling's move and not its own. It counts as
+ * moved only when every fewest-moves reading moves it: it went past more of
+ * its siblings than would have to move round it. A swap with one neighbour is
+ * exactly as well explained by the neighbour moving, and the document cannot
+ * say which happened, so it is not counted; the editor refuses the move of the
+ * locked block itself before it is made.
  */
 function samePlaceAmongSiblings(
   id: string,
@@ -88,15 +114,26 @@ function samePlaceAmongSiblings(
   written: readonly string[]
 ): boolean {
   const kept = new Set(written);
-  const was = new Set(stored);
-  const before = (list: readonly string[], present: Set<string>) =>
-    list.slice(0, list.indexOf(id)).filter(sibling => present.has(sibling));
-  const storedBefore = before(stored, kept);
-  const writtenBefore = new Set(before(written, was));
-  return (
-    storedBefore.length === writtenBefore.size &&
-    storedBefore.every(sibling => writtenBefore.has(sibling))
-  );
+  const common = stored.filter(sibling => kept.has(sibling));
+  const writtenAt = new Map<string, number>();
+  for (const sibling of written) {
+    if (!writtenAt.has(sibling)) writtenAt.set(sibling, writtenAt.size);
+  }
+  const order = common.map(sibling => writtenAt.get(sibling) ?? -1);
+  const index = common.indexOf(id);
+  const here = order[index];
+  // Most writes keep every sibling in order, and then nothing is counted.
+  if (
+    here === undefined ||
+    order.every((at, i) => i === 0 || (order[i - 1] ?? 0) < at)
+  ) {
+    return true;
+  }
+  const withIt =
+    longestRising(order.slice(0, index).filter(at => at < here)) +
+    1 +
+    longestRising(order.slice(index + 1).filter(at => at > here));
+  return withIt === longestRising(order);
 }
 
 /**
