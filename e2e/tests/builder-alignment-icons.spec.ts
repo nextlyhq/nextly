@@ -10,7 +10,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { pressSave } from "./canvas/editor-driver";
+import { block, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -124,8 +124,8 @@ async function openStyle(
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });
-  await page
-    .locator(`.nx-canvas [data-nx-node="${nodeId}"]`)
+  // Through the editor driver, which finds a block in the canvas's frame.
+  await (await block(page, nodeId))
     .first()
     .click(nodeId === SECTION ? { position: { x: 4, y: 4 } } : {});
   await expect(page.locator("[data-block-card]")).toBeVisible();
