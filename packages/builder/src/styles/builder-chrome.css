@@ -1397,7 +1397,7 @@
   flex: 1 1 auto;
 }
 
-.nx-expose__name-input {
+.nx-expose__field .nx-expose__name-input {
   border-style: dashed;
   border-color: color-mix(
     in oklch,
@@ -1507,9 +1507,12 @@
   gap: 0.375rem;
 }
 
+/* Sentence case, as the view's own words are: "Fields", not "FIELDS". */
 .nx-component-fields .nx-inspector__heading {
   margin: 0;
   font-size: 0.75rem;
+  text-transform: none;
+  letter-spacing: 0.02em;
 }
 
 .nx-component-fields__list {
@@ -1530,9 +1533,14 @@
   border-radius: var(--radius-md, 0.375rem);
 }
 
+/*
+ * A faint wash of the text colour, not the accent or the muted ground: a
+ * theme may make the accent a brand colour, which drowns the row's type
+ * icon, and the muted ground is the panel's own, which shows nothing.
+ */
 .nx-component-field:hover,
 .nx-component-field:focus-within {
-  background: var(--nx-accent);
+  background: color-mix(in oklch, var(--nx-foreground) 6%, transparent);
 }
 
 .nx-component-field__type {
@@ -1551,7 +1559,11 @@
  * The field's name, edited in place but drawn as the row's title: no box
  * until it is hovered or focused, so the list reads as a list.
  */
-.nx-component-field__name {
+/*
+ * Qualified by the row: the design system's input classes are loaded after
+ * this sheet at the same weight, so the bare class would lose the border.
+ */
+.nx-component-field .nx-component-field__name {
   height: 1.375rem;
   padding: 0 0.25rem;
   margin-left: -0.25rem;
@@ -1561,11 +1573,11 @@
   font-weight: 500;
 }
 
-.nx-component-field__name:hover {
+.nx-component-field .nx-component-field__name:hover {
   border-color: var(--nx-border);
 }
 
-.nx-component-field__name:focus-visible {
+.nx-component-field .nx-component-field__name:focus-visible {
   background: var(--nx-background);
 }
 
@@ -5687,6 +5699,8 @@ fieldset.nx-inspector__fields {
 .nx-variants__header .nx-inspector__heading {
   margin: 0;
   font-size: var(--text-xs, 0.75rem);
+  text-transform: none;
+  letter-spacing: 0.02em;
 }
 
 .nx-variants__list {
@@ -5748,7 +5762,8 @@ fieldset.nx-inspector__fields {
  * The variant's name, renamed in place but drawn as the row's title: no box
  * until it is hovered or focused.
  */
-.nx-variants__name-input {
+/* Qualified by the row, for the reason the field's name is. */
+.nx-variants__name .nx-variants__name-input {
   height: 1.75rem;
   padding: 0 0.25rem;
   border-color: transparent;
@@ -5757,11 +5772,11 @@ fieldset.nx-inspector__fields {
   font-weight: 500;
 }
 
-.nx-variants__name-input:hover {
+.nx-variants__name .nx-variants__name-input:hover {
   border-color: var(--nx-border);
 }
 
-.nx-variants__name-input:focus-visible {
+.nx-variants__name .nx-variants__name-input:focus-visible {
   background: var(--nx-background);
 }
 
