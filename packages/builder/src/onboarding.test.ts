@@ -54,6 +54,26 @@ function register() {
       // A block with NOTHING an author can type into, so "write something"
       // cannot be satisfied by adding one.
       { ...base, name: "acme/divider", props: {} },
+      // A block placed with text of its own, which nobody here wrote.
+      {
+        ...base,
+        name: "acme/titled",
+        props: { text: { type: "text", inline: true } },
+        defaultProps: { text: "Heading" },
+      },
+      // Placed with its EXAMPLE's text over an empty default, as core/heading
+      // is: the inserter's starting props, not the default alone.
+      {
+        ...base,
+        name: "acme/exampled",
+        props: { text: { type: "text", inline: true } },
+        defaultProps: { text: "" },
+        example: { props: { text: "A section title" } },
+        // A variation placed with text of its own, as a plugin's may be.
+        editor: {
+          variations: [{ name: "hero", props: { text: "Hero title" } }],
+        },
+      },
     ] as never,
     { source: "onboarding-test" }
   );
@@ -108,6 +128,52 @@ describe("builderChecklist", () => {
     expect(step(documentOf([heading("a", "Hello")]), "write-text")?.done).toBe(
       true
     );
+  });
+
+  it("does not count a block's starting text as writing", () => {
+    // Placing a heading that reads "Heading" is adding a block, not writing.
+    const titled = (text: string) =>
+      ({
+        id: "t",
+        type: "acme/titled",
+        version: 1,
+        props: { text },
+      }) as BlockNode;
+    expect(step(documentOf([titled("Heading")]), "write-text")?.done).toBe(
+      false
+    );
+    expect(step(documentOf([titled("  Heading ")]), "write-text")?.done).toBe(
+      false
+    );
+    expect(step(documentOf([titled("Our story")]), "write-text")?.done).toBe(
+      true
+    );
+  });
+
+  it("does not count the text a block is placed with from its example", () => {
+    const exampled = (text: string) =>
+      ({
+        id: "e",
+        type: "acme/exampled",
+        version: 1,
+        props: { text },
+      }) as BlockNode;
+    expect(
+      step(documentOf([exampled("A section title")]), "write-text")?.done
+    ).toBe(false);
+    expect(step(documentOf([exampled("About us")]), "write-text")?.done).toBe(
+      true
+    );
+  });
+
+  it("does not count the text a block is placed with as one of its variations", () => {
+    const placed = {
+      id: "v",
+      type: "acme/exampled",
+      version: 1,
+      props: { text: "Hero title" },
+    } as BlockNode;
+    expect(step(documentOf([placed]), "write-text")?.done).toBe(false);
   });
 
   it("finds text on a NESTED block", () => {

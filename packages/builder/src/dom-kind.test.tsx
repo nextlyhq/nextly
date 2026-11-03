@@ -34,6 +34,7 @@ import {
   CHROME_ATTRIBUTE,
   Canvas,
   contextMenuTargetOf,
+  DropRefusal,
   nodeIdFromEvent,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
@@ -407,6 +408,7 @@ describe("the drop refusal in another realm", () => {
         document={PAIR}
         siteStyles={{ css: "", classes: {} } as never}
         drag={drag}
+        overlay={<DropRefusal drag={drag} document={PAIR} />}
       />,
       { container }
     );

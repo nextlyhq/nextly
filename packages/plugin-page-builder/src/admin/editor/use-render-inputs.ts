@@ -1,7 +1,7 @@
 /**
  * What the canvas draws with, and the readings the inspector and the spacing
  * handles take from the same inputs: the site's style, the render context,
- * the box's width and zoom, the interaction state shown, and the cascade.
+ * the frame's width and zoom, the interaction state shown, and the cascade.
  *
  * Every reading here is derived from one context the canvas is compiled
  * under, never assembled a second time beside it.
@@ -10,7 +10,6 @@
  */
 import {
   BASE_BREAKPOINT,
-  previewContainerFor,
   registryNestingSource,
   getBlock,
   type BlockDocument,
@@ -28,19 +27,18 @@ import {
 } from "@nextlyhq/builder";
 import {
   breakpointsAtWidth,
+  DESKTOP_PREVIEW_WIDTH,
   editingBreakpointOf,
   pageStyleTrace,
   previewWidth,
   selectionIsInspectable,
   useCanvasDrag,
   type CanvasDrag,
-  type CanvasPreview,
   type CanvasZoom,
   type SpacingScrubContext,
 } from "@nextlyhq/builder/shell";
 import {
   useCallback,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -60,6 +58,7 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
+import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
   useBreakpointWriter,
   useClassSurface,
@@ -236,7 +235,6 @@ export type SiteStyleInputs = {
 /** The canvas's render context, as `useCanvasRender` returns it. */
 type CanvasRender = {
   canvasRender: PageRenderInputs;
-  canvasPreviewContainer: string | undefined;
   classSummaryContext: StyleCompileContext;
 };
 
@@ -249,48 +247,6 @@ function useCanvasRender({
   stylePolicy,
 }: Pick<EditorMount, "clientConfig" | "documentLimits" | "componentLibrary"> &
   Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
-  /*
-   * The name the canvas box establishes as a query container.
-   *
-   * The editor canvas is not an iframe — the renderer emits its sheet into the
-   * admin document — so `@media` asks the browser WINDOW and resizing the box
-   * cannot change which tier applies. Compiled against a container name, the
-   * viewport tiers become `@container` rules about THIS box, and the box's own
-   * width decides them.
-   *
-   * Minted from `useId` rather than spelled here, because the name identifies
-   * one mounted surface: two editors on a page sharing a literal would each
-   * answer the other's queries. `previewContainerFor` is what turns the seed
-   * into a name the compiler will accept, and it is the only supported way to
-   * make one.
-   */
-  const canvasBoxId = useId();
-  /*
-   * The name this canvas would establish, and whether it establishes one AT
-   * ALL.
-   *
-   * Previewing is not free: a preview compile rewrites every CONTAINER-axis
-   * rule to `@container nx-not-previewable (width < 0px)`, which matches
-   * nothing. That is the engine refusing to answer a question it cannot — a
-   * container query resolves against an element's own query container, which a
-   * preview box is not — and it is the right refusal when there are viewport
-   * tiers to gain in exchange.
-   *
-   * With NO emitted viewport tier there is nothing to gain and the same price
-   * is paid: a site whose only breakpoints are container ones would have every
-   * one of them silently stop matching on the canvas while they keep working on
-   * the published page. So a canvas with nothing to simulate stays published,
-   * which is also what it looked like before any of this existed.
-   *
-   * `offeredTiers` rather than a second reading of the set, because it is
-   * already the answer to "which tiers can this canvas be sized to" — and if
-   * none can, there is no width to simulate.
-   */
-  const previewContainer = useMemo(
-    () => previewContainerFor(canvasBoxId),
-    [canvasBoxId]
-  );
-
   /*
    * What the canvas hands `PageRenderer` beyond the document and the sheet.
    *
@@ -356,7 +312,9 @@ function useCanvasRender({
       pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
-        previewContainer,
+        // None: the canvas is a frame at the previewed device's size, so the
+        // sheet is compiled exactly as the published route compiles it.
+        previewContainer: undefined,
         previewStates: true,
         limits: documentLimits,
         // The map's identity changes only when the read does, so this memo —
@@ -367,19 +325,10 @@ function useCanvasRender({
     [
       canvasSiteStyle,
       clientConfig,
-      previewContainer,
       documentLimits,
       componentLibrary.definitions,
     ]
   );
-
-  /*
-   * What the canvas is previewing under, read back from the ONE context that
-   * decided it rather than recomputed. The box and the inspector must be told
-   * the same thing the sheet was compiled with, and a second derivation here
-   * would be a second chance to answer differently.
-   */
-  const canvasPreviewContainer = canvasRender.styleContext.previewContainer;
 
   /*
    * What the classes manager compiles each class's summary with, so the summary
@@ -405,7 +354,7 @@ function useCanvasRender({
     [canvasRender.styleContext, stylePolicy]
   );
 
-  return { canvasRender, canvasPreviewContainer, classSummaryContext };
+  return { canvasRender, classSummaryContext };
 }
 
 /** What `useCanvasViewport` returns. */
@@ -421,18 +370,15 @@ type CanvasViewport = {
   appliedScale: number;
   setAppliedScale: Dispatch<SetStateAction<number>>;
   editedBreakpoint: string;
-  canvasPreview: CanvasPreview | undefined;
+  /** The width the canvas frame lays the page out at. */
+  frameWidth: number;
   liveBreakpoints: string[];
 };
 
 /** The device being edited, the width it is shown at, and the zoom. */
 function useCanvasViewport({
   canvasRender,
-  canvasPreviewContainer,
-}: Pick<
-  CanvasRender,
-  "canvasRender" | "canvasPreviewContainer"
->): CanvasViewport {
+}: Pick<CanvasRender, "canvasRender">): CanvasViewport {
   const breakpoints = canvasRender.styleContext.breakpoints;
   /*
    * The device the SHELL holds, mirrored here to draw the canvas with it.
@@ -461,20 +407,18 @@ function useCanvasViewport({
 
   /*
    * Which breakpoint an edit lands in: the device the author chose, and
-   * nothing else.
-   *
-   * Never the width the canvas measured. The region the canvas sits in
-   * narrows as panels open and with the window, and reading the breakpoint
-   * off it sent every edit to a narrower breakpoint the author never picked
-   * (at the 1280px minimum, the region alone was already narrower than a
-   * 991px tablet's base). The canvas instead lays the page out at the
-   * device's own width, and the zoom shrinks it to fit.
-   *
-   * A device the site no longer defines resolves to the base breakpoint, so
-   * an edit is never stored under a breakpoint nothing draws.
+   * nothing else — never the room the editor has, which narrows as panels
+   * open. A device the site no longer defines resolves to the base
+   * breakpoint, so an edit is never stored under a breakpoint nothing draws.
    */
   const editedBreakpoint = editingBreakpointOf(breakpoints, chosenDevice);
-  const requestedWidth = previewWidth(breakpoints, editedBreakpoint);
+  /*
+   * The width the frame lays the page out at: the device's own, or the
+   * desktop width on a site that declares no viewport breakpoints, where
+   * there is no device to simulate and the page is shown as a laptop would.
+   */
+  const frameWidth =
+    previewWidth(breakpoints, editedBreakpoint) ?? DESKTOP_PREVIEW_WIDTH;
 
   /*
    * The zoom the SHELL owns, mirrored here only to draw the canvas with it,
@@ -483,35 +427,15 @@ function useCanvasViewport({
    */
   const [zoom, setZoom] = useState<CanvasZoom>(DEFAULT_PREFERENCES.zoom);
   const [appliedScale, setAppliedScale] = useState(1);
-  /*
-   * What the box actually got, for which breakpoints the page applies there.
-   * The box is laid out at the device's width whatever the region's, so this
-   * agrees with the device; it is read rather than assumed so the inspector
-   * describes the box on screen.
-   */
-  const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
-    undefined
-  );
 
   /*
-   * The box's own inputs, as one object. Memoised because the canvas takes
-   * them as a group, and its measurement effect re-subscribes on identity.
+   * Which breakpoints apply on the canvas: those at the frame's width, which
+   * is the width of the frame's viewport and so the width every media query
+   * in it answers for.
    */
-  const canvasPreview = useMemo(
-    () =>
-      canvasPreviewContainer === undefined
-        ? undefined
-        : {
-            container: canvasPreviewContainer,
-            ...(requestedWidth === undefined ? {} : { width: requestedWidth }),
-            onMeasured: setMeasuredWidth,
-          },
-    [canvasPreviewContainer, requestedWidth]
-  );
-
   const liveBreakpoints = useMemo(
-    () => breakpointsAtWidth(breakpoints, measuredWidth ?? requestedWidth),
-    [breakpoints, measuredWidth, requestedWidth]
+    () => breakpointsAtWidth(breakpoints, frameWidth),
+    [breakpoints, frameWidth]
   );
 
   return {
@@ -523,7 +447,7 @@ function useCanvasViewport({
     appliedScale,
     setAppliedScale,
     editedBreakpoint,
-    canvasPreview,
+    frameWidth,
     liveBreakpoints,
   };
 }
@@ -685,7 +609,6 @@ function useStyleReadings({
   remotePatterns,
   stylePolicy,
   canvasRender,
-  canvasPreviewContainer,
   editedBreakpoint,
   shownStyleState,
 }: Pick<EditorMount, "editor" | "documentLimits"> &
@@ -697,7 +620,7 @@ function useStyleReadings({
     | "remotePatterns"
     | "stylePolicy"
   > &
-  Pick<CanvasRender, "canvasRender" | "canvasPreviewContainer"> & {
+  Pick<CanvasRender, "canvasRender"> & {
     editedBreakpoint: BreakpointId;
     shownStyleState: StyleState;
   }): StyleReadings {
@@ -706,7 +629,7 @@ function useStyleReadings({
    *
    * Every field is read back from the SAME context the canvas sheet was
    * compiled under, never derived again here. A preview compiled against a
-   * different breakpoint set, container name, token prefix or scope than the
+   * different breakpoint set, token prefix or scope than the
    * rule it has to outrank simply does not match — the drag looks frozen and
    * the value jumps into place on release, which reads as the handle being
    * broken rather than as the two answers having diverged.
@@ -733,9 +656,6 @@ function useStyleReadings({
        */
       address: { state: shownStyleState, breakpoint: editedBreakpoint },
       breakpoints: canvasRender.styleContext.breakpoints,
-      ...(canvasPreviewContainer === undefined
-        ? {}
-        : { previewContainer: canvasPreviewContainer }),
       ...(canvasRender.styleContext.tokenPrefix === undefined
         ? {}
         : { tokenPrefix: canvasRender.styleContext.tokenPrefix }),
@@ -745,7 +665,6 @@ function useStyleReadings({
       ...(stylePolicy === undefined ? {} : { policy: stylePolicy }),
     }),
     [
-      canvasPreviewContainer,
       canvasRender.styleContext.breakpoints,
       canvasRender.styleContext.scope,
       canvasRender.styleContext.tokenPrefix,
@@ -863,7 +782,8 @@ function useStyleReadings({
  * Each part reads the ones before it, so they are asked in this order and
  * handed on whole rather than re-derived: the context, the widths sized from
  * it, the state shown, the element and the drag, and the readings off all of
- * them.
+ * them. Where the page is drawn — the site's canvas route or the editor's
+ * blank page — reads only the plugin's config.
  */
 export function useCanvasInputs(
   mount: EditorMount,
@@ -880,7 +800,15 @@ export function useCanvasInputs(
     ...viewport,
     ...styleState,
   });
-  return { ...render, ...viewport, ...styleState, ...wiring, ...readings };
+  const site = useSiteCanvas(mount.clientConfig);
+  return {
+    ...render,
+    ...viewport,
+    ...styleState,
+    ...wiring,
+    ...readings,
+    ...site,
+  };
 }
 
 /**
@@ -892,4 +820,5 @@ export type CanvasInputs = CanvasRender &
   CanvasViewport &
   ShownStyleState &
   CanvasWiring &
-  StyleReadings;
+  StyleReadings &
+  SiteCanvas;

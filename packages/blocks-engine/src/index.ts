@@ -608,6 +608,20 @@ export { isPlainRecord } from "./plain-record";
  */
 export { authoredText, isAuthoredText } from "./authored-text";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
+// Per-device visibility as an author works with it: each device's resolved
+// state, a hide that stays on one device, and the stored values carried across
+// a change of the site's breakpoints. Public because the editor writes the eye
+// and the breakpoint flows rewrite documents, and both must resolve devices as
+// the compiler does.
+export {
+  carryDeviceVisibility,
+  carryDocumentDeviceVisibility,
+  deviceVisibility,
+  hiddenOnDevice,
+  revealDeviceHidden,
+  setDeviceVisibility,
+} from "./device-visibility";
+export type { CarriedVisibility, DeviceVisibility } from "./device-visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
   BlockTypeLookup,
@@ -840,6 +854,7 @@ export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {
+  GENERIC_FONT_FAMILIES,
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,
@@ -963,6 +978,8 @@ export {
   // the later entry, which is four separate rules to get right by hand.
   usableNamedClasses,
   usableNamedClassPositions,
+  // The part of a library the compiler reads, before those rules run.
+  namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";

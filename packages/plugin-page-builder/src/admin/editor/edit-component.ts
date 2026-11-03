@@ -4,9 +4,9 @@
  *
  * ## One helper
  *
- * The inspector of a placement and the block toolbar both offer it, and both
- * call {@link useEditComponent}, so the address, the way back and the
- * permission are decided once.
+ * The inspector of a placement, the block toolbar and the Components panel
+ * all offer it, and all call {@link useEditComponent}, so the address, the
+ * way back and the permission are decided once.
  *
  * ## The way back
  *
@@ -129,15 +129,34 @@ export function hereAddress(
 }
 
 /**
- * Open a placed component alone, or `undefined` when this author may not
- * update components, so no surface offers it.
+ * Where Back from a component's view returns to.
  *
- * `isSection` says whether the placement is a top-level block of the page,
- * asked when the author presses, of the document as it is then.
+ * From a placement: at it when it is a section of the page, so the editor
+ * reopens with it selected, and otherwise without a section. From no
+ * placement, as from the Components panel: the address as it stands, a
+ * section it names included, since that is where the editor is open.
+ */
+export function backAddress(
+  location: { readonly pathname: string; readonly search: string },
+  nodeId: string | undefined,
+  isSection: (nodeId: string) => boolean
+): string {
+  if (nodeId === undefined) return `${location.pathname}${location.search}`;
+  return hereAddress(location, isSection(nodeId) ? nodeId : undefined);
+}
+
+/**
+ * Open a component alone, or `undefined` when this author may not update
+ * components, so no surface offers it.
+ *
+ * From a placement, `nodeId` names it, and `isSection` says whether it is a
+ * top-level block of the page, asked when the author presses, of the
+ * document as it is then. From the Components panel there is no placement,
+ * and Back returns to the address as the author left it.
  */
 export function useEditComponent(
   isSection: (nodeId: string) => boolean
-): ((componentId: string, nodeId: string) => void) | undefined {
+): ((componentId: string, nodeId?: string) => void) | undefined {
   const editing = useComponentEditing();
   // The latest question, read when the author presses rather than closed over,
   // so the callback keeps one identity across the page's edits.
@@ -146,12 +165,9 @@ export function useEditComponent(
     asked.current = isSection;
   }, [isSection]);
   const open = useCallback(
-    (componentId: string, nodeId: string) => {
+    (componentId: string, nodeId?: string) => {
       if (editing === undefined) return;
-      const back = hereAddress(
-        window.location,
-        asked.current(nodeId) ? nodeId : undefined
-      );
+      const back = backAddress(window.location, nodeId, asked.current);
       openDocument(
         componentEditorAddress(
           editing.collection,

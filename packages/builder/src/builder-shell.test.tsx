@@ -477,6 +477,71 @@ describe("Settings, as the host's dialog", () => {
     expect(handed.at(-1)?.returnFocus()).toBe(item);
   });
 
+  it("opens from a host's request once per count, and not again on a re-render", () => {
+    const { renderSettings } = settingsHost();
+    const { rerender } = renderShell({
+      renderSettings,
+      openSettingsRequest: { count: 1 },
+    });
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    // The same request again is not a new one: closed stays closed.
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 1 }}
+      />
+    );
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 2 }}
+      />
+    );
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+  });
+
+  it("holds a request that arrives while the window is too narrow, and opens once it fits", async () => {
+    // A dialog there would trap focus over the notice and its way out. Read
+    // from what the shell hands the host: a real dialog portals out of the
+    // hidden regions, so "open" is the trap whatever this stand-in shows.
+    const { handed, renderSettings } = settingsHost();
+    const shell = (request?: { count: number }) => (
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        {...(request === undefined ? {} : { openSettingsRequest: request })}
+      />
+    );
+    const request = { count: 1 };
+    const { rerender } = render(shell());
+    act(() => stubContainerFits(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("navigation", { name: "Editor panels" })
+      ).toBeNull()
+    );
+
+    const before = handed.length;
+    rerender(shell(request));
+    await new Promise(settle => setTimeout(settle, 20));
+    expect(handed.slice(before).some(dialog => dialog.open)).toBe(false);
+
+    act(() => stubContainerFits(true));
+    rerender(shell(request));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    );
+  });
+
   it("closes when the editor gives way to its narrow-window notice", async () => {
     const { renderSettings } = settingsHost();
     renderShell({ renderSettings });
@@ -2492,5 +2557,69 @@ describe("the shell's keys inside the canvas's frame", () => {
     fireEvent.keyDown(inner, { key: "s", metaKey: true, ctrlKey: false });
     expect(onPress).toHaveBeenCalledTimes(1);
     frame.remove();
+  });
+});
+
+describe("the canvas region around a canvas in a frame", () => {
+  it("hands focus on into the frame, and is no tab stop of its own", () => {
+    /*
+     * F6 focuses the canvas region; the page is in the frame, so focus has to
+     * go on into it. A region that stayed a tab stop as well would trap Tab:
+     * Shift+Tab out of the frame would land on it and be sent straight back.
+     */
+    const frame = document.createElement("iframe");
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <span />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    // The frame inside the region, as `CanvasFrame` draws it there.
+    region.append(frame);
+    expect(region.tabIndex).toBe(-1);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(frame);
+  });
+
+  it("is a tab stop of its own while the painted frame overflows it, so the keyboard can scroll it", () => {
+    /*
+     * At a zoom past the region, the region itself scrolls the painted frame,
+     * and arrow keys inside the frame scroll only the frame's own page. So
+     * while it overflows, the region keeps focus when it gets it, and Tab goes
+     * on into the frame from there.
+     */
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(2000);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    const frame = document.createElement("iframe");
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <span />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    region.append(frame);
+    expect(region.tabIndex).toBe(0);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(region);
+    vi.restoreAllMocks();
+  });
+
+  it("stays a tab stop over a canvas in the editor's own document", () => {
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <span />
+      </BuilderShell>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    expect(region.tabIndex).toBe(0);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(region);
   });
 });

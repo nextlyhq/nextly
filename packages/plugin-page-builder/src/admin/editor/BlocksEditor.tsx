@@ -22,7 +22,11 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
+  CanvasFrame,
+  CanvasFrameProvider,
+  CanvasMarks,
   DropIndicator,
+  DropRefusal,
   EmptyContainerAppenders,
   InspectorPanel,
   RepairNotice,
@@ -65,6 +69,7 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { SettingsDialog } from "./settings-dialog";
 import {
@@ -72,13 +77,18 @@ import {
   type SharePreview,
   type ShareSeoFields,
 } from "./share-preview";
+import { SiteLayoutNote } from "./site-canvas";
 import {
   ConnectStyleHistoryContext,
   RemountOnStyleReplay,
   StyleRevisionContext,
   useSiteStyleHistory,
 } from "./site-style-history";
-import { offerableTokens, siteStyleStatus } from "./site-style-studios";
+import {
+  offerableFaces,
+  offerableTokens,
+  siteStyleStatus,
+} from "./site-style-studios";
 import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -101,6 +111,7 @@ type EditorView = EditorMount &
   CanvasInputs &
   EditorPanels & {
     documentDirty: boolean;
+    pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
   };
@@ -225,7 +236,11 @@ const COMPONENT_READ_NOTES: Readonly<
  * history and state at the start, the devices in the centre, and Preview and
  * the document's actions at the end.
  */
-function editorTopBar(view: EditorView): {
+function editorTopBar(
+  view: EditorView,
+  /** The page's title as the form has it now, and the field being edited. */
+  page: { title: string | undefined; field: string }
+): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
   topBarEnd: React.JSX.Element;
@@ -243,8 +258,24 @@ function editorTopBar(view: EditorView): {
   return {
     topBar: (
       <>
-        <HistoryButtons editor={editor} inline={inline} />
+        {/* As the agreed bar has it: the title as a switcher, the status,
+            then undo and redo. */}
+        <PageTitleSwitcher
+          title={page.title ?? ""}
+          current={
+            view.pages.currentPage === null
+              ? null
+              : {
+                  ...view.pages.currentPage,
+                  field: page.field,
+                  title: page.title ?? "",
+                }
+          }
+          userId={view.userId}
+          onAllPages={() => view.requestPanel("pages")}
+        />
         <DocumentStatusPill isDirty={documentDirty} />
+        <HistoryButtons editor={editor} inline={inline} />
       </>
     ),
     topBarCenter: (
@@ -279,7 +310,7 @@ function editorTopBar(view: EditorView): {
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
+        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
           document's leading action with its other ways to publish on its
@@ -384,11 +415,12 @@ function editorInspector(
     canvasRender,
     chooseDevice,
     editedBreakpoint,
-    canvasPreviewContainer,
     liveBreakpoints,
     canvasSiteStyle,
+    configSiteStyle,
     siteStylePending,
     siteStyleError,
+    requestPanel,
     componentFacts,
     componentVariants,
   } = view;
@@ -421,35 +453,36 @@ function editorInspector(
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
-      // Which tier the Style tab writes to, and which tiers it may call
-      // live. Both are the canvas's answer rather than the panel's: the
-      // queries are about the preview box, and `matchMedia` cannot
-      // evaluate a container query, so only the surface that owns the box
-      // can observe them. The container name travels with them because
-      // that is what tells the panel the window is not the authority.
+      // Which tier the Style tab writes to, and which tiers are live: the
+      // canvas's answer rather than the panel's, as the frame's width is
+      // what the page's media queries answer for.
       /*
-       * Going to a tier is SIZING THE CANVAS to it, never setting a
-       * second piece of state saying which tier is being edited. The
-       * edited tier is derived from the width the box gets, so a jump
-       * that wrote its own answer would put the two back in the
-       * disagreement deriving them from one width exists to remove.
-       *
-       * A tier the compiler emits no bound for resolves to `undefined`
-       * and releases the canvas to the region rather than pinning it to a
-       * number nothing responds to — which is also what the unconditional
-       * tier means.
+       * Going to a tier is CHOOSING ITS DEVICE, never setting a second
+       * piece of state saying which tier is being edited, so the device the
+       * frame shows and the tier edits go to cannot disagree.
        */
       // Already a TIER, so it is stored directly rather than converted
       // to a width and back.
       onJumpToBreakpoint={chooseDevice}
       breakpoint={editedBreakpoint}
-      previewContainer={canvasPreviewContainer}
       liveBreakpoints={liveBreakpoints}
       tokens={offerableTokens(
         canvasSiteStyle,
         siteStylePending,
         siteStyleError
       )}
+      // The Font control lists only what the site can draw: the faces the
+      // canvas loads, of which those from the site's code cannot be removed,
+      // and a way to Design's fonts to add one.
+      fonts={{
+        faces: offerableFaces(
+          canvasSiteStyle,
+          siteStylePending,
+          siteStyleError
+        ),
+        fromCode: configSiteStyle.fonts ?? [],
+        onManageFonts: () => requestPanel("design", "fonts"),
+      }}
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, and how far a removal reaches.
       componentFields={componentFacts}
@@ -469,12 +502,13 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     inline,
     zoom,
     setAppliedScale,
+    frameWidth,
+    pageTitle,
     canvasRoot,
     setCanvasElement,
     shownStyleState,
     canvasSiteStyle,
     canvasRender,
-    canvasPreview,
     drag,
     dragging,
     spacingScrub,
@@ -482,6 +516,11 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     blocks,
     showEmptyElements,
     openInsertPanel,
+    locale,
+    canvasSource,
+    canvasFallback,
+    onCanvasFallback,
+    canvasDir,
   } = view;
   return (
     <>
@@ -520,6 +559,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
         and confirm.
       */}
       <RepairNotice editor={editor} />
+      {/*
+        Whether the page is drawn inside the site's own layout, and why not
+        when it is not: without the site's stylesheets the canvas can differ
+        from the published page.
+      */}
+      <SiteLayoutNote fallback={canvasFallback} />
       {siteStylePending ||
       siteStyleError !== null ||
       componentLibrary.state === "pending" ? (
@@ -532,55 +577,31 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               lays out exactly as it did.
             */
         <BlockContextMenu editor={editor}>
-          <Canvas
+          {/*
+            The page is drawn in a frame of its own at the device's width and
+            height, so its media queries, `vw` and `vh` answer for the device
+            and nothing of the admin's theme reaches it. The editor's chrome
+            is the frame's overlay, drawn in this document over the frame.
+          */}
+          <CanvasFrame
+            width={frameWidth}
             zoom={zoom}
-            /*
-                  On the CANVAS, not inside `preview`. The scale is reported
-                  whether or not a viewport is being previewed, and an extra key
-                  on that inferred object is accepted and ignored rather than
-                  refused — so the reporter simply never ran.
-                */
             onScale={setAppliedScale}
-            document={editor.document}
-            rootRef={canvasRoot}
-            onRoot={setCanvasElement}
-            forcedState={shownStyleState}
-            siteStyles={siteSheet(canvasSiteStyle)}
-            selectedId={editor.selectedId}
-            selectedIds={editor.selection.ids}
-            onSelect={editor.select}
-            // The style context and the host policy, derived above so both are
-            // one object with one identity rather than rebuilt per render.
-            render={canvasRender}
-            // The box the tiers are compiled against, the width it is asked
-            // to take, and the reporter that closes the loop: the request is
-            // a ceiling, and everything downstream is derived from what the
-            // box actually got rather than from what it was offered.
-            preview={canvasPreview}
-            dragHandlers={drag.handlers}
-            // The regions of the page's Layout, drawn locked around it from
-            // the published Layout, as a visitor gets them.
-            regions={view.canvasRegions}
-            // The same object those handlers came from, forwarded whole.
-            // The canvas draws what the pointer currently means — which
-            // block is in flight, which container is receiving it, and why
-            // a region will not take it — and decides none of it.
-            //
-            // Whole rather than picked apart for the reason the handlers
-            // are: a set spread across several props can be partially
-            // wired, and a canvas told about a refusal but not about the
-            // block in flight explains a refusal while dimming nothing.
-            drag={drag}
-            // The pointer route into typing a block's text. Its keyboard
-            // counterpart is the Enter binding above, registered in the same
-            // place so a surface cannot gain one without the other.
-            onDoubleClick={inline.onDoubleClick}
-            // Both pieces of chrome go through the canvas rather than beside it,
-            // because both are positioned in the canvas's own content
-            // coordinates and the canvas root is what establishes them.
+            title={pageTitle}
+            // The language being edited, for a screen reader in the frame, and
+            // the way it is written.
+            lang={locale}
+            dir={canvasDir}
+            // The site's canvas route, where the site serves one, so the page
+            // is drawn inside the site's own layout and stylesheets.
+            source={canvasSource}
+            onSourceFallback={onCanvasFallback}
+            showEmptyElements={showEmptyElements}
             overlay={
               <>
+                <CanvasMarks />
                 <DropIndicator target={drag.target} />
+                <DropRefusal drag={drag} document={editor.document} />
                 {/*
                   Suppressed for the duration of a drag. The bar would otherwise
                   sit over the canvas the author is aiming at, naming a block
@@ -597,27 +618,17 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   hidden={dragging}
                   /*
                    * The tier a spacing handle writes to, and what the canvas
-                   * compiled this page under. Not optional in practice: the
-                   * overlay falls back to the base breakpoint of the resting
-                   * state, so without this a handle on a narrow canvas would
-                   * preview nothing and commit at the wrong tier — the same
-                   * inputs the inspector beside it is already given, read
-                   * from the ONE context that compiled the sheet rather than
-                   * derived a second time.
+                   * compiled this page under, read from the ONE context that
+                   * compiled the sheet rather than derived a second time.
                    */
                   scrub={spacingScrub}
                 />
                 {/*
                   Suppressed during a drag for the same reason the toolbar and
-                  the bands are: the document is mid-change, so a control
-                  offering to fill a container names a shape that is about to
-                  be different.
-                  ALSO suppressed while the author has turned empty-container
-                  chrome off: the dashed placeholder box collapses to zero
-                  height under the same preference (`builder-chrome.css`'s
-                  `[data-nx-slots]:empty` rule already matches it), and a "+"
-                  left floating over nothing after that would make the
-                  preference lie about what a visitor sees.
+                  the bands are, and while the author has turned empty-container
+                  chrome off: the placeholder box collapses to zero height under
+                  the same preference, and a "+" left floating over nothing
+                  would make the preference lie about what a visitor sees.
                 */}
                 <EmptyContainerAppenders
                   document={editor.document}
@@ -637,7 +648,35 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 />
               </>
             }
-          />
+          >
+            <Canvas
+              document={editor.document}
+              rootRef={canvasRoot}
+              onRoot={setCanvasElement}
+              forcedState={shownStyleState}
+              siteStyles={siteSheet(canvasSiteStyle)}
+              selectedId={editor.selectedId}
+              selectedIds={editor.selection.ids}
+              onSelect={editor.select}
+              // The style context and the host policy, derived above so both
+              // are one object with one identity rather than rebuilt per
+              // render.
+              render={canvasRender}
+              dragHandlers={drag.handlers}
+              // The regions of the page's Layout, drawn locked around it from
+              // the published Layout, as a visitor gets them.
+              regions={view.canvasRegions}
+              // The same object those handlers came from, forwarded whole.
+              // The canvas draws what the pointer currently means — which
+              // block is in flight, which container is receiving it — and
+              // decides none of it.
+              drag={drag}
+              // The pointer route into typing a block's text. Its keyboard
+              // counterpart is the Enter binding, registered in the same
+              // place so a surface cannot gain one without the other.
+              onDoubleClick={inline.onDoubleClick}
+            />
+          </CanvasFrame>
         </BlockContextMenu>
       )}
     </>
@@ -765,7 +804,15 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
     <SiteStyleHistoryContext.Provider value={style.history}>
       <StyleRevisionContext.Provider value={style.replay}>
         <ConnectStyleHistoryContext.Provider value={style.connect}>
-          <EditorBody {...props} />
+          {/*
+            The canvas's frame, provided above the whole editor: the canvas
+            registers it here, and the inspector, the toolbar, inline editing
+            and the keys outside the canvas all ask it which document and
+            window the page is drawn in.
+          */}
+          <CanvasFrameProvider>
+            <EditorBody {...props} />
+          </CanvasFrameProvider>
         </ConnectStyleHistoryContext.Provider>
       </StyleRevisionContext.Provider>
     </SiteStyleHistoryContext.Provider>
@@ -856,12 +903,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
 
+  // The page's title, for the canvas frame's accessible name.
+  const pageTitle = page.title;
   const view: EditorView = {
     ...mount,
     ...style,
     ...canvas,
     ...panels,
     documentDirty,
+    pageTitle,
     componentView,
   };
   useOpenAtSection({
@@ -915,10 +965,9 @@ function EditorBody<TFieldValues extends FieldValues>({
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
-        {...editorTopBar(view)}
-        // The document's title, read-only, as the author has it in the form
-        // right now. Nothing for a document with no title field.
-        title={page.title}
+        // The title is the top bar's switcher, so the shell draws none.
+        {...editorTopBar(view, { title: page.title, field: name })}
+        openSettingsRequest={view.pages.settingsRequest}
         renderSettings={editorSettings(view, page)}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states

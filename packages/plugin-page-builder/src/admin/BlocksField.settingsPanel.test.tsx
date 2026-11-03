@@ -117,7 +117,22 @@ vi.mock("./editor/settings-dialog", () => ({
   ),
 }));
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The editor mount asks for the variant-use writer; no case here opens a
   // component, so it is never called.
   usePluginRouteMutation: () => ({
@@ -167,7 +182,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   validationIssues: () => [],
-  useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -281,7 +295,7 @@ describe("Settings, as a dialog rather than a panel", () => {
     entryFields = <p>fields</p>;
     openEditor();
     expect(rail()).toBe(withoutFields);
-    for (const panel of ["add", "layers", "design"]) {
+    for (const panel of ["add", "layers", "components", "design"]) {
       expect(withoutFields).toContain(panel);
     }
   });

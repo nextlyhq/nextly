@@ -20,6 +20,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { settleTransitions } from "./support/axe-scan.mjs";
+import { canvasBlock } from "./support/canvas-frame";
 import { ownSeat, test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
@@ -97,7 +98,7 @@ function railButton(page: Page, name: string) {
 
 /** Select the heading on the canvas, and wait for its inspector. */
 async function selectHeading(page: Page): Promise<void> {
-  await page.locator(`.nx-canvas [data-nx-node="${HEADING}"]`).first().click();
+  await canvasBlock(page, HEADING).first().click();
   await expect(page.locator("[data-block-card]")).toBeVisible();
 }
 
@@ -199,10 +200,7 @@ const SURFACES: ReadonlyArray<{
   {
     name: "a block's context menu",
     open: async page => {
-      await page
-        .locator(`.nx-canvas [data-nx-node="${HEADING}"]`)
-        .first()
-        .click({ button: "right" });
+      await canvasBlock(page, HEADING).first().click({ button: "right" });
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },

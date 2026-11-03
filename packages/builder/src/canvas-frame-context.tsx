@@ -34,6 +34,10 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import type { FrameSize } from "./canvas-width";
+import type { Point } from "./geometry";
+import { framePointInHost, hostPointInFrame } from "./geometry-dom";
+
 /**
  * The frame the canvas renders in and the document it holds now, or `null`
  * for the editor's own document.
@@ -57,7 +61,114 @@ export interface CanvasFrame {
   readonly document: Document | null;
   /** That document's window: the one whose media queries describe the canvas. */
   readonly window: (Window & typeof globalThis) | null;
+  /**
+   * How much larger the editor paints the frame than it lays it out: `0.5` at
+   * 50%. `1` with no frame, where nothing is scaled.
+   *
+   * A value that changes whenever the zoom or the fit does, so chrome drawn
+   * over the frame can depend on it to be placed again: nothing inside the
+   * frame resizes when only its painted scale moves, so no observer there
+   * reports it.
+   */
+  readonly scale: number;
+  /**
+   * The part of the frame's page on screen, in the frame's own CSS pixels and
+   * without its scrollbars, or `null` with no frame. What chrome that has to
+   * stay visible, such as a toolbar flipping at the top edge, is kept inside.
+   */
+  readonly viewport: FrameSize | null;
+  /** A point in the canvas document's client coordinates, in the editor's. */
+  readonly toHost: (point: Point) => Point;
+  /** A point in the editor's client coordinates, in the canvas document's. */
+  readonly toCanvas: (point: Point) => Point;
 }
+
+/** What a mounted frame reports about how it is drawn. */
+interface CanvasFrameLayout {
+  readonly scale: number;
+  readonly viewport: FrameSize | null;
+}
+
+/**
+ * How a frame rendered beneath an uncontrolled provider hands its iframe and
+ * its layout up to it.
+ *
+ * `null` under a provider told its frame directly, and with no provider at
+ * all: the frame then provides for itself.
+ */
+interface FrameRegistration {
+  readonly register: (frame: HTMLIFrameElement | null) => void;
+  readonly report: (layout: CanvasFrameLayout) => void;
+}
+
+const FrameRegistrationContext = React.createContext<FrameRegistration | null>(
+  null
+);
+
+/**
+ * Where a frame registers itself, or `null` when nothing above will hear it.
+ *
+ * @internal
+ */
+export function useFrameRegistration(): FrameRegistration | null {
+  return React.useContext(FrameRegistrationContext);
+}
+
+/**
+ * The answer, held where nothing walking an object's own keys can reach the
+ * frame, its document or its window.
+ *
+ * The value is a context provider's prop, and React's development build
+ * describes a changed prop by walking the object's own enumerable keys a few
+ * levels down. A window's own keys include each frame inside it, and a page
+ * with an Embed block holds one in an opaque origin, where reading anything
+ * throws a `SecurityError` in the middle of React's commit. Private fields
+ * behind getters are not own keys, so the walk finds nothing to enter.
+ */
+class CanvasFrameView implements CanvasFrame {
+  readonly #frame: HTMLIFrameElement | null;
+  readonly #document: Document | null;
+  readonly scale: number;
+  readonly viewport: FrameSize | null;
+
+  constructor(
+    frame: HTMLIFrameElement | null,
+    doc: Document | null,
+    layout: CanvasFrameLayout
+  ) {
+    this.#frame = frame;
+    this.#document = doc;
+    this.scale = layout.scale;
+    this.viewport = layout.viewport;
+  }
+
+  get frame(): HTMLIFrameElement | null {
+    return this.#frame;
+  }
+
+  get document(): Document | null {
+    return this.#document;
+  }
+
+  get window(): (Window & typeof globalThis) | null {
+    return this.#document?.defaultView ?? null;
+  }
+
+  // Read live at the call: where the frame sits on screen moves with every
+  // scroll of the editor, which no render reports.
+  toHost = (point: Point): Point => {
+    const frame = this.#frame;
+    return frame === null ? point : framePointInHost(frame, point);
+  };
+
+  toCanvas = (point: Point): Point => {
+    const frame = this.#frame;
+    return frame === null ? point : hostPointInFrame(frame, point);
+  };
+}
+
+/** A frame's layout before it has reported one. */
+const UNREPORTED: CanvasFrameLayout = { scale: 1, viewport: null };
 
 /** A frame and the document it was last seen holding. */
 interface SeenDocument {
@@ -84,12 +195,45 @@ interface SeenDocument {
  * @experimental
  */
 export function CanvasFrameProvider({
-  frame,
+  frame: given,
   children,
 }: {
-  frame: HTMLIFrameElement | null;
+  /**
+   * The frame, when the caller holds it. Left out, the provider waits for a
+   * `CanvasFrame` beneath it to register its own, which is how an editor
+   * provides the frame to the panels and keys around the canvas as well as to
+   * the canvas itself.
+   */
+  frame?: HTMLIFrameElement | null;
   children?: React.ReactNode;
 }): React.JSX.Element {
+  const [registered, setRegistered] = React.useState<HTMLIFrameElement | null>(
+    null
+  );
+  const [layout, setLayout] = React.useState<CanvasFrameLayout>(UNREPORTED);
+  const controlled = given !== undefined;
+  const frame = controlled ? given : registered;
+  // One object for the life of the provider, so a frame registering does not
+  // re-run on every render of what is above it.
+  const registration = React.useMemo<FrameRegistration | null>(
+    () =>
+      controlled
+        ? null
+        : {
+            register: next => {
+              setRegistered(next);
+              if (next === null) setLayout(UNREPORTED);
+            },
+            report: next =>
+              setLayout(current =>
+                current.scale === next.scale &&
+                sameSize(current.viewport, next.viewport)
+                  ? current
+                  : next
+              ),
+          },
+    [controlled]
+  );
   const [seen, setSeen] = React.useState<SeenDocument>(() => ({
     frame,
     document: frame?.contentDocument ?? null,
@@ -128,17 +272,22 @@ export function CanvasFrameProvider({
     setSeen({ frame, document: doc });
   }
   const value = React.useMemo<CanvasFrame | null>(
-    () =>
-      frame === null
-        ? null
-        : { frame, document: doc, window: doc?.defaultView ?? null },
-    [frame, doc]
+    () => (frame === null ? null : new CanvasFrameView(frame, doc, layout)),
+    [frame, doc, layout]
   );
   return (
-    <CanvasFrameContext.Provider value={value}>
-      {children}
-    </CanvasFrameContext.Provider>
+    <FrameRegistrationContext.Provider value={registration}>
+      <CanvasFrameContext.Provider value={value}>
+        {children}
+      </CanvasFrameContext.Provider>
+    </FrameRegistrationContext.Provider>
   );
+}
+
+/** Whether two sizes are the same, `null` included. */
+function sameSize(a: FrameSize | null, b: FrameSize | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.width === b.width && a.height === b.height;
 }
 
 /**
@@ -153,10 +302,15 @@ export function CanvasFrameProvider({
  */
 export function useCanvasFrame(): CanvasFrame {
   const framed = React.useContext(CanvasFrameContext);
-  const own = React.useMemo<CanvasFrame>(() => {
-    const doc = typeof document === "undefined" ? null : document;
-    return { frame: null, document: doc, window: doc?.defaultView ?? null };
-  }, []);
+  const own = React.useMemo<CanvasFrame>(
+    () =>
+      new CanvasFrameView(
+        null,
+        typeof document === "undefined" ? null : document,
+        UNREPORTED
+      ),
+    []
+  );
   return framed ?? own;
 }
 

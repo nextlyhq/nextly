@@ -67,9 +67,9 @@ export interface RefusalWording {
    * `permitted` does NOT mean the same thing for every reason and the wording
    * has to follow that. A slot refusal names what the SLOT admits; the other
    * two name the containers the MOVING BLOCK is allowed to sit inside. Calling
-   * both "takes" asserts something about the region that the second kind never
-   * said — "Accordion does not take a Column. Takes Columns" reads as the
-   * accordion accepting columns, which is not what was measured.
+   * both "This spot takes" asserts something about the region that the second
+   * kind never said — it would read as the accordion accepting columns, which
+   * is not what was measured; those say where the block goes instead.
    *
    * Null rather than an empty string: a caller rendering it unconditionally
    * would draw a sentence that was cut off rather than an absent fact.

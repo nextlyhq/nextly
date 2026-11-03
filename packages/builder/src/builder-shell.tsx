@@ -7,6 +7,7 @@ import {
   ResizablePanelGroup,
   ShortcutProvider,
   TooltipProvider,
+  useIsomorphicLayoutEffect,
   useShortcuts,
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
@@ -19,12 +20,13 @@ import {
   useNoticeQueue,
   type NoticeQueue,
 } from "./builder-notices";
-import { CanvasFrameShortcuts } from "./canvas-frame-context";
+import { CanvasFrameShortcuts, useCanvasFrame } from "./canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { isHTMLElement } from "./dom-kind";
 import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
+import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 import { HelpDialog } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
@@ -120,6 +122,14 @@ export interface BuilderShellProps {
    * left panel.
    */
   renderSettings?: (dialog: SettingsDialogState) => React.ReactNode;
+  /**
+   * Opens the host's Settings dialog from outside the rail, as
+   * `openPanelRequest` opens a panel: a page's "Settings" in a list the host
+   * draws, say. Applied once per `count`, so a host re-rendering with the same
+   * request does not reopen a dialog the author has closed. Ignored without
+   * `renderSettings`.
+   */
+  openSettingsRequest?: { readonly count: number };
   /**
    * The host's notice queue, when the host raises notices of its own.
    *
@@ -888,6 +898,11 @@ function RailAndDialogs({
 }): React.JSX.Element {
   const help = useRailDialog(active);
   const settings = useRailDialog(active);
+  useSettingsRequest(
+    React.useContext(SettingsRequestContext),
+    settings.setOpen,
+    active
+  );
   return (
     <>
       <EditorRail
@@ -930,6 +945,36 @@ function HostSettings({
  * button it would then keep out of reach. Closed rather than hidden, so
  * widening the window again does not bring back a dialog nobody reopened.
  */
+/**
+ * The host's open-Settings request, handed from the shell's props to the rail
+ * that owns the dialog. A context rather than a prop through the regions in
+ * between, which only pass it along.
+ */
+const SettingsRequestContext =
+  React.createContext<BuilderShellProps["openSettingsRequest"]>(undefined);
+
+/**
+ * Opens Settings once for each new `count` a host sends. A ref, not state,
+ * holds the count last applied, so the request is applied at most once and a
+ * re-render does not reopen a dialog the author closed.
+ */
+function useSettingsRequest(
+  request: BuilderShellProps["openSettingsRequest"],
+  setOpen: (open: boolean) => void,
+  active: boolean
+): void {
+  const handled = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    // Not while the shell has given way to its narrow-window notice: a dialog
+    // there would trap focus over the notice's way out. The request waits,
+    // unconsumed, and opens Settings once the shell is in use again.
+    if (!active) return;
+    if (request === undefined || handled.current === request.count) return;
+    handled.current = request.count;
+    setOpen(true);
+  }, [request, setOpen, active]);
+}
+
 function useRailDialog(active: boolean): {
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -1301,6 +1346,136 @@ function useSeparatorRegionEscape(
   );
 }
 
+/**
+ * The canvas's region: a named `section`, never `<main>`.
+ *
+ * HTML allows one non-hidden `main` per document, and every mount this shell
+ * has is inside a host that already owns it — the admin's dashboard layout
+ * renders one, and the editor is embedded in it. A second gives assistive
+ * technology two competing primary landmarks and makes every strict `main`
+ * locator ambiguous. A `section` carrying an accessible name is still exposed
+ * as a landmark, as a `region`.
+ *
+ * The ref and `tabIndex` belong to this element deliberately: F6 region
+ * cycling focuses it, and dropping either would lose the canvas as a cycle
+ * target — which reads as a focus bug rather than a markup change.
+ */
+/**
+ * Whether `element` has content past its own box to scroll to, kept current
+ * as it or what it holds changes size: the painted frame grows past the
+ * region at a zoom, and the region narrows with the panels beside it.
+ */
+function useScrollsItsContent(element: HTMLElement | null): boolean {
+  const [overflows, setOverflows] = React.useState(false);
+  useIsomorphicLayoutEffect(() => {
+    if (element === null) return;
+    const measure = () => {
+      setOverflows(
+        element.scrollWidth > element.clientWidth ||
+          element.scrollHeight > element.clientHeight
+      );
+    };
+    measure();
+    const view = element.ownerDocument.defaultView;
+    if (view === null || typeof view.ResizeObserver !== "function") return;
+    const sizes = new view.ResizeObserver(measure);
+    /*
+     * The region, and the painted frame's box inside it, whose size the zoom
+     * changes while the region's own stays put. Found again whenever what
+     * the region holds changes, since the frame mounts after the region.
+     */
+    const observe = () => {
+      sizes.disconnect();
+      sizes.observe(element);
+      for (const box of Array.from(
+        element.querySelectorAll(`[${CANVAS_FRAME_BOX_ATTRIBUTE}]`)
+      )) {
+        sizes.observe(box);
+      }
+      measure();
+    };
+    observe();
+    const contents = new view.MutationObserver(observe);
+    contents.observe(element, { childList: true, subtree: true });
+    return () => {
+      contents.disconnect();
+      sizes.disconnect();
+    };
+  }, [element]);
+  return overflows;
+}
+
+function CanvasRegion({
+  regionRef,
+  children,
+}: {
+  regionRef: (element: HTMLElement | null) => void;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  // The frame the canvas is drawn in, which focus arriving on the region is
+  // handed on to.
+  const canvasFrame = useCanvasFrame();
+  const [element, setElement] = React.useState<HTMLElement | null>(null);
+  const ref = React.useCallback(
+    (next: HTMLElement | null) => {
+      regionRef(next);
+      setElement(next);
+    },
+    [regionRef]
+  );
+  const overflows = useScrollsItsContent(element);
+  // Steps aside for the frame only while there is nothing here to scroll.
+  const handsOn = canvasFrame.frame !== null && !overflows;
+  return (
+    <section
+      ref={ref}
+      /*
+       * `0`, not `-1`, wherever this region SCROLLS: nothing inside it that
+       * the keyboard can reach scrolls it — blocks are selected by pointer,
+       * not by tab, and arrow keys in a frame scroll only the frame's own
+       * page — so at `-1` a keyboard user could not scroll the canvas at all.
+       * A canvas in this document, or a frame painted past the region at a
+       * zoom.
+       *
+       * Otherwise a canvas in a frame is its own tab stop, and its page
+       * scrolls inside it, so the region steps aside: `-1` keeps it
+       * focusable for F6, and focus arriving on it goes on into the
+       * frame. Kept as a stop as well it would be a trap — Shift+Tab
+       * out of the frame would land here and be sent back in.
+       */
+      tabIndex={handsOn ? -1 : 0}
+      onFocus={event => {
+        if (!handsOn || event.target !== event.currentTarget) return;
+        canvasFrame.frame?.focus();
+      }}
+      aria-label="Canvas"
+      /*
+       * Padded, so the page floats inside the region rather than
+       * meeting its edges. The frame is then visible on every side at
+       * every width — without it the page fills the region whenever
+       * it is not scaled down, and the edge this gap exists to show
+       * has nowhere to appear.
+       *
+       * Safe against the fit: the canvas frame observes this element's
+       * CONTENT box, so padding narrows the room the page is fitted into
+       * and the scale follows it. A padding the measurement
+       * could not see would size the page to the region and paint it
+       * over the gap.
+       *
+       * Taken from the constant the panel's own minimum is derived
+       * from, rather than written as a utility class. The gap is
+       * spent out of this panel, so a class here and a number there
+       * would let the two drift and put the floor back inside the
+       * editing surface.
+       */
+      style={{ padding: CANVAS_GUTTER }}
+      className="nx-canvas-scroller h-full overflow-auto"
+    >
+      {children}
+    </section>
+  );
+}
+
 function ShellRegions({
   appliedScale = 1,
   onZoomPick,
@@ -1534,62 +1709,15 @@ function ShellRegions({
           ) : null}
 
           <ResizablePanel id="canvas" minSize={MIN_CANVAS_PANEL_WIDTH}>
-            {/*
-             * A named `section`, never `<main>`.
-             *
-             * HTML allows one non-hidden `main` per document, and every mount this
-             * shell has is inside a host that already owns it — the admin's
-             * dashboard layout renders one, and the editor is embedded in it. A
-             * second gives assistive technology two competing primary landmarks and
-             * makes every strict `main` locator ambiguous.
-             *
-             * Nothing is lost: a `section` carrying an accessible name is still
-             * exposed as a landmark, as a `region`. For an editor embedded in a page
-             * whose primary content is the surrounding form, `region` is the more
-             * accurate description of what this is.
-             *
-             * The ref and `tabIndex` move with the element deliberately. F6 region
-             * cycling focuses this node, and dropping either would lose the canvas as
-             * a cycle target — which reads as a focus bug rather than a markup change.
-             */}
+            {/* The canvas's region: see `CanvasRegion`. */}
             <div className="relative h-full">
-              <section
-                ref={element => {
+              <CanvasRegion
+                regionRef={element => {
                   regionRefs.current.canvas = element;
                 }}
-                /*
-                 * `0`, not `-1`. This region SCROLLS, and nothing inside it is
-                 * focusable — blocks are selected by pointer, not by tab — so
-                 * at `-1` a keyboard user could not scroll the canvas at all.
-                 * Programmatically focusable was enough for F6 region cycling
-                 * and not enough to read the page.
-                 */
-                tabIndex={0}
-                aria-label="Canvas"
-                /*
-                 * Padded, so the page floats inside the region rather than
-                 * meeting its edges. The frame is then visible on every side at
-                 * every width — without it the page fills the region whenever
-                 * it is not scaled down, and the edge this gap exists to show
-                 * has nowhere to appear.
-                 *
-                 * Safe against the fit: `canvasScale` observes this element's
-                 * CONTENT box, so padding narrows the width the page is fitted
-                 * into and the scale follows it. A padding the measurement
-                 * could not see would size the page to the region and paint it
-                 * over the gap.
-                 *
-                 * Taken from the constant the panel's own minimum is derived
-                 * from, rather than written as a utility class. The gap is
-                 * spent out of this panel, so a class here and a number there
-                 * would let the two drift and put the floor back inside the
-                 * editing surface.
-                 */
-                style={{ padding: CANVAS_GUTTER }}
-                className="h-full overflow-auto"
               >
                 {children}
-              </section>
+              </CanvasRegion>
               {checklist === undefined ? null : (
                 // The positioner takes no pointer events, so it cannot swallow
                 // a click aimed at the page underneath it; the card itself
@@ -2061,22 +2189,26 @@ export function BuilderShell({
                     become descendants of this provider by being RENDERED here,
                     wherever the host created them. */}
                 <NoticeSinkProvider raise={notices.raise}>
-                  <ShellRegions
-                    appliedScale={appliedScale}
-                    onZoomPick={onZoomPick}
-                    {...props}
-                    preferences={preferences}
-                    update={update}
-                    active={shellFits}
-                    loadCount={loadCount}
-                    /*
-                     * The caller's `className` stops here: the measuring wrapper
-                     * above carries it. Passing it on would apply the host's grid
-                     * area, height or border a second time, on a box nested inside
-                     * the one already carrying it.
-                     */
-                    className={undefined}
-                  />
+                  <SettingsRequestContext.Provider
+                    value={props.openSettingsRequest}
+                  >
+                    <ShellRegions
+                      appliedScale={appliedScale}
+                      onZoomPick={onZoomPick}
+                      {...props}
+                      preferences={preferences}
+                      update={update}
+                      active={shellFits}
+                      loadCount={loadCount}
+                      /*
+                       * The caller's `className` stops here: the measuring wrapper
+                       * above carries it. Passing it on would apply the host's grid
+                       * area, height or border a second time, on a box nested inside
+                       * the one already carrying it.
+                       */
+                      className={undefined}
+                    />
+                  </SettingsRequestContext.Provider>
                 </NoticeSinkProvider>
               </PortalProvider>
             </ShellActiveContext.Provider>

@@ -12,13 +12,17 @@ import {
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
 import {
+  browserStore,
   DEFAULT_PREFERENCES,
   type LeftPanel,
+  type PreferenceStore,
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
+  CHECKLIST_STORAGE_KEY,
   ClassManagerPanel,
+  ComponentsPanel,
   InsertPanel,
   LayersPanel,
   useBuilderChecklist,
@@ -54,6 +58,7 @@ import {
   withoutSelfPatterns,
   type ComponentGraph,
 } from "./offered-library";
+import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
 import {
   FontsPanelWithUpload,
   offerableFaces,
@@ -61,19 +66,47 @@ import {
   renderedTokens,
   TokensStudio,
 } from "./site-style-studios";
+import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
+/** A key for the document the editor has open, from its identity. */
+function identityKey(
+  identity: ReturnType<typeof useDocumentIdentity>
+): string | undefined {
+  if (identity === null) return undefined;
+  return identity.kind === "collection"
+    ? `collection:${identity.slug}:${identity.documentId ?? "new"}`
+    : `${identity.kind}:${identity.slug}`;
+}
+
 /**
- * Every left panel the editor can fill today: Add, Layers, and Design with
- * the site's variables, classes and fonts. Pages and Components are not built.
+ * Where the getting-started card's dismissal is kept: under the author's own
+ * key, so dismissing it is one author's choice in a browser two people share.
+ * With no author known, the card's own browser-wide default.
+ */
+function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : browserStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
+}
+
+/**
+ * Every left panel the editor can fill today: Add, Layers, Pages, the site's
+ * Components, and Design with the site's variables, classes and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
  * would reserve space and shrink the canvas to show it, which is why this
  * grows one entry at a time rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["add", "layers", "design"] as const;
+const AVAILABLE_PANELS = [
+  "add",
+  "layers",
+  "pages",
+  "components",
+  "design",
+] as const;
 
 /**
  * The insert panel, with this site's saved patterns.
@@ -371,9 +404,19 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
+  const checklistStore = useMemo(
+    () => checklistStoreFor(mount.userId),
+    [mount.userId]
+  );
+  const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
-    enabled: clientConfig?.checklist !== false,
+    documentKey: identityKey(identity),
+    // Not until the author is known: their own dismissal is the one to read,
+    // and a card drawn before it arrives would flash for an author who
+    // dismissed it.
+    enabled: clientConfig?.checklist !== false && checklistStore !== undefined,
+    ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
   const library = useOfferedLibrary(mount);
@@ -381,9 +424,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
+  // The Pages panel, and the request its rows send to open Settings.
+  const pages = usePagesPanel(mount.initialDocument.kind === "page");
   return {
     entryFields,
     search: { open: searchOpen, setOpen: setSearchOpen },
+    pages,
     checklist,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
@@ -414,6 +460,7 @@ export type EditorPanels = OfferedLibrary &
     layersRegions: readonly LayersRegionRow[];
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
+    pages: PagesPanelMount;
   };
 
 /**
@@ -425,6 +472,9 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  componentLibrary,
+  componentVerbs,
+  componentView,
   layersRegions,
   drag,
   offered,
@@ -440,9 +490,15 @@ export function editorPanelRenderer({
   classSummaryContext,
   requestPanel,
   insertInside,
-}: Pick<EditorMount, "editor"> & {
+  pages,
+  documentDirty,
+}: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
+  documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
+  /** "Edit component", which the Components panel offers on each row. */
+  componentView: Pick<ComponentView, "onEditComponent">;
 } & Pick<
     SiteStyleInputs,
     | "canvasSiteStyle"
@@ -456,7 +512,7 @@ export function editorPanelRenderer({
   Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "insertInside"
+    "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -481,6 +537,38 @@ export function editorPanelRenderer({
         />
       ),
       /*
+              The site's components, from the SAME offered read Add's
+              "Your components" group and the editor's search are handed, so
+              a component this author may not read is offered nowhere, and
+              placed through Add's own path, so the two panels cannot place
+              differently. The rows the read holds and the panel does not
+              offer are the ones this document cannot contain: the
+              component being edited, and those that place it.
+            */
+      components: () => (
+        <ComponentsPanel
+          editor={editor}
+          components={offered.components}
+          componentDefinitions={offered.definitions}
+          loading={offered.state === "pending"}
+          library={{
+            components: tierStateOf(offered),
+            retry: offered.retry,
+          }}
+          withheld={
+            componentLibrary.components.length - offered.components.length
+          }
+          beginInsertDrag={drag.beginInsertDrag}
+          {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // From the panel there is no placement, so Back returns to the
+          // editor as the author left it.
+          {...(componentView.onEditComponent === undefined
+            ? {}
+            : { onEditComponent: componentView.onEditComponent })}
+          mayCreate={componentVerbs.mayCreate}
+        />
+      ),
+      /*
               The panel cannot work this out for itself. It is drawn here, in
               the shell's panel region, while `BlockKeyboardActions` below wraps
               the shell's CHILDREN — sibling subtrees, so nothing the panel can
@@ -501,6 +589,9 @@ export function editorPanelRenderer({
           componentTitle={offered.titleOf}
         />
       ),
+      // Read when the panel is drawn, as every other entry reads its inputs,
+      // so drawing another panel never needs the Pages panel's mount.
+      pages: () => pages.renderPagesPanel({ unsavedWork: documentDirty }),
       design: () => (
         <DesignPanel
           view={view}
@@ -552,6 +643,7 @@ export function editorPanelRenderer({
                   siteStylePending,
                   siteStyleError
                 )}
+                codeFaces={configSiteStyle?.fonts}
                 tokens={renderedTokens(
                   canvasSiteStyle,
                   siteStylePending,

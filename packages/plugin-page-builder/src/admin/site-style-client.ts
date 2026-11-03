@@ -9,8 +9,10 @@
  *
  * ## Nothing here is a second implementation
  *
- * The read is the admin's own `useSingleDocument`, so this document caches and
- * invalidates exactly as every other Single does. The narrowing is
+ * The read is `useStoredSiteStyle`, the editor's one query on the plugin's
+ * site-style route, which answers anyone who may edit something the builder
+ * opens; the Single's own read would refuse an author without Design's
+ * permission, and the canvas could then draw nothing. The narrowing is
  * `readSiteStyleRecord`, the same function the server reads a stored record
  * with. The merge is `resolveSiteStyle`, the one place defaults and stored tier
  * meet. What this module adds is the composition, not a rule.
@@ -31,7 +33,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
 import {
-  useSingleDocument,
+  readPluginRoute,
   useUpdateSingleDocument,
   validationIssues,
   writePluginRoute,
@@ -50,12 +52,21 @@ import {
   SITE_BREAKPOINTS_ROUTE_PATH,
   type SiteBreakpointsRequest,
 } from "../library-contract";
+import {
+  SITE_FONTS_CATALOGUE_ROUTE_PATH,
+  SITE_FONTS_ROUTE_PATH,
+  type AddSiteFontRequest,
+  type FontCatalogueList,
+  type FontCatalogueRead,
+} from "../site-fonts/contract";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import {
   readSiteStyleRecord,
   unreadableStoredFonts,
 } from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
+
+import { useStoredSiteStyle } from "./site-style-read";
 
 /** The four sections of the document, each one studio's to own. */
 export type SiteStyleSection = keyof SiteStyleData;
@@ -111,7 +122,7 @@ export interface SiteStyleRead {
  * does not fetch them twice.
  */
 export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
-  const { data, isPending, error } = useSingleDocument(SITE_STYLE_SLUG);
+  const { data, isPending, error } = useStoredSiteStyle();
 
   // Narrowed and merged in one memo over one source. A stored row predates its
   // validators, so the read keeps what it can type and drops what it cannot,
@@ -281,7 +292,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     scopeId: SITE_STYLE_SLUG,
   });
   // The stored document, read at the moment of a save rather than closed over.
-  const { data, refetch } = useSingleDocument(SITE_STYLE_SLUG);
+  const { data, refetch } = useStoredSiteStyle();
   const stored = useRef(data);
   stored.current = data;
   const history = useContext(SiteStyleHistoryContext);
@@ -304,6 +315,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           await refetch();
         } else {
           await mutation.mutateAsync({ [section]: value });
+          // The editor reads the style through the plugin's route, which the
+          // Single's own write does not invalidate, so it is asked again.
+          // Not awaited, as the Single's own invalidation is not: the save has
+          // answered, and the history waits for this read where it must.
+          void refetch();
         }
         return { saved: true, issues: {} };
       } catch (reason) {
@@ -441,4 +457,56 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   return { save, saving: mutation.isPending };
+}
+
+/**
+ * Reading the Google Fonts catalogue and adding a family from it, both through
+ * the server: the editor's browser never asks the catalogue's api itself.
+ *
+ * An add is a site save made at once rather than a step of the editor's undo
+ * history; Remove in the Fonts tab is the way back. The style is read again
+ * afterwards, so the canvas and the tab draw the new faces.
+ */
+export function useFontCatalogueClient(): {
+  readonly load: (signal: AbortSignal) => Promise<FontCatalogueRead>;
+  readonly add: (request: AddSiteFontRequest) => Promise<string | undefined>;
+} {
+  const { refetch } = useStoredSiteStyle();
+  const load = useCallback(async (signal: AbortSignal) => {
+    const list = await readPluginRoute<FontCatalogueList>({
+      plugin: PAGE_BUILDER_PLUGIN_NAME,
+      path: SITE_FONTS_CATALOGUE_ROUTE_PATH,
+      signal,
+    });
+    if (list === undefined) throw new Error("The catalogue answered nothing.");
+    // The list envelope, read back into what the Fonts tab draws from.
+    return {
+      families: list.items,
+      previewBase: list.meta.previewBase,
+      fetchedAt: list.meta.fetchedAt,
+    };
+  }, []);
+  const add = useCallback(
+    async (request: AddSiteFontRequest): Promise<string | undefined> => {
+      try {
+        await writePluginRoute<AddSiteFontRequest>({
+          plugin: PAGE_BUILDER_PLUGIN_NAME,
+          path: SITE_FONTS_ROUTE_PATH,
+          body: request,
+        });
+      } catch (reason) {
+        // The route's own words: which value the family does not offer, or
+        // that the catalogue did not answer.
+        const named = Object.values(issuesFromRejection(reason));
+        if (named.length > 0) return named.join(" ");
+        return reason instanceof Error
+          ? reason.message
+          : "This font could not be added.";
+      }
+      await refetch();
+      return undefined;
+    },
+    [refetch]
+  );
+  return useMemo(() => ({ load, add }), [load, add]);
 }

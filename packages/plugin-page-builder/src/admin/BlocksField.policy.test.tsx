@@ -159,6 +159,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BreakpointManager: nothing,
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    // Passed through: the canvas renders inside its frame, which jsdom never
+    // loads a page into.
+    CanvasFrame: ({
+      children,
+    }: {
+      children?: React.ReactNode;
+    }): React.JSX.Element => <>{children}</>,
     ClassManagerPanel: record("classes"),
     BlockKeyboardActions: passthrough,
     /*
@@ -218,7 +225,17 @@ vi.mock("./editor/settings-dialog", () => ({
   },
 }));
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({ ...siteStyleRead, refetch: refetchStoredStyle }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The editor mount asks for the variant-use writer; no case here opens a
   // component, so it is never called.
   usePluginRouteMutation: () => ({
@@ -278,7 +295,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // merge of stored over defaults is `site-style-client`'s own question and has
   // its own coverage. Standing a real query client up here would put a second
   // subject in every assertion below.
-  useSingleDocument: () => ({ ...siteStyleRead, refetch: async () => ({}) }),
   // The site's breakpoints are written through Settings' route.
   writePluginRoute: async (write: unknown) => {
     routeWrites.push(write);

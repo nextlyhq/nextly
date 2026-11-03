@@ -567,6 +567,34 @@ export interface SiteBreakpointsRequest {
   readonly breakpoints: BreakpointSet | null;
 }
 
+/**
+ * Where the editor reads the stored site style: the one read the canvas, the
+ * inspector and Design's studios draw from.
+ *
+ * A route rather than the `site-style` Single's own read, because drawing a
+ * block needs the style and the Single's read needs Design's
+ * `read-site-style`. An author who may edit a page but not the site's design
+ * would otherwise open an editor whose canvas cannot draw. The route answers
+ * to a caller holding `read-site-style` or able to update something the
+ * builder edits; writes still go through the Single and its own permission.
+ */
+export const SITE_STYLE_ROUTE_PATH = "/site/style";
+
+/**
+ * The stored site style as the route answers it: the Single's four sections
+ * exactly as stored, each `null` where nothing is stored, and nothing else.
+ *
+ * Raw rather than narrowed, so the editor narrows a stored record with the
+ * same reader the published render does and can still say which stored font
+ * rows it had to drop.
+ */
+export interface StoredSiteStyle {
+  readonly tokens: unknown;
+  readonly fonts: unknown;
+  readonly classes: unknown;
+  readonly breakpoints: unknown;
+}
+
 /** Where Settings' Site tab reads what it shows and what this caller may change. */
 export const SITE_SETTINGS_ROUTE_PATH = "/site/settings";
 
@@ -679,4 +707,112 @@ export interface ComponentFactsResponse {
    * answer, or the caller may not read the component.
    */
   readonly reach: { readonly count: number; readonly complete: boolean } | null;
+}
+
+/**
+ * Where the Design panel locks and unlocks a shared style: the one write that
+ * may move a lock, gated on the permission to lock shared styles alone.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_LOCK_ROUTE_PATH = "/shared-styles/lock";
+
+/** What the lock route is sent: which shared style, and whether to lock it. */
+export interface SharedStyleLockRequest {
+  readonly classId: string;
+  readonly locked: boolean;
+}
+
+/**
+ * Where the Design panel reads how widely its visible shared styles are used,
+ * a page of rows at a time.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_USAGE_ROUTE_PATH = "/shared-styles/usage";
+
+/** The query parameter naming one shared style, by id; repeated for several. */
+export const SHARED_STYLE_ID_PARAM = "id";
+
+/** The most shared styles one usage read answers for: one page of rows. */
+export const SHARED_STYLE_USAGE_IDS_MAX = 50;
+
+/**
+ * The kinds of document a shared style is counted on. Every collection with a
+ * page builder field other than the composition stores holds pages.
+ */
+export type SharedStyleUsageKind =
+  | "pages"
+  | "components"
+  | "patterns"
+  | "layouts";
+
+/** How widely one shared style is used, from the class usage index. */
+export interface SharedStyleUsage {
+  /** How many documents apply it, gated and hidden content included. */
+  readonly documents: number;
+  /** The same documents, by kind. */
+  readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
+  /** False makes both numbers floors: "at least". */
+  readonly complete: boolean;
+}
+
+/**
+ * What the usage read answers: the index's health once for the screen, what
+ * this caller may do, and the usage of each style asked about.
+ *
+ * NOT A SECURITY BOUNDARY: every write is judged on its own.
+ */
+export interface SharedStylesUsageResponse {
+  /** Whether the usage index covers the whole site, so counts can be exact. */
+  readonly whole: boolean;
+  /** Whether this caller may lock and unlock shared styles. */
+  readonly mayLock: boolean;
+  /** Each style asked about, by id. */
+  readonly styles: Readonly<Record<string, SharedStyleUsage>>;
+}
+
+/**
+ * Where the Design panel lists the documents a shared style is used on, read
+ * as the caller: documents the caller may not read are counted, not named.
+ * The answer is the canonical list envelope, paged twenty at a time with
+ * `?page=` from 1: `meta.total` and the pages count the documents the caller
+ * may read, and `meta.hiddenCount` the ones it may not.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_WHERE_USED_ROUTE_PATH = "/shared-styles/where-used";
+
+/** The most documents one where-used answer names. */
+export const SHARED_STYLE_WHERE_USED_MAX = 20;
+
+/** The query parameter naming which page of a where-used list, from 1. */
+export const SHARED_STYLE_PAGE_PARAM = "page";
+
+/**
+ * The last page a where-used read may ask for: the most documents one usage
+ * listing can name, twenty to a page.
+ */
+export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
+
+/** One document a shared style is used on, as the where-used list names it. */
+export interface SharedStyleUseItem {
+  readonly id: string;
+  readonly title: string;
+  readonly collection: string;
+  readonly kind: SharedStyleUsageKind;
+}
+
+/**
+ * Where the Design panel removes unused shared styles: the one write that may
+ * remove one, made only after the server finds the usage index whole and
+ * nothing using any of them.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_REMOVE_ROUTE_PATH = "/shared-styles/remove";
+
+/** What the remove route is sent: the shared styles to remove, by id. */
+export interface SharedStyleRemoveRequest {
+  readonly ids: readonly string[];
 }

@@ -57,14 +57,21 @@ let refetches = 0;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  useSingleDocument: () => ({
+// The stored style arrives through the editor's one read of the plugin's
+// route; that read's own request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
     ...readAnswer,
     refetch: async () => {
       refetches += 1;
-      return {};
+      return { isError: false };
     },
   }),
+}));
+
+// No `useSingleDocument` here: the editor must not read the Single, which an
+// author without Design's permission is refused, so a read of it fails.
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // The site's breakpoints go through Settings' route, answered like the
   // Single's own update so one switch drives both.
   writePluginRoute: async (write: unknown) => {
@@ -72,6 +79,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return writeBehaviour();
   },
   validationIssues: () => issuesAnswer,
+  readPluginRoute: async () => undefined,
   useUpdateSingleDocument: (
     _slug: string,
     _locale?: string,
@@ -88,8 +96,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
 }));
 
-const { SiteStyleHistoryContext, useSaveSiteStyle, useSiteStyle } =
-  await import("./site-style-client");
+const {
+  SiteStyleHistoryContext,
+  useFontCatalogueClient,
+  useSaveSiteStyle,
+  useSiteStyle,
+} = await import("./site-style-client");
 
 /** A defaults tier a host states in code. */
 const DEFAULTS = {
@@ -219,6 +231,9 @@ describe("writing one section", () => {
     });
     expect(routeWrites).toEqual([]);
     expect(writes).toEqual([{ fonts: [] }]);
+    // Nothing invalidates the route's read for a Single write, so the writer
+    // asks it again, or the canvas would keep drawing the old style.
+    expect(refetches).toBe(1);
   });
 
   it("serializes against the other studios through one mutation scope", () => {
@@ -657,5 +672,47 @@ describe("a save inside the editor, as a step of its history", () => {
       await Promise.all([saving, undoing, redoing]);
     });
     expect(writes).toHaveLength(1);
+  });
+});
+
+describe("adding a catalogue font", () => {
+  const LORA = {
+    id: "lora",
+    weights: [400, 700],
+    styles: ["normal" as const],
+    subsets: ["latin"],
+  };
+
+  it("asks the server's route to add it, then reads the style again", async () => {
+    const { result } = renderHook(() => useFontCatalogueClient());
+    let refusal: string | undefined = "not answered";
+    await act(async () => {
+      refusal = await result.current.add(LORA);
+    });
+    expect(refusal).toBeUndefined();
+    expect(writes).toEqual([]);
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/fonts",
+        body: LORA,
+      },
+    ]);
+    expect(refetches).toBe(1);
+  });
+
+  it("says why the server refused, and reads nothing again", async () => {
+    writeBehaviour = async () => {
+      throw new Error(
+        "Google Fonts didn\u2019t answer in time. Nothing was added; try again."
+      );
+    };
+    const { result } = renderHook(() => useFontCatalogueClient());
+    let refusal: string | undefined;
+    await act(async () => {
+      refusal = await result.current.add(LORA);
+    });
+    expect(refusal).toContain("didn\u2019t answer in time");
+    expect(refetches).toBe(0);
   });
 });
