@@ -287,3 +287,18 @@ describe("a style row's reset", () => {
     expect(FLAT).not.toContain(".nx-style-inspector__select-clear");
   });
 });
+
+describe("the Content tab's Advanced", () => {
+  it("draws the panel's chevron, not the browser's triangle", () => {
+    const summary = ruleBody(".nx-inspector__advanced > summary");
+    expect(summary).toContain("list-style: none");
+    expect(FLAT).toContain(
+      ".nx-inspector__advanced > summary::-webkit-details-marker { display: none; }"
+    );
+    expect(
+      ruleBody(
+        ".nx-inspector__advanced[open] > summary > .nx-inspector__advanced-chevron"
+      )
+    ).toContain("rotate: 90deg");
+  });
+});

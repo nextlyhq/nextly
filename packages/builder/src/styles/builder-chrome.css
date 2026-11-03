@@ -1138,10 +1138,32 @@
   border-block-start: 1px solid var(--nx-builder-border);
 }
 
+/*
+ * The panel's own chevron rather than the browser's triangle, which drew in
+ * a different glyph, weight and colour in each browser: right while closed,
+ * down while open, as the Style tab's section headings are.
+ */
 .nx-inspector__advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  list-style: none;
   cursor: pointer;
   font-size: var(--text-sm);
   font-weight: 500;
+}
+
+.nx-inspector__advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nx-inspector__advanced-chevron {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector__advanced[open] > summary > .nx-inspector__advanced-chevron {
+  rotate: 90deg;
 }
 
 .nx-inspector__advanced[open] > summary {
