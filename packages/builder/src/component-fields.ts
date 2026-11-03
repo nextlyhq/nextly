@@ -423,7 +423,7 @@ export function removalSentences(
   const placements =
     removing.kind === "field"
       ? `When you publish this component, every use of it that set this field loses its value.${pages}`
-      : `When you publish this component, the blocks each page added here are removed.${pages}`;
+      : `When you publish this component, the blocks each use of it added here are removed.${pages}`;
   const variants = edit.prunedVariants.map(variant => ({
     variant: variant.variant,
     sentence: variant.emptied
@@ -471,7 +471,7 @@ export function slotSource(
   const node =
     typeof nodeId === "string" ? findNode(component.nodes, nodeId) : undefined;
   if (node === undefined) return MISSING_BLOCK;
-  return `${blockLabel(node.type)}, filled on each page`;
+  return `${blockLabel(node.type)}, filled by each use`;
 }
 
 /**

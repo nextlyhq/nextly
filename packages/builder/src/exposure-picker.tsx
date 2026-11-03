@@ -49,7 +49,7 @@ const REFUSAL: Readonly<Record<ExposureEditProblem, string>> = {
   "content-only":
     "This block is in an area locked to its content, and this isn’t content, so pages couldn’t change it.",
   "invalid-label": "Give the field a name.",
-  "invalid-exposure": "This value can’t be changed per page.",
+  "invalid-exposure": "This value can’t be changed per use.",
   "exceeds-limits": "This selection is too large to offer more values.",
 };
 

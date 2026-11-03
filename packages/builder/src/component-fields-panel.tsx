@@ -768,8 +768,8 @@ function ExposedSlotRow({
       <span
         className="nx-component-field__type"
         role="img"
-        aria-label="Blocks each page adds"
-        title="Blocks each page adds"
+        aria-label="Blocks each use adds"
+        title="Blocks each use adds"
       >
         <SquareDashed size={15} aria-hidden="true" />
       </span>

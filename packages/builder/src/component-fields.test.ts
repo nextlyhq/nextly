@@ -523,6 +523,6 @@ describe("where a field comes from, in plain words", () => {
       nodes,
       slots: { body: { label: "Body", nodeId: "b", slot: "inside" } },
     });
-    expect(slotSource(slotted, "body")).toBe("Button, filled on each page");
+    expect(slotSource(slotted, "body")).toBe("Button, filled by each use");
   });
 });
