@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { lazyAction } from "../lazy-action";
 
 export function registerI18nRestoreCommand(program: Command): void {
@@ -33,6 +34,7 @@ export function registerI18nRestoreCommand(program: Command): void {
       "Remove the replayed rows from the archive once restored",
       false
     )
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .action(
       lazyAction(async () => (await import("./i18n-restore")).i18nRestoreAction)
     );

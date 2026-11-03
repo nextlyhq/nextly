@@ -23,6 +23,7 @@ import { schemaListed } from "../auth/access/route-gate-adapters";
 import { getRBACService } from "../auth/code-access";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
+import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../domains/schema/sibling-fields";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
@@ -276,45 +277,61 @@ export const POST = withErrorHandler(async (request: Request) => {
       simplePluralize(validated.labels.singular),
   };
 
-  // A new address beside another collection's or Single's of the same snake_case form is refused
-  // here, before the row is written: the registry's own guard leaves that check to the road.
-  await assertGlobalResourceSlugAvailable(
-    getService("adapter"),
-    validated.slug,
-    { addressKind: "collection" }
-  );
+  // The address check and the row write hold the schema lock together, refused at once while a
+  // migration holds it: the row describes storage a migration could be moving, and the address is
+  // judged against the collections and Singles as they stand while it is held. Everything above
+  // reads the request alone and is decided before the lock is taken.
+  const adapter = getService("adapter");
+  const collection = await withSchemaChangeExcluded(
+    {
+      adapter,
+      logger: getService("logger"),
+      label: `create collection "${validated.slug}"`,
+      // This route writes the registry row alone; the table comes from the next migrate. It issues
+      // no DDL, so it must not create the lock table on a role without DDL rights.
+      issuesDdl: false,
+    },
+    async () => {
+      // A new address beside another collection's or Single's of the same snake_case form is
+      // refused here, before the row is written: the registry's own guard leaves that check to
+      // the road.
+      await assertGlobalResourceSlugAvailable(adapter, validated.slug, {
+        addressKind: "collection",
+      });
 
-  const collection = await registry.registerCollection({
-    slug: validated.slug,
-    labels: normalizedLabels,
-    tableName,
-    description: validated.description,
-    fields,
-    timestamps: validated.timestamps,
-    admin: validated.admin,
-    source: "ui",
-    locked: false,
-    // Forward Draft/Published flag so the schema-level POST honours the
-    // user's status opt-in just like the dispatcher path does.
-    status: validated.status === true,
-    // i18n: forward the localization opt-in so the registry stores it (companion
-    // table is provisioned on the next migrate).
-    localized: validated.localized === true,
-    // Version history opt-in, normalized to the resolved config the column
-    // holds and every runtime reader tests. Retention rides with the switch.
-    versions: resolveBuilderVersions(
-      validated.versions,
-      validated.versionsMaxPerDoc
-    ),
-    // Cache-revalidation opt-out, normalized to the resolved config the write
-    // path reads (null = standard tags, { disable: true } = off).
-    revalidate: resolveBuilderRevalidate(validated.revalidate),
-    // Persist the recording opt-out alongside the other policy columns so it
-    // survives a restart, not just this process.
-    webhooks: resolveBuilderWebhooks(validated.webhooks),
-    schemaHash,
-    hooks: validated.hooks,
-  });
+      return registry.registerCollection({
+        slug: validated.slug,
+        labels: normalizedLabels,
+        tableName,
+        description: validated.description,
+        fields,
+        timestamps: validated.timestamps,
+        admin: validated.admin,
+        source: "ui",
+        locked: false,
+        // Forward Draft/Published flag so the schema-level POST honours the
+        // user's status opt-in just like the dispatcher path does.
+        status: validated.status === true,
+        // i18n: forward the localization opt-in so the registry stores it (companion
+        // table is provisioned on the next migrate).
+        localized: validated.localized === true,
+        // Version history opt-in, normalized to the resolved config the column
+        // holds and every runtime reader tests. Retention rides with the switch.
+        versions: resolveBuilderVersions(
+          validated.versions,
+          validated.versionsMaxPerDoc
+        ),
+        // Cache-revalidation opt-out, normalized to the resolved config the write
+        // path reads (null = standard tags, { disable: true } = off).
+        revalidate: resolveBuilderRevalidate(validated.revalidate),
+        // Persist the recording opt-out alongside the other policy columns so it
+        // survives a restart, not just this process.
+        webhooks: resolveBuilderWebhooks(validated.webhooks),
+        schemaHash,
+        hooks: validated.hooks,
+      });
+    }
+  );
 
   // POST is a create; canonical mutation envelope ships a toast message
   // alongside the new collection so the admin can confirm success.

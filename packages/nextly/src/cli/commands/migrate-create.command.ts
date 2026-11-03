@@ -15,11 +15,8 @@ export function registerMigrateCreateCommand(program: Command): void {
     .argument("[name]", "Migration name (slug-cased, e.g., add_excerpt)")
     .option("--name <name>", "Migration name (alternate to positional arg)")
     .option("--blank", "Create an empty migration file for custom SQL", false)
-    .option(
-      "--non-interactive",
-      "Skip interactive prompts (auto-detected from non-TTY)",
-      false
-    )
+    // No `--non-interactive` of its own: the program's global one, with the
+    // same spelling, is what `canPrompt` reads for this command's prompts.
     .option(
       "--accept-renames",
       "ADVANCED: auto-accept all rename candidates in non-interactive mode",

@@ -12,6 +12,7 @@
  *
  * @module components-panel.test
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -513,14 +514,18 @@ describe("Edit, on each row", () => {
 
 describe("the rail's Components item", () => {
   function railWith(available: readonly LeftPanel[]): void {
+    // Inside the shortcut owner, as the shell draws the rail: its items
+    // register their panels' keys.
     render(
-      <EditorRail
-        openPanel={null}
-        isAvailable={panel => available.includes(panel)}
-        onSelect={() => {}}
-        onHelp={() => {}}
-        railRef={() => {}}
-      />
+      <ShortcutProvider>
+        <EditorRail
+          openPanel={null}
+          isAvailable={panel => available.includes(panel)}
+          onSelect={() => {}}
+          onHelp={() => {}}
+          railRef={() => {}}
+        />
+      </ShortcutProvider>
     );
   }
 

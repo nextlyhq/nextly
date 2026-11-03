@@ -50,7 +50,7 @@ they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, fo
 checkout or a test run, and the server log then names each missing component and the switch.
 
 Check the committed map in CI with `nextly generate:types --check`. It writes nothing, and
-exits 1 naming each missing component and each path no longer declared, or 2 when it cannot
+exits 2 naming each missing component and each path no longer declared, or 1 when it cannot
 load the config:
 
 ```bash
