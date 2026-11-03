@@ -120,8 +120,7 @@ export type ToolbarActionId =
   | "save-as-pattern"
   | "save-as-shared-style"
   | "edit-component"
-  | "save-as-component"
-  | "convert-to-component"
+  | "turn-into-component"
   | "detach-component"
   | "duplicate-component"
   | "update-pattern"
@@ -194,39 +193,28 @@ const MAKE_COMPONENT_GRANT_REFUSAL =
 const PLANNED_COMPONENT_ID = "planned-component";
 
 /**
- * "Save as component" and "Convert to component", each enabled or dimmed with
- * the reason, both asked of the planners rather than restated. Save shares
- * the pattern save's selection rules; convert is planned in full, and the
- * ops it would apply are put to the editor's lock question, since a slot's
- * lock can refuse the placement that replaces the run.
+ * What "Turn into component…" may do with a selection: replace the blocks
+ * with a placement of the new component, or keep them and save a copy. Each
+ * way is asked of its planner rather than restated: keeping shares the
+ * pattern save's selection rules; replacing is planned in full, and the ops
+ * it would apply are put to the editor's lock question, since a slot's lock
+ * can refuse the placement that replaces the run. A way that is refused
+ * carries its reason; both open, the object is empty.
  */
-function componentActions(
+export interface TurnIntoChoice {
+  /** Why the blocks cannot be replaced, so only a copy can be saved. */
+  readonly replaceRefused?: string;
+  /** Why no copy can be saved leaving them, so only replacing is open. */
+  readonly keepRefused?: string;
+}
+
+/** Each way "Turn into component…" may go, and why not where it may not. */
+export function turnIntoChoice(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
-): ToolbarAction[] {
-  if (offer === undefined) return [];
-  const save: ToolbarAction = {
-    id: "save-as-component",
-    label: "Save as component",
-    enabled: true,
-    inMenu: true,
-  };
-  const convert: ToolbarAction = {
-    id: "convert-to-component",
-    label: "Convert to component",
-    enabled: true,
-    inMenu: true,
-  };
-  if (!offer.mayCreate) {
-    const reason = MAKE_COMPONENT_GRANT_REFUSAL;
-    return [
-      { ...save, enabled: false, reason },
-      { ...convert, enabled: false, reason },
-    ];
-  }
+  ask?: LockQuestion
+): TurnIntoChoice {
   const saving = saveAsPatternRefusal(document, ids, nesting);
   const converting = planConvertToComponent(
     document,
@@ -236,18 +224,47 @@ function componentActions(
     {},
     nesting
   );
-  return [
-    saving === undefined
-      ? save
-      : { ...save, enabled: false, reason: compositionRefusalReason(saving) },
-    converting.problem === undefined
-      ? heldByLock(convert, ask, converting.pageOps)
-      : {
-          ...convert,
-          enabled: false,
-          reason: compositionRefusalReason(converting),
-        },
-  ];
+  const replaceRefused =
+    converting.problem !== undefined
+      ? compositionRefusalReason(converting)
+      : converting.pageOps === undefined
+        ? undefined
+        : lockReason(ask, converting.pageOps);
+  return {
+    ...(replaceRefused === undefined ? {} : { replaceRefused }),
+    ...(saving === undefined
+      ? {}
+      : { keepRefused: compositionRefusalReason(saving) }),
+  };
+}
+
+/**
+ * "Turn into component…": ONE item for both ways of making a component from
+ * the selection, the choice between them made in its dialog. Offered while
+ * either way is open; dimmed, with the reason, when neither is.
+ */
+function componentActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const turn: ToolbarAction = {
+    id: "turn-into-component",
+    label: "Turn into component…",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    return [{ ...turn, enabled: false, reason: MAKE_COMPONENT_GRANT_REFUSAL }];
+  }
+  const choice = turnIntoChoice(document, ids, nesting, ask);
+  if (choice.replaceRefused !== undefined && choice.keepRefused !== undefined) {
+    return [{ ...turn, enabled: false, reason: choice.replaceRefused }];
+  }
+  return [turn];
 }
 
 /**

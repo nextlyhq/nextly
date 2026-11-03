@@ -277,6 +277,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
       () => documentActions
     ),
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,

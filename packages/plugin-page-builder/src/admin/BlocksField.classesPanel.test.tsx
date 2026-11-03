@@ -118,7 +118,10 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-// A designer: the role that may change the site's design.
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * here too, and it asks whether the variables may be changed.
+ */
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) => permission === "update-site-style",
 }));
@@ -210,6 +213,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
    * a rejection into per-field messages. Answering none exercises the branch
@@ -327,7 +332,9 @@ async function settle(): Promise<void> {
 /** A style's details, opened from its row. */
 async function details(slug: string): Promise<HTMLElement> {
   fireEvent.click(
-    screen.getByRole("button", { name: new RegExp(`^${slug}, \\.${slug}`) })
+    screen.getByRole("button", {
+      name: new RegExp(`^${slug}, \\.nx-c-${slug}`),
+    })
   );
   const dialog = await screen.findByRole("dialog", { name: slug });
   await settle();
@@ -357,7 +364,7 @@ describe("the Shared styles tab reaching an author", () => {
     expect(panel.textContent).toContain("Shared styles");
     // The site's OWN style reached it. An empty panel would satisfy the
     // heading assertion alone, which is the shape this file exists to refuse.
-    expect(panel.textContent).toContain(".card");
+    expect(panel.textContent).toContain(".nx-c-card");
   });
 
   it("draws a read still in flight as loading, not as a site with no styles", () => {
@@ -485,12 +492,12 @@ describe("the Shared styles tab reaching an author", () => {
     await settle();
     expect(
       screen
-        .getByRole("button", { name: /^card, \.card/ })
+        .getByRole("button", { name: /^card, \.nx-c-card/ })
         .getAttribute("aria-label")
     ).toContain("At least 1 block on this page");
     expect(
       screen
-        .getByRole("button", { name: /^hero, \.hero/ })
+        .getByRole("button", { name: /^hero, \.nx-c-hero/ })
         .getAttribute("aria-label")
     ).not.toContain("on this page");
   });
@@ -507,7 +514,7 @@ describe("the Shared styles tab reaching an author", () => {
     storedClasses(CARD);
     openEditor();
     await settle();
-    const row = screen.getByRole("button", { name: /^card, \.card/ });
+    const row = screen.getByRole("button", { name: /^card, \.nx-c-card/ });
     expect(row.getAttribute("aria-label")).not.toContain("block on this page");
   });
 

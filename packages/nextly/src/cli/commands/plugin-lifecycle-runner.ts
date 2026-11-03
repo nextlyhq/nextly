@@ -18,7 +18,7 @@ import {
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import { isInteractiveTerminal } from "../../domains/schema/migrate/data-loss-consent";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   orderedMigrations,
   pluginModuleStatements,
@@ -769,8 +769,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     runDown,
     underMigrateLock,
     // A full uninstall without consent asks the person at a terminal, and is
-    // refused at once where nobody is there to answer.
-    interactive: isInteractiveTerminal(),
+    // refused at once where nobody can answer: no terminal, `CI` set, or
+    // `--non-interactive`.
+    interactive: canPrompt(),
     askToDelete: askToDeleteInTerminal,
     // What other owners built on or into the plugin's schema. Loaded when an
     // uninstall asks: nothing else in a command needs the dependents' reader.

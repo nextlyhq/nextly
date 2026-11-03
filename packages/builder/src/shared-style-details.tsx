@@ -7,7 +7,10 @@
  *
  * @module shared-style-details
  */
-import type { StyleCompileContext } from "@nextlyhq/blocks-engine";
+import {
+  namedClassName,
+  type StyleCompileContext,
+} from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -23,7 +26,9 @@ import {
   sharedStyleRemoval,
   sharedStyleSlug,
   SHARED_STYLE_NOT_WHOLE_NOTE,
+  SHARED_STYLE_RENAME_PENDING,
   type BlocksOnThisPage,
+  type SharedStyleRemoval,
   type SharedStyleReach,
   type SharedStyleRow,
   type SharedStyleUse,
@@ -47,6 +52,11 @@ export interface SharedStyleDetailsProps {
   mayLock: boolean;
   readOnly: boolean;
   access: SharedStylesAccess | undefined;
+  /**
+   * A rename of any style is still being stored. Lock and Remove each write
+   * the whole list of styles too, so they wait for it, whichever row it is.
+   */
+  held: boolean;
   /** A rename refused for this style, shown under its name. */
   issue: string | null;
   onRename: (value: string) => void;
@@ -63,33 +73,74 @@ export function SharedStyleDetails(
     props.reach,
     props.whole
   );
+  const holdId = React.useId();
+  const heldBy = props.held ? holdId : undefined;
   return (
-    <div className="nx-vars-editor__body">
-      <NameField
+    <div className="nx-vars-editor__body nx-shared-styles__details">
+      {/* Kept at the top while the rest scrolls inside the window's height. */}
+      <div className="nx-shared-styles__details-head">
+        <NameField
+          row={row}
+          name={name}
+          fixed={readOnly || row.locked || row.inCode}
+          issue={props.issue}
+          onRename={props.onRename}
+        />
+      </div>
+      <HoldReason
+        // Said once, above the controls it holds, which both point to.
+        held={props.held && holdsAControl(props, removal)}
+        id={holdId}
+      />
+      <LockLine
         row={row}
         name={name}
-        fixed={readOnly || row.locked || row.inCode}
-        issue={props.issue}
-        onRename={props.onRename}
+        mayLock={props.mayLock}
+        access={access}
+        heldBy={heldBy}
       />
-      <LockLine row={row} name={name} mayLock={props.mayLock} access={access} />
       <Declares row={row} styleContext={props.styleContext} />
       <WhereUsed id={row.id} sentence={props.sentence} access={access} />
       {row.inCode ? (
         <p className="nx-shared-styles__meta">Set in your site&rsquo;s code</p>
       ) : null}
-      {readOnly || access === undefined ? null : removal.kind === "refused" ? (
-        <p className="nx-shared-styles__meta">{removal.reason}</p>
-      ) : removal.kind === "removable" ? (
-        <RemoveOne
+      {readOnly || access === undefined ? null : (
+        <Removal
+          removal={removal}
           id={row.id}
           name={name}
           access={access}
+          heldBy={heldBy}
           onRemoved={props.onRemoved}
         />
-      ) : null}
+      )}
     </div>
   );
+}
+
+/** Whether the popover shows a control a pending rename holds: Lock or Remove. */
+function holdsAControl(
+  props: SharedStyleDetailsProps,
+  removal: SharedStyleRemoval
+): boolean {
+  const removable =
+    !props.readOnly &&
+    props.access !== undefined &&
+    removal.kind === "removable";
+  return removable || mayLockRow(props.row, props.mayLock, props.access);
+}
+
+/** Why a style can't be removed, or Remove, or nothing when said elsewhere. */
+function Removal({
+  removal,
+  ...remove
+}: {
+  removal: SharedStyleRemoval;
+} & React.ComponentProps<typeof RemoveOne>): React.JSX.Element | null {
+  if (removal.kind === "refused") {
+    return <p className="nx-shared-styles__meta">{removal.reason}</p>;
+  }
+  return removal.kind === "removable" ? <RemoveOne {...remove} /> : null;
 }
 
 /** The class name a typed name gives, or the style's own while it is unchanged. */
@@ -142,7 +193,7 @@ function NameField({
           }}
         />
         <p className="nx-vars-editor__code" id={`${id}-code`}>
-          {typed === "" ? row.className : `.${typed}`}
+          {typed === "" ? row.className : `.${namedClassName(typed)}`}
         </p>
         {typed === "" || typed === row.slug ? null : (
           // A class name is what hand-written CSS selects, so a change to it
@@ -164,42 +215,97 @@ function lockMessage(name: string, may: boolean): string {
     : "Locked by your site’s designers. Ask someone who can unlock shared styles.";
 }
 
+/**
+ * Why a write waits while a rename is stored, said beside the control it
+ * holds, or nothing.
+ */
+export function HoldReason({
+  held,
+  id,
+}: {
+  held: boolean;
+  id: string;
+}): React.JSX.Element | null {
+  if (!held) return null;
+  return (
+    <p className="nx-shared-styles__meta" id={id}>
+      {SHARED_STYLE_RENAME_PENDING}
+    </p>
+  );
+}
+
+/** Whether this author may move this style's lock here. */
+function mayLockRow(
+  row: SharedStyleRow,
+  mayLock: boolean,
+  access: SharedStylesAccess | undefined
+): access is SharedStylesAccess {
+  return mayLock && access !== undefined && !row.inCode;
+}
+
 /** What a lock says, and Lock or Unlock for an author the server says may. */
 function LockLine({
   row,
   name,
   mayLock,
   access,
+  heldBy,
 }: {
   row: SharedStyleRow;
   name: string;
   mayLock: boolean;
   access: SharedStylesAccess | undefined;
+  /** While a rename is stored: the id of the words saying Lock waits. */
+  heldBy: string | undefined;
 }): React.JSX.Element | null {
-  const { busy, refusal, run } = useRefusableWrite();
-  const may = mayLock && access !== undefined && !row.inCode;
+  const may = mayLockRow(row, mayLock, access);
   if (!row.locked && !may) return null;
   return (
     <div className="nx-vars-editor__field">
       {row.locked ? (
         <p className="nx-shared-styles__meta">{lockMessage(name, may)}</p>
       ) : null}
-      <Refusal refusal={refusal} />
-      {may && access !== undefined ? (
-        <div className="nx-vars-editor__actions">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="nx-vars-editor__button"
-            disabled={busy}
-            onClick={() => void run(() => access.lock(row.id, !row.locked))}
-          >
-            {row.locked ? `Unlock ${name}` : `Lock ${name}`}
-          </Button>
-        </div>
+      {may ? (
+        <LockButton row={row} name={name} access={access} heldBy={heldBy} />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Lock or Unlock, with the route's refusal. Held while a rename is stored: a
+ * lock and a rename each write the whole list of styles, so a lock landing
+ * second would put the old name back.
+ */
+function LockButton({
+  row,
+  name,
+  access,
+  heldBy,
+}: {
+  row: SharedStyleRow;
+  name: string;
+  access: SharedStylesAccess;
+  heldBy: string | undefined;
+}): React.JSX.Element {
+  const { busy, refusal, run } = useRefusableWrite();
+  return (
+    <>
+      <Refusal refusal={refusal} />
+      <div className="nx-vars-editor__actions">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="nx-vars-editor__button"
+          disabled={busy || heldBy !== undefined}
+          aria-describedby={heldBy}
+          onClick={() => void run(() => access.lock(row.id, !row.locked))}
+        >
+          {row.locked ? `Unlock ${name}` : `Lock ${name}`}
+        </Button>
+      </div>
+    </>
   );
 }
 
@@ -238,6 +344,8 @@ interface UsesRead {
   readonly items: readonly SharedStyleUse[];
   readonly last: SharedStyleUsesPage | undefined;
   readonly page: number;
+  /** The last page that arrived; behind `page` while that one is coming. */
+  readonly loaded: number;
   readonly failed: boolean;
 }
 
@@ -250,6 +358,7 @@ function useUses(
     items: [],
     last: undefined,
     page: 1,
+    loaded: 0,
     failed: false,
   });
   React.useEffect(() => {
@@ -262,6 +371,7 @@ function useUses(
           ...current,
           items: [...current.items, ...answer.items],
           last: answer,
+          loaded: current.page,
         }));
       },
       () => {
@@ -271,8 +381,16 @@ function useUses(
     );
     return () => controller.abort();
   }, [access, id, read.page]);
+  // The next page follows the last one that arrived, and only once the one
+  // asked for has: a second press while a page is coming would otherwise
+  // abort it and append the page after it, losing a page of documents.
   const more = React.useCallback(
-    () => setRead(current => ({ ...current, page: current.page + 1 })),
+    () =>
+      setRead(current =>
+        current.loaded < current.page
+          ? current
+          : { ...current, page: current.loaded + 1 }
+      ),
     []
   );
   return { read, more };
@@ -324,7 +442,8 @@ function UsesList({
       {items.length === 0 ? null : (
         <ul className="nx-shared-styles__uses">
           {items.map(use => (
-            <li key={`${use.kind}:${use.id}`}>
+            // An id is unique only within its collection, so both key a row.
+            <li key={JSON.stringify([use.collection, use.id])}>
               <span className="nx-shared-styles__use-title">{use.title}</span>
               <span className="nx-shared-styles__meta">
                 {sharedStyleKindName(use.kind)}
@@ -355,15 +474,22 @@ function RemoveOne({
   id,
   name,
   access,
+  heldBy,
   onRemoved,
 }: {
   id: string;
   name: string;
   access: SharedStylesAccess;
+  /**
+   * While a rename is stored: the id of the words saying Remove waits, since
+   * it writes the whole list of styles too.
+   */
+  heldBy: string | undefined;
   onRemoved: () => void;
 }): React.JSX.Element {
   const [confirming, setConfirming] = React.useState(false);
   const { busy, refusal, run } = useRefusableWrite();
+  const held = heldBy !== undefined;
   const remove = async (): Promise<void> => {
     if (await run(() => access.remove([id]))) onRemoved();
   };
@@ -384,6 +510,8 @@ function RemoveOne({
             onKeep={() => setConfirming(false)}
             onRemove={() => void remove()}
             removeLabel={`Remove ${name}`}
+            removeHeld={held}
+            removeDescribedBy={heldBy}
           />
         </div>
       ) : (
@@ -393,6 +521,8 @@ function RemoveOne({
             variant="ghost"
             size="sm"
             className="nx-vars-editor__button nx-vars-editor__remove"
+            disabled={held}
+            aria-describedby={heldBy}
             onClick={() => setConfirming(true)}
           >
             Remove

@@ -17,8 +17,11 @@
  * any other collection or live Single declaring a blocks field the builder
  * opens (a removed code-first Single's leftover registry row does not count).
  * Asked through `ctx.caller.can`, the framework's own answer for a session or
- * an API key, before anything is read. Nobody else: not an anonymous caller,
- * and not one who may only read those documents.
+ * an API key, before anything is read. The update questions are type-level
+ * (`anyEntry`): an update rule limited to the entries a row filter matches
+ * counts, since such an author may edit some of those documents. Nobody
+ * else: not an anonymous caller, and not one who may only read those
+ * documents.
  *
  * ## What it answers
  *
@@ -31,7 +34,12 @@
  *
  * @module site-style-route
  */
-import { getCachedNextly, NextlyError, respondDoc } from "@nextlyhq/plugin-sdk";
+import {
+  getCachedNextly,
+  NextlyError,
+  respondDoc,
+  type PluginRouteCanOptions,
+} from "@nextlyhq/plugin-sdk";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
@@ -62,7 +70,11 @@ export interface SiteStyleRouteContext extends PageCollectionsContext {
     readonly singles: Readonly<Record<string, string | undefined>>;
   };
   readonly caller: {
-    can(action: string, resource: string): Promise<boolean>;
+    can(
+      action: string,
+      resource: string,
+      options?: PluginRouteCanOptions
+    ): Promise<boolean>;
   } | null;
   /** The app's configuration, for which code-first Singles it still declares. */
   readonly config: { readonly singles?: unknown };
@@ -86,10 +98,36 @@ function slugOf(record: unknown): string | undefined {
   return typeof slug === "string" && slug !== "" ? slug : undefined;
 }
 
-/** Whether a registry record declares a blocks field the builder opens. */
-function opensInBuilder(record: unknown): boolean {
-  if (typeof record !== "object" || record === null) return false;
-  return editorBlocksFields(record).length > 0;
+/**
+ * A collection or live Single that declares a blocks field the builder opens:
+ * its slug, its label when the registry gives one, and where each such field
+ * sits on its documents.
+ */
+export interface BuilderDocumentType {
+  readonly slug: string;
+  /** The registry's label for it, when it has a usable one. */
+  readonly label: string | undefined;
+  /** Each blocks field the builder opens on it, by its form path (`hero.body`). */
+  readonly paths: readonly string[];
+}
+
+/**
+ * A registry record as a document type the builder opens, or `undefined` when
+ * it declares no blocks field the builder opens or names no slug. One reading,
+ * so the access gate below and the shared-style rescan agree on which
+ * documents the builder edits.
+ */
+function builderTypeOf(record: unknown): BuilderDocumentType | undefined {
+  if (typeof record !== "object" || record === null) return undefined;
+  const slug = slugOf(record);
+  const paths = editorBlocksFields(record).map(field => field.path);
+  if (slug === undefined || paths.length === 0) return undefined;
+  const label = (record as { label?: unknown }).label;
+  return {
+    slug,
+    label: typeof label === "string" && label.trim() !== "" ? label : undefined,
+    paths,
+  };
 }
 
 /**
@@ -109,22 +147,22 @@ function isLiveSingle(
   return !isOrphanedSingle(row, declared);
 }
 
-/** The slugs of the live Singles on one page of the listing that the builder opens. */
+/** The live Singles on one page of the listing that the builder opens. */
 function builderSinglesIn(
   rows: readonly unknown[],
   declared: ReadonlySet<string> | undefined
-): string[] {
+): BuilderDocumentType[] {
   return rows
-    .filter(row => isLiveSingle(row, declared) && opensInBuilder(row))
-    .map(slugOf)
-    .filter((slug): slug is string => slug !== undefined);
+    .filter(row => isLiveSingle(row, declared))
+    .map(builderTypeOf)
+    .filter((type): type is BuilderDocumentType => type !== undefined);
 }
 
-/** Every live Single that holds a blocks field the builder opens, by slug. */
-async function singlesTheBuilderOpens(
-  ctx: SiteStyleRouteContext
-): Promise<string[]> {
-  const slugs: string[] = [];
+/** Every live Single that holds a blocks field the builder opens. */
+export async function singlesTheBuilderOpens(
+  ctx: Pick<SiteStyleRouteContext, "config" | "services">
+): Promise<BuilderDocumentType[]> {
+  const types: BuilderDocumentType[] = [];
   const declared = declaredSingleSlugs(ctx);
   for (let page = 0; page < SINGLES_PAGES_MAX; page += 1) {
     const listed = await ctx.services.singles.list({
@@ -133,23 +171,20 @@ async function singlesTheBuilderOpens(
     });
     const { data, total } = listed as { data?: unknown; total?: unknown };
     if (!Array.isArray(data) || data.length === 0) break;
-    slugs.push(...builderSinglesIn(data, declared));
+    types.push(...builderSinglesIn(data, declared));
     const read = page * SINGLES_PAGE_SIZE + data.length;
     if (typeof total !== "number" || read >= total) break;
   }
-  return slugs;
+  return types;
 }
 
-/** Every collection that declares a blocks field the builder opens, by slug. */
-async function collectionsTheBuilderOpens(
-  ctx: SiteStyleRouteContext
-): Promise<string[]> {
-  const slugs: string[] = [];
-  for (const record of await registryRecords(ctx)) {
-    const slug = slugOf(record);
-    if (slug !== undefined && opensInBuilder(record)) slugs.push(slug);
-  }
-  return slugs;
+/** Every collection that declares a blocks field the builder opens. */
+export async function collectionsTheBuilderOpens(
+  ctx: PageCollectionsContext
+): Promise<BuilderDocumentType[]> {
+  return (await registryRecords(ctx))
+    .map(builderTypeOf)
+    .filter((type): type is BuilderDocumentType => type !== undefined);
 }
 
 /**
@@ -181,17 +216,18 @@ export async function mayReadSiteStyle(
     if (asked.has(slug)) return false;
     asked.add(slug);
     // A type-level question: may this caller edit this kind of document at
-    // all? `can` answers a row-filtered update rule as "no", having no entry
-    // to apply the filter to, so an author whose only update right is
-    // row-filtered is not admitted here and needs `read-site-style`. A probe
-    // that answers "yes" for such a rule, without applying it, belongs here.
-    return caller.can("update", slug);
+    // all? Asked with `anyEntry`, so an author whose update rule limits them
+    // to the entries a row filter matches counts as one who may edit: plain
+    // `can` would answer no, having no entry to apply the filter to. The
+    // filter is neither applied nor bypassed here; only admission is decided,
+    // and every write the author makes is still judged on its entry.
+    return caller.can("update", slug, { anyEntry: true });
   };
   for (const slug of known) if (await mayUpdate(slug)) return true;
-  for (const slug of await collectionsTheBuilderOpens(ctx)) {
+  for (const { slug } of await collectionsTheBuilderOpens(ctx)) {
     if (await mayUpdate(slug)) return true;
   }
-  for (const slug of await singlesTheBuilderOpens(ctx)) {
+  for (const { slug } of await singlesTheBuilderOpens(ctx)) {
     if (await mayUpdate(slug)) return true;
   }
   return false;

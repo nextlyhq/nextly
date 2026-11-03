@@ -10,6 +10,7 @@ import {
   renameSharedStyle,
   searchSharedStyles,
   sharedStyleDeclares,
+  sharedStylePageTile,
   sharedStylePreview,
   sharedStyleReachChip,
   sharedStyleReachSentence,
@@ -53,11 +54,13 @@ const reachOf = (
 };
 
 describe("the rows", () => {
-  it("names a style by its label, and an older one by its slug", () => {
+  it("names a style by its label, an older one by its slug, and the class the page carries", () => {
     const rows = sharedStyleRows([card, hero], new Set());
+    // The class name is the one the compiler emits, prefix included, since
+    // that is what hand-written CSS has to select.
     expect(rows.map(row => [row.name, row.className])).toEqual([
-      ["Card", ".card"],
-      ["hero-banner", ".hero-banner"],
+      ["Card", ".nx-c-card"],
+      ["hero-banner", ".nx-c-hero-banner"],
     ]);
   });
 
@@ -165,6 +168,39 @@ describe("the row's preview", () => {
   it("draws the colours a style sets, and leaves out a variable it reads", () => {
     expect(sharedStylePreview(card.styles)).toEqual({ color: "#112233" });
     expect(sharedStylePreview(hero.styles)).toEqual({});
+  });
+});
+
+describe("the tile a row's preview is drawn on", () => {
+  // The engine's defaults: white page and near-black text in light mode.
+  const tokens = { tokens: [] };
+
+  it("is the site's page, in the mode the canvas shows", () => {
+    expect(sharedStylePageTile(tokens, "light")).toEqual({
+      backgroundColor: "#ffffff",
+      color: "#111827",
+    });
+    expect(sharedStylePageTile(tokens, "dark")).toEqual({
+      backgroundColor: "#0b0f19",
+      color: "#f9fafb",
+    });
+  });
+
+  it("follows a site that changed its page colour", () => {
+    const own = {
+      tokens: [
+        {
+          name: "color.background",
+          kind: "color" as const,
+          values: { light: "#fdf6e3" },
+        },
+      ],
+    };
+    expect(sharedStylePageTile(own, "light").backgroundColor).toBe("#fdf6e3");
+  });
+
+  it("says nothing without the site's variables, so the neutral tile shows", () => {
+    expect(sharedStylePageTile(undefined, "light")).toEqual({});
   });
 });
 

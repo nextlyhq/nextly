@@ -60,7 +60,6 @@ import {
   Lock,
   Palette,
   RefreshCw,
-  Replace,
   SquarePen,
   Trash2,
   Unlink,
@@ -99,8 +98,8 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "save-as-shared-style": Palette,
   // A pen on a square, the editing glyph: the component opens to be edited.
   "edit-component": SquarePen,
-  "save-as-component": Component,
-  "convert-to-component": Replace,
+  // The component mark: the selection becomes one.
+  "turn-into-component": Component,
   "detach-component": Unlink,
   "duplicate-component": CopyPlus,
   "update-pattern": RefreshCw,

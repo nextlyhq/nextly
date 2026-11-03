@@ -43,6 +43,7 @@ import {
   TabsTrigger,
   useIsomorphicLayoutEffect,
 } from "@nextlyhq/ui";
+import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
@@ -63,6 +64,7 @@ import {
   ComponentVariantsSection,
 } from "./component-variants-panel";
 import {
+  ContentServicesContext,
   contentControlFor,
   UnsupportedField,
   type ContentServices,
@@ -644,7 +646,15 @@ function SelectionInspector({
     (componentLibrary ?? NO_LIBRARY).definitions,
     canvasRoot
   );
-  if ("tabless" in surface) return surface.tabless;
+  // A tabless surface still reaches the host's media library: a component
+  // placement's exposed image chooses a file as the Content tab does.
+  if ("tabless" in surface) {
+    return (
+      <ContentServicesContext.Provider value={contentServices}>
+        {surface.tabless}
+      </ContentServicesContext.Provider>
+    );
+  }
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
 
@@ -806,6 +816,11 @@ function ContentTab({
             setAdvancedOpen(open => !open);
           }}
         >
+          <ChevronRight
+            className="nx-inspector__advanced-chevron"
+            size={16}
+            aria-hidden="true"
+          />
           Advanced
         </summary>
         {/*

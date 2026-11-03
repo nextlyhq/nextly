@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The page builder's Design panel has a Shared styles tab: find a shared style by name, property or value, see how many blocks and pages use it and where, rename it (its class name follows the name), lock or unlock it if your role may, and remove the ones nothing uses after seeing them listed. While some pages are still being counted, numbers read "at least" and nothing can be removed. `@nextlyhq/builder/shell` replaces the experimental `ClassManagerPanel` with `SharedStylesPanel`.
+The page builder's Design panel has a Shared styles tab: find a shared style by name, property or value, show only the used, unused or locked ones, see how many blocks and pages use it and where, rename it (its class name follows the name), lock or unlock it if your role may, and remove the ones nothing uses after seeing them listed. While some pages are still being counted, numbers read "at least" and nothing can be removed. `@nextlyhq/builder/shell` replaces the experimental `ClassManagerPanel` with `SharedStylesPanel`.

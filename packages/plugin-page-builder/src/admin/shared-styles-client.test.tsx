@@ -97,7 +97,7 @@ describe("reading how widely shared styles are used", () => {
 });
 
 describe("reading where a shared style is used", () => {
-  it("asks for the page named, and reads the hidden count and the floor", async () => {
+  it("asks for the page named, and reads each document's collection, the hidden count and the floor", async () => {
     readAnswer = {
       items: [{ id: "p1", title: "Home", collection: "pages", kind: "pages" }],
       meta: {
@@ -115,8 +115,9 @@ describe("reading where a shared style is used", () => {
     const page = await result.current.uses("c-card", 2, signal);
 
     expect(reads).toEqual([{ path: sharedStyleWhereUsedPath("c-card", 2) }]);
+    // The collection is kept: an id is unique only within it.
     expect(page).toEqual({
-      items: [{ id: "p1", title: "Home", kind: "pages" }],
+      items: [{ id: "p1", title: "Home", collection: "pages", kind: "pages" }],
       total: 21,
       hidden: 3,
       hasNext: false,

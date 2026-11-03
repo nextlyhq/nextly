@@ -47,8 +47,7 @@ export type CardVerbs = SharedBlockVerbs;
 const CARD_VERBS: readonly ToolbarActionId[] = [
   "duplicate",
   "save-as-shared-style",
-  "save-as-component",
-  "convert-to-component",
+  "turn-into-component",
   "detach-component",
   "duplicate-component",
   "delete",

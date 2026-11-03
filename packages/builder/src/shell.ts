@@ -190,7 +190,14 @@ export type { ComponentFieldsHost } from "./component-fields";
 export { ComponentBanner } from "./component-banner";
 export type { ComponentBannerProps } from "./component-banner";
 // And about its variants: how many placements chose one, for the delete dialog.
-export type { ComponentVariantsHost, VariantUse } from "./component-variants";
+export type {
+  ComponentVariantsHost,
+  VariantPreviewBinding,
+  VariantUse,
+} from "./component-variants";
+// The variant open in a component's view, previewed on the host's canvas.
+export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
+export type { VariantPreviewState } from "./variant-preview";
 
 /**
  * The Style half of the same inspector.
@@ -293,6 +300,8 @@ export type {
   ComponentVerbsHost,
   SharedStyleVerbHost,
 } from "./keyboard-actions";
+// Which way "Turn into component…" may go, as the host is told when it opens.
+export type { TurnIntoChoice } from "./toolbar-actions";
 
 /**
  * The floating toolbar, from this entry because it is a client component and
@@ -534,8 +543,8 @@ export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
  */
-export { TokensPanel } from "./tokens-panel";
-export type { TokensPanelProps } from "./tokens-panel";
+export { TokensPanel, useVariablesHeader } from "./tokens-panel";
+export type { TokensPanelProps, VariablesHeader } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*
@@ -648,7 +657,7 @@ export type {
 
 /**
  * Which values each placement of a new component may change: the picker the
- * host's "Save as component" and "Convert to component" forms draw.
+ * host's "Turn into component" form draws.
  */
 export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
 export type { ExposurePickerProps } from "./exposure-picker";

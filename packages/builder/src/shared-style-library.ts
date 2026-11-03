@@ -11,10 +11,11 @@
  */
 import {
   MAX_NAMED_CLASS_NAME_LENGTH,
-  NAMED_CLASS_PREFIX,
+  namedClassName,
   tokenLabelIssue,
   type NamedClass,
   type NodeStyles,
+  type SiteTokenSet,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
@@ -24,6 +25,8 @@ import {
   usableSiteClasses,
 } from "./class-library";
 import { EDITOR_WORDS } from "./editor-words";
+import type { TokenMode } from "./font-library";
+import { colourHexOf } from "./style-colour";
 
 /** The kinds of document a shared style is counted on. */
 export type SharedStyleKind = "pages" | "components" | "patterns" | "layouts";
@@ -50,8 +53,11 @@ export interface SharedStylesUsage {
 
 /** One document a shared style is used on. */
 export interface SharedStyleUse {
+  /** Unique only within its collection. */
   readonly id: string;
   readonly title: string;
+  /** The collection holding it: with `id`, what tells one document from another. */
+  readonly collection: string;
   readonly kind: SharedStyleKind;
 }
 
@@ -74,7 +80,7 @@ export interface SharedStyleRow {
   /** The name an author gave it, or its slug when it has none. */
   readonly name: string;
   readonly slug: string;
-  /** The class name as developers read it: `.card`. */
+  /** The class the page carries, as hand-written CSS selects it: `.nx-c-card`. */
   readonly className: string;
   readonly locked: boolean;
   /** Supplied by the site's code: shown, never renamed, locked or removed. */
@@ -95,7 +101,7 @@ export function sharedStyleRows(
     id: entry.id,
     name: sharedStyleName(entry),
     slug: entry.slug,
-    className: `.${entry.slug}`,
+    className: `.${namedClassName(entry.slug)}`,
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
     styles: entry.styles,
@@ -183,12 +189,7 @@ export function sharedStyleSearchText(
     entry => `${entry.property}: ${entry.value}`
   );
   return searchable(
-    [
-      row.name,
-      row.className,
-      `${NAMED_CLASS_PREFIX}${row.slug}`,
-      ...declarations,
-    ].join("\n")
+    [row.name, row.slug, row.className, ...declarations].join("\n")
   );
 }
 
@@ -242,6 +243,32 @@ export function sharedStylePreview(
     preview[key] = entry.value;
   }
   return preview;
+}
+
+/**
+ * The tile a row's "Aa" is drawn on: the site's page, its background and text
+ * colours in the mode the canvas shows, so a style's own colours read as they
+ * do on a page rather than against the panel. Resolved through the colour
+ * controls' own reading of the site's variables ({@link colourHexOf}), by the
+ * identities the engine gives the page's two colours.
+ *
+ * Empty without the site's variables, or for a colour that cannot be read:
+ * the tile then keeps its neutral look.
+ */
+export function sharedStylePageTile(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
+): { backgroundColor?: string; color?: string } {
+  const backgroundColor = colourHexOf(
+    { $token: "color.background" },
+    tokens,
+    mode
+  );
+  const color = colourHexOf({ $token: "color.text" }, tokens, mode);
+  return {
+    ...(backgroundColor === undefined ? {} : { backgroundColor }),
+    ...(color === undefined ? {} : { color }),
+  };
 }
 
 const KIND_WORDS: Record<SharedStyleKind, readonly [string, string]> = {
@@ -356,9 +383,64 @@ export function isUnused(
   blocks: BlocksOnThisPage | undefined,
   reach: SharedStyleReach
 ): boolean {
-  const pageClear =
-    blocks !== undefined && blocks.complete && blocks.count === 0;
-  return pageClear && reach.complete && reach.documents === 0;
+  return (
+    sharedStyleUse(blocks, reach) === "unused" &&
+    blocks !== undefined &&
+    blocks.complete &&
+    reach.complete
+  );
+}
+
+/**
+ * Whether any use of a style has been counted: on a block of the open page or
+ * on a document in the index. "unused" says only that none has been counted;
+ * it is certain once every count is ({@link isUnused}). Undefined while the
+ * style's usage has not been read.
+ */
+export function sharedStyleUse(
+  blocks: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach | undefined
+): "used" | "unused" | undefined {
+  if (reach === undefined) return undefined;
+  return (blocks?.count ?? 0) > 0 || reach.documents > 0 ? "used" : "unused";
+}
+
+/** Which styles the tab lists: every one, or those used, unused or locked. */
+export type SharedStyleFilter = "all" | "used" | "unused" | "locked";
+
+/** The filters in the order the tab offers them, with their words. */
+export const SHARED_STYLE_FILTERS: readonly {
+  readonly filter: SharedStyleFilter;
+  readonly word: string;
+}[] = [
+  { filter: "all", word: "All" },
+  { filter: "used", word: "Used" },
+  { filter: "unused", word: "Unused" },
+  { filter: "locked", word: "Locked" },
+];
+
+/**
+ * Whether a row belongs under a filter. A style whose usage has not been read
+ * yet is under neither Used nor Unused until it has.
+ */
+export function inSharedStyleFilter(
+  row: Pick<SharedStyleRow, "locked">,
+  filter: SharedStyleFilter,
+  use: "used" | "unused" | undefined
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "locked") return row.locked;
+  return use === filter;
+}
+
+/** What the tab says when a filter, with or without a search, lists nothing. */
+export function sharedStyleFilterEmpty(
+  filter: Exclude<SharedStyleFilter, "all">,
+  query: string
+): string {
+  const word = SHARED_STYLE_FILTERS.find(entry => entry.filter === filter);
+  const kind = `${(word?.word ?? filter).toLowerCase()} ${SHARED_STYLES_WORD}`;
+  return query === "" ? `No ${kind}.` : `No ${kind} match “${query}”.`;
 }
 
 /**
@@ -367,6 +449,14 @@ export function isUnused(
  */
 export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
   "Some pages are still being counted, so no shared style can be removed yet.";
+
+/**
+ * Why Lock, Remove and Remove unused wait: a rename writes the whole list of
+ * styles, and so does each of them, so whichever landed second would put the
+ * other's list back.
+ */
+export const SHARED_STYLE_RENAME_PENDING =
+  "Wait until the name change is saved.";
 
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =

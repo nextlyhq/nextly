@@ -20,9 +20,11 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
+import { defineCollection, text } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -60,6 +62,21 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         plugins: [pageBuilder()],
         seedPublic: true,
+        collections: [
+          // A collection the builder opens, whose authors may update only the
+          // entries they own: the rule answers a row filter, not a yes.
+          defineCollection({
+            slug: "articles",
+            access: {
+              read: () => true,
+              update: ({ user }) => ({ owner: { equals: user?.id ?? "" } }),
+            },
+            fields: [
+              text({ name: "owner" }),
+              { name: "body", type: BLOCKS_TYPE },
+            ],
+          }),
+        ],
       });
       // The site's first user is its owner, granted everything. Made first, so
       // every person below holds only what the test gives them.
@@ -203,6 +220,22 @@ describe.each(getConfiguredTestDialects())(
       const answer = await read(null);
       expect(answer.status).toBe(401);
       expect(answer.body.tokens).toBeUndefined();
+    });
+
+    it("lets an author whose update is limited to their own entries read it", async () => {
+      const t = await boot();
+      // The rule's filter decides which articles this author may update; it
+      // may update some, so it may draw them.
+      const author = await holding(t, "read-articles", "update-articles");
+      const answer = await read(author);
+      expect(answer.status).toBe(200);
+      expect(answer.body.tokens).toEqual(TOKENS);
+    });
+
+    it("refuses an author who may only read the entries the builder opens", async () => {
+      const t = await boot();
+      const reader = await holding(t, "read-articles");
+      expect((await read(reader)).status).toBe(403);
     });
 
     it("refuses a signed-in caller who may edit nothing the builder opens", async () => {

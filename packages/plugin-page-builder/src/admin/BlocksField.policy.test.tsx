@@ -225,7 +225,11 @@ vi.mock("./editor/settings-dialog", () => ({
   },
 }));
 
-// A designer: the role that may change the site's design.
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * whenever the classes manager is, and it asks whether the variables may be
+ * changed.
+ */
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) => permission === "update-site-style",
 }));
@@ -295,6 +299,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the
   // merge of stored over defaults is `site-style-client`'s own question and has
@@ -1136,7 +1142,7 @@ describe("what the Shared styles tab says a style declares", () => {
     // Drawn without the routes: what a style declares is read from the
     // library alone.
     render(<RealSharedStylesPanel {...props} access={undefined} />);
-    fireEvent.click(screen.getByRole("button", { name: /^hero, \.hero/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^hero, \.nx-c-hero/ }));
     const details = await screen.findByRole("dialog", { name: "hero" });
     return (
       details.querySelector(".nx-shared-styles__declares")?.parentElement

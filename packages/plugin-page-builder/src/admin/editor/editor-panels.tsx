@@ -65,6 +65,7 @@ import {
   renderedTokens,
   SharedStylesStudio,
   TokensStudio,
+  VariablesTab,
 } from "./site-style-studios";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
@@ -595,18 +596,23 @@ export function editorPanelRenderer({
       design: () => (
         <DesignPanel
           view={view}
+          // The studio surrounds every tab, so the header it draws stays the
+          // same whichever is open.
+          frame={designTabs => (
+            <TokensStudio
+              merged={offerableTokens(
+                canvasSiteStyle,
+                siteStylePending,
+                siteStyleError
+              )}
+              supplied={configSiteStyle?.tokens}
+              pending={siteStylePending}
+            >
+              {designTabs}
+            </TokensStudio>
+          )}
           tabs={{
-            variables: () => (
-              <TokensStudio
-                merged={offerableTokens(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                supplied={configSiteStyle?.tokens}
-                pending={siteStylePending}
-              />
-            ),
+            variables: () => <VariablesTab />,
             classes: () => (
               <SharedStylesStudio
                 classes={classes}
@@ -614,6 +620,12 @@ export function editorPanelRenderer({
                 styleContext={classSummaryContext}
                 suppliedClassIds={configSiteStyle?.classes?.map(
                   entry => entry.id
+                )}
+                // The same variables the Fonts tab reads, as the canvas draws.
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
                 )}
               />
             ),
