@@ -748,9 +748,13 @@ test.describe("spacing values on the canvas", () => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
-      (
-        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
-      ).style.overflow = "hidden";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      // No padding, so the clip can reach the block: a section's own
+      // padding would hold it clear of a 10px clip.
+      section.style.padding = "0";
     });
     await target.click();
 
@@ -797,6 +801,8 @@ test.describe("spacing values on the canvas", () => {
       ) as HTMLElement;
       section.style.overflow = "hidden";
       section.style.border = "20px solid transparent";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
     });
     await target.click();
     await expect(page.locator(BAND)).not.toHaveCount(0);
@@ -849,6 +855,8 @@ test.describe("spacing values on the canvas", () => {
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
       section.style.overflow = "clip";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
     });
     // Selected while the container still shows it. Shrinking first would clip
     // the target out of reach and the click would land on the page instead.
@@ -925,6 +933,8 @@ test.describe("spacing values on the canvas", () => {
       ) as HTMLElement;
       section.style.overflow = "hidden";
       section.style.border = "20px solid transparent";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
       // From the top left, so the border's rendered thickness is a plain
       // doubling rather than a function of where the box happens to sit.
       section.style.transformOrigin = "0 0";
