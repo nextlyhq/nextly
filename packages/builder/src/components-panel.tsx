@@ -51,7 +51,7 @@ import {
 } from "./insert-panel";
 import {
   filterEntries,
-  paletteGroups,
+  unplaceableComponentEntries,
   type ComponentInsertEntry,
   type SavedComponent,
 } from "./inserter";
@@ -108,17 +108,33 @@ const NO_BLOCKS: NonNullable<InsertPanelProps["definitions"]> = [];
 /** How many placeholder rows stand in while the read is on its way. */
 const PLACEHOLDER_ROWS = 3;
 
-/** The component entries of the catalogue, in the order Add groups them. */
-function componentEntries(
+/**
+ * What the panel says of a component with nothing in it that can be placed:
+ * one saved without content, or with none the canvas could draw. It is
+ * listed so it can be opened and filled, and refused where Add leaves it out.
+ */
+const NOTHING_TO_PLACE = "Nothing in it can be placed yet.";
+
+/**
+ * Every row the panel lists, in the library's order, as Add offers its
+ * component tiles: the catalogue's entry for a component, or for one it
+ * offers none, its entry with nothing to place.
+ */
+function componentRows(
+  components: readonly SavedComponent[],
   catalog: ReturnType<typeof useInsertOffers>["catalog"],
+  unplaceable: readonly ComponentInsertEntry[],
   query: string
 ): readonly ComponentInsertEntry[] {
-  const offered = catalog.filter(
-    (entry): entry is ComponentInsertEntry => entry.kind === "component"
-  );
-  return paletteGroups(filterEntries(offered, query)).flatMap(
-    group => group.entries
-  );
+  const byId = new Map<string, ComponentInsertEntry>();
+  for (const entry of [...unplaceable, ...catalog]) {
+    if (entry.kind === "component") byId.set(entry.componentId, entry);
+  }
+  const rows = components.flatMap(component => {
+    const entry = byId.get(component.id);
+    return entry === undefined ? [] : [entry];
+  });
+  return filterEntries(rows, query);
 }
 
 /** Move focus to the row before or after `from`, or back to the search. */
@@ -164,7 +180,12 @@ export function ComponentsPanel({
     inside,
     onInsert,
   });
-  const entries = componentEntries(catalog, query);
+  const unplaceable = React.useMemo(
+    () => unplaceableComponentEntries(components, componentDefinitions),
+    [components, componentDefinitions]
+  );
+  const listed = componentRows(components, catalog, unplaceable, "");
+  const entries = componentRows(components, catalog, unplaceable, query);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
   const listRef = React.useRef<HTMLUListElement | null>(null);
 
@@ -222,7 +243,7 @@ export function ComponentsPanel({
       <LibraryNotices library={library} tier="components" />
       <PanelBody
         loading={loading}
-        anyOffered={catalog.some(entry => entry.kind === "component")}
+        anyListed={listed.length > 0}
         unavailable={library?.components === "unavailable"}
         query={query}
         matches={entries.length}
@@ -304,7 +325,7 @@ function ComponentSearch({
  */
 function PanelBody({
   loading,
-  anyOffered,
+  anyListed,
   unavailable,
   query,
   matches,
@@ -312,7 +333,7 @@ function PanelBody({
   children,
 }: {
   loading: boolean;
-  anyOffered: boolean;
+  anyListed: boolean;
   unavailable: boolean;
   query: string;
   /** How many rows the search leaves. */
@@ -320,7 +341,7 @@ function PanelBody({
   empty: React.ReactNode;
   children: React.ReactNode;
 }): React.JSX.Element | null {
-  if (loading && !anyOffered) {
+  if (loading && !anyListed) {
     return (
       <div className="nx-components-panel__body">
         <p role="status" className="nx-sr-only">
@@ -334,7 +355,7 @@ function PanelBody({
       </div>
     );
   }
-  if (!anyOffered) return unavailable ? null : <>{empty}</>;
+  if (!anyListed) return unavailable ? null : <>{empty}</>;
   if (matches === 0) {
     return (
       <p className="nx-insert-panel__note">
@@ -374,7 +395,10 @@ function ComponentRow({
   onEdit?: () => void;
 }): React.JSX.Element {
   const id = React.useId();
-  const aside = tileAside(offer, document);
+  // Every entry the catalogue holds has an offer; one without is a component
+  // with nothing to place.
+  const placeable = offer !== undefined;
+  const aside = placeable ? tileAside(offer, document) : NOTHING_TO_PLACE;
   const described = [
     aside === undefined ? undefined : `${id}-where`,
     entry.description === "" ? undefined : `${id}-what`,
@@ -384,7 +408,9 @@ function ComponentRow({
   return (
     <li
       className="nx-components-panel__row"
-      data-refused={offer?.refusal === undefined ? undefined : "true"}
+      data-refused={
+        placeable && offer.refusal === undefined ? undefined : "true"
+      }
       data-first-match={firstMatch ? "true" : undefined}
     >
       <button
