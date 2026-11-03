@@ -635,7 +635,10 @@ describe("the inspector's Content and Style tabs", () => {
     const list = ruleBody(".nx-inspector__tablist");
     expect(list).toContain("justify-content: flex-start");
     expect(list).toContain("height: var(--nx-builder-control-height)");
-    expect(list).toContain("border-block-end: 1px solid var(--nx-border)");
+    // The builder's border token, which more contrast promotes.
+    expect(list).toContain(
+      "border-block-end: 1px solid var(--nx-builder-border)"
+    );
     expect(list).toContain("background: transparent");
     const tab = ruleBody(".nx-inspector__tab");
     expect(tab).toContain("flex: none");
@@ -650,6 +653,14 @@ describe("the inspector's Content and Style tabs", () => {
     expect(active).toContain("border-block-end-color: var(--nx-foreground)");
     expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
       "outline: 2px solid var(--nx-ring)"
+    );
+  });
+
+  it("keeps the open tab's line in forced colours", () => {
+    // Forced colours replace the palette; the line is named in system colours
+    // so the open tab stays marked.
+    expect(FLAT).toContain(
+      '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"] { border-block-end-color: CanvasText; } }'
     );
   });
 });

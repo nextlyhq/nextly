@@ -2546,7 +2546,8 @@
   height: var(--nx-builder-control-height);
   padding: 0;
   border: 0;
-  border-block-end: 1px solid var(--nx-border);
+  /* The builder's border token, which a request for more contrast promotes. */
+  border-block-end: 1px solid var(--nx-builder-border);
   border-radius: 0;
   background: transparent;
 }
@@ -2588,6 +2589,13 @@
 .nx-inspector__tab:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
+}
+
+/* Forced colours replace the palette: the open tab's line in a system colour. */
+@media (forced-colors: active) {
+  .nx-inspector__tab[data-state="active"] {
+    border-block-end-color: CanvasText;
+  }
 }
 
 .nx-style-inspector {
