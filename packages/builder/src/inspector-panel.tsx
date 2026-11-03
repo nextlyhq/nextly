@@ -701,9 +701,15 @@ function SelectionInspector({
         onValueChange={tabChangeHandler(setTab, styleState?.onChange)}
         className="nx-inspector__tabs"
       >
-        <TabsList>
+        {/* A segmented control, as the Design panel draws its tabs; the
+            classes carry it, over the shared underline tabs. */}
+        <TabsList className="nx-inspector__tablist">
           {INSPECTOR_TABS.map(tab => (
-            <TabsTrigger key={tab.value} value={tab.value}>
+            <TabsTrigger
+              key={tab.value}
+              value={tab.value}
+              className="nx-inspector__tab"
+            >
               {tab.label}
             </TabsTrigger>
           ))}

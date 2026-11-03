@@ -2532,13 +2532,54 @@
 }
 
 /*
- * The chosen tab's words in the panel's own text colour, with the accent left
- * to its underline. The accent as text measured 4.09:1 on the panel surface,
- * under the 4.5:1 that text this size needs; the underline still marks which
- * tab is chosen, and the words stay readable in both schemes.
+ * Content and Style as a segmented control, as the Design panel draws its
+ * tabs: the chosen tab raised on the card surface within a muted track, at
+ * the density's height. Every other choice of two in the editor is segmented,
+ * and an underline under two words read as a different control. Unlayered,
+ * so these outrank the shared tabs' underline utilities.
  */
-.nx-inspector__tabs [role="tab"][data-state="active"] {
+.nx-inspector__tablist {
+  display: flex;
+  height: var(--nx-builder-control-height);
+  padding: 2px;
+  gap: 2px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--nx-muted);
+}
+
+.nx-inspector__tab {
+  flex: 1;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector__tab:hover {
+  color: var(--nx-foreground);
+}
+
+/*
+ * The chosen tab's words in the panel's own text colour, never the accent,
+ * which measured 4.09:1 as text on the panel surface, under the 4.5:1 text
+ * this size needs; the raised surface marks which tab is chosen.
+ */
+.nx-inspector__tab[data-state="active"] {
+  background: var(--nx-card);
   color: var(--nx-builder-text, var(--nx-foreground));
+  box-shadow: var(--shadow-sm);
+}
+
+.nx-inspector__tab:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
 }
 
 .nx-style-inspector {

@@ -151,6 +151,18 @@ describe("what InspectorPanel forwards to the style tab", () => {
     ).toBeDefined();
   });
 
+  it("draws Content and Style as a segmented control", () => {
+    // Named for the stylesheet's segmented rules, which replace the shared
+    // underline tabs in the inspector only.
+    register();
+    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+    const style = screen.getByRole("tab", { name: "Style" });
+    expect(style.className).toContain("nx-inspector__tab");
+    expect(style.closest('[role="tablist"]')?.className).toContain(
+      "nx-inspector__tablist"
+    );
+  });
+
   it("shows no class surface when the host passed nothing", () => {
     // The control: the assertion above must be about forwarding, not about the
     // selector rendering unconditionally.

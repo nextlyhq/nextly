@@ -582,3 +582,24 @@ describe("the inspector at the editor's density", () => {
     );
   });
 });
+
+describe("the inspector's Content and Style tabs", () => {
+  it("are a segmented control, as the Design panel draws its tabs", () => {
+    // An underline under two words read as a different control from every
+    // other choice of two in the editor, which are segmented.
+    const list = ruleBody(".nx-inspector__tablist");
+    expect(list).toContain("height: var(--nx-builder-control-height)");
+    expect(list).toContain("background: var(--nx-muted)");
+    expect(list).toContain("border: 0");
+    const tab = ruleBody(".nx-inspector__tab");
+    expect(tab).toContain("border: 0");
+    expect(tab).toContain("background: transparent");
+    expect(tab).toContain("color: var(--nx-muted-foreground)");
+    const active = ruleBody('.nx-inspector__tab[data-state="active"]');
+    expect(active).toContain("background: var(--nx-card)");
+    expect(active).toContain("box-shadow: var(--shadow-sm)");
+    expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
+      "outline: 2px solid var(--nx-ring)"
+    );
+  });
+});
