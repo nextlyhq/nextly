@@ -244,9 +244,9 @@ export function layersOf(
         conditional: hasConditions(node),
         breakpointHidden: hiddenAtSomeBreakpoint(node),
         ...(device === undefined ? {} : { hiddenHere }),
-        ...(hiddenHere || hiddenBy === undefined
-          ? {}
-          : { hiddenWith: hiddenBy }),
+        // Kept on a row hidden itself as well: showing it here shows nothing
+        // while the block around it is hidden, so the row offers no eye.
+        ...(hiddenBy === undefined ? {} : { hiddenWith: hiddenBy }),
         // Declaration order across every slot the node holds. `Object.values`
         // preserves insertion order for string keys, which is the order the
         // document was written in — so the tree matches the document rather

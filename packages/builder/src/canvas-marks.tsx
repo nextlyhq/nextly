@@ -191,8 +191,11 @@ function outlineOf(
 interface MarkInputs {
   /** The block a Layers row points at, or `null`. */
   readonly hovered: string | null;
-  /** Selected blocks shown although the page hides them on this device. */
-  readonly revealed: readonly string[];
+  /**
+   * Selected blocks shown although the page hides them on this device, as a
+   * set: asked once per marked element, and a selection can hold thousands.
+   */
+  readonly revealed: ReadonlySet<string>;
 }
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
@@ -226,7 +229,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           secondary: selected !== "primary",
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
-          hidden: address !== null && inputs.revealed.includes(address),
+          hidden: address !== null && inputs.revealed.has(address),
         });
       }
       // An exposed part that is itself selected keeps its ring alone: one
@@ -304,7 +307,7 @@ export function CanvasMarks({
         ? NO_MARKS
         : marksOf(element, {
             hovered,
-            revealed: JSON.parse(revealedKey) as string[],
+            revealed: new Set(JSON.parse(revealedKey) as string[]),
           });
     setMarks(current => (sameMarks(current, next) ? current : next));
   }, [hovered, revealedKey]);

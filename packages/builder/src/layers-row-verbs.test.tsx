@@ -283,6 +283,46 @@ describe("LayerRowMenu", () => {
   });
 });
 
+describe("a row's eye and padlock", () => {
+  it("take no focus from the row on a press, so its keys keep working", () => {
+    register();
+    render(<Host document={page(node("a", "core/heading"))} />);
+    const eye = action("a", "toggle-hidden");
+    if (eye === null) throw new Error("no eye");
+    // A cancelled mousedown is what keeps a browser from focusing the button.
+    expect(fireEvent.mouseDown(eye)).toBe(false);
+    const padlock = action("a", "toggle-lock");
+    if (padlock === null) throw new Error("no padlock");
+    expect(fireEvent.mouseDown(padlock)).toBe(false);
+  });
+});
+
+describe("a hidden block inside a hidden block", () => {
+  it("says both, and offers no eye that could only be refused", () => {
+    register();
+    render(
+      <Host
+        document={page(
+          node("box", "core/box", {
+            name: "Hero",
+            visibility: { devices: { tablet: false } },
+            slots: {
+              children: [
+                node("in", "core/heading", {
+                  visibility: { devices: { tablet: false } },
+                }),
+              ],
+            },
+          })
+        )}
+      />
+    );
+    fireEvent.keyDown(row("box"), { key: "ArrowRight" });
+    expect(row("in").textContent).toContain("Hidden");
+    expect(action("in", "toggle-hidden")).toBeNull();
+  });
+});
+
 describe("the lock", () => {
   it("locks and unlocks the block from its row", () => {
     register();

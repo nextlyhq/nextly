@@ -409,7 +409,9 @@ function RowAction({
       {...(pinned ? { "data-pinned": "" } : {})}
       title={title}
       // Neither a drag nor a selection of the row: the press is the action.
+      // Nor a focus: the row keeps it, so its keystrokes still reach it.
       onPointerDown={stop}
+      onMouseDown={event => event.preventDefault()}
       onDoubleClick={stop}
       onClick={event => {
         event.stopPropagation();
@@ -1043,6 +1045,11 @@ export function LayersPanel({
   // Nothing stays pointed at once the panel goes, or the canvas would keep
   // outlining a block no row is under.
   React.useEffect(() => () => setHovered(null), [setHovered]);
+  // A drag's own marks say where the block will land, so the hover outline
+  // goes as the drag starts, though the pointer entered no other row.
+  React.useEffect(() => {
+    if (drag.draggingId !== null) setHovered(null);
+  }, [drag.draggingId, setHovered]);
 
   const revealChosen = useRevealChosen(canvasRoot);
 
