@@ -114,8 +114,9 @@ function markedAt(target: EventTarget | null): {
  * @param loadRichText - how to obtain the shared rich-text editor, when there is one
  * @param onFinished - told how every finished PASSAGE turned out; see {@link InlineRichTextFinished}
  * @param onPartOf - told the placement whose text was double-clicked when that
- *   text belongs to the component's design rather than to a field it exposes;
- *   the placement is selected first, and the host says so
+ *   text belongs to the component's design rather than to a field it exposes,
+ *   or to a field a lock the component sets holds, by that field's exposure
+ *   id; the placement is selected first, and the host says so
  * @param passages - where inspector fields hold open passages; `commit`
  *   finishes them first, see {@link OpenPassages}
  * @returns one edit at a time, and the canvas handler that starts it
@@ -124,7 +125,7 @@ export function useInlineEditing(
   editor: EditorState,
   loadRichText?: InlineRichTextEditorLoader,
   onFinished?: InlineRichTextFinished,
-  onPartOf?: (placementId: string) => void,
+  onPartOf?: (placementId: string, heldExposureId?: string) => void,
   passages?: OpenPassages
 ): UseInlineEditingResult {
   const subscribe = useCallback(
@@ -262,7 +263,11 @@ export function useInlineEditing(
         if (rich.commit().status === "refused") return;
         plain.commit();
         editor.select(composed.placementId);
-        onPartOf?.(composed.placementId);
+        if (composed.heldExposureId === undefined) {
+          onPartOf?.(composed.placementId);
+        } else {
+          onPartOf?.(composed.placementId, composed.heldExposureId);
+        }
         return;
       }
       const point =
