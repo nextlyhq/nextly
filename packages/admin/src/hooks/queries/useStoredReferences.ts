@@ -27,6 +27,7 @@ import {
 import type { FieldConfig } from "nextly/config";
 import { useCallback, useEffect, useRef } from "react";
 
+import { isApiError } from "@admin/lib/api/parseApiError";
 import {
   populatedAmongStored,
   withStoredReferences,
@@ -158,7 +159,8 @@ export interface StoredReferencesResult<T> {
   isLoading: boolean;
   /**
    * Why there is no document to edit. A failed read of a document already on
-   * screen is not one: that document stays, and `latest.failed` says so.
+   * screen is not one, unless it was refused or the document is gone: that
+   * document stays, and `latest.failed` says so.
    */
   error: Error | null;
   latest: DocumentLatest;
@@ -256,6 +258,19 @@ function readError(
 }
 
 /**
+ * Whether a failed read ends the document's place on screen: refused, as after
+ * the editor's access to it is taken away, or gone. Kept, a copy the editor may
+ * no longer read stays in front of them, and a deleted one offers a retry that
+ * cannot succeed. Any other failure, such as the server being out of reach,
+ * leaves the copy on screen, held read-only.
+ */
+function endsDocument(failure: Error | null): boolean {
+  return (
+    isApiError(failure) && (failure.status === 403 || failure.status === 404)
+  );
+}
+
+/**
  * Keep the merge of a pair of reads that agree, made at `readAt`, and say
  * whether it is a new one.
  *
@@ -330,14 +345,16 @@ export function useWithStoredReferences<T extends Doc>({
   const readAt = Math.min(populated.dataUpdatedAt, stored.dataUpdatedAt);
   if (agree && rememberMerge(last, pair, scope, readAt)) retries.reset();
 
-  const document =
+  const failure = readError(populated, stored, retries.spent);
+  const merged =
     !retries.spent && last.current?.scope === scope
       ? last.current.document
       : undefined;
   // A read that fails after the document is on screen leaves the editor in
   // place, edits and all, for the lock surface to hold read-only; only a read
-  // that never produced a document replaces the editor with the error.
-  const failure = readError(populated, stored, retries.spent);
+  // that never produced a document, or one that ends it, replaces the editor
+  // with the error.
+  const document = endsDocument(failure) ? undefined : merged;
   const error = document === undefined ? failure : null;
   const { refetch: refetchPopulated } = populated;
   const { refetch: refetchStored } = stored;

@@ -712,8 +712,11 @@ export default function EditEntryPage({
               generated element box. A view rooted in bare text, or in an
               element with `display: contents`, produces none and is
               auto-placed into a gutter. The registry imposes no root-element
-              contract, so the page provides the box. */}
-          <div>
+              contract, so the page provides the box. Keyed on the loads of
+              the latest version, since a view may read `initialData` once, as
+              it mounts: one that gains the document starts again from the
+              copy just loaded rather than unlocking over the one before. */}
+          <div key={customViewLock.reloads}>
             <PluginSlot path={customEditViewPath} props={customViewProps} />
           </div>
         </MeasuredPageFrame>

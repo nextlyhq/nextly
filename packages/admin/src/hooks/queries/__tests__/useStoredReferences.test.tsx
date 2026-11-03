@@ -23,6 +23,7 @@ vi.mock("@tanstack/react-query", async importOriginal => ({
     ).length,
 }));
 
+import { parseApiError } from "@admin/lib/api/parseApiError";
 import { RESTRICTED_REFERENCE } from "@admin/lib/form/stored-references";
 
 import { useWithStoredReferences } from "../useStoredReferences";
@@ -333,6 +334,55 @@ describe("useWithStoredReferences", () => {
 
       rerender({ populated: read(populatedV1) });
       expect(result.current.latest.failed).toBe(false);
+    });
+
+    it.each([
+      [403, "the editor may no longer read it"],
+      [404, "it was deleted"],
+    ])("ends the document when the read is refused with %i: %s", status => {
+      const ended = parseApiError(
+        { error: { code: "X", message: "Refused.", requestId: "r1" } },
+        status
+      );
+      const { result, rerender } = renderHook(
+        (props: { populated: never }) =>
+          useWithStoredReferences({
+            fields: FIELDS,
+            documentKey: DOCUMENT,
+            populated: props.populated,
+            stored: read(storedV1),
+            scope: "e",
+          }),
+        { initialProps: { populated: read(populatedV1) } }
+      );
+      expect(result.current.document).toBeDefined();
+
+      rerender({ populated: read(populatedV1, { error: ended }) });
+      expect(result.current.document).toBeUndefined();
+      expect(result.current.error).toBe(ended);
+      expect(result.current.latest.failed).toBe(false);
+    });
+
+    it("keeps the document through a server that answers with an error of its own", () => {
+      const unreachable = parseApiError(
+        { error: { code: "INTERNAL", message: "Down.", requestId: "r1" } },
+        503
+      );
+      const { result, rerender } = renderHook(
+        (props: { populated: never }) =>
+          useWithStoredReferences({
+            fields: FIELDS,
+            documentKey: DOCUMENT,
+            populated: props.populated,
+            stored: read(storedV1),
+            scope: "e",
+          }),
+        { initialProps: { populated: read(populatedV1) } }
+      );
+      rerender({ populated: read(populatedV1, { error: unreachable }) });
+      expect(result.current.document).toBeDefined();
+      expect(result.current.error).toBeNull();
+      expect(result.current.latest.failed).toBe(true);
     });
 
     it("is the page's error when no document ever arrived", () => {

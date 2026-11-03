@@ -44,6 +44,13 @@ export interface DocumentLockSurface extends DocumentLockAffordances {
   readonly requestAccess: () => void;
   /** Ask again for the latest version of the document after it failed to load. */
   readonly retryLoad: () => void;
+  /**
+   * Moves each time a load of the latest version reaches the document on
+   * screen, and at no other time. A view that reads its document once, as it
+   * mounts, is keyed on it, so it starts again from the copy just loaded
+   * rather than unlocking over the one it read before.
+   */
+  readonly reloads: number;
 }
 
 export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
@@ -127,7 +134,7 @@ function useGainLoad(
   gains: number,
   latest: DocumentLatest | undefined,
   claiming: boolean
-): { load: LatestDocumentLoad; retry: () => void } {
+): { load: LatestDocumentLoad; retry: () => void; reloads: number } {
   const [handled, setHandled] = useState(gains);
   const [load, setLoad] = useState<GainLoad | null>(null);
   const attempts = useRef(0);
@@ -164,7 +171,20 @@ function useGainLoad(
   return {
     load: latestLoad(latest, gains !== handled, load),
     retry: start,
+    reloads: loadsReached(latest, load),
   };
+}
+
+/**
+ * How many loads have reached the document: the last one once reads made
+ * since it was asked for are on screen, the one before it until then.
+ */
+function loadsReached(
+  latest: DocumentLatest | undefined,
+  load: GainLoad | null
+): number {
+  if (load === null) return 0;
+  return latest?.readAt !== load.from ? load.attempt : load.attempt - 1;
 }
 
 /** What someone who may only read the document is shown. */
@@ -230,5 +250,6 @@ export function useDocumentLockSurface({
     takeOver,
     requestAccess,
     retryLoad: gainLoad.retry,
+    reloads: gainLoad.reloads,
   };
 }
