@@ -27,6 +27,7 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import {
+  isUsableDefault,
   layoutExists,
   readLayoutSettings,
   relationId,
@@ -272,8 +273,9 @@ async function finishRestore(
  * cannot tell whether its create ran. The one resume path, for the sweep and
  * for the default repair alike.
  *
- * A recorded Layout deleted since is not resumed against: the row is settled
- * and logged, and the default is left to the repair's own fallback.
+ * A recorded Layout that can no longer be a default (deleted or unpublished
+ * since) is not resumed against: the row is settled and logged, and the
+ * default is left to the repair's own fallback.
  */
 export async function resumeRestore(
   deps: RestoreDeps & { readonly nextly: Pick<DefaultLayoutDirectApi, "find"> },
@@ -281,10 +283,10 @@ export async function resumeRestore(
 ): Promise<string | null> {
   const restored = removal.copy?.restoredAs;
   if (removal.copy === null || restored === undefined) return null;
-  if (!(await layoutExists(deps.nextly, deps.slugs, restored))) {
+  if (!(await isUsableDefault(deps.nextly, deps.slugs, restored))) {
     await deps.store.settle(removal.layoutId, removal.token, "restoring");
     deps.warn(
-      "[page-builder] the Layout a stopped restore created was deleted since, so the restore was not finished; the default falls back to the site's own",
+      "[page-builder] the Layout a stopped restore created was deleted or unpublished since, so the restore was not finished; the default falls back to the site's own",
       { removedLayout: removal.layoutId, restoredLayout: restored }
     );
     return null;

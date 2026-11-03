@@ -1769,6 +1769,55 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("falls back to the seed when the Layout a stopped restore recorded was unpublished since", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        const recorded = (await fence().removalOf(other))?.copy?.restoredAs;
+        expect(recorded).toBeDefined();
+        // The restored Layout is unpublished before anything resumes, past
+        // every hook: it still exists, but can't be a default.
+        await t.adapter.update(
+          await tableOf(t, LAYOUTS_SLUG),
+          { status: "draft" },
+          { and: [{ column: "id", op: "=", value: recorded }] }
+        );
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
       it("has the default repair finish a restore that stopped after its create, before it would fall back to the seed", async () => {
         const t = await boot();
         const other = await layout(t, "Other", "other");
