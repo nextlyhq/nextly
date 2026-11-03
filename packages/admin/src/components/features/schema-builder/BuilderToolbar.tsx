@@ -9,7 +9,7 @@ import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import type { JSX } from "react";
 
-import { Lock, Settings } from "@admin/components/icons";
+import { Lock, Plus, Settings } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
 
 // Prose names the kind through the shared table, so the toolbar spells each
@@ -24,6 +24,8 @@ type Props = {
   unsavedCount: number;
   /** True when the entity is code-first / locked from UI edits. */
   locked?: boolean;
+  /** Opens the field picker for a field at the end of the list. */
+  onAddField: () => void;
   onOpenSettings: () => void;
   onSave: () => void;
 };
@@ -55,6 +57,7 @@ export function BuilderToolbar({
   name,
   unsavedCount,
   locked = false,
+  onAddField,
   onOpenSettings,
   onSave,
 }: Props): JSX.Element {
@@ -108,6 +111,20 @@ export function BuilderToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        {/* Adding is an edit, so a read-only entity has no add here. */}
+        {!locked && (
+          // Icon only on a phone, so the entity's name keeps its room; the
+          // label stays its accessible name at every width.
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Add field"
+            onClick={onAddField}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Add field</span>
+          </Button>
+        )}
         {/* Settings stays enabled when locked so the config can be viewed
             read-only; only Save is gated. */}
         <Button

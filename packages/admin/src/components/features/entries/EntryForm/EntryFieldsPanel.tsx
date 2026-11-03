@@ -30,6 +30,13 @@ import { computeFieldsBeside } from "@admin/lib/builder/takeoverLayout";
 import { EntryFormContent } from "./EntryFormContent";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 
+/**
+ * How the entry's fields are framed: as the form's own sections, in a panel,
+ * or flat, for a dialog that frames them itself and where the slug reads as
+ * the page's address. The fields and their rules are the same either way.
+ */
+export type EntryFieldsPresentation = "panel" | "dialog";
+
 export interface EntryFieldsPanelProps {
   /** The document's identity — title, slug. */
   page: FieldConfig[];
@@ -49,6 +56,8 @@ export interface EntryFieldsPanelProps {
    * has a public address. Absent means no warning is warranted.
    */
   slugName?: string;
+  /** How the fields are framed. Defaults to the panel's sections. */
+  presentation?: EntryFieldsPresentation;
 }
 
 /**
@@ -116,7 +125,20 @@ export function EntryFieldsPanel({
   readOnly,
   mode,
   slugName,
+  presentation = "panel",
 }: EntryFieldsPanelProps): React.JSX.Element {
+  if (presentation === "dialog") {
+    return (
+      <FlatEntryFields
+        page={page}
+        content={content}
+        disabled={disabled}
+        readOnly={readOnly}
+        mode={mode}
+        slugName={slugName}
+      />
+    );
+  }
   return (
     <div className="space-y-4 p-4" onKeyDown={blockImplicitSubmit}>
       {page.length === 0 ? null : (
@@ -173,6 +195,67 @@ export function EntryFieldsPanel({
  * uncovered is the form CALLING this, which no test reaches today because
  * nothing renders `EntryForm` at all.
  */
+/** A field shown under another label in this view, its rules untouched. */
+function relabelled(
+  fields: FieldConfig[],
+  name: string,
+  label: string
+): FieldConfig[] {
+  return fields.map(field =>
+    field.name === name ? { ...field, label } : field
+  );
+}
+
+/**
+ * The fields flat, for a dialog: the page's own group (its title, and its
+ * slug read as the page's address with the full address under it and the
+ * change warning), then the rest, with no section cards or form headings.
+ */
+function FlatEntryFields({
+  page,
+  content,
+  disabled,
+  readOnly,
+  mode,
+  slugName,
+}: Omit<EntryFieldsPanelProps, "presentation">): React.JSX.Element {
+  // The slug is the field named so, whether or not its address is live yet.
+  const slugField = slugName ?? "slug";
+  return (
+    <div className="space-y-6" onKeyDown={blockImplicitSubmit}>
+      {page.length === 0 ? null : (
+        <section aria-labelledby="entry-fields-page" className="space-y-1">
+          <h3 id="entry-fields-page" className="text-sm font-semibold">
+            Page
+          </h3>
+          <EntryFormContent
+            fields={relabelled(page, slugField, "Address")}
+            disabled={disabled}
+            readOnly={readOnly}
+            mode={mode}
+          />
+          {/* Warned about only where the address is already live. */}
+          {slugName === undefined ? null : (
+            <PublicUrlChangeNotice
+              slugName={slugName}
+              active
+              className="mt-2 block"
+            />
+          )}
+        </section>
+      )}
+      {content.length === 0 ? null : (
+        <EntryFormContent
+          fields={content}
+          disabled={disabled}
+          readOnly={readOnly}
+          mode={mode}
+        />
+      )}
+    </div>
+  );
+}
+
 export function fieldsBesidePanel(
   allFields: FieldConfig[],
   excludePath: string,
@@ -188,6 +271,8 @@ export function fieldsBesidePanel(
     values?: Record<string, unknown>;
     /** Whether the document has a public address the slug decides. */
     hasPublicAddress?: boolean;
+    /** How the fields are framed. */
+    presentation?: EntryFieldsPresentation;
   } = {}
 ): React.ReactNode | null {
   const beside = computeFieldsBeside(allFields, excludePath, options.values);
@@ -203,6 +288,9 @@ export function fieldsBesidePanel(
       disabled={options.disabled}
       readOnly={options.readOnly}
       mode={options.mode}
+      {...(options.presentation === undefined
+        ? {}
+        : { presentation: options.presentation })}
       slugName={
         options.hasPublicAddress === true && slug !== undefined
           ? (slug.name ?? "slug")

@@ -50,6 +50,12 @@ let edit: ((next: BlockDocument) => void) | undefined;
 /** The form's values as last rendered, which is what a save would send. */
 let values: FieldValues | undefined;
 
+/** The saved copy the open editor last judged locks against. */
+let lastStored: BlockDocument | undefined;
+
+/** Resets the host's form, as a save does to what the server stored. */
+let resetForm: ((next: FieldValues) => void) | undefined;
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
   const nothing = (): null => null;
@@ -92,6 +98,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     TokensPanel: nothing,
     OnboardingChecklist: nothing,
@@ -115,9 +122,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
      */
     useEditorState: ({
       initialDocument,
+      stored,
     }: {
       initialDocument: BlockDocument;
+      stored?: BlockDocument;
     }) => {
+      lastStored = stored;
       const [document, setDocument] = React.useState(() => {
         seeded.push(initialDocument);
         return initialDocument;
@@ -152,8 +162,29 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("../site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
+  // No preview here: the surrounding editor offers none.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the view, as the admin draws it at that page's own
   // address.
@@ -190,15 +221,15 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // Nothing stored, read successfully: the site's style is ready, so the
   // read-only page is drawn rather than held back for a sheet still coming.
-  useSingleDocument: () => ({
-    data: undefined,
-    isPending: false,
-    error: null,
-  }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -269,6 +300,7 @@ function Values({
  */
 function Host({
   field = CONTENT_FIELD,
+  fieldPath,
   readOnly = false,
   stored = {
     body: pageSaying(BODY_TEXT),
@@ -276,15 +308,18 @@ function Host({
   },
 }: {
   field?: DocumentViewProps["field"];
+  fieldPath?: string;
   readOnly?: boolean;
   stored?: FieldValues;
 }): React.JSX.Element {
-  const { control } = useForm<FieldValues>({ defaultValues: stored });
+  const { control, reset } = useForm<FieldValues>({ defaultValues: stored });
+  resetForm = reset;
   return (
     <>
       <PageBuilderView
         control={control}
         field={field}
+        {...(fieldPath === undefined ? {} : { fieldPath })}
         readOnly={readOnly}
         exit={exit}
       />
@@ -302,6 +337,8 @@ beforeEach(() => {
   seeded.length = 0;
   edit = undefined;
   values = undefined;
+  lastStored = undefined;
+  resetForm = undefined;
   exit.mockClear();
 });
 
@@ -317,6 +354,17 @@ describe("the field the view edits", () => {
     // field holds a well-formed page too, so an editor bound to it would be
     // seeded with a plausible document and fail here only on its words.
     expect(seeded).toEqual([pageSaying(CONTENT_TEXT)]);
+  });
+
+  it("holds locks against the named field's saved copy, and follows it when a save resets the form", () => {
+    render(<Host />);
+    expect(lastStored).toEqual(pageSaying(CONTENT_TEXT));
+
+    // A save resets the form to what the server stored. The editor then
+    // judges the next edit against that page, not the one it opened with.
+    act(() => resetForm?.({ body: pageSaying(BODY_TEXT), content: EDITED }));
+
+    expect(lastStored).toEqual(EDITED);
   });
 
   it("commits an edit into the named field on leaving, and leaves the other alone", () => {
@@ -339,6 +387,39 @@ describe("the field the view edits", () => {
     expect(seeded).toEqual([pageSaying(BODY_TEXT)]);
     expect(values?.body).toEqual(EDITED);
     expect(values?.content).toEqual(pageSaying(CONTENT_TEXT));
+  });
+});
+
+describe("a field inside a named group", () => {
+  const HERO_TEXT = "The words in the hero's own page";
+  // The group's field shares its name with a top-level one, so a view that
+  // bound by the declaration's own name would reach a well-formed page and
+  // fail only on its words.
+  const nested = {
+    field: declaration({ name: "body", type: "blocks" }),
+    fieldPath: "hero.body",
+    stored: {
+      body: pageSaying(BODY_TEXT),
+      hero: { body: pageSaying(HERO_TEXT) },
+    },
+  };
+
+  it("edits the field at its path, and leaves the top-level field of that name alone", () => {
+    render(<Host {...nested} />);
+    expect(seeded).toEqual([pageSaying(HERO_TEXT)]);
+
+    act(() => edit?.(EDITED));
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+
+    expect(values?.hero).toEqual({ body: EDITED });
+    expect(values?.body).toEqual(pageSaying(BODY_TEXT));
+  });
+
+  it("draws the page at its path while read-only", () => {
+    const { container } = render(<Host {...nested} readOnly />);
+
+    expect(container.textContent).toContain(HERO_TEXT);
+    expect(container.textContent).not.toContain(BODY_TEXT);
   });
 });
 

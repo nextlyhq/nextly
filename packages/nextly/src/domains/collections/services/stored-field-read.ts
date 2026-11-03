@@ -25,6 +25,8 @@
  *
  * @module domains/collections/services/stored-field-read
  */
+import { and, eq } from "drizzle-orm";
+
 import type {
   DynamicCollectionRecord,
   FieldDefinition,
@@ -38,6 +40,15 @@ import type {
   PluginStoredValueTarget,
 } from "../../../plugins/contributions";
 import type { EntryWriteContext } from "../../../shared/lib/entry-validation";
+import type { LocalizedFieldRef } from "../../i18n/companion-join";
+import {
+  buildCompanionSchema,
+  type CompanionSchema,
+} from "../../i18n/runtime/companion-io";
+import {
+  cachedCompanionReadiness,
+  resolveCompanionSchemaReadiness,
+} from "../../i18n/runtime/companion-readiness";
 import { getFieldType } from "../../schema/field-types/field-type-registry";
 import type { VersionsDbApi } from "../../versions/db-api";
 import {
@@ -79,6 +90,8 @@ export function entryWriteContext(args: {
   kind: EntryWriteContext["kind"];
   slug: string;
   id?: string;
+  /** The language the write is judged in, for a document kept per language. */
+  locale?: string;
   connection: StoredFieldConnection;
 }): EntryWriteContext {
   const records = registryRecords(args.connection);
@@ -86,6 +99,8 @@ export function entryWriteContext(args: {
     kind: args.kind,
     slug: args.slug,
     ...(args.id === undefined ? {} : { id: args.id }),
+    ...(args.locale === undefined ? {} : { locale: args.locale }),
+    defaultLocale: args.connection.defaultLocale,
     // The executor is the transaction's own, and it is handed only for one.
     inTransaction: args.connection.executor !== undefined,
     readStored: (allowedType, target) =>
@@ -124,14 +139,25 @@ function registryRecords(connection: StoredFieldConnection): RegistryRecords {
 }
 
 /**
- * Read one stored top-level field of one entry, as `form` holds it.
+ * Read one stored field of one entry or single, as `form` holds it: a
+ * top-level field, or one inside named groups, named by its path
+ * (`hero.body`).
  *
  * `allowedType` is the only field type this read will return: a field of any
- * other type, or a field the entity does not declare at top level, is refused
- * by name rather than answered, because answering would make the scope the
- * caller set a suggestion. A localized field is refused the same way: its
- * values live per language in a companion row, and answering from the main row
- * would return something no reader receives.
+ * other type, or a field the entity does not declare at top level or inside
+ * named groups, is refused by name rather than answered, because answering
+ * would make the scope the caller set a suggestion.
+ *
+ * A named group stores its value whole, in one column of the group's name, so
+ * a field inside one is read from that column and then walked to by name. The
+ * working draft carries the same nesting and is walked the same way.
+ *
+ * A field stored per language is read in `target.locale`, or the app's
+ * default language when none is named: from the language's own companion row,
+ * never from the main row, which holds nothing a reader of that language
+ * receives. A language that stores nothing for it is absent rather than
+ * another language's value, so a caller judging a write against it measures
+ * against the field's starting value, which refuses more and never less.
  */
 export async function readStoredField(
   connection: StoredFieldConnection,
@@ -139,88 +165,397 @@ export async function readStoredField(
   target: StoredFieldTarget,
   records: RegistryRecords = registryRecords(connection)
 ): Promise<PluginStoredValue> {
-  const entity = await storedEntity(records, target, allowedType);
-  const field = entity.fields.find(entry => entry.name === target.field);
-  if (field === undefined || field.type !== allowedType) {
-    throw refused(target, allowedType, "is not a field of that type");
-  }
-  if ((field as { localized?: unknown }).localized === true) {
-    throw refused(target, allowedType, "is localized");
-  }
+  const entity = await storedEntity(connection, records, target, allowedType);
+  const path = storedFieldPath(entity, target, allowedType);
+  const locale = target.locale ?? connection.defaultLocale ?? null;
+  // Only a top-level field can be kept per language on its own: a field
+  // inside a group is stored in the group's value, and a group kept per
+  // language is refused by the path above.
+  const perLanguage =
+    path.within.length === 0
+      ? companionFieldOf(entity, path.column)
+      : undefined;
 
-  const rows = await connection.db.select<Record<string, unknown>>(
-    entity.tableName,
-    {
-      // The one column asked for: a row can hold other large values, and a
-      // composition reads up to a hundred definitions in one save.
-      columns: [target.field],
-      where: { and: [{ column: "id", op: "=", value: target.id }] },
-      limit: 1,
-    }
+  const row = await storedRow(
+    connection,
+    entity,
+    target,
+    path.column,
+    perLanguage
   );
-  const row = rows[0];
   if (row === undefined) return { kind: "absent" };
-  const live: PluginStoredValue = {
+  const shown = await shownValue(connection, entity, target, {
+    id: String(row.id),
+    column: path.column,
+    stored: row[path.column],
+    perLanguage,
+    locale,
+  });
+  const reached =
+    shown === undefined ? undefined : valueWithin(shown.value, path.within);
+  if (reached === undefined) return { kind: "absent" };
+  // Only a column's own value is stored encoded. A value reached inside a
+  // group was decoded with the group, and decoding it again would turn a
+  // string holding JSON text ("123", "null") into what that text says.
+  return {
     kind: "value",
-    value: decoded(row[target.field], allowedType),
+    value:
+      path.within.length === 0
+        ? decoded(reached.value, allowedType)
+        : reached.value,
   };
-  if (target.form === "published") return live;
+}
 
-  const drafted = await workingDraftValue(connection, entity, target);
-  return drafted === undefined
-    ? live
-    : { kind: "value", value: decoded(drafted.value, allowedType) };
+/**
+ * Where a stored read's field is kept: the column its top-level field is
+ * stored in, and the names that lead from that column's value to the field.
+ */
+interface StoredFieldPath {
+  readonly column: string;
+  /** Empty for a top-level field; the group names after the first, then the field's own. */
+  readonly within: readonly string[];
+}
+
+/**
+ * The column `target.field` is read from, refusing a path that does not lead
+ * through named groups alone to a field of `allowedType`.
+ *
+ * Only a named group is walked. A repeater's rows, a field-group instance and
+ * a presentational group are not: a row is named by its index, which a write
+ * can move, an instance is stored in its own table, and a presentational group
+ * stores nothing of its own. A group kept per language is refused as well,
+ * since its value is not the main row's to answer for every language; so is a
+ * group below the top flagged as translated in an entity kept per language:
+ * its author asked for a value per language, and the shared value is not one.
+ */
+function storedFieldPath(
+  entity: StoredEntity,
+  target: StoredFieldTarget,
+  allowedType: string
+): StoredFieldPath {
+  const refuse = (why: string) => refused(target, allowedType, why);
+  const names = target.field.split(".");
+  const fields = innermostGroupFields(entity, names.slice(0, -1), refuse);
+  const field = fields.find(entry => entry.name === names.at(-1));
+  if (field?.type !== allowedType) {
+    throw refuse("is not a field of that type");
+  }
+  return { column: names[0] ?? target.field, within: names.slice(1) };
+}
+
+/** A named group: a `group` field that declares fields of its own. */
+type NamedGroup = FieldDefinition & { fields: FieldDefinition[] };
+
+/**
+ * The fields of the innermost group `groups` names, walking from the entity's
+ * top level; the entity's own fields for a top-level read. Refused with
+ * `refuse`'s error where a name is not a named group, or names one kept per
+ * language.
+ */
+function innermostGroupFields(
+  entity: StoredEntity,
+  groups: readonly string[],
+  refuse: (why: string) => NextlyError
+): readonly FieldDefinition[] {
+  let fields: readonly FieldDefinition[] = entity.fields;
+  for (const [depth, name] of groups.entries()) {
+    const group = namedGroupIn(fields, name);
+    if (group === undefined) throw refuse("is not inside named groups alone");
+    if (groupKeptPerLanguage(entity, group, depth)) {
+      throw refuse("is inside a group kept per language");
+    }
+    fields = group.fields;
+  }
+  return fields;
+}
+
+/** The named group `name` among `fields`, or `undefined` where it is none. */
+function namedGroupIn(
+  fields: readonly FieldDefinition[],
+  name: string
+): NamedGroup | undefined {
+  return fields.find(
+    (entry): entry is NamedGroup =>
+      entry.name === name &&
+      entry.type === "group" &&
+      Array.isArray(entry.fields)
+  );
+}
+
+/**
+ * Whether a group on a read's path keeps its value per language: a top-level
+ * one by the companion schema every localized write is split by, and one
+ * below it by its own flag, in an entity kept per language.
+ */
+function groupKeptPerLanguage(
+  entity: StoredEntity,
+  group: NamedGroup,
+  depth: number
+): boolean {
+  return depth === 0
+    ? companionFieldOf(entity, group.name) !== undefined
+    : entity.localized && group.localized === true;
+}
+
+/**
+ * The value `names` lead to inside a group's stored value, or `undefined`
+ * where a group on the way holds no such key: the field then stores nothing.
+ *
+ * A group's value is JSON, stored as text on SQLite and as raw storage in a
+ * version snapshot, so a group read as a string is parsed the way every read
+ * path parses it. One that does not parse to an object holds nothing.
+ */
+function valueWithin(
+  value: unknown,
+  names: readonly string[]
+): { value: unknown } | undefined {
+  let at = value;
+  for (const name of names) {
+    const holder = typeof at === "string" ? parsedJson(at) : at;
+    if (
+      typeof holder !== "object" ||
+      holder === null ||
+      Array.isArray(holder) ||
+      !Object.hasOwn(holder, name)
+    ) {
+      return undefined;
+    }
+    at = (holder as Record<string, unknown>)[name];
+  }
+  return { value: at };
+}
+
+/**
+ * The value `target.form` shows: for `draft`, the pending working draft where
+ * a preview would show it; otherwise, and where none is shown, the stored
+ * value, read from the language's own companion row for a field kept per
+ * language and from the main row for any other.
+ */
+async function shownValue(
+  connection: StoredFieldConnection,
+  entity: StoredEntity,
+  target: StoredFieldTarget,
+  at: {
+    readonly id: string;
+    /** The column read: the field's own, or the top-level group holding it. */
+    readonly column: string;
+    readonly stored: unknown;
+    readonly perLanguage: CompanionField | undefined;
+    readonly locale: string | null;
+  }
+): Promise<{ value: unknown } | undefined> {
+  const drafted =
+    target.form === "draft"
+      ? await workingDraftValue(connection, entity, at.column, at.id, at.locale)
+      : undefined;
+  if (drafted !== undefined) return drafted;
+  return at.perLanguage === undefined
+    ? { value: at.stored }
+    : languageValue(connection, at.perLanguage, at.id, at.locale, target);
 }
 
 /** What a read needs to know about the entity it reads from. */
 interface StoredEntity {
+  readonly kind: "collection" | "single";
   readonly slug: string;
   /** The registry record, which carries the draft lifecycle's switches. */
   readonly record: unknown;
   readonly fields: readonly FieldDefinition[];
   readonly tableName: string;
+  /** Whether the entity keeps translatable values per language. */
+  readonly localized: boolean;
+  /** Whether it has a draft/published status, kept per language as well. */
+  readonly status: boolean;
 }
 
 /**
- * The collection's REGISTRY record, read on the same connection.
+ * The entity's REGISTRY record, read on the same connection: the collection's,
+ * or the single's.
  *
  * The registry rather than a metadata service, which adds the entry form's
  * synthetic fields: a column the table does not have is not a value anyone
  * stored.
  */
 async function storedEntity(
+  connection: StoredFieldConnection,
   records: RegistryRecords,
   target: StoredFieldTarget,
   allowedType: string
 ): Promise<StoredEntity> {
+  if ("single" in target) {
+    const single = await getService("singleRegistryService").getSingleBySlug(
+      target.single,
+      connection.executor
+    );
+    if (single === null) throw refused(target, allowedType, "names no single");
+    return {
+      kind: "single",
+      slug: target.single,
+      record: single,
+      fields: (single.fields ?? []) as unknown as FieldDefinition[],
+      tableName: single.tableName,
+      localized: single.localized === true,
+      status: (single as { status?: unknown }).status === true,
+    };
+  }
   const collection = await records(target.collection);
   if (collection === null) {
     throw refused(target, allowedType, "names no collection");
   }
   return {
+    kind: "collection",
     slug: target.collection,
     record: collection,
     fields: collectionFields(collection),
     tableName: collectionTableName(collection, target.collection),
+    localized: (collection as { localized?: unknown }).localized === true,
+    status: (collection as { status?: unknown }).status === true,
   };
 }
 
+/** The select surface a companion read needs, on a Drizzle executor. */
+interface CompanionSelect {
+  select(projection: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<{ value?: unknown }[]>;
+      };
+    };
+  };
+}
+
+/** A field kept per language, with the companion table that holds it. */
+interface CompanionField {
+  readonly companion: CompanionSchema;
+  readonly field: LocalizedFieldRef;
+}
+
 /**
- * The field's value in the pending working draft, where a preview would show it.
+ * The companion row's column for `name`, when the entity keeps it per
+ * language; `undefined` when it is stored on the main row.
  *
- * `undefined` where the preview would show the live row: the document has no
- * draft lifecycle, none is pending, or the shared rule declines to overlay it.
- * A draft that does not carry the field leaves the live value standing, which
- * is what promoting it would do.
+ * Read from the companion schema every localized write is split by, so a field
+ * is read where it was written: a flag on a field of an unlocalized entity
+ * keeps it on the main row, and a localized entity's text fields are kept per
+ * language unflagged.
+ */
+function companionFieldOf(
+  entity: StoredEntity,
+  name: string
+): CompanionField | undefined {
+  if (!entity.localized) return undefined;
+  const companion = buildCompanionSchema({
+    slug: entity.slug,
+    tableName: entity.tableName,
+    fields: entity.fields as unknown as { name: string; type: string }[],
+    dialect: getService("adapter").dialect,
+    status: entity.status,
+  });
+  const field = companion?.localizedFields.find(entry => entry.name === name);
+  return companion === null || field === undefined
+    ? undefined
+    : { companion, field };
+}
+
+/**
+ * The entity's stored row: the entry by id, or the single's one row. Its id,
+ * which keys the companion rows and the working draft, and `column` where the
+ * main row holds it.
+ */
+async function storedRow(
+  connection: StoredFieldConnection,
+  entity: StoredEntity,
+  target: StoredFieldTarget,
+  column: string,
+  perLanguage: CompanionField | undefined
+): Promise<Record<string, unknown> | undefined> {
+  const rows = await connection.db.select<Record<string, unknown>>(
+    entity.tableName,
+    {
+      // Only what is asked for: a row can hold other large values, and a
+      // composition reads up to a hundred definitions in one save.
+      columns: perLanguage === undefined ? ["id", column] : ["id"],
+      ...("single" in target
+        ? {}
+        : { where: { and: [{ column: "id", op: "=", value: target.id }] } }),
+      limit: 1,
+    }
+  );
+  return rows[0];
+}
+
+/**
+ * The field's value in one language, as its companion row holds it, with no
+ * fallback to another language; `undefined` where that language stores none.
+ *
+ * Inside a write's transaction the remembered readiness verdict is read and
+ * never resolved: resolving queries, and on PostgreSQL a query against a
+ * missing relation aborts the transaction. A companion not known to be ready
+ * is refused rather than answered as empty, which a caller could not tell from
+ * a language that stores nothing.
+ */
+async function languageValue(
+  connection: StoredFieldConnection,
+  { companion, field }: CompanionField,
+  id: string,
+  locale: string | null,
+  target: StoredFieldTarget
+): Promise<{ value: unknown } | undefined> {
+  if (locale === null) {
+    throw refused(target, "", "is kept per language, and no language is set");
+  }
+  const adapter = getService("adapter");
+  const readiness =
+    connection.executor === undefined
+      ? await resolveCompanionSchemaReadiness(adapter, companion)
+      : cachedCompanionReadiness(adapter, companion.companionTableName);
+  if (readiness !== "ready") {
+    throw NextlyError.serviceUnavailable({
+      // Not a refusal of the caller's request: the language store is still
+      // being set up, so a reader can tell "cannot read yet" from an error.
+      publicMessage: "This language's content can't be read yet.",
+      logMessage: `"${"single" in target ? target.single : target.collection}.${target.field}" is kept per language, and that store is not ready.`,
+    });
+  }
+  // Only the field asked for, of the one row for this entry and language: a
+  // translation row can hold every other large value of the page, and a save
+  // reads this for each stored form. Read as stored, whatever the language's
+  // status, as the main row is for a field kept there.
+  const table = companion.table as Record<string, unknown>;
+  const rows = await (
+    (connection.executor ?? adapter.getDrizzle()) as CompanionSelect
+  )
+    .select({ value: table[field.column] })
+    .from(companion.table)
+    .where(
+      and(eq(table._parent as never, id), eq(table._locale as never, locale))
+    )
+    .limit(1);
+  // No row, or a row holding nothing for the field: either way the language
+  // stores nothing.
+  const value = rows[0]?.value;
+  return value === null || value === undefined ? undefined : { value };
+}
+
+/**
+ * `column`'s value in the pending working draft, where a preview would show it.
+ *
+ * `undefined` where the preview would show the stored value: the document has
+ * no draft lifecycle, none is pending, or the shared rule declines to overlay
+ * it. A draft that does not carry the column leaves the stored value standing,
+ * which is what promoting it would do. A document kept per language keeps a
+ * draft per language, so the one looked for is `locale`'s.
  */
 async function workingDraftValue(
   connection: StoredFieldConnection,
   entity: StoredEntity,
-  target: StoredFieldTarget
+  column: string,
+  id: string,
+  locale: string | null
 ): Promise<{ value: unknown } | undefined> {
   const facts = draftDocumentFacts({
     ...(entity.record as DraftDocumentConfig),
-    localized: (entity.record as { localized?: boolean }).localized,
+    localized: entity.localized,
   });
   const fields = entity.fields as unknown as FieldConfig[];
   const overlay = (
@@ -230,12 +565,13 @@ async function workingDraftValue(
   ) =>
     resolveDraftOverlay({
       ...facts,
+      entityKind: entity.kind,
       fields,
       componentSchemas,
       includeWorkingDraft: true,
       // As the system: this judges what a preview renders, not who may see it.
       callerMayEdit: true,
-      requestLocale: null,
+      requestLocale: locale,
       defaultLocale: connection.defaultLocale,
     });
 
@@ -245,19 +581,22 @@ async function workingDraftValue(
   if (!provisional.overlay) return undefined;
 
   const draft = await new VersionsRepository(connection.db).findWorkingDraft(
-    { scopeKind: "collection", scopeSlug: entity.slug, entryId: target.id },
+    { scopeKind: entity.kind, scopeSlug: entity.slug, entryId: id },
     provisional.draftLocale
   );
   if (draft === undefined) return undefined;
 
   // The confirming half, against resolved schemas: a draft nothing could promote
   // is not one the preview shows.
-  if (!overlay(await resolveComponentSchemas(fields)).overlay) return undefined;
+  // On the write's own connection: inside a transaction a pooled read could
+  // wait behind the very connection the transaction holds.
+  const schemas = await resolveComponentSchemas(fields, connection.executor);
+  if (!overlay(schemas).overlay) return undefined;
 
   const snapshot = draft.snapshot;
   if (typeof snapshot !== "object" || snapshot === null) return undefined;
-  if (!Object.hasOwn(snapshot, target.field)) return undefined;
-  return { value: (snapshot as Record<string, unknown>)[target.field] };
+  if (!Object.hasOwn(snapshot, column)) return undefined;
+  return { value: (snapshot as Record<string, unknown>)[column] };
 }
 
 /**
@@ -271,6 +610,11 @@ function decoded(value: unknown, type: string): unknown {
   if (typeof value !== "string" || getFieldType(type)?.storage !== "json") {
     return value;
   }
+  return parsedJson(value);
+}
+
+/** `value` parsed as JSON, or as it is where it does not parse. */
+function parsedJson(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
   } catch {
@@ -291,7 +635,7 @@ function refused(
   why: string
 ): NextlyError {
   return NextlyError.invalidInput({
-    message: `"${target.collection}.${target.field}" cannot be read here: it ${why}. Only top-level "${allowedType}" fields can be read.`,
+    message: `"${"single" in target ? target.single : target.collection}.${target.field}" cannot be read here: it ${why}.${allowedType === "" ? "" : ` Only top-level "${allowedType}" fields, or ones inside named groups, can be read.`}`,
     logContext: { ...target, allowedType },
   });
 }

@@ -516,32 +516,35 @@ describe("running the command", () => {
       ok: false,
       reason: expect.stringContaining(declaration()),
     });
+    expect(result.ok === false && result.reason).toContain(
+      "(--overwrite overwrites)"
+    );
     expect(await readFile(declaration(), "utf8")).toBe("// mine\n");
     expect(await readFile(join(dir, "nextly.config.ts"), "utf8")).toBe(
       configBefore
     );
   });
 
-  it("overwrites them with --force", async () => {
+  it("overwrites them with --overwrite", async () => {
     await asSite();
     await runGenerateWidget(dir, { id: "open-orders" });
     await writeFile(declaration(), "// mine\n");
     await runGenerateWidget(dir, {
       id: "open-orders",
       view: "list",
-      force: true,
+      overwrite: true,
     });
     expect(await readFile(declaration(), "utf8")).toContain('view: "list"');
   });
 
-  it("lists a widget generated again with --force once, and edits nothing else", async () => {
+  it("lists a widget generated again with --overwrite once, and edits nothing else", async () => {
     await asSite();
     await runGenerateWidget(dir, { id: "open-orders" });
     const config = await readFile(join(dir, "nextly.config.ts"), "utf8");
     const manifest = await readFile(join(dir, "package.json"), "utf8");
     const again = await runGenerateWidget(dir, {
       id: "open-orders",
-      force: true,
+      overwrite: true,
     });
     expect(again).toMatchObject({ ok: true, edits: [], manual: [] });
     expect(await readFile(join(dir, "nextly.config.ts"), "utf8")).toBe(config);
@@ -550,7 +553,7 @@ describe("running the command", () => {
     expect(config.match(/\bopenOrders\b/g)).toHaveLength(2);
   });
 
-  it("generates again with --force over a config its formatter rewrote, adding nothing", async () => {
+  it("generates again with --overwrite over a config its formatter rewrote, adding nothing", async () => {
     await asSite();
     await runGenerateWidget(dir, { id: "open-orders" });
     const configFile = join(dir, "nextly.config.ts");
@@ -559,7 +562,7 @@ describe("running the command", () => {
     await writeFile(configFile, formatted);
     const again = await runGenerateWidget(dir, {
       id: "open-orders",
-      force: true,
+      overwrite: true,
     });
     expect(again).toMatchObject({ ok: true, edits: [] });
     expect(await readFile(configFile, "utf8")).toBe(formatted);
@@ -634,7 +637,7 @@ describe("running the command", () => {
     }
   });
 
-  it("refuses to switch a widget between its own component and a core view with --force, naming what to remove", async () => {
+  it("refuses to switch a widget between its own component and a core view with --overwrite, naming what to remove", async () => {
     await asPlugin();
     await runGenerateWidget(dir, { id: "open-orders", view: "component" });
     const component = join(dir, "src", "admin", "open-orders-card.tsx");
@@ -648,7 +651,7 @@ describe("running the command", () => {
     const toFigure = await runGenerateWidget(dir, {
       id: "open-orders",
       view: "figure",
-      force: true,
+      overwrite: true,
     });
     expect(toFigure).toEqual({
       ok: false,
@@ -665,7 +668,7 @@ describe("running the command", () => {
       await runGenerateWidget(dir, {
         id: "closed-orders",
         view: "component",
-        force: true,
+        overwrite: true,
       })
     ).toEqual({
       ok: false,
@@ -868,7 +871,7 @@ describe("running the command", () => {
     );
   });
 
-  it("generates a component again with --force over an admin entry its formatter rewrote, adding nothing", async () => {
+  it("generates a component again with --overwrite over an admin entry its formatter rewrote, adding nothing", async () => {
     await asPlugin();
     await runGenerateWidget(dir, { id: "open-orders", view: "component" });
     const index = join(dir, "src", "admin", "index.ts");
@@ -877,7 +880,7 @@ describe("running the command", () => {
     const again = await runGenerateWidget(dir, {
       id: "open-orders",
       view: "component",
-      force: true,
+      overwrite: true,
     });
     expect(again).toMatchObject({ ok: true, edits: [], manual: [] });
     expect(await readFile(index, "utf8")).toBe(formatted);
@@ -922,7 +925,7 @@ describe("running the command", () => {
       await runGenerateWidget(dir, {
         id: "open-orders",
         view: "component",
-        force: true,
+        overwrite: true,
       })
     ).toEqual({
       ok: false,

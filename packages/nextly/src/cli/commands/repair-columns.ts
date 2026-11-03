@@ -22,13 +22,17 @@ import type {
   ColumnState,
   DifferenceCause,
 } from "../../domains/schema/repair-columns/types";
+import type {
+  ConversionJudgement,
+  ConversionReason,
+  ConversionReasonKind,
+  RowKey,
+} from "../../domains/schema/value-conversion/types";
 import { databaseEnvError, exitWithError } from "../errors";
 import type { CommandContext, GlobalOptions } from "../program";
 import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 import { installRegistryResolver } from "../utils/registry-resolver";
-
-const REPAIR_COLUMNS_COMMAND = "repair-columns";
 
 const ENTITY_LABEL: Record<ColumnLocation["kind"], string> = {
   collection: "collection",
@@ -51,6 +55,45 @@ function describeCause(cause: DifferenceCause | null): string {
   return cause.kind === "legacy"
     ? `; created before ${cause.before}`
     : "; created by the current version's generator";
+}
+
+/** What each reason means for the column's values, as the report says it. */
+const REASON_TEXT: Record<ConversionReasonKind, string> = {
+  "not-json": "values that do not parse as JSON would be cleared",
+  "kept-unreadable":
+    "values the new type would keep in a form the field cannot read would be cleared",
+  "too-long": "values longer than the new type holds would be cut",
+  "stored-differently":
+    "values the database would accept and store as a different value",
+  "null-under-not-null": "rows hold a null where the column is to be NOT NULL",
+  "unreadable-reference-list": "values cannot be read as a list of references",
+  "no-conversion": "Nextly has no conversion from this type to that one",
+  "late-write":
+    "MySQL checks the rows and changes the column in separate transactions, so a value written meanwhile could be changed with no error",
+};
+
+function describeKey(key: RowKey): string {
+  return "id" in key
+    ? `id ${key.id}`
+    : `parent ${key.parent} locale ${key.locale}`;
+}
+
+/** One reason with the rows that give it, by key and never by value. */
+function describeReason(reason: ConversionReason): string {
+  const text = REASON_TEXT[reason.kind];
+  if (reason.rows === undefined) return text;
+  const { first, count } = reason.rows;
+  const keys = first.map(describeKey).join(", ");
+  const rows = count === 1 ? "1 row" : `${count} rows`;
+  const shown = first.length < count ? `, first ${first.length}` : "";
+  return `${text} (${rows}${shown}: ${keys})`;
+}
+
+/** A difference's class and every reason behind it. */
+function describeJudgement(judgement: ConversionJudgement | null): string {
+  if (judgement === null) return "";
+  if (judgement.reasons.length === 0) return ` ${judgement.class}.`;
+  return ` ${judgement.class}: ${judgement.reasons.map(describeReason).join("; ")}.`;
 }
 
 /** The entity, field and column a finding is about, as each line opens. */
@@ -85,7 +128,7 @@ export function formatFinding(finding: ColumnFinding): string {
       return `${at}: pending a migration, ${from} as applied, ${to} as configured. Run \`nextly migrate:create\`, then \`nextly migrate\`.${owner}`;
     }
     case "differs":
-      return `${at}: is ${describeState(finding.live)}, expected ${describeState(finding.expected)}${describeCause(finding.cause)}.${owner}`;
+      return `${at}: is ${describeState(finding.live)}, expected ${describeState(finding.expected)}${describeCause(finding.cause)}.${describeJudgement(finding.judgement)}${owner}`;
   }
 }
 
@@ -165,22 +208,20 @@ async function runRepairColumns(
   }
 }
 
-export function registerRepairColumnsCommand(
-  program: Command,
+/**
+ * The action of `nextly repair-columns`, loaded when it runs, with the
+ * context factory the program registered it with.
+ */
+export function repairColumnsAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command(REPAIR_COLUMNS_COMMAND)
-    .description(
-      "Report every column whose type or nullability differs from its field (changes nothing)"
-    )
-    .action(async (_options: Record<string, never>, cmd: Command) => {
-      const globals = cmd.optsWithGlobals<GlobalOptions>();
-      const context = createContext(globals);
-      // Every way the run stops ends in the CLI's error shape, with the code that names it.
-      await runRepairColumns(
-        { config: globals.config, cwd: globals.cwd, verbose: globals.verbose },
-        context
-      ).catch((error: unknown) => exitWithError(context.logger, error));
-    });
+) {
+  return async (_options: Record<string, never>, cmd: Command) => {
+    const globals = cmd.optsWithGlobals<GlobalOptions>();
+    const context = createContext(globals);
+    // Every way the run stops ends in the CLI's error shape, with the code that names it.
+    await runRepairColumns(
+      { config: globals.config, cwd: globals.cwd, verbose: globals.verbose },
+      context
+    ).catch((error: unknown) => exitWithError(context.logger, error));
+  };
 }

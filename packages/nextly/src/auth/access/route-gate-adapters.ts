@@ -500,6 +500,8 @@ async function entityCapabilities(
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
     const answered: Record<string, boolean> = {};
     for (const action of actions) {
+      // A collection's delete is answered once, below, in each language.
+      if (kind === "collection" && action === "delete") continue;
       answered[action] = await withRuleLanguage(
         languageOf(OPERATION_OF[kind][action] ?? action, "as-asked"),
         () => capability(caller, action, slug, rules)
@@ -524,6 +526,12 @@ async function entityCapabilities(
       kind === "single" || !hasLifecycle(slug)
     );
     if (kind === "collection") {
+      answered.delete = await deletesInSomeLanguage(
+        caller,
+        slug,
+        rules,
+        languageOf("deleteEntry", "none")
+      );
       answered.duplicate = await duplicates(
         caller,
         slug,
@@ -535,6 +543,33 @@ async function entityCapabilities(
     byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
   return byEntity;
+}
+
+/**
+ * Whether `caller` may delete some entry of `resource`, as a hint: a delete
+ * is asked in each language its entry holds, which a collection's cell
+ * cannot know, so it answers yes where the rule allows a delete in any of
+ * `everyLanguage`, each asked as that one. The delete itself is judged entry
+ * by entry. With no language, asked once, as a delete is.
+ */
+async function deletesInSomeLanguage(
+  caller: GateCaller,
+  resource: string,
+  rules: RouteRules,
+  everyLanguage: RuleLanguage
+): Promise<boolean> {
+  const ask = () => capability(caller, "delete", resource, rules);
+  if (everyLanguage.locales.length === 0) {
+    return withRuleLanguage(everyLanguage, ask);
+  }
+  for (const locale of everyLanguage.locales) {
+    const allowed = await withRuleLanguage(
+      { locale, locales: everyLanguage.locales },
+      ask
+    );
+    if (allowed) return true;
+  }
+  return false;
 }
 
 /**
@@ -883,25 +918,30 @@ async function decidedOne(
  * `action` is a plain string rather than the operation union, because a
  * permission's action is not bounded by those six: `export-submissions` and
  * `manage-background-jobs` are both real grants.
+ *
+ * `options.anyEntry` asks whether the caller may perform `action` on any
+ * entry at all: the same decision, with a rule's filter counting as yes for a
+ * write as well as a read. It decides nothing about an entry, so it applies
+ * and bypasses no rule; the write itself is still judged on its entry.
  */
 export async function callerMayPerform(
   scope: AuthenticatedScope | undefined,
   action: string,
   resource: string,
-  user: { id: string; roles?: readonly string[] }
+  user: { id: string; roles?: readonly string[] },
+  options: { readonly anyEntry?: boolean } = {}
 ): Promise<boolean> {
   if (!user.id) return false;
   const rules = getRBACService();
   const caller = probedCaller(scope, user);
   if (!action || !resource) return refusedEmpty(caller, action, resource);
+  // `anyEntry` asks the type-level question a capability cell asks: a rule's
+  // filter counts as yes for any action, since the caller may act on the
+  // entries it matches. Otherwise a filter answers yes for a read alone, as a
+  // yes-or-no with no entry to apply it to must.
+  const readFilter = options.anyEntry === true ? "cell" : "some-entries";
   if (!caller.key) {
-    return sessionAnswer(
-      caller.userId,
-      action,
-      resource,
-      rules,
-      "some-entries"
-    );
+    return sessionAnswer(caller.userId, action, resource, rules, readFilter);
   }
   // A key is judged on its own scope, the route gate's way, with or without
   // the service.
@@ -912,7 +952,7 @@ export async function callerMayPerform(
       resource,
       rules,
       () => Promise.resolve(false),
-      "some-entries"
+      readFilter
     )
   ).allowed;
 }

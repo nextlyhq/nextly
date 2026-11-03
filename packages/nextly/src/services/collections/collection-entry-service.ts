@@ -24,6 +24,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
 import {
   everyLanguageOf,
+  queryWriteLanguagesFor,
   readLanguagesFor,
   withRuleLanguage,
   writeAsNamedLanguagesFor,
@@ -70,7 +71,7 @@ import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
 import type { WhereFilter } from "./query-operators";
-import type { TrustBound } from "./trust-grant";
+import type { HookExemptRead, TrustBound } from "./trust-grant";
 
 export {
   type CollectionServiceResult,
@@ -280,38 +281,44 @@ export class CollectionEntryService extends BaseService {
     );
   }
 
-  async listEntries(params: {
-    collectionName: string;
-    user?: UserContext;
-    search?: string;
-    page?: number;
-    limit?: number;
-    depth?: number;
-    select?: Record<string, boolean>;
-    where?: WhereFilter;
-    richTextFormat?: RichTextOutputFormat;
-    sort?: string;
-    /** Draft/Published lifecycle scope; forwarded to the query service. */
-    status?: "published" | "draft" | "all";
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /** Requested content locale (i18n M4) — forwarded to the query service. */
-    locale?: string;
-    /** Fallback control (`false`/`"none"` disables fallback). */
-    fallbackLocale?: string | false;
-    context?: Record<string, unknown>;
-    /** The HTTP request behind this operation, when one produced it. */
-    request?: Request;
-    /** Route authorization already ran the coarse RBAC gate, so it is skipped. */
-    routeAuthorized?: boolean;
-    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
-    authenticatedScope?: AuthenticatedScope;
-  }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
+  async listEntries(
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      search?: string;
+      page?: number;
+      limit?: number;
+      depth?: number;
+      select?: Record<string, boolean>;
+      where?: WhereFilter;
+      richTextFormat?: RichTextOutputFormat;
+      /** Draft/Published lifecycle scope; forwarded to the query service. */
+      status?: "published" | "draft" | "all";
+      overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows, and never admits a target's drafts.
+       */
+      trusted?: TrustBound;
+      /** Requested content locale (i18n M4) — forwarded to the query service. */
+      locale?: string;
+      /** Fallback control (`false`/`"none"` disables fallback). */
+      fallbackLocale?: string | false;
+      context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
+      /** Route authorization already ran the coarse RBAC gate, so it is skipped. */
+      routeAuthorized?: boolean;
+      /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+      authenticatedScope?: AuthenticatedScope;
+      /** A grant waiving the collection's read hooks, honoured by the query service. */
+      hookExemptRead?: HookExemptRead;
+    } /** The sort and offset, as the query service reads them. */ & Pick<
+      Parameters<CollectionQueryService["listEntries"]>[0],
+      "sort" | "offset" | "unknownSort"
+    >
+  ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
@@ -351,6 +358,8 @@ export class CollectionEntryService extends BaseService {
      * one thing nobody re-checks is an option that appears not to exist.
      */
     status?: "published" | "draft" | "all";
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??
@@ -447,6 +456,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }) {
     return withRuleLanguage(this.readLanguages(params), () =>
       this.queryService.getEntry(params)
@@ -1171,11 +1182,12 @@ export class CollectionEntryService extends BaseService {
     // Thrown, as the bulk service throws any request-level refusal: there are
     // no items yet to report a partial failure on.
     assertWellFormedFilter(params.where, { allowTranslated: true });
-    // It writes the default language, but its filter may choose the rows by
-    // any language's translation state, so it is told every language: the
-    // REST gate, which cannot see the filter in the body, tells the same.
+    // It writes the default language, so its rule judges that one, while
+    // its filter may choose the rows by any language's translation state, so
+    // it is told every language as well: the REST gate, which cannot see the
+    // filter in the body, tells the same.
     const result = await withRuleLanguage(
-      everyLanguageOf(this.localization),
+      queryWriteLanguagesFor(this.localization),
       () => this.bulkService.bulkUpdateByQuery(params, options)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);

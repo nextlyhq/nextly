@@ -180,8 +180,14 @@ export interface BatchOperationResult {
   failed: number;
   /** IDs of successfully created/updated entries */
   ids: string[];
-  /** Detailed error information for each failed entry */
-  errors: Array<{ index: number; error: string }>;
+  /**
+   * Detailed error information for each failed entry. `code` is the code of
+   * the entry's own answer (`ENTITY_NOT_MIGRATED` for a missing table or
+   * column, `NOT_FOUND`, `VALIDATION_ERROR`, ...), the code the single-entry
+   * write reports for the same failure. Optional so a result built before
+   * codes were reported still type-checks; every legacy batch sets it.
+   */
+  errors: Array<{ index: number; error: string; code?: string }>;
   /**
    * Whether the committed batch appended any durable outbox event, independent
    * of `successful`. A per-item delete can commit its row + event in the shared

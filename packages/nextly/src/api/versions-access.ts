@@ -57,6 +57,10 @@ import {
 } from "../domains/versions/version-views";
 import type { VersionRef } from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
+import {
+  errorFromServiceEnvelope,
+  type ServiceErrorEnvelope,
+} from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -496,9 +500,11 @@ async function canUpdateLiveSingle(
  * normal read path uses so the collection's own gate applies identically.
  *
  * A denial (403) and a missing document (404) both mean "no history for you".
- * Any other failure is a real server-side fault — a component/relationship load
- * error, a throwing afterRead hook — and is re-thrown so the route reports it
- * as a 5xx instead of disguising an outage as missing content.
+ * Any other failure is the read failing rather than refusing — a database not
+ * migrated for the collection, a component/relationship load error, a throwing
+ * afterRead hook — and is re-thrown with the read's own error, so the route
+ * answers what the document read would instead of disguising it as missing
+ * content.
  */
 async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
@@ -544,7 +550,7 @@ async function canReadLiveDocument(
     // The read rules and hooks are handed this language's values.
     ...(locale === undefined ? {} : { locale }),
   });
-  if (!interpretReadResult(result.success, result.statusCode)) return false;
+  if (!interpretReadResult(result)) return false;
   // The read must be of the document asked about. A `beforeOperation` hook may
   // rewrite the id a read resolves, and a read that passed on another document
   // would authorize this one's history by that document's rules. The id is the
@@ -605,15 +611,21 @@ export { resolveSingleDocumentId };
 /**
  * Collapse a live-read result into "may the caller see this document".
  * Only 403/404 mean no; anything else non-successful is a genuine fault.
+ *
+ * The fault keeps the code and status the read gave it, rebuilt through the
+ * shared converter: a database not migrated for the collection answers
+ * ENTITY_NOT_MIGRATED, as the caller's own read of the document does, rather
+ * than an opaque 500. The read ran as the caller, so its answer names only
+ * what the caller may be told.
  */
-function interpretReadResult(success: boolean, statusCode: number): boolean {
-  if (success) return true;
-  if (statusCode === 403 || statusCode === 404) return false;
-  throw NextlyError.internal({
-    logContext: {
-      reason: "version-live-read-failed",
-      statusCode,
-    },
+function interpretReadResult(
+  read: ServiceErrorEnvelope & { success: boolean; statusCode: number }
+): boolean {
+  if (read.success) return true;
+  if (read.statusCode === 403 || read.statusCode === 404) return false;
+  throw errorFromServiceEnvelope(read, {
+    reason: "version-live-read-failed",
+    statusCode: read.statusCode,
   });
 }
 

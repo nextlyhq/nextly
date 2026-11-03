@@ -76,7 +76,6 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -105,7 +104,6 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -126,7 +124,6 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -146,7 +143,6 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -156,7 +152,7 @@ describe("BuilderFieldList", () => {
     ).toBeInTheDocument();
   });
 
-  it("invokes onAddAt(0) when the empty-state button is clicked", async () => {
+  it("opens the picker at the end of the list from the empty state", async () => {
     const user = userEvent.setup();
     const onAddAt = vi.fn();
     render(
@@ -169,12 +165,11 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
     await user.click(screen.getByRole("button", { name: /add your first/i }));
-    expect(onAddAt).toHaveBeenCalledWith(0);
+    expect(onAddAt).toHaveBeenCalledWith({});
   });
 
   it("hides the Add field button and per-card Delete in readOnly mode", () => {
@@ -189,7 +184,6 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -215,7 +209,6 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -239,7 +232,6 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -308,7 +300,6 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -331,7 +322,6 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -350,7 +340,6 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -381,7 +370,6 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -390,26 +378,25 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
     ).toBeNull();
   });
 
-  it("calls onAddInsideParent with the parent id when nested +Add is clicked", async () => {
+  it("opens the picker at the end of a container from its nested +Add", async () => {
     const onAdd = vi.fn();
     render(
       withDndContext(
         <BuilderFieldList
           kind="collection"
           fields={[sysTitle, sysSlug, repeaterParent]}
-          onAddAt={vi.fn()}
+          onAddAt={onAdd}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={onAdd}
         />
       )
     );
     await userEvent.click(
       screen.getByRole("button", { name: /add field inside hero sections/i })
     );
-    expect(onAdd).toHaveBeenCalledWith("rep1");
+    expect(onAdd).toHaveBeenCalledWith({ parentFieldId: "rep1" });
   });
 
   it("forces 50%-width repeaters onto their own row (Q1 visual layout)", () => {
@@ -431,7 +418,6 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
-          onAddInsideParent={vi.fn()}
         />
       )
     );

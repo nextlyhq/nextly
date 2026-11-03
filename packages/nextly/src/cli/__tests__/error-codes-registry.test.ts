@@ -203,10 +203,11 @@ describe("the errors a command can end with", () => {
   });
 
   it("no command ends with exit 1 except through the error shape", () => {
-    // `exitWithError` prints the shape and exits; the entry point exits after `reportCliError`,
-    // and its last handler covers the CLI failing to load before any command exists.
+    // `exitWithError` prints the shape and exits; a run exits after `reportCliError` (`run.ts`),
+    // and the entry point's last handler covers the CLI failing to load before any command exists.
     const allowed = new Set([
       join("cli", "errors", "report.ts"),
+      join("cli", "run.ts"),
       join("cli", "nextly.ts"),
     ]);
     const literal = /process\.exit\(\s*1\s*\)|process\.exitCode\s*=\s*1\b/;
@@ -219,7 +220,6 @@ describe("the errors a command can end with", () => {
         join("cli", "commands", "generate-types.ts"),
         join("cli", "commands", "component-map-check-command.ts"),
       ],
-      [join("cli", "commands", "add.ts"), join("cli", "commands", "add.ts")],
       [
         join("cli", "commands", "media.ts"),
         join("cli", "commands", "media.ts"),

@@ -170,6 +170,14 @@ describe("resolveSiteStyle", () => {
     expect(merged.fonts?.[1]).toEqual(face("Geist", undefined, "italic"));
   });
 
+  it("keeps one cut stored for two scripts as two faces", () => {
+    const latin = { ...face("Lora"), unicodeRange: "U+0000-00FF" };
+    const cyrillic = { ...face("Lora"), unicodeRange: "U+0400-045F" };
+    const merged = resolveSiteStyle(undefined, { fonts: [latin, cyrillic] });
+    // Each covers its own characters; dropping one leaves a script unloaded.
+    expect(merged.fonts).toEqual([latin, cyrillic]);
+  });
+
   it("replaces breakpoints as a WHOLE set when the stored one defines any", () => {
     const stored: BreakpointSet = {
       viewport: [

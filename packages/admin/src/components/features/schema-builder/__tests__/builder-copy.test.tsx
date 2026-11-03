@@ -61,7 +61,7 @@ import { BuilderSettingsModal } from "../BuilderSettingsModal";
 import { BuilderToolbar } from "../BuilderToolbar";
 import type { BuilderConfig, BuilderKind } from "../builder-config";
 import { FieldEditorSheet } from "../FieldEditorSheet";
-import { FieldPickerModal } from "../FieldPickerModal";
+import { BuilderFieldPicker } from "../BuilderFieldPicker";
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField, SchemaChangeConfirmation } from "../types";
 
@@ -133,6 +133,8 @@ const FIXTURE_NAMES = new Set([
   "Hero",
   "Users",
   "Draft",
+  // A field's own label, which the between-rows add names as its place.
+  "Cover",
 ]);
 
 /** Type ids that are not already their own plain name, read from the catalog. */
@@ -471,11 +473,14 @@ const SURFACES: readonly Surface[] = [
   {
     name: "field picker",
     ui: (
-      <FieldPickerModal
-        open
-        excludedTypes={[]}
+      <BuilderFieldPicker
+        config={configFor("collection")}
+        fields={[]}
+        position={{}}
+        entitySlug="posts"
         onCancel={() => {}}
-        onSelect={() => {}}
+        onFieldsChange={() => {}}
+        onAdded={() => {}}
       />
     ),
   },
@@ -489,6 +494,7 @@ const SURFACES: readonly Surface[] = [
           config={configFor(kind)}
           name="Posts"
           unsavedCount={1}
+          onAddField={() => {}}
           onOpenSettings={() => {}}
           onSave={() => {}}
         />
@@ -520,7 +526,6 @@ const SURFACES: readonly Surface[] = [
             onDeleteField={() => {}}
             onDuplicateField={() => {}}
             onReorder={() => {}}
-            onAddInsideParent={() => {}}
           />
         </DndContext>
       ),

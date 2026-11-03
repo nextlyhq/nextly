@@ -3,11 +3,11 @@ import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { Command } from "commander";
+import type { Command } from "commander";
 import { config as loadEnvFile } from "dotenv";
 
 import {
-  canonicalStoredPath,
+  storedKeysOn,
   collectionsSharingMediaPlace,
   findOrphanThumbnails,
   mediaPlaceIsExclusive,
@@ -36,6 +36,7 @@ import {
 } from "../../storage/storage";
 import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
+import { environmentFilesRead } from "../environment";
 import { exitWithError, printCliError, type CliError } from "../errors";
 import {
   mediaApplyOutsideProject,
@@ -136,11 +137,17 @@ export async function referencedStoredPaths(
  * removed, when the table cannot be read, or when an item has come to have
  * a thumbnail whose stored location its record does not show: by a URL
  * under any name, it may refer to any listed file.
+ *
+ * Paths are compared as `storage` tells its files apart (`storedKeysOn`):
+ * exactly where it keeps keys as written, where an item naming
+ * `media/x.webp` does not use `media//x.webp`.
  */
 export function referencedNowIn(
   adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">,
+  storage: Pick<IStorageAdapter, "getType">,
   options: ReferenceOptions = {}
 ): ReferencedNow {
+  const keys = storedKeysOn(storage.getType());
   // One reader for every recheck, so the column's provenance is asked once
   // across them all rather than once per batch.
   const shared: ReferenceOptions = {
@@ -159,10 +166,8 @@ export function referencedNowIn(
       return null;
     }
     if (now.unlocated.length > 0) return null;
-    const referenced = new Set([...now.paths].map(canonicalStoredPath));
-    return new Set(
-      paths.filter(path => referenced.has(canonicalStoredPath(path)))
-    );
+    const referenced = new Set([...now.paths].map(keys.path));
+    return new Set(paths.filter(path => referenced.has(keys.path(path))));
   };
 }
 
@@ -379,12 +384,12 @@ const REINDEX_USAGE: ProjectGuard = {
  * config, such as a local-disk plugin given a relative path, resolves that
  * path when the config loads, against the process's directory.
  *
- * The database settings were read before --cwd: from `.env` where the CLI
- * was run, from the shell or from a parent process, and may be another
- * project's. So from another directory a command with a `guard`, one that
- * changes the database or what it describes, is refused, and a listing warns
- * when that directory has its own `.env`; the project's own `.env` sets what
- * nothing has set yet.
+ * The database settings were read before --cwd: from the environment files
+ * where the CLI was run, from the shell or from a parent process, and may be
+ * another project's. So from another directory a command with a `guard`, one
+ * that changes the database or what it describes, is refused, and a listing
+ * warns naming each environment file the run read there; the project's own
+ * `.env` sets what nothing has set yet.
  */
 function enterProject(
   cwd: string,
@@ -397,10 +402,12 @@ function enterProject(
     // the shell or from a parent process, none of which a `.env` loaded now
     // replaces: nothing ties them to this project, so nothing is changed.
     if (guard) throw guard.outsideProject(cwd);
-    const loaded = path.join(ranIn, ".env");
-    if (existsSync(loaded)) {
+    // Every file the run read, as the entry point's environment step recorded
+    // it, not a guess at which of them exist.
+    const loaded = environmentFilesRead();
+    if (loaded.length > 0) {
       logger.warn(
-        `The environment was read from ${loaded}, not from ${cwd}, so the database it names may be another project's.`
+        `The environment was read from ${loaded.join(", ")}, not from ${cwd}, so the database it names may be another project's.`
       );
     }
     const projectEnv = path.join(cwd, ".env");
@@ -489,147 +496,122 @@ function otherUploaders(
   return others;
 }
 
-/**
- * `nextly media orphans [--apply]`: finds, and with --apply removes, the
- * upload-time thumbnails deletes before this release left in the media
- * storage, still publicly served. A dry run by default.
- *
- * `nextly media remove-sizes [--apply] [--drop]`: lists, and with --apply
- * removes, the image size files items stored before sizes were removed, then
- * clears each item's sizes; with --drop as well it then drops the column and
- * the table. A dry run by default.
- *
- * `nextly media reindex-usage`: rebuilds the record of where each media item
- * is used from the stored content, for an install whose content predates the
- * record and after a restore.
- */
-export function createMediaCommand(): Command {
-  const media = new Command("media").description(
-    "Work with the media library's stored files"
-  );
-  media
-    .command("orphans")
-    .description(
-      "List upload-time thumbnails no media item refers to; remove them with --apply"
-    )
-    .option("--apply", "Remove the thumbnails listed", false)
-    .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
-      const apply = cmdOptions.apply === true;
-      await runMediaCommand(
-        cmd,
-        apply ? MEDIA_APPLY : null,
-        ({ context, drizzle, mediaStorage }) => {
-          const storage = mediaStorage.getAdapterForCollection("media");
-          const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
-          const others = otherUploaders(mediaStorage);
-          // One reader for the listing and every recheck after it, so the
-          // retired column's provenance is asked once for the whole run.
-          const readSizes = retiredSizesReader(
-            drizzle.getDrizzle(),
-            drizzle.dialect
-          );
-          return mediaOrphans({
-            storage,
-            prefix,
-            exclusive: mediaPlaceIsExclusive(
-              prefix,
-              others.map(other => other.prefix)
-            ),
-            sharedWith: collectionsSharingMediaPlace(prefix, others),
-            referenced: () =>
-              referencedStoredPaths(drizzle, { retiredSizes: readSizes }),
-            referencedNow: referencedNowIn(drizzle, {
-              retiredSizes: readSizes,
-            }),
-            apply,
-            say: line => console.log(line),
-            // The run's failing code is its exit status, so the reason is printed in the error
-            // shape here and the exit keeps the code `mediaOrphans` answers.
-            fail: error => {
-              printCliError(context.logger, error);
-            },
-          });
-        }
+/** The action of `nextly media orphans`, loaded when it runs. */
+export async function mediaOrphansAction(
+  cmdOptions: { apply?: boolean },
+  cmd: Command
+): Promise<void> {
+  const apply = cmdOptions.apply === true;
+  await runMediaCommand(
+    cmd,
+    apply ? MEDIA_APPLY : null,
+    ({ context, drizzle, mediaStorage }) => {
+      const storage = mediaStorage.getAdapterForCollection("media");
+      const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
+      const others = otherUploaders(mediaStorage);
+      // One reader for the listing and every recheck after it, so the
+      // retired column's provenance is asked once for the whole run.
+      const readSizes = retiredSizesReader(
+        drizzle.getDrizzle(),
+        drizzle.dialect
       );
-    });
-  media
-    .command("remove-sizes")
-    .description(
-      "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply; then drop the sizes column and the image_sizes table with --apply --drop"
-    )
-    .option("--apply", "Remove the size files listed", false)
-    .option(
-      "--drop",
-      "With --apply, once no item names a size file, drop the media table's sizes column and the image_sizes table",
-      false
-    )
-    .action(
-      async (cmdOptions: { apply?: boolean; drop?: boolean }, cmd: Command) => {
-        const apply = cmdOptions.apply === true;
-        await runMediaCommand(
-          cmd,
-          apply ? MEDIA_APPLY : null,
-          ({ drizzle, dialect, mediaStorage }) =>
-            runRemoveSizes({
-              db: drizzle.getDrizzle(),
-              dialect,
-              storage: mediaStorage.getAdapterForCollection("media"),
-              apply,
-              drop: cmdOptions.drop === true,
-              // The question `media orphans` asks just before its removals,
-              // without the retired sizes: those are the files being removed.
-              referencedNow: referencedNowIn(drizzle, {
-                withRetiredSizes: false,
-              }),
-              executeSql: statement => drizzle.executeQuery(statement),
-              dropUnderLock: dropSizesUnderSchemaLock(drizzle),
-              say: line => console.log(line),
-            })
-        );
-      }
+      return mediaOrphans({
+        storage,
+        prefix,
+        exclusive: mediaPlaceIsExclusive(
+          prefix,
+          others.map(other => other.prefix)
+        ),
+        sharedWith: collectionsSharingMediaPlace(prefix, others),
+        referenced: () =>
+          referencedStoredPaths(drizzle, { retiredSizes: readSizes }),
+        referencedNow: referencedNowIn(drizzle, storage, {
+          retiredSizes: readSizes,
+        }),
+        apply,
+        say: line => console.log(line),
+        // The run's failing code is its exit status, so the reason is printed in the error
+        // shape here and the exit keeps the code `mediaOrphans` answers.
+        fail: error => {
+          printCliError(context.logger, error);
+        },
+      });
+    }
+  );
+}
+
+/** The action of `nextly media remove-sizes`, loaded when it runs. */
+export async function mediaRemoveSizesAction(
+  cmdOptions: { apply?: boolean; drop?: boolean },
+  cmd: Command
+): Promise<void> {
+  const apply = cmdOptions.apply === true;
+  await runMediaCommand(
+    cmd,
+    apply ? MEDIA_APPLY : null,
+    ({ drizzle, dialect, mediaStorage }) => {
+      const storage = mediaStorage.getAdapterForCollection("media");
+      return runRemoveSizes({
+        db: drizzle.getDrizzle(),
+        dialect,
+        storage,
+        apply,
+        drop: cmdOptions.drop === true,
+        // The question `media orphans` asks just before its removals,
+        // without the retired sizes: those are the files being removed.
+        referencedNow: referencedNowIn(drizzle, storage, {
+          withRetiredSizes: false,
+        }),
+        executeSql: statement => drizzle.executeQuery(statement),
+        dropUnderLock: dropSizesUnderSchemaLock(drizzle),
+        say: line => console.log(line),
+      });
+    }
+  );
+}
+
+/** The action of `nextly media reindex-usage`, loaded when it runs. */
+export async function mediaReindexUsageAction(
+  _cmdOptions: unknown,
+  cmd: Command
+): Promise<void> {
+  const context = createContext(cmd.optsWithGlobals());
+  let adapter: CLIDatabaseAdapter | null = null;
+  try {
+    const cwd = path.resolve(context.cwd);
+    // It empties and rewrites the database's record from the config's
+    // collections, so both must be the project's, as for `--apply`.
+    const loaded = await projectConfig(
+      cwd,
+      context.configPath,
+      // From here it connects as `runMediaCommand` does, but keeps the whole
+      // loaded config and sets up no media storage, so the two stay separate.
+      // fallow-ignore-next-line code-duplication
+      REINDEX_USAGE,
+      context.logger
     );
-  media
-    .command("reindex-usage")
-    .description(
-      "Rebuild the record of where each media item is used, from the stored content"
-    )
-    .action(async (_cmdOptions: unknown, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      let adapter: CLIDatabaseAdapter | null = null;
-      try {
-        const cwd = path.resolve(context.cwd);
-        // It empties and rewrites the database's record from the config's
-        // collections, so both must be the project's, as for `--apply`.
-        const loaded = await projectConfig(
-          cwd,
-          context.configPath,
-          REINDEX_USAGE,
-          context.logger
-        );
-        const db = databaseEnvOrThrow();
-        adapter = await createCliAdapter({
-          dialect: db.dialect,
-          databaseUrl: db.databaseUrl,
-          logger: context.options.verbose ? context.logger : undefined,
-        });
-        const drizzle = adapter as unknown as DrizzleAdapter;
-        installRegistryResolver(drizzle);
-        const result = await reindexUsageWithServices(
-          loaded,
-          drizzle,
-          context.logger
-        );
-        console.log(
-          `Read ${result.documents} document(s); the record holds ${result.rows} use(s) of media items.`
-        );
-        await adapter.disconnect();
-        process.exit(0);
-      } catch (error) {
-        if (adapter) await adapter.disconnect();
-        exitWithError(context.logger, error);
-      }
+    const db = databaseEnvOrThrow();
+    adapter = await createCliAdapter({
+      dialect: db.dialect,
+      databaseUrl: db.databaseUrl,
+      logger: context.options.verbose ? context.logger : undefined,
     });
-  return media;
+    const drizzle = adapter as unknown as DrizzleAdapter;
+    installRegistryResolver(drizzle);
+    const result = await reindexUsageWithServices(
+      loaded,
+      drizzle,
+      context.logger
+    );
+    console.log(
+      `Read ${result.documents} document(s); the record holds ${result.rows} use(s) of media items.`
+    );
+    await adapter.disconnect();
+    process.exit(0);
+  } catch (error) {
+    if (adapter) await adapter.disconnect();
+    exitWithError(context.logger, error);
+  }
 }
 
 /** What a `nextly media` command runs against, once the project is entered. */

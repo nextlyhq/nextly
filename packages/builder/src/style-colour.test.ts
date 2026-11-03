@@ -123,6 +123,40 @@ describe("which tokens a colour control offers", () => {
     expect(bare).not.toContain("space.4");
   });
 
+  it("calls each by the name an author reads, with both its values to paint", () => {
+    const [brand] = colourTokensFor(COLOR, {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#1d2b6b", dark: "#8fa7ff" },
+        },
+        {
+          name: "color.paper",
+          label: "Page paper",
+          kind: "color",
+          values: { light: "#fefefe" },
+        },
+      ],
+    }).filter(token => token.name === "color.brand");
+    expect(brand?.label).toBe("Brand");
+    expect(brand?.pair).toEqual({ light: "#1d2b6b", dark: "#8fa7ff" });
+    const paper = colourTokensFor(COLOR, {
+      tokens: [
+        {
+          name: "color.paper",
+          label: "Page paper",
+          kind: "color",
+          values: { light: "#fefefe" },
+        },
+      ],
+    }).find(token => token.name === "color.paper");
+    // An own label wins, and a token with no dark value shows its light one
+    // for dark, as the page does.
+    expect(paper?.label).toBe("Page paper");
+    expect(paper?.pair).toEqual({ light: "#fefefe", dark: "#fefefe" });
+  });
+
   it("still offers nothing when the question was never asked", () => {
     // `undefined` is not "the site has the defaults" — it is "no host has said
     // what this site holds", and answering with the defaults would be a claim.
@@ -499,23 +533,14 @@ describe("a translucent background withholds the verdict", () => {
 
 describe("which mode a token resolves in", () => {
   const media: SiteTokenSet = { ...TOKENS, darkMode: "media" };
-  const attribute: SiteTokenSet = { ...TOKENS, darkMode: "attribute" };
 
-  it("follows the system only where the site said to", () => {
-    // `emitTokenBlocks` wraps the dark block in
-    // `@media (prefers-color-scheme:dark)` for the media strategy, so the
-    // canvas switches with the system and nothing tells the panel.
-    expect(activeTokenMode(media, true)).toBe("dark");
-    expect(activeTokenMode(media, false)).toBe("light");
-  });
-
-  it("stays light on the attribute strategy, which the panel cannot observe", () => {
-    // The dark block is written under `[data-nx-theme="dark"]`, set by the HOST
-    // on an ancestor of its choosing. A stated limit, not a claim.
-    expect(activeTokenMode(attribute, true)).toBe("light");
-    // And the default, when a site names no strategy at all.
-    expect(activeTokenMode(TOKENS, true)).toBe("light");
-    expect(activeTokenMode(undefined, true)).toBe("light");
+  it("follows the device, which is what the compiled sheet follows", () => {
+    // The site sheet writes every dark value under
+    // `@media (prefers-color-scheme:dark)`, whatever the set's deprecated
+    // `darkMode` says, so the canvas switches with the device and the panel
+    // has to resolve the same way.
+    expect(activeTokenMode(true)).toBe("dark");
+    expect(activeTokenMode(false)).toBe("light");
   });
 
   it("resolves a reference to the value the canvas is actually showing", () => {
@@ -892,6 +917,8 @@ describe("what a token is CALLED where two share a name", () => {
     ({
       identity,
       name,
+      // The label is what a list shows, so it is what collides.
+      label: name,
       kind: "color",
       colour: "#000000",
       swatch: "#000000",

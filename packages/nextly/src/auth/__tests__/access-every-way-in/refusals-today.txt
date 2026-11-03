@@ -920,7 +920,7 @@ service custom-role create collection user-is-key-maker at route  403 FORBIDDEN 
 service custom-role create collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service custom-role create users none at rest  403 FORBIDDEN error  | You can't create users.
 service custom-role create users none at route  403 FORBIDDEN error  | You can't create users.
-service custom-role delete collection async-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async falses.
+service custom-role delete collection async-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
@@ -930,37 +930,37 @@ service custom-role delete collection async-filter at direct outside  404 NOT_FO
 service custom-role delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service custom-role delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection async-throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async throws.
+service custom-role delete collection async-throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
 service custom-role delete collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c falses.
+service custom-role delete collection false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection false at route  403 FORBIDDEN error  | You can't delete c falses.
 service custom-role delete collection false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection malformed-filter at bulk  403 FORBIDDEN error  missing=same  | You can't delete c malformed filters.
+service custom-role delete collection malformed-filter at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection malformed-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service custom-role delete collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection permission-spelling at bulk  403 FORBIDDEN error  missing=same  | You can't delete c permission spellings.
+service custom-role delete collection permission-spelling at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
 service custom-role delete collection permission-spelling at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection principal-kind at bulk  403 FORBIDDEN error  missing=same  | You can't delete c principal kinds.
+service custom-role delete collection principal-kind at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection principal-kind at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection principal-kind at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
 service custom-role delete collection principal-kind at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-empty-in at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns empty ins.
+service custom-role delete collection returns-empty-in at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection returns-empty-in at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-empty-in at route  403 FORBIDDEN error  | You can't delete c returns empty ins.
 service custom-role delete collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns falses.
+service custom-role delete collection returns-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
@@ -970,32 +970,32 @@ service custom-role delete collection returns-filter at direct outside  404 NOT_
 service custom-role delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service custom-role delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-null at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns nulls.
+service custom-role delete collection returns-null at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
 service custom-role delete collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-string at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns strings.
+service custom-role delete collection returns-string at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-string at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-string at route  403 FORBIDDEN error  | You can't delete c returns strings.
 service custom-role delete collection returns-string at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-undefined at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns undefineds.
+service custom-role delete collection returns-undefined at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection returns-undefined at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-undefined at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-undefined at route  403 FORBIDDEN error  | You can't delete c returns undefineds.
 service custom-role delete collection returns-undefined at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection role-name at bulk  403 FORBIDDEN error  missing=same  | You can't delete c role names.
+service custom-role delete collection role-name at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection role-name at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection role-name at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection role-name at route  403 FORBIDDEN error  | You can't delete c role names.
 service custom-role delete collection role-name at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c throws.
+service custom-role delete collection throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection throws at route  403 FORBIDDEN error  | You can't delete c throws.
 service custom-role delete collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection user-is-key-maker at bulk  403 FORBIDDEN error  missing=same  | You can't delete c user is key makers.
+service custom-role delete collection user-is-key-maker at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service custom-role delete collection user-is-key-maker at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection user-is-key-maker at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection user-is-key-maker at route  403 FORBIDDEN error  | You can't delete c user is key makers.
@@ -1741,7 +1741,7 @@ service key-full-access create collection throws at route  403 FORBIDDEN error  
 service key-full-access create collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
 service key-full-access create users none at rest  403 FORBIDDEN error  | You can't create users.
 service key-full-access create users none at route  403 FORBIDDEN error  | You can't create users.
-service key-full-access delete collection async-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async falses.
+service key-full-access delete collection async-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
@@ -1751,37 +1751,37 @@ service key-full-access delete collection async-filter at direct outside  404 NO
 service key-full-access delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-full-access delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection async-throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async throws.
+service key-full-access delete collection async-throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
 service key-full-access delete collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c falses.
+service key-full-access delete collection false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection false at route  403 FORBIDDEN error  | You can't delete c falses.
 service key-full-access delete collection false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection malformed-filter at bulk  403 FORBIDDEN error  missing=same  | You can't delete c malformed filters.
+service key-full-access delete collection malformed-filter at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection malformed-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service key-full-access delete collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection permission-spelling at bulk  403 FORBIDDEN error  missing=same  | You can't delete c permission spellings.
+service key-full-access delete collection permission-spelling at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
 service key-full-access delete collection permission-spelling at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection principal-kind at bulk  403 FORBIDDEN error  missing=same  | You can't delete c principal kinds.
+service key-full-access delete collection principal-kind at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection principal-kind at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection principal-kind at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
 service key-full-access delete collection principal-kind at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-empty-in at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns empty ins.
+service key-full-access delete collection returns-empty-in at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection returns-empty-in at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-empty-in at route  403 FORBIDDEN error  | You can't delete c returns empty ins.
 service key-full-access delete collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns falses.
+service key-full-access delete collection returns-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
@@ -1791,22 +1791,22 @@ service key-full-access delete collection returns-filter at direct outside  404 
 service key-full-access delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-full-access delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-null at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns nulls.
+service key-full-access delete collection returns-null at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
 service key-full-access delete collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-string at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns strings.
+service key-full-access delete collection returns-string at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-string at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-string at route  403 FORBIDDEN error  | You can't delete c returns strings.
 service key-full-access delete collection returns-string at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-undefined at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns undefineds.
+service key-full-access delete collection returns-undefined at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection returns-undefined at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-undefined at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-undefined at route  403 FORBIDDEN error  | You can't delete c returns undefineds.
 service key-full-access delete collection returns-undefined at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c throws.
+service key-full-access delete collection throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-full-access delete collection throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection throws at route  403 FORBIDDEN error  | You can't delete c throws.
@@ -5642,7 +5642,7 @@ service key-role-based create collection throws at route  403 FORBIDDEN error  |
 service key-role-based create collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
 service key-role-based create users none at rest  403 FORBIDDEN error  | You can't create users.
 service key-role-based create users none at route  403 FORBIDDEN error  | You can't create users.
-service key-role-based delete collection async-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async falses.
+service key-role-based delete collection async-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
@@ -5652,37 +5652,37 @@ service key-role-based delete collection async-filter at direct outside  404 NOT
 service key-role-based delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-role-based delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection async-throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async throws.
+service key-role-based delete collection async-throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
 service key-role-based delete collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c falses.
+service key-role-based delete collection false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection false at route  403 FORBIDDEN error  | You can't delete c falses.
 service key-role-based delete collection false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection malformed-filter at bulk  403 FORBIDDEN error  missing=same  | You can't delete c malformed filters.
+service key-role-based delete collection malformed-filter at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection malformed-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service key-role-based delete collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection permission-spelling at bulk  403 FORBIDDEN error  missing=same  | You can't delete c permission spellings.
+service key-role-based delete collection permission-spelling at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
 service key-role-based delete collection permission-spelling at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection principal-kind at bulk  403 FORBIDDEN error  missing=same  | You can't delete c principal kinds.
+service key-role-based delete collection principal-kind at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection principal-kind at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection principal-kind at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
 service key-role-based delete collection principal-kind at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-empty-in at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns empty ins.
+service key-role-based delete collection returns-empty-in at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection returns-empty-in at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-empty-in at route  403 FORBIDDEN error  | You can't delete c returns empty ins.
 service key-role-based delete collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns falses.
+service key-role-based delete collection returns-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
@@ -5692,27 +5692,27 @@ service key-role-based delete collection returns-filter at direct outside  404 N
 service key-role-based delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-role-based delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-null at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns nulls.
+service key-role-based delete collection returns-null at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
 service key-role-based delete collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-string at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns strings.
+service key-role-based delete collection returns-string at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-string at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-string at route  403 FORBIDDEN error  | You can't delete c returns strings.
 service key-role-based delete collection returns-string at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-undefined at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns undefineds.
+service key-role-based delete collection returns-undefined at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection returns-undefined at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-undefined at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-undefined at route  403 FORBIDDEN error  | You can't delete c returns undefineds.
 service key-role-based delete collection returns-undefined at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection role-name at bulk  403 FORBIDDEN error  missing=same  | You can't delete c role names.
+service key-role-based delete collection role-name at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection role-name at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection role-name at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection role-name at route  403 FORBIDDEN error  | You can't delete c role names.
 service key-role-based delete collection role-name at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c throws.
+service key-role-based delete collection throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based delete collection throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection throws at route  403 FORBIDDEN error  | You can't delete c throws.
@@ -6433,7 +6433,7 @@ service key-role-based-super-admin create collection user-is-key-maker at route 
 service key-role-based-super-admin create collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service key-role-based-super-admin create users none at rest  403 FORBIDDEN error  | You can't create users.
 service key-role-based-super-admin create users none at route  403 FORBIDDEN error  | You can't create users.
-service key-role-based-super-admin delete collection async-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async falses.
+service key-role-based-super-admin delete collection async-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
@@ -6443,37 +6443,37 @@ service key-role-based-super-admin delete collection async-filter at direct outs
 service key-role-based-super-admin delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-role-based-super-admin delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection async-throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async throws.
+service key-role-based-super-admin delete collection async-throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
 service key-role-based-super-admin delete collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c falses.
+service key-role-based-super-admin delete collection false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection false at route  403 FORBIDDEN error  | You can't delete c falses.
 service key-role-based-super-admin delete collection false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection malformed-filter at bulk  403 FORBIDDEN error  missing=same  | You can't delete c malformed filters.
+service key-role-based-super-admin delete collection malformed-filter at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection malformed-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service key-role-based-super-admin delete collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection permission-spelling at bulk  403 FORBIDDEN error  missing=same  | You can't delete c permission spellings.
+service key-role-based-super-admin delete collection permission-spelling at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
 service key-role-based-super-admin delete collection permission-spelling at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection principal-kind at bulk  403 FORBIDDEN error  missing=same  | You can't delete c principal kinds.
+service key-role-based-super-admin delete collection principal-kind at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection principal-kind at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection principal-kind at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
 service key-role-based-super-admin delete collection principal-kind at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-empty-in at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns empty ins.
+service key-role-based-super-admin delete collection returns-empty-in at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-empty-in at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-empty-in at route  403 FORBIDDEN error  | You can't delete c returns empty ins.
 service key-role-based-super-admin delete collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns falses.
+service key-role-based-super-admin delete collection returns-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
@@ -6483,32 +6483,32 @@ service key-role-based-super-admin delete collection returns-filter at direct ou
 service key-role-based-super-admin delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-role-based-super-admin delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-null at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns nulls.
+service key-role-based-super-admin delete collection returns-null at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
 service key-role-based-super-admin delete collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-string at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns strings.
+service key-role-based-super-admin delete collection returns-string at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-string at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-string at route  403 FORBIDDEN error  | You can't delete c returns strings.
 service key-role-based-super-admin delete collection returns-string at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-undefined at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns undefineds.
+service key-role-based-super-admin delete collection returns-undefined at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-undefined at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-undefined at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-undefined at route  403 FORBIDDEN error  | You can't delete c returns undefineds.
 service key-role-based-super-admin delete collection returns-undefined at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection role-name at bulk  403 FORBIDDEN error  missing=same  | You can't delete c role names.
+service key-role-based-super-admin delete collection role-name at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection role-name at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection role-name at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection role-name at route  403 FORBIDDEN error  | You can't delete c role names.
 service key-role-based-super-admin delete collection role-name at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c throws.
+service key-role-based-super-admin delete collection throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection throws at route  403 FORBIDDEN error  | You can't delete c throws.
 service key-role-based-super-admin delete collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection user-is-key-maker at bulk  403 FORBIDDEN error  missing=same  | You can't delete c user is key makers.
+service key-role-based-super-admin delete collection user-is-key-maker at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service key-role-based-super-admin delete collection user-is-key-maker at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection user-is-key-maker at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection user-is-key-maker at route  403 FORBIDDEN error  | You can't delete c user is key makers.
@@ -9148,7 +9148,7 @@ service user-with create collection throws at route  403 FORBIDDEN error  | You 
 service user-with create collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
 service user-with create users none at rest  403 FORBIDDEN error  | You can't create users.
 service user-with create users none at route  403 FORBIDDEN error  | You can't create users.
-service user-with delete collection async-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async falses.
+service user-with delete collection async-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
@@ -9158,37 +9158,37 @@ service user-with delete collection async-filter at direct outside  404 NOT_FOUN
 service user-with delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service user-with delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection async-throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c async throws.
+service user-with delete collection async-throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
 service user-with delete collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c falses.
+service user-with delete collection false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection false at route  403 FORBIDDEN error  | You can't delete c falses.
 service user-with delete collection false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection malformed-filter at bulk  403 FORBIDDEN error  missing=same  | You can't delete c malformed filters.
+service user-with delete collection malformed-filter at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection malformed-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service user-with delete collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection permission-spelling at bulk  403 FORBIDDEN error  missing=same  | You can't delete c permission spellings.
+service user-with delete collection permission-spelling at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
 service user-with delete collection permission-spelling at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection principal-kind at bulk  403 FORBIDDEN error  missing=same  | You can't delete c principal kinds.
+service user-with delete collection principal-kind at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection principal-kind at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection principal-kind at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
 service user-with delete collection principal-kind at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-empty-in at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns empty ins.
+service user-with delete collection returns-empty-in at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection returns-empty-in at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-empty-in at route  403 FORBIDDEN error  | You can't delete c returns empty ins.
 service user-with delete collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-false at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns falses.
+service user-with delete collection returns-false at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
@@ -9198,22 +9198,22 @@ service user-with delete collection returns-filter at direct outside  404 NOT_FO
 service user-with delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service user-with delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-null at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns nulls.
+service user-with delete collection returns-null at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
 service user-with delete collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-string at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns strings.
+service user-with delete collection returns-string at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-string at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-string at route  403 FORBIDDEN error  | You can't delete c returns strings.
 service user-with delete collection returns-string at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-undefined at bulk  403 FORBIDDEN error  missing=same  | You can't delete c returns undefineds.
+service user-with delete collection returns-undefined at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection returns-undefined at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-undefined at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-undefined at route  403 FORBIDDEN error  | You can't delete c returns undefineds.
 service user-with delete collection returns-undefined at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection throws at bulk  403 FORBIDDEN error  missing=same  | You can't delete c throws.
+service user-with delete collection throws at bulk  404 NOT_FOUND item  missing=same  | Not found.
 service user-with delete collection throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection throws at route  403 FORBIDDEN error  | You can't delete c throws.

@@ -195,6 +195,7 @@ import {
   getDefaultValue,
   shouldTreatAsJson,
   singleAbsentResult,
+  singleWithoutDocumentResult,
 } from "./single-utils";
 
 /**
@@ -1258,12 +1259,8 @@ export class SingleQueryService extends BaseService {
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
-        // A Single removed from code is not given a document by a read:
-        // creating one is a write, which it refuses. It answers as a Single
-        // holding no document does.
-        if (await entityRemovedFromCode("single", slug)) {
-          return singleAbsentResult(slug);
-        }
+        const answered = await this.answerWithoutCreating(slug, options);
+        if (answered !== null) return answered;
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocumentOnce(singleMeta);
       }
@@ -2138,6 +2135,29 @@ export class SingleQueryService extends BaseService {
       companionData,
       companionStatus
     );
+  }
+
+  /**
+   * The answer for a read that found no document and must not create one, or
+   * `null` when the read should go on to create the default document.
+   *
+   * A Single removed from code is not given a document by a read: creating
+   * one is a write, which it refuses, so it answers as a Single holding no
+   * document does. A caller that asked to read without writing
+   * (`createIfMissing: false`) is answered here too, before the creation, so
+   * none of it runs: no row, no companion seed, no version snapshot and no
+   * created event.
+   */
+  private async answerWithoutCreating(
+    slug: string,
+    options: GetSingleOptions
+  ): Promise<SingleResult | null> {
+    if (await entityRemovedFromCode("single", slug)) {
+      return singleAbsentResult(slug);
+    }
+    return options.createIfMissing === false
+      ? singleWithoutDocumentResult()
+      : null;
   }
 
   /**

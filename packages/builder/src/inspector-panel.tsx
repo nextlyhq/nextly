@@ -24,6 +24,7 @@
  */
 
 import {
+  BASE_BREAKPOINT,
   findNode,
   type BlockDocument,
   type BlockInspectorProps,
@@ -36,34 +37,55 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
-  Checkbox,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-  Textarea,
   useIsomorphicLayoutEffect,
 } from "@nextlyhq/ui";
+import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
+import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import { deviceLabel } from "./breakpoint-switcher";
+import type { ComponentFieldsHost } from "./component-fields";
+import {
+  ComponentFieldsContext,
+  ComponentFieldsScope,
+  ExposedFieldsList,
+  PropExposeControl,
+  VisibilityExposeControl,
+  type ComponentFieldsBinding,
+} from "./component-fields-panel";
+import type { ComponentVariantsHost } from "./component-variants";
+import {
+  ComponentVariantsContext,
+  ComponentVariantsSection,
+} from "./component-variants-panel";
+import {
+  contentControlFor,
+  UnsupportedField,
+  type ContentServices,
+} from "./content-controls";
+import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
-import { IdentityFields } from "./identity-fields";
+import { EDITOR_WORDS } from "./editor-words";
+import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
   blockIsReadOnly,
+  designReadOnlyReason,
   fieldLabel,
   inspectSelection,
+  lockOp,
   lockStateOf,
+  layersLockChangeable,
+  lockStatusOf,
+  lockViewOf,
   propIsWritable,
   propPatch,
+  renameOp,
   selectedNode,
   type BlockInspection,
   type EditableProp,
@@ -73,13 +95,14 @@ import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
-import { useStoredDraft } from "./stored-draft";
 import {
+  breakpointLabel,
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
+import { placedDefinition } from "./variant-picker";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -132,6 +155,11 @@ export interface InspectorPanelProps {
   classLibraryAbsence?: StyleInspectorPanelProps["classLibraryAbsence"];
   /** Create a class and apply it to the selected block. Opts the surface in. */
   onCreateClass?: StyleInspectorPanelProps["onCreateClass"];
+  /**
+   * The site's fonts, carried to the Style tab's Font control. See
+   * {@link StyleInspectorPanelProps.fonts}.
+   */
+  fonts?: StyleInspectorPanelProps["fonts"];
   /**
    * The editor whose selected block this edits.
    *
@@ -242,6 +270,36 @@ export interface InspectorPanelProps {
    * way to edit it. Omitted, every block gets the generated controls.
    */
   inspectors?: BlockInspectorResolver;
+  /**
+   * The block verbs the card's menu offers beside Rename and Lock: the same
+   * verbs and verdicts the toolbar uses, handed out of the editor's verbs
+   * provider. Omitted, the menu offers Rename and Lock alone.
+   */
+  verbs?: CardVerbs;
+  /**
+   * What the host lends the Content tab: the media library and the shared
+   * rich-text editor. A control whose service is absent says so.
+   *
+   * @experimental Grows with the controls registry.
+   */
+  contentServices?: ContentServices;
+  /**
+   * What the host knows about the component being edited, when the document
+   * is one: the ids it may never mint again, and how many pages place it.
+   * Exposing fields is offered for any component document; without this, a
+   * new field's id is kept clear of the ids this session has seen only.
+   *
+   * @experimental Settles when the component editor ships.
+   */
+  componentFields?: ComponentFieldsHost;
+  /**
+   * What the host can tell the component's variants section: how many
+   * placements chose a variant, for the delete dialog. Omitted, the dialog
+   * says the placements fall back without a number.
+   *
+   * @experimental Settles when the component editor ships.
+   */
+  componentVariants?: ComponentVariantsHost;
 }
 
 /** What the inspector needs of the host's component read. */
@@ -253,24 +311,23 @@ export interface ComponentLibrary {
 }
 
 /**
- * Which half of the inspector is showing.
+ * Which half of the inspector is showing: what the block says, and how it
+ * looks.
  *
- * Two tabs rather than a second rail: two rails meaning different things is the
- * ambiguity this editor's layout rulings have consistently removed, and the
- * inspector is already the region that answers "what is selected".
+ * Two tabs, as Gutenberg's Settings and Styles and Webflow's two panels split
+ * it. The CSS id and the custom attributes are Content's last section,
+ * "Advanced", rather than a third tab: one place called Advanced, and it is
+ * where an author looking for an anchor id goes after the block's own fields.
  */
 const INSPECTOR_TABS = [
-  { value: "content", label: "Content" },
-  { value: "style", label: "Style" },
-  /*
-   * Last, and named for what it is rather than for what it holds. An author
-   * reaching for a `data-` attribute or an anchor id is leaving the modelled
-   * surface behind, and putting that beside Content would invite it as an
-   * ordinary next step. Every editor with this surface separates it the same
-   * way, and the one this replaces did too.
-   */
-  { value: "advanced", label: "Advanced" },
+  { value: "content", label: EDITOR_WORDS.content },
+  { value: "style", label: EDITOR_WORDS.style },
 ] as const;
+
+/** The inspector's tab names, in order, as an author reads them. */
+export function inspectorTabLabels(): string[] {
+  return INSPECTOR_TABS.map(tab => tab.label);
+}
 
 /**
  * The Style tab's own handler for a change of tab.
@@ -349,7 +406,8 @@ function selectedInstance(
     editor.document,
     editor.selectedId,
     library.definitions,
-    library.components
+    library.components,
+    lockViewOf(editor)
   );
 }
 
@@ -372,7 +430,12 @@ function selectedInstance(
 function surfaceFor(
   editor: EditorState,
   instance: InstanceInspection | null,
-  inspection: BlockInspection | null
+  inspection: BlockInspection | null,
+  verbs: CardVerbs | undefined,
+  fields: ComponentFieldsBinding | undefined,
+  definitions: ComponentLookup,
+  /** The canvas's root, where the instance panel marks a placement's parts. */
+  canvasRoot?: HTMLElement | null
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -402,7 +465,15 @@ function surfaceFor(
   }
   if (instance !== null) {
     return {
-      tabless: <InstanceInspectorPanel inspection={instance} editor={editor} />,
+      tabless: (
+        <InstanceInspectorPanel
+          inspection={instance}
+          editor={editor}
+          verbs={verbs}
+          definition={placedDefinition(definitions, instance.componentId)}
+          canvasRoot={canvasRoot}
+        />
+      ),
     };
   }
   /*
@@ -413,7 +484,27 @@ function surfaceFor(
    * second surface-meaning-two-things the layout ruling removed, wearing a
    * different shape. Tabs are withheld too: a Style tab over no selection would
    * offer an author somewhere to click that can never show anything.
+   *
+   * In a component's own view, nothing selected means the component itself is
+   * what is being looked at, so its exposed fields are listed, and the
+   * variants that preset them under those.
    */
+  if (
+    inspection === null &&
+    editor.selectedId === null &&
+    fields !== undefined
+  ) {
+    return {
+      tabless: (
+        <ExposedFieldsList binding={fields} editor={editor}>
+          <ComponentVariantsSection
+            editor={editor}
+            component={fields.context.component}
+          />
+        </ExposedFieldsList>
+      ),
+    };
+  }
   if (inspection === null) {
     return {
       tabless: (
@@ -426,25 +517,43 @@ function surfaceFor(
   return { block: inspection };
 }
 
+/**
+ * The inspector, inside the component's own view when the document is a
+ * component: the scope holds the removal dialog and hands every control the
+ * binding, so the panel below draws the same whichever document it edits.
+ */
 export function InspectorPanel({
+  componentFields,
+  componentVariants,
+  ...panel
+}: InspectorPanelProps): React.JSX.Element {
+  return (
+    <ComponentFieldsScope editor={panel.editor} host={componentFields}>
+      <ComponentVariantsContext.Provider value={componentVariants}>
+        <SelectionInspector {...panel} />
+      </ComponentVariantsContext.Provider>
+    </ComponentFieldsScope>
+  );
+}
+
+function SelectionInspector({
   editor,
   canvasRoot,
-  classLibrary,
-  classLibraryAbsence,
-  onCreateClass,
-  policy,
   styleState,
   breakpoint,
   cascade,
-  breakpoints,
   previewContainer,
-  liveBreakpoints,
-  onJumpToBreakpoint,
-  tokens,
   blocks,
   componentLibrary,
   inspectors,
-}: InspectorPanelProps): React.JSX.Element {
+  verbs,
+  contentServices,
+  // What only the Style tab reads, carried to it whole.
+  ...styleOnly
+}: Omit<
+  InspectorPanelProps,
+  "componentFields" | "componentVariants"
+>): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
   // the document and the values shown.
@@ -458,7 +567,11 @@ export function InspectorPanel({
     cascade,
     previewContainer,
   });
-  const inspection = inspectSelection(editor.document, editor.selectedId);
+  const inspection = inspectSelection(
+    editor.document,
+    editor.selectedId,
+    lockViewOf(editor)
+  );
   /*
    * Asked beside the block inspection rather than instead of it, and the two
    * cannot both answer: a node is an instance or a registered block, never
@@ -495,43 +608,67 @@ export function InspectorPanel({
   const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
 
   const commit = React.useCallback(
-    (name: string, value: unknown) => {
+    (name: string, value: unknown): BlockDocument | null => {
       const id = editor.selectedId;
-      if (id === null) return;
+      if (id === null) return null;
       // Read at commit time rather than closed over: a field committing on
-      // blur can fire after another edit has already replaced the node.
-      commitProp(editor, editor.document, id, name, value);
+      // blur can fire after another edit has already replaced the node. The
+      // document written is answered, for a caller storing it straight away.
+      return commitProp(editor, editor.document, id, name, value);
     },
     [editor]
   );
 
-  const surface = surfaceFor(editor, instance, inspection);
+  // The lock reason's id, which every held control points to. Made before
+  // the early return, as every hook here is.
+  const reasonId = React.useId();
+  // The component's own view, when the document is a component.
+  const fields = React.useContext(ComponentFieldsContext);
+
+  const surface = surfaceFor(
+    editor,
+    instance,
+    inspection,
+    verbs,
+    fields,
+    (componentLibrary ?? NO_LIBRARY).definitions,
+    canvasRoot
+  );
   if ("tabless" in surface) return surface.tabless;
   const block = surface.block;
+  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
 
   return (
     <div className="nx-inspector">
-      <h2 className="nx-inspector__title">{block.label}</h2>
-
-      {/*
-        What the block IS, above what it holds.
-
-        First because it answers "which block am I looking at" — a page with six
-        headings gives an author six identical inspector titles, and the name is
-        the only thing that tells them apart. Both fields are also the two the
-        layers panel already shows, so this is where that display gets a writer.
-
-        Above the tabs rather than inside Content, because it describes the block
-        under both of them: an author on the Style tab still needs to know which
-        of six headings they are looking at.
-      */}
-      <IdentityFields
-        // Keyed by node so the name input does not carry an uncommitted edit
-        // across a selection change, exactly as the prop fields are.
-        key={`${block.nodeId}:identity`}
-        nodeId={block.nodeId}
-        identity={block.identity}
-        editor={editor}
+      <BlockCard
+        // Keyed by node, so a rename half-typed for one block does not carry
+        // to the next.
+        key={`${block.nodeId}:card`}
+        icon={block.icon}
+        type={block.label}
+        name={block.identity.name}
+        description={block.description}
+        lock={lock}
+        // Withheld while a Layers lock holds the block, its own or one around
+        // it: renaming is a change like any other, and the op layer refuses it.
+        onRename={
+          lock.layers || lock.inheritedFrom !== undefined
+            ? undefined
+            : name => editor.apply(renameOp(block.nodeId, name))
+        }
+        onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
+        // Held inside a `contentOnly` area, which pins the node's own lock
+        // with its design: the save would refuse the change. The one predicate
+        // the multi-selection card asks too, so a block's Lock is offered alike
+        // however it was selected; inside a block locked in Layers it stays
+        // offered, since a change to the lock alone is always allowed.
+        lockHeld={
+          layersLockChangeable(lock)
+            ? undefined
+            : "The area it sits in fixes this."
+        }
+        verbs={verbs}
+        reasonId={reasonId}
       />
 
       {/*
@@ -539,10 +676,6 @@ export function InspectorPanel({
         styling one block after another means to stay on Style. This element's
         position does not change, so the state lives across every selection; a
         `key` on the node id would reset it on every click.
-
-        Controlled rather than left to Radix because the Advanced tab has to be
-        told when it stops being the one on screen: it is force-mounted, so its
-        own removal no longer tells it.
       */}
       <Tabs
         value={tab}
@@ -557,86 +690,229 @@ export function InspectorPanel({
           ))}
         </TabsList>
 
-        <TabsContent value="content">
-          <ContentSurface
-            // Keyed by node, so a custom inspector holding local state does not
-            // carry one block's draft to the next, as the generated fields do
-            // not.
-            key={`${block.nodeId}:content`}
-            inspection={block}
+        {/*
+          FORCE-MOUNTED, because Content holds Advanced, and Advanced holds a
+          draft: unmounting it threw away what the author had typed and the
+          reason a refused row was not saved. HIDDEN here rather than left to
+          Radix, which ties mounting and visibility together — `forceMount`
+          alone would draw Content under Style as well — and `hidden` takes it
+          out of the accessibility tree exactly as an unmounted panel was.
+        */}
+        <TabsContent value="content" forceMount hidden={tab !== "content"}>
+          <ContentTab
+            block={block}
             editor={editor}
             onCommit={commit}
             inspectors={inspectors}
+            services={contentServices}
+            blocks={blocks}
+            onScreen={tab === "content"}
+            reasonId={reasonId}
+            fields={fields}
           />
         </TabsContent>
 
         <TabsContent value="style">
-          {/*
-            ABOVE the controls, because it decides what every one of them reads
-            and writes. Below them it would be a filter applied after the fact,
-            and an author would have edited a value before meeting the thing
-            that says which state the value belongs to.
-
-            Whether it appears at all is the FIELD's own decision — see
-            `StyleStateField`, which withholds itself from a host that cannot
-            carry the choice to its canvas.
-          */}
-          <StyleStateField
-            state={editedStyleState(styleState)}
-            onSelect={styleState?.onChange}
-            node={styleNode}
-            breakpoints={breakpoints}
-          />
-          <StyleInspectorPanel
+          <StyleTab
+            {...styleOnly}
             editor={editor}
+            styleNode={styleNode}
             renderedTag={canvas.tag}
             sideOrientation={canvas.orientation}
-            policy={policy}
-            state={editedStyleState(styleState)}
+            styleState={styleState}
             breakpoint={breakpoint}
             cascade={cascade}
-            breakpoints={breakpoints}
             previewContainer={previewContainer}
-            liveBreakpoints={liveBreakpoints}
-            onJumpToBreakpoint={onJumpToBreakpoint}
-            tokens={tokens}
-            classLibrary={classLibrary}
-            classLibraryAbsence={classLibraryAbsence}
-            onCreateClass={onCreateClass}
           />
         </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
 
+/**
+ * The Content tab: the block's own fields, then its Advanced section with the
+ * CSS id and custom attributes.
+ */
+function ContentTab({
+  block,
+  editor,
+  onCommit: commit,
+  inspectors,
+  services,
+  blocks,
+  onScreen,
+  reasonId,
+  fields,
+}: {
+  block: BlockInspection;
+  editor: EditorState;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  inspectors: BlockInspectorResolver | undefined;
+  services: ContentServices | undefined;
+  blocks: BlockResolver | undefined;
+  /** The id of the lock reason held controls point to, in the card. */
+  reasonId: string;
+  /** Whether the Content tab is the one showing. */
+  onScreen: boolean;
+  /** The component's own view, when the document is a component. */
+  fields: ComponentFieldsBinding | undefined;
+}): React.JSX.Element {
+  // Whether the Advanced section is open, so the panel inside it can be told
+  // when it stops being on screen and settle its draft.
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  const designLocked = designReadOnlyReason(
+    editor.document,
+    block.nodeId,
+    lockViewOf(editor)
+  );
+
+  return (
+    <>
+      <ContentSurface
+        // Keyed by node, so a custom inspector holding local state does not
+        // carry one block's draft to the next, as the generated fields do
+        // not.
+        key={`${block.nodeId}:content`}
+        inspection={block}
+        editor={editor}
+        onCommit={commit}
+        inspectors={inspectors}
+        services={services}
+        reasonId={reasonId}
+        fields={fields}
+      />
+      <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*
-          FORCE-MOUNTED, alone among the three. The other two hold controls that
-          write on the spot; this one holds a draft, and unmounting it threw
-          away both what the author had typed and the reason a refused row was
-          not saved.
-
-          HIDDEN here rather than left to Radix, which ties the two together:
-          `TabsContent` renders `hidden={!present}` where `present` is
-          `forceMount || isSelected`, so asking it to stay mounted also tells it
-          it is on screen — and the Advanced fields appeared under Content and
-          Style as well. Keeping the mount and stating the visibility separately
-          is what was actually wanted, and `hidden` takes it out of the
-          accessibility tree exactly as an unmounted panel was.
+        Opened from the summary's own click, which a keyboard's Enter and
+        Space also raise, rather than from the element's toggle event:
+        that event arrives a task later, and the panel inside must know
+        it is on screen in the same render the author opened it.
+      */}
+        <summary
+          onClick={event => {
+            event.preventDefault();
+            setAdvancedOpen(open => !open);
+          }}
+        >
+          <ChevronRight
+            className="nx-inspector__advanced-chevron"
+            size={16}
+            aria-hidden="true"
+          />
+          Advanced
+        </summary>
+        {/*
+          Held while the design is locked: every native control inside is
+          read-only at once and points at the reason in the card, and the
+          panel's own write path refuses what the save would.
         */}
-        <TabsContent value="advanced" forceMount hidden={tab !== "advanced"}>
+        <HeldByLock
+          reasonId={designLocked === undefined ? undefined : reasonId}
+        >
           <AdvancedPanel
-            // Keyed by node, so a half-typed attribute does not travel to the
-            // next block the way an uncommitted name would. The panel holds
-            // rows locally; without this an author would select another block
-            // and find this one's unsaved row waiting there.
+            // Keyed by node, so a half-typed attribute does not travel to
+            // the next block the way an uncommitted name would. The panel
+            // holds rows locally; without this an author would select
+            // another block and find this one's unsaved row waiting there.
             key={`${block.nodeId}:advanced`}
             nodeId={block.nodeId}
             cssId={block.html.cssId}
             attributes={block.html.attributes}
             editor={editor}
-            active={tab === "advanced"}
+            active={onScreen && advancedOpen}
             blocks={blocks}
           />
-        </TabsContent>
-      </Tabs>
-    </div>
+        </HeldByLock>
+      </details>
+    </>
+  );
+}
+
+/**
+ * The Style tab: the bar that says what an edit changes, then the style
+ * controls themselves.
+ */
+function StyleTab({
+  editor,
+  styleNode,
+  renderedTag,
+  sideOrientation,
+  styleState,
+  policy,
+  breakpoint,
+  cascade,
+  breakpoints,
+  previewContainer,
+  liveBreakpoints,
+  onJumpToBreakpoint,
+  tokens,
+  classLibrary,
+  classLibraryAbsence,
+  onCreateClass,
+  fonts,
+}: Pick<
+  InspectorPanelProps,
+  | "editor"
+  | "styleState"
+  | "policy"
+  | "breakpoint"
+  | "cascade"
+  | "breakpoints"
+  | "previewContainer"
+  | "liveBreakpoints"
+  | "onJumpToBreakpoint"
+  | "tokens"
+  | "classLibrary"
+  | "classLibraryAbsence"
+  | "onCreateClass"
+  | "fonts"
+> & {
+  styleNode: ReturnType<typeof selectedNode>;
+  renderedTag: StyleInspectorPanelProps["renderedTag"];
+  sideOrientation: StyleInspectorPanelProps["sideOrientation"];
+}): React.JSX.Element {
+  const state = editedStyleState(styleState);
+  return (
+    <>
+      {/*
+      ABOVE the controls, because it decides what every one of them reads
+      and writes. Below them it would be a filter applied after the fact,
+      and an author would have edited a value before meeting the thing
+      that says which state the value belongs to.
+    */}
+      <EditingBar
+        target={{ kind: "block" }}
+        device={editedDevice(breakpoints, breakpoint ?? BASE_BREAKPOINT)}
+        state={state}
+        stateControl={
+          <StyleStateField
+            state={state}
+            onSelect={styleState?.onChange}
+            node={styleNode}
+            breakpoints={breakpoints}
+          />
+        }
+      />
+      <StyleInspectorPanel
+        editor={editor}
+        renderedTag={renderedTag}
+        sideOrientation={sideOrientation}
+        policy={policy}
+        state={state}
+        breakpoint={breakpoint}
+        cascade={cascade}
+        breakpoints={breakpoints}
+        previewContainer={previewContainer}
+        liveBreakpoints={liveBreakpoints}
+        onJumpToBreakpoint={onJumpToBreakpoint}
+        tokens={tokens}
+        classLibrary={classLibrary}
+        classLibraryAbsence={classLibraryAbsence}
+        onCreateClass={onCreateClass}
+        fonts={fonts}
+      />
+    </>
   );
 }
 
@@ -658,6 +934,9 @@ function commitProp(
   name: string,
   value: unknown
 ): BlockDocument | null {
+  // Refused here, for every caller: a lock set after a field drew must still
+  // stop the write, and inside a `contentOnly` area only content may change.
+  if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
   return editor.apply({
@@ -680,28 +959,102 @@ function ContentSurface({
   editor,
   onCommit,
   inspectors,
+  services,
+  reasonId,
+  fields,
 }: {
   inspection: BlockInspection;
   editor: EditorState;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   inspectors: BlockInspectorResolver | undefined;
+  services: ContentServices | undefined;
+  reasonId: string;
+  /** The component's own view, when the document is a component. */
+  fields: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
   const generated = (
-    <ContentFields inspection={inspection} onCommit={onCommit} />
+    <ContentFields
+      inspection={inspection}
+      onCommit={onCommit}
+      services={services}
+      reasonId={reasonId}
+      fields={fields}
+      writable={name =>
+        propIsWritable(
+          editor.document,
+          inspection.nodeId,
+          name,
+          lockViewOf(editor)
+        )
+      }
+    />
   );
   const Custom =
     inspection.inspector === undefined
       ? undefined
       : inspectors?.(inspection.inspector);
-  if (Custom === undefined) return generated;
-  return (
-    <CustomInspectorBoundary fallback={generated}>
-      <CustomInspector
-        Inspector={Custom}
+  const visibility =
+    fields === undefined ? null : (
+      <VisibilityExposeControl
+        binding={fields}
         nodeId={inspection.nodeId}
-        editor={editor}
+        blockName={inspection.label}
       />
-    </CustomInspectorBoundary>
+    );
+  if (Custom === undefined) {
+    return (
+      <>
+        {visibility}
+        {generated}
+      </>
+    );
+  }
+  return (
+    <>
+      {visibility}
+      <CustomInspectorBoundary fallback={generated}>
+        <CustomInspector
+          Inspector={Custom}
+          nodeId={inspection.nodeId}
+          editor={editor}
+        />
+        {/*
+          A block's own inspector draws its own controls and knows nothing of
+          exposing them, so in a component's view its props are listed again
+          beneath it, each with its switch.
+        */}
+        {fields === undefined ? null : (
+          <ExposeRows inspection={inspection} fields={fields} />
+        )}
+      </CustomInspectorBoundary>
+    </>
+  );
+}
+
+/** Each prop's expose switch, for a block whose own inspector draws its controls. */
+function ExposeRows({
+  inspection,
+  fields,
+}: {
+  inspection: BlockInspection;
+  fields: ComponentFieldsBinding;
+}): React.JSX.Element {
+  return (
+    <div className="nx-inspector__fields" data-expose-rows="">
+      {inspection.props.map(prop => (
+        <div
+          key={`${inspection.nodeId}:${prop.name}:expose`}
+          className="nx-inspector__prop"
+        >
+          <p className="nx-inspector__note">{fieldLabel(prop.name)}</p>
+          <PropExposeControl
+            binding={fields}
+            nodeId={inspection.nodeId}
+            prop={prop}
+          />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -745,7 +1098,9 @@ function CustomInspector({
   const commit = React.useCallback(
     (name: string, value: unknown): void => {
       const { editor: current, document } = live.current;
-      if (!propIsWritable(document, nodeId, name)) return;
+      if (!propIsWritable(document, nodeId, name, lockViewOf(current))) {
+        return;
+      }
       const next = commitProp(current, document, nodeId, name, value);
       if (next !== null) live.current = { editor: current, document: next };
     },
@@ -800,9 +1155,25 @@ class CustomInspectorBoundary extends React.Component<
 function ContentFields({
   inspection,
   onCommit,
+  services,
+  reasonId,
+  fields,
+  writable,
 }: {
   inspection: BlockInspection;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  services: ContentServices | undefined;
+  /** The id of the lock reason a held field points to. */
+  reasonId: string;
+  /**
+   * Whether one prop may be set: not on a locked block, and inside a
+   * `contentOnly` area only for content props. The same rule the commit and
+   * the save apply, asked so the field is drawn read-only rather than met with
+   * a refusal.
+   */
+  writable: (name: string) => boolean;
+  /** The component's own view, when the document is a component. */
+  fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
   if (inspection.props.length === 0) {
     return (
@@ -813,181 +1184,90 @@ function ContentFields({
   }
   return (
     <div className="nx-inspector__fields">
-      {inspection.props.map(prop => (
-        <PropField
-          // Keyed by node AND prop: a bare prop name would let React reuse one
-          // block's field for the next block's same-named prop, so the input
-          // would keep the previous block's uncommitted text.
-          key={`${inspection.nodeId}:${prop.name}`}
-          prop={prop}
-          onCommit={onCommit}
-        />
-      ))}
+      {inspection.props.map(prop => {
+        const field = (
+          <HeldByLock
+            // Keyed by node AND prop: a bare prop name would let React reuse
+            // one block's field for the next block's same-named prop, so the
+            // input would keep the previous block's uncommitted text.
+            key={`${inspection.nodeId}:${prop.name}`}
+            // A held field points at the reason in the card.
+            reasonId={writable(prop.name) ? undefined : reasonId}
+          >
+            <PropField
+              prop={prop}
+              disabled={!writable(prop.name)}
+              onCommit={onCommit}
+              services={services}
+            />
+          </HeldByLock>
+        );
+        if (fields === undefined) return field;
+        // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
+        // still one a designer may try to expose, and the refusal that says
+        // why is the answer they need, which a disabled switch would withhold.
+        return (
+          <div
+            key={`${inspection.nodeId}:${prop.name}`}
+            className="nx-inspector__prop"
+          >
+            {field}
+            <PropExposeControl
+              binding={fields}
+              nodeId={inspection.nodeId}
+              prop={prop}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 function PropField({
   prop,
+  disabled,
   onCommit,
+  services,
 }: {
   prop: EditableProp;
-  onCommit: (name: string, value: unknown) => void;
+  disabled: boolean;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  services: ContentServices | undefined;
 }): React.JSX.Element {
-  const id = `nx-prop-${prop.name}`;
+  // Unique per mount, so two editors on one page never share a field id and a
+  // label never points at the other editor's control.
+  const id = React.useId();
+  const Control = contentControlFor(prop.schema.type);
 
-  if (!prop.supported) {
-    return (
-      <div className="nx-inspector__field" data-unsupported="">
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-        {/*
-          Listed rather than omitted. A block declaring a prop this panel cannot
-          draw is still a block with that prop, and hiding it presents an
-          incomplete block as a complete one — an author would conclude the
-          field does not exist rather than that it is edited elsewhere.
-        */}
-        <p className="nx-inspector__note">
-          Not editable here ({prop.schema.type}).
-        </p>
-      </div>
-    );
+  if (Control === undefined) {
+    return <UnsupportedField prop={prop} />;
   }
-
-  if (prop.schema.type === "checkbox") {
-    return (
-      <div className="nx-inspector__field nx-inspector__field--inline">
-        <Checkbox
-          id={id}
-          checked={prop.value === true}
-          onCheckedChange={checked => onCommit(prop.name, checked === true)}
-        />
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-      </div>
-    );
-  }
-
-  if (prop.schema.type === "select") {
-    return (
-      <div className="nx-inspector__field">
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-        <Select
-          value={typeof prop.value === "string" ? prop.value : undefined}
-          onValueChange={next => onCommit(prop.name, next)}
-        >
-          <SelectTrigger id={id}>
-            <SelectValue placeholder="Choose" />
-          </SelectTrigger>
-          <SelectContent>
-            {prop.options.map(option => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    );
-  }
-
-  return <TextishField id={id} prop={prop} onCommit={onCommit} />;
-}
-
-/** A prop's value as editable text, or empty when it is not representable. */
-function storedText(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return "";
-}
-
-/**
- * A field the author types into: text, textarea, url, number.
- *
- * Holds its own value while focused so typing is responsive, and reports it on
- * blur. Reading straight from the node would make every keystroke a document
- * edit; reporting only on blur without local state would make the field refuse
- * to show what was typed.
- */
-function TextishField({
-  id,
-  prop,
-  onCommit,
-}: {
-  id: string;
-  prop: EditableProp;
-  onCommit: (name: string, value: unknown) => void;
-}): React.JSX.Element {
-  // Only a primitive becomes text. `String({})` is "[object Object]", and a
-  // field showing that would COMMIT it on blur — turning a prop the panel
-  // cannot represent into a string that permanently replaces it. An
-  // unrepresentable value shows empty and, because `send` compares against
-  // this, an untouched field writes nothing.
-  const stored = storedText(prop.value);
-  const [draft, setDraft] = useStoredDraft(stored);
-
-  const send = () => {
-    if (draft === stored) return;
-    if (prop.schema.type === "number") {
-      const parsed = Number(draft);
-      // A number field that cannot parse reverts rather than writing NaN, which
-      // survives JSON as `null` and reaches the renderer as a missing prop.
-      if (draft.trim() === "" || Number.isNaN(parsed)) {
-        setDraft(stored);
-        return;
-      }
-      onCommit(prop.name, parsed);
-      return;
-    }
-    onCommit(prop.name, draft);
-  };
-
-  const shared = {
-    id,
-    value: draft,
-    onBlur: send,
-    onChange: (
-      event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-    ) => setDraft(event.target.value),
-  };
 
   return (
-    <div className="nx-inspector__field">
-      <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-      {prop.schema.type === "textarea" ? (
-        <Textarea {...shared} rows={3} />
-      ) : (
-        <Input
-          {...shared}
-          type={prop.schema.type === "number" ? "number" : "text"}
-          inputMode={prop.schema.type === "url" ? "url" : undefined}
-          // Enter commits as well as blur. A single-line field is where an
-          // author expects Enter to mean "done", and waiting for them to click
-          // elsewhere leaves the canvas stale after a deliberate action.
-          onKeyDown={event => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              send();
-            }
-          }}
-        />
-      )}
-    </div>
+    <Control
+      id={id}
+      prop={prop}
+      disabled={disabled}
+      onCommit={onCommit}
+      services={services}
+    />
   );
 }
 
 /**
  * The inspector when several blocks are selected.
  *
- * Says how many, and offers the one control that is well defined across a set:
- * the lock. A tri-state checkbox rather than a two-state one, because "some of
- * these are locked" is a real state and showing it as either on or off tells
- * the author something false about half of their selection.
+ * Says how many, and offers in its menu the one control that is well defined
+ * across a set: the lock. From a set that is partly locked, the menu LOCKS
+ * everything — the alternative is a first press that appears to do nothing to
+ * the blocks that were already unlocked, and every file manager and design
+ * tool resolves it the same way.
  *
- * From `mixed`, the first press LOCKS everything. The alternative — unlocking —
- * is a first press that appears to do nothing to the blocks that were already
- * unlocked, and every file manager and design tool resolves it the same way.
+ * Planned only over the blocks whose own lock may change here. A block inside
+ * a `contentOnly` area has its lock pinned by that area, and the edit is
+ * applied as one group, so planning it would have the save refuse the whole
+ * edit and change none of the others. The card says how many are held and why.
  */
 function ManyBlocksPanel({
   editor,
@@ -998,43 +1278,42 @@ function ManyBlocksPanel({
   count: number;
   lock: LockState;
 }): React.JSX.Element {
-  const plan = selectionLock(
-    editor.document,
-    editor.selection.ids,
-    // Mixed locks; locked unlocks; unlocked locks.
-    lock !== "locked"
+  const view = lockViewOf(editor);
+  const changeable = editor.selection.ids.filter(id =>
+    layersLockChangeable(lockStatusOf(editor.document, id, view))
   );
+  // The direction is read from the blocks it would change, so a held block
+  // already in the other state cannot leave the menu with nothing to do.
+  const unlocking =
+    changeable.length > 0 &&
+    lockStateOf(editor.document, changeable) === "locked";
+  const plan = selectionLock(editor.document, changeable, !unlocking);
 
   return (
     <div className="nx-inspector" data-selection="many">
-      <h2 className="nx-inspector__title">{count} blocks selected</h2>
-
-      <div className="nx-inspector__identity">
-        <label className="nx-inspector__check">
-          <input
-            type="checkbox"
-            checked={lock === "locked"}
-            // `indeterminate` is a DOM property with no HTML attribute, so it
-            // is set through a ref rather than declared. `aria-checked` carries
-            // the same fact to assistive technology, which reads the attribute
-            // and never the property.
-            ref={element => {
-              if (element !== null) element.indeterminate = lock === "mixed";
-            }}
-            aria-checked={lock === "mixed" ? "mixed" : lock === "locked"}
-            onChange={() => {
-              if (plan === null) return;
-              editor.applyAll(plan.ops);
-            }}
-          />
-          Lock these blocks
-        </label>
-      </div>
-
+      <SelectionCard
+        count={count}
+        lock={lock}
+        unlocking={unlocking}
+        held={editor.selection.ids.length - changeable.length}
+        onLock={plan === null ? undefined : () => editor.applyAll(plan.ops)}
+      />
       <p className="nx-inspector__note">
         Editing properties across several blocks is not available yet. Select
         one block to edit what it holds.
       </p>
     </div>
   );
+}
+
+/**
+ * The device the Style tab edits, named as the device switcher names it, so
+ * the bar and the switcher beside it agree. A tier the switcher does not offer
+ * (a container tier) is named by its own definition.
+ */
+function editedDevice(
+  breakpoints: BreakpointSet | undefined,
+  id: BreakpointId
+): string {
+  return deviceLabel(breakpoints, id) ?? breakpointLabel(breakpoints, id);
 }

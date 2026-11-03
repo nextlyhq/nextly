@@ -7,7 +7,8 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
-import { migrateCore } from "../migrate";
+import { CliError } from "../../errors";
+import { migrateCore, migrateExitCode } from "../migrate";
 
 function deps(over: Record<string, unknown> = {}) {
   return {
@@ -24,6 +25,8 @@ function deps(over: Record<string, unknown> = {}) {
     lockMode: "fail-fast" as const,
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
     runFileMigrationsFn: vi.fn(async () => 0),
+    refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
+    assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
@@ -503,6 +506,76 @@ describe("a plugin's migration history", () => {
     // what ran before it is under test here.
     await migrateCore(d as never).catch(() => undefined);
     expect(order).toEqual(["ledger", "core"]);
+  });
+});
+
+describe("an unresolved app attempt", () => {
+  it("is refused inside the lock, before the core reconcile writes anything", async () => {
+    const order: string[] = [];
+    const refusal = new Error("unresolved attempt");
+    const d = deps({
+      withLock: async (
+        _db: unknown,
+        _d: unknown,
+        fn: () => Promise<unknown>
+      ) => {
+        order.push("lock");
+        return { ran: true as const, value: await fn() };
+      },
+      refuseUnresolvedAttemptsFn: vi.fn(async (args: { command: string }) => {
+        order.push(`refusal:${args.command}`);
+        throw refusal;
+      }),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+      lockCommand: "boot migrations (db.runMigrationsOnBoot)",
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    // The command it names is the one holding the lock, the boot step's here.
+    expect(order).toEqual([
+      "lock",
+      "refusal:boot migrations (db.runMigrationsOnBoot)",
+    ]);
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("an applied file edited since it ran", () => {
+  it("is refused inside the lock, after the attempt check and before the core reconcile", async () => {
+    const order: string[] = [];
+    const refusal = new CliError("MIGRATION_TAMPERED", {
+      what: "edited",
+      why: "edited",
+      next: "restore it",
+    });
+    const d = deps({
+      refuseUnresolvedAttemptsFn: vi.fn(async () => {
+        order.push("attempts");
+      }),
+      assertAppliedFilesUnchangedFn: vi.fn(
+        async (args: { command: string }) => {
+          order.push(`checksums:${args.command}`);
+          throw refusal;
+        }
+      ),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    expect(order).toEqual(["attempts", "checksums:nextly migrate"]);
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+    // The code the guide documents, so a deploy script can tell it apart.
+    expect(migrateExitCode(refusal)).toBe(2);
+    expect(migrateExitCode(new Error("anything else"))).toBe(1);
+    expect(
+      migrateExitCode(
+        new CliError("MIGRATION_MISSING", { what: "x", why: "x", next: "x" })
+      )
+    ).toBe(1);
   });
 });
 

@@ -123,6 +123,81 @@
   outline-offset: 1px;
 }
 
+/* ----------------------------------------------------------- design panel */
+/* The Design panel's header: its title with the open tab's own controls, and
+   the tabs as a segmented control, as in the editor's agreed design. */
+.nx-pb-design,
+.nx-pb-design__tabs-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.nx-pb-design__head {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 8px;
+}
+.nx-pb-design__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+}
+.nx-pb-design__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+.nx-pb-design__tabs.nx-pb-design__tabs {
+  display: flex;
+  height: 32px;
+  padding: 2px;
+  gap: 2px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--nx-muted);
+}
+.nx-pb-design__tabs .nx-pb-design__tab {
+  flex: 1;
+  height: auto;
+  margin: 0;
+  padding: 4px 0;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
+.nx-pb-design__tabs .nx-pb-design__tab:hover {
+  color: var(--nx-foreground);
+}
+.nx-pb-design__tabs .nx-pb-design__tab[data-state="active"] {
+  border: 0;
+  background: var(--nx-card);
+  color: var(--nx-foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.1);
+}
+.nx-pb-design__tabs .nx-pb-design__tab:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+.nx-pb-design__body.nx-pb-design__body {
+  margin-top: 0;
+  min-height: 0;
+}
+/* What an import or export reported, under the header whichever tab is
+   open; nothing at all until there is something to say. */
+.nx-pb-design__reports {
+  padding: 0 12px 8px;
+}
+.nx-pb-design__reports:empty {
+  display: none;
+}
+
 /* ------------------------------------------------------------ generic btn */
 .nx-pb-icon-btn {
   display: inline-flex;

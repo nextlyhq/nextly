@@ -65,6 +65,7 @@ import {
   applyPluginSchemaContributionsDeferred,
   type BuilderEntities,
   type DeferredExtend,
+  type FieldsAddedByPlugins,
   assertRegisteredKeepTheirKind,
   resolveBuilderExtends,
 } from "../../plugins/schema/apply-contributions";
@@ -238,6 +239,13 @@ export interface LoadConfigResult {
    * materialize the extra columns onto the Builder tables without re-folding.
    */
   deferredExtends?: DeferredExtend[];
+
+  /**
+   * The fields plugins added to entities they do not own, by `extend` or a
+   * transform, as the fold's ownership ledgers recorded them: what a full
+   * uninstall of a plugin takes with it. Absent when no plugin is configured.
+   */
+  fieldsAddedByPlugins?: FieldsAddedByPlugins;
 
   /**
    * The plugin field types this config registered, captured at the end of its
@@ -607,6 +615,7 @@ async function loadConfigInternal(
     const appConfig = defineConfig(rawConfig);
     let config = appConfig;
     let deferredExtends: DeferredExtend[] | undefined;
+    let fieldsAddedByPlugins: FieldsAddedByPlugins | undefined;
 
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
@@ -684,6 +693,7 @@ async function loadConfigInternal(
       );
       config = applyFoldedToBase(config, folded.config, transformedConfig);
       deferredExtends = folded.deferredExtends;
+      fieldsAddedByPlugins = folded.fieldsAddedByPlugins;
 
       // Register plugin custom field types (C7/D16) so the CLI's column
       // classifier (getColumnDescriptor) resolves each plugin type to its
@@ -757,6 +767,7 @@ async function loadConfigInternal(
       projectRoot: cwd,
       dependencies,
       deferredExtends,
+      fieldsAddedByPlugins,
       pluginConsent,
       // Captured after registration, so it holds exactly what this config
       // contributed rather than whatever the live set becomes later.

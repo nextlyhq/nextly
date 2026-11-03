@@ -72,6 +72,7 @@ import type {
 } from "../domains/schema/pipeline/diff/types";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
+import { ttyRequiredDetail } from "../domains/schema/pipeline/prompt-dispatcher/errors";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline";
 import type {
   MigrationJournal,
@@ -94,6 +95,10 @@ import type {
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import {
+  refusedConfiguredSiblingFields,
+  siblingClashMessage,
+} from "../domains/schema/sibling-fields";
 import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
 import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
@@ -1867,14 +1872,25 @@ async function applyReloadHolding(
   // `AdapterLike` is a narrow view of the registered adapter, which is a `DrizzleAdapter` at runtime.
   const liveAdapter = adapter as unknown as DrizzleAdapter;
   let refusedAddresses: Awaited<ReturnType<typeof refusedConfiguredAddresses>>;
+  // The reloaded configuration's new pairs of sibling fields, judged as a start judges them.
+  let refusedSiblings: Awaited<
+    ReturnType<typeof refusedConfiguredSiblingFields>
+  >;
   try {
+    const reloaded = {
+      collections: (newConfig.collections ?? []).filter(hasSlug),
+      singles: (newConfig.singles ?? []).filter(hasSlug),
+      fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
+    };
+    const registered = await loadBuilderEntities(liveAdapter);
     refusedAddresses = await refusedConfiguredAddresses(
-      {
-        collections: (newConfig.collections ?? []).filter(hasSlug),
-        singles: (newConfig.singles ?? []).filter(hasSlug),
-        fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
-      },
-      await loadBuilderEntities(liveAdapter),
+      reloaded,
+      registered,
+      table => liveAdapter.tableExists(table)
+    );
+    refusedSiblings = await refusedConfiguredSiblingFields(
+      reloaded,
+      registered,
       table => liveAdapter.tableExists(table)
     );
   } catch (err) {
@@ -1887,10 +1903,15 @@ async function applyReloadHolding(
     undoOptimisticReloadWork();
     return;
   }
-  if (refusedAddresses.length > 0) {
+  if (refusedAddresses.length > 0 || refusedSiblings.length > 0) {
     for (const { refusal } of refusedAddresses) {
       logger?.error(
         `[Nextly HMR] ${refusal.code}: ${refusal.message}. Keeping the previously-loaded config.`
+      );
+    }
+    for (const { entity, clash } of refusedSiblings) {
+      logger?.error(
+        `[Nextly HMR] FIELD_NAME_DUPLICATE: ${siblingClashMessage(entity, clash)} Keeping the previously-loaded config.`
       );
     }
     undoOptimisticReloadWork();
@@ -3154,10 +3175,7 @@ async function applyReloadHolding(
       // pending. Surface a top-level, scannable instruction so the
       // user knows exactly what to do, rather than burying it in
       // a "FAILED" line that reads like a bug.
-      const detail = applyResult.error.message
-        .replace(/^TTY required for schema confirmation\.\s*/i, "")
-        .replace(/\s*Run from an interactive terminal,.*$/i, "")
-        .trim();
+      const detail = ttyRequiredDetail(applyResult.error.message);
       consoleLogger.warn(
         `\n[Nextly] Schema change needs your confirmation:\n` +
           `  ${detail}\n\n` +

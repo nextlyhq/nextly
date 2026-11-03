@@ -64,7 +64,7 @@ export type BuilderConfig = {
     previewSchemaChange: boolean;
   };
   picker: {
-    /** Field types to omit from FieldPickerModal. Empty for all kinds today
+    /** Field types to omit from the field picker. Empty for all kinds today
      * per audit findings; reserved for future product decisions. */
     excludedTypes?: readonly FieldTypeId[];
   };

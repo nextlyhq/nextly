@@ -69,6 +69,7 @@ import {
   getColumnDescriptor,
 } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
@@ -571,7 +572,12 @@ export class DynamicCollectionService extends BaseService {
       throw new Error(`Collection "${normalizedName}" already exists`);
     }
 
-    const userDefinedFields = this.userFieldsOf(data.fields, tableName);
+    const userDefinedFields = this.userFieldsOf(
+      normalizedName,
+      data.fields,
+      tableName,
+      null
+    );
 
     const id = this.generateId();
 
@@ -747,14 +753,31 @@ export class DynamicCollectionService extends BaseService {
    * that differs from a stored one only in case keeps the stored name, so a
    * field saved lowercased before names kept their case keeps its column and
    * values (`namesKeptFromStored`).
+   *
+   * The create and the update of every road share this point (the Builder, the root-exported
+   * service and a plugin's `ctx.services`), so the sibling rule is asked here, before anything is
+   * written: the fields as sent, against the one stored (`null` for a new collection), so only
+   * a pair of sibling fields the save creates is refused and one the collection already holds
+   * keeps working.
    */
   private userFieldsOf(
+    slug: string,
     fields: FieldDefinition[],
     tableName: string,
-    stored: readonly FieldDefinition[] = []
+    stored: readonly FieldDefinition[] | null
   ): FieldDefinition[] {
-    const userDefinedFields = namesKeptFromStored(
-      fields.filter(f => !RESERVED_FIELD_NAMES.includes(f.name.toLowerCase())),
+    const declared = fields.filter(
+      f => !RESERVED_FIELD_NAMES.includes(f.name.toLowerCase())
+    );
+    // Judged under the names as sent, so a refusal names what the caller wrote; reserved names are
+    // dropped first because they are never stored, so they make no pair with anything.
+    assertNoNewSiblingClashes({ kind: "collection", slug }, declared, stored);
+    const userDefinedFields = namesKeptFromStored(declared, stored ?? []);
+    // And again as they will be stored: a field sent under a spelling of a stored one keeps the
+    // stored name, so two fields apart as sent (`metatitle`, `meta_title`) can arrive at one.
+    assertNoNewSiblingClashes(
+      { kind: "collection", slug },
+      userDefinedFields,
       stored
     );
     this.validationService.validateFieldNames(userDefinedFields);
@@ -1520,6 +1543,7 @@ export class DynamicCollectionService extends BaseService {
 
     if (updates.fields !== undefined) {
       const userDefinedFields = this.userFieldsOf(
+        collectionName,
         updates.fields,
         collection.tableName,
         collection.fields || []

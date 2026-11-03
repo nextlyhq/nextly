@@ -77,6 +77,7 @@ import {
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -208,6 +209,11 @@ interface LeavingSettingStep {
   setting: "required" | "unique";
   forward: string;
   inverse: string;
+  /**
+   * On SQLite, the nullability `forward` can't express: column → true for NOT NULL. Applied by
+   * rebuilding the table after `forward` runs.
+   */
+  sqliteNullability: ReadonlyMap<string, boolean>;
 }
 
 /**
@@ -236,6 +242,11 @@ function withoutRefusedSettings<F extends { name: string }>(
 interface UpdateDdlPlan {
   /** Statements to run. Empty for a save that changes only flags. */
   migrationSQL: string;
+  /**
+   * On SQLite, the nullability changes `migrationSQL` can't express (column → true for NOT NULL),
+   * applied by rebuilding the table once its statements have run, in the same transaction.
+   */
+  sqliteNullability?: ReadonlyMap<string, boolean>;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
@@ -389,6 +400,12 @@ export class SingleMetadataService {
     // the process restarts, even though the registry insert afterwards correctly rejects the
     // duplicate. The insert is what makes the row safe; it is not what makes the process safe.
     await this.assertCreateStillPossible(input);
+    // A new Single holds no pair of sibling fields yet, so every pair it is created with is new.
+    assertNoNewSiblingClashes(
+      { kind: "single", slug: input.slug },
+      input.fields ?? [],
+      null
+    );
 
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
@@ -695,6 +712,15 @@ export class SingleMetadataService {
       "../../../api/fields-payload"
     );
     assertValidPluginFieldOptions(args.fields ?? []);
+    // Judged against the fields as stored now, so only a pair of sibling fields this save creates
+    // is refused, and one the Single already holds keeps working.
+    if (args.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "single", slug: current.slug },
+        args.fields,
+        current.fields ?? []
+      );
+    }
 
     // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed
     // record. The `is*`/`has*` flags describe what the request asked for — but only where it
@@ -1020,6 +1046,8 @@ export class SingleMetadataService {
       schemaService
     );
 
+    // What SQLite can't alter in place, which the apply rebuilds the table for.
+    const sqliteNullability = new Map<string, boolean>();
     return {
       leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
@@ -1037,8 +1065,11 @@ export class SingleMetadataService {
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
           ...groupMigration,
+          onSqliteNullability: (column, required) =>
+            sqliteNullability.set(column, required),
         }
       ),
+      sqliteNullability,
       fields,
       previousFields,
       describesWholeTable: false,
@@ -1228,9 +1259,10 @@ export class SingleMetadataService {
    * every entry would otherwise hold NULL or one placeholder until the companion reconcile copies
    * the default language's values in; the settings follow the copy. Each step puts back one
    * setting, from the state the step before it leaves, with the SQL that takes it off again, so a
-   * step that committed can be undone on its own. A step the dialect renders nothing for (SQLite
-   * modifies no column here) is left out. The SQL is planned without the live table's facts, which
-   * describe the columns before the migration creates them.
+   * step that committed can be undone on its own. On SQLite, which can't alter a column, a Required
+   * setting is carried as the nullability the apply rebuilds the table for; a step with nothing to
+   * do is left out. The SQL is planned without the live table's facts, which describe the columns
+   * before the migration creates them.
    */
   private withLeavingSettingsDeferred(
     input: UpdateSingleSchemaInput,
@@ -1259,8 +1291,9 @@ export class SingleMetadataService {
         : []
     );
     const unconstrained = withoutLeavingConstraints(newFields, leaving);
-    const alter = (from: FieldDefinition[], to: FieldDefinition[]) =>
-      schemaService.generateAlterTableMigration(
+    const alter = (from: FieldDefinition[], to: FieldDefinition[]) => {
+      const sqliteNullability = new Map<string, boolean>();
+      const sql = schemaService.generateAlterTableMigration(
         input.existing.tableName,
         from,
         to,
@@ -1272,8 +1305,12 @@ export class SingleMetadataService {
           // the legacy renderer, narrowing a float that diff had just created `double` down to
           // `decimal(10,2)`.
           liveColumnTypes: schemaService.plannedColumnTypes(from),
+          onSqliteNullability: (column, required) =>
+            sqliteNullability.set(column, required),
         }
       );
+      return { sql, sqliteNullability };
+    };
     const leavingSettings: LeavingSettingStep[] = [];
     let state = unconstrained;
     newFields.forEach((field, i) => {
@@ -1287,12 +1324,13 @@ export class SingleMetadataService {
               : { ...f, unique: field.unique }
         );
         const forward = alter(state, next);
-        if (forward.trim() !== "") {
+        if (forward.sql.trim() !== "" || forward.sqliteNullability.size > 0) {
           leavingSettings.push({
             field: field.name,
             setting,
-            forward,
-            inverse: alter(next, state),
+            forward: forward.sql,
+            inverse: alter(next, state).sql,
+            sqliteNullability: forward.sqliteNullability,
           });
         }
         state = next;
@@ -1631,10 +1669,11 @@ export class SingleMetadataService {
   private async applyMainMigrationOrUndo(
     adapter: DrizzleAdapter,
     slug: string,
+    tableName: string,
     plan: UpdateDdlPlan,
     undoRename: readonly string[]
   ): Promise<void> {
-    if (!plan.migrationSQL) return;
+    if (!plan.migrationSQL && !plan.sqliteNullability?.size) return;
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
@@ -1642,6 +1681,11 @@ export class SingleMetadataService {
         migrationSQL: plan.migrationSQL,
         entity: "single",
         tolerateApplied: true,
+        sqliteNullability: plan.sqliteNullability && {
+          adapter,
+          tableName,
+          required: plan.sqliteNullability,
+        },
       });
     } catch (refusal) {
       await this.undoCompanionRename(adapter, slug, undoRename);
@@ -1743,7 +1787,13 @@ export class SingleMetadataService {
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
     // the registry should describe, so it fails the save.
-    await this.applyMainMigrationOrUndo(adapter, input.slug, plan, undoRename);
+    await this.applyMainMigrationOrUndo(
+      adapter,
+      input.slug,
+      tableName,
+      plan,
+      undoRename
+    );
 
     try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
@@ -1920,17 +1970,24 @@ export class SingleMetadataService {
     const steps = plan.leavingSettings;
     if (steps.length === 0) return [];
     const dialect = adapter.getCapabilities().dialect;
-    const run = (migrationSQL: string) =>
+    const run = (
+      migrationSQL: string,
+      required: ReadonlyMap<string, boolean> = new Map()
+    ) =>
       applyMigrationWhole({
         db: adapter.getDrizzle(),
         dialect,
         migrationSQL,
         entity: "single",
+        sqliteNullability: { adapter, tableName, required },
       });
     try {
       if (dialect !== "mysql") {
+        // On SQLite the Required settings are one rebuild after the steps' statements, all in one
+        // transaction.
         await run(
-          steps.map(step => step.forward).join("\n--> statement-breakpoint\n")
+          steps.map(step => step.forward).join("\n--> statement-breakpoint\n"),
+          new Map(steps.flatMap(step => [...step.sqliteNullability]))
         );
         return [];
       }

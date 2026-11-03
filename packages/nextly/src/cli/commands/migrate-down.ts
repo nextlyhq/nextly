@@ -39,9 +39,8 @@ import {
   type SchemaEventRow,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
-  ACCEPT_DATA_LOSS_HELP,
-  isInteractiveTerminal,
   judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -87,7 +86,7 @@ import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   type CLIDatabaseAdapter,
@@ -97,11 +96,14 @@ import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
+  dataLossDeclined,
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
+import { commandRun } from "./command-run";
+import { refuseUnresolvedAppAttempts } from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -377,6 +379,14 @@ export interface MigrateDownCoreDeps {
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<ReadonlyMap<string, string>>;
   withLock: typeof withMigrateLock;
+  /**
+   * Refuses while an app migration has an unresolved attempt that may have
+   * stopped part-way (`refuseUnresolvedAppAttempts`), its own down section's
+   * included. Asked under the lock before the plan, for the app's stream
+   * only: a plugin's history keeps its own rules. The command supplies it;
+   * absent, a caller with no migrations folder of the app's, nothing is read.
+   */
+  refuseUnresolvedAttempts?: () => Promise<void>;
   /**
    * Whether a person is at a terminal to be asked before a DOWN loses data.
    * Absent reads as no, so a rollback without consent is refused rather than
@@ -746,10 +756,9 @@ async function planAndGuard(
     deps,
     agreed === undefined
   );
-  if (targets.length === 0)
-    return { planned: [], deletions: [], declined: false };
+  if (targets.length === 0) return { planned: [], deletions: [] };
   const planned = await planRollback(targets, deps, reads);
-  if (deps.options.dryRun) return { planned, deletions: [], declined: false };
+  if (deps.options.dryRun) return { planned, deletions: [] };
 
   // Guards — evaluated up front for every target, before executing anything.
   for (const p of planned) {
@@ -793,15 +802,16 @@ async function planAndGuard(
       logContext: { reason: `data-loss-${verdict.reason}` },
     });
   }
-  return { planned, deletions, declined: verdict.kind === "declined" };
+  // A no at the terminal stops the run before anything is rolled back, and
+  // it exits 1 naming the consent, as a refusal does.
+  if (verdict.kind === "declined") throw dataLossDeclined();
+  return { planned, deletions };
 }
 
 /** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
 interface GuardedPlan {
   planned: PlannedDown[];
   deletions: Deletion[];
-  /** The terminal was asked and said no: nothing is rolled back. */
-  declined: boolean;
 }
 
 export async function migrateDownCore(
@@ -809,8 +819,37 @@ export async function migrateDownCore(
 ): Promise<MigrateDownResult> {
   const guarded = await planAndGuard(deps);
   const planned = guarded.planned;
+  const lockOptions = {
+    command: deps.lockCommand ?? "nextly migrate:down",
+    // A held lock is waited for, about a minute, and then the run stops naming its holder.
+    mode: "wait" as const,
+    logger: {
+      warn: (m: string) => deps.logger.warn(m),
+      info: (m: string) => deps.logger.info(m),
+    },
+  };
 
   if (planned.length === 0) {
+    // Nothing to roll back still refuses on an unresolved attempt, judged under
+    // the lock as a run with targets is: the command must not read as having
+    // found the history sound while an attempt stands unresolved.
+    if (
+      !deps.options.dryRun &&
+      deps.options.plugin === undefined &&
+      deps.refuseUnresolvedAttempts !== undefined
+    ) {
+      await deps.withLock(
+        lockAdapter(deps),
+        deps.dialect,
+        async () => {
+          const unresolved = await refusalOfUnresolvedAttempts(deps);
+          if (unresolved !== undefined) throw unresolved;
+        },
+        lockOptions
+      );
+    }
+    // A dry run reports the same refusal, as it does with targets.
+    if (deps.options.dryRun) await reportUnresolvedRefusal(deps);
     deps.logger.info("Nothing to roll back.");
     return { rolledBack: [] };
   }
@@ -821,6 +860,8 @@ export async function migrateDownCore(
   // disagree; so is what a real run would need the data-loss consent for, so
   // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
+    // The refusal a real run makes under the lock, reported as the others are.
+    await reportUnresolvedRefusal(deps);
     deps.logger.info(`Would roll back ${planned.length} migration(s):`);
     for (const p of planned) {
       deps.logger.info(`  • ${p.filename}`);
@@ -844,11 +885,6 @@ export async function migrateDownCore(
     return { rolledBack: [] };
   }
 
-  if (guarded.declined) {
-    deps.logger.info("Nothing was rolled back.");
-    return { rolledBack: [] };
-  }
-
   if (deps.nodeEnv === "production" && !deps.options.yes) {
     throw NextlyError.invalidInput({
       message:
@@ -862,6 +898,11 @@ export async function migrateDownCore(
     lockAdapter(deps),
     deps.dialect,
     async () => {
+      // Before the plan and the first write, from the ledger as it stands
+      // once the lock is held: a DOWN retried over its own stopped attempt
+      // would run statements that already ran.
+      const unresolved = await refusalOfUnresolvedAttempts(deps);
+      if (unresolved !== undefined) throw unresolved;
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
       const { planned: current } = await planAndGuard(held, guarded.deletions);
@@ -875,18 +916,40 @@ export async function migrateDownCore(
         deps.logger.success(`Rolled back ${p.filename}`);
       }
     },
-    {
-      command: deps.lockCommand ?? "nextly migrate:down",
-      // A held lock is waited for, about a minute, and then the run stops naming its holder.
-      mode: "wait",
-      logger: {
-        warn: m => deps.logger.warn(m),
-        info: m => deps.logger.info(m),
-      },
-    }
+    lockOptions
   );
 
   return { rolledBack };
+}
+
+/** A dry run's line for the unresolved-attempt refusal a real run would make. */
+async function reportUnresolvedRefusal(
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "options" | "refuseUnresolvedAttempts" | "logger"
+  >
+): Promise<void> {
+  const unresolved = await refusalOfUnresolvedAttempts(deps);
+  if (unresolved === undefined) return;
+  deps.logger.info(
+    `✖ a real run would be refused: ${describeError(unresolved, { context: false })}`
+  );
+}
+
+/**
+ * The unresolved-attempt refusal, or undefined: a real run throws it under the
+ * lock, a dry run reports it. Never for a plugin's stream (`--plugin`).
+ */
+async function refusalOfUnresolvedAttempts(
+  deps: Pick<MigrateDownCoreDeps, "options" | "refuseUnresolvedAttempts">
+): Promise<Error | undefined> {
+  if (deps.options.plugin !== undefined) return undefined;
+  try {
+    await deps.refuseUnresolvedAttempts?.();
+    return undefined;
+  } catch (refusal) {
+    return asError(refusal);
+  }
 }
 
 // ============================================================================
@@ -1004,6 +1067,7 @@ export async function downDatabaseDeps(args: {
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
         marksNoTransaction: () => Promise.resolve(false),
+        fileChecksum: () => Promise.resolve(""),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       return true;
@@ -1183,7 +1247,20 @@ export async function runMigrateDown(
       fileExists: () => Promise.resolve(true),
       readDownSql,
       withLock: withMigrateLock,
-      interactive: isInteractiveTerminal(),
+      ...(plugin === undefined
+        ? {
+            refuseUnresolvedAttempts: () =>
+              refuseUnresolvedAppAttempts({
+                adapter,
+                db,
+                dialect,
+                migrationsDir,
+                logger,
+                command: "nextly migrate:down",
+              }),
+          }
+        : {}),
+      interactive: canPrompt(),
       askToDelete: askToDeleteInTerminal,
     });
 
@@ -1199,48 +1276,20 @@ export async function runMigrateDown(
   }
 }
 
-export function registerMigrateDownCommand(program: Command): void {
-  program
-    .command("migrate:down")
-    .description(
-      "Roll back the most-recently-applied migration(s) using their -- DOWN section"
-    )
-    .option("--step <n>", "Roll back the last N migrations", parseInt)
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .option("--allow-data-loss", "Deprecated: use --accept-data-loss", false)
-    .option(
-      "--yes",
-      "Confirm rollback in production (NODE_ENV=production)",
-      false
-    )
-    .option(
-      "--dry-run",
-      "Show what would be rolled back (and the DOWN SQL) without executing",
-      false
-    )
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .option(
-      "--plugin <name>",
-      "Roll back <name>'s migrations instead of the app's"
-    )
-    .action(async (cmdOptions: MigrateDownCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      const resolvedOptions: ResolvedDownOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-      try {
-        await runMigrateDown(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/**
+ * The action of `nextly migrate:down`, loaded when it runs.
+ */
+export async function migrateDownAction(
+  cmdOptions: MigrateDownCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedDownOptions = options;
+  try {
+    await runMigrateDown(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateDownCommand } from "./migrate-down.command";

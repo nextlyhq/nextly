@@ -617,18 +617,11 @@ function entity(kind?: "collection" | "single" | "component") {
           }
         }
       }
-      // Duplicate field names.
-      const seen = new Set<string>();
-      for (const f of e.fields) {
-        if (seen.has(f.name)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `duplicate field name '${f.name}'`,
-            path: ["fields"],
-          });
-        }
-        seen.add(f.name);
-      }
+      // Two fields of one name are the sibling rule's question
+      // (`domains/schema/sibling-fields`), asked where the definition the
+      // entity last had is known: a save against its registry row, the
+      // migrate commands against the latest snapshot. A pair the entity
+      // already holds keeps working, so the manifest alone cannot refuse one.
       // Components have no entries of their own — they are embedded in a
       // collection or single, whose versioning covers them. Accepting the key
       // here would persist a setting nothing reads and the Builder never

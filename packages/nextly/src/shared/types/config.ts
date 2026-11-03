@@ -68,6 +68,8 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
 
+import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
+
 // ============================================================
 // TypeScript Configuration
 // ============================================================
@@ -1138,13 +1140,9 @@ export interface SanitizedNextlyConfig {
 // Default Values
 // ============================================================
 
-/**
- * Default TypeScript configuration values.
- */
-export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
-  outputFile: "./src/types/generated/nextly-types.ts",
-  declare: true,
-};
+// Default TypeScript configuration values, defined in a module that imports
+// nothing at run time so a command's help can name them cheaply.
+export { DEFAULT_TYPESCRIPT_CONFIG };
 
 /**
  * Default database configuration values.

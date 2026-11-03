@@ -10,6 +10,7 @@
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
+import type { ConversionJudgement } from "../value-conversion/types";
 
 import type { ColumnAspects } from "./column-comparison";
 
@@ -143,6 +144,11 @@ export interface DiffersFinding extends FindingBase {
   live: ColumnState;
   aspects: ColumnAspects;
   cause: DifferenceCause | null;
+  /**
+   * Whether the column can convert, from the rows it holds: its class, every reason and the rows
+   * that give it. Null for a column a plugin owns, which is reported and never changed.
+   */
+  judgement: ConversionJudgement | null;
 }
 
 /**

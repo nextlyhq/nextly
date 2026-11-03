@@ -32,6 +32,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
+import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import {
   deleteEntityRegistryRow,
@@ -63,6 +64,10 @@ import { UserFieldDefinitionService } from "../../services/users/user-field-defi
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
+import {
+  judgeDataLossWithGrace,
+  readDataLossConsent,
+} from "../utils/data-loss-consent";
 import { formatCount } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
@@ -715,11 +720,136 @@ function toTitleCase(str: string): string {
 // ============================================================================
 
 /**
+ * The data-loss consent for `--remove-orphaned`, taken once for the whole run
+ * before the first deletion of any kind.
+ *
+ * Every orphan the run deletes is collected first: each collection, Single
+ * and field group no longer in the config (its table, its translations table
+ * when there is one, and with them its registry entry and the rows stored for
+ * it in shared tables), and the permissions the cleanup retires, theirs
+ * included. They are judged together, so the person asked sees all of it, and
+ * a no or a refusal ends the run with nothing deleted. A run that cannot ask
+ * and was given no consent deletes as before, after a notice that the next
+ * release needs the consent. Nothing orphaned, nothing is asked.
+ *
+ * The deletions themselves stay where they are (the syncs and the permission
+ * seeding), which find the same orphans again under the same schema lock this
+ * runs under.
+ */
+export async function judgeOrphanRemoval(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  options: ResolvedDevOptions,
+  context: CommandContext
+): Promise<void> {
+  if (!options.removeOrphaned) return;
+  const { logger } = context;
+  // Before anything is read, so a malformed list stops the run at once.
+  const consent = readDataLossConsent({
+    flag: options.acceptDataLoss,
+    warn: message => logger.warn(message),
+  });
+  const deletions = await collectOrphanDeletions(configResult, adapter, logger);
+  await judgeDataLossWithGrace({
+    command: "db:sync --remove-orphaned",
+    deletions,
+    consent,
+    print: line => logger.info(line),
+    warn: message => logger.warn(message),
+  });
+}
+
+/** What `--remove-orphaned` deletes, as the consent judges it. */
+async function collectOrphanDeletions(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  logger: CommandContext["logger"]
+): Promise<Deletion[]> {
+  const { config } = configResult;
+  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  // Detection only: the services log nothing a person needs here.
+  const quiet: ServiceLogger = {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.debug(msg),
+    error: (msg: string) => logger.debug(msg),
+    debug: (msg: string) => logger.debug(msg),
+  };
+
+  // The same detections the syncs delete from.
+  const collections = await new CollectionSyncService(
+    drizzleAdapter,
+    quiet
+  ).detectRemovedCollections(config.collections);
+  const singles = await detectRemovedSingles(
+    config.singles,
+    new SingleRegistryService(drizzleAdapter, quiet)
+  );
+  const fieldGroups = await detectRemovedComponents(
+    config.fieldGroups,
+    new FieldGroupRegistryService(drizzleAdapter, quiet)
+  );
+
+  const deletions: Deletion[] = [];
+  const entities = [
+    {
+      kind: "collection",
+      orphans: collections,
+      shared: "autosaves, version pins, ",
+    },
+    { kind: "single", orphans: singles, shared: "autosaves, version pins, " },
+    { kind: "field group", orphans: fieldGroups, shared: "" },
+  ];
+  for (const { kind, orphans, shared } of entities) {
+    for (const { slug, tableName } of orphans) {
+      // What goes with the table from tables every entity shares: named with
+      // it, so naming the table covers it without naming a shared table.
+      deletions.push({
+        kind: "table",
+        table: tableName,
+        alongside: `${kind} "${slug}": its registry entry, ${shared}field group instances and archived translations`,
+      });
+      // The translations table is dropped with it, listed as its own table
+      // as `prune` lists it.
+      if (await drizzleAdapter.tableExists(`${tableName}_locales`)) {
+        deletions.push({ kind: "table", table: `${tableName}_locales` });
+      }
+    }
+  }
+
+  // Permissions are retired with their grants. Unreadable, they are listed
+  // anyway: the cleanup may still delete some, and consent is taken for
+  // what may be deleted.
+  let permissionsGo = true;
+  try {
+    const orphanedPermissions = await new PermissionSeedService(
+      drizzleAdapter,
+      quiet
+    ).findOrphanedPermissions({
+      collections: collections.map(c => c.slug),
+      singles: singles.map(s => s.slug),
+      fieldGroups: fieldGroups.map(f => f.slug),
+    });
+    permissionsGo = orphanedPermissions.length > 0;
+  } catch (error) {
+    logger.debug(
+      `Orphaned permissions could not be read, so they are listed: ${describeError(error)}`
+    );
+  }
+  if (permissionsGo) {
+    deletions.push(
+      { kind: "rows", table: "permissions" },
+      { kind: "rows", table: "role_permissions" }
+    );
+  }
+  return deletions;
+}
+
+/**
  * Detect singles that exist in the database with source='code' but are
  * no longer defined in the config.
  */
 async function detectRemovedSingles(
-  codeSingles: CodeFirstSingleConfig[],
+  codeSingles: ReadonlyArray<{ slug: string }>,
   registry: SingleRegistryService
 ): Promise<OrphanRecord[]> {
   const dbSingles = await registry.getAllSingles({ source: "code" });
@@ -783,7 +913,7 @@ async function handleRemovedSingles(
  * no longer defined in the config.
  */
 async function detectRemovedComponents(
-  codeComponents: CodeFirstComponentConfig[],
+  codeComponents: ReadonlyArray<{ slug: string }>,
   registry: FieldGroupRegistryService
 ): Promise<OrphanRecord[]> {
   const dbComponents = await registry.getAllComponents({ source: "code" });

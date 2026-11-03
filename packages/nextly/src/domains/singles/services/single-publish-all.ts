@@ -52,6 +52,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
+import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -102,6 +103,7 @@ import {
 import {
   type ComponentFieldResolver,
   resolveComponentFieldMap,
+  stripSingleComponentTags,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -132,6 +134,7 @@ import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
   promoteCallerFor,
+  readsSingleInEveryLanguage,
 } from "./promote-gate";
 import {
   checkSingleAccess,
@@ -302,6 +305,13 @@ export class SinglePublishAllService extends BaseService {
         options.authenticatedScope,
         this.fieldRuleVisitor
       );
+      // Whether the caller may read the Single, which decides what a refusal
+      // of the promotion may name; asked here for the same reason. Trusted
+      // code is told every issue, so it is not asked.
+      const promoteReads =
+        options.overrideAccess === true
+          ? undefined
+          : await this.readsSingle(plan.slug, options);
 
       // Every component type's readiness, resolved before the transaction:
       // the drafts' component values are written inside it, where a verdict
@@ -321,7 +331,8 @@ export class SinglePublishAllService extends BaseService {
             options,
             refused,
             askedLanguages,
-            promoteGrants
+            promoteGrants,
+            promoteReads
           )
         )
       );
@@ -385,7 +396,9 @@ export class SinglePublishAllService extends BaseService {
       this.adapter,
       this.singleRegistryService,
       slug,
-      this.logger
+      this.logger,
+      // A write: refused in production where the Single was never registered.
+      { intent: "write" }
     );
     if (!singleMeta) {
       return {
@@ -537,6 +550,25 @@ export class SinglePublishAllService extends BaseService {
    * Checked directly rather than through a transition, since this publishes
    * companion locales even when the main row is already published.
    */
+  /**
+   * Whether `options`' caller may read the Single in every language; see
+   * `readsSingleInEveryLanguage`.
+   */
+  private async readsSingle(
+    slug: string,
+    options: PublishAllSingleLocalesOptions
+  ): Promise<boolean> {
+    return readsSingleInEveryLanguage({
+      slug,
+      user: options.user,
+      authenticatedScope: options.authenticatedScope,
+      rbacAccessControlService: this.rbacAccessControlService,
+      visitor: this.fieldRuleVisitor,
+      logger: this.logger,
+      localization: this.localization,
+    });
+  }
+
   private async authorizePublish(
     plan: PublishPlan,
     options: PublishAllSingleLocalesOptions
@@ -716,7 +748,9 @@ export class SinglePublishAllService extends BaseService {
     /** The languages the publish rule was asked about before this transaction. */
     askedLanguages: readonly string[],
     /** Resolved before this transaction opened; see `publishAllLocales`. */
-    promoteGrants?: () => Promise<CallerGrants>
+    promoteGrants?: () => Promise<CallerGrants>,
+    /** Whether the caller may read the Single, asked with `promoteGrants`. */
+    promoteReads?: boolean
   ): Promise<PublishOutcome> {
     const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
 
@@ -798,7 +832,8 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       judged,
       options,
-      promoteGrants
+      promoteGrants,
+      promoteReads
     );
 
     // The components as they stood before the drafts are promoted, for each
@@ -1020,7 +1055,8 @@ export class SinglePublishAllService extends BaseService {
     lockedRow: Record<string, unknown>,
     pending: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
     options: PublishAllSingleLocalesOptions,
-    promoteGrants?: () => Promise<CallerGrants>
+    promoteGrants?: () => Promise<CallerGrants>,
+    promoteReads?: boolean
   ): Promise<void> {
     // Nothing goes live that was not live already: nothing to judge.
     if (pending.length === 0) return;
@@ -1056,6 +1092,9 @@ export class SinglePublishAllService extends BaseService {
         componentFields,
         options,
         grants: promoteGrants,
+        readsEntry: promoteReads,
+        localization: this.localization,
+        tableName: singleMeta.tableName,
       }),
       entryId: existingDoc.id,
       toLogical: doc =>
@@ -1175,7 +1214,24 @@ export class SinglePublishAllService extends BaseService {
           values: companionValues,
         });
       }
-      await this.promoteComponents(tx, plan, components, draft.locale, access);
+      await this.promoteComponents(
+        tx,
+        plan,
+        components,
+        draft.locale,
+        access,
+        // The whole pending change, published: what the instances' validators
+        // are handed as the write, without the markers only a snapshot
+        // carries, nested ones included.
+        {
+          ...stripSingleComponentTags(
+            (draft.snapshot ?? {}) as Record<string, unknown>,
+            plan.fieldConfigs,
+            componentFields
+          ),
+          status: "published",
+        }
+      );
     }
 
     await new VersionsRepository(tx).deleteAllWorkingDrafts(
@@ -1196,7 +1252,8 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     components: Record<string, unknown>,
     locale: string | null,
-    access: FieldGroupWriteAccess
+    access: FieldGroupWriteAccess,
+    payload: Record<string, unknown>
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(components).length === 0) {
       return;
@@ -1209,6 +1266,23 @@ export class SinglePublishAllService extends BaseService {
       locale: locale ?? undefined,
       req: access.user ? { user: access.user } : {},
       access,
+      // The Single's write, on its transaction, so a field inside an instance
+      // that reads the library judges it as the Single's own fields are.
+      // In the language published, and as a publish: the payload is the
+      // published document, so such a field judges the published form too.
+      write: {
+        ...entryWriteContext({
+          kind: "single",
+          slug: plan.slug,
+          ...(locale === null ? {} : { locale }),
+          connection: {
+            db: tx,
+            executor: tx.getDrizzle(),
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          },
+        }),
+        payload,
+      },
     });
   }
 
