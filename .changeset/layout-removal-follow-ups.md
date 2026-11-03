@@ -29,6 +29,6 @@
 "nextly": patch
 ---
 
-Page Builder: Remove Layout reads past a page deleted while it runs. A page deleted after a removal listed it no longer stops the removal's scan of the pages using the Layout, or the clearing of the other pages left on it afterwards; only a missing page is read past, and any other failure still stops the removal.
+Page Builder: Remove Layout reads past a page deleted while it runs. A page deleted after a removal listed it no longer stops the removal's scan of the pages using the Layout, or the clearing of the other pages left on it afterwards; a page is read past only once a second check confirms it is gone. A page that is still there but can't be read refuses the removal with "Not every page could be checked", and any other failure still stops it.
 
-The default Layout repair, at startup and in its background job, now finishes a restore of a deleted default that stopped after creating the restored Layout, pointing the default at it, before it would fall back to the seed Layout. The restored Layout is no longer left behind unused.
+The default Layout repair, at startup and in its background job, now finishes a restore of a deleted default that stopped after creating the restored Layout, pointing the default at it, before it would fall back to the seed Layout. The restored Layout is no longer left behind unused. If that Layout was deleted in the meantime, the repair falls back to the seed as before.
