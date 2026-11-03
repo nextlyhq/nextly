@@ -1096,4 +1096,61 @@ describe("what the plugin owns", () => {
       expect.objectContaining({ kind: "relationship field", name: "ssoNote" }),
     ]);
   });
+
+  it("does not count a relationship field its transform put inside another owner's group", async () => {
+    // As the fold's ownership ledgers record it: fx's transform nested
+    // `fxNote` in the app's `settings` group, which stays the app's.
+    const own = await pluginEntities(
+      {
+        name: "fx",
+        version: "1.0.0",
+        contributes: { collections: [{ slug: "fx-notes", fields: [] }] },
+      } as unknown as PluginDefinition,
+      new Map([["posts", new Map([["settings.fxNote", "fx"]])]])
+    );
+
+    const found = await findUninstallDependents({
+      pluginName: "fx",
+      owned: [row({})],
+      collectionSlugs: ["fx-notes"],
+      collectionSlugForTable: table =>
+        table === "fx__notes" ? "fx-notes" : null,
+      ownEntities: own,
+      sources: sources({
+        fields: [
+          {
+            entityType: "collection",
+            entitySlug: "posts",
+            fields: [
+              {
+                name: "settings",
+                type: "group",
+                fields: [
+                  {
+                    name: "fxNote",
+                    type: "relationship",
+                    relationTo: "fx-notes",
+                  },
+                  // CONTROL: the app's own field in the same group counts.
+                  {
+                    name: "appNote",
+                    type: "relationship",
+                    relationTo: "fx-notes",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+      recordedRowsOn: () => Promise.resolve([]),
+      liveSchema: () => Promise.resolve([]),
+    });
+    expect(found).toEqual([
+      expect.objectContaining({
+        kind: "relationship field",
+        name: "settings.appNote",
+      }),
+    ]);
+  });
 });
