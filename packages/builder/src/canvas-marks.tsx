@@ -72,6 +72,11 @@ interface Mark {
    * selected: hatched, and tagged as hidden.
    */
   readonly hidden: boolean;
+  /**
+   * Where a hidden block's tag sits: below the ring, or above it when the
+   * block ends at the bottom of the page, where a tag below would be cut off.
+   */
+  readonly tag: "below" | "above";
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
   readonly rect: Rect;
@@ -82,6 +87,9 @@ interface Mark {
 const NO_MARKS: readonly Mark[] = [];
 
 const NO_IDS: readonly string[] = [];
+
+/** The height a hidden block's tag takes outside its ring, with its gap. */
+const TAG_ROOM = 24;
 
 /** @experimental */
 export interface CanvasMarksProps {
@@ -101,14 +109,24 @@ export interface CanvasMarksProps {
 
 /** Everything that decides how a mark is drawn, as one comparable value. */
 function markKey(mark: Mark): string {
-  const { kind, secondary, component, locked, hidden, clipped, radius, rect } =
-    mark;
+  const {
+    kind,
+    secondary,
+    component,
+    locked,
+    hidden,
+    tag,
+    clipped,
+    radius,
+    rect,
+  } = mark;
   return JSON.stringify([
     kind,
     secondary,
     component,
     locked,
     hidden,
+    tag,
     clipped,
     radius,
     rect.x,
@@ -203,6 +221,11 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
   if (space === null) return NO_MARKS;
   const { root } = space;
+  // The bottom of the page, in the chrome's coordinates: a tag below a block
+  // that ends there would be drawn past it, where the canvas cuts it off.
+  const pageBottom = space.place(canvasContentRect(root, root));
+  const roomBelow = (rect: Rect): boolean =>
+    rect.y + rect.height + TAG_ROOM <= pageBottom.y + pageBottom.height;
   const found: Mark[] = [];
   root
     .querySelectorAll(
@@ -219,6 +242,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         component: false,
         locked: false,
         hidden: false,
+        tag: "below" as const,
       };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
       if (selected !== null) {
@@ -230,6 +254,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
           hidden: address !== null && inputs.revealed.has(address),
+          tag: roomBelow(outline.rect) ? "below" : "above",
         });
       }
       // An exposed part that is itself selected keeps its ring alone: one
@@ -266,6 +291,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         component: candidate.hasAttribute(INSTANCE_ATTRIBUTE),
         locked: false,
         hidden: false,
+        tag: "below",
       });
     });
   }
@@ -346,6 +372,7 @@ export function CanvasMarks({
           // from this attribute; the layer is hidden from assistive
           // technology, and Layers and the inspector say it in words.
           data-label={mark.hidden ? hiddenLabel : undefined}
+          data-tag={mark.hidden ? mark.tag : undefined}
           data-clipped={mark.clipped ? "" : undefined}
           style={{
             left: mark.rect.x,

@@ -2976,6 +2976,13 @@
   white-space: nowrap;
 }
 
+/* Above the ring's top right when the block ends at the bottom of the page,
+   where a tag below would fall past the page and be cut off. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="above"]::after {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
 /*
  * Where a dragged block will land.
  *

@@ -436,4 +436,30 @@ describe("a selected block shown although the page hides it", () => {
     expect(hidden).toHaveLength(1);
     expect(hidden[0]?.getAttribute("data-label")).toBe("Hidden on Mobile");
   });
+
+  it("puts its tag above the ring when the block ends at the bottom of the page", async () => {
+    // The page 1000px tall; "a" at its top, "c" ending at its bottom, where a
+    // tag below would be drawn past the page and cut off.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "a") return new DOMRect(0, 0, 1000, 50);
+        if (id === "c") return new DOMRect(0, 950, 1000, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={leaves}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="a"
+        selectedIds={["a", "c"]}
+        overlay={<CanvasMarks revealed={["a", "c"]} />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    const tags = halosIn(container).map(mark => mark.getAttribute("data-tag"));
+    expect(tags.sort()).toEqual(["above", "below"]);
+  });
 });
