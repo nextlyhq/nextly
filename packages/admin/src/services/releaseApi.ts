@@ -13,7 +13,9 @@
 
 import { fetcher } from "../lib/api/fetcher";
 import type {
+  AddedReleaseMember,
   AddReleaseMemberPayload,
+  AddReleaseMembersPayload,
   CreateReleasePayload,
   HiddenReleaseMembers,
   Release,
@@ -207,6 +209,30 @@ export const addReleaseMember = (
 ): Promise<MemberMutationResponse> =>
   fetcher<MemberMutationResponse>(
     `/releases/${releaseId}/members`,
+    { method: "POST", body: JSON.stringify(payload) },
+    true
+  );
+
+/** What adding several documents answers: the release and its new members. */
+export interface MembersMutationResponse {
+  message?: string;
+  item: {
+    release: Release;
+    members: AddedReleaseMember[];
+  };
+}
+
+/**
+ * Put several documents into a release in one request, each with its action.
+ * The server adds all of them or none, and answers each new member with the
+ * documents it links to that will not be live at the release's moment.
+ */
+export const addReleaseMembers = (
+  releaseId: string,
+  payload: AddReleaseMembersPayload
+): Promise<MembersMutationResponse> =>
+  fetcher<MembersMutationResponse>(
+    `/releases/${releaseId}/members/batch`,
     { method: "POST", body: JSON.stringify(payload) },
     true
   );
