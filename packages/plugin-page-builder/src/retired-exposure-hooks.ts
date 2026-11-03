@@ -13,9 +13,11 @@
  * its transaction, after every `before*` hook has run, so only the `after*`
  * phase can tell which one happened. The record is therefore made after commit,
  * as the ids the previous live definition exposed minus the ids the new one
- * does. A record that fails is logged naming the component, and the ids it
- * would have stored can be derived again from the component's published
- * versions.
+ * does. A record that fails is logged naming the component, and repaired at
+ * once where it can be: the ids are derived again from the component's
+ * published versions (`retired-history`), and recorded. The editor asks for
+ * the same repair before it mints a field id, so a record lost twice still
+ * keeps the id from reuse.
  *
  * Retiring an id only a draft ever held is harmless, since ids are never
  * reused. Missing one is the harmful direction: the id could be minted again
@@ -56,6 +58,12 @@ import type { HookContext } from "nextly";
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import { leavesDocumentPublished } from "./component-readiness-hook";
 import { asDocument } from "./component-store-source";
+import {
+  exposureIdsOf,
+  reconcileRetired,
+  type ComponentHistory,
+  type RetiredHistoryMemo,
+} from "./retired-history";
 import type { RetiredStore } from "./retired-store";
 import { requestContextFor, SINGLE_HOOK_NAMESPACE } from "./write-target";
 
@@ -78,6 +86,8 @@ export interface RetiredExposurePluginContext {
         limit: number;
       }): Promise<{ data: readonly { slug: string; fields?: unknown }[] }>;
     };
+    /** Version history, read when a failed record is repaired. */
+    versions: ComponentHistory;
   };
   logger: {
     warn(message: string, meta?: Record<string, unknown>): void;
@@ -95,6 +105,8 @@ export interface RetiredExposureHooksArgs {
   store: RetiredStore;
   /** The bounds documents are walked under, asked per call. */
   limits: () => DocumentLimits;
+  /** What the repair has read of each component's history already. */
+  memo?: RetiredHistoryMemo;
 }
 
 /**
@@ -142,8 +154,10 @@ async function recordRetirements(
   ) {
     return;
   }
+  let live: Live | undefined;
   try {
-    if (!(await goesLive(args, context, componentId, retired))) return;
+    live = await goesLive(args, context, componentId, retired);
+    if (!live.live) return;
     if (componentId === undefined) {
       throw new Error("the published row carries no id");
     }
@@ -155,7 +169,54 @@ async function recordRetirements(
         "values until they are recorded, and the ids could be minted again.",
       { componentId, retired, error }
     );
+    await repair(args, live, componentId);
   }
+}
+
+/**
+ * Derive the component's retired ids from its history and record the ones the
+ * table lacks, best effort: the editor asks for the same repair before it
+ * mints, so a repair that fails here is made there.
+ *
+ * Only once the write is known to have put the removal live: a failure before
+ * that says nothing about the store, which may be localized and record no
+ * retirements at all.
+ */
+async function repair(
+  args: RetiredExposureHooksArgs,
+  live: Live | undefined,
+  componentId: string | undefined
+): Promise<void> {
+  if (live?.live !== true || componentId === undefined) return;
+  const lifecycle = live.lifecycle;
+  try {
+    await reconcileRetired(
+      {
+        history: args.ctx.services.versions,
+        componentCollection: args.componentCollection,
+        componentField: args.componentField,
+        lifecycle,
+        store: args.store,
+        logger: args.ctx.logger,
+        ...(args.memo === undefined ? {} : { memo: args.memo }),
+      },
+      componentId
+    );
+  } catch (error) {
+    args.ctx.logger.error(
+      `[page-builder] the retired fields of component "${componentId}" ` +
+        "could not be derived from its history; they are derived again when " +
+        "the component is next edited.",
+      { componentId, error }
+    );
+  }
+}
+
+/** Whether a write puts its removal live, and how the store decides that. */
+interface Live {
+  readonly live: boolean;
+  /** Whether the store has the Draft/Published lifecycle. */
+  readonly lifecycle: boolean;
 }
 
 /**
@@ -173,7 +234,7 @@ async function goesLive(
   context: HookContext<unknown>,
   componentId: string | undefined,
   retired: RetiredExposures
-): Promise<boolean> {
+): Promise<Live> {
   const collection = await args.ctx.services.collections.getCollection(
     args.componentCollection,
     requestContextFor(context)
@@ -187,12 +248,15 @@ async function goesLive(
         "be reused.",
       { componentId, retired }
     );
-    return false;
+    return { live: false, lifecycle: store?.status === true };
   }
   // A store without the Draft/Published lifecycle keeps no draft: every write
   // is the definition pages render from.
-  if (store?.status !== true) return true;
-  return leavesDocumentPublished(context, collection);
+  if (store?.status !== true) return { live: true, lifecycle: false };
+  return {
+    live: leavesDocumentPublished(context, collection),
+    lifecycle: true,
+  };
 }
 
 /** The ids `before` exposes that `after` does not, fields and slots apart. */
@@ -206,21 +270,6 @@ function droppedExposures(
     properties: was.properties.filter(id => !kept.properties.includes(id)),
     slots: was.slots.filter(id => !kept.slots.includes(id)),
   };
-}
-
-/** The field and slot ids a definition exposes, read as stored. */
-function exposureIdsOf(document: BlockDocument): RetiredExposures {
-  const envelope = document as unknown as Record<string, unknown>;
-  const exposed = Array.isArray(envelope.exposed) ? envelope.exposed : [];
-  const properties: string[] = [];
-  for (const entry of exposed) {
-    const id = isPlainRecord(entry) ? entry.id : undefined;
-    if (typeof id === "string") properties.push(id);
-  }
-  const slots = isPlainRecord(envelope.slots)
-    ? Object.keys(envelope.slots)
-    : [];
-  return { properties, slots };
 }
 
 /**

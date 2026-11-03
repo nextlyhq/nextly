@@ -8,12 +8,16 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { RetiredExposures } from "@nextlyhq/blocks-engine";
+
 import {
+  componentStoreShape,
   factsQuery,
   liveIdsOf,
   readComponentFacts,
-  storeIsLocalized,
+  reconciledRetired,
 } from "./component-facts-route";
+import { reconcileRetired, type ComponentHistory } from "./retired-history";
 
 const NO_RETIRED = { properties: [], slots: [] };
 
@@ -204,9 +208,114 @@ describe("whether the store is localized", () => {
       },
     };
     expect(
-      await storeIsLocalized(collections, "translated", { id: "u1" })
+      (await componentStoreShape(collections, "translated", { id: "u1" }))
+        .localized
     ).toBe(true);
-    expect(await storeIsLocalized(collections, "components", null)).toBe(false);
+    expect(
+      (await componentStoreShape(collections, "components", null)).localized
+    ).toBe(false);
     expect(asked[0]).toEqual(["translated", { user: { id: "u1" } }]);
+  });
+});
+
+describe("the retired ids, reconciled with history", () => {
+  /** Two published definitions: the first exposes `subtitle`, the newest not. */
+  const history: ComponentHistory = {
+    list: async (_ref, { cursor }) =>
+      cursor === undefined
+        ? [
+            { versionNo: 2, status: "published" },
+            { versionNo: 1, status: "published" },
+          ]
+        : [],
+    get: async (_ref, versionNo) => ({
+      snapshot: {
+        content: {
+          ...row.content,
+          exposed:
+            versionNo === 1
+              ? [
+                  ...row.content.exposed,
+                  {
+                    id: "subtitle",
+                    label: "Subtitle",
+                    nodeId: "h",
+                    propPath: "text",
+                    type: "text",
+                  },
+                ]
+              : row.content.exposed,
+        },
+      },
+    }),
+  };
+
+  it("answer an id whose record was lost, and record it", async () => {
+    const recorded: RetiredExposures[] = [];
+    const facts = await readComponentFacts("hero", {
+      readLive: async () => row,
+      countPlacements: async () => ({ documents: 1, complete: true }),
+      field: "content",
+      readRetired: reconciledRetired({
+        shape: async () => ({ localized: false, lifecycle: true }),
+        reconcile: (id, lifecycle) =>
+          reconcileRetired(
+            {
+              history,
+              componentCollection: "nx_pb_components",
+              componentField: "content",
+              lifecycle,
+              store: {
+                of: async () => new Map(),
+                retire: async (_id, retired) => {
+                  recorded.push(retired);
+                },
+              },
+              logger: { warn: () => {}, error: () => {} },
+            },
+            id
+          ),
+      }),
+    });
+
+    expect(facts.retired).toEqual({ properties: ["subtitle"], slots: [] });
+    expect(recorded).toEqual([{ properties: ["subtitle"], slots: [] }]);
+  });
+
+  it("pass the store's lifecycle on, and are null for a localized store", async () => {
+    const asked: boolean[] = [];
+    const reconcile = async (_id: string, lifecycle: boolean) => {
+      asked.push(lifecycle);
+      return { properties: [], slots: [] };
+    };
+
+    await reconciledRetired({
+      shape: async () => ({ localized: false, lifecycle: false }),
+      reconcile,
+    })("hero");
+    const localized = await reconciledRetired({
+      shape: async () => ({ localized: true, lifecycle: true }),
+      reconcile,
+    })("hero");
+
+    expect(asked).toEqual([false]);
+    expect(localized).toBeNull();
+  });
+});
+
+describe("the store's shape", () => {
+  it("says whether it is localized and has the publishing lifecycle", async () => {
+    const collections = {
+      getCollection: async (name: string) =>
+        name === "plain" ? { slug: name } : { slug: name, status: true },
+    };
+    expect(await componentStoreShape(collections, "plain", null)).toEqual({
+      localized: false,
+      lifecycle: false,
+    });
+    expect(await componentStoreShape(collections, "drafts", null)).toEqual({
+      localized: false,
+      lifecycle: true,
+    });
   });
 });

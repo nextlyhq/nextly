@@ -11,6 +11,15 @@
  * minted under the same id. The draft in the editor has forgotten it; the
  * live row has not.
  *
+ * ## Why the retired ids are derived as well as read
+ *
+ * A retirement is recorded after the publish that drops the field, and a
+ * record that fails leaves the id in neither the definition nor the table.
+ * This answer is what the editor mints against, so it is the place a lost
+ * record must not reach: the ids are derived again from the component's
+ * published history, and any the table lacks are recorded on the way
+ * (`retired-history`).
+ *
  * ## Why the count may be a floor
  *
  * It comes from the usage index, which may not yet cover every document, and
@@ -162,23 +171,55 @@ export function factsQuery(url: string): {
   };
 }
 
+/** What the component store's configuration says about its retirements. */
+export interface ComponentStoreShape {
+  /**
+   * A localized store records no retirements, since publishing there is per
+   * language.
+   */
+  readonly localized: boolean;
+  /** Whether it has the Draft/Published lifecycle. */
+  readonly lifecycle: boolean;
+}
+
 /**
- * Whether the component store is localized, read from its own configuration
- * as the request's user. Such a store records no retirements, since publishing
- * there is per language. The service is named structurally, as the write hooks
- * name it, for the one method read.
+ * The component store's shape, read from its own configuration as the
+ * request's user. The service is named structurally, as the write hooks name
+ * it, for the one method read.
  */
-export async function storeIsLocalized(
+export async function componentStoreShape(
   collections: {
     getCollection(name: string, context: unknown): Promise<unknown>;
   },
   slug: string,
   user: unknown
-): Promise<boolean> {
-  const store = await collections.getCollection(slug, {
+): Promise<ComponentStoreShape> {
+  const store = (await collections.getCollection(slug, {
     user: user ?? undefined,
-  });
-  return (store as { localized?: unknown } | null)?.localized === true;
+  })) as { localized?: unknown; status?: unknown } | null;
+  return {
+    localized: store?.localized === true,
+    lifecycle: store?.status === true,
+  };
+}
+
+/**
+ * The retired ids the editor is told: the table's, and those the component's
+ * published history implies, which `reconcile` records where the table lacks
+ * them. `null` for a localized store, which records none.
+ */
+export function reconciledRetired(args: {
+  readonly shape: () => Promise<ComponentStoreShape>;
+  readonly reconcile: (
+    id: string,
+    lifecycle: boolean
+  ) => Promise<RetiredExposures>;
+}): (id: string) => Promise<RetiredExposures | null> {
+  return async id => {
+    const shape = await args.shape();
+    if (shape.localized) return null;
+    return args.reconcile(id, shape.lifecycle);
+  };
 }
 
 /** The live row, read as the caller; null when it is gone or not theirs. */

@@ -1,0 +1,254 @@
+/**
+ * A component's retired ids, derived again from its published history when
+ * the record its publish made is lost.
+ *
+ * The unit suite drives the derivation over an in-memory history. What only a
+ * real instance shows is what core's history holds: that a publish and a draft
+ * save each leave a version the plugin can list and read as the system, what
+ * status each records, and what shape a snapshot comes back in on each
+ * dialect. Asked through the component facts route, as the editor asks before
+ * it mints a field id, with a signed session.
+ *
+ * @module __tests__/retired-from-history.integration.test
+ */
+
+// Set before the harness boots: the routes verify the session with it.
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "@nextlyhq/plugin-sdk/testing";
+import { ServiceContainer } from "nextly";
+import { buildClaims, signAccessToken } from "nextly/auth";
+import { createDynamicHandlers } from "nextly/runtime";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { COMPONENT_RETIRED_SLUG } from "../collections/component-retired-exposures";
+import { COMPONENTS_SLUG } from "../collections/components";
+import {
+  componentFactsPath,
+  PAGE_BUILDER_PLUGIN_NAME,
+} from "../library-contract";
+import { pageBuilder } from "../plugin";
+
+type Row = Record<string, unknown>;
+
+const ORIGIN = "http://localhost";
+
+/** A hero exposing the named fields, each on a heading of its own. */
+const hero = (fields: string[]): Row => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes: fields.map(id => ({
+    id: `h-${id}`,
+    type: "core/heading",
+    version: 1,
+    props: { text: id, level: 2 },
+  })),
+  exposed: fields.map(id => ({
+    id,
+    label: id,
+    nodeId: `h-${id}`,
+    propPath: "text",
+    type: "text",
+  })),
+});
+
+describe.each(getConfiguredTestDialects())(
+  "a component's retired ids, derived from its history (%s)",
+  (dialect: TestDialect) => {
+    let current: TestNextly | undefined;
+
+    afterEach(async () => {
+      await current?.destroy();
+      current = undefined;
+    });
+
+    async function boot(): Promise<TestNextly> {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder()],
+        seedPublic: true,
+      });
+      // The instance's first user is its super admin, so it is made here
+      // and never asks: the reader below holds only what it is granted.
+      await person(current, "owner");
+      return current;
+    }
+
+    async function person(t: TestNextly, name: string): Promise<string> {
+      const created = await t.nextly.users.create({
+        email: `${name}-${Date.now()}@example.com`,
+        password: "Password123!",
+        data: { name, isActive: true },
+      });
+      return created.item.id;
+    }
+
+    /** A session for someone who may read components and nothing more. */
+    async function reader(t: TestNextly): Promise<string> {
+      const userId = await person(t, "reader");
+      const permissions = await t.nextly.permissions.find({ limit: 500 });
+      const read = permissions.items.find(
+        item => item.slug === "read-components"
+      );
+      if (read === undefined) throw new Error("read-components is not seeded");
+      const role = await t.nextly.roles.create({
+        data: { name: "Reader", slug: "reader", permissionIds: [read.id] },
+      });
+      const assigned = await new ServiceContainer(
+        t.adapter
+      ).userRoles.assignRoleToUser(userId, role.item.id);
+      expect(assigned.success).toBe(true);
+      const user = await t.nextly.users.findByID({ id: userId });
+      if (user === null) throw new Error(`no user ${userId}`);
+      const token = await signAccessToken(
+        buildClaims({
+          userId,
+          email: user.email,
+          name: user.name ?? "",
+          image: null,
+          roleIds: [],
+          sessionEpoch: 0,
+        }),
+        process.env.NEXTLY_SECRET ?? ""
+      );
+      return `nextly_session=${token}`;
+    }
+
+    /** The facts route's answer for one component, as `cookie`. */
+    async function facts(cookie: string, id: string): Promise<Row> {
+      const path = componentFactsPath(id);
+      const [route] = path.slice(1).split("?");
+      const segments = [
+        "plugins",
+        ...PAGE_BUILDER_PLUGIN_NAME.split("/"),
+        ...route!.split("/"),
+      ];
+      const response = await createDynamicHandlers().GET(
+        new Request(
+          `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}${path}`,
+          { method: "GET", headers: { cookie, origin: ORIGIN } }
+        ),
+        { params: Promise.resolve({ params: segments }) }
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as Row;
+    }
+
+    async function publishedHero(t: TestNextly): Promise<string> {
+      const created = await t.nextly.create({
+        collection: COMPONENTS_SLUG,
+        data: {
+          title: "Hero",
+          slug: "hero",
+          content: hero(["title", "body"]),
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      return String(created.item.id);
+    }
+
+    async function save(
+      t: TestNextly,
+      id: string,
+      fields: string[],
+      status?: "published"
+    ): Promise<void> {
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id,
+        data: {
+          content: hero(fields),
+          ...(status === undefined ? {} : { status }),
+        },
+        overrideAccess: true,
+      });
+    }
+
+    async function retiredRows(t: TestNextly): Promise<Row[]> {
+      const found = await t.nextly.find({
+        collection: COMPONENT_RETIRED_SLUG,
+        limit: 50,
+        depth: 0,
+        overrideAccess: true,
+      });
+      return found.items as Row[];
+    }
+
+    const triples = (rows: Row[]) =>
+      rows.map(row => [row.componentId, row.kind, row.exposureId]);
+
+    it("answers and records a retirement whose record was lost", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      await save(t, heroId, ["body"], "published");
+      // The record the publish made, lost as a failed write loses it.
+      for (const row of await retiredRows(t)) {
+        await t.nextly.delete({
+          collection: COMPONENT_RETIRED_SLUG,
+          id: String(row.id),
+          overrideAccess: true,
+        });
+      }
+      expect(await retiredRows(t)).toEqual([]);
+      const cookie = await reader(t);
+
+      const answer = await facts(cookie, heroId);
+
+      expect(answer.retired).toEqual({ properties: ["title"], slots: [] });
+      expect(triples(await retiredRows(t))).toEqual([
+        [heroId, "property", "title"],
+      ]);
+
+      // Asked again, the same answer and no second row.
+      expect((await facts(cookie, heroId)).retired).toEqual({
+        properties: ["title"],
+        slots: [],
+      });
+      expect(await retiredRows(t)).toHaveLength(1);
+    });
+
+    it("does not retire a field only a draft held", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      // Two held saves: the first adds a field, the second takes it out again,
+      // so history holds a draft version exposing it and no published one.
+      await save(t, heroId, ["title", "body", "teaser"]);
+      await save(t, heroId, ["title", "body"]);
+      const cookie = await reader(t);
+
+      const answer = await facts(cookie, heroId);
+
+      expect(answer.retired).toEqual({ properties: [], slots: [] });
+      expect(await retiredRows(t)).toEqual([]);
+    });
+
+    it("retires a field a published version had and the newest one has not, across a draft", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      await save(t, heroId, ["body"], "published");
+      await save(t, heroId, ["body", "teaser"]);
+      for (const row of await retiredRows(t)) {
+        await t.nextly.delete({
+          collection: COMPONENT_RETIRED_SLUG,
+          id: String(row.id),
+          overrideAccess: true,
+        });
+      }
+      const cookie = await reader(t);
+
+      expect((await facts(cookie, heroId)).retired).toEqual({
+        properties: ["title"],
+        slots: [],
+      });
+    });
+  }
+);
