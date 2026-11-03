@@ -48,7 +48,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { CircleSlash, Layers, Link2, PenLine } from "lucide-react";
+import { CircleSlash, Layers, Link2, Lock, PenLine } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
@@ -315,11 +315,6 @@ function ExposedField({
     >
       <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
       <div className="nx-inspector__exposed">
-        {row.heldBy === undefined ? null : (
-          <p id={reasonId} className="nx-inspector__note">
-            {refusalAnnouncement(row.heldBy)}
-          </p>
-        )}
         <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
           <ExposedControl id={id} row={row} onSet={onSet} />
           <div className="nx-inspector__provenance">
@@ -351,6 +346,17 @@ function ExposedField({
             ) : null}
           </div>
         </HeldByLock>
+        {/*
+          Why the row is held, UNDER the field as its helper text, as the
+          provenance note is: the field keeps its place beside its label, and
+          the reason reads as a fact about the value above it.
+        */}
+        {row.heldBy === undefined ? null : (
+          <p id={reasonId} className="nx-inspector__held-reason">
+            <Lock aria-hidden="true" className="nx-inspector__source-icon" />
+            <span>{refusalAnnouncement(row.heldBy)}</span>
+          </p>
+        )}
       </div>
     </div>
   );
