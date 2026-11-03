@@ -209,7 +209,16 @@ describe("the column conversion's rebuild keeps everything but the column's type
         (row as { type: string }).type !== "table"
     );
 
-  async function convert(to: ConversionRequest["to"]): Promise<{
+  /**
+   * Builds the plan, checks what it says the new type cannot keep, and runs it as a migration.
+   * `blockedBy` lists the properties and names the plan must name; the rebuild is run either way,
+   * since the rebuild keeps them as written and the block is the judgement of what they mean for
+   * the new type.
+   */
+  async function convert(
+    to: ConversionRequest["to"],
+    blockedBy: [string, string][] = []
+  ): Promise<{
     before: TableDefinition;
     after: TableDefinition;
     schemaBefore: unknown[];
@@ -229,9 +238,11 @@ describe("the column conversion's rebuild keeps everything but the column's type
     expect(plan).toMatchObject({
       rewritesTable: true,
       blocks: "writes",
-      cannotCarry: [],
       notCarried: [],
     });
+    expect(plan.cannotCarry.map(item => [item.property, item.name])).toEqual(
+      blockedBy
+    );
     expect(plan.steps).toHaveLength(1);
     await runAsMigration(plan.steps[0] ?? []);
     expect(await readTableDefinition(query, "sqlite", LINES)).toEqual(
@@ -336,10 +347,12 @@ describe("the column conversion's rebuild keeps everything but the column's type
   });
 
   it("an affinity-changing type change changes only the column's type", async () => {
-    const { before, after, schemaBefore } = await convert({
-      type: "integer",
-      nullable: false,
-    });
+    // The check reads `score` as a string, and integer is another kind of value: the plan names
+    // it, and the rebuild still keeps it as written.
+    const { before, after, schemaBefore } = await convert(
+      { type: "integer", nullable: false },
+      [["check", 'CHECK (length("score") < 20)']]
+    );
 
     expect(after).toEqual({
       ...before,
