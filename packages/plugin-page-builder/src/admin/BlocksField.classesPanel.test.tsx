@@ -109,6 +109,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * here too, and it asks whether the variables may be changed.
+ */
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 /** Asking the stored style again, as the editor does after a save. */
 const refetchStoredStyle = async () => ({ isError: false });
 // The stored site style arrives through the editor's one read, the plugin's

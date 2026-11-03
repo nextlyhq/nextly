@@ -367,6 +367,7 @@ function PrimaryAction({
   dangerOptions = [],
   optionsLabel = PUBLISH_OPTIONS_LABEL,
   pending,
+  menuClassName,
 }: {
   primary: Bound;
   options: Bound[];
@@ -375,6 +376,8 @@ function PrimaryAction({
   /** What the arrow is called, for what it holds. */
   optionsLabel?: string;
   pending: boolean;
+  /** Extra classes for the arrow's menu, for a surface with its own density. */
+  menuClassName?: string;
 }) {
   const reason = reasonFor(primary.action, primary.binding);
   const press = (
@@ -419,7 +422,10 @@ function PrimaryAction({
             <ChevronDown className="h-4 w-4" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-56">
+        <DropdownMenuContent
+          align="end"
+          className={cn("min-w-56", menuClassName)}
+        >
           {options.map(entry => (
             <OptionRow key={entry.action.id} entry={entry} />
           ))}
@@ -510,6 +516,7 @@ export function CompactDocumentActionBar({
         documentItems={options}
         dangerItems={danger}
         wideMenu
+        menuClassName={COMPACT_MENU_CLASS}
       />
     );
   }
@@ -524,9 +531,18 @@ export function CompactDocumentActionBar({
           : DOCUMENT_OPTIONS_LABEL
       }
       pending={pending}
+      menuClassName={COMPACT_MENU_CLASS}
     />
   );
 }
+
+/**
+ * The compact bar's menu at the page builder's density: 12px rows 28px high,
+ * as the bar it opens from. Spelled here rather than read from the builder's
+ * tokens, which a menu drawn outside the editor's element can't inherit.
+ */
+const COMPACT_MENU_CLASS =
+  "[&_[role=menuitem]]:py-1.5 [&_[role=menuitem]]:text-xs [&_[role=menuitem]]:leading-4";
 
 /**
  * The document's menu: its other verbs, its destructive ones apart, and on a
@@ -537,11 +553,14 @@ function DocumentMenu({
   documentItems,
   dangerItems,
   wideMenu,
+  menuClassName,
 }: {
   narrowItems: readonly NarrowMenuItem[];
   documentItems: Bound[];
   dangerItems: Bound[];
   wideMenu: boolean;
+  /** Extra classes for the menu, for a surface with its own density. */
+  menuClassName?: string;
 }) {
   return (
     <DropdownMenu>
@@ -557,7 +576,7 @@ function DocumentMenu({
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className={menuClassName}>
         {narrowItems.map(item => (
           <DropdownMenuItem
             key={item.id}

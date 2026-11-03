@@ -92,6 +92,9 @@ export function SearchButton({
       type="button"
       size="sm"
       variant="outline"
+      // A square at the editor's control height while it shows only its icon,
+      // as the bar's other icon buttons are; wide again where the key hint shows.
+      className="w-[var(--nx-builder-control-height)] px-0 @min-[1500px]/topbar:w-auto @min-[1500px]/topbar:px-[var(--nx-builder-control-padding-x)]"
       title={
         hint === null ? "Search and commands" : `Search and commands (${hint})`
       }
