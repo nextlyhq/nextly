@@ -7,7 +7,7 @@ description: "The prompt listing what the command would delete was answered no, 
 
 The prompt listing what the command would delete was answered no, so it changed nothing.
 
-A command that deletes data (a table, a column, or the rows in them) lists what it would delete and asks before it deletes anything. The answer was no, or the prompt was cancelled, so the command stopped there.
+A command that deletes data (a table, a column, or the rows in them) lists what it would delete and asks before it deletes anything. The answer was no, so the command stopped there. A cancel (Ctrl+C) is not a no: it ends the run with exit 130 and never reaches this error.
 
 ## Fix
 
