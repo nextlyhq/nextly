@@ -2216,6 +2216,30 @@ describe("the space a container puts between its children", () => {
     }
   });
 
+  it("writes a child gap only where a margin AND a gap can take it", () => {
+    // `-1rem` is a margin a block-flow container could write, but no `gap`:
+    // written as the one and not the other, a container switched to flex or
+    // grid would lose its spacing. So neither is written, and nothing marks
+    // the container.
+    const result = compilePageCss(doc([node("n1")]), {
+      ...CTX,
+      childGaps: { "core/box": "-1rem" },
+    });
+    expect(result.css).not.toContain("> * + *");
+    expect(result.css).not.toMatch(/\bgap:/);
+    expect(result.classes.get("n1")?.split(" ")).not.toContain(CHILD_GAP_CLASS);
+    expect(
+      result.warnings.some(w => w.path.startsWith("/childGaps/core~1box"))
+    ).toBe(true);
+    // The control: a length both take is written as both.
+    const control = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: { "core/box": "1rem" },
+    });
+    expect(control).toContain("margin-block-start: 1rem");
+    expect(control).toContain("gap: 1rem");
+  });
+
   it("writes no layout rule for a node whose type has no child gap", () => {
     const out = css(
       doc([node("n1", { base: { base: { display: "flex" } } })]),

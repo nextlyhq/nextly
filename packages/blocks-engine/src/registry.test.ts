@@ -228,6 +228,25 @@ describe("registration rules", () => {
     }
   });
 
+  it("refuses a child gap that a margin or a gap could not take", () => {
+    // A child gap is written as a top margin in block flow and as `gap` under
+    // flex or grid, so it has to be a value BOTH take: a negative length is a
+    // margin but never a gap, `auto` only a margin, `normal` and a second
+    // length only a gap. Accepting any of them loses the spacing in one mode.
+    for (const childGap of ["-1rem", "auto", "normal", "1rem 2rem", "red"]) {
+      expect(
+        () => registerBlocks([block({ name: "core/g4", childGap } as never)]),
+        childGap
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*childGap/s);
+    }
+    // The control: lengths both take, including a fluid one and a percentage.
+    registerBlocks([
+      block({ name: "core/g5", childGap: "clamp(1rem, 2vw, 2rem)" } as never),
+      block({ name: "core/g6", childGap: "5%" } as never),
+    ]);
+    expect(hasBlock("core/g5") && hasBlock("core/g6")).toBe(true);
+  });
+
   it("registers a block declaring well-formed parts", () => {
     // The control every rejection below needs: a gate that refused every parts
     // record would pass all of them while making the feature unusable.

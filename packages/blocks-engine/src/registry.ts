@@ -16,6 +16,7 @@ import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isSlotLock } from "./slot-lock";
+import { childGapIssues } from "./style/child-gap";
 import { styleSupportDefinitions } from "./style/supports-map";
 import type { SlotDefaultSource } from "./tree";
 import type { BlockTypeLookup } from "./validation";
@@ -335,6 +336,16 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       fail(
         "NEXTLY_BLOCK_INVALID",
         `block "${def.name}" childGap must be a length or a { $token } reference.`
+      );
+    }
+    // And a length both of its forms take, since it is written as a margin in
+    // block flow and as `gap` under flex or grid: refused here rather than
+    // lost silently on every page that switches the container's layout.
+    const issues = childGapIssues(gap, "/childGap");
+    if (issues.length > 0) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" childGap must be a length that both a margin and a gap take: ${issues[0].message}`
       );
     }
   }

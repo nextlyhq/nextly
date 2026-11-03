@@ -46,6 +46,7 @@ import { isConditionGated } from "../visibility";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
+import { childGapForms } from "./child-gap";
 import { escapeIdentifier } from "./css-value";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
@@ -2120,8 +2121,12 @@ export function compilePageCss(
       });
       continue;
     }
+    // Both forms or neither: a value only one of them takes would space the
+    // children in one layout mode and lose the spacing in the other, so the
+    // container is left unspaced and unmarked, and the refusal is reported.
+    const forms = childGapForms(gaps[type]);
     const flow = compileStyleValues(
-      { margin: { blockStart: gaps[type] } },
+      forms.flow,
       path,
       tokenPrefix,
       budget,
@@ -2130,8 +2135,16 @@ export function compilePageCss(
     );
     warnings.push(...flow.warnings);
     if (flow.declarations.length === 0) continue;
-    // The value was judged once above; this only respells it for `gap`.
-    const spaced = compileStyleValues({ gap: gaps[type] }, path, tokenPrefix);
+    const spaced = compileStyleValues(
+      forms.spaced,
+      path,
+      tokenPrefix,
+      budget,
+      warningAllowance,
+      { mayFetchUrl }
+    );
+    warnings.push(...spaced.warnings);
+    if (spaced.declarations.length === 0) continue;
     const typeClass = `.${escapeIdentifier(blockTypeClassName(type))}`;
     // The type AND the marker, so the marker alone switches the gap off.
     const container = `${typeClass}.${CHILD_GAP_CLASS}`;

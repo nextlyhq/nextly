@@ -522,7 +522,9 @@ export interface BlockDefinition<
   /**
    * The space this block puts between the blocks in its slots: a literal
    * length, the number `0` (which the catalog's `gap` also takes), or a
-   * `{ $token }` reference. Registration accepts exactly these.
+   * `{ $token }` reference. A literal must be one both a margin and `gap`
+   * take, so not negative, not `auto` or `normal`, and a single length;
+   * registration refuses anything else.
    *
    * Declared by containers, never as a margin on the blocks they hold. A block
    * carries no outer margin of its own, so the space between two blocks belongs
