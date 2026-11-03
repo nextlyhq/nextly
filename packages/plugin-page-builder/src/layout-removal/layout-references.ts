@@ -23,7 +23,8 @@
  *
  * Reads run as the system, so a page the remover may not read still stops the
  * removal. Which of them the remover may see is asked separately
- * ({@link readableTitles}), so a refusal names only pages they may read.
+ * ({@link readableTitles}), so a refusal names only pages they may read, by
+ * the title their own read answers.
  *
  * @module layout-removal/layout-references
  */
@@ -221,11 +222,15 @@ export async function scanLayoutReferences(args: {
  */
 const READABLE_CHUNK = 200;
 
-/** Which of `ids` the remover may read, as one query. */
+/**
+ * Which of `ids` the remover may read, as one query, each with the title that
+ * read answers: `null` when a field rule hid the title from them.
+ */
 async function readableIn(
   args: { nextly: Pick<Nextly, "find">; pages: string; asPerson: PersonReads },
   ids: readonly string[]
-): Promise<string[]> {
+): Promise<Map<string, string | null>> {
+  const titles = new Map<string, string | null>();
   try {
     const answered = await args.nextly.find({
       collection: args.pages,
@@ -236,14 +241,17 @@ async function readableIn(
       select: { title: true },
       ...args.asPerson,
     });
-    return answered.items
-      .map(row => relationId(row))
-      .filter((id): id is string => id !== null);
+    for (const row of answered.items) {
+      const id = relationId(row);
+      if (id === null) continue;
+      const title = (row as { title?: unknown }).title;
+      titles.set(id, typeof title === "string" ? title : null);
+    }
   } catch {
     // A caller refused the collection outright reads none of them, and is
     // told only how many there are.
-    return [];
   }
+  return titles;
 }
 
 /** How the remover reads: as themselves, never past their own access. */
@@ -255,7 +263,9 @@ export interface PersonReads {
 
 /**
  * Which of `references` the remover may read, by id and title, read again as
- * them; the rest are only counted. One query for all of them.
+ * them; the rest are only counted. The title is the one THAT read answers,
+ * never the system scan's, so a page whose title a field rule hides from the
+ * remover is counted rather than named. One query per chunk of ids.
  */
 export async function readableTitles(args: {
   nextly: Pick<Nextly, "find">;
@@ -265,17 +275,15 @@ export async function readableTitles(args: {
 }): Promise<{ readable: { id: string; title: string }[]; unreadable: number }> {
   const ids = args.references.map(reference => reference.id);
   if (ids.length === 0) return { readable: [], unreadable: 0 };
-  const seen = new Set<string>();
+  const titles = new Map<string, string | null>();
   for (let at = 0; at < ids.length; at += READABLE_CHUNK) {
-    for (const id of await readableIn(
-      args,
-      ids.slice(at, at + READABLE_CHUNK)
-    )) {
-      seen.add(id);
-    }
+    const chunk = await readableIn(args, ids.slice(at, at + READABLE_CHUNK));
+    for (const [id, title] of chunk) titles.set(id, title);
   }
-  const readable = args.references
-    .filter(reference => seen.has(reference.id))
-    .map(reference => ({ id: reference.id, title: reference.title }));
+  const readable: { id: string; title: string }[] = [];
+  for (const reference of args.references) {
+    const title = titles.get(reference.id);
+    if (typeof title === "string") readable.push({ id: reference.id, title });
+  }
   return { readable, unreadable: ids.length - readable.length };
 }

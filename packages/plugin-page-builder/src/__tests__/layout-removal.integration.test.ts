@@ -109,6 +109,34 @@ function probePlugin(holder: { store?: LayoutRemovalStore }): PluginDefinition {
   });
 }
 
+/**
+ * A plugin hiding the pages' title from every read that keeps to access: a
+ * field-level read rule, the kind a site sets on a field it keeps private.
+ */
+function hiddenTitlesPlugin(): PluginDefinition {
+  return definePlugin({
+    name: "@test/hidden-page-titles",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    contributes: {
+      transforms: [
+        {
+          target: PAGES_SLUG,
+          transform: entity => ({
+            ...entity,
+            fields: entity.fields.map(field =>
+              "name" in field && field.name === "title"
+                ? { ...field, access: { read: () => false } }
+                : field
+            ),
+          }),
+        },
+      ],
+    },
+  });
+}
+
 describe.each(getConfiguredTestDialects())(
   "Remove Layout (%s)",
   (dialect: TestDialect) => {
@@ -136,10 +164,12 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      extra: readonly PluginDefinition[] = []
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder(), probePlugin(probe)],
+        plugins: [pageBuilder(), probePlugin(probe), ...extra],
         seedPublic: true,
       });
       await ensure(current);
@@ -338,6 +368,31 @@ describe.each(getConfiguredTestDialects())(
         });
         expect(await fence().removalOf(other)).toBeNull();
         expect(await layoutRow(t, other)).toBeDefined();
+      });
+      it("never names a page whose title a field rule hides from the remover", async () => {
+        const t = await boot([hiddenTitlesPlugin()]);
+        const me = await owner(t);
+        const other = await layout(t, "Other", "other");
+        await page(t, "Secret plans", { layout: other, status: "published" });
+        // The rule holds for the remover's own read of the page.
+        const asOwner = await t.nextly.find({
+          collection: PAGES_SLUG,
+          where: { layout: { equals: other } },
+          status: "all",
+          depth: 0,
+          overrideAccess: false,
+          user: { id: me.id },
+        });
+        expect(asOwner.items[0]).not.toHaveProperty("title");
+
+        const answer = await remove(me.cookie, other, "delete", true);
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect(JSON.stringify(answer.body)).not.toContain("Secret plans");
+        expect((answer.body.item as { check?: unknown }).check).toMatchObject({
+          pages: [],
+          unreadable: 1,
+        });
       });
     });
 
