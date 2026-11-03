@@ -19,7 +19,11 @@
  * @module editor-command-palette
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  walkNodes,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
@@ -30,6 +34,7 @@ import {
   type CommandGroupOptions,
 } from "./command-palette";
 import type { EditorState } from "./editor-state";
+import { inlineTargets } from "./inline-text";
 import {
   placementWords,
   useInsertOffers,
@@ -240,9 +245,11 @@ function addCommands(
 }
 
 /**
- * The page's blocks, by the names Layers shows, each saying what it is and
- * where it sits. Listed only while searching: the whole page is what Layers
- * is for.
+ * The page's blocks, each by what tells it apart: the name the author gave it
+ * in Layers, else its own text (or the first text inside it), else its kind,
+ * with its place among the rows that would still read the same ("Section 2 of
+ * 3"). Each says what it is and where it sits. Listed only while searching:
+ * the whole page is what Layers is for.
  */
 function pageCommands(
   editor: Pick<EditorState, "document" | "select">,
@@ -252,37 +259,85 @@ function pageCommands(
   componentTitle: ComponentTitleOf | undefined
 ): BuilderCommand[] {
   if (query === "") return [];
-  return blocksOnPage(editor.document, componentTitle).map(
+  const rows = blocksOnPage(editor.document, componentTitle).map(
     ({ layer, parent }) => {
       // A placement is a component, in the word and the mark Layers uses, rather
       // than the engine's name for its node type.
       const kind = layer.component ? UNNAMED_COMPONENT : blockLabel(layer.type);
-      return {
-        id: `block:${layer.id}`,
-        label: layer.label,
-        // The same mark the Add panel draws for this kind of block.
-        icon: (
-          <BlockIconMark
-            icon={layer.component ? "component" : icons.get(layer.type)}
-            size={16}
-          />
-        ),
-        // Found by what it is as well as by its name: "heading" finds them all.
-        keywords: [kind],
-        group: PAGE_GROUP,
-        // The kind only where the name doesn't already say it.
-        detail: [
-          ...(layer.label === kind ? [] : [kind]),
-          ...(parent === undefined ? [] : [`in ${parent.label}`]),
-        ].join(" · "),
-        verb: "Select",
-        run: () => {
-          editor.select(layer.id);
-          revealBlock?.(layer.id);
-        },
-      };
+      const text = blockText(editor.document, layer.id);
+      const name =
+        layer.label !== kind || text === undefined ? layer.label : text;
+      return { layer, parent, kind, name };
     }
   );
+  const label = numberedAlike(rows.map(row => row.name));
+  return rows.map(({ layer, parent, kind, name }, index) => {
+    return {
+      id: `block:${layer.id}`,
+      label: label[index] ?? name,
+      // The same mark the Add panel draws for this kind of block.
+      icon: (
+        <BlockIconMark
+          icon={layer.component ? "component" : icons.get(layer.type)}
+          size={16}
+        />
+      ),
+      // Found by what it is as well as by its name: "heading" finds them all.
+      keywords: [kind],
+      group: PAGE_GROUP,
+      // The kind only where the name doesn't already say it.
+      detail: [
+        ...(name === kind ? [] : [kind]),
+        ...(parent === undefined ? [] : [`in ${parent.label}`]),
+      ].join(" · "),
+      verb: "Select",
+      run: () => {
+        editor.select(layer.id);
+        revealBlock?.(layer.id);
+      },
+    };
+  });
+}
+
+/** How much of a block's text a row shows before it is cut. */
+const TEXT_SHOWN = 40;
+
+/**
+ * The first text an author can read in a block, or in the blocks inside it,
+ * cut to fit a row. Read by the rule the canvas types into, so it is text the
+ * author sees on the page; undefined for a block with none.
+ */
+function blockText(document: BlockDocument, id: string): string | undefined {
+  const node = findNode(document.nodes, id);
+  if (node === undefined) return undefined;
+  let found: string | undefined;
+  walkNodes([node], inner => {
+    if (found !== undefined) return;
+    found = inlineTargets(document, inner.id)
+      .map(target => target.value.trim())
+      .find(value => value !== "");
+  });
+  if (found === undefined) return undefined;
+  return found.length > TEXT_SHOWN
+    ? `${found.slice(0, TEXT_SHOWN - 1).trimEnd()}…`
+    : found;
+}
+
+/**
+ * The names, with any that repeat numbered by their place among the alike
+ * ("Section 2 of 3"), so no two rows read the same.
+ */
+function numberedAlike(names: readonly string[]): string[] {
+  const total = new Map<string, number>();
+  for (const name of names) total.set(name, (total.get(name) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return names.map(name => {
+    const count = total.get(name) ?? 1;
+    if (count < 2) return name;
+    const place = (seen.get(name) ?? 0) + 1;
+    seen.set(name, place);
+    return `${name} ${place} of ${count}`;
+  });
 }
 
 /**

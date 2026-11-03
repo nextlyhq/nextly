@@ -194,6 +194,91 @@ describe("the editor's search", () => {
     expect(revealBlock).toHaveBeenCalledWith("welcome");
   });
 
+  it("names a block by its text, and numbers blocks that would still read the same", () => {
+    // By type alone, two titles and two sections were two pairs of identical
+    // rows; their text, or their place among the alike, tells them apart.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/title",
+          editor: { label: "Title" },
+          props: { text: { type: "text", inline: true } },
+        },
+        {
+          ...base,
+          name: "acme/band",
+          editor: { label: "Band" },
+          slots: { children: {} },
+        },
+      ] as never,
+      { source: "acme-named" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "t1",
+          type: "acme/title",
+          version: 1,
+          props: { text: "We build calm software" },
+        },
+        {
+          id: "t2",
+          type: "acme/title",
+          version: 1,
+          props: { text: "Pricing" },
+        },
+        {
+          id: "b1",
+          type: "acme/band",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+        {
+          id: "b2",
+          type: "acme/band",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+        {
+          id: "b3",
+          type: "acme/band",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              {
+                id: "t3",
+                type: "acme/title",
+                version: 1,
+                props: { text: "Contact us" },
+              },
+            ],
+          },
+        },
+      ],
+    } as BlockDocument;
+    mount(editorSpy(document, null));
+
+    search("title");
+    const titles = rowsUnder("On this page").map(row => row.textContent ?? "");
+    expect(titles.some(text => text.includes("We build calm software"))).toBe(
+      true
+    );
+    expect(titles.some(text => text.includes("Pricing"))).toBe(true);
+
+    search("band");
+    const bands = rowsUnder("On this page").map(row => row.textContent ?? "");
+    // Two empty bands, numbered; the third named by the text inside it.
+    expect(bands.some(text => text.includes("Band 1 of 2"))).toBe(true);
+    expect(bands.some(text => text.includes("Band 2 of 2"))).toBe(true);
+    expect(bands.some(text => text.includes("Contact us"))).toBe(true);
+  });
+
   it("finds a placed component by its component's title, and says it is one", () => {
     register();
     const editor = editorSpy(
