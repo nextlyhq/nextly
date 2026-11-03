@@ -197,6 +197,23 @@ describe("permissions:cleanup and the data-loss consent", () => {
     expect(output).not.toMatch(NEXT_RELEASE);
   });
 
+  it.each([
+    ["with no terminal", () => terminal(false)],
+    ["at a terminal", () => terminal(true)],
+  ])(
+    "refuses a consent naming permissions alone %s, deleting nothing and naming role_permissions",
+    async (_case, arrange) => {
+      arrange();
+      const { code, output } = await run({ acceptDataLoss: "permissions" });
+      expect(code).toBe(1);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(output).toContain("rows of role_permissions");
+      expect(output).toContain("(DATA_LOSS_CONSENT_NOT_COVERED)");
+      expect(output).not.toMatch(NEXT_RELEASE);
+    }
+  );
+
   it("asks at a terminal, and deletes on yes", async () => {
     terminal(true);
     confirm.mockResolvedValueOnce(true);

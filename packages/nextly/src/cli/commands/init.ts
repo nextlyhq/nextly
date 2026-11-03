@@ -42,6 +42,10 @@ import {
   type CommandContext,
   type GlobalOptions,
 } from "../program";
+import {
+  isPromptForceClosed,
+  promptCancelled,
+} from "../utils/prompt-cancelled";
 
 /**
  * Options specific to the init command
@@ -145,13 +149,11 @@ export async function runInit(
     try {
       answers = await promptUser(defaults);
     } catch (error) {
-      // User cancelled (Ctrl+C)
-      if (
-        error instanceof Error &&
-        error.message.includes("User force closed")
-      ) {
+      // Ctrl+C at a prompt: nothing has been written yet, and the run ends
+      // as interrupted, exit 130.
+      if (isPromptForceClosed(error)) {
         logger.warn("\nSetup cancelled.");
-        process.exit(0);
+        await promptCancelled();
       }
       throw error;
     }

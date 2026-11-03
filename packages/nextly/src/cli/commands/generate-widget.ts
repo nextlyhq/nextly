@@ -22,6 +22,7 @@ import {
   widgetGenerateCancelled,
   widgetNotGenerated,
 } from "../errors/areas/commands";
+import { answered as answeredOrCancelled } from "../utils/prompt-cancelled";
 
 import type { WidgetViewKind } from "./generate-widget/files";
 import {
@@ -32,15 +33,12 @@ import {
 } from "./generate-widget/run";
 
 /**
- * A cancelled prompt stops the command; nothing has been written by then. The prompts are asked
- * only inside the action's `try`, so the throw ends the command through its catch, in the shape.
+ * A cancelled prompt stops the command; nothing has been written by then. It says so in the
+ * shape, under its own code, and the run ends as interrupted, exit 130 (`promptCancelled`).
  */
-function answered<T>(value: T | symbol): T {
-  if (clack.isCancel(value)) {
-    clack.cancel("Nothing written.");
-    throw widgetGenerateCancelled();
-  }
-  return value;
+function answered<T>(value: T | symbol): Promise<T> {
+  if (clack.isCancel(value)) clack.cancel("Nothing written.");
+  return answeredOrCancelled(value, widgetGenerateCancelled());
 }
 
 /** Asks on a terminal through @clack/prompts, as the CLI's other questions do. */

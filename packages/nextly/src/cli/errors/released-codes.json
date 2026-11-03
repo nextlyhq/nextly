@@ -39,7 +39,7 @@
   "DATABASE_VERSION_UNSUPPORTED": "The database server is older than the oldest version Nextly supports for its dialect.",
   "DATA_LOSS_CONSENT_MALFORMED": "The data-loss consent names its targets in a form it cannot read, so the command changed nothing.",
   "DATA_LOSS_CONSENT_NOT_COVERED": "The data-loss consent names what may be deleted, and leaves out something the command would delete.",
-  "DATA_LOSS_CONSENT_REQUIRED": "The command would delete data, no consent covers it, and no terminal is attached to ask.",
+  "DATA_LOSS_CONSENT_REQUIRED": "The command would delete data, no consent covers it, and nobody can be asked (no terminal, CI, or --non-interactive).",
   "DATA_LOSS_DECLINED": "The prompt listing what the command would delete was answered no, so it changed nothing.",
   "DEMOTE_COLLECTION_NOT_FOUND": "`db:sync --demote` names a collection that `nextly.config.ts` does not define.",
   "DROP_OF_FOREIGN_TABLE": "A migration would drop, rename or change a table, column or index that belongs to a different owner.",

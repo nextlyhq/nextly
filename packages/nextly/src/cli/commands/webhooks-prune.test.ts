@@ -215,6 +215,26 @@ describe("runWebhooksPruneCommand", () => {
       expect(output).not.toMatch(NEXT_RELEASE);
     });
 
+    it.each([
+      ["with no terminal", () => terminal(false)],
+      ["at a terminal", () => terminal(true)],
+    ])(
+      "refuses a consent naming nextly_events alone %s, deleting nothing and naming nextly_webhook_deliveries",
+      async (_case, arrange) => {
+        arrange();
+        const { failure, output } = await run({
+          acceptDataLoss: "nextly_events",
+        });
+        expect(confirm).not.toHaveBeenCalled();
+        expect(deleted()).toBe(false);
+        expect(failure?.code).toBe("DATA_LOSS_CONSENT_NOT_COVERED");
+        expect(`${failure?.what ?? ""}\n${failure?.next ?? ""}`).toContain(
+          "nextly_webhook_deliveries"
+        );
+        expect(output).not.toMatch(NEXT_RELEASE);
+      }
+    );
+
     it("asks at a terminal, and deletes on yes", async () => {
       terminal(true);
       confirm.mockResolvedValueOnce(true);

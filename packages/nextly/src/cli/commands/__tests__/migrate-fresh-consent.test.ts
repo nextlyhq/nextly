@@ -14,17 +14,36 @@ import type { CommandContext } from "../../program";
 import { runMigrateFresh } from "../migrate-fresh";
 
 const connect = vi.hoisted(() => vi.fn());
-// The answer typed at the prompt, and whether the prompt was reached.
-const prompt = vi.hoisted(() => ({ answer: "no", asked: 0 }));
+// The answer typed at the prompt (null for Ctrl+C), and whether the prompt
+// was reached.
+const prompt = vi.hoisted(() => ({
+  answer: "no" as string | null,
+  asked: 0,
+}));
 
+// Ctrl+C reaches readline as `SIGINT` on its interface; with nothing
+// listening, readline only pauses and the question is never answered, which
+// is said here rather than left to hang the test.
 vi.mock("node:readline", () => ({
-  createInterface: () => ({
-    question: (_question: string, answer: (typed: string) => void) => {
-      prompt.asked += 1;
-      answer(prompt.answer);
-    },
-    close: () => {},
-  }),
+  createInterface: () => {
+    const interrupted: Array<() => void> = [];
+    const rl = {
+      on: (event: string, listener: () => void) => {
+        if (event === "SIGINT") interrupted.push(listener);
+        return rl;
+      },
+      question: (_question: string, answer: (typed: string) => void) => {
+        prompt.asked += 1;
+        if (prompt.answer !== null) return answer(prompt.answer);
+        if (interrupted.length === 0) {
+          throw new Error("Ctrl+C went unheard: nothing listens for SIGINT");
+        }
+        for (const listener of interrupted) listener();
+      },
+      close: () => {},
+    };
+    return rl;
+  },
 }));
 
 // `../program` imports every command, `migrate` with its whole graph among
@@ -61,6 +80,9 @@ vi.mock("../../utils/adapter", () => ({
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({ config: { db: {} }, configPath: undefined }),
 }));
+
+/** Every status `process.exit` was called with, the first being the one a run ends on. */
+const exits: Array<number | undefined> = [];
 
 class Exited extends Error {
   constructor(readonly code: number | undefined) {
@@ -143,7 +165,9 @@ describe("migrate:fresh and the data-loss consent", () => {
     // Past the consent the run connects; stopping there keeps the test off
     // any database.
     connect.mockRejectedValue(new Error("connected"));
+    exits.length = 0;
     vi.spyOn(process, "exit").mockImplementation(code => {
+      exits.push(code === undefined ? undefined : Number(code));
       throw new Exited(code === undefined ? undefined : Number(code));
     });
   });
@@ -166,6 +190,15 @@ describe("migrate:fresh and the data-loss consent", () => {
     expect(connect).not.toHaveBeenCalled();
     expect(output).toContain("the deletion was not confirmed");
     expect(output).toContain("--accept-data-loss");
+  });
+
+  it("exits 130 when the prompt is cancelled (Ctrl+C), before connecting", async () => {
+    terminal(true);
+    prompt.answer = null;
+    await fresh({});
+    expect(prompt.asked).toBe(1);
+    expect(exits[0]).toBe(130);
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("proceeds when the prompt is answered yes", async () => {

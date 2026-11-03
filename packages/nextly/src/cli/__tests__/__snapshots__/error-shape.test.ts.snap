@@ -35,7 +35,7 @@ exports[`a command that ends with an error > names a missing configuration file,
 `;
 
 exports[`a rollback refused for want of consent > ends with what it would delete and the consent that allows it, running nothing 1`] = `
-"✗ Deleting data needs consent, and no terminal is attached to ask.
+"✗ Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
   Why:  This would delete:
         - 20261020_120000_add_summary.sql's DOWN, which drops a table or column, or empties a table
         Nothing was changed.
@@ -615,7 +615,7 @@ exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_NOT_COVERED 1`
 `;
 
 exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_REQUIRED 1`] = `
-"✗ Deleting data needs consent, and no terminal is attached to ask.
+"✗ Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
   Why:  This would delete:
         - column dc_posts.summary (42 non-empty values)
         Nothing was changed.

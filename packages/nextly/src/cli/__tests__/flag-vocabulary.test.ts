@@ -12,7 +12,10 @@
 import type { Command, Option } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
+import {
+  canPrompt,
+  setNonInteractive,
+} from "../../domains/schema/migrate/can-prompt";
 import { createProgram } from "../program";
 
 import { commandAt, commandPaths } from "./helpers/answer-only-invocations";
@@ -179,4 +182,56 @@ describe("every global option reaches every command", () => {
       expect(seen).toMatchObject(expected);
     }
   );
+});
+
+describe("--non-interactive typed on the command line", () => {
+  // A test worker's streams are not terminals and carry no `isTTY` at all, so
+  // each case makes them terminals, and the original (usually absent) is put
+  // back after.
+  const original = {
+    stdin: Object.getOwnPropertyDescriptor(process.stdin, "isTTY"),
+    stdout: Object.getOwnPropertyDescriptor(process.stdout, "isTTY"),
+  };
+  const restore = (
+    stream: NodeJS.ReadStream | NodeJS.WriteStream,
+    was?: PropertyDescriptor
+  ) => {
+    if (was) Object.defineProperty(stream, "isTTY", was);
+    else delete (stream as { isTTY?: boolean }).isTTY;
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    restore(process.stdin, original.stdin);
+    restore(process.stdout, original.stdout);
+  });
+
+  /** Whether `prune`'s action, run from `argv` at a terminal, may ask. */
+  async function mayAskFrom(argv: string[]): Promise<boolean | undefined> {
+    vi.stubEnv("CI", undefined);
+    for (const stream of [process.stdin, process.stdout]) {
+      Object.defineProperty(stream, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+    }
+    const run = createProgram();
+    let mayAsk: boolean | undefined;
+    // Its own action is replaced, so nothing it does is loaded or run.
+    commandAt(run, ["prune"]).action(() => {
+      mayAsk = canPrompt();
+    });
+    await run.parseAsync(argv);
+    return mayAsk;
+  }
+
+  it("reaches canPrompt, so the command may not ask", async () => {
+    expect(
+      await mayAskFrom(["node", "nextly", "prune", "--non-interactive"])
+    ).toBe(false);
+  });
+
+  it("is what turns it off: without it, the same run at a terminal may ask", async () => {
+    expect(await mayAskFrom(["node", "nextly", "prune"])).toBe(true);
+  });
 });

@@ -99,6 +99,7 @@ import { formatDuration } from "../utils/logger";
 
 import {
   ensureLocalizedCompanions,
+  judgeOrphanRemoval,
   performPermissionSeeding,
   publishExtensionSchema,
   syncCollections,
@@ -166,6 +167,13 @@ export interface DbSyncCommandOptions {
    * @default false
    */
   removeOrphaned?: boolean;
+
+  /**
+   * `--accept-data-loss [targets]`: the data-loss consent, for the push's
+   * column drops (handed on as NEXTLY_ACCEPT_DATA_LOSS) and for what
+   * `--remove-orphaned` deletes. `true` alone, the list when one is given.
+   */
+  acceptDataLoss?: string | boolean;
 }
 
 /**
@@ -358,6 +366,11 @@ export async function runDbSync(
 
           assertPluginFieldDeclarations(configResult.config);
 
+          // Every orphan `--remove-orphaned` would delete, judged with the
+          // data-loss consent before anything below changes the database: a
+          // no, or a consent leaving one out, ends the run with none deleted.
+          await judgeOrphanRemoval(configResult, adapter, options, context);
+
           // Every entity as the registry records it before the syncs below rewrite it, so the
           // companion pass after them can tell a field this run newly translates from one
           // translated before it.
@@ -515,7 +528,6 @@ export async function dbSyncAction(
   cmdOptions: DbSyncCommandOptions & {
     promote?: string;
     demote?: string;
-    acceptDataLoss?: string | boolean;
   },
   cmd: Command
 ) {

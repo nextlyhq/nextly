@@ -14,8 +14,6 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { createInterface } from "node:readline";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
@@ -30,6 +28,7 @@ import { coreDestructiveNeedsTerminal } from "../errors/areas/migrations";
 import { createContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
+import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import { maybeForceUnlock } from "./migrate";
 import type {
@@ -214,20 +213,6 @@ export interface UpgradeCommandOptions {
   forceUnlock?: boolean;
 }
 
-/** Minimal interactive yes/no prompt for the TTY backup confirmation. */
-function promptYesNo(question: string): Promise<boolean> {
-  return new Promise(resolve => {
-    const rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    rl.question(question, answer => {
-      rl.close();
-      resolve(/^y(es)?$/i.test(answer.trim()));
-    });
-  });
-}
-
 /** The action of `nextly upgrade`, loaded when it runs. */
 export async function upgradeAction(
   cmdOptions: UpgradeCommandOptions,
@@ -273,7 +258,7 @@ export async function upgradeAction(
           if (!canPrompt()) {
             return Promise.reject(coreDestructiveNeedsTerminal(reasons));
           }
-          return promptYesNo(
+          return askYesInTerminal(
             `Reconcile core schema with these destructive operations?\n  - ${reasons.join("\n  - ")}\nProceed? [y/N]: `
           );
         },
@@ -294,7 +279,7 @@ export async function upgradeAction(
           // The CLI's one answer to whether anyone can be asked.
           isTTY: canPrompt(),
           promptConfirm: () =>
-            promptYesNo("Have you backed up your database? [y/N]: "),
+            askYesInTerminal("Have you backed up your database? [y/N]: "),
         }
       );
     }

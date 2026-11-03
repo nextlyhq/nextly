@@ -201,8 +201,8 @@ Nextly does **not** auto-drop them (your data is never deleted behind your back)
 `prune` CLI to review and remove them:
 
 ```bash
-nextly prune           # dry run — lists orphaned plugin:* tables/columns/permissions
-nextly prune --force   # actually drops them (and their data + seeded permissions)
+nextly prune                      # dry run — lists orphaned plugin:* tables/columns/permissions
+nextly prune --accept-data-loss   # actually drops them (and their data + seeded permissions)
 ```
 
 `prune` only ever targets `plugin:<name>` provenance. Code-first (`code`) and
@@ -424,7 +424,7 @@ generator cannot tell a rename from a drop and an add, and either loses the
 rows, so it refuses (`PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA`) and names what
 it would have dropped; write the rename, or the deliberate drop, by hand in a
 module from `--blank` (below). With no schema changes it writes nothing and
-exits with code 2, whatever `schemaVersion` says.
+exits with code 0, whatever `schemaVersion` says.
 
 A column added to a table an earlier module created has to give the rows
 already in it a value, so generation refuses one that is `NOT NULL` with no

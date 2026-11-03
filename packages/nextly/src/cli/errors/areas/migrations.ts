@@ -40,8 +40,9 @@ function lockRefusal(error: NextlyError): CliErrorParts {
 /**
  * A data-loss refusal, as its three parts, in the consent's own wording.
  *
- * The verdict's message is a header ("Deleting data needs consent, and no terminal is attached to
- * ask. This would delete:"), the deletions one per line, then "Nothing was changed. To consent:
+ * The verdict's message is a header ("Deleting data needs consent, and nobody can be asked (no
+ * terminal, CI, or --non-interactive). This would delete:"), the deletions one per line, then
+ * "Nothing was changed. To consent:
  * …". The header's first sentence is what happened, the list and "Nothing was changed." are why,
  * and the consent to give is next.
  */
@@ -411,7 +412,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   DATA_LOSS_CONSENT_REQUIRED: {
     cause:
-      "The command would delete data, no consent covers it, and no terminal is attached to ask.",
+      "The command would delete data, no consent covers it, and nobody can be asked (no terminal, CI, or --non-interactive).",
     from: [
       {
         code: "INVALID_INPUT",

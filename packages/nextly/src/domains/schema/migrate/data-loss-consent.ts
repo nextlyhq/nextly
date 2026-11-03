@@ -37,8 +37,6 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { countNonEmpty, countRows } from "../pipeline/classifier/count-helpers";
 
-import { canPrompt } from "./can-prompt";
-
 /** The consent's command-line spelling. */
 const ACCEPT_DATA_LOSS_FLAG = "--accept-data-loss";
 
@@ -383,8 +381,8 @@ export type DataLossVerdict =
       kind: "refused";
       /**
        * `not-covered`: a consent naming targets was given and leaves some
-       * deletion out. `needs-consent`: none covers it, and no terminal is
-       * there to ask.
+       * deletion out. `needs-consent`: none covers it, and nobody can be
+       * asked (no terminal, `CI` set, or `--non-interactive`).
        */
       reason: "not-covered" | "needs-consent";
       /** The refusal, naming each deletion left out and the consent that covers it. */
@@ -465,7 +463,7 @@ export async function judgeDataLoss(args: {
     reason: "needs-consent",
     uncovered,
     message:
-      `Deleting data needs consent, and no terminal is attached to ask. This would delete:\n` +
+      `Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive). This would delete:\n` +
       `${lines(uncovered).join("\n")}\n` +
       `Nothing was changed. To consent: ${consentHint(uncovered, consent, flag)}.`,
   };
@@ -499,12 +497,4 @@ export async function countDeletions(
     }
   }
   return counted;
-}
-
-/**
- * Whether a person is there to answer. The CLI's one answer to that,
- * `canPrompt`: a terminal on both ends, no `--non-interactive`, `CI` unset.
- */
-export function isInteractiveTerminal(): boolean {
-  return canPrompt();
 }

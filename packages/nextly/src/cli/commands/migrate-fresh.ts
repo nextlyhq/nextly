@@ -30,8 +30,6 @@
  * ```
  */
 
-import { createInterface } from "node:readline";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 import { sql, type SQL } from "drizzle-orm";
@@ -68,6 +66,7 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
+import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import { commandRun } from "./command-run";
 import { runMigrate } from "./migrate";
@@ -200,7 +199,8 @@ export async function runMigrateFresh(
         warn: message => logger.warn(message),
       }),
       interactive: canPrompt(),
-      ask: question => confirmDestructiveAction(`${question} (yes/no): `),
+      // A yes deletes; Ctrl+C ends the run with exit 130 (`askYesInTerminal`).
+      ask: question => askYesInTerminal(`${question} (yes/no): `),
       print: line => logger.warn(line),
     });
     requireConsented(verdict);
@@ -560,28 +560,6 @@ async function dropTable(
   }
 
   await adapter.executeQuery(query);
-}
-
-// ============================================================================
-// Confirmation Helper
-// ============================================================================
-
-/**
- * Prompt user for confirmation of destructive action
- */
-async function confirmDestructiveAction(prompt: string): Promise<boolean> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise(resolve => {
-    rl.question(prompt, answer => {
-      rl.close();
-      const normalizedAnswer = answer.toLowerCase().trim();
-      resolve(normalizedAnswer === "yes" || normalizedAnswer === "y");
-    });
-  });
 }
 
 /**

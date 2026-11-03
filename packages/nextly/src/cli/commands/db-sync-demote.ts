@@ -23,6 +23,7 @@ import type { CommandContext } from "../program";
 // kept its own signature, so wrap the call here to preserve the
 // downstream code's expectation of `{ config, configPath, ... }`.
 import { loadConfig } from "../utils/config-loader";
+import { answered } from "../utils/prompt-cancelled";
 
 import { confirmationAnswered } from "./db-sync-promote";
 import { openCollectionRegistry } from "./db-sync-registry";
@@ -74,14 +75,18 @@ export async function runDemote(
     serializeCollection({ slug, fields: fields as never[] }),
     `About to move '${slug}' to UI source`
   );
-  // `--yes` answers the confirmation: write, without asking.
+  // `--yes` answers the confirmation: write, without asking. Ctrl+C at the
+  // prompt ends the run with exit 130 (`answered`); a no is the declined
+  // demote below.
   const confirm =
     confirmationAnswered(context) ||
-    (await p.confirm({
-      message:
-        "Write to dynamic_collections so the Schema Builder can edit it?",
-    }));
-  if (p.isCancel(confirm) || !confirm) {
+    (await answered(
+      await p.confirm({
+        message:
+          "Write to dynamic_collections so the Schema Builder can edit it?",
+      })
+    ));
+  if (!confirm) {
     logger.info("Demote cancelled.");
     return;
   }

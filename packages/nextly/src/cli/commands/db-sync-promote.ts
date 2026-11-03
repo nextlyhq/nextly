@@ -17,6 +17,7 @@ import {
   syncConfirmationRequired,
 } from "../errors/areas/sync";
 import type { CommandContext } from "../program";
+import { answered } from "../utils/prompt-cancelled";
 
 import { openCollectionRegistry } from "./db-sync-registry";
 
@@ -57,28 +58,34 @@ export async function runPromote(
   const code = serializeCollection({ slug, fields: fields as never[] });
 
   // 4. User confirmation flow. `--yes` answers it: append, without asking.
+  // Ctrl+C at either prompt ends the run with exit 130 (`answered`); choosing
+  // Cancel, or a no, is the declined promote below.
   const action = confirmationAnswered(context)
     ? "accept"
-    : await p.select({
-        message: `Preview generated code for '${slug}'. Action?`,
-        options: [
-          { value: "preview", label: "Show preview" },
-          { value: "accept", label: "Append to nextly.config.ts" },
-          { value: "decline", label: "Cancel" },
-        ],
-      });
+    : await answered(
+        await p.select({
+          message: `Preview generated code for '${slug}'. Action?`,
+          options: [
+            { value: "preview", label: "Show preview" },
+            { value: "accept", label: "Append to nextly.config.ts" },
+            { value: "decline", label: "Cancel" },
+          ],
+        })
+      );
 
-  if (p.isCancel(action) || action === "decline") {
+  if (action === "decline") {
     logger.info("Promote cancelled.");
     return;
   }
 
   if (action === "preview") {
     p.note(code, "Generated code");
-    const confirm = await p.confirm({
-      message: "Append this to nextly.config.ts and delete the UI record?",
-    });
-    if (p.isCancel(confirm) || !confirm) {
+    const confirm = await answered(
+      await p.confirm({
+        message: "Append this to nextly.config.ts and delete the UI record?",
+      })
+    );
+    if (!confirm) {
       logger.info("Promote cancelled.");
       return;
     }

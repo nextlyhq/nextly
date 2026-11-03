@@ -34,17 +34,23 @@ with its exit codes, and no command waits for an answer it cannot get.
 
 Compatibility, for scripts and CI:
 
-- A deletion that is declined at the prompt, or that cannot be asked about
-  (no terminal, `CI` set, or `--non-interactive`) and has no consent, now exits
-  1 on `migrate:fresh`, `migrate:down` and `prune` (it exited 0). Give
+- A deletion declined at the prompt now exits 1 on `migrate:fresh`,
+  `migrate:down` and `prune` (it exited 0). A `prune` that cannot be asked (no
+  terminal, `CI` set, or `--non-interactive`) and has no consent now exits 1 as
+  well; `migrate:fresh` and `migrate:down` already exited 1 there. Give
   `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) to let it run.
 - `--yes` never consents to deleting data. `migrate:fresh --yes` is refused and
   names `--accept-data-loss`.
-- `webhooks:prune` and `permissions cleanup` now take `--accept-data-loss`.
+- `webhooks:prune` and `permissions:cleanup` now take `--accept-data-loss`.
   In this release a run that cannot be asked still deletes and prints a
   notice; from the next release it needs `--accept-data-loss` (or
   `NEXTLY_ACCEPT_DATA_LOSS`). With a terminal they ask. `i18n:restore --purge`
   takes the consent too.
+- `nextly db:sync --remove-orphaned` now lists the orphaned tables, registry
+  entries and permissions it would delete and takes the data-loss consent
+  first: at a terminal it asks, and a no exits 1 with nothing deleted; where
+  nobody can be asked it still deletes in this release and prints that the next
+  release needs `--accept-data-loss`.
 - `nextly migrate:create` with nothing to do exits 0 (it exited 2).
 - `nextly generate:types --check` exits 2 when the component map is out of step
   and 1 when it could not check (the two were the other way round).
@@ -65,4 +71,4 @@ New:
   `--yes`) and `upgrade --reconcile-core` stop with an error of their own
   instead of waiting.
 - A misspelt flag or command is refused with the nearest one suggested, on
-  every command, `media` and `permissions` included.
+  every command, `media` and `permissions:cleanup` included.

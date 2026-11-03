@@ -42,7 +42,6 @@ import {
 } from "vitest";
 
 import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
-import { isInteractiveTerminal } from "../../domains/schema/migrate/data-loss-consent";
 import {
   ClackTerminalPromptDispatcher,
   TTYRequiredError,
@@ -66,6 +65,7 @@ const seen = vi.hoisted(() => ({
   createInterface: vi.fn(),
   stepRun: vi.fn(),
   reconciled: vi.fn(),
+  openRegistry: vi.fn(),
   registry: {
     getCollectionBySlug: vi.fn(),
     deleteCollection: vi.fn(),
@@ -125,7 +125,7 @@ vi.mock("../utils/config-loader", () => ({
 }));
 
 vi.mock("../commands/db-sync-registry", () => ({
-  openCollectionRegistry: () => Promise.resolve(seen.registry),
+  openCollectionRegistry: seen.openRegistry,
 }));
 
 vi.mock("../commands/migrate", () => ({
@@ -256,6 +256,7 @@ describe("--non-interactive at a terminal", () => {
       close: () => {},
     }));
     seen.stepRun.mockResolvedValue(1);
+    seen.openRegistry.mockResolvedValue(seen.registry);
     seen.registry.getCollectionBySlug.mockResolvedValue({
       slug: "nw_posts",
       fields: [],
@@ -273,6 +274,7 @@ describe("--non-interactive at a terminal", () => {
       seen.createInterface,
       seen.stepRun,
       seen.reconciled,
+      seen.openRegistry,
       ...Object.values(seen.registry),
     ]) {
       mock.mockReset();
@@ -285,10 +287,6 @@ describe("--non-interactive at a terminal", () => {
 
   const printedError = () =>
     errors.mock.calls.map(call => String(call[0])).join("\n");
-
-  it("the data-loss judgement is told nobody is there to ask", () => {
-    expect(isInteractiveTerminal()).toBe(false);
-  });
 
   it("users:create-admin asks for nothing and names --email", async () => {
     await createAdminAction(() => recordingContext())({}, new Command());
@@ -346,6 +344,8 @@ describe("--non-interactive at a terminal", () => {
     await expect(
       runPromote("nw_posts", recordingContext())
     ).rejects.toMatchObject({ code: 1 });
+    // Refused before the database is opened, not after.
+    expect(seen.openRegistry).not.toHaveBeenCalled();
     expect(seen.select).not.toHaveBeenCalled();
     expect(seen.confirm).not.toHaveBeenCalled();
     expect(seen.registry.deleteCollection).not.toHaveBeenCalled();
@@ -357,6 +357,8 @@ describe("--non-interactive at a terminal", () => {
     await expect(
       runDemote("nw_posts", recordingContext())
     ).rejects.toMatchObject({ code: 1 });
+    // Refused before the database is opened, not after.
+    expect(seen.openRegistry).not.toHaveBeenCalled();
     expect(seen.confirm).not.toHaveBeenCalled();
     expect(seen.registry.registerCollection).not.toHaveBeenCalled();
     expect(seen.registry.updateCollection).not.toHaveBeenCalled();

@@ -21,6 +21,7 @@
 
 import * as clack from "@clack/prompts";
 
+import { answered } from "../../../../cli/utils/prompt-cancelled";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { consoleLogger } from "../../../../shared/types";
 import { canPrompt } from "../../migrate/can-prompt";
@@ -80,13 +81,27 @@ function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
   return event.kind === "destructive_drop";
 }
 
-/** Asks at the terminal, defaulting to no; a cancelled prompt is a no. */
+/**
+ * Asks at the terminal, defaulting to no. A cancelled prompt (Ctrl+C) is not
+ * a no: it ends the run with exit 130 (`answered`).
+ */
 async function askInTerminal(question: string): Promise<boolean> {
-  const answer = await clack.confirm({
-    message: question,
-    initialValue: false,
-  });
-  return !clack.isCancel(answer) && answer;
+  return answered(
+    await clack.confirm({
+      message: question,
+      initialValue: false,
+    })
+  );
+}
+
+/**
+ * A prompt's answer, or, for Ctrl+C, the end of the run with exit 130
+ * (`answered`) once the prompt block is closed. A cancel is not the
+ * "Cancel everything" answer, which stops only the apply.
+ */
+function answeredOrClosed<T>(answer: T | symbol): Promise<T> {
+  if (clack.isCancel(answer)) clack.outro("Cancelled");
+  return answered(answer);
 }
 
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
@@ -287,7 +302,8 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
   // Walk classifier events in order. NOT-NULL kinds get a multi-step
   // (select kind -> text value if provide_default -> next event); type_change
-  // gets a single warning + Y/N. Any abort or cancel returns proceed=false.
+  // gets a single warning + Y/N. An abort or a no returns proceed=false; a
+  // cancel (Ctrl+C) ends the run with exit 130.
   private async runEventPrompts(
     events: ClassifierEvent[],
     kept: { answered: Deletion[]; unasked: Deletion[] } = {
@@ -326,11 +342,13 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           ].join("\n"),
           `Type change on ${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType}`
         );
-        const proceed = await clack.confirm({
-          message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
-          initialValue: false,
-        });
-        if (clack.isCancel(proceed) || proceed === false) {
+        const proceed = await answeredOrClosed(
+          await clack.confirm({
+            message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
+            initialValue: false,
+          })
+        );
+        if (!proceed) {
           clack.outro("Cancelled");
           return { resolutions, proceed: false };
         }
@@ -364,29 +382,24 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
         value: kind,
         label: labels[kind],
       }));
-      const choice = await clack.select({
-        message: "How do you want to handle this?",
-        options,
-      });
-      if (clack.isCancel(choice)) {
-        clack.outro("Cancelled");
-        return { resolutions, proceed: false };
-      }
-      const kind = choice;
+      const kind = await answeredOrClosed(
+        await clack.select({
+          message: "How do you want to handle this?",
+          options,
+        })
+      );
       if (kind === "abort") {
         clack.outro("Cancelled");
         return { resolutions, proceed: false };
       }
       if (kind === "provide_default") {
-        const value = await clack.text({
-          message: `Default value for "${event.columnName}":`,
-          validate: v =>
-            !v || v.trim().length === 0 ? "Cannot be empty" : undefined,
-        });
-        if (clack.isCancel(value)) {
-          clack.outro("Cancelled");
-          return { resolutions, proceed: false };
-        }
+        const value = await answeredOrClosed(
+          await clack.text({
+            message: `Default value for "${event.columnName}":`,
+            validate: v =>
+              !v || v.trim().length === 0 ? "Cannot be empty" : undefined,
+          })
+        );
         resolutions.push({
           kind: "provide_default",
           eventId: event.id,
@@ -498,16 +511,13 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           ? `rename:${compatible.toColumn}`
           : "drop_and_add";
 
-      const choice = await clack.select({
-        message: `Column "${first.fromColumn}" was removed in ${first.tableName}. What should happen?`,
-        options: selectOptions,
-        initialValue,
-      });
-
-      if (clack.isCancel(choice)) {
-        clack.outro("Cancelled");
-        throw new PromptCancelledError();
-      }
+      const choice = await answeredOrClosed(
+        await clack.select({
+          message: `Column "${first.fromColumn}" was removed in ${first.tableName}. What should happen?`,
+          options: selectOptions,
+          initialValue,
+        })
+      );
 
       if (typeof choice === "string" && choice.startsWith("rename:")) {
         const targetColumn = choice.slice("rename:".length);

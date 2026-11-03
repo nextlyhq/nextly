@@ -31,8 +31,6 @@ import {
   resolveEntityTables,
 } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
-import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import { judgeDataLoss } from "../../domains/schema/migrate/data-loss-consent";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { createContext, type CommandContext } from "../context";
 import { exitWithError } from "../errors";
@@ -44,7 +42,7 @@ import { withAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
-  askToDeleteInTerminal,
+  judgeDataLossAtTerminal,
   readDataLossConsent,
   requireConsented,
   type AcceptDataLossOption,
@@ -135,14 +133,12 @@ export async function runI18nRestore(
   // the restore, and the run names the consent.
   if (options.purge) {
     requireConsented(
-      await judgeDataLoss({
+      await judgeDataLossAtTerminal({
         deletions: [{ kind: "rows", table: "nextly_i18n_archive" }],
         consent: readDataLossConsent({
           flag: options.acceptDataLoss,
           warn: message => logger.warn(message),
         }),
-        interactive: canPrompt(),
-        ask: askToDeleteInTerminal,
         print: line => logger.info(line),
       })
     );
