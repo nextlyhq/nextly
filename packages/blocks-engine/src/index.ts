@@ -503,6 +503,31 @@ export type {
   ExposureTarget,
   PrunedVariant,
 } from "./exposure-planners";
+// Defining, renaming and deleting a component's variants, and the values each
+// presets, as the designer does in the component's own view. A variant's key
+// is its stable id; its name is unique per component. `@experimental` until the
+// component editor that uses them ships.
+export {
+  planAddVariant,
+  planDeleteVariant,
+  planRenameVariant,
+  planResetVariantValue,
+  planSetVariantValue,
+  variantOptions,
+} from "./variant-planners";
+export type {
+  NewVariantSources,
+  VariantEdit,
+  VariantEditProblem,
+  VariantEditRefusal,
+  VariantEditResult,
+  VariantOption,
+} from "./variant-planners";
+export { variantLabelKey } from "./variant-labels";
+// A placement's variant key, judged against its component on every write: a
+// key the write newly sets must name one of the component's variants.
+export { placementVariantIssues } from "./placement-variants";
+export type { PlacementVariantIssue } from "./placement-variants";
 export { stripRetiredExposures } from "./retired-exposures";
 export type {
   RetiredByComponent,
