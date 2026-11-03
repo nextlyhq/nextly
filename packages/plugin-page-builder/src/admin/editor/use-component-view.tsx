@@ -35,9 +35,12 @@ import {
 
 /** What the editor draws and hands on for "Edit component". */
 export interface ComponentView {
-  /** Opens a placed component in its own view; absent where not offered. */
+  /**
+   * Opens a component in its own view, from a placement when `nodeId` names
+   * one; absent where not offered.
+   */
   readonly onEditComponent:
-    | ((componentId: string, nodeId: string) => void)
+    | ((componentId: string, nodeId?: string) => void)
     | undefined;
   /** The banner over a component's own view; nothing over a page. */
   readonly banner: JSX.Element | null;

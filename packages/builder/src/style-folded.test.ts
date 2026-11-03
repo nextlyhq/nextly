@@ -39,17 +39,27 @@ describe("fontWeightOptions", () => {
 
   it("shows a stored keyword or an unlisted weight first, as stored", () => {
     expect(fontWeightOptions("bold")[0]).toEqual({
-      key: "bold",
+      key: "s:bold",
       label: "Bold",
       value: "bold",
     });
     expect(fontWeightOptions(450)[0]).toEqual({
-      key: "450",
+      key: "n:450",
       label: "450",
       value: 450,
     });
     // A listed weight is not repeated.
     expect(fontWeightOptions(700)).toHaveLength(11);
+  });
+
+  it("keeps a weight stored as text apart from the number it spells", () => {
+    // "700" as a string is not the 700 the list stores. Shown as its own
+    // choice, it can be seen and repaired by choosing Bold 700.
+    const options = fontWeightOptions("700");
+    expect(options[0]).toEqual({ key: "s:700", label: "700", value: "700" });
+    expect(options.find(option => option.key === "n:700")?.label).toBe(
+      "Bold 700"
+    );
   });
 });
 
@@ -58,6 +68,9 @@ describe("lineHeightFromText", () => {
     expect(lineHeightFromText("1.5")).toBe(1.5);
     expect(lineHeightFromText(" 2 ")).toBe(2);
     expect(lineHeightFromText(".8")).toBe(0.8);
+    // CSS's whole number grammar, exponents included.
+    expect(lineHeightFromText("1e2")).toBe(100);
+    expect(lineHeightFromText(".5e1")).toBe(5);
     expect(lineHeightFromText("24px")).toBe("24px");
     expect(lineHeightFromText("150%")).toBe("150%");
     expect(lineHeightFromText("normal")).toBe("normal");
