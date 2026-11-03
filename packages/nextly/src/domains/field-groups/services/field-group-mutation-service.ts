@@ -2088,7 +2088,11 @@ export class FieldGroupMutationService extends BaseService {
             : {
                 write: instanceWriteOf(
                   write,
-                  new Set(componentFields.map(field => field.name))
+                  new Set(
+                    componentFields.flatMap(field =>
+                      typeof field.name === "string" ? [field.name] : []
+                    )
+                  )
                 ),
               }),
         }
