@@ -373,6 +373,21 @@ describe("states", () => {
   });
 });
 
+describe("the add menu and the rest of the editor", () => {
+  it("leaves everything around it in the accessibility tree", async () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    render(<Hosted tokens={SITE} />);
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Add spacing, radius or shadow" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+});
+
 describe("import and export", () => {
   it("lists the exports with CSS last", async () => {
     render(<Hosted tokens={SITE} />);

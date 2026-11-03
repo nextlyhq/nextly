@@ -19,6 +19,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { settleTransitions } from "./support/axe-scan.mjs";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
@@ -123,6 +124,35 @@ const SURFACES: ReadonlyArray<{
     },
   })),
   {
+    name: "the Variables add menu",
+    open: async page => {
+      await railButton(page, "Design").click();
+      await page.getByRole("tab", { name: "Variables", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Add spacing, radius or shadow" })
+        .click();
+      await expect(page.getByRole("menu")).toBeVisible();
+    },
+  },
+  {
+    name: "the Style tab's More menu",
+    open: async page => {
+      await selectHeading(page);
+      await page.getByRole("tab", { name: "Style", exact: true }).click();
+      // The section's "More" button shows once the section is open.
+      const typography = page.locator(
+        '.nx-style-inspector [data-section="typography"]'
+      );
+      if ((await typography.getAttribute("data-state")) !== "open") {
+        await typography.locator("button").first().click();
+      }
+      await page
+        .getByRole("button", { name: "More typography properties" })
+        .click();
+      await expect(page.getByRole("menu")).toBeVisible();
+    },
+  },
+  {
     name: "the inspector's Style tab",
     open: async page => {
       await selectHeading(page);
@@ -201,6 +231,23 @@ interface Finding {
 }
 
 async function scan(page: Page): Promise<Finding[]> {
+  // Every running CSS transition finished first, as the shared scan does, so
+  // axe reads settled colours rather than a frame between two of them.
+  await settleTransitions(page);
+  // And every finite animation, such as a dialog's fade in: one sampled
+  // part-way through has colours it never settles on. An endless one, a
+  // spinner, is left alone, since it never finishes.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter(
+          animation =>
+            animation.effect?.getComputedTiming().endTime !== Infinity
+        )
+        .map(animation => animation.finished.catch(() => undefined))
+    )
+  );
   const results = await new AxeBuilder({ page }).withTags(AA_TAGS).analyze();
   // A scan that reached nothing reports zero violations, as a clean page does.
   expect(results.passes.length).toBeGreaterThan(10);

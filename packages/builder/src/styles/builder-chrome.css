@@ -1703,9 +1703,11 @@
   color: var(--nx-muted-foreground);
 }
 
+/* The accent fill with its own foreground: a site's brand accent replaces the
+   fill, and the page's foreground on it can fail contrast in either mode. */
 .nx-style-inspector__more:hover,
 .nx-style-inspector__more:focus-visible {
-  color: var(--nx-foreground);
+  color: var(--nx-accent-foreground);
   background: var(--nx-accent);
 }
 
