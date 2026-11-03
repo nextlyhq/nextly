@@ -2882,7 +2882,7 @@ export interface ApplyOptions {
  * unlock.
  */
 function layersLockRefusal(
-  op: BuilderOp,
+  op: Exclude<BuilderOp, { readonly kind: "envelope" }>,
   lockedId: string,
   where: LayersLockBreak["where"]
 ): string {
@@ -2934,6 +2934,9 @@ function assertKeepsLayersLocks(
   options: ApplyOptions
 ): void {
   if (options.layersLocks === "ignore") return;
+  // An envelope edit changes what placements may set, not a block, so no
+  // Layers lock stands in its way.
+  if (op.kind === "envelope") return;
   // Refused rather than exempting the inverse from the lock: see the insert
   // branch of `applyOp`. With the lock ignored, the inverse is a remove the
   // same option lets through, so the round trip still holds.

@@ -111,7 +111,9 @@ export function layersLockFacts(
 }
 
 /** What an op does to the block it addresses, as a refusal of it says. */
-function verbOf(op: BuilderOp): LockedVerb {
+function verbOf(
+  op: Exclude<BuilderOp, { readonly kind: "envelope" }>
+): LockedVerb {
   switch (op.kind) {
     case "remove":
       return "delete";
@@ -130,6 +132,8 @@ function factsOfBreak(
   op: BuilderOp,
   broken: LayersLockBreak
 ): LayersLockRefusalFacts | undefined {
+  // An envelope edit changes no block, so no lock is broken by one.
+  if (op.kind === "envelope") return undefined;
   const locked = findNode(document.nodes, broken.lockedId);
   if (locked === undefined) return undefined;
   if (broken.where === "destination" || op.kind === "insert") {
