@@ -48,6 +48,7 @@ import { settleLayoutRemovals } from "../layout-removal/settle";
 import { LAYOUT_REMOVAL_CONTEXT_KEY } from "../layout-removal/layout-removal-guard";
 import {
   layoutRemovalStore,
+  REMOVAL_LEASE_MS,
   type LayoutRemovalStore,
 } from "../layout-removal/store";
 import {
@@ -1334,6 +1335,77 @@ describe.each(getConfiguredTestDialects())(
 
         expect(await fence().removalOf(other)).toBeNull();
         expect((await makeDefault(cookie, other)).status).toBe(200);
+      });
+    });
+
+    describe("the sweep beside a removal still running", () => {
+      const token = "running0-0000-4000-8000-000000000000";
+      const past = () => new Date(Date.now() + REMOVAL_LEASE_MS + 60_000);
+
+      async function leftAtChecked(id: string): Promise<void> {
+        await fence().mark({
+          layoutId: id,
+          action: "delete",
+          token,
+          startedBy: null,
+          now: new Date(),
+        });
+        await fence().advance({
+          layoutId: id,
+          token,
+          from: "marked",
+          to: "checked",
+        });
+      }
+
+      function sweep(t: TestNextly, store: LayoutRemovalStore) {
+        return settleLayoutRemovals({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          store,
+          warn: () => {},
+          now: past,
+        });
+      }
+
+      it("clears a row left at checked once its lease is past", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await leftAtChecked(other);
+
+        await sweep(t, fence());
+
+        expect(await fence().removalOf(other)).toBeNull();
+      });
+
+      it("leaves a row that moved on after the sweep read it", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await leftAtChecked(other);
+        const store = fence();
+        // The removal finishes its scan and moves on between the sweep's read
+        // and its clear.
+        const racing: LayoutRemovalStore = {
+          ...store,
+          unsettled: async () => {
+            const read = await store.unsettled();
+            await store.advance({
+              layoutId: other,
+              token,
+              from: "checked",
+              to: "final",
+            });
+            return read;
+          },
+        };
+
+        await sweep(t, racing);
+
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "final",
+          token,
+        });
       });
     });
 

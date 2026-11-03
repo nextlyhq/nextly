@@ -164,13 +164,15 @@ async function requireRemovable(
 /** The pages naming the Layout, as the person may see them. */
 async function checkPages(
   deps: RemoveLayoutDeps,
-  layoutId: string
+  layoutId: string,
+  onProgress?: () => Promise<void>
 ): Promise<Omit<RemovalCheck, "isDefault">> {
   const scan = await scanLayoutReferences({
     nextly: deps.nextly,
     pages: deps.slugs.pages,
     layoutId,
     ...(deps.budget === undefined ? {} : { budget: deps.budget }),
+    ...(onProgress === undefined ? {} : { onProgress }),
   });
   const named = await readableTitles({
     nextly: deps.nextly,
@@ -264,12 +266,40 @@ async function advanceOrRefuse(
   }
 }
 
+/** How often a scan under the fence renews the row's lease. */
+const LEASE_RENEWAL_MS = 60_000;
+
+/**
+ * Renew the row's lease at `step` as a scan goes, at most once a minute, so a
+ * removal busy with a long scan never looks stopped to the sweep or to a later
+ * removal.
+ */
+function leaseKeeper(
+  deps: RemoveLayoutDeps,
+  layoutId: string,
+  token: string,
+  step: "checked"
+): () => Promise<void> {
+  let renewedAt = deps.now().getTime();
+  return async () => {
+    const now = deps.now().getTime();
+    if (now - renewedAt < LEASE_RENEWAL_MS) return;
+    renewedAt = now;
+    await deps.store.renew(layoutId, token, step);
+  };
+}
+
 /** Step 4: refuse while any page names the Layout, or the scan stopped short. */
 async function finalScan(
   deps: RemoveLayoutDeps,
-  layoutId: string
+  layoutId: string,
+  token: string
 ): Promise<void> {
-  const pages = await checkPages(deps, layoutId);
+  const pages = await checkPages(
+    deps,
+    layoutId,
+    leaseKeeper(deps, layoutId, token, "checked")
+  );
   if (pages.complete && pages.pages.length + pages.unreadable === 0) return;
   throw conflict(
     pagesUseItRefusal({
@@ -504,7 +534,7 @@ export async function removeLayout(
       from: "marked",
       to: "checked",
     });
-    await finalScan(deps, request.layoutId);
+    await finalScan(deps, request.layoutId, token);
     await copyThenRemove(deps, request, token);
   } catch (error) {
     // Nothing was removed: take this request's fence down. Fenced by token,

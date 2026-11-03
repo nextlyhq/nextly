@@ -159,8 +159,11 @@ export async function scanLayoutReferences(args: {
   pages: string;
   layoutId: string;
   budget?: number;
+  /** Called after each listing page, so a long scan can keep its lease. */
+  onProgress?: () => Promise<void>;
 }): Promise<ReferenceScan> {
   const { nextly, pages, layoutId } = args;
+  const progress = args.onProgress ?? (async () => {});
   const budget = args.budget ?? PAGE_READ_BUDGET;
   const found = new Map<string, PageReference>();
   let spent = 0;
@@ -186,7 +189,8 @@ export async function scanLayoutReferences(args: {
         }),
       { layout: { equals: layoutId } }
     ),
-    onPage: (items, { hasNext }) => {
+    onPage: async (items, { hasNext }) => {
+      await progress();
       for (const row of items) {
         spent += 1;
         const id = relationId(row);
@@ -223,6 +227,7 @@ export async function scanLayoutReferences(args: {
       {}
     ),
     onPage: async (items, { hasNext }) => {
+      await progress();
       const toRead: { id: string; title: string }[] = [];
       let unread = 0;
       for (const row of items) {

@@ -33,6 +33,10 @@
  * - at `restoring`, a restore that stopped part-way cannot tell whether its
  *   Layout was created, so it is settled and logged rather than run twice.
  *
+ * A row is removed only while it is exactly as the sweep read it: the same
+ * token, step and `updatedAt`. A removal that moved on after the read, or
+ * renewed its lease during a long scan, is left to the request that holds it.
+ *
  * It also drops an unpublish tombstone whose Layout is published again by a
  * write that ran no collection hooks (core's all-languages publish).
  *
@@ -196,7 +200,7 @@ async function finishFinal(
   removal: LayoutRemoval
 ): Promise<void> {
   if (!(await writeLanded(deps, removal))) {
-    await deps.store.stop(removal.layoutId, removal.token);
+    await deps.store.stopStale(removal);
     return;
   }
   const moved = await deps.store.advance({
@@ -216,7 +220,7 @@ async function sweepOne(
   switch (removal.step) {
     case "marked":
     case "checked":
-      await deps.store.stop(removal.layoutId, removal.token);
+      await deps.store.stopStale(removal);
       return;
     case "final":
       await finishFinal(deps, removal);

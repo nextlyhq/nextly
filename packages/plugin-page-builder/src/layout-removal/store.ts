@@ -106,6 +106,19 @@ export interface LayoutRemovalStore {
   /** Take `token`'s fence down. */
   stop(layoutId: string, token: string): Promise<boolean>;
   /**
+   * Take down a fence the sweep judged stale, only while it is still exactly
+   * as the sweep read it: the same token, step and `updatedAt`. A removal
+   * that moved on, or renewed its lease, after the read is left alone.
+   */
+  stopStale(
+    observed: Pick<LayoutRemoval, "layoutId" | "token" | "step" | "updatedAt">
+  ): Promise<boolean>;
+  /**
+   * Renew `token`'s lease at `step`, so a removal busy with a long scan never
+   * looks stopped. False when the row moved on or another request holds it.
+   */
+  renew(layoutId: string, token: string, step: RemovalStep): Promise<boolean>;
+  /**
    * Drop an unpublish removal's tombstone, so the Layout can be chosen again
    * once it is published. Rows at any other step are left alone.
    */
@@ -341,6 +354,35 @@ export function layoutRemovalStore(
       const changed = await db
         .delete(layoutRemovals)
         .where(both(eq(t().layoutId, layoutId), eq(t().token, token)));
+      return changed === 1;
+    },
+
+    stopStale: async observed => {
+      const changed = await db
+        .delete(layoutRemovals)
+        .where(
+          both(
+            eq(t().layoutId, observed.layoutId),
+            eq(t().token, observed.token),
+            eq(t().step, observed.step),
+            eq(t().updatedAt, observed.updatedAt)
+          )
+        );
+      return changed === 1;
+    },
+
+    renew: async (layoutId, token, step) => {
+      // Setting the step it already holds is the write; the table refreshes
+      // `updatedAt` on every update.
+      const changed = await db
+        .update(layoutRemovals, { step })
+        .where(
+          both(
+            eq(t().layoutId, layoutId),
+            eq(t().token, token),
+            eq(t().step, step)
+          )
+        );
       return changed === 1;
     },
 

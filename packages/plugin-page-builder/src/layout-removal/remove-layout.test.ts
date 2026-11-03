@@ -41,8 +41,10 @@ type Row = Record<string, unknown> & { id: string };
 /** The fence, in memory, with the stored one's compare-and-set rules. */
 function memoryStore(): LayoutRemovalStore & {
   rows: Map<string, LayoutRemoval>;
+  renewals: { layoutId: string; token: string; step: string }[];
 } {
   const rows = new Map<string, LayoutRemoval>();
+  const renewals: { layoutId: string; token: string; step: string }[] = [];
   const put = (removal: LayoutRemoval, patch: Partial<LayoutRemoval>) => {
     rows.set(removal.layoutId, { ...removal, ...patch, updatedAt: new Date() });
   };
@@ -56,6 +58,7 @@ function memoryStore(): LayoutRemovalStore & {
   };
   return {
     rows,
+    renewals,
     removalOf: async id => rows.get(id) ?? null,
     mark: async ({ layoutId, action, token, startedBy, now }) => {
       const existing = rows.get(layoutId);
@@ -91,6 +94,21 @@ function memoryStore(): LayoutRemovalStore & {
     stop: async (layoutId, token) => {
       if (rows.get(layoutId)?.token !== token) return false;
       rows.delete(layoutId);
+      return true;
+    },
+    stopStale: async observed => {
+      const removal = held(observed.layoutId, observed.token, observed.step);
+      if (removal?.updatedAt.getTime() !== observed.updatedAt.getTime()) {
+        return false;
+      }
+      rows.delete(observed.layoutId);
+      return true;
+    },
+    renew: async (layoutId, token, step) => {
+      const removal = held(layoutId, token, step);
+      if (removal === undefined) return false;
+      renewals.push({ layoutId, token, step });
+      put(removal, {});
       return true;
     },
     releaseTombstone: async layoutId => {
@@ -800,6 +818,43 @@ describe("the scan", () => {
   });
 });
 
+describe("a long scan under the fence", () => {
+  it("renews the row's lease as it goes, so it never looks stopped", async () => {
+    const s = site();
+    for (let i = 0; i < 250; i += 1) {
+      s.pages.push({
+        id: `p${String(i).padStart(3, "0")}`,
+        title: "P",
+        status: "published",
+        layout: null,
+      });
+    }
+    // Two minutes pass between every look at the clock.
+    let minutes = 0;
+    const started = Date.now();
+    const d = {
+      ...deps(s),
+      now: () => {
+        minutes += 2;
+        return new Date(started + minutes * 60_000);
+      },
+    };
+
+    const answer = await removeLayout(d, {
+      layoutId: "landing",
+      action: "delete",
+      dryRun: false,
+    });
+
+    expect(answer.message).toBe("The Layout was deleted.");
+    expect(d.store.renewals).toContainEqual({
+      layoutId: "landing",
+      token: "token-1",
+      step: "checked",
+    });
+  });
+});
+
 describe("the scan's cursor", () => {
   it("still reads a later page's working draft when a page it passed is deleted", async () => {
     const s = site();
@@ -959,6 +1014,32 @@ describe("the sweep", () => {
       expect(s.layouts.has("landing")).toBe(true);
     }
   );
+
+  it("leaves a row that moved on after the sweep read it", async () => {
+    const s = site();
+    const d = deps(s);
+    await leftAt(d.store, "checked");
+    const unsettled = d.store.unsettled.bind(d.store);
+    // The request holding the row moves it on between the sweep's read and
+    // its clear, as a long scan finishing would.
+    d.store.unsettled = async () => {
+      const read = await unsettled();
+      await d.store.advance({
+        layoutId: "landing",
+        token: "stopped",
+        from: "checked",
+        to: "final",
+      });
+      return read;
+    };
+
+    await settleLayoutRemovals({ ...d, now: stale });
+
+    expect(d.store.rows.get("landing")).toMatchObject({
+      step: "final",
+      token: "stopped",
+    });
+  });
 
   it("leaves a row inside its lease to the request that holds it", async () => {
     const s = site();
