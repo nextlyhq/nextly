@@ -1600,6 +1600,15 @@
  * auto margins centre it while it is smaller and resolve to nothing once it is
  * larger, so an enlarged page scrolls from its left edge with nothing clipped.
  */
+/*
+ * The canvas region, while it scrolls a frame painted past it: a tab stop of
+ * its own, so its focus is drawn.
+ */
+.nx-canvas-scroller:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
 .nx-canvas-stage {
   display: flex;
   min-width: 100%;
@@ -1615,7 +1624,10 @@
 .nx-canvas-frame {
   position: relative;
   flex: none;
-  margin: auto;
+  /* Centred across the region and held at its top, just under the top bar,
+     as the page sits on any screen; a page shorter than the region leaves
+     the room below it rather than an empty band above. */
+  margin: 0 auto auto;
   outline: 1px solid var(--nx-builder-border);
   box-shadow: var(--shadow-md);
 }
@@ -1730,6 +1742,24 @@
   outline-color: var(--nx-builder-component);
 }
 
+/*
+ * A selected block locked in Layers, by its own lock or one around it: the
+ * ring is dashed, so the canvas says it is held before anything is tried on
+ * it.
+ */
+.nx-canvas-mark[data-mark="selected"][data-locked] {
+  outline-style: dashed;
+}
+
+/*
+ * A mark cut to the part of a block an ancestor's clip leaves visible: the
+ * halo band would run along edges the page does not show, so only the ring is
+ * drawn.
+ */
+.nx-canvas-mark[data-clipped] {
+  box-shadow: none;
+}
+
 .nx-canvas-mark[data-mark="drop-parent"] {
   outline: 2px dashed var(--nx-builder-select);
   outline-offset: 2px;
@@ -1824,35 +1854,55 @@
  * to the message rather than to the container beneath.
  */
 .nx-drop-refusal {
+  /* Over the container that refused, in the chrome layer over the canvas. */
   position: absolute;
   z-index: 3;
-  pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  max-width: 18rem;
-  padding: 0.5rem 0.625rem;
-  border-radius: var(--radius);
-  background: var(--nx-destructive);
-  color: var(--nx-destructive-foreground);
-  box-shadow: var(--shadow-md);
-  font-size: 0.8125rem;
-  line-height: 1.4;
-}
-
-.nx-drop-refusal__why {
-  font-weight: 600;
 }
 
 /*
- * The remedy, quieter than the refusal itself.
- *
- * Deliberately not hidden on a narrow canvas: naming what the region DOES take
- * is what makes this an instruction rather than a wall, and it is the half an
- * author acts on.
+ * A refused drop's notice, on the canvas and in Layers alike: the editor's
+ * notice surface with a red edge and a warning mark rather than a red fill,
+ * so the reason reads beside ordinary content at AA contrast in both themes.
+ * The remedy is quieter than the refusal, and never hidden: naming what the
+ * spot DOES take is what makes this an instruction rather than a wall.
  */
-.nx-drop-refusal__takes {
-  opacity: 0.9;
+.nx-refusal-notice {
+  width: max-content;
+  max-width: 18rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-left: 3px solid var(--nx-destructive);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.nx-refusal-notice__mark {
+  flex: none;
+  margin-top: 0.0625rem;
+  color: var(--nx-destructive);
+}
+
+.nx-refusal-notice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.nx-refusal-notice__why {
+  font-weight: var(--font-weight-semibold);
+}
+
+.nx-refusal-notice__takes {
+  color: var(--nx-builder-text-muted);
 }
 
 /*
@@ -2032,42 +2082,6 @@
      canvas it overlaps, and never on the rows it explains. */
   position: fixed;
   z-index: 50;
-  width: max-content;
-  max-width: 18rem;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.5rem 0.625rem;
-  border: 1px solid var(--nx-builder-border);
-  border-left: 3px solid var(--nx-destructive);
-  border-radius: var(--radius-md);
-  background: var(--nx-builder-surface-raised);
-  color: var(--nx-builder-text);
-  box-shadow: var(--shadow-md);
-  font-size: var(--text-xs);
-  line-height: 1.45;
-  pointer-events: none;
-}
-
-.nx-layers-drop-refusal__mark {
-  flex: none;
-  margin-top: 0.0625rem;
-  color: var(--nx-destructive);
-}
-
-.nx-layers-drop-refusal__text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  min-width: 0;
-}
-
-.nx-layers-drop-refusal__why {
-  font-weight: var(--font-weight-semibold);
-}
-
-.nx-layers-drop-refusal__takes {
-  color: var(--nx-builder-text-muted);
 }
 
 .nx-layers-panel__note {
@@ -2324,16 +2338,6 @@
      at runtime; the fallback is the same step. */
   font-size: var(--text-xs, 0.75rem);
   white-space: nowrap;
-}
-
-/*
- * A selected block locked in Layers, by its own lock or one around it: the
- * selection ring is dashed, so the canvas says it is held before anything is
- * tried on it. Only a canvas node carries the lock mark, so the node marker is
- * not repeated here; this still outranks the selection ring's own rule.
- */
-.nx-canvas [data-nx-locked][data-nx-selected] {
-  outline-style: dashed;
 }
 
 /*

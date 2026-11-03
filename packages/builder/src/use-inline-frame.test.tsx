@@ -139,4 +139,36 @@ describe("Enter on a selected block, on a canvas in a frame", () => {
     expect(passage).not.toBeNull();
     expect(attach.mock.calls[0]?.[0]).toBe(passage);
   });
+
+  it("takes the caret into the frame's new page when the frame replaces its document mid-edit", () => {
+    registerArticle();
+    const first = framedPage();
+    let frame = first.frame;
+    function Wrapper({ children }: { children?: React.ReactNode }) {
+      return (
+        <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>
+      );
+    }
+    const { result, rerender } = renderHook(
+      () => useInlineText(editorState()),
+      {
+        wrapper: Wrapper,
+      }
+    );
+    // The pointer route: the element pressed, in the first page.
+    const pressed = first.inside.querySelector('[data-nx-prop="caption"]');
+    act(() => {
+      result.current.onDoubleClick({ target: pressed });
+    });
+    expect(pressed?.getAttribute("contenteditable")).toBe("plaintext-only");
+
+    // The frame's page is replaced, as a reload does: the same block, drawn
+    // again in a new document.
+    const second = framedPage();
+    frame = second.frame;
+    rerender();
+
+    const redrawn = second.inside.querySelector('[data-nx-prop="caption"]');
+    expect(redrawn?.getAttribute("contenteditable")).toBe("plaintext-only");
+  });
 });

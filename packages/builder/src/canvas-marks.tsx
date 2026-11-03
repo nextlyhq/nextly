@@ -27,6 +27,7 @@ import {
   CANVAS_ROOT_CLASS,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
+  LOCKED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -37,9 +38,11 @@ import {
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
+  clippedByAncestor,
   overlaySpaceOf,
   renderedScale,
   usedRadiiOf,
+  visiblePartOf,
   type OverlaySpace,
 } from "./geometry-dom";
 
@@ -50,6 +53,10 @@ interface Mark {
   readonly secondary: boolean;
   /** A component placement, drawn in the component colour. */
   readonly component: boolean;
+  /** A block locked in Layers, by its own lock or one around it: dashed. */
+  readonly locked: boolean;
+  /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
+  readonly clipped: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -67,6 +74,8 @@ function sameMarks(a: readonly Mark[], b: readonly Mark[]): boolean {
       mark.kind === other.kind &&
       mark.secondary === other.secondary &&
       mark.component === other.component &&
+      mark.locked === other.locked &&
+      mark.clipped === other.clipped &&
       mark.radius === other.radius &&
       mark.rect.x === other.rect.x &&
       mark.rect.y === other.rect.y &&
@@ -95,28 +104,43 @@ function borderRadiusOf(radii: CornerRadii): string {
  * style leaves unresolved: over a frame the mark is the only ring the block
  * has, so a block whose shape cannot be described keeps a square one rather
  * than none.
+ *
+ * A block an ancestor clips (`overflow: hidden` or `clip`) is marked over the
+ * part left visible, square and `clipped`: the page draws nothing of it past
+ * the clip, and a ring drawn there would mark what the reader cannot see.
+ * Where the clip cannot be described, the whole box keeps a square ring.
  */
 function outlineOf(
   marked: Element,
   root: HTMLElement,
   space: OverlaySpace
-): { rect: Rect; radius: string } {
+): { rect: Rect; radius: string; clipped: boolean } {
   const own = canvasContentRect(marked, root);
-  const rect = space.place(own);
   const style = marked.ownerDocument.defaultView?.getComputedStyle(marked);
   const scale = renderedScale(marked, root);
   const radii =
     style === undefined || !scale.describable
       ? undefined
       : usedRadiiOf(style, own, scale);
-  const drawn =
+  // In the root's coordinates, where the clip is asked about.
+  const inRoot =
     radii === undefined
       ? SQUARE_CORNERS
-      : scaleCornerRadii(radii, {
-          x: scale.x * space.scale,
-          y: scale.y * space.scale,
-        });
-  return { rect, radius: borderRadiusOf(drawn) };
+      : scaleCornerRadii(radii, { x: scale.x, y: scale.y });
+  if (clippedByAncestor(marked, root, inRoot)) {
+    const visible = visiblePartOf(marked, root) ?? own;
+    return {
+      rect: space.place(visible),
+      radius: borderRadiusOf(SQUARE_CORNERS),
+      clipped: true,
+    };
+  }
+  const drawn = scaleCornerRadii(inRoot, { x: space.scale, y: space.scale });
+  return {
+    rect: space.place(own),
+    radius: borderRadiusOf(drawn),
+    clipped: false,
+  };
 }
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
@@ -132,34 +156,23 @@ function marksOf(element: HTMLElement): readonly Mark[] {
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
       if (marked.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
-      const { rect, radius } = outlineOf(marked, root, space);
+      const outline = outlineOf(marked, root, space);
+      const plain = { secondary: false, component: false, locked: false };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
       if (selected !== null) {
         found.push({
+          ...outline,
           kind: "selected",
           secondary: selected !== "primary",
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
-          rect,
-          radius,
+          locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
         });
       }
       if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
-        found.push({
-          kind: "drop-parent",
-          secondary: false,
-          component: false,
-          rect,
-          radius,
-        });
+        found.push({ ...outline, ...plain, kind: "drop-parent" });
       }
       if (marked.hasAttribute(DROP_REFUSED_ATTRIBUTE)) {
-        found.push({
-          kind: "drop-refused",
-          secondary: false,
-          component: false,
-          rect,
-          radius,
-        });
+        found.push({ ...outline, ...plain, kind: "drop-refused" });
       }
     });
   return found;
@@ -214,6 +227,8 @@ export function CanvasMarks(): React.JSX.Element {
           data-mark={mark.kind}
           data-secondary={mark.secondary ? "" : undefined}
           data-component={mark.component ? "" : undefined}
+          data-locked={mark.locked ? "" : undefined}
+          data-clipped={mark.clipped ? "" : undefined}
           style={{
             left: mark.rect.x,
             top: mark.rect.y,

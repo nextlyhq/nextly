@@ -477,7 +477,7 @@ describe("useBlockKeyboardActions", () => {
     const said = screen.getByRole("status").textContent ?? "";
     // A REASON, not merely that something failed — the assertion the previous
     // wording could not make, since "could not be moved" is true of both.
-    expect(said).toMatch(/has to sit inside a container/i);
+    expect(said).toMatch(/has to go inside a container/i);
     // And the remedy, which is what turns a refusal into an instruction.
     expect(said).toMatch(/goes inside/i);
   });
@@ -537,7 +537,7 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.apply).not.toHaveBeenCalled();
     const said = screen.getByRole("status").textContent ?? "";
-    expect(said).toMatch(/has to sit inside a container/i);
+    expect(said).toMatch(/has to go inside a container/i);
   });
 
   it("indents into a component instance through the slot its component exposes, given the definitions", () => {

@@ -121,9 +121,22 @@ test.describe("the editor inside locked areas", () => {
 
     // Refused while the pointer is still over it, in the lock's words, drawn
     // over the frame in the editor's document.
-    await expect(canvasLayer(page).locator(".nx-drop-refusal")).toContainText(
-      "This area of Fixed row is locked."
-    );
+    const notice = canvasLayer(page).locator(".nx-drop-refusal");
+    await expect(notice).toContainText("This area of Fixed row is locked.");
+    // The neutral notice Layers draws too: the editor's surface with a red
+    // edge and a warning mark, not a red fill.
+    const look = await notice.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        fill: style.backgroundColor,
+        edge: style.borderLeftColor,
+        edgeWidth: style.borderLeftWidth,
+        mark: element.querySelector("svg") !== null,
+      };
+    });
+    expect(look.edgeWidth).toBe("3px");
+    expect(look.mark).toBe(true);
+    expect(look.fill).not.toBe(look.edge);
     await page.mouse.up();
     expect(await tree(page)).toEqual(PLACED);
     expect(await undoDepth(page)).toBe(0);

@@ -1423,10 +1423,10 @@ describe("the drag in flight is drawn on the canvas", () => {
 
     // The whole point of the row: the reason the engine computed reaches the
     // author, in words, naming the container and what it would accept.
-    expect(getByText("Box does not take a Leaf.")).toBeTruthy();
+    expect(getByText("A Leaf can't go inside this Box.")).toBeTruthy();
     // `wrong-parent` carries the MOVING block's valid parents, so the remedy
     // says where the leaf can go — never that the box accepts a Twice.
-    expect(getByText("Leaf goes inside Twice")).toBeTruthy();
+    expect(getByText("A Leaf goes inside a Twice.")).toBeTruthy();
   });
 
   it("draws no refusal while a target is still committed", async () => {
@@ -1463,7 +1463,7 @@ describe("the drag in flight is drawn on the canvas", () => {
       container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)
     ).not.toBeNull();
     expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
-    expect(queryByText(/does not take/)).toBeNull();
+    expect(queryByText(/can't go/)).toBeNull();
   });
 
   it("draws no drag marks at all when no drag is supplied", async () => {

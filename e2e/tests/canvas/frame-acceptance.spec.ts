@@ -596,6 +596,73 @@ function expectAligned(mark: Box, block: Box, what: string): void {
   ).toBeLessThanOrEqual(1);
 }
 
+test.describe("the frame in the canvas region", () => {
+  /** How far the frame's top edge sits under the canvas region's. */
+  async function topGap(page: Page): Promise<number> {
+    const region = await page
+      .getByRole("region", { name: "Canvas" })
+      .boundingBox();
+    const box = await page.locator("[data-nx-canvas-frame-box]").boundingBox();
+    if (region === null || box === null) throw new Error("no layout");
+    return box.y - region.y;
+  }
+
+  test("sits just under the top bar at Fit and at 50%, rather than centred", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openEditorWith(page, [text("gap", "A short page")], "gap");
+    // At Fit the painted page is shorter than the region, and still starts
+    // at the region's own gutter rather than half way down.
+    expect(Math.abs((await topGap(page)) - 16)).toBeLessThanOrEqual(1);
+    await chooseZoom(page, "50%");
+    await expect.poll(() => topGap(page)).toBeGreaterThan(0);
+    expect(Math.abs((await topGap(page)) - 16)).toBeLessThanOrEqual(1);
+  });
+
+  test("scrolls from the keyboard when the zoom paints the frame past the region", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openEditorWith(
+      page,
+      [text("wide", "A page zoomed past its region")],
+      "wide"
+    );
+    await chooseZoom(page, "200%");
+    const region = page.getByRole("region", { name: "Canvas" });
+    // The region itself scrolls the painted frame; it is a tab stop of its
+    // own while it does, and keeps focus rather than handing it on.
+    await expect(region).toHaveAttribute("tabindex", "0");
+    await region.focus();
+    await expect(region).toBeFocused();
+    const before = await region.evaluate(element => element.scrollLeft);
+    for (let press = 0; press < 5; press += 1) {
+      await page.keyboard.press("ArrowRight");
+    }
+    await expect
+      .poll(() => region.evaluate(element => element.scrollLeft))
+      .toBeGreaterThan(before);
+  });
+});
+
+test.describe("a locked block's ring", () => {
+  test("is dashed over the frame", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openEditorWith(
+      page,
+      [{ ...text("held", "A locked block"), locked: true }],
+      "held"
+    );
+    // A locked block still selects, so it can be unlocked.
+    await canvasBlock(page, "held").click();
+    const ring = canvasLayer(page).locator(
+      '.nx-canvas-mark[data-mark="selected"]'
+    );
+    await expect(ring).toHaveCSS("outline-style", "dashed");
+  });
+});
+
 test.describe("chrome drawn over the frame stays on the block", () => {
   test.describe.configure({ timeout: 240_000 });
 

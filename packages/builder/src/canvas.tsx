@@ -88,6 +88,7 @@ import {
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { useNearestThemeMarker } from "./nearest-theme";
+import { RefusalNotice } from "./refusal-notice";
 import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
@@ -1483,35 +1484,21 @@ function DropRefusalNotice({
   }, [parentId, headline, remedy, framed, canvasFrame]);
 
   return (
-    <div
+    <RefusalNotice
       ref={notice}
       className="nx-drop-refusal"
-      // Chrome drawn over the page rather than part of it, so hit-testing and
-      // the style inspector both skip it.
-      {...{ [CHROME_ATTRIBUTE]: "" }}
       style={at === null ? undefined : { left: at.x, top: at.y }}
       /*
        * NOT announced, matching {@link DropIndicator} rather than differing
        * from it: this describes a POINTER gesture, and a live region here
-       * would speak to someone who is not the one dragging.
-       *
-       * The spoken counterpart is `keyboard-actions`, which refuses a move the
-       * nesting rule forbids and announces the same reason and remedy through
-       * its own live region. `keyboardMovePosition` stays purely positional —
-       * it answers where a block goes, never whether it may — so the question
-       * is asked by the wiring on both routes, of one function.
-       *
-       * Which is why announcing here would be wrong rather than redundant: it
-       * would put the sentence on a pointer gesture, spoken to someone who is
-       * not the one dragging.
+       * would speak to someone who is not the one dragging. The spoken
+       * counterpart is `keyboard-actions`, which refuses a move the nesting
+       * rule forbids and announces the same reason and remedy through its own
+       * live region, asked of the same wording function.
        */
-      aria-hidden="true"
-    >
-      <span className="nx-drop-refusal__why">{headline}</span>
-      {remedy === null ? null : (
-        <span className="nx-drop-refusal__takes">{remedy}</span>
-      )}
-    </div>
+      headline={headline}
+      remedy={remedy}
+    />
   );
 }
 

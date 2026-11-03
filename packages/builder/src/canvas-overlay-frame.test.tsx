@@ -270,6 +270,11 @@ describe("chrome drawn over a frame lines up with the page", () => {
     await act(async () => undefined);
     const notice = container.querySelector<HTMLElement>(".nx-drop-refusal");
     expect(notice).not.toBeNull();
+    // The one refusal notice Layers draws too: the neutral surface with the
+    // warning mark, the reason and what the spot takes.
+    expect(notice?.classList.contains("nx-refusal-notice")).toBe(true);
+    expect(notice?.querySelector(".nx-refusal-notice__mark")).not.toBeNull();
+    expect(notice?.querySelector(".nx-refusal-notice__why")).not.toBeNull();
     // Nothing of the editor's chrome is drawn into the page.
     expect(frame.contentDocument?.querySelector(".nx-drop-refusal")).toBeNull();
   });

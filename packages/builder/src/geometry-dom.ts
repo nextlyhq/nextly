@@ -1346,6 +1346,65 @@ export function clippedByAncestor(
 }
 
 /**
+ * The part of `element`'s box its clipping ancestors leave visible, in the
+ * canvas's content coordinates: the box cut to every ancestor's clip, on each
+ * axis that ancestor clips. `null` when nothing of it is left, or when a clip
+ * cannot be described (an ancestor not aligned with the axes), which leaves
+ * the caller its own fallback.
+ *
+ * Read from the same per-ancestor answer {@link clippedByAncestor} reads, so
+ * the box that is said to be cut and the part said to be visible come from
+ * one reading of each ancestor.
+ */
+export function visiblePartOf(
+  element: Element,
+  root: HTMLElement
+): Rect | null {
+  const view = element.ownerDocument.defaultView;
+  if (view === null) return null;
+  const box = element.getBoundingClientRect();
+  const edges = {
+    left: box.left,
+    top: box.top,
+    right: box.right,
+    bottom: box.bottom,
+  };
+  const described = !anyAncestorCuts(element, root, node => {
+    const context = ancestorClipContext(node, view, root);
+    if (context.kind === "cut") return true;
+    if (context.kind === "clips") narrowTo(edges, context);
+    return false;
+  });
+  if (!described || edges.right <= edges.left || edges.bottom <= edges.top) {
+    return null;
+  }
+  return clientRectInCanvas(
+    {
+      x: edges.left,
+      y: edges.top,
+      width: edges.right - edges.left,
+      height: edges.bottom - edges.top,
+    },
+    root
+  );
+}
+
+/** Cut `edges` to one ancestor's clip, on each axis the ancestor clips. */
+function narrowTo(
+  edges: { left: number; top: number; right: number; bottom: number },
+  context: { clipsX: boolean; clipsY: boolean; clip: EdgeBounds }
+): void {
+  if (context.clipsX) {
+    edges.left = Math.max(edges.left, context.clip.left);
+    edges.right = Math.min(edges.right, context.clip.right);
+  }
+  if (context.clipsY) {
+    edges.top = Math.max(edges.top, context.clip.top);
+    edges.bottom = Math.min(edges.bottom, context.clip.bottom);
+  }
+}
+
+/**
  * Walks the ancestors strictly between `element` and `root`, reporting
  * whether any one of them satisfies `cut`.
  *

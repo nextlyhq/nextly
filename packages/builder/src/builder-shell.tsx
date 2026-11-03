@@ -7,6 +7,7 @@ import {
   ResizablePanelGroup,
   ShortcutProvider,
   TooltipProvider,
+  useIsomorphicLayoutEffect,
   useShortcuts,
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
@@ -1315,6 +1316,34 @@ function useSeparatorRegionEscape(
  * cycling focuses it, and dropping either would lose the canvas as a cycle
  * target — which reads as a focus bug rather than a markup change.
  */
+/**
+ * Whether `element` has content past its own box to scroll to, kept current
+ * as it or what it holds changes size: the painted frame grows past the
+ * region at a zoom, and the region narrows with the panels beside it.
+ */
+function useScrollsItsContent(element: HTMLElement | null): boolean {
+  const [overflows, setOverflows] = React.useState(false);
+  useIsomorphicLayoutEffect(() => {
+    if (element === null) return;
+    const measure = () => {
+      setOverflows(
+        element.scrollWidth > element.clientWidth ||
+          element.scrollHeight > element.clientHeight
+      );
+    };
+    measure();
+    const view = element.ownerDocument.defaultView;
+    if (view === null || typeof view.ResizeObserver !== "function") return;
+    const observer = new view.ResizeObserver(measure);
+    observer.observe(element);
+    // What the region holds, whose size the zoom changes while the region's
+    // own stays put.
+    for (const child of Array.from(element.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [element]);
+  return overflows;
+}
+
 function CanvasRegion({
   regionRef,
   children,
@@ -1325,24 +1354,37 @@ function CanvasRegion({
   // The frame the canvas is drawn in, which focus arriving on the region is
   // handed on to.
   const canvasFrame = useCanvasFrame();
+  const [element, setElement] = React.useState<HTMLElement | null>(null);
+  const ref = React.useCallback(
+    (next: HTMLElement | null) => {
+      regionRef(next);
+      setElement(next);
+    },
+    [regionRef]
+  );
+  const overflows = useScrollsItsContent(element);
+  // Steps aside for the frame only while there is nothing here to scroll.
+  const handsOn = canvasFrame.frame !== null && !overflows;
   return (
     <section
-      ref={regionRef}
+      ref={ref}
       /*
-       * `0`, not `-1`, for a canvas in this document. This region
-       * SCROLLS, and nothing inside it is focusable — blocks are
-       * selected by pointer, not by tab — so at `-1` a keyboard user
-       * could not scroll the canvas at all.
+       * `0`, not `-1`, wherever this region SCROLLS: nothing inside it that
+       * the keyboard can reach scrolls it — blocks are selected by pointer,
+       * not by tab, and arrow keys in a frame scroll only the frame's own
+       * page — so at `-1` a keyboard user could not scroll the canvas at all.
+       * A canvas in this document, or a frame painted past the region at a
+       * zoom.
        *
-       * A canvas in a frame is its own tab stop, and its page
+       * Otherwise a canvas in a frame is its own tab stop, and its page
        * scrolls inside it, so the region steps aside: `-1` keeps it
        * focusable for F6, and focus arriving on it goes on into the
        * frame. Kept as a stop as well it would be a trap — Shift+Tab
        * out of the frame would land here and be sent back in.
        */
-      tabIndex={canvasFrame.frame === null ? 0 : -1}
+      tabIndex={handsOn ? -1 : 0}
       onFocus={event => {
-        if (event.target !== event.currentTarget) return;
+        if (!handsOn || event.target !== event.currentTarget) return;
         canvasFrame.frame?.focus();
       }}
       aria-label="Canvas"
@@ -1366,7 +1408,7 @@ function CanvasRegion({
        * editing surface.
        */
       style={{ padding: CANVAS_GUTTER }}
-      className="h-full overflow-auto"
+      className="nx-canvas-scroller h-full overflow-auto"
     >
       {children}
     </section>

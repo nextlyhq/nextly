@@ -68,6 +68,19 @@ beforeAll(() => {
           createElement("div", { className }),
       },
       {
+        // A block that clips what it holds: its child sits partly outside it.
+        name: "acme/clip",
+        version: 1,
+        description: "A block that clips its child.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement(
+            "div",
+            { className, style: { overflow: "hidden" }, "data-clip": "" },
+            createElement("div", { [NODE_ID_ATTRIBUTE]: "inner" })
+          ),
+      },
+      {
         // A block that draws its child twice: the shape of
         // `core/collection-loop`, which renders its children once per entry.
         name: "acme/twice",
@@ -203,5 +216,73 @@ describe("selection marks", () => {
     );
     await act(async () => undefined);
     expect(halosIn(container)).toHaveLength(0);
+  });
+
+  it("dashes the ring of a locked block, carried onto the mark", async () => {
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "a", type: "acme/leaf", version: 1, props: {}, locked: true },
+            { id: "b", type: "acme/leaf", version: 1, props: {} },
+          ],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedIds={["a", "b"]}
+        selectedId="a"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    // The locked block's mark says so; the free one's does not.
+    expect(
+      halosIn(container).map(mark => mark.hasAttribute("data-locked"))
+    ).toEqual([true, false]);
+  });
+
+  it("draws only the part of a block its clipping ancestor leaves visible", async () => {
+    /*
+     * The page's own outline used to be clipped with the block; over the
+     * frame the mark is drawn outside the page and has to be cut to the
+     * visible part itself, or it rings an area the reader cannot see.
+     */
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-clip")) return new DOMRect(0, 0, 100, 50);
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "inner") {
+          return new DOMRect(50, 20, 100, 100);
+        }
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "clip", type: "acme/clip", version: 1, props: {} }],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="inner"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    const mark = await waitFor(() => {
+      const [found] = halosIn(container);
+      if (found === undefined) throw new Error("no mark yet");
+      return found as HTMLElement;
+    });
+    expect({
+      left: mark.style.left,
+      top: mark.style.top,
+      width: mark.style.width,
+      height: mark.style.height,
+    }).toEqual({ left: "50px", top: "20px", width: "50px", height: "30px" });
+    // Cut by the clip, so the halo band is not drawn along the cut edges.
+    expect(mark.hasAttribute("data-clipped")).toBe(true);
   });
 });

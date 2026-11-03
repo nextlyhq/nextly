@@ -320,8 +320,20 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
    */
   useEffect(() => {
     if (editing === null) return;
+    /*
+     * The element a press handed over, while it is still the page's: a frame
+     * that replaces its document mid-edit leaves it in the discarded page, and
+     * the value is then found again in the page the canvas now draws.
+     */
+    const held = elementRef.current;
+    const current =
+      held !== null &&
+      held.isConnected &&
+      (canvasDocument === null || held.ownerDocument === canvasDocument)
+        ? held
+        : null;
     const element =
-      elementRef.current ??
+      current ??
       (canvasDocument === null
         ? null
         : editableElement(canvasDocument, editing));

@@ -452,3 +452,39 @@ describe("a Layout region drawn in the canvas frame", () => {
     expect(CHROME.includes(".nx-canvas-region")).toBe(false);
   });
 });
+
+describe("the marks drawn over the frame", () => {
+  it("dash a locked block's ring and drop the halo where a clip cuts the mark", () => {
+    expect(
+      declared(
+        ruleFor('.nx-canvas-mark[data-mark="selected"][data-locked]'),
+        "outline-style"
+      )
+    ).toBe("dashed");
+    expect(
+      declared(ruleFor(".nx-canvas-mark[data-clipped]"), "box-shadow")
+    ).toBe("none");
+    // The page's elements are in the frame, where this sheet never reaches, so
+    // a rule styling a locked block's own outline would mark nothing.
+    expect(CHROME.includes("[data-nx-locked][data-nx-selected]")).toBe(false);
+  });
+});
+
+describe("a refused drop's notice", () => {
+  it("is one neutral notice with a red edge, on the canvas and in Layers alike", () => {
+    const notice = ruleFor(".nx-refusal-notice");
+    expect(declared(notice, "background")).toBe(
+      "var(--nx-builder-surface-raised)"
+    );
+    expect(declared(notice, "color")).toBe("var(--nx-builder-text)");
+    expect(declared(notice, "border-left")).toBe(
+      "3px solid var(--nx-destructive)"
+    );
+    // Each place only positions it: neither paints a fill of its own.
+    for (const place of [".nx-drop-refusal", ".nx-layers-drop-refusal"]) {
+      const rule = ruleFor(place);
+      expect(declared(rule, "background"), place).toBe(undefined);
+      expect(declared(rule, "background-color"), place).toBe(undefined);
+    }
+  });
+});
