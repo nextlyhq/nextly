@@ -19,6 +19,7 @@ import {
   createContext,
   useContext,
   useLayoutEffect,
+  useMemo,
   type JSX,
   type ReactNode,
   type RefObject,
@@ -58,6 +59,20 @@ const NO_RECOVERY_POINT: RecoveryPointState = {
 const RecoveryPointContext =
   createContext<RecoveryPointState>(NO_RECOVERY_POINT);
 
+/**
+ * When the hosted document was last stored, so a surface can report it saved
+ * from the moment it opens. Null for a new document, or one with no readable
+ * time.
+ */
+const StoredAtContext = createContext<Date | null>(null);
+
+/** The stored time a document's `updatedAt` names, or null when it names none. */
+function storedTimeOf(updatedAt: string | undefined): Date | null {
+  if (updatedAt === undefined) return null;
+  const time = Date.parse(updatedAt);
+  return Number.isNaN(time) ? null : new Date(time);
+}
+
 export function DocumentActionsHost({
   input,
   recovery = NO_RECOVERY_POINT,
@@ -69,10 +84,15 @@ export function DocumentActionsHost({
   children: ReactNode;
 }): JSX.Element {
   const documentActions = useDocumentActionBindings(input);
+  const updatedAt = input.entry?.updatedAt;
+  // Keyed on the string, so the same stored time is the same Date each render.
+  const storedAt = useMemo(() => storedTimeOf(updatedAt), [updatedAt]);
   return (
     <DocumentActionsContext.Provider value={documentActions}>
       <RecoveryPointContext.Provider value={recovery}>
-        {children}
+        <StoredAtContext.Provider value={storedAt}>
+          {children}
+        </StoredAtContext.Provider>
       </RecoveryPointContext.Provider>
       <DocumentActionConfirmations
         confirmations={documentActions.confirmations}
@@ -86,6 +106,11 @@ export function DocumentActionsHost({
 /** The document's recovery point, or none outside a host that records one. */
 export function useHostedRecoveryPoint(): RecoveryPointState {
   return useContext(RecoveryPointContext);
+}
+
+/** When the hosted document was last stored, or null outside a host. */
+export function useHostedStoredAt(): Date | null {
+  return useContext(StoredAtContext);
 }
 
 /**

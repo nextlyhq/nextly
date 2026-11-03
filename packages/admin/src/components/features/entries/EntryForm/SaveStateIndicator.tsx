@@ -70,7 +70,13 @@ function recoveryLine(recovery: RecoveryPointState): string | null {
  */
 export function saveIndicatorView(
   saveState: DocumentSaveState,
-  recovery: RecoveryPointState
+  recovery: RecoveryPointState,
+  /**
+   * When the opened document was last stored, for a surface that reports it
+   * as saved from the moment it opens. Absent, an opened document says nothing
+   * until it is saved.
+   */
+  storedAt: Date | null = null
 ): SaveIndicatorView {
   switch (saveState.kind) {
     case "failed":
@@ -88,7 +94,7 @@ export function saveIndicatorView(
         label: "Unsaved changes",
         detail: recoveryLine(recovery),
       };
-    case "saved":
+    case "saved": {
       // Never "Saved" over edits that live only in a recovery point.
       if (recovery.pendingOfferAt !== null) {
         return {
@@ -97,14 +103,17 @@ export function saveIndicatorView(
           detail: `Recovery point stored ${formatTimeAgo(recovery.pendingOfferAt)}`,
         };
       }
-      // Nothing stored this session and nothing pending: an opened document
+      // Nothing stored this session and nothing pending: an opened document is
+      // saved as of its stored time where the surface knows it, and otherwise
       // has nothing to report yet.
-      if (saveState.at === null) return null;
+      const savedAt = saveState.at ?? storedAt;
+      if (savedAt === null) return null;
       return {
         tone: "saved",
         label: "Saved",
-        detail: `Saved ${formatTimeAgo(saveState.at)}`,
+        detail: `Saved ${formatTimeAgo(savedAt)}`,
       };
+    }
   }
 }
 
@@ -121,7 +130,7 @@ function FailedSaveState({
         className="h-4 w-4 shrink-0 text-destructive"
         aria-hidden="true"
       />
-      <span className="text-destructive">{view.label}</span>
+      <span className="whitespace-nowrap text-destructive">{view.label}</span>
       <span id={detailId} className="sr-only">
         {view.detail}
       </span>
@@ -187,7 +196,8 @@ function SettledSaveState({
         <TooltipTrigger asChild>
           <div className="flex items-center gap-1.5">
             {SETTLED_ICON[view.tone]}
-            <span>{view.label}</span>
+            {/* One line at every width: a label that wraps grows the bar. */}
+            <span className="whitespace-nowrap">{view.label}</span>
           </div>
         </TooltipTrigger>
         {detail === null ? null : (
@@ -203,15 +213,18 @@ function SettledSaveState({
 export interface SaveStateIndicatorProps {
   saveState: DocumentSaveState;
   recovery: RecoveryPointState;
+  /** When the opened document was last stored; see `saveIndicatorView`. */
+  storedAt?: Date | null;
   className?: string;
 }
 
 export function SaveStateIndicator({
   saveState,
   recovery,
+  storedAt = null,
   className,
 }: SaveStateIndicatorProps): JSX.Element {
-  const view = saveIndicatorView(saveState, recovery);
+  const view = saveIndicatorView(saveState, recovery, storedAt);
 
   return (
     // The reserved width: the widest state, "Not saved" with its Retry, fits

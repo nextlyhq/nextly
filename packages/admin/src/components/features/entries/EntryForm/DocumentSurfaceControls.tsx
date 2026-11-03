@@ -23,6 +23,7 @@ import {
 import {
   useDocumentActionsContext,
   useHostedRecoveryPoint,
+  useHostedStoredAt,
 } from "./DocumentActionsContext";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { SaveStateIndicator } from "./SaveStateIndicator";
@@ -40,12 +41,16 @@ export function DocumentSaveIndicator({
 }): JSX.Element | null {
   const hosted = useDocumentActionsContext();
   const recovery = useHostedRecoveryPoint();
+  // The editor reports a stored document saved from the moment it opens, with
+  // when in the tooltip; the entry form's own bar does not pass this.
+  const storedAt = useHostedStoredAt();
   if (hosted === null) return null;
   return (
     <>
       <SaveStateIndicator
         saveState={hosted.saveState}
         recovery={recovery}
+        storedAt={storedAt}
         {...(className === undefined ? {} : { className })}
       />
       <DocumentStatusLive
