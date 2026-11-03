@@ -196,26 +196,59 @@ describe("a field's Clear", () => {
   });
 });
 
-describe("a style field in the narrow inspector", () => {
-  it("stacks its label over its control, as every narrow field does", () => {
-    // The Style tab's wider label column outranks the shared narrow rule by
-    // specificity, so it has its own narrow rule after it.
-    const style = FLAT.indexOf(
-      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr) auto; }"
+describe("a style field's row", () => {
+  it("keeps its label beside its control at the default panel width", () => {
+    /*
+     * One line per row, as the design draws it: stacking every label over its
+     * control at the default 1440 panel (about 18.5rem of fields) doubled the
+     * inspector's height. The label column is at most 7rem, so the widest icon
+     * strip (five icons and More) beside it still starts where the other
+     * controls do at 1440, and it gives way to
+     * a control that needs the room, since an icon strip never shrinks; the
+     * reset has a fixed slot at the end, whether or not the row has one, so
+     * every control ends at one edge.
+     */
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem; }"
     );
-    expect(style).toBeGreaterThan(-1);
-    // At 19rem, not the shared 18rem: a 7.5rem label and a set Align items
-    // row (five icons, More and the reset) need about 18.9rem side by side.
+    // Placed by name, so the shared rule below 18rem, which sends every child
+    // to column 1, does not stack a style row the panel still has room for.
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field > * { grid-column: 2; }"
+    );
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field > label, .nx-style-inspector .nx-inspector__field > .nx-inspector__field-name { grid-column: 1; grid-row: 1; }"
+    );
+    expect(FLAT).not.toContain(':not(:has(> [data-action="reset"]))');
+  });
+
+  it("keeps a list's chosen value on one line, cut rather than wrapped", () => {
+    // "Semibold 600" wrapped to two lines in a 9rem list, making its row
+    // twice the height of every other.
+    const value = ruleBody(
+      '.nx-style-inspector__select [data-slot="select-value"]'
+    );
+    expect(value).toContain("white-space: nowrap");
+    expect(value).toContain("text-overflow: ellipsis");
+    expect(value).toContain("min-width: 0");
+  });
+
+  it("stacks only below 17rem, near the panel's narrowest", () => {
+    expect(
+      atRuleBodies("@container nx-inspector-fields (max-width: 19rem)")
+    ).toEqual([]);
     const narrow = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 19rem)"
-    ).filter(body =>
-      body.includes(
-        ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 1fr) auto; }"
-      )
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 1fr) 1.5rem; }"
     );
-    expect(narrow).toHaveLength(1);
-    const at = FLAT.indexOf(narrow[0] ?? "");
-    expect(at).toBeGreaterThan(style);
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > * { grid-column: 1; }"
+    );
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > label, .nx-style-inspector .nx-inspector__field > .nx-inspector__field-name { grid-column: 1 / -1; }"
+    );
   });
 });
 
@@ -272,33 +305,13 @@ describe("a style row's reset", () => {
 
   it("follows its control onto the second row when the narrow inspector stacks", () => {
     const narrow = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 19rem)"
+      "@container nx-inspector-fields (max-width: 17rem)"
     ).join(" ");
     expect(narrow).toContain(
       '.nx-style-inspector .nx-inspector__field > .nx-style-inspector__breakpoint-action[data-action="reset"] { grid-column: 2; grid-row: 2; }'
     );
-    // The control takes the wide column beside it. Left to the shared rule's
-    // column 2, it lands in the reset's narrow column and drops a row, so the
-    // reset reads as a line of its own above the control.
-    expect(narrow).toContain(
-      ".nx-style-inspector .nx-inspector__field > * { grid-column: 1; }"
-    );
     expect(narrow).toContain(
       '.nx-style-inspector .nx-inspector__field > [data-action="jump"], .nx-style-inspector .nx-inspector__field > .nx-inspector__error { grid-column: 1 / -1; }'
-    );
-  });
-
-  it("leaves no column for itself on a row with nothing set", () => {
-    // An empty `auto` column still takes the column gap, which stopped an
-    // unset control short of the rows around it.
-    expect(FLAT).toContain(
-      '.nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) { grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr); }'
-    );
-    const narrow = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 19rem)"
-    ).join(" ");
-    expect(narrow).toContain(
-      '.nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) { grid-template-columns: minmax(0, 1fr); }'
     );
   });
 
@@ -320,6 +333,16 @@ describe("a style row's reset", () => {
     expect(rows).toContain(
       ".nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action, .nx-spacing-box .nx-inspector__error { display: flex;"
     );
+  });
+
+  it("keeps a side's jump clear of its reset when the box shows both", () => {
+    // A value stored here and shadowed by another tier earns both, and the
+    // overlay drew them at one inset, the jump over the reset.
+    expect(
+      ruleBody(
+        '.nx-spacing-box .nx-inspector__field:has(> [data-action="reset"]) > [data-action="jump"]'
+      )
+    ).toContain("inset-block-start: calc(100% + 2.5rem)");
   });
 
   it("no longer draws the words beside it, which made each set control two rows", () => {

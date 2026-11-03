@@ -1076,7 +1076,12 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
-    const group = screen.getByRole("radiogroup", { name: "Justify content" });
+    // "Justify", its CSS name in the label's tooltip: "Justify content" was cut
+    // short in the 7rem label column.
+    const group = screen.getByRole("radiogroup", { name: "Justify" });
+    expect(screen.getByText("Justify").closest("label")?.title).toMatch(
+      /^Justify content/
+    );
     const start = within(group).getByRole("radio", { name: "Start" });
     expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
 
@@ -1094,7 +1099,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
-    fireEvent.click(screen.getByText("Justify content"));
+    fireEvent.click(screen.getByText("Justify"));
 
     expect(document.activeElement?.getAttribute("role")).toBe("radio");
     expect(document.activeElement?.getAttribute("aria-label")).toBe("End");
@@ -3674,6 +3679,25 @@ describe("the Font control", () => {
     );
     return editor;
   }
+
+  it("removes a family the site does not have through the row's one reset", () => {
+    register({ typography: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { fontFamily: "Comic Sans MS, cursive" } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        fonts={{ faces: [INTER], fromCode: [] }}
+      />
+    );
+    const field = fieldsOf("fontFamily");
+    expect(field.queryByRole("button", { name: "Clear Font" })).toBeNull();
+    fireEvent.click(field.getByRole("button", { name: /^Reset Font/ }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
 
   it("is a list of the site's fonts, with no box to type a family into", () => {
     mountFonts();

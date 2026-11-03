@@ -2086,6 +2086,18 @@
 }
 
 /*
+ * A list's chosen value stays on one line, cut with an ellipsis, rather than
+ * wrapping its row to twice the height of every other ("Semibold 600").
+ */
+.nx-style-inspector__select [data-slot="select-value"] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
+}
+
+/*
  * A field's Clear, beside a list or a token: at least 24px square, WCAG 2.2's
  * minimum target, where the browser's default button around a word of small
  * text is smaller.
@@ -3979,18 +3991,43 @@ fieldset.nx-inspector__fields {
 }
 
 /*
- * A style field's label on one line, in a column wide enough for the
- * longest common one ("Justify content"); a longer one is cut with an
- * ellipsis, its whole name still the field's accessible name.
+ * A style field's row: its label, its control, then a fixed slot for the
+ * reset, on one line at the panel's default width as the design draws it.
+ *
+ * The label column is at most 7rem: wide enough for the longest common label
+ * ("Justify content"), and narrow enough that the widest icon strip (five
+ * icons and More) beside it starts where every other control does at the
+ * default width. It gives way to a control that needs more room:
+ * an icon strip never shrinks, so its column is at least its own width, and a
+ * text field, which can shrink, takes what is left. A longer label is cut with
+ * an ellipsis, its whole name still the field's accessible name.
+ *
+ * The reset's slot is kept whether or not the row has one, so every control
+ * ends at one edge and none changes width when a value is set or reset.
  */
 .nx-style-inspector .nx-inspector__field {
-  grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem;
 }
 
 /*
- * A set value's reset, at the end of its control's row: an icon, where a
- * "Reset to unset" line under every set control made each one two rows. A
- * jump to another tier, or a refusal, still reads under the control.
+ * Placed by name rather than left to the shared rules, which below 18rem send
+ * every child to column 1 and would stack a style row the panel still has room
+ * to draw on one line.
+ */
+.nx-style-inspector .nx-inspector__field > * {
+  grid-column: 2;
+}
+
+.nx-style-inspector .nx-inspector__field > label,
+.nx-style-inspector .nx-inspector__field > .nx-inspector__field-name {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/*
+ * A set value's reset, in its slot at the end of its control's row: an icon,
+ * where a "Reset to unset" line under every set control made each one two
+ * rows. A jump to another tier, or a refusal, still reads under the control.
  */
 .nx-style-inspector .nx-inspector__field > [data-action="reset"] {
   display: inline-grid;
@@ -4009,15 +4046,6 @@ fieldset.nx-inspector__fields {
   grid-column: 2 / -1;
 }
 
-/*
- * A row with nothing set has no reset and no column for one: an empty `auto`
- * column still takes the column gap, which stopped an unset control short of
- * the set rows around it.
- */
-.nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) {
-  grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr);
-}
-
 .nx-style-inspector .nx-style-inspector__field-label-text {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4025,26 +4053,23 @@ fieldset.nx-inspector__fields {
 }
 
 /*
- * Narrow, a style field stacks like every other: the wider column above
- * outranks the shared narrow rule, so it is undone here, after it. At 19rem
- * rather than 18: a 7.5rem label beside a set Align items row (five icons,
- * More and the reset) needs about 18.9rem.
- *
- * Stacked, the label takes the first row and the control the second, with
- * its reset at that row's end. The control is moved to the first column by
- * name: between 18rem and 19rem the shared rule, which places every child in
- * column 2, is still in force, and column 2 is now the reset's narrow one.
+ * Narrow, a style field stacks: its label on a line of its own, then its
+ * control with the reset's slot at that line's end. Only below 17rem, near the
+ * inspector's narrowest (16rem of fields at its 280px minimum), where a 7rem
+ * label beside a control leaves the control too little room. Above it, a wide
+ * control narrows the label column instead.
  */
-@container nx-inspector-fields (max-width: 19rem) {
+@container nx-inspector-fields (max-width: 17rem) {
   .nx-style-inspector .nx-inspector__field {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 1.5rem;
   }
 
   .nx-style-inspector .nx-inspector__field > * {
     grid-column: 1;
   }
 
-  .nx-style-inspector .nx-inspector__field > label {
+  .nx-style-inspector .nx-inspector__field > label,
+  .nx-style-inspector .nx-inspector__field > .nx-inspector__field-name {
     grid-column: 1 / -1;
   }
 
@@ -4058,10 +4083,6 @@ fieldset.nx-inspector__fields {
   .nx-style-inspector .nx-inspector__field > [data-action="jump"],
   .nx-style-inspector .nx-inspector__field > .nx-inspector__error {
     grid-column: 1 / -1;
-  }
-
-  .nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -4741,10 +4762,6 @@ fieldset.nx-inspector__fields {
   color: var(--nx-muted-foreground);
 }
 
-.nx-font-pick__clear {
-  flex: none;
-}
-
 /* Two classes, to outrank the popover's own width and padding. */
 [data-slot="popover-content"].nx-font-pick__popover {
   width: var(--radix-popover-trigger-width);
@@ -5131,6 +5148,17 @@ fieldset.nx-inspector__fields {
   background: var(--nx-popover);
   color: var(--nx-popover-foreground);
   box-shadow: var(--shadow-md);
+}
+
+/*
+ * A side whose value is stored here and shadowed by another tier offers both
+ * a reset and a jump, each in the overlay below the side: the jump drops
+ * below the reset rather than painting over it at the same inset.
+ */
+.nx-spacing-box
+  .nx-inspector__field:has(> [data-action="reset"])
+  > [data-action="jump"] {
+  inset-block-start: calc(100% + 2.5rem);
 }
 
 .nx-spacing-box [data-side="inlineEnd"] .nx-style-inspector__breakpoint-action,

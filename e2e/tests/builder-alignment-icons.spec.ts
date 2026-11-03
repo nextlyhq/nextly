@@ -143,7 +143,7 @@ async function openStyle(
 /** Each icon of a group chosen by a click, each showing as chosen. */
 async function clickEach(page: Page, group: string): Promise<string> {
   const radios = page
-    .getByRole("radiogroup", { name: group })
+    .getByRole("radiogroup", { name: group, exact: true })
     .getByRole("radio");
   const count = await radios.count();
   expect(count, `${group} has icons`).toBeGreaterThan(1);
@@ -161,17 +161,15 @@ test.describe("alignment and direction icons", () => {
     const pageId = await createPage(page.request);
     await openStyle(page, pageId, SECTION, "Layout");
 
-    for (const group of [
-      "Flex direction",
-      "Flex wrap",
-      "Justify content",
-      "Align items",
-    ]) {
+    for (const group of ["Flex direction", "Flex wrap", "Justify", "Align"]) {
       await clickEach(page, group);
     }
 
     // By keyboard: the group is one tab stop, and the arrows move the choice.
-    const justify = page.getByRole("radiogroup", { name: "Justify content" });
+    const justify = page.getByRole("radiogroup", {
+      name: "Justify",
+      exact: true,
+    });
     await justify.getByRole("radio", { name: "Start" }).click();
     const reachable = justify.locator('[role="radio"][tabindex="0"]');
     await expect(reachable).toHaveCount(1);
@@ -214,7 +212,7 @@ test.describe("alignment and direction icons", () => {
     const pageId = await createPage(page.request);
     await openStyle(page, pageId, SECTION, "Layout");
     await expect(
-      page.getByRole("radiogroup", { name: "Justify content" })
+      page.getByRole("radiogroup", { name: "Justify", exact: true })
     ).toBeVisible();
 
     const results = await new AxeBuilder({ page })
