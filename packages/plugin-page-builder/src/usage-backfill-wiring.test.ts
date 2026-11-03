@@ -32,6 +32,8 @@ function host(over: Partial<BackfillHost>): BackfillHost {
     locales: () => [],
     limits: NOT_USED as never,
     slugs: NOT_USED as never,
+    bookkeeping: NOT_USED as never,
+    ownIndexReader: NOT_USED as never,
     ...over,
   };
 }

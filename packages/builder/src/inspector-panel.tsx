@@ -64,6 +64,7 @@ import {
 } from "./content-controls";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
@@ -299,9 +300,14 @@ export interface ComponentLibrary {
  * where an author looking for an anchor id goes after the block's own fields.
  */
 const INSPECTOR_TABS = [
-  { value: "content", label: "Content" },
-  { value: "style", label: "Style" },
+  { value: "content", label: EDITOR_WORDS.content },
+  { value: "style", label: EDITOR_WORDS.style },
 ] as const;
+
+/** The inspector's tab names, in order, as an author reads them. */
+export function inspectorTabLabels(): string[] {
+  return INSPECTOR_TABS.map(tab => tab.label);
+}
 
 /**
  * The Style tab's own handler for a change of tab.
@@ -594,10 +600,19 @@ function SelectionInspector({
         name={block.identity.name}
         description={block.description}
         lock={lock}
-        onRename={name => editor.apply(renameOp(block.nodeId, name))}
+        // Withheld while a Layers lock holds the block, its own or one around
+        // it: renaming is a change like any other, and the op layer refuses it.
+        onRename={
+          lock.layers || lock.inheritedFrom !== undefined
+            ? undefined
+            : name => editor.apply(renameOp(block.nodeId, name))
+        }
         onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
         // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change.
+        // with its design: the save would refuse the change. The one predicate
+        // the multi-selection card asks too, so a block's Lock is offered alike
+        // however it was selected; inside a block locked in Layers it stays
+        // offered, since a change to the lock alone is always allowed.
         lockHeld={
           layersLockChangeable(lock)
             ? undefined

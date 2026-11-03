@@ -54,6 +54,11 @@ import {
   isComponentDocument,
 } from "./document";
 import {
+  layersLockBreak,
+  lockedWithin,
+  type LayersLockBreak,
+} from "./layers-lock";
+import {
   countNodes,
   DEFAULT_LIMITS,
   ForestTooLargeError,
@@ -74,7 +79,6 @@ import {
   moveNode,
   removeNode,
   updateNode,
-  walkNodes,
   type NodeLocation,
   type TreePosition,
 } from "./tree";
@@ -699,6 +703,20 @@ export function sameStoredValue(a: unknown, b: unknown): boolean {
  * this answer is never one `applyOp` would refuse as a no-op.
  */
 export function sameStyleValue(a: unknown, b: unknown): boolean {
+  return equalWithin(a, b, COMPARISON_BUDGET, false);
+}
+
+/**
+ * Whether two stored values hold the same data, whatever order their keys were
+ * written in.
+ *
+ * For a value read back from a database column against one a writer sends:
+ * PostgreSQL's `jsonb` and MySQL's JSON type both rewrite key order when they
+ * store a document, so a page an editor sends back untouched can differ from
+ * what it read in nothing but that order. The same walk as
+ * {@link sameStyleValue}, asked for that reason rather than for a compiler's.
+ */
+export function sameValueInAnyKeyOrder(a: unknown, b: unknown): boolean {
   return equalWithin(a, b, COMPARISON_BUDGET, false);
 }
 
@@ -2580,26 +2598,11 @@ export function positionRefusal(
 /**
  * The first locked node anywhere in a subtree, or `undefined`.
  *
- * Exported because a PLANNER has to be able to ask it before an insert is
- * built. `applyOp` refuses an insert whose subtree arrives locked — the inverse
- * of an insert is a remove, and a remove refuses a locked subtree, so accepting
- * it would put the document one edit from a state its own undo could not leave.
- * A planner that could not ask would report a plan the apply then throws on,
- * which is exactly the gap between a dry run and a real run that planning
- * separately exists to close.
- *
- * The whole subtree and not just its root, because removing a container removes
- * everything under it. A check that read only the node an op addresses would
- * let an author delete a locked block by deleting the column it sits in — the
- * lock honoured at the node and defeated one level up.
+ * Stated in `layers-lock`, beside the rest of the Layers lock's rule, and
+ * re-exported here because planners and the builder have always imported it
+ * from the op vocabulary.
  */
-export function lockedWithin(node: BlockNode): string | undefined {
-  let found: string | undefined;
-  walkNodes([node], candidate => {
-    if (found === undefined && candidate.locked === true) found = candidate.id;
-  });
-  return found;
-}
+export { lockedWithin } from "./layers-lock";
 
 /**
  * Refuses a position whose fields cannot mean what they claim.
@@ -2850,6 +2853,105 @@ function priorValues(
   return { patch: snapshot(patch), unset };
 }
 
+/**
+ * How an op is applied, beyond the document's limits.
+ *
+ * @experimental
+ */
+export interface ApplyOptions {
+  /**
+   * Whether the Layers lock holds for this apply. `"enforce"`, the default,
+   * refuses any op that changes, moves or removes a locked block or anything
+   * inside it (see `layers-lock`).
+   *
+   * `"ignore"` is for a SYSTEM transform only: an edit the site makes to every
+   * document for a reason no author chose, such as stripping the styles of a
+   * breakpoint the site no longer defines. A lock protects what an author can
+   * see; it is not meant to make a site-wide change hostage to every locked
+   * block. Anything an author or an agent asks for applies with the default.
+   *
+   * Only the exact string `"ignore"` lifts the check, so a misspelled or
+   * mistyped option enforces the lock rather than skipping it.
+   */
+  readonly layersLocks?: "enforce" | "ignore";
+}
+
+/**
+ * What an op that breaks a Layers lock is refused with: which locked block,
+ * and where it sits relative to the edit, so the remedy names the block to
+ * unlock.
+ */
+function layersLockRefusal(
+  op: BuilderOp,
+  lockedId: string,
+  where: LayersLockBreak["where"]
+): string {
+  const locked = describe(lockedId);
+  if (where === "destination") {
+    return (
+      `${op.kind}: the position given is inside ${locked}, which is locked, ` +
+      `and nothing may be added to a locked block. Unlock it first.`
+    );
+  }
+  const subject = op.kind === "insert" ? locked : describe(op.id);
+  if (where === "around") {
+    return (
+      `${op.kind}: ${subject} sits inside ${locked}, which is locked, and a ` +
+      `lock covers everything inside the block. Unlock ${locked} first.`
+    );
+  }
+  switch (op.kind) {
+    case "remove":
+      return (
+        `remove: ${locked} is locked and sits inside what this would ` +
+        `delete. An author locked it against deletion, and removing its ` +
+        `ancestor deletes it just as thoroughly.`
+      );
+    case "move":
+      return (
+        `move: ${locked} is locked and sits inside what this would ` +
+        `relocate. A lock is easier to rely on when it means one thing — ` +
+        `this node does not move or disappear until you unlock it — than ` +
+        `when it holds for the node and not for the section around it.`
+      );
+    default:
+      return (
+        `${op.kind}: ${locked} is locked, so nothing about it may change, ` +
+        `its name included. Unlock it first; changing the lock alone is ` +
+        `always allowed.`
+      );
+  }
+}
+
+/**
+ * Refuse an op that breaks a Layers lock, unless the apply was told to ignore
+ * the lock. Asked by each branch of {@link applyOp} only once the op's own
+ * fields have been checked, because the rule reads them.
+ */
+function assertKeepsLayersLocks(
+  nodes: BlockNode[],
+  op: BuilderOp,
+  options: ApplyOptions
+): void {
+  if (options.layersLocks === "ignore") return;
+  // Refused rather than exempting the inverse from the lock: see the insert
+  // branch of `applyOp`. With the lock ignored, the inverse is a remove the
+  // same option lets through, so the round trip still holds.
+  if (op.kind === "insert") {
+    const lockedId = lockedWithin(op.node);
+    if (lockedId !== undefined) {
+      throw new OpError(
+        `insert: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
+          `removed — so this insert could never be undone. Unlock it before ` +
+          `adding it to the document.`
+      );
+    }
+  }
+  const broken = layersLockBreak(nodes, op);
+  if (broken === undefined) return;
+  throw new OpError(layersLockRefusal(op, broken.lockedId, broken.where));
+}
+
 /** The result of applying one op: the new forest, and the op that undoes it. */
 export interface AppliedOp {
   readonly document: BlockDocument;
@@ -3074,7 +3176,8 @@ function assertDocumentIdentity(document: BlockDocument): void {
 export function applyOp(
   document: BlockDocument,
   op: BuilderOp,
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  options: ApplyOptions = {}
 ): AppliedOp {
   // The LIMITS, before anything is judged against them. Every cap in this
   // module is a `>` comparison, and every comparison against `NaN` is false —
@@ -3205,14 +3308,11 @@ export function applyOp(
         measured(() => treeDepth([op.node]), "insert"),
         "insert"
       );
-      const lockedId = lockedWithin(op.node);
-      if (lockedId !== undefined) {
-        throw new OpError(
-          `insert: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
-            `removed — so this insert could never be undone. Unlock it before ` +
-            `adding it to the document.`
-        );
-      }
+      // A subtree arriving locked, and where it lands: a block put into a
+      // locked one changes what the lock protects as surely as an edit to a
+      // block already inside it. Both are the Layers lock's, so both stand
+      // down together when the apply is told to ignore it.
+      assertKeepsLayersLocks(nodes, op, options);
       // Asked BEFORE the placement, because afterwards the slot exists whether
       // this insert made it or not, and the question cannot be answered.
       const createdSlot = slotCreatedBy(nodes, op.at);
@@ -3287,14 +3387,9 @@ export function applyOp(
       if (location.parent !== undefined) {
         assertIdIsUnique(nodes, location.parent.id, "remove");
       }
-      const lockedId = lockedWithin(node);
-      if (lockedId !== undefined) {
-        throw new OpError(
-          `remove: ${describe(lockedId)} is locked and sits inside what this would ` +
-            `delete. An author locked it against deletion, and removing its ` +
-            `ancestor deletes it just as thoroughly.`
-        );
-      }
+      // A locked block inside what this deletes, and a locked block this
+      // takes something out of: both change what the lock protects.
+      assertKeepsLayersLocks(nodes, op, options);
       // Both the node and where it sat, captured before it goes: neither is
       // recoverable from the forest afterwards, which is the whole reason the
       // inverse cannot be computed later.
@@ -3345,15 +3440,9 @@ export function applyOp(
       if (op.to.parentId !== undefined) {
         assertIdIsUnique(nodes, op.to.parentId, "move");
       }
-      const lockedMoving = lockedWithin(node);
-      if (lockedMoving !== undefined) {
-        throw new OpError(
-          `move: ${describe(lockedMoving)} is locked and sits inside what this would ` +
-            `relocate. A lock is easier to rely on when it means one thing — ` +
-            `this node does not move or disappear until you unlock it — than ` +
-            `when it holds for the node and not for the section around it.`
-        );
-      }
+      // The subtree it carries, the locked block it leaves and the locked
+      // block it enters: each is a change to something a lock protects.
+      assertKeepsLayersLocks(nodes, op, options);
       assertDropSlot(op.dropSlotIfEmpty, "move");
       // Before the relocation, for the same reason as insert: afterwards the
       // slot exists whether this move made it or not.
@@ -3429,6 +3518,9 @@ export function applyOp(
       }
       assertIdIsUnique(nodes, op.id, "update");
       assertPatchNames(op);
+      // After the names are known to be patchable, because the rule reads them:
+      // a patch naming `locked` alone is the one change a locked block takes.
+      assertKeepsLayersLocks(nodes, op, options);
       const touched = [...Object.keys(op.patch), ...(op.unset ?? [])];
       const before = priorValues(node, touched);
       // `unset` becomes `undefined` only HERE, at the moment of applying, and
@@ -3692,7 +3784,8 @@ export interface AppliedOps {
 export function applyOps(
   document: BlockDocument,
   ops: readonly BuilderOp[],
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  options: ApplyOptions = {}
 ): AppliedOps {
   // The LIMITS are `applyOp`'s to judge, and it judges them on every op it
   // applies. Reading them here as well would observe a caller's accessor or
@@ -3712,14 +3805,14 @@ export function applyOps(
   // to re-answer a question it just answered — on the commonest edit in the
   // builder, since the editor routes every single-block edit through here.
   if (ops.length === 1) {
-    const only = applyOp(document, ops[0], limits);
+    const only = applyOp(document, ops[0], limits, options);
     return { document: only.document, inverses: [only.inverse] };
   }
 
   let working = document;
   const inverses: BuilderOp[] = [];
   for (const op of ops) {
-    const applied = applyOp(working, op, limits);
+    const applied = applyOp(working, op, limits, options);
     working = applied.document;
     // Front, so undoing the group runs the LAST op's inverse first: each
     // inverse describes the document as it stood when its op ran.

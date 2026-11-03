@@ -39,13 +39,14 @@
  *
  * @module entries-route
  */
-import { allBlocks, ITEM_SCHEMA_MAX_DEPTH } from "@nextlyhq/blocks-engine";
+import { ITEM_SCHEMA_MAX_DEPTH } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta, type WhereFilter } from "nextly";
 import { entryTitleField, readableTitleText } from "nextly/config";
 import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
+import { editorVisibleBlocks } from "./blocks/registration-service";
 import {
   ENTRIES_IDS_MAX,
   ENTRIES_LIMIT_DEFAULT,
@@ -59,6 +60,7 @@ import {
   type EntryItem,
 } from "./entries-contract";
 import { readingAsUser } from "./library-route";
+import { parseRouteQuery } from "./route-query";
 
 /**
  * The longest single id the route accepts.
@@ -136,25 +138,12 @@ const querySchema = z.object({
  * nowhere but the read it was checked for.
  */
 export function parseEntriesQuery(url: string | URL): EntriesRequest {
-  const params = new URL(url).searchParams;
-  // Only the parameters the route reads, and each once: a repeated parameter
-  // takes its first value, as `URLSearchParams.get` does everywhere.
-  const raw: Record<string, string> = {};
-  for (const name of Object.values(ENTRIES_PARAMS)) {
-    const value = params.get(name);
-    if (value !== null) raw[name] = value;
-  }
-  const parsed = querySchema.safeParse(raw);
-  if (!parsed.success) {
-    throw NextlyError.validation({
-      errors: parsed.error.issues.map(issue => ({
-        path: issue.path.map(String).join(".") || "query",
-        code: "INVALID_QUERY",
-        message: "This parameter is not one the entries route accepts.",
-      })),
-    });
-  }
-  const query = parsed.data;
+  const query = parseRouteQuery(
+    url,
+    Object.values(ENTRIES_PARAMS),
+    querySchema,
+    "entries route"
+  );
   const ids = query[ENTRIES_PARAMS.ids];
   const search = query[ENTRIES_PARAMS.search];
   const locale = query[ENTRIES_PARAMS.locale];
@@ -168,16 +157,18 @@ export function parseEntriesQuery(url: string | URL): EntriesRequest {
 }
 
 /**
- * Every collection a registered block prop names as a relation target.
+ * Every collection a block the editor can draw names as a relation target.
  *
- * Read from the live registry on every call, as the save route reads it, so a
- * block registered after boot — or a re-registration — is seen. A prop counts
+ * Only the editor's blocks (the core set and those declared with an
+ * `editorEntry`): a block registered on the server only has no relation
+ * control anywhere, and must not widen which collections this route reads.
+ * Read on every call, so a block registered after boot is seen. A prop counts
  * when it declares `type: "relation"` and a non-empty string `relationTo`;
  * anything else declares no target, and a malformed declaration must not open
  * a collection by accident.
  */
 export function relationTargets(
-  blocks: readonly { props?: unknown }[] = allBlocks()
+  blocks: readonly { props?: unknown }[] = editorVisibleBlocks()
 ): ReadonlySet<string> {
   const targets = new Set<string>();
   for (const block of blocks) collectTargets(block.props, targets, 0);

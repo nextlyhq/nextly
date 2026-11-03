@@ -109,6 +109,9 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
  */
 export { useModalKeyboardHold } from "./modal-keyboard-hold";
 export type { CanvasPreview, CanvasProps } from "./canvas";
+// The regions of a page's Layout, drawn locked around the page on the canvas.
+export type { CanvasRegion } from "./canvas-regions";
+export { REGION_ATTRIBUTE } from "./canvas-regions";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -237,6 +240,7 @@ export type {
   BlockActions,
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
+  ComponentVerbsHost,
 } from "./keyboard-actions";
 
 /**
@@ -321,6 +325,23 @@ export type { EmptyContainerAppendersProps } from "./empty-container-appender";
  */
 export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";
+
+/**
+ * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block
+ * declares, or a block an author locked in Layers. The answer is a union, and
+ * `isLayersLockFacts` tells the two apart: a Layers lock names the locked
+ * block (`label`, `relation`, `verb`), a slot lock names its holder
+ * (`holderType`, `lock`). `lockRefusalWording` words either.
+ */
+export {
+  isLayersLockFacts,
+  lockRefusalWording,
+  type LayersLockRefusalFacts,
+  type LockedRelation,
+  type LockedVerb,
+  type LockRefusalFacts,
+  type SlotLockRefusalFacts,
+} from "./lock-refusal";
 
 /**
  * Dragging blocks on the canvas, behind the same client banner: the hook holds
@@ -457,7 +478,7 @@ export type {
  * document and ships from the root entry.
  */
 export { LayersPanel } from "./layers-panel";
-export type { LayersPanelProps } from "./layers-panel";
+export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
@@ -466,6 +487,12 @@ export { TokensPanel } from "./tokens-panel";
 export type { TokensPanelProps } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The editor's words, spelled once, for every surface a host draws beside the
+ * shell's own: a panel it mounts names its places with these.
+ */
+export { EDITOR_WORDS } from "./editor-words";
+export type { EditorWord } from "./editor-words";
 /*
  * The two class surfaces, and the rules both answer from.
  *
@@ -543,3 +570,10 @@ export type {
   FontTokenRow,
   StackReading,
 } from "./font-library";
+
+/**
+ * Which values each placement of a new component may change: the picker the
+ * host's "Save as component" and "Convert to component" forms draw.
+ */
+export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
+export type { ExposurePickerProps } from "./exposure-picker";

@@ -7,7 +7,10 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
-import { CORE_CATEGORIES } from "@nextlyhq/blocks-react/blocks";
+import {
+  CORE_CATEGORIES,
+  CORE_PALETTE_ORDER,
+} from "@nextlyhq/blocks-react/blocks";
 import {
   DEFAULT_PREFERENCES,
   type LeftPanel,
@@ -20,6 +23,8 @@ import {
   LayersPanel,
   useBuilderChecklist,
   type BuilderShell,
+  type CanvasRegion,
+  type LayersRegionRow,
   type LibraryTierState,
 } from "@nextlyhq/builder/shell";
 import {
@@ -34,8 +39,10 @@ import {
   type ReactNode,
   type Dispatch,
 } from "react";
+import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
+import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
@@ -69,20 +76,6 @@ import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 const AVAILABLE_PANELS = ["add", "layers", "design"] as const;
 
 /**
- * With an entry-fields panel to fill, `settings` joins them.
- *
- * Derived rather than declared twice: the shell leaves a panel outside
- * `availablePanels` off the rail, and opening one nothing renders into
- * reserves width to display nothing, which reads as a broken control. So the
- * list and the renderer move together by construction, and the rail cannot
- * disagree with the body.
- */
-const AVAILABLE_PANELS_WITH_SETTINGS: readonly [
-  ...typeof AVAILABLE_PANELS,
-  "settings",
-] = [...AVAILABLE_PANELS, "settings"] as const;
-
-/**
  * The insert panel, with this site's saved patterns.
  *
  * A component of its own so the library is read WHEN THE PANEL OPENS. The shell
@@ -108,7 +101,10 @@ function InsertPanelWithLibrary({
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
   categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
+  blockOrder: React.ComponentProps<typeof InsertPanel>["blockOrder"];
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
+  /** The container to add inside, when its "+" asked for it. */
+  inside?: string;
   /**
    * The component tier, read by the EDITOR rather than here.
    *
@@ -247,13 +243,19 @@ type PanelRequests = {
     | { panel: LeftPanel; view?: string; count: number }
     | undefined;
   requestPanel: (panel: LeftPanel, view?: string) => void;
-  openInsertPanel: () => void;
+  /**
+   * Open Add; given a container, add inside it (its empty-container "+"),
+   * which is never implied by selecting it.
+   */
+  openInsertPanel: (inside?: string) => void;
+  /** The container the last "+" chose to add inside, if any. */
+  insertInside: string | undefined;
   showEmptyElements: boolean;
   setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
 };
 
 /** Requests to open a panel from the canvas, and the empty-chrome switch. */
-function usePanelRequests(): PanelRequests {
+function usePanelRequests(selectedId: string | null): PanelRequests {
   /*
    * Opens the insert panel from the canvas itself, for the empty-container
    * appender: pressing its "+" must select the container AND show the panel
@@ -281,9 +283,25 @@ function usePanelRequests(): PanelRequests {
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const openInsertPanel = useCallback((): void => {
-    requestPanel("add");
-  }, [requestPanel]);
+  const [insideRequest, setInsideRequest] = useState<string | undefined>(
+    undefined
+  );
+  const openInsertPanel = useCallback(
+    (inside?: string): void => {
+      setInsideRequest(inside);
+      requestPanel("add");
+    },
+    [requestPanel]
+  );
+  /*
+   * A "+"'s choice lasts while its container stays selected. Selecting
+   * anything else, the block just added included, ends it, so selecting the
+   * container again later adds after it, as any selection does.
+   */
+  if (insideRequest !== undefined && selectedId !== insideRequest) {
+    setInsideRequest(undefined);
+  }
+  const insertInside = insideRequest === selectedId ? insideRequest : undefined;
 
   /*
    * Whether the author wants empty-container chrome showing at all, mirrored
@@ -304,6 +322,7 @@ function usePanelRequests(): PanelRequests {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
+    insertInside,
     showEmptyElements,
     setShowEmptyElements,
   };
@@ -313,11 +332,25 @@ function usePanelRequests(): PanelRequests {
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
-export function useEditorPanels(
+export function useEditorPanels<TFieldValues extends FieldValues>(
   mount: EditorMount,
-  name: string
+  name: string,
+  /**
+   * The entry's form, and the canvas the Layout's regions are scrolled to.
+   * The page's Layout regions are rows in Layers, drawn on the canvas beside
+   * them; its section is handed to the Settings dialog.
+   */
+  page: {
+    control: Control<TFieldValues>;
+    canvasRoot: HTMLElement | null;
+  }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
+  // The Layout section for the Settings dialog's "This page" tab, or null for
+  // a form that is not a page's.
+  const pageLayout = usePageLayoutSettings(page.control);
+  // From the form's unsaved values, so a change of Layout redraws at once.
+  const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -327,7 +360,9 @@ export function useEditorPanels(
    * form has a renderer, so a gate on the renderer's existence is true even for
    * a collection whose only fields are its title, its slug and this one.
    */
-  const entryFields = useEntryFieldsPanel(name);
+  // Flat, for the Settings dialog that frames them: no section cards, the
+  // slug read as the page's address.
+  const entryFields = useEntryFieldsPanel(name, { presentation: "dialog" });
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -342,14 +377,16 @@ export function useEditorPanels(
   });
 
   const library = useOfferedLibrary(mount);
-  const requests = usePanelRequests();
+  const requests = usePanelRequests(editor.selectedId);
   return {
     entryFields,
     checklist,
-    // The rail and the body read the same value, so a Settings panel is never
-    // offered that renders nothing.
-    availablePanels:
-      entryFields === null ? AVAILABLE_PANELS : AVAILABLE_PANELS_WITH_SETTINGS,
+    // Settings is a dialog, not a panel: the entry's fields are drawn in its
+    // "This page" tab.
+    availablePanels: AVAILABLE_PANELS,
+    pageLayout,
+    canvasRegions: layoutRegions.canvas,
+    layersRegions: layoutRegions.layers,
     ...library,
     ...requests,
   };
@@ -365,9 +402,13 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
-    availablePanels:
-      | typeof AVAILABLE_PANELS
-      | typeof AVAILABLE_PANELS_WITH_SETTINGS;
+    /** The page's Layout section for Settings, or null for another form. */
+    pageLayout: ReactNode | null;
+    /** The regions of the page's Layout, drawn locked around the page. */
+    canvasRegions: readonly CanvasRegion[];
+    /** The same regions, as read-only rows in Layers. */
+    layersRegions: readonly LayersRegionRow[];
+    availablePanels: typeof AVAILABLE_PANELS;
   };
 
 /**
@@ -379,6 +420,7 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  layersRegions,
   drag,
   offered,
   offerablePatterns,
@@ -392,9 +434,11 @@ export function editorPanelRenderer({
   documentClasses,
   classSummaryContext,
   requestPanel,
-  entryFields,
-}: Pick<EditorMount, "editor"> &
-  Pick<
+  insertInside,
+}: Pick<EditorMount, "editor"> & {
+  /** The regions of the page's Layout, as read-only rows in Layers. */
+  layersRegions?: readonly LayersRegionRow[];
+} & Pick<
     SiteStyleInputs,
     | "canvasSiteStyle"
     | "siteStylePending"
@@ -407,7 +451,7 @@ export function editorPanelRenderer({
   Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "entryFields"
+    "offered" | "offerablePatterns" | "requestPanel" | "insertInside"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -423,9 +467,12 @@ export function editorPanelRenderer({
         <InsertPanelWithLibrary
           editor={editor}
           categoryOrder={CORE_CATEGORIES}
+          blockOrder={CORE_PALETTE_ORDER}
           beginInsertDrag={drag.beginInsertDrag}
           components={offered}
           offerablePatterns={offerablePatterns}
+          // Inside the container a "+" chose, while it is the selection.
+          {...(insertInside === undefined ? {} : { inside: insertInside })}
         />
       ),
       /*
@@ -443,6 +490,7 @@ export function editorPanelRenderer({
           editor={editor}
           moveHints
           definitions={offered.definitions}
+          regions={layersRegions}
         />
       ),
       design: () => (
@@ -518,17 +566,6 @@ export function editorPanelRenderer({
           }}
         />
       ),
-      /*
-              The document's title and slug, and the entry's own fields — SEO,
-              relations, whatever this collection declares — which this editor
-              covered when it took the window. Drawn by the ADMIN, not
-              reconstructed here: how a field is drawn is the entry form's
-              contract, and a second renderer would drift from it.
-
-              The same value the rail was derived from, so a panel is never
-              offered that this returns nothing for.
-            */
-      settings: () => entryFields,
     };
     return panels[panel]?.() ?? null;
   };

@@ -50,12 +50,15 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   INSTANCE_ATTRIBUTE,
+  layoutPartSheets,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   previewContainerStyle,
   sharedStyleInputs,
+  type PagePart,
+  type PageRendererProps,
+  type PartSheet,
 } from "@nextlyhq/blocks-react";
-import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import {
   BlockEnvironmentProvider,
   type BlockEnvironment,
@@ -64,6 +67,7 @@ import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import {
   type JSX,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -71,21 +75,37 @@ import {
   useState,
 } from "react";
 
+import { scaleCornerRadii, type CornerRadii } from "./border-radii";
+import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
+import {
+  OVERLAY_OUTPUT_ATTRIBUTE,
+  watchCanvasFor,
+} from "./canvas-geometry-watch";
 import { guardCanvasNavigation } from "./canvas-link-guard";
+import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
+import type { Rect } from "./geometry";
 import {
   canvasContentRect,
+  canvasRootFrom,
   canvasScroller,
+  clippedByAncestor,
+  layoutFragments,
+  renderedScale,
   scrollEventTarget,
+  usedRadiiOf,
+  viewportPositioned,
   visibleBandOf,
 } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { useNearestThemeMarker } from "./nearest-theme";
+import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -124,6 +144,24 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
  */
 export const LOCKED_ATTRIBUTE = "data-nx-locked";
 
+/** How a block is locked in Layers: by its own lock, or by one around it. */
+export type LockMark = "own" | "inherited";
+
+/**
+ * Every locked block's mark, from one walk: a block's own lock, else the lock
+ * of a block it sits inside, carried down rather than climbed per block.
+ */
+export function lockMarksOf(document: BlockDocument): Map<string, LockMark> {
+  const marks = new Map<string, LockMark>();
+  walkNodes(document.nodes, (node, parent) => {
+    if (isLocked(node)) marks.set(node.id, "own");
+    else if (parent !== undefined && marks.has(parent.id)) {
+      marks.set(node.id, "inherited");
+    }
+  });
+  return marks;
+}
+
 /**
  * Marks every element drawing the block currently being dragged.
  *
@@ -156,21 +194,9 @@ export const DROP_PARENT_ATTRIBUTE = "data-nx-drop-parent";
  */
 export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
 
-/**
- * Marks editor chrome drawn over the page, which is not part of the page.
- *
- * A click on the canvas background CLEARS the selection, and the overlay sits
- * inside the canvas root — so without this a press on any control drawn over
- * the page resolves to "no node" and deselects the very block that control
- * acts on. The floating toolbar would run its action and then watch itself
- * disappear.
- *
- * An attribute rather than each overlay calling `stopPropagation`: the rule
- * belongs to what chrome IS, and the version where every new overlay has to
- * remember it is the version where the next one does not. The drop indicator
- * needs no marker only because it takes no pointer events at all.
- */
-export const CHROME_ATTRIBUTE = "data-nx-chrome";
+// Defined in its own module so the region frames drawn inside the canvas can
+// mark themselves as chrome without importing the canvas back.
+export { CHROME_ATTRIBUTE } from "./canvas-chrome";
 
 /**
  * The site tokens the canvas page is drawn from, by IDENTITY as the default
@@ -203,10 +229,10 @@ const DARK_GROUND_LUMINANCE = 0.179;
 interface SiteSurface {
   /** The custom properties naming the site's tokens, under its prefix. */
   readonly style: Record<`--${string}`, string>;
-  /** How the site's dark token values are switched on. */
-  readonly darkMode: "attribute" | "media";
-  /** Whether the site's background token has a DARK value for that state. */
+  /** Whether the site's background token has a DARK value. */
   readonly darkGround: boolean;
+  /** Whether every value of the site's background token is fully opaque. */
+  readonly opaqueGround: boolean;
 }
 
 /**
@@ -221,10 +247,10 @@ interface SiteSurface {
  * `resolveSiteTokens` — so whether the ground has a dark value is asked of the
  * same tokens the page draws with.
  *
- * The page's colour scheme is not inferred from the strategy alone. The
- * strategy says when the site's dark VALUES apply; the scheme goes dark only
- * where those values include a dark ground, so a site whose dark set leaves
- * the background light keeps a light page and light native controls.
+ * The site sheet applies dark values with the device (or a dark marker), for
+ * every site. The scheme goes dark only where those values include a dark
+ * ground, so a site whose dark set leaves the background light keeps a light
+ * page and light native controls.
  */
 function siteSurface(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
@@ -241,13 +267,18 @@ function siteSurface(
     style[property] = `var(${tokenCustomProperty(token, prefix)}, ${fallback})`;
   }
   const tokens = resolveSiteTokens(siteStyles.tokens);
-  const ground = tokens.tokens.find(
+  const values = tokens.tokens.find(
     token => tokenIdentity(token) === SITE_GROUND_TOKEN
-  )?.values.dark;
+  )?.values;
+  const ground = values?.dark;
   return {
     style,
-    darkMode: tokens.darkMode ?? "attribute",
     darkGround: ground !== undefined && isDarkGround(ground),
+    opaqueGround:
+      values !== undefined &&
+      [values.light, values.dark].every(
+        value => value === undefined || alphaOf(value.trim()) === 1
+      ),
   };
 }
 
@@ -263,10 +294,114 @@ function isDarkGround(value: string): boolean {
   return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
 }
 
-/** `oklch(L …)`, its lightness as a number or a percentage. */
-const OKLCH = /^oklch\(\s*([\d.]+)(%?)/i;
-/** `hsl(H S% L%)` or `hsla(H, S%, L%, A)`, hue optionally in degrees. */
-const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
+/**
+ * One numeric colour component, with its percentage sign if it has one: an
+ * optional sign, a decimal, an optional exponent, an optional `%`.
+ *
+ * The SAME grammar as the engine's `NUMERIC_COMPONENT` in `contrast.ts`, which
+ * reads `rgb()` and does not export it; mirrored here for the two syntaxes the
+ * engine does not read, so a component is a number in all of them alike.
+ * Matched whole rather than parsed with `parseFloat`, which reads a prefix and
+ * stops — `5e-1` would read as 5 and `12abc` as 12.
+ */
+const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
+
+/** A component as a number, and whether it was a percentage. */
+function numericOf(
+  part: string | undefined
+): { value: number; percent: boolean } | undefined {
+  if (part === undefined) return undefined;
+  const match = NUMERIC_COMPONENT.exec(part);
+  if (match === null) return undefined;
+  const value = Number.parseFloat(part);
+  return Number.isFinite(value)
+    ? { value, percent: match[1] === "%" }
+    : undefined;
+}
+
+/** A component as a 0–1 fraction: a percentage of 100, or a number of `scale`. */
+function fractionOf(
+  part: string | undefined,
+  scale: number
+): number | undefined {
+  const parsed = numericOf(part);
+  if (parsed === undefined) return undefined;
+  const fraction = parsed.value / (parsed.percent ? 100 : scale);
+  // Clamped, as CSS Color 4 clamps alpha, lightness and saturation.
+  return Math.min(1, Math.max(0, fraction));
+}
+
+/**
+ * An `oklch()` or `hsl()`/`hsla()` call, split into its colour components and
+ * its alpha: after a `/` in the modern syntax, the fourth comma-separated
+ * component in the legacy one. `undefined` for anything else, or a call whose
+ * shape is neither.
+ */
+function colourFunction(text: string): ColourCall | undefined {
+  const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
+  const body = call[2] ?? "";
+  return body.includes(",") ? legacyCall(name, body) : modernCall(name, body);
+}
+
+/** A colour function's name, colour components and alpha, as written. */
+interface ColourCall {
+  readonly name: "oklch" | "hsl";
+  readonly components: readonly string[];
+  readonly alpha: string | undefined;
+}
+
+/**
+ * The legacy, comma-separated form: `hsl(h, s%, l%)` or `hsla(h, s%, l%, a)`.
+ * Only `hsl()` has one, and it takes no slash.
+ */
+function legacyCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  if (name === "oklch" || body.includes("/")) return undefined;
+  const parts = body.split(",").map(part => part.trim());
+  if (parts.length !== 3 && parts.length !== 4) return undefined;
+  return { name, components: parts.slice(0, 3), alpha: parts[3] };
+}
+
+/** The modern, space-separated form, with an optional `/ alpha` after it. */
+function modernCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  const [channels, alpha, ...rest] = body.split("/");
+  if (rest.length > 0) return undefined;
+  const parts = (channels ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(part => part !== "");
+  if (parts.length !== 3) return undefined;
+  return { name, components: parts, alpha: alpha?.trim() };
+}
+
+/**
+ * A colour's alpha, 0–1, or `undefined` when it cannot be told.
+ *
+ * Hex and `rgb()` from the engine's parser; `oklch()` and `hsl()` from their
+ * own alpha component, 1 when they state none. A bare colour keyword is opaque
+ * — every named colour is — except `transparent`, and a keyword this cannot
+ * place, such as `currentColor`, is unknown, as is a reference or a function
+ * this does not read.
+ */
+function alphaOf(text: string): number | undefined {
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return rgb.a;
+  const call = colourFunction(text);
+  if (call !== undefined) {
+    return call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
+  }
+  if (!/^[a-z]+$/i.test(text)) return undefined;
+  const keyword = text.toLowerCase();
+  if (keyword === "transparent") return 0;
+  return keyword === "currentcolor" ? undefined : 1;
+}
 
 /**
  * The relative luminance of a ground colour, or `undefined` when it cannot be
@@ -274,23 +409,38 @@ const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
  * Tailwind themes write, carries perceptual lightness directly: its L cubed is
  * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
  * which shadcn-style themes write, converts to rgb by the standard formula.
+ *
+ * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
+ * surface behind it, which the canvas cannot see either. So any alpha below 1,
+ * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground — and
+ * so is an alpha this cannot read.
  */
 function groundLuminance(text: string): number | undefined {
+  if (alphaOf(text) !== 1) return undefined;
   const rgb = parseColor(text);
   if (rgb !== undefined) return relativeLuminance(rgb);
-  const oklch = OKLCH.exec(text);
-  if (oklch) {
-    const lightness = Number(oklch[1]) / (oklch[2] === "%" ? 100 : 1);
-    return Math.min(1, Math.max(0, lightness)) ** 3;
+  const call = colourFunction(text);
+  if (call === undefined) return undefined;
+  const [first, second, third] = call.components;
+  if (call.name === "oklch") {
+    // L is a number in 0–1, or a percentage.
+    const lightness = fractionOf(first, 1);
+    return lightness === undefined ? undefined : lightness ** 3;
   }
-  const hsl = HSL.exec(text);
-  if (hsl) {
-    const [hue, saturation, lightness] = [hsl[1], hsl[2], hsl[3]].map(Number);
-    return relativeLuminance(
-      hslToRgb(hue ?? 0, (saturation ?? 0) / 100, (lightness ?? 0) / 100)
-    );
+  // Hue as a number, in degrees if it says so; saturation and lightness as
+  // percentages, or the bare numbers CSS Color 4 also accepts for them.
+  const hue = numericOf(first?.replace(/deg$/i, ""));
+  const saturation = fractionOf(second, 100);
+  const lightness = fractionOf(third, 100);
+  if (
+    hue === undefined ||
+    hue.percent ||
+    saturation === undefined ||
+    lightness === undefined
+  ) {
+    return undefined;
   }
-  return undefined;
+  return relativeLuminance(hslToRgb(hue.value, saturation, lightness));
 }
 
 /** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
@@ -528,26 +678,6 @@ export function nodeElement(root: HTMLElement, id: string): Element | null {
   // instance is replaced rather than rendered — but the precedence states which
   // answer is the node's rather than leaving it to iteration order.
   return own ?? hosted;
-}
-
-/**
- * Every element the renderer marked as a node, in document order.
- *
- * Beside {@link nodeElement} because both answer from the same marker, and a
- * caller that needs all of them should not walk the tree with its own selector.
- *
- * Chrome drawn INSIDE the canvas root carries no node marker, so it is excluded
- * by construction rather than by a filter that would have to be kept in step
- * with whatever chrome arrives next.
- */
-export function nodeElements(root: HTMLElement): readonly Element[] {
-  const found: Element[] = [];
-  // `forEach` for the reason given in `nodeElement`: a `NodeList` is only
-  // iterable under a lib this package does not compile with.
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    found.push(element);
-  });
-  return found;
 }
 
 /**
@@ -1020,7 +1150,7 @@ function useCanvasMarkers(
   page: React.ReactNode,
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
-  lockedIds: ReadonlySet<string>
+  lockedIds: ReadonlyMap<string, LockMark>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -1155,7 +1285,11 @@ function useCanvasMarkers(
         // rather than from the document per element: this walk re-runs on every
         // change to the rendered tree, and a tree search per element would make
         // that quadratic on a large page.
-        setFlag(element, LOCKED_ATTRIBUTE, id !== null && lockedIds.has(id));
+        setMark(
+          element,
+          LOCKED_ATTRIBUTE,
+          id === null ? undefined : lockedIds.get(id)
+        );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
         }
@@ -1299,6 +1433,20 @@ function ownedByCanvas(element: Element, container: HTMLElement): boolean {
  * rule, and four copies of it are four chances for the guard to be dropped
  * from whichever copy is edited next.
  */
+/**
+ * Set an attribute to a value, or remove it for `undefined`, writing only when
+ * it changes, for the reason {@link setFlag} gives.
+ */
+function setMark(
+  element: Element,
+  attribute: string,
+  value: string | undefined
+): void {
+  if (element.getAttribute(attribute) === (value ?? null)) return;
+  if (value === undefined) element.removeAttribute(attribute);
+  else element.setAttribute(attribute, value);
+}
+
 function setFlag(element: Element, attribute: string, wanted: boolean): void {
   if (wanted === element.hasAttribute(attribute)) return;
   if (wanted) element.setAttribute(attribute, "");
@@ -1849,6 +1997,18 @@ export interface CanvasProps {
    * context of its own.
    */
   overlay?: React.ReactNode;
+  /**
+   * The regions of the page's Layout, drawn locked around the page: a header
+   * before it, a footer after it, as a visitor gets them.
+   *
+   * Drawn inside the canvas root, as part of what the canvas renders, so any
+   * surface the canvas is mounted on carries them with the page. They share
+   * the page's one site sheet and its previewed breakpoints, each compiled
+   * under a scope of its own (`layoutPartSheets`), so the canvas shows the
+   * cascade the published route serves. Absent or empty, the canvas draws the
+   * page exactly as it always has.
+   */
+  regions?: readonly CanvasRegion[];
 }
 
 /**
@@ -2075,6 +2235,141 @@ function DropRefusalNotice({
 }
 
 /**
+ * The canvas box's style, with its zoom also published as a custom property.
+ *
+ * Chrome drawn inside the canvas (a Layout region's badge and tag) is scaled
+ * with everything else by the root's `zoom`, which makes its words unreadable
+ * on a zoomed-out canvas. Reading the factor back lets that chrome undo it and
+ * stay at the admin's own size, without each piece measuring the canvas.
+ */
+function withZoomVariable(style: React.CSSProperties): React.CSSProperties {
+  const zoom = style.zoom;
+  return typeof zoom === "number"
+    ? ({ ...style, "--nx-canvas-zoom": zoom } as React.CSSProperties)
+    : style;
+}
+
+/** A region of the page's Layout, with how it treats the site sheet. */
+interface DrawnRegion {
+  region: CanvasRegion;
+  sheet: PartSheet;
+}
+
+/** The page and the regions drawn around it, each with its sheet inputs. */
+interface LayoutParts {
+  page: PartSheet;
+  header: DrawnRegion | undefined;
+  footer: DrawnRegion | undefined;
+}
+
+/**
+ * The page and the regions around it, each with its site-sheet inputs.
+ *
+ * Asked of `layoutPartSheets`, the answer the published route uses, so the
+ * first part drawn emits the site sheet and each part compiles under its own
+ * scope. `undefined` when there is no region to draw.
+ */
+function useLayoutParts(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+): LayoutParts | undefined {
+  return useMemo(
+    () => layoutPartsOf(regions, rendered, sheet),
+    [regions, rendered, sheet]
+  );
+}
+
+/** {@link useLayoutParts}'s answer, computed. */
+function layoutPartsOf(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+): LayoutParts | undefined {
+  const header = regions?.find(region => region.area === "header");
+  const footer = regions?.find(region => region.area === "footer");
+  if (header === undefined && footer === undefined) return undefined;
+  const parts = drawingOrder(header !== undefined, footer !== undefined);
+  const sheets = layoutPartSheets({
+    parts,
+    styleContext: rendered?.styleContext,
+    siteStyles: sheet,
+    pageScope: pageScopeOf(rendered),
+  });
+  const sheetFor = (part: PagePart): PartSheet =>
+    sheets[parts.indexOf(part)] ?? {};
+  return {
+    page: sheetFor("page"),
+    header: drawnRegion(header, sheetFor),
+    footer: drawnRegion(footer, sheetFor),
+  };
+}
+
+/** The parts in the order they are drawn: header, page, footer. */
+function drawingOrder(hasHeader: boolean, hasFooter: boolean): PagePart[] {
+  return [
+    ...(hasHeader ? (["header"] as const) : []),
+    "page",
+    ...(hasFooter ? (["footer"] as const) : []),
+  ];
+}
+
+/** The scope the page's own styles compile under, when it states one. */
+function pageScopeOf(
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined
+): string | undefined {
+  const scope = rendered?.styles?.scope;
+  return typeof scope === "string" ? scope : undefined;
+}
+
+/** One region with its sheet inputs, or nothing for a region not drawn. */
+function drawnRegion(
+  region: CanvasRegion | undefined,
+  sheetFor: (part: PagePart) => PartSheet
+): DrawnRegion | undefined {
+  return region === undefined
+    ? undefined
+    : { region, sheet: sheetFor(region.area) };
+}
+
+/**
+ * The page between its Layout's header and footer, as the canvas draws them.
+ *
+ * Each region is drawn in the page's environment, so a header block that
+ * measures itself or listens is told the frame the canvas draws in, as the
+ * page is. Without regions it is the page alone, exactly as before.
+ */
+function RegionsAround({
+  drawn,
+  rendered,
+  environment,
+  children,
+}: {
+  drawn: LayoutParts | undefined;
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  environment: BlockEnvironment | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const frame = (part: DrawnRegion | undefined) =>
+    part === undefined ? null : (
+      <BlockEnvironmentProvider value={environment}>
+        <CanvasRegionFrame
+          region={part.region}
+          rendered={rendered}
+          sheet={part.sheet}
+        />
+      </BlockEnvironmentProvider>
+    );
+  return (
+    <>
+      {frame(drawn?.header)}
+      {children}
+      {frame(drawn?.footer)}
+    </>
+  );
+}
+
+/**
  * The document and window the canvas draws in, held where nothing walking an
  * object's own keys can reach them.
  *
@@ -2108,6 +2403,156 @@ class CanvasEnvironment implements BlockEnvironment {
   }
 }
 
+/**
+ * The canvas root, published to both of its readers, and guarded.
+ *
+ * ONE assignment site for both publications.
+ *
+ * They are two APIs because they answer two questions — `rootRef` is read in
+ * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
+ * so a reader can REACT to the canvas arriving, which a ref cannot express
+ * because assigning `.current` changes no dependency. Neither can serve the
+ * other's caller.
+ *
+ * But two effects deciding what the element is could drift: an edit to one is
+ * invisible to the other, and the two would then hand out different answers
+ * with nothing to report it. One effect, one element, published twice.
+ *
+ * After paint rather than through a merged ref callback: the element is the
+ * same for the life of the mount, and one assignment here is easier to follow
+ * than a callback keeping two refs agreeing.
+ */
+function usePublishedRoot(
+  root: React.RefObject<HTMLDivElement | null>,
+  rootRef: CanvasProps["rootRef"],
+  onRoot: CanvasProps["onRoot"]
+): void {
+  useEffect(() => {
+    const element = root.current;
+    if (rootRef !== undefined) rootRef.current = element;
+    onRoot?.(element);
+    return () => {
+      if (rootRef !== undefined) rootRef.current = null;
+      onRoot?.(null);
+    };
+  }, [root, rootRef, onRoot]);
+
+  // A link or form the page draws selects its block here and never takes the
+  // editor anywhere: see `canvas-link-guard`. Same element, same lifetime as
+  // the effect above, so it is installed once per mount.
+  useEffect(() => {
+    const element = root.current;
+    return element === null
+      ? undefined
+      : guardCanvasNavigation(element, `[${CHROME_ATTRIBUTE}]`);
+  }, [root]);
+}
+
+/**
+ * What is marked as selected, and the pointer handlers that select.
+ *
+ * The primary alone is marked when a host has not adopted the set yet, which
+ * keeps every existing caller correct without a change. A drag's own pointer
+ * down runs first, so its behaviour is exactly what it was.
+ */
+function useSelectionPointer({
+  selectedIds,
+  selectedId,
+  onSelect,
+  onDoubleClick,
+  dragPointerDown,
+}: {
+  selectedIds: CanvasProps["selectedIds"];
+  selectedId: string | null;
+  onSelect: CanvasProps["onSelect"];
+  onDoubleClick: CanvasProps["onDoubleClick"];
+  dragPointerDown:
+    | ((event: React.PointerEvent<HTMLDivElement>) => void)
+    | undefined;
+}) {
+  const marked = useMemo(
+    () => markedIds(selectedIds, selectedId),
+    [selectedIds, selectedId]
+  );
+  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const canvasPointerDown = pointer.onPointerDown;
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragPointerDown?.(event);
+      canvasPointerDown(event);
+    },
+    [canvasPointerDown, dragPointerDown]
+  );
+  return { marked, pointer, pointerDown };
+}
+
+/**
+ * The document and window the blocks are drawn in, for block code that
+ * measures itself or listens (`useBlockEnvironment`). Read from the canvas
+ * root's OWN document rather than the globals, so the answer is the frame's
+ * once the canvas renders inside one, with nothing here to change.
+ * `undefined` until the root has mounted, which the hook passes on rather
+ * than falling back to the admin page. Built as a `CanvasEnvironment` rather
+ * than an object literal; see there for why.
+ */
+function useCanvasEnvironment(
+  root: React.RefObject<HTMLDivElement | null>
+): BlockEnvironment | undefined {
+  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
+    undefined
+  );
+  useEffect(() => {
+    const view = root.current?.ownerDocument.defaultView;
+    if (root.current === null || view == null) return;
+    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
+  }, [root]);
+  return environment;
+}
+
+/**
+ * The page, drawn, and the regions of its Layout around it.
+ *
+ * The parts in drawing order, each with how it treats the site sheet:
+ * `undefined` when there are no regions, so a canvas without a Layout renders
+ * exactly as it did.
+ */
+function useDrawnPage({
+  regions,
+  rendered,
+  sheet,
+  document,
+  environment,
+}: {
+  regions: readonly CanvasRegion[] | undefined;
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  sheet: NonNullable<PageRendererProps["siteStyles"]>;
+  document: BlockDocument;
+  environment: BlockEnvironment | undefined;
+}): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
+  const drawn = useLayoutParts(regions, rendered, sheet);
+  const page = useMemo(
+    () => (
+      <BlockEnvironmentProvider value={environment}>
+        <PageRenderer
+          {...rendered}
+          document={document}
+          siteStyles={sheet}
+          {...drawn?.page}
+          // What makes the hit-testing above possible at all. The renderer emits
+          // the node attribute only when asked, because a PUBLISHED page should
+          // not carry an editor's addressing — so the canvas asks and a route
+          // does not. Spread first and set here deliberately: a caller passing
+          // `nodeAttribute: false` through `render` would silently disable
+          // selection for the whole canvas.
+          nodeAttribute
+        />
+      </BlockEnvironmentProvider>
+    ),
+    [rendered, document, sheet, environment, drawn]
+  );
+  return { drawn, page };
+}
+
 export function Canvas({
   document,
   rootRef,
@@ -2126,64 +2571,18 @@ export function Canvas({
   onDoubleClick,
   overlay,
   preview,
+  regions,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
+  usePublishedRoot(root, rootRef, onRoot);
 
-  /*
-   * ONE assignment site for both publications.
-   *
-   * They are two APIs because they answer two questions — `rootRef` is read in
-   * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
-   * so a reader can REACT to the canvas arriving, which a ref cannot express
-   * because assigning `.current` changes no dependency. Neither can serve the
-   * other's caller.
-   *
-   * But two effects deciding what the element is could drift: an edit to one is
-   * invisible to the other, and the two would then hand out different answers
-   * with nothing to report it. One effect, one element, published twice.
-   *
-   * After paint rather than through a merged ref callback: the element is the
-   * same for the life of the mount, and one assignment here is easier to follow
-   * than a callback keeping two refs agreeing.
-   */
-  useEffect(() => {
-    const element = root.current;
-    if (rootRef !== undefined) rootRef.current = element;
-    onRoot?.(element);
-    return () => {
-      if (rootRef !== undefined) rootRef.current = null;
-      onRoot?.(null);
-    };
-  }, [rootRef, onRoot]);
-
-  // A link or form the page draws selects its block here and never takes the
-  // editor anywhere: see `canvas-link-guard`. Same element, same lifetime as
-  // the effect above, so it is installed once per mount.
-  useEffect(() => {
-    const element = root.current;
-    return element === null
-      ? undefined
-      : guardCanvasNavigation(element, `[${CHROME_ATTRIBUTE}]`);
-  }, []);
-
-  /*
-   * What to mark. The primary alone when a host has not adopted the set yet,
-   * which keeps every existing caller correct without a change.
-   */
-  const marked = useMemo(
-    () => markedIds(selectedIds, selectedId),
-    [selectedIds, selectedId]
-  );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
-  const dragPointerDown = dragHandlers?.onPointerDown;
-  const canvasPointerDown = pointer.onPointerDown;
-  const pointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      dragPointerDown?.(event);
-      canvasPointerDown(event);
-    },
-    [canvasPointerDown, dragPointerDown]
-  );
+  const { marked, pointer, pointerDown } = useSelectionPointer({
+    selectedIds,
+    selectedId,
+    onSelect,
+    onDoubleClick,
+    dragPointerDown: dragHandlers?.onPointerDown,
+  });
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
@@ -2194,59 +2593,26 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
+  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
   const rootStyle: React.CSSProperties = { ...boxStyle, ...surface?.style };
 
-  /*
-   * The document and window the blocks are drawn in, for block code that
-   * measures itself or listens (`useBlockEnvironment`). Read from the canvas
-   * root's OWN document rather than the globals, so the answer is the frame's
-   * once the canvas renders inside one, with nothing here to change.
-   * `undefined` until the root has mounted, which the hook passes on rather
-   * than falling back to the admin page. Built as a `CanvasEnvironment` rather
-   * than an object literal; see there for why.
-   */
-  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
-    undefined
-  );
-  useEffect(() => {
-    const view = root.current?.ownerDocument.defaultView;
-    if (root.current === null || view == null) return;
-    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
-  }, []);
-
-  const page = useMemo(
-    () => (
-      <BlockEnvironmentProvider value={environment}>
-        <PageRenderer
-          {...rendered}
-          document={document}
-          siteStyles={sheet}
-          // What makes the hit-testing above possible at all. The renderer emits
-          // the node attribute only when asked, because a PUBLISHED page should
-          // not carry an editor's addressing — so the canvas asks and a route
-          // does not. Spread first and set here deliberately: a caller passing
-          // `nodeAttribute: false` through `render` would silently disable
-          // selection for the whole canvas.
-          nodeAttribute
-        />
-      </BlockEnvironmentProvider>
-    ),
-    [rendered, document, sheet, environment]
-  );
+  const environment = useCanvasEnvironment(root);
+  const { drawn, page } = useDrawnPage({
+    regions,
+    rendered,
+    sheet,
+    document,
+    environment,
+  });
 
   /*
    * The locked nodes, collected in ONE traversal per document rather than asked
    * per element inside the marker walk, which re-runs on every change to the
-   * rendered tree.
+   * rendered tree: `own` for a block locked itself, `inherited` for one inside
+   * a locked block, which the lock covers too.
    */
-  const lockedIds = useMemo(() => {
-    const ids = new Set<string>();
-    walkNodes(document.nodes, node => {
-      if (isLocked(node)) ids.add(node.id);
-    });
-    return ids;
-  }, [document]);
+  const lockedIds = useMemo(() => lockMarksOf(document), [document]);
 
   useCanvasMarkers(
     root,
@@ -2272,7 +2638,7 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={rootStyle}
+      style={withZoomVariable(rootStyle)}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and
@@ -2280,22 +2646,27 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       /*
-       * How the site's GROUND turns dark, for the stylesheet: the strategy the
-       * site's dark token values apply by, present only when those values
-       * include a dark ground.
-       *
-       * The canvas draws the page from the site's own tokens, so its ground
-       * and text already follow the site's dark values; what this decides is
-       * the colour scheme — Canvas, CanvasText and native controls. A site on
-       * the `media` strategy darkens with the visitor's system, and only the
-       * token set says which strategy it uses — CSS cannot read it — so it is
-       * carried here and the sheet pairs it with the media query. The strategy
-       * alone says when dark values apply, not that the page is dark, so a
-       * site whose dark set keeps a light ground carries nothing. Absent too
-       * when the host serves no site sheet.
+       * Whether the site's dark values include a dark ground. They apply with
+       * the device, or under a dark marker, exactly as the site sheet applies
+       * them, and the stylesheet pairs this with both to switch the SCHEME:
+       * Canvas, CanvasText and native controls. Absent when the dark values
+       * keep a light ground, or the host serves no site sheet.
        */
-      data-nx-site-dark-ground={
-        surface?.darkGround === true ? surface.darkMode : undefined
+      data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
+      /*
+       * `data-nx-site-theme`, the mode the nearest theme marker above names,
+       * is written onto this element by `useNearestThemeMarker` before paint,
+       * not rendered here: see that hook.
+       */
+      /*
+       * Whether the site's ground is fully opaque, in every mode. Only then
+       * does the rendered page carry the ground as well as the canvas: painted
+       * twice, an opaque ground looks exactly as it does once, while a
+       * translucent one would darken where the layers overlap. See the page
+       * root's rule in `builder-chrome.css` for why the page wants it.
+       */
+      data-nx-site-ground-opaque={
+        surface?.opaqueGround === true ? "" : undefined
       }
       /*
        * What the pointer means, for the cursor.
@@ -2324,7 +2695,25 @@ export function Canvas({
       {...dragHandlers}
       onPointerDown={pointerDown}
     >
-      {page}
+      <RegionsAround
+        drawn={drawn}
+        rendered={rendered}
+        environment={environment}
+      >
+        {page}
+      </RegionsAround>
+      {/*
+       * The white halo inside every selected rendering's ring, part of what
+       * selecting a block draws, so every host of this canvas has it.
+       */}
+      <SelectionHalos
+        /*
+         * Suppressed for the duration of a drag, as the toolbar and the spacing
+         * bands are: the selection is mid-move, and a drag reads no geometry
+         * per pointer move beyond the rectangles it cached when it began.
+         */
+        active={marked.length > 0 && drag?.draggingBlockName == null}
+      />
       {overlay}
       {refusalDrawn === null ? null : (
         <DropRefusalNotice
@@ -2346,3 +2735,178 @@ export function Canvas({
     </div>
   );
 }
+
+/** One selected rendering, measured in the canvas's content coordinates. */
+interface Halo extends Rect {
+  /** The primary selection, whose ring is the full width. */
+  readonly primary: boolean;
+  /** A component placement, whose ring is the component colour. */
+  readonly component: boolean;
+  /** The block's own corners, in the canvas's content coordinates. */
+  readonly radii: CornerRadii;
+}
+
+const NO_HALOS: readonly Halo[] = [];
+
+function sameHalos(a: readonly Halo[], b: readonly Halo[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((halo, index) => {
+      const other = b[index];
+      return (
+        other !== undefined &&
+        halo.primary === other.primary &&
+        halo.component === other.component &&
+        halo.x === other.x &&
+        halo.y === other.y &&
+        halo.width === other.width &&
+        halo.height === other.height &&
+        borderRadiusOf(halo.radii) === borderRadiusOf(other.radii)
+      );
+    })
+  );
+}
+
+/** Corner radii as the `border-radius` shorthand writes them, both axes. */
+function borderRadiusOf(radii: CornerRadii): string {
+  const { topLeft, topRight, bottomRight, bottomLeft } = radii;
+  const px = (value: number): string => `${String(value)}px`;
+  return (
+    `${px(topLeft.x)} ${px(topRight.x)} ${px(bottomRight.x)} ${px(bottomLeft.x)} / ` +
+    `${px(topLeft.y)} ${px(topRight.y)} ${px(bottomRight.y)} ${px(bottomLeft.y)}`
+  );
+}
+
+/**
+ * The halo for one selected element, or `undefined` where this layer cannot
+ * draw the element's shape — and the element's own outline ring then stands
+ * alone, which is always correct.
+ *
+ * Declined for the cases every overlay drawn in the canvas's content
+ * coordinates declines, asked of the same `geometry-dom` decisions the spacing
+ * overlay asks: no box or an inline box broken across lines, a box positioned
+ * against the viewport (sticky or fixed, which moves without the content the
+ * halo is drawn in), a rotation, skew, reflection or perspective, and a box an
+ * ancestor cuts off.
+ */
+function haloFor(selected: Element, root: HTMLElement): Halo | undefined {
+  const style = selected.ownerDocument.defaultView?.getComputedStyle(selected);
+  if (style === undefined) return undefined;
+  if (layoutFragments(selected) !== 1) return undefined;
+  if (viewportPositioned(selected)) return undefined;
+  const scale = renderedScale(selected, root);
+  if (!scale.describable) return undefined;
+  // Through `canvasContentRect`, the one place this package reads a rectangle,
+  // so the halo and every other overlay agree at any scroll.
+  const rect = canvasContentRect(selected, root);
+  const radii = usedRadiiOf(style, rect, scale);
+  if (radii === undefined) return undefined;
+  // Into the canvas's coordinates, where the halo is drawn: the element's
+  // corners scale with every transform between it and the root.
+  const drawn = scaleCornerRadii(radii, { x: scale.x, y: scale.y });
+  if (clippedByAncestor(selected, root, drawn)) return undefined;
+  return {
+    ...rect,
+    radii: drawn,
+    primary: selected.getAttribute(SELECTED_ATTRIBUTE) === "primary",
+    component: selected.hasAttribute(INSTANCE_ATTRIBUTE),
+  };
+}
+
+/**
+ * The white halo just inside every selected rendering's ring, drawn by the
+ * editor.
+ *
+ * The ring is an outline on the selected element, which the page never sets
+ * and so cannot lose. The halo is the second tone that keeps the ring readable
+ * on the page's own colours — the select blue vanishes on a blue section, and
+ * the white carries it there — and it is drawn HERE, as positioned elements of
+ * the canvas's own, rather than as anything on the page's elements: a
+ * `box-shadow` replaced the block's own shadow, and an `anchor-name` replaced
+ * the block's own anchor and could mark only one of the elements a selection
+ * renders. Measured, the canvas leaves the page exactly as the page styles it.
+ *
+ * EVERY selected rendering gets one: each member of a multi-selection, and each
+ * copy of a node a block draws more than once — `core/collection-loop` draws
+ * its children once per entry, and the canvas marks every copy. It reads WHICH
+ * elements from those marks rather than deciding again, so the halo and the
+ * ring cannot disagree. The marks are written after this layer renders, so the
+ * geometry watch — which hears attribute changes on the page — draws the first
+ * halo, as well as moving every halo with the layout.
+ */
+const SelectionHalos = memo(function SelectionHalos({
+  active,
+}: {
+  active: boolean;
+}): JSX.Element {
+  const layer = useRef<HTMLDivElement | null>(null);
+  const [halos, setHalos] = useState<readonly Halo[]>(NO_HALOS);
+
+  const measure = useCallback(() => {
+    const element = layer.current;
+    const root =
+      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
+    const next: Halo[] = [];
+    if (active && root !== null) {
+      root.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`).forEach(selected => {
+        // Another canvas's selection is that canvas's to draw.
+        if (!ownedByCanvas(selected, root)) return;
+        const halo = haloFor(selected, root);
+        if (halo !== undefined) next.push(halo);
+      });
+    }
+    setHalos(current => (sameHalos(current, next) ? current : next));
+  }, [active]);
+
+  /*
+   * Before paint, once per change of whether there is anything to draw — not
+   * on every render of the canvas, which re-renders on every pointer move of a
+   * drag. Everything that moves a selected block after that, the selection
+   * marks included, reaches the geometry watch below.
+   */
+  useIsomorphicLayoutEffect(() => {
+    measure();
+  }, [measure]);
+
+  // Every later move: a selection mark changing, an image loading, a resize, a
+  // scroll. The layer is how the watch finds the root and ignores its own
+  // writes, so drawing a halo does not schedule the next measurement.
+  // Only while something is selected: with nothing to draw there is nothing to
+  // re-measure, and a canvas with no selection observes nothing for it.
+  useEffect(
+    () => (active ? watchCanvasFor(() => layer.current, measure) : undefined),
+    [active, measure]
+  );
+
+  return (
+    <div
+      ref={layer}
+      className="nx-selection-halos"
+      aria-hidden="true"
+      // Drawn over the page and moving nothing in it, so another overlay's
+      // watch does not re-measure for a halo being drawn.
+      {...{ [OVERLAY_OUTPUT_ATTRIBUTE]: "" }}
+    >
+      {halos.map((halo, index) => (
+        <div
+          // By position in document order: the halos carry no identity of their
+          // own, and a re-measure replaces them all.
+          key={index}
+          className="nx-selection-halo"
+          data-primary={halo.primary ? "" : undefined}
+          data-component={halo.component ? "" : undefined}
+          // The element's own rectangle and corners: the ring and band are drawn
+          // inside it by the stylesheet, from the same edge the element's ring
+          // uses, and follow its curve.
+          style={{
+            left: halo.x,
+            top: halo.y,
+            width: halo.width,
+            height: halo.height,
+            borderRadius: borderRadiusOf(halo.radii),
+          }}
+        />
+      ))}
+    </div>
+  );
+});

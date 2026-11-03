@@ -239,6 +239,24 @@ describe("repairOps", () => {
       refused: { reason: "locked-block", nodeId: "inner" },
     });
   });
+
+  it("names the locked block AROUND one it must move or change, the one to unlock", () => {
+    // The broken row sits inside a block the author locked in Layers. Every
+    // step of its repair changes something that lock covers, so the op layer
+    // refuses it; the repair names the block to unlock rather than reporting
+    // that its blocks could not be placed.
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.reverse();
+    const document = page({
+      ...placed("acme/card", "frame"),
+      locked: true,
+      slots: { body: [row] },
+    });
+
+    expect(repairOps(document, planRepair(document, sources()))).toEqual({
+      refused: { reason: "locked-block", nodeId: "frame" },
+    });
+  });
   it("puts parts back before it adds, so every step stays within the byte cap", () => {
     // A row missing its divider, and a sealed card whose headline holds a
     // large design value the lock puts back. The page and the repaired page

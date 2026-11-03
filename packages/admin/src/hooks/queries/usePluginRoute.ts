@@ -64,6 +64,12 @@ export interface PluginRouteRead<T extends object | null> {
   error: Error | null;
   /** Ask again, ignoring anything cached. */
   refetch: () => void;
+  /**
+   * Whether a fetch is in flight, the first or a refresh. `data` can be a
+   * cached answer while this is true, so a surface that must act on a FRESH
+   * answer (seeding a draft it will later write back) waits for it.
+   */
+  fetching: boolean;
 }
 
 /** What to read. */
@@ -160,6 +166,7 @@ export function usePluginRoute<T extends object | null>({
     pending: enabled && query.isPending,
     error: query.error,
     refetch: () => void query.refetch(),
+    fetching: enabled && query.isFetching,
   };
 }
 

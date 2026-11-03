@@ -19,7 +19,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BreakpointDialog } from "./breakpoint-dialog";
+import { BreakpointEditor } from "./breakpoint-editor";
 import type { BreakpointSet } from "./breakpoints";
 
 function stored(): BreakpointSet {
@@ -29,13 +29,16 @@ function stored(): BreakpointSet {
   };
 }
 
+/**
+ * The editor, as a host shows it while editing. `onOpenChange` stands for the
+ * host's "editing" state: leaving the editor calls it with `false`.
+ */
 function open(value: BreakpointSet, onSave = vi.fn(), onOpenChange = vi.fn()) {
   render(
-    <BreakpointDialog
-      open
-      onOpenChange={onOpenChange}
+    <BreakpointEditor
       value={value}
       onSave={onSave}
+      onClose={() => onOpenChange(false)}
     />
   );
   return onSave;
@@ -145,15 +148,11 @@ describe("saving", () => {
 
   it("refuses dismissal while a save is in flight", async () => {
     /*
-     * Freezing the fields left three ways out untouched — Cancel, the content's
-     * X, and Escape — all of which arrive through `onOpenChange`. Taken during a
-     * pending write, the dialog unmounts with the draft: a refusal landing
-     * afterwards has nowhere to be shown, and reopening seeds from a read that
-     * has not caught up.
-     *
-     * Escape is exercised as well as the button, because they are different
-     * paths to the same callback and guarding only the one with a `disabled`
-     * attribute would leave the keyboard route open.
+     * Freezing the fields left Cancel untouched. Taken during a pending write,
+     * the editor unmounts with the draft: a refusal landing afterwards has
+     * nowhere to be shown, and editing again seeds from a read that has not
+     * caught up. Escape is pressed too, and leaves nothing either: the editor
+     * sits in its host's page, which owns Escape.
      */
     let settle: (value: undefined) => void = () => {};
     const onSave = vi.fn(
@@ -340,10 +339,83 @@ describe("a saved breakpoint's id", () => {
     // `onSave` carries only the breakpoint set. A rename here would leave every
     // NodeStyles entry keyed by the old id, and the compiler would stop
     // emitting those styles on every page that used them, reporting nothing.
-    open(stored());
-    const id = screen.getByDisplayValue("tablet") as HTMLInputElement;
+    // The id is shown nowhere, and renaming a stored breakpoint keeps it.
+    const onSave = open(stored());
+    expect(screen.queryByDisplayValue("tablet")).toBeNull();
+    fireEvent.change(screen.getByDisplayValue("Tablet"), {
+      target: { value: "Small screens" },
+    });
+    fireEvent.click(saveButton());
 
-    expect(id.readOnly).toBe(true);
+    const saved = onSave.mock.calls[0]?.[0] as BreakpointSet;
+    expect(saved.viewport[0]).toMatchObject({
+      id: "tablet",
+      label: "Small screens",
+    });
+  });
+
+  it("names a new breakpoint's id after it, and says a clash in plain words", () => {
+    const onSave = open(stored());
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    const names = screen.getAllByLabelText("Name");
+    fireEvent.change(names[names.length - 1] as HTMLElement, {
+      target: { value: "Wide Phone" },
+    });
+    const widths = screen.getAllByLabelText("Up to");
+    fireEvent.change(widths[widths.length - 1] as HTMLElement, {
+      target: { value: "700" },
+    });
+    fireEvent.click(saveButton());
+    const saved = onSave.mock.calls[0]?.[0] as BreakpointSet;
+    expect(saved.viewport.map(def => def.id)).toContain("wide-phone");
+
+    // A name that makes no id, or one already taken, still saves: the id
+    // falls back, or is numbered, and the author never sees it.
+    cleanup();
+    const again = open(stored());
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    const moreNames = screen.getAllByLabelText("Name");
+    const moreWidths = screen.getAllByLabelText("Up to");
+    fireEvent.change(moreNames[moreNames.length - 2] as HTMLElement, {
+      target: { value: "携帯" },
+    });
+    fireEvent.change(moreWidths[moreWidths.length - 2] as HTMLElement, {
+      target: { value: "500" },
+    });
+    fireEvent.change(moreNames[moreNames.length - 1] as HTMLElement, {
+      target: { value: "Tablet!" },
+    });
+    fireEvent.change(moreWidths[moreWidths.length - 1] as HTMLElement, {
+      target: { value: "800" },
+    });
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    const ids = (again.mock.calls[0]?.[0] as BreakpointSet).viewport.map(
+      def => def.id
+    );
+    expect(ids).toEqual(expect.arrayContaining(["breakpoint", "tablet-2"]));
+
+    // The same NAME twice is still refused, and said about the name.
+    cleanup();
+    open(stored());
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    const twice = screen.getAllByLabelText("Name");
+    const last = twice[twice.length - 1] as HTMLElement;
+    fireEvent.change(last, { target: { value: " tablet" } });
+    expect(saveButton().disabled).toBe(true);
+    expect(last.getAttribute("aria-invalid")).toBe("true");
+    expect(
+      screen.getByText('Another breakpoint is already called "tablet".')
+    ).toBeTruthy();
   });
 
   it("survives an unrelated edit byte for byte", () => {
@@ -394,5 +466,71 @@ describe("the draft", () => {
     });
 
     expect(value.viewport[0]?.maxWidth).toBe(991);
+  });
+});
+
+describe("where each breakpoint applies", () => {
+  it("says it in the device buttons' words, from the next narrower one up", () => {
+    open({
+      viewport: [
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "mobile", label: "Mobile", maxWidth: 575 },
+      ],
+      container: [],
+    });
+    expect(screen.getByText("576–991px")).toBeTruthy();
+    expect(screen.getByText("up to 575px")).toBeTruthy();
+    // The base is the fixed first row, not an editable one.
+    expect(screen.getByText("the base, always applies")).toBeTruthy();
+  });
+
+  it("starts just above a fractional width, not a whole pixel past it", () => {
+    open({
+      viewport: [
+        { id: "tablet", label: "Tablet", maxWidth: 768.5 },
+        { id: "mobile", label: "Mobile", maxWidth: 480.5 },
+      ],
+      container: [],
+    });
+    expect(screen.getByText("above 480.5px, up to 768.5px")).toBeTruthy();
+  });
+});
+
+describe("telling the host about a save", () => {
+  it("says when a save starts and when it settles", async () => {
+    let settle: (value: undefined) => void = () => {};
+    const onSave = vi.fn(
+      () =>
+        new Promise<undefined>(resolve => {
+          settle = resolve;
+        })
+    );
+    const onSavingChange = vi.fn();
+    render(
+      <BreakpointEditor
+        value={stored()}
+        onSave={onSave}
+        onClose={vi.fn()}
+        onSavingChange={onSavingChange}
+      />
+    );
+    fireEvent.click(saveButton());
+    expect(onSavingChange).toHaveBeenLastCalledWith(true);
+    settle(undefined);
+    await waitFor(() => expect(onSavingChange).toHaveBeenLastCalledWith(false));
+  });
+});
+
+describe("container widths", () => {
+  it("offers the first one on a site that has none", () => {
+    open(stored());
+    expect(screen.queryByText("Container widths")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add a container width" })
+    );
+    expect(screen.getByText("Container widths")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Add a container width" })
+    ).toBeNull();
   });
 });

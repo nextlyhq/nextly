@@ -31,6 +31,41 @@ the site's default, and a page whose default is not usable gets no header or foo
 `effectiveLayoutFor` from `@nextlyhq/plugin-page-builder` answers this for a stored
 page; it is experimental.
 
+### Choose a page's Layout
+
+Both settings are one choice, made in one place. The **Layout** picker sits at the top
+of the editor's **Settings** and on the page's Page Builder card in the entry form. It
+offers:
+
+- **Site default (Main)**: the site's default Layout, named. It reads **Site default
+  (none set)** when the site has no published default.
+- Each published Layout, by its title.
+- Each Layout that is not published yet, marked "(not published: the site default
+  shows until it is)".
+- **No header or footer**.
+
+The line under the picker says which Layout is in effect and why, for example "Site
+default: Main" or "Landing (not published, so the site default shows)". A page whose
+Layout was deleted shows "Site default (the chosen Layout was deleted)". An author who
+may not read Layouts sees the choice but cannot change it.
+
+### The Layout's regions in the editor
+
+The editor draws the header and footer of the Layout in effect around the page, as a
+visitor gets them: the published Layout and the published versions of its components.
+Changing the picker redraws them at once, before you save.
+
+The regions are locked. A click selects nothing and shows where the region comes
+from, such as "Header, from Layout Main". If you may edit Layouts, **Edit Layout ↗**
+opens it in a new tab, so your page and its undo history stay as they are. Press
+Enter on a focused region to show the same tag, and Escape to close it. When the
+Layout or one of its components has changes that are not published yet, the tag says
+"Draft changes not live" and names which. Layers lists the regions as locked rows
+above and below the page's blocks; selecting one shows it on the canvas.
+
+Publishing a page that names an unpublished Layout publishes the page only, and you
+are told that the site default shows until that Layout is published.
+
 ## The default Layout
 
 Your site always has exactly one default Layout. On a new site the plugin creates a

@@ -109,6 +109,14 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   offset?: number;
 
   /**
+   * What a sort key naming no sortable field does: `"drop"` (the default)
+   * warns and sorts by the others; `"refuse"` refuses the read, naming each.
+   *
+   * @experimental
+   */
+  unknownSort?: "drop" | "refuse";
+
+  /**
    * Sort order.
    *
    * Use field name for ascending, prefix with `-` for descending.
