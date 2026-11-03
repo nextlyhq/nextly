@@ -38,6 +38,11 @@ function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
           ? "unknown"
           : `${orientation.writingMode}/${orientation.direction}`}
       </span>
+      <span data-testid="layout">
+        {orientation === undefined
+          ? "unknown"
+          : `${orientation.display ?? ""}/${orientation.flexDirection ?? ""}`}
+      </span>
     </>
   );
 }
@@ -214,6 +219,38 @@ describe("keeping the axes current when nothing in the tree moves", () => {
     view.rerender(<Reader root={canvas} state="hover" />);
 
     expect(screen.getByTestId("axes").textContent).toBe("horizontal-tb/rtl");
+  });
+
+  it("keeps a new reading when only the element's LAYOUT changed", () => {
+    // Choosing Column changes neither the tag nor the axes, and a reading
+    // kept as "the same" would leave the alignment icons on the old layout.
+    const canvas = document.createElement("div");
+    canvas.innerHTML = '<div data-nx-node="n1">A box</div>';
+    const drawn = canvas.firstElementChild as HTMLElement;
+    let computed = {
+      writingMode: "horizontal-tb",
+      direction: "ltr",
+      display: "flex",
+      flexDirection: "row",
+    };
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) =>
+      element === drawn
+        ? (computed as unknown as CSSStyleDeclaration)
+        : REAL(element, pseudo)) as typeof window.getComputedStyle);
+
+    const view = render(<Reader root={canvas} state="base" />);
+    expect(screen.getByTestId("layout").textContent).toBe("flex/row");
+
+    computed = {
+      ...computed,
+      flexDirection: "column",
+    };
+    view.rerender(<Reader root={canvas} state="hover" />);
+
+    expect(screen.getByTestId("layout").textContent).toBe("flex/column");
   });
 
   it("re-reads when the canvas resize observer FIRES", () => {

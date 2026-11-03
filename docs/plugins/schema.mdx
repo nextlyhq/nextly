@@ -239,7 +239,9 @@ depends on it (`PLUGIN_HAS_DEPENDENTS`) or when a module has no DOWN
 another owner has built on the plugin's schema: a column, index, foreign key or check the
 app or another plugin added to one of its tables, a key or a relationship field elsewhere
 pointing into them, or an index or key using or referencing a column the plugin added to
-someone else's table. Dropping any of it would delete another owner's data, so no consent covers it. The
+someone else's table. A relationship field the plugin itself added elsewhere, by `extend` or a
+transform and at any depth inside another owner's groups or repeaters, goes with it and does
+not count. Dropping any of it would delete another owner's data, so no consent covers it. The
 refusal names each one and its owner. Remove them in their owner's code and migrate, or
 uninstall with `--keep-data`, which drops nothing. A full uninstall also deletes the
 plugin's settings (secrets included), its owner records and its migration history, so a

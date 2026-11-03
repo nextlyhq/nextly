@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  backAddress,
   checkedAdminPath,
   componentEditorAddress,
   hereAddress,
@@ -90,6 +91,30 @@ describe("the way back", () => {
         undefined
       )
     ).toBe("/admin/collections/pages/p1/builder?field=content");
+  });
+});
+
+describe("Back from a component's view", () => {
+  const here = {
+    pathname: "/admin/collections/pages/p1/builder",
+    search: "?field=content&section=hero",
+  };
+
+  it("keeps the address as it stands when no placement opened it", () => {
+    // From the Components panel: the editor is open at the section its
+    // address names, and Back returns there.
+    expect(backAddress(here, undefined, () => false)).toBe(
+      "/admin/collections/pages/p1/builder?field=content&section=hero"
+    );
+  });
+
+  it("returns to a placement that is a section, and drops one that is not", () => {
+    expect(backAddress(here, "placed", () => true)).toBe(
+      "/admin/collections/pages/p1/builder?field=content&section=placed"
+    );
+    expect(backAddress(here, "inner", () => false)).toBe(
+      "/admin/collections/pages/p1/builder?field=content"
+    );
   });
 });
 

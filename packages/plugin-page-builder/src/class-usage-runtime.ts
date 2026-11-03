@@ -17,6 +17,7 @@ import type { ClassUsageDocumentStore } from "./class-usage-index-rebuild";
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageDocumentReader } from "./class-usage-write";
+import type { UsageRowReader } from "./usage-count";
 import type { GroupedUsageReader } from "./usage-index";
 
 /**
@@ -415,6 +416,37 @@ function localeOptions(subject: ClassUsageSubject): {
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
   return (row as Record<string, unknown>)[subject.field];
+}
+
+/** How many index rows one page of a batch usage read takes. */
+const USAGE_ROW_PAGE_SIZE = 500;
+
+/**
+ * The rows of one usage index a predicate matches, a page at a time, backed by
+ * the Direct API: what a batch usage read folds into documents.
+ *
+ * As the system, for the reason the grouped reader gives: the index denies
+ * every access rule it declares, so an untrusted read answers nothing, which
+ * reads as "used nowhere".
+ */
+export function usageRowReader(
+  nextly: ClassUsageDirectApi,
+  /** The index collection's RESOLVED slug, since an integrator may rename it. */
+  indexCollection: string
+): UsageRowReader {
+  return async args => {
+    const found = await nextly.find({
+      collection: indexCollection,
+      where: args.where,
+      page: args.page,
+      // The Direct API clamps a page at 500 rows, so asking for that many
+      // makes each page the whole page.
+      limit: USAGE_ROW_PAGE_SIZE,
+      depth: 0,
+      ...AS_THE_SYSTEM,
+    });
+    return { items: found.items, hasNext: found.meta.hasNext };
+  };
 }
 
 /**

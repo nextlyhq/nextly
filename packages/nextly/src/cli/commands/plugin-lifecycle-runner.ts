@@ -623,9 +623,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             // a transformer that adds a plugin or a collection added it again.
             //
             // Boot migrations off: the hook runs inside the command's migrate
-            // lock, so a boot that migrated would wait on that lock itself,
-            // and on SQLite, whose lock holds nothing back, it could apply a
-            // module after the uninstall had fixed which ones to undo.
+            // lock, which this process may take again, so a boot that
+            // migrated would apply a pending module after the uninstall had
+            // fixed which ones to undo, on every dialect.
             config: {
               ...appConfig,
               db: { ...appConfig.db, runMigrationsOnBoot: false },

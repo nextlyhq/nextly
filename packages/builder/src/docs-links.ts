@@ -22,3 +22,9 @@ export const PAGE_BUILDER_DOCS: readonly DocsLink[] = [
   { label: "Page Builder docs", href: `${DOCS_BASE}/page-builder` },
   { label: "Using the editor", href: `${DOCS_BASE}/page-builder/editor` },
 ];
+
+/**
+ * Where the docs explain the canvas route a site mounts to draw the canvas
+ * inside its own layout: the page a fallback's Details link opens.
+ */
+export const CANVAS_ROUTE_DOCS_HREF: string = `${DOCS_BASE}/page-builder#draw-the-canvas-in-your-sites-layout`;
