@@ -314,6 +314,8 @@ describe("--non-interactive at a terminal", () => {
     expect(
       [...seen.printed, printedError()].join("\n").toLowerCase()
     ).toContain("this confirmation needs a terminal");
+    // Its own code, not the one a "no" typed at the prompt ends with.
+    expect(printedError()).toContain("(CORE_DESTRUCTIVE_NEEDS_TERMINAL)");
   });
 
   it("the schema push's terminal prompts are not shown, and a terminal is asked for", async () => {
@@ -348,6 +350,7 @@ describe("--non-interactive at a terminal", () => {
     expect(seen.confirm).not.toHaveBeenCalled();
     expect(seen.registry.deleteCollection).not.toHaveBeenCalled();
     expect(printedError()).toContain("--yes");
+    expect(printedError()).toContain("(SYNC_CONFIRMATION_REQUIRED)");
   });
 
   it("db:sync --demote does not ask, changes nothing, and names --yes", async () => {
@@ -358,6 +361,7 @@ describe("--non-interactive at a terminal", () => {
     expect(seen.registry.registerCollection).not.toHaveBeenCalled();
     expect(seen.registry.updateCollection).not.toHaveBeenCalled();
     expect(printedError()).toContain("--yes");
+    expect(printedError()).toContain("(SYNC_CONFIRMATION_REQUIRED)");
   });
 
   it("db:sync --promote --yes answers its confirmation yes without asking", async () => {

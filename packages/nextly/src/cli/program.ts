@@ -154,8 +154,8 @@ ${pc.bold("Documentation:")}
 
   // Register all commands
   registerCommands(program);
-  // Then end every command's help with what its exit status means: last, so
-  // the block follows any help text a command adds itself.
+  // Then end the program's help and every command's with what its exit
+  // status means: last, so the block follows any help text added before it.
   addExitCodesHelp(program);
 
   // Telemetry preAction/postAction hooks. We capture command_started before

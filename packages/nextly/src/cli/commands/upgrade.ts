@@ -26,6 +26,7 @@ import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
 import { exitWithError, failWithError } from "../errors";
+import { coreDestructiveNeedsTerminal } from "../errors/areas/migrations";
 import { createContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
@@ -265,15 +266,12 @@ export async function upgradeAction(
           info: msg => context.logger.info(msg),
           warn: msg => context.logger.warn(msg),
         },
-        // Asked only where someone can answer. Otherwise the change is not
-        // confirmed, so the reconcile refuses before changing anything, and
-        // the run says why rather than waiting on input nobody will give.
+        // Asked only where someone can answer. Otherwise the run ends here,
+        // before the reconcile changes anything, and says the confirmation
+        // needs a terminal rather than waiting on input nobody will give.
         confirmDestructive: reasons => {
           if (!canPrompt()) {
-            context.logger.warn(
-              "This confirmation needs a terminal: --reconcile-core asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or --non-interactive was given, or CI is set). Nothing was changed."
-            );
-            return Promise.resolve(false);
+            return Promise.reject(coreDestructiveNeedsTerminal(reasons));
           }
           return promptYesNo(
             `Reconcile core schema with these destructive operations?\n  - ${reasons.join("\n  - ")}\nProceed? [y/N]: `

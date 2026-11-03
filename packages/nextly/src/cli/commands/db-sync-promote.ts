@@ -9,9 +9,13 @@ import { appendFileSync, existsSync } from "node:fs";
 
 import * as p from "@clack/prompts";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import { exitWithError } from "../errors";
-import { promoteCollectionNotFound } from "../errors/areas/sync";
+import {
+  promoteCollectionNotFound,
+  syncConfirmationRequired,
+} from "../errors/areas/sync";
 import type { CommandContext } from "../program";
 
 import { openCollectionRegistry } from "./db-sync-registry";
@@ -31,6 +35,12 @@ export async function runPromote(
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+
+  // Its confirmation cannot be asked and `--yes` did not answer it: stop
+  // before the database is opened, so nothing is changed.
+  if (!confirmationAnswered(context) && !canPrompt()) {
+    exitWithError(logger, syncConfirmationRequired("--promote", slug));
+  }
 
   // 1. Database wiring, shared with --demote, so a missing or unreachable
   // database ends with the same errors as the rest of db:sync.

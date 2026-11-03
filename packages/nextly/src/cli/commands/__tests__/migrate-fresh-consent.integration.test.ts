@@ -2,7 +2,7 @@
  * `migrate:fresh` drops every table, so only the data-loss consent lets it:
  * `--yes` answers questions and never consents to deleting data. Run as a
  * shell runs it, with no terminal to ask, `migrate:fresh --yes` leaves every
- * table in place and exits 1, and `migrate:fresh --accept-data-loss` drops
+ * table in place, exits 1 and names the consent that would allow it, and `migrate:fresh --accept-data-loss` drops
  * them and rebuilds the migrated ones, on every configured dialect.
  *
  * A table no migration creates is the observable that separates a rebuild
@@ -110,11 +110,14 @@ describe.each(getConfiguredTestDialects())(
     }
 
     it(
-      "--yes alone with no terminal leaves every table",
+      "--yes alone with no terminal leaves every table, naming --accept-data-loss",
       async () => {
         const before = await migratedWithStray();
         const run = await nextly(["migrate:fresh", "--yes"]);
         expect(run.status, run.stdout + run.stderr).toBe(1);
+        expect(run.stdout + run.stderr).toContain(
+          "--yes does not consent to deleting data: give --accept-data-loss"
+        );
         expect((await instance!.adapter.listTables()).sort()).toEqual(before);
       },
       3 * NEXTLY_RUN_TIMEOUT

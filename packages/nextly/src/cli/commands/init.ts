@@ -30,9 +30,13 @@ import { confirm, input } from "@inquirer/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { projectUsesSrcLayout } from "../../shared/lib/generated-output-paths";
 import { exitWithError } from "../errors";
-import { projectAlreadyInitialized } from "../errors/areas/commands";
+import {
+  initAnswersRequired,
+  projectAlreadyInitialized,
+} from "../errors/areas/commands";
 import {
   createContext,
   type CommandContext,
@@ -131,6 +135,10 @@ export async function runInit(
   if (options.yes) {
     answers = { ...defaults };
     logger.info("Using default configuration...");
+  } else if (!canPrompt()) {
+    // Nobody can answer the questions: stop before anything is written and
+    // name the flag that answers them with the defaults.
+    exitWithError(logger, initAnswersRequired());
   } else {
     logger.info("Answer a few questions to set up your project.\n");
 

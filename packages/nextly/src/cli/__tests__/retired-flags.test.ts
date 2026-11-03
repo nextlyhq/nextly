@@ -4,7 +4,9 @@
  * `migrate:fresh -f/--force` and `prune --force` are the data-loss consent
  * `--accept-data-loss`, and `generate:widget --force` is `--overwrite`.
  * `db:sync -f/--force` never did anything, so it is refused, naming
- * `--accept-data-loss`, before the sync starts. `nextly init` is retired whole,
+ * `--accept-data-loss`, before the sync starts. `migrate:fresh --yes` never
+ * consents to deleting data, so it is refused the same way, at a terminal or
+ * not, before the database is reached. `nextly init` is retired whole,
  * so its `-f/--force` keeps overwriting with no notice of its own.
  *
  * Each command is declared as the program declares it and run through
@@ -186,6 +188,33 @@ describe("migrate:fresh -f/--force", () => {
     expect(text).toContain("--accept-data-loss");
     expect(text).not.toContain("--force");
     expect(text).not.toMatch(/-f,/);
+  });
+});
+
+describe("migrate:fresh --yes", () => {
+  it.each([
+    ["with no terminal", false],
+    ["at a terminal", true],
+  ])(
+    "is refused %s, before the database is reached, naming --accept-data-loss",
+    async (_where, attached) => {
+      terminal(attached);
+      const code = await run(program(registerMigrateFreshCommand), [
+        "migrate:fresh",
+        "--yes",
+      ]);
+      expect(code).toBe(1);
+      expect(connect).not.toHaveBeenCalled();
+      expect(printed()).toContain(
+        "--yes does not consent to deleting data: give --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS)"
+      );
+      expect(printed()).toContain("(INPUT_REFUSED)");
+    }
+  );
+
+  it("is not listed in the help", () => {
+    const text = help(program(registerMigrateFreshCommand), "migrate:fresh");
+    expect(text).not.toContain("--yes");
   });
 });
 

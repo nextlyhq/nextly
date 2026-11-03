@@ -1,7 +1,8 @@
 /**
  * `migrate:fresh` deletes every table, so it takes the data-loss consent in
  * the form without targets, and with no terminal and no consent it refuses
- * before it connects to the database.
+ * before it connects to the database. `--yes` is never that consent: it is
+ * refused, at a terminal or not, whatever else is given.
  *
  * The adapter is faked so that reaching it is the observable: a run allowed
  * to proceed connects, and a refused one never does.
@@ -212,6 +213,30 @@ describe("migrate:fresh and the data-loss consent", () => {
     expect(connect).not.toHaveBeenCalled();
     expect(output).toContain("only by the consent without targets");
     expect(output).toContain("(DATA_LOSS_CONSENT_NOT_COVERED)");
+  });
+
+  it.each([
+    ["with no terminal", false],
+    ["at a terminal", true],
+  ])(
+    "refuses --yes %s, before asking or connecting, naming the consent",
+    async (_where, attached) => {
+      terminal(attached);
+      const { code, output } = await fresh({ yes: true });
+      expect(code).toBe(1);
+      expect(prompt.asked).toBe(0);
+      expect(connect).not.toHaveBeenCalled();
+      expect(output).toContain(
+        "--yes does not consent to deleting data: give --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS)"
+      );
+      expect(output).toContain("(INPUT_REFUSED)");
+    }
+  );
+
+  it("refuses --yes beside the consent too", async () => {
+    const { code } = await fresh({ yes: true, acceptDataLoss: true });
+    expect(code).toBe(1);
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("honours --force, naming it deprecated", async () => {

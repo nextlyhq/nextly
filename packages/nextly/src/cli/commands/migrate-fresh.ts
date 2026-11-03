@@ -42,11 +42,15 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import { judgeDataLoss } from "../../domains/schema/migrate/data-loss-consent";
+import {
+  ACCEPT_DATA_LOSS_ENV,
+  judgeDataLoss,
+} from "../../domains/schema/migrate/data-loss-consent";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
 import { exitWithError } from "../errors";
+import { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -93,6 +97,11 @@ export interface MigrateFreshCommandOptions {
    * @default false
    */
   seed?: boolean;
+
+  /**
+   * Refused whenever it is given: it never consents to deleting data.
+   */
+  yes?: boolean;
 }
 
 /**
@@ -137,6 +146,10 @@ export async function runMigrateFresh(
   const startTime = Date.now();
 
   logger.header("Migrate Fresh");
+
+  // `--yes` is refused before anything is read or reached, whatever else is
+  // given, so a run that meant it as consent changes nothing.
+  if (options.yes) exitWithError(logger, yesIsNotConsent());
 
   // Step 1: Validate database environment
   logger.debug("Validating database environment...");
@@ -568,6 +581,19 @@ async function confirmDestructiveAction(prompt: string): Promise<boolean> {
       const normalizedAnswer = answer.toLowerCase().trim();
       resolve(normalizedAnswer === "yes" || normalizedAnswer === "y");
     });
+  });
+}
+
+/**
+ * The refusal of `migrate:fresh --yes`: it answers other commands' questions,
+ * and deleting every table takes the data-loss consent, never `--yes`.
+ */
+function yesIsNotConsent(): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: `--yes does not consent to deleting data: give --accept-data-loss (or ${ACCEPT_DATA_LOSS_ENV}).`,
+    why: "Nothing was changed. migrate:fresh deletes every table, which only the data-loss consent allows.",
+    next: `Run \`nextly migrate:fresh --accept-data-loss\` (or set ${ACCEPT_DATA_LOSS_ENV}=1) in place of --yes.`,
+    context: { reason: "yes-is-not-consent" },
   });
 }
 

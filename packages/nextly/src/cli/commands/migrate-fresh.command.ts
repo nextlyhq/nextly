@@ -26,6 +26,12 @@ export function registerMigrateFreshCommand(program: Command): void {
         .default(false)
         .hideHelp()
     )
+    // `--yes` answers other commands' questions and never consents to
+    // deleting data, so here it is refused, naming the consent, and kept out
+    // of the help.
+    .addOption(
+      new Option("--yes", "Refused: use --accept-data-loss").hideHelp()
+    )
     .option("--seed", "Run seeders after migrations", false)
     .action(
       lazyAction(

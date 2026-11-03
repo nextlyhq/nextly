@@ -67,11 +67,10 @@ export async function askToDeleteInTerminal(
 /**
  * The error a run ends with when the person at the terminal did not confirm
  * a deletion: nothing changed, and it names the consent that deletes without
- * asking. A refusal of the run as given, so it carries the input-refused code
- * and exits 1, as a run with no consent and no terminal does.
+ * asking. It exits 1, as a run with no consent and no terminal does.
  */
 export function dataLossDeclined(): CliError {
-  return new CliError("INPUT_REFUSED", {
+  return new CliError("DATA_LOSS_DECLINED", {
     what: "Nothing was changed: the deletion was not confirmed.",
     why: "The prompt that listed what would be deleted was not answered yes.",
     next: `Run the command again and confirm, or give --accept-data-loss (or ${ACCEPT_DATA_LOSS_ENV}) to consent without being asked.`,

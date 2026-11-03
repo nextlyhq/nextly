@@ -1,9 +1,10 @@
 /**
  * One meaning per flag, on every command the program defines: no command shows
- * a `--force` but `init`, none offers both `--dry-run` and `--apply`, and every
- * global option reaches every command through the program's one definition.
- * A hidden option is a retired spelling still honoured for a release, and only
- * the ones listed here exist.
+ * a `--force` but `init` (and `upgrade`, until that command changes), none
+ * offers both `--dry-run` and `--apply`, and every global option reaches every
+ * command through the program's one definition. A hidden option is a spelling
+ * still answered, honoured for a release or refused with a notice, and only the
+ * ones listed here exist.
  *
  * The commands are read from the program's own list, so a command is covered by
  * being defined.
@@ -34,11 +35,13 @@ const named = (name: string): Command => commandAt(program, name.split(" "));
 /**
  * The retired spellings each command still answers, hidden from its help:
  * honoured for a release with a notice naming the new spelling, or, for
- * `db:sync`, refused with a notice.
+ * `db:sync`, refused with a notice. `migrate:fresh --yes` is refused too: a
+ * habit carried from other commands, it never consents to deleting data, and
+ * the refusal names the consent that does.
  */
 const RETIRED: Record<string, string[]> = {
   "db:sync": ["-f, --force"],
-  "migrate:fresh": ["-f, --force"],
+  "migrate:fresh": ["-f, --force", "--yes"],
   prune: ["--force"],
   "generate:widget": ["--force"],
 };
@@ -69,13 +72,17 @@ describe("the flag vocabulary", () => {
     expect(paths.length).toBeGreaterThan(30);
   });
 
-  it("shows --force or -f on init alone", () => {
-    const shown = paths.filter(name =>
-      named(name).options.some(
-        option =>
-          !option.hidden &&
-          flagsOf(option).some(flag => flag === "--force" || flag === "-f")
-      )
+  it("shows --force or -f on init alone, upgrade aside", () => {
+    // upgrade's old flags, its -f/--force among them, are replaced when the
+    // command changes, so its visible --force is left to that change.
+    const shown = paths.filter(
+      name =>
+        name !== "upgrade" &&
+        named(name).options.some(
+          option =>
+            !option.hidden &&
+            flagsOf(option).some(flag => flag === "--force" || flag === "-f")
+        )
     );
     expect(shown).toEqual(["init"]);
   });
@@ -88,7 +95,7 @@ describe("the flag vocabulary", () => {
     expect(both).toEqual([]);
   });
 
-  it("hides only the retired spellings still honoured", () => {
+  it("hides only the retired spellings listed", () => {
     const hidden: Record<string, string[]> = {};
     for (const name of paths) {
       const flags = named(name)

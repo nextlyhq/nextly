@@ -1,6 +1,8 @@
 /**
  * Every command's `--help` ends by saying what its exit status means: the
- * codes every command shares, then the codes that command adds. The commands
+ * codes every command shares, then the codes that command adds. `nextly
+ * --help` ends with the shared codes, which every command it lists ends with
+ * too. The commands
  * are read from the program's own list, so a command is covered by being
  * defined.
  *
@@ -22,7 +24,6 @@ const SHARED =
 
 /** The codes each command adds, as its help must print them. */
 const OWN: Record<string, string[]> = {
-  add: ["a failed install exits with the package manager's own code"],
   migrate: ["2 an applied migration file was edited since it ran"],
   "generate:types": [
     "with --check: 2 the component map is out of step with the config, 1 it could not be checked",
@@ -53,6 +54,15 @@ describe("every command's help ends with its exit codes", () => {
     expect(paths).toContain("migrate");
     expect(paths).toContain("media orphans");
     expect(paths.length).toBeGreaterThan(30);
+  });
+
+  it("nextly itself", () => {
+    const help = printedHelp(program);
+    expect(
+      help.trimEnd().endsWith(["Exit codes:", `  ${SHARED}`].join("\n"))
+    ).toBe(true);
+    // Once: the commands' own blocks are not printed in the program's help.
+    expect(help.split("Exit codes:")).toHaveLength(2);
   });
 
   it.each(paths)("%s", name => {

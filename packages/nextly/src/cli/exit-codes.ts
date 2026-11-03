@@ -17,9 +17,6 @@ export const SHARED_EXIT_CODES =
  * `nextly` (a subcommand with its parent's name before it, as `media orphans`).
  */
 export const COMMAND_EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
-  // The package manager's failing code is passed through, so a script sees
-  // what the install itself ended with.
-  add: ["a failed install exits with the package manager's own code"],
   // `migrateExitCode`: an edited applied file is told apart from any other
   // failure.
   migrate: ["2 an applied migration file was edited since it ran"],
@@ -29,28 +26,37 @@ export const COMMAND_EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
-/** The block that ends `name`'s help. */
-function exitCodesHelp(name: string): string {
+/** The block that ends a help: the shared codes, then `own`. */
+function exitCodesHelp(own: readonly string[]): string {
   return [
     "",
     "Exit codes:",
     `  ${SHARED_EXIT_CODES}`,
-    ...(COMMAND_EXIT_CODES[name] ?? []).map(line => `  ${line}`),
+    ...own.map(line => `  ${line}`),
   ].join("\n");
 }
 
-/**
- * Ends the help of every command under `parent`, at any depth, with its exit
- * codes. Run once every command is registered, so the block comes after any
- * help text a command adds itself.
- */
-export function addExitCodesHelp(
+/** Ends the help of every command under `parent`, at any depth, with its exit codes. */
+function addCommandsExitCodesHelp(
   parent: Command,
-  prefix: readonly string[] = []
+  prefix: readonly string[]
 ): void {
   for (const command of parent.commands) {
     const path = [...prefix, command.name()];
-    command.addHelpText("after", exitCodesHelp(path.join(" ")));
-    addExitCodesHelp(command, path);
+    command.addHelpText(
+      "after",
+      exitCodesHelp(COMMAND_EXIT_CODES[path.join(" ")] ?? [])
+    );
+    addCommandsExitCodesHelp(command, path);
   }
+}
+
+/**
+ * Ends the program's help with the shared codes, and every command's, at any
+ * depth, with its own. Run once every command is registered, so the block
+ * comes after any help text the program or a command adds itself.
+ */
+export function addExitCodesHelp(program: Command): void {
+  program.addHelpText("after", exitCodesHelp([]));
+  addCommandsExitCodesHelp(program, []);
 }
