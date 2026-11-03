@@ -25,6 +25,7 @@ import { BaseService } from "../../../shared/base-service";
 import { keepDeniedAtStored } from "../../../shared/lib/denied-change";
 import {
   validateEntryData,
+  type EntryWriteContext,
   type ValidationIssue,
 } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
@@ -182,6 +183,14 @@ export interface SaveComponentDataParams {
    * anything else the parent write puts on its request travels with it.
    */
   req?: Record<string, unknown>;
+
+  /**
+   * The host write's context, for a field type inside an instance that reads
+   * through it, as a blocks field does to judge its composition against the
+   * component library: the host's entry, operation and connection. A read of
+   * the host entry itself is refused ({@link instanceWriteOf}).
+   */
+  write?: EntryWriteContext;
 
   /** Who the write is made as; see {@link FieldGroupWriteAccess}. */
   access: FieldGroupWriteAccess;
@@ -350,6 +359,66 @@ function resolveZoneInstances(
 ): ComponentInstanceData[] {
   const raw = field.repeatable ? value : [value];
   return Array.isArray(raw) ? (raw as ComponentInstanceData[]) : [];
+}
+
+/**
+ * The host write's context as a field inside one of its field-group
+ * instances sees it: the same entry, operation, language, payload, connection
+ * and library reads, except a read of the host's own field named as one of
+ * the instance's.
+ *
+ * A stored read names a top-level field of the entry it reads, so a field of
+ * the instance reading its own baseline that way would reach the host's own
+ * field of the same name: another value, of another document, already written
+ * in this transaction. A lock judged against that could pass a change the
+ * instance's own value never allowed. So that read answers that nothing is
+ * stored, which is true of the instance: the field judges against its starting
+ * value alone, failing closed. Refusing the read instead would fail every save
+ * of a field group holding a locked block, since a failed stored read fails
+ * the write. A read of any other field of the host is the host's own read.
+ */
+export function instanceWriteOf(
+  host: EntryWriteContext,
+  /** The instance's own field names: the reads that would mistake the host's. */
+  ownFields: ReadonlySet<string>
+): EntryWriteContext {
+  return {
+    ...host,
+    readStored: (allowedType, target) =>
+      ownFields.has(topLevelName(target.field)) && readsTheHost(host, target)
+        ? Promise.resolve({ kind: "absent" as const })
+        : host.readStored(allowedType, target),
+  };
+}
+
+/**
+ * The top-level field a stored read's field path starts at: `settings` for
+ * `settings.content`, `rows` for `rows[0].content`, the name itself for a
+ * top-level field. A field nested in an instance's group or repeater reads
+ * by such a path, and it is still the instance's own.
+ */
+function topLevelName(path: string): string {
+  return path.split(/[.[]/, 1)[0] ?? path;
+}
+
+/**
+ * Whether a stored read names the host document itself: the same collection
+ * entry by id, or the same single, which has one document and is named by its
+ * slug alone.
+ */
+function readsTheHost(
+  host: EntryWriteContext,
+  target: Parameters<EntryWriteContext["readStored"]>[1]
+): boolean {
+  if (host.kind === "single") {
+    return "single" in target && target.single === host.slug;
+  }
+  return (
+    host.id !== undefined &&
+    "collection" in target &&
+    target.collection === host.slug &&
+    target.id === host.id
+  );
 }
 
 export class FieldGroupMutationService extends BaseService {
@@ -797,7 +866,7 @@ export class FieldGroupMutationService extends BaseService {
      */
     validateOnly = false
   ): Promise<void> {
-    const { parentId, parentTable, fields, data, locale, req } = params;
+    const { parentId, parentTable, fields, data, locale, req, write } = params;
 
     // Every read made beneath this write goes through the transaction's own connection; see
     // `writeScope`.
@@ -833,6 +902,7 @@ export class FieldGroupMutationService extends BaseService {
                   data: fieldData,
                   locale,
                   req,
+                  write,
                 },
                 validateOnly
               );
@@ -848,6 +918,7 @@ export class FieldGroupMutationService extends BaseService {
                     data: fieldData,
                     locale,
                     req,
+                    write,
                   },
                   validateOnly
                 );
@@ -862,6 +933,7 @@ export class FieldGroupMutationService extends BaseService {
                     data: fieldData as ComponentInstanceData,
                     locale,
                     req,
+                    write,
                   },
                   validateOnly
                 );
@@ -1054,6 +1126,7 @@ export class FieldGroupMutationService extends BaseService {
       data: ComponentInstanceData;
       locale?: string;
       req?: Record<string, unknown>;
+      write?: EntryWriteContext;
     },
     /** Prepare and validate only; write nothing. */
     validateOnly = false
@@ -1096,7 +1169,8 @@ export class FieldGroupMutationService extends BaseService {
         req,
         componentMeta.slug,
         // The row this field's single instance is, whatever id is sent.
-        existing[0]?.id
+        existing[0]?.id,
+        params.write
       );
       // Validation only: the instance has been judged as the write would
       // judge it, and nothing is stored.
@@ -1298,6 +1372,7 @@ export class FieldGroupMutationService extends BaseService {
       data: unknown;
       locale?: string;
       req?: Record<string, unknown>;
+      write?: EntryWriteContext;
     },
     /** Prepare and validate only; write nothing. */
     validateOnly = false
@@ -1355,7 +1430,8 @@ export class FieldGroupMutationService extends BaseService {
           req,
           componentMeta.slug,
           // The stored row an existing instance is, for its stored passwords.
-          instanceId && existingMap.has(instanceId) ? instanceId : undefined
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined,
+          params.write
         );
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
@@ -1622,6 +1698,7 @@ export class FieldGroupMutationService extends BaseService {
       data: unknown;
       locale?: string;
       req?: Record<string, unknown>;
+      write?: EntryWriteContext;
     },
     /** Prepare and validate only; write nothing. */
     validateOnly = false
@@ -1701,6 +1778,7 @@ export class FieldGroupMutationService extends BaseService {
           metaCache,
           globalExistingMap,
           req,
+          write: params.write,
         });
         if (!prepared) continue;
         const { meta, componentFields, instanceId, existingEntry } = prepared;
@@ -1959,7 +2037,9 @@ export class FieldGroupMutationService extends BaseService {
      * stored definition, which carries constants and cannot carry a function.
      */
     slug?: string,
-    storedId?: string
+    storedId?: string,
+    /** The host write's context, seen through {@link instanceWriteOf}. */
+    write?: EntryWriteContext
   ): Promise<void> {
     // A component instance must be a plain object. A primitive (e.g. a bare
     // string sent for a non-repeatable component field) would make the field
@@ -2007,7 +2087,25 @@ export class FieldGroupMutationService extends BaseService {
       ...(await validateEntryData(
         instance,
         slug ? attachFieldValidators("fieldGroup", slug, judged) : judged,
-        { mode, req, componentFields: nested }
+        {
+          mode,
+          req,
+          componentFields: nested,
+          // A field type that reads the library judges this instance with the
+          // host write's context, as it judges the host's own field.
+          ...(write === undefined
+            ? {}
+            : {
+                write: instanceWriteOf(
+                  write,
+                  new Set(
+                    componentFields.flatMap(field =>
+                      typeof field.name === "string" ? [field.name] : []
+                    )
+                  )
+                ),
+              }),
+        }
       )),
     ];
     if (issues.length > 0) {
@@ -2414,6 +2512,8 @@ export class FieldGroupMutationService extends BaseService {
    * Null when this write resolved no record for the type the block claims.
    */
   private async prepareZoneBlock(args: {
+    /** The host write's context; see `SaveComponentDataParams.write`. */
+    write?: EntryWriteContext;
     instance: ComponentInstanceData;
     componentType: string;
     metaCache: Map<string, DynamicFieldGroupRecord>;
@@ -2442,7 +2542,8 @@ export class FieldGroupMutationService extends BaseService {
       args.req,
       meta.slug,
       // The stored row an existing block is, for its stored passwords.
-      existingEntry ? instanceId : undefined
+      existingEntry ? instanceId : undefined,
+      args.write
     );
     return { meta, componentFields, instanceId, existingEntry };
   }

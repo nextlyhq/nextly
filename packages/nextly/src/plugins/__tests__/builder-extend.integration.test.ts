@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
+import { installRegistryResolver } from "../../cli/utils/registry-resolver";
 import { createAdapter } from "../../database/factory";
 import { clearServices } from "../../di/register";
 import {
@@ -89,6 +90,10 @@ async function seededAdapter(): Promise<
   Awaited<ReturnType<typeof createAdapter>>
 > {
   const adapter = await freshAdapter();
+  // What boot does before first-run setup: the schema lock seeds its row
+  // through an insert, which an adapter refuses for a table its resolver
+  // does not hold.
+  installRegistryResolver(adapter);
   await ensureFirstRunSetup({
     adapter,
     logger: silentLogger,

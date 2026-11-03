@@ -11,17 +11,25 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { advanceBackfill, backfillComplete } from "./usage-backfill";
+import {
+  advanceBackfill,
+  backfillComplete,
+  type ScopeWalk,
+} from "./usage-backfill";
 import { backfillScopeKey, type BackfillScope } from "./usage-backfill-scope";
 
 function scope(field: string): BackfillScope {
   return { entity: "pages", field, locale: "", variant: "published" };
 }
 
+/** What a rebuild that walked its scope to the end answers. */
+const WHOLE = { finished: true };
+
 /** A state store over a plain set, recording what it was told and when. */
-function store(initial: string[] = []) {
+function store(initial: string[] = [], cursors = new Map<string, string>()) {
   const done = new Set(initial);
   const recorded: string[] = [];
+  const checkpoints: string[] = [];
   // Counted, because the production store answers `completed()` by paging the
   // whole progress collection — so "did this read the store at all" is the
   // property, not an implementation detail.
@@ -29,6 +37,7 @@ function store(initial: string[] = []) {
   return {
     done,
     recorded,
+    checkpoints,
     get reads() {
       return counter.reads;
     },
@@ -41,6 +50,13 @@ function store(initial: string[] = []) {
         recorded.push(key);
         done.add(key);
       },
+      cursorOf: (key: string) => cursors.get(key),
+      checkpoint: async (key: string, cursor: string) => {
+        checkpoints.push(`${key}@${cursor}`);
+        cursors.set(key, cursor);
+      },
+      fenced: <T>(write: () => Promise<T>) => write(),
+      finish: async () => undefined,
     },
   };
 }
@@ -58,6 +74,7 @@ describe("advancing a backfill", () => {
       state: s.state,
       rebuild: async sc => {
         walked.push(sc.field);
+        return WHOLE;
       },
     });
 
@@ -76,6 +93,7 @@ describe("advancing a backfill", () => {
       state: s.state,
       rebuild: async sc => {
         walked.push(sc.field);
+        return WHOLE;
       },
     });
 
@@ -90,7 +108,7 @@ describe("advancing a backfill", () => {
     const pass = await advanceBackfill({
       scopes: [scope("a"), scope("b")],
       state: s.state,
-      rebuild: async () => undefined,
+      rebuild: async () => WHOLE,
     });
 
     expect({ walked: pass.walked?.field, complete: pass.complete }).toEqual({
@@ -108,6 +126,7 @@ describe("advancing a backfill", () => {
       state: s.state,
       rebuild: async () => {
         rebuilds += 1;
+        return WHOLE;
       },
     });
 
@@ -116,6 +135,7 @@ describe("advancing a backfill", () => {
         walked: null,
         complete: true,
         completed: new Set([backfillScopeKey(scope("a"))]),
+        finished: true,
       },
       rebuilds: 0,
     });
@@ -136,6 +156,7 @@ describe("advancing a backfill", () => {
       state: s.state,
       rebuild: async () => {
         rebuilds += 1;
+        return WHOLE;
       },
       completed: new Set([backfillScopeKey(scope("a"))]),
     });
@@ -155,7 +176,7 @@ describe("advancing a backfill", () => {
     const first = await advanceBackfill({
       scopes: [scope("a"), scope("b")],
       state: s.state,
-      rebuild: async () => undefined,
+      rebuild: async () => WHOLE,
       completed: new Set<string>(),
     });
 
@@ -164,7 +185,7 @@ describe("advancing a backfill", () => {
     const second = await advanceBackfill({
       scopes: [scope("a"), scope("b")],
       state: s.state,
-      rebuild: async () => undefined,
+      rebuild: async () => WHOLE,
       completed: first.completed,
     });
 
@@ -201,6 +222,7 @@ describe("advancing a backfill", () => {
       state: s.state,
       rebuild: async sc => {
         walked.push(sc.field);
+        return WHOLE;
       },
     });
     // A second store, standing for a pass that crashed before recording.
@@ -210,10 +232,83 @@ describe("advancing a backfill", () => {
       state: crashed.state,
       rebuild: async sc => {
         walked.push(sc.field);
+        return WHOLE;
       },
     });
 
     expect(walked).toEqual(["a", "a"]);
+  });
+});
+
+describe("a scope larger than one tick", () => {
+  it("resumes the walk after the cursor an earlier tick recorded", async () => {
+    // Without the cursor each tick would start the scope again and, on a
+    // scope larger than a tick, never reach its end.
+    const key = backfillScopeKey(scope("a"));
+    const s = store([], new Map([[key, "doc-5"]]));
+    let resumedAfter: string | undefined;
+
+    await advanceBackfill({
+      scopes: [scope("a")],
+      state: s.state,
+      rebuild: async (_sc, walk) => {
+        resumedAfter = walk.after;
+        return WHOLE;
+      },
+    });
+
+    expect(resumedAfter).toBe("doc-5");
+  });
+
+  it("records the walk's checkpoints under the scope's key", async () => {
+    const s = store();
+    await advanceBackfill({
+      scopes: [scope("a")],
+      state: s.state,
+      rebuild: async (_sc, walk: ScopeWalk) => {
+        await walk.checkpoint("doc-1");
+        return { finished: false };
+      },
+    });
+
+    expect(s.checkpoints).toEqual([`${backfillScopeKey(scope("a"))}@doc-1`]);
+  });
+
+  it("does NOT record a scope the budget stopped inside", async () => {
+    // Recorded, a half-walked scope would never be revisited, and the
+    // documents after the cursor would stay unindexed while health said whole.
+    const s = store();
+
+    const pass = await advanceBackfill({
+      scopes: [scope("a"), scope("b")],
+      state: s.state,
+      rebuild: async () => ({ finished: false }),
+    });
+
+    expect({ recorded: s.recorded, pass }).toEqual({
+      recorded: [],
+      pass: {
+        walked: scope("a"),
+        complete: false,
+        completed: new Set(),
+        finished: false,
+      },
+    });
+  });
+
+  it("hands the walk the caller's budget", async () => {
+    const s = store();
+    let asked = false;
+    await advanceBackfill({
+      scopes: [scope("a")],
+      state: s.state,
+      stop: () => {
+        asked = true;
+        return true;
+      },
+      rebuild: async (_sc, walk) => ({ finished: !walk.stop() }),
+    });
+    expect(asked).toBe(true);
   });
 });
 

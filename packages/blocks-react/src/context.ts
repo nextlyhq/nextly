@@ -23,15 +23,48 @@ import type { ReactNode } from "react";
  * @module context
  */
 
-/** A query the renderer asks its host to answer. Shapes stay deliberately
- * narrow: this is the subset dynamic blocks need today, and widening it is a
- * deliberate act rather than a side effect of a new block. */
+/** The operators a list's filter row may use, each meaning the same on every database. */
+export type BlocksFilterOp =
+  | "equals"
+  | "not_equals"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "in"
+  | "not_in"
+  | "exists";
+
+/** One filter row: a field, an operator and a typed value. Never a raw query. */
+export interface BlocksFilter {
+  field: string;
+  op: BlocksFilterOp;
+  value: string | number | boolean | readonly (string | number | boolean)[];
+}
+
+/**
+ * A query the renderer asks its host to answer.
+ *
+ * Data, not a database query: typed filter rows, sort keys and a window. It is
+ * the shape `nextly/runtime`'s public reader takes, written out here because
+ * this entry must not import `nextly`; a type test keeps the two the same.
+ * Who may see what is not in it, on purpose: that is the reader's to fix.
+ */
 export interface BlocksQuery {
   collection: string;
+  filters?: readonly BlocksFilter[];
+  /** One key or several in order, `-field` descending; ties break by id. */
+  sort?: string | readonly string[];
+  /** 1 to 100. */
   limit?: number;
+  /** Rows to skip, from 0. */
   offset?: number;
-  sort?: string;
+  /** A page of `limit` rows after the offset, from 1. */
+  page?: number;
   locale?: string;
+  /** The fields each row carries, besides its id; a relationship as its id. */
+  select?: readonly string[];
 }
 
 /** What a host returns for a {@link BlocksQuery}. */
@@ -49,6 +82,75 @@ export interface BlocksResult {
  */
 export interface BlocksDataProvider {
   find(query: BlocksQuery): Promise<BlocksResult>;
+}
+
+/**
+ * The reads a route hands a page's data provider: published entries and
+ * public fields only, as an anonymous visitor reads them, in the route's
+ * language.
+ *
+ * The shape of `nextly/runtime`'s `PublicReader`, written out for the same
+ * reason as {@link BlocksQuery}. A query that tries to widen the read is
+ * refused by the reader, not by the provider, so no provider can forget to.
+ *
+ * @experimental
+ */
+export interface BlocksPublicReader {
+  /** Nextly's list envelope: the rows, and their pagination with the total. */
+  find(query: BlocksQuery): Promise<{
+    items: Record<string, unknown>[];
+    meta: { total: number };
+  }>;
+  count(
+    query: Pick<BlocksQuery, "collection" | "filters" | "locale">
+  ): Promise<number>;
+}
+
+/**
+ * How a route builds its data provider: from the public reader it binds to
+ * each render.
+ *
+ * A function rather than a provider, so a route never holds a reader of its
+ * own: the one it is given is the one that decides who sees what.
+ *
+ * @experimental
+ */
+export type BlocksDataProviderFactory = (
+  reader: BlocksPublicReader
+) => BlocksDataProvider;
+
+/** Options for {@link createDefaultDataProvider}. */
+export interface DefaultDataProviderOptions {
+  /**
+   * The collections a page's lists may read. A list naming another reads
+   * nothing. Absent means every collection the public may read.
+   */
+  collections?: readonly string[];
+}
+
+/**
+ * The provider a route uses when it is given none: every list reads through
+ * the public reader, optionally limited to some collections.
+ *
+ * @experimental
+ */
+export function createDefaultDataProvider(
+  reader: BlocksPublicReader,
+  options: DefaultDataProviderOptions = {}
+): BlocksDataProvider {
+  const allowed =
+    options.collections === undefined
+      ? undefined
+      : new Set<string>(options.collections);
+  return {
+    find: async query => {
+      if (allowed !== undefined && !allowed.has(query.collection)) {
+        return { items: [], total: 0 };
+      }
+      const { items, meta } = await reader.find(query);
+      return { items, total: meta.total };
+    },
+  };
 }
 
 /**

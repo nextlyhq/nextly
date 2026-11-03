@@ -108,7 +108,7 @@ describe("installing the page-builder plugin", () => {
   });
 });
 
-describe("the warning for a blocks field below the top level", () => {
+describe("the warning for a blocks field inside a repeater", () => {
   it("is said through the plugin's logger when it is installed", () => {
     const { ctx } = initContext();
     Object.assign(ctx.config, {
@@ -117,8 +117,8 @@ describe("the warning for a blocks field below the top level", () => {
           slug: "wiring-pages",
           fields: [
             {
-              name: "hero",
-              type: "group",
+              name: "rows",
+              type: "repeater",
               fields: [{ name: "layout", type: "blocks" }],
             },
           ],
@@ -129,7 +129,7 @@ describe("the warning for a blocks field below the top level", () => {
     (pageBuilder().init as (c: unknown) => void)(ctx);
 
     expect(ctx.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('"hero.layout" on collection "wiring-pages"')
+      expect.stringContaining('"rows.layout" on collection "wiring-pages"')
     );
   });
 

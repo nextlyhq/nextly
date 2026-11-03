@@ -171,13 +171,24 @@ export function canNestInSlot(
   // admit nothing at all, which is a slot no document can fill rather than one
   // that accepts anything — and registration does not reject it.
   if (!Array.isArray(allow) || allow.length === 0) return ALLOWED;
-  const admitted = allow.some(entry =>
+  if (slotAdmits(allow, childType)) return ALLOWED;
+  return { allowed: false, reason: "not-allowed-in-slot", permitted: allow };
+}
+
+/**
+ * Whether an allow-list admits a block type. The ONE reading of an allow-list,
+ * shared by a registered slot and a component's exposed slot, so `core/*`
+ * means the same thing in both.
+ */
+export function slotAdmits(
+  allow: readonly string[],
+  childType: string
+): boolean {
+  return allow.some(entry =>
     entry.endsWith("/*")
       ? childType.startsWith(entry.slice(0, -1))
       : entry === childType
   );
-  if (admitted) return ALLOWED;
-  return { allowed: false, reason: "not-allowed-in-slot", permitted: allow };
 }
 
 /**

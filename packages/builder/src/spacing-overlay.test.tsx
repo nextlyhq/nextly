@@ -91,6 +91,7 @@ function editorOf(selectedId: string | null, ids?: string[]): EditorState {
       ids: ids ?? (selectedId === null ? [] : [selectedId]),
       primary: selectedId,
     },
+    composed: () => undefined,
   } as unknown as EditorState;
 }
 
@@ -450,6 +451,98 @@ describe("who may write from the canvas", () => {
   it("draws them again once the selection is a single block", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
+  });
+
+  /*
+   * A handle writes the block's spacing, which an area locked to its content
+   * fixes, so the inspector holds its Style tab read-only there and the canvas
+   * must not offer the same write. The bands still report.
+   */
+  function heldIn(
+    lock: "contentOnly" | undefined,
+    layers = false
+  ): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/holder",
+          version: 1,
+          description: "A holder.",
+          example: { props: {} },
+          slots: { body: { lock } },
+          // Draws its slot, so the block inside is on the canvas to measure.
+          render: ({
+            renderSlot,
+          }: {
+            renderSlot: (slot: string) => React.ReactNode;
+          }) => React.createElement("div", null, renderSlot("body")),
+        },
+      ] as never,
+      { source: "spacing-overlay-lock-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "h",
+          type: "acme/holder",
+          version: 1,
+          props: {},
+          slots: {
+            body: [
+              {
+                id: "a",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                ...(layers ? { locked: true } : {}),
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+    return {
+      document,
+      selectedId: "a",
+      selection: { ids: ["a"], primary: "a" },
+      composed: () => undefined,
+    } as unknown as EditorState;
+  }
+
+  it("draws no handles for a block inside an area locked to its content", () => {
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    register();
+    const { container } = mount(heldIn("contentOnly"));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
+  });
+
+  it("draws no handles for a block its own Layers lock holds", () => {
+    // Locked from Layers or the inspector's card: every control is read-only,
+    // so the canvas must not offer the spacing write either.
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    register();
+    const { container } = mount(heldIn(undefined, true));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
+  });
+
+  it("draws them for the same block where its slot is not locked", () => {
+    // The control: nested the same way, so the case above is not passing on a
+    // nested block the overlay never reached.
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    register();
+    const { container } = mount(heldIn(undefined));
     expect(labels(container)).toEqual(["16"]);
     expect(
       container.querySelectorAll(".nx-spacing-handles__handle").length

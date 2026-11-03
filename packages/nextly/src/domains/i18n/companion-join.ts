@@ -15,6 +15,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
+import { batches } from "../../auth/access/retired-manage-permissions";
 import { isMissingNamedColumnError } from "../../database/missing-column";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
@@ -86,6 +87,8 @@ export interface PopulateCompanionArgs {
   localeChain: string[];
   /** The main-row primary-key property (defaults to `"id"`). */
   idKey?: string;
+  /** See {@link CompanionReadBudget.maxParams}. */
+  maxParams?: number;
   /**
    * Per-locale status filter (i18n M6). When set, only companion rows whose `_status` is one of
    * these are considered — a draft translation is filtered out and the field falls back to the
@@ -159,6 +162,9 @@ export async function populateCompanionFieldsByLanguage(
   );
   if (localizedFields.length === 0 || languages.length === 0) return;
 
+  // Every read first, then every row filled: a read that fails leaves no
+  // row half translated. One row per entry and the union of the chains, so
+  // the entries every language asks about are read once for them all.
   const ids = [
     ...new Set(
       languages
@@ -166,21 +172,15 @@ export async function populateCompanionFieldsByLanguage(
         .filter((id): id is string | number => id !== null && id !== undefined)
     ),
   ];
-  if (ids.length === 0) return;
-
-  const table = companionTable as CompanionTable;
-
-  const companionRows: Record<string, unknown>[] = await db
-    .select()
-    .from(companionTable)
-    .where(
-      and(
-        inArray(table._parent as never, ids),
-        inLocaleChain(table, [
-          ...new Set(languages.flatMap(language => language.localeChain)),
-        ])
-      )
-    );
+  const companionRows = await readCompanionRows({
+    db,
+    companionTable,
+    rows: ids.map(id => ({ [idKey]: id })),
+    idKey,
+    locales: [...new Set(languages.flatMap(language => language.localeChain))],
+    maxParams: args.maxParams,
+  });
+  if (companionRows === undefined) return;
 
   for (const language of languages) {
     fillCompanionFields({
@@ -192,6 +192,65 @@ export async function populateCompanionFieldsByLanguage(
       companionRows,
     });
   }
+}
+
+/** How many values one companion read may bind. */
+interface CompanionReadBudget {
+  /**
+   * The most values one statement may bind, the adapter's
+   * `maxParamsPerQuery`. A read binds one per row id and one per language,
+   * so a batch of more is read in several statements, splitting the
+   * languages too where they alone would reach it. Absent, one statement.
+   */
+  maxParams?: number;
+}
+
+/**
+ * The companion rows of `rows` (by their `idKey`) in `locales`, in as many
+ * statements as `maxParams` needs, every one read before any is used.
+ * `undefined` where no row carries an id, which reads nothing.
+ */
+async function readCompanionRows(
+  args: CompanionReadBudget & {
+    db: SelectableDb;
+    companionTable: unknown;
+    rows: Record<string, unknown>[];
+    idKey: string;
+    locales: string[];
+  }
+): Promise<Record<string, unknown>[] | undefined> {
+  const ids = args.rows
+    .map(row => row[args.idKey])
+    .filter((id): id is string | number => id !== null && id !== undefined);
+  if (ids.length === 0) return undefined;
+  const table = args.companionTable as CompanionTable;
+  const limit = args.maxParams;
+  const bounded = limit !== undefined && Number.isFinite(limit);
+  // Each statement binds a run of languages and a run of ids. The languages
+  // take what they need, leaving at least one bind for an id.
+  const localeRun = bounded
+    ? Math.max(1, Math.min(args.locales.length, limit - 1))
+    : args.locales.length;
+  const idRun = bounded
+    ? Math.max(1, limit - localeRun)
+    : Number.MAX_SAFE_INTEGER;
+  const rows: Record<string, unknown>[] = [];
+  for (const locales of batches(args.locales, localeRun)) {
+    for (const run of batches(ids, idRun)) {
+      rows.push(
+        ...(await args.db
+          .select()
+          .from(args.companionTable)
+          .where(
+            and(
+              inArray(table._parent as never, run),
+              inLocaleChain(table, locales)
+            )
+          ))
+      );
+    }
+  }
+  return rows;
 }
 
 /**
@@ -455,6 +514,8 @@ export interface PopulateCompanionAllArgs {
   statusValues?: readonly string[];
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
+  /** See {@link CompanionReadBudget.maxParams}. */
+  maxParams?: number;
 }
 
 /**
@@ -476,21 +537,17 @@ export async function populateCompanionFieldsAllLocales(
   ) {
     return;
   }
-  const ids = rows
-    .map(r => r[idKey])
-    .filter((id): id is string | number => id !== null && id !== undefined);
-  if (ids.length === 0) return;
-
-  const table = companionTable as CompanionTable;
-  const companionRows: Record<string, unknown>[] = await db
-    .select()
-    .from(companionTable)
-    .where(
-      and(
-        inArray(table._parent as never, ids),
-        inArray(table._locale as never, locales)
-      )
-    );
+  // Every read first, then every row filled: a read that fails leaves no
+  // row half translated.
+  const companionRows = await readCompanionRows({
+    db,
+    companionTable,
+    rows,
+    idKey,
+    locales,
+    maxParams: args.maxParams,
+  });
+  if (companionRows === undefined) return;
 
   const byParent = indexCompanionRowsByParent(companionRows, args.statusValues);
 
@@ -539,6 +596,9 @@ export function buildLocalizedOrderExpr(args: {
     code =>
       sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
   );
+  // One language, as a read with fallback off asks: its value alone. SQLite
+  // refuses COALESCE with a single argument.
+  if (perLocale.length === 1) return perLocale[0];
   return sql`COALESCE(${sql.join(perLocale, sql`, `)})`;
 }
 
