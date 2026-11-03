@@ -574,6 +574,39 @@ describe("a type size's line height", () => {
     ).toBeDefined();
   });
 
+  const FOLLOWS =
+    "Dark now follows the light value; set a dark value again if you need one.";
+  const BOTH: SiteTokenSet = {
+    tokens: [
+      { name: "font-size.body", kind: "dimension", values: { light: "16px" } },
+      {
+        name: "line-height.body",
+        kind: "dimension",
+        values: { light: "24px", dark: "28px" },
+      },
+    ],
+  };
+
+  it("drops the dark-follows note when Add dark values sets dark again", async () => {
+    render(<Hosted tokens={BOTH} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Add dark values" })
+    );
+    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
+  });
+
+  it("drops the dark-follows note when Reset puts the code's values back", async () => {
+    render(<Hosted tokens={BOTH} supplied={BOTH} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
+    fireEvent.click(within(editor).getByRole("button", { name: "Reset" }));
+    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
+  });
+
   it("drops a refusal when Use light value removes the refused field", async () => {
     const dark: SiteTokenSet = {
       tokens: [

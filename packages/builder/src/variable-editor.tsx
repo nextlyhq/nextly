@@ -66,28 +66,7 @@ export function VariableEditor({
   const token = tokens.tokens[row.at];
   const [nameIssue, setNameIssue] = React.useState<string | undefined>();
   const [name, setName] = useDraft(entry.label);
-  // Each field holding a refused value, with why and with the value the field
-  // stored when it was refused: that field is marked and the reason said under
-  // the fields until THAT field is corrected, whatever else is committed.
-  const [recorded, setRefusals] = React.useState<
-    ReadonlyMap<string, RefusedValue>
-  >(() => new Map());
-  // A refusal lasts only while its field stores what it did when refused. A
-  // control that replaces or removes the value (Use light value, Reset, an
-  // undo) also replaces what the field shows, so its refusal goes with it.
-  const refusals = liveRefusals(recorded, tokens);
-  if (refusals.size !== recorded.size) setRefusals(refusals);
-  const refuse = (at: number, mode: TokenMode, message?: string): void =>
-    setRefusals(current => {
-      const key = fieldKey(at, mode);
-      if (current.get(key)?.message === message) return current;
-      const next = new Map(current);
-      if (message === undefined) next.delete(key);
-      else next.set(key, { message, held: tokens.tokens[at]?.values[mode] });
-      return next;
-    });
-  // What a write changed beyond its own field, said until the next write.
-  const [note, setNote] = React.useState<string | undefined>();
+  const { writeValue, refusals, note } = useValueWrites(tokens, onChange);
 
   const commitName = (value: string): void => {
     if (readOnly || value.trim() === entry.label) {
@@ -99,26 +78,6 @@ export function VariableEditor({
     if (issue === undefined) onChange(relabelToken(tokens, row.at, value));
   };
 
-  /*
-   * Every value field writes through here, so a refusal is decided once. The
-   * value it already holds writes nothing and clears a message, which is how
-   * putting back what was there before a refusal reads as fixing it.
-   */
-  const writeValue: ValueWrite = (at, mode, value) => {
-    const next = value.trim();
-    if (tokens.tokens[at]?.values[mode] === next) {
-      refuse(at, mode);
-      return;
-    }
-    const written = writeTokenValue(tokens, at, mode, next);
-    if ("issue" in written) {
-      refuse(at, mode, written.issue);
-      return;
-    }
-    refuse(at, mode);
-    setNote(written.note);
-    onChange(written.tokens);
-  };
   const saidId = `${id}-said`;
   const refused: Refused = { fields: refusals, describedBy: saidId };
 
@@ -183,8 +142,90 @@ export function VariableEditor({
   );
 }
 
+/**
+ * The value fields' one write, and what it leaves said under the fields: the
+ * fields holding a refused value, and a note about what a write changed
+ * beyond its own field.
+ */
+function useValueWrites(
+  tokens: SiteTokenSet,
+  onChange: (tokens: SiteTokenSet) => void
+): {
+  writeValue: ValueWrite;
+  refusals: ReadonlyMap<string, RefusedValue>;
+  note: string | undefined;
+} {
+  // Each field holding a refused value, with why and with the value the field
+  // stored when it was refused: that field is marked and the reason said under
+  // the fields until THAT field is corrected, whatever else is committed.
+  const [recorded, setRefusals] = React.useState<
+    ReadonlyMap<string, RefusedValue>
+  >(() => new Map());
+  // A refusal lasts only while its field stores what it did when refused. A
+  // control that replaces or removes the value (Use light value, Reset, an
+  // undo) also replaces what the field shows, so its refusal goes with it.
+  const refusals = liveRefusals(recorded, tokens);
+  if (refusals.size !== recorded.size) setRefusals(refusals);
+  const refuse = (at: number, mode: TokenMode, message?: string): void =>
+    setRefusals(current => {
+      const key = fieldKey(at, mode);
+      if (current.get(key)?.message === message) return current;
+      const next = new Map(current);
+      if (message === undefined) next.delete(key);
+      else next.set(key, { message, held: tokens.tokens[at]?.values[mode] });
+      return next;
+    });
+  // What a write changed beyond its own field, said until the next write.
+  // It lasts, as a refusal does, only while the variable holds what that
+  // write left: Add dark values, Reset or an undo that changes it ends it.
+  const [noted, setNote] = React.useState<WriteNote>();
+  const note =
+    noted !== undefined &&
+    JSON.stringify(tokens.tokens[noted.at]?.values) === noted.values
+      ? noted.text
+      : undefined;
+  if (noted !== undefined && note === undefined) setNote(undefined);
+
+  /*
+   * Every value field writes through here, so a refusal is decided once. The
+   * value it already holds writes nothing and clears a message, which is how
+   * putting back what was there before a refusal reads as fixing it.
+   */
+  const writeValue: ValueWrite = (at, mode, value) => {
+    const next = value.trim();
+    if (tokens.tokens[at]?.values[mode] === next) {
+      refuse(at, mode);
+      return;
+    }
+    const written = writeTokenValue(tokens, at, mode, next);
+    if ("issue" in written) {
+      refuse(at, mode, written.issue);
+      return;
+    }
+    refuse(at, mode);
+    setNote(
+      written.note === undefined
+        ? undefined
+        : {
+            text: written.note,
+            at,
+            values: JSON.stringify(written.tokens.tokens[at]?.values),
+          }
+    );
+    onChange(written.tokens);
+  };
+  return { writeValue, refusals, note };
+}
+
 /** Writes one variable's value for one mode, or says why it cannot. */
 type ValueWrite = (at: number, mode: TokenMode, value: string) => void;
+
+/** A note a write left, and what its variable held once written, as JSON. */
+interface WriteNote {
+  text: string;
+  at: number;
+  values: string;
+}
 
 /** A refused value's reason, and what its field stored when it was refused. */
 interface RefusedValue {
