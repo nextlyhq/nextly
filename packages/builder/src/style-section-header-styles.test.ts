@@ -143,6 +143,8 @@ describe("the spacing box", () => {
     );
     expect(clear).toContain("position: absolute");
     expect(clear).toContain("opacity: 0");
+    // Faded and out of the pointer's way, so it cannot take a click unseen.
+    expect(clear).toContain("pointer-events: none");
     // Flush with the side: a gap between them is where a pointer moving to
     // Clear leaves the side's hover, and Clear fades before it is reached.
     // An explicit zero, and no other margin: a shorthand such as
@@ -155,6 +157,12 @@ describe("the spacing box", () => {
         ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button, .nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button"
       )
     ).toContain("opacity: 1");
+    // Shown, it takes the click it is shown for.
+    expect(
+      ruleBody(
+        ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button, .nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button"
+      )
+    ).toContain("pointer-events: auto");
   });
 });
 
