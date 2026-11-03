@@ -511,3 +511,39 @@ describe("the Content tab's Advanced", () => {
     ).toContain("rotate: 90deg");
   });
 });
+
+describe("the inspector at the editor's density", () => {
+  it("sizes every control to the density's height and its text to 12px", () => {
+    // The shared controls size from these tokens, so pointing them at the
+    // density's one height reaches every field, select and button at once.
+    const root = ruleBody(".nx-inspector");
+    expect(root).toContain(
+      "--nx-control-height: var(--nx-builder-control-height)"
+    );
+    expect(root).toContain(
+      "--nx-control-height-sm: var(--nx-builder-control-height)"
+    );
+    expect(root).toContain("font-size: var(--nx-builder-font-size)");
+    expect(root).toContain("line-height: var(--nx-builder-line-height)");
+    expect(
+      ruleBody(
+        '.nx-inspector :is(input, textarea, button, label, [data-slot="select-trigger"])'
+      )
+    ).toContain("font-size: var(--nx-builder-font-size)");
+  });
+
+  it("titles a style section at 12px semibold", () => {
+    const title = ruleBody(".nx-style-inspector__section-label");
+    expect(title).toContain("font-size: var(--nx-builder-title-size)");
+    expect(title).toContain("font-weight: var(--nx-builder-title-weight)");
+  });
+
+  it("sets notes at the density's text size and rows its gap apart", () => {
+    expect(ruleBody(".nx-inspector__note")).toContain(
+      "font-size: var(--nx-builder-font-size)"
+    );
+    expect(ruleBody(".nx-inspector__fields")).toContain(
+      "gap: var(--nx-builder-row-gap)"
+    );
+  });
+});

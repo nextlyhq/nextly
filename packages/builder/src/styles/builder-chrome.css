@@ -997,6 +997,17 @@
    */
   --nx-chrome-writing-mode: horizontal-tb;
   --nx-chrome-direction: ltr;
+  /*
+   * The editor's density, as the top bar takes it: the shared controls size
+   * from these tokens, so every field, select and button in the panel is the
+   * one 28px height, and its text the density's 12px on a 16px line.
+   */
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1008,9 +1019,19 @@
   background: var(--nx-builder-surface, var(--nx-background));
 }
 
+/*
+ * The shared controls set their own text size (`text-sm`); in the panel they
+ * take the density's 12px. `:is()` keeps an element in the selector's weight,
+ * so this outranks the utility class whatever order the sheets load in.
+ */
+.nx-inspector
+  :is(input, textarea, button, label, [data-slot="select-trigger"]) {
+  font-size: var(--nx-builder-font-size);
+}
+
 .nx-inspector__note {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: var(--nx-builder-font-size);
   line-height: 1.5;
   color: var(--nx-muted-foreground);
 }
@@ -1908,7 +1929,7 @@
 .nx-inspector__fields {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--nx-builder-row-gap);
   container-type: inline-size;
   container-name: nx-inspector-fields;
 }
@@ -2512,8 +2533,8 @@
   align-items: center;
   gap: 0.4375rem;
   text-align: start;
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: var(--nx-builder-title-size);
+  font-weight: var(--nx-builder-title-weight);
 }
 
 .nx-style-inspector__section-dot {
