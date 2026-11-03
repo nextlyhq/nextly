@@ -67,6 +67,7 @@ import type {
 } from "../domains/schema/pipeline/diff/types";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
+import { ttyRequiredDetail } from "../domains/schema/pipeline/prompt-dispatcher/errors";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline";
 import type {
   MigrationJournal,
@@ -3160,10 +3161,7 @@ async function applyReloadHolding(
       // pending. Surface a top-level, scannable instruction so the
       // user knows exactly what to do, rather than burying it in
       // a "FAILED" line that reads like a bug.
-      const detail = applyResult.error.message
-        .replace(/^TTY required for schema confirmation\.\s*/i, "")
-        .replace(/\s*Run from an interactive terminal,.*$/i, "")
-        .trim();
+      const detail = ttyRequiredDetail(applyResult.error.message);
       consoleLogger.warn(
         `\n[Nextly] Schema change needs your confirmation:\n` +
           `  ${detail}\n\n` +

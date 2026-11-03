@@ -37,6 +37,11 @@ import {
   type JobDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import { restoreMissingDefault } from "../layout-removal/restore";
+import { settleLayoutRemovals } from "../layout-removal/settle";
+import type { LayoutRemovalStore } from "../layout-removal/store";
+import { deleteUnrecordedLayout } from "../layout-removal/system-remove";
+
 import { seedSlug, seedTitle } from "./seed-names";
 import {
   layoutExists,
@@ -68,20 +73,28 @@ const NAME_SCAN_PAGE_SIZE = 100;
  */
 const SEED_SLUG_ATTEMPTS = 5;
 
-/** What the repair needs: the Direct API, the resolved slugs and a log. */
+/**
+ * What the repair needs: the Direct API, the resolved slugs, the Layout
+ * removals' fence (whose copies it restores from) and a log.
+ */
 export interface EnsureDefaultDeps {
   readonly nextly: DefaultLayoutDirectApi;
   readonly slugs: DefaultLayoutSlugs;
+  /** The RESOLVED pages slug, whose pages a removal's check after its write clears. */
+  readonly pagesSlug: string;
+  readonly removals: LayoutRemovalStore;
   /** Where the repair says why it acted. Called only when it changed something. */
   readonly warn: (message: string, meta?: Record<string, unknown>) => void;
 }
 
 /**
- * What one run did. `kept`: the default was usable. `repointed`: the default
+ * What one run did. `kept`: the default was usable. `restored`: the default
+ * named a Layout a removal deleted while a promotion raced it, and that Layout
+ * was restored from the removal's copy under a new id. `repointed`: the default
  * now names the existing seed (published again if it was not). `seeded`: a new
  * seed was created and made the default.
  */
-export type EnsureOutcome = "kept" | "repointed" | "seeded";
+export type EnsureOutcome = "kept" | "restored" | "repointed" | "seeded";
 
 /** The run in flight in this process, which a concurrent caller joins. */
 let inFlight: Promise<EnsureOutcome> | null = null;
@@ -109,6 +122,19 @@ async function ensureOnce(deps: EnsureDefaultDeps): Promise<EnsureOutcome> {
   const published = await publishedLayoutIds(deps.nextly, deps.slugs, asked);
 
   if (isPublished(settings.defaultLayout, published)) return "kept";
+  // Before falling back to the seed: a default that names a Layout a removal
+  // deleted under a racing promotion comes back from the removal's copy, so
+  // the author's choice of default is kept. Only for a Layout that is gone; a
+  // Layout that still exists is never written from a copy.
+  if (
+    settings.defaultLayout !== null &&
+    (await restoreMissingDefault(
+      { ...deps, store: deps.removals },
+      settings.defaultLayout
+    )) !== null
+  ) {
+    return "restored";
+  }
   const seed = settings.seededLayout;
   if (seed !== null && (await seedStillExists(deps, seed, published))) {
     return repointToSeed(deps, seed, settings.defaultLayout, published);
@@ -231,7 +257,8 @@ async function stillDefault(
  * Layouts list for good beside the next run's seed. So the created Layout is
  * deleted as the system (best effort, and logged when even that fails) and
  * the failure rethrown, which fails the run for the sweep to retry. The delete
- * passes the guard: the seed is not the default, since the write failed.
+ * goes through the Layout fence, as every Layout's delete must: the seed is
+ * not the default, since the write failed, and no page can name it yet.
  *
  * The seed is made the default only while the default is still `observed`,
  * the unusable one this run set out to replace; a make-default that landed
@@ -253,21 +280,23 @@ async function recordSeed(
         : {}),
     });
   } catch (error) {
-    await deps.nextly
-      .delete({
-        collection: deps.slugs.layouts,
-        id: created,
-        overrideAccess: true,
-      })
-      .catch((cleanup: unknown) => {
-        deps.warn(
-          "[page-builder] a seeded default Layout could not be recorded or removed; delete it by hand",
-          {
-            seededLayout: created,
-            error: cleanup instanceof Error ? cleanup.message : String(cleanup),
-          }
-        );
-      });
+    // Through the Layout fence, as every delete of a Layout must be.
+    await deleteUnrecordedLayout(
+      {
+        nextly: deps.nextly,
+        store: deps.removals,
+        layouts: deps.slugs.layouts,
+      },
+      created
+    ).catch((cleanup: unknown) => {
+      deps.warn(
+        "[page-builder] a seeded default Layout could not be recorded or removed; delete it by hand",
+        {
+          seededLayout: created,
+          error: cleanup instanceof Error ? cleanup.message : String(cleanup),
+        }
+      );
+    });
     throw error;
   }
 }
@@ -407,7 +436,9 @@ export async function queueDefaultLayoutRepair(
 
 /**
  * The repair as a job, kept queued as a sweep so the jobs runner checks the
- * default on every pass without a timer of its own.
+ * default on every pass without a timer of its own. Each pass first finishes
+ * or clears the Layout removals a stopped request left part-way, since one of
+ * those may be what left the default unusable.
  *
  * The deps are resolved per run, through the plugin's installed context, for
  * the reason the usage backfill gives: the Direct API is not resolvable when
@@ -420,7 +451,12 @@ export function defaultLayoutJob(
     slug: DEFAULT_LAYOUT_JOB,
     sweep: true,
     handler: async () => {
-      await ensureDefaultLayout(await deps());
+      const resolved = await deps();
+      await settleLayoutRemovals({
+        ...resolved,
+        store: resolved.removals,
+      });
+      await ensureDefaultLayout(resolved);
     },
   });
 }

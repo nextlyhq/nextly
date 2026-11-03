@@ -40,13 +40,22 @@ export interface StorePage {
  */
 export async function walkPages(args: {
   fetchPage: (page: number) => Promise<StorePage>;
-  onPage: (items: readonly unknown[]) => Promise<void | "stop"> | void | "stop";
+  /**
+   * Handed each page's items and whether the store holds another page after
+   * it, so a caller spending a budget can tell a walk that ends exactly on its
+   * budget from one the budget cut short.
+   */
+  onPage: (
+    items: readonly unknown[],
+    page: { hasNext: boolean }
+  ) => Promise<void | "stop"> | void | "stop";
   maxPages: number;
   describe: string;
 }): Promise<boolean> {
   for (let page = 1; page <= args.maxPages; page++) {
     const result = await args.fetchPage(page);
-    if ((await args.onPage(result.items)) === "stop") return false;
+    const hasNext = result.meta.hasNext;
+    if ((await args.onPage(result.items, { hasNext })) === "stop") return false;
     if (!result.meta.hasNext) return true;
   }
   throw new Error(

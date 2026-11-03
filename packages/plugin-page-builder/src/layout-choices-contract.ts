@@ -9,6 +9,8 @@
  */
 import type { BlockDocument, LayoutRegion } from "@nextlyhq/blocks-engine";
 
+import type { FencedLayoutState } from "./layout-removal/words";
+
 /** Where the Layout choices are read, under this plugin's own namespace. */
 export const LAYOUT_CHOICES_ROUTE_PATH = "/layouts/choices";
 
@@ -76,6 +78,11 @@ export const PAGE_COLLECTION_ROUTE_PATH = "/layouts/page-collection";
 export interface PageCollectionResponse {
   /** The pages collection's RESOLVED slug. */
   readonly pagesCollection: string;
+  /**
+   * The Layouts collection's RESOLVED slug, so a surface drawn on every entry
+   * form (Remove Layout) can tell a Layout's form, renamed or not.
+   */
+  readonly layoutsCollection: string;
 }
 
 /**
@@ -106,6 +113,13 @@ export interface LayoutChoice {
    * Empty for a Layout that is not published, which no page is drawn inside.
    */
   readonly regions: readonly LayoutRegion[];
+  /**
+   * Where the Layout stands with Remove Layout, when it is behind its fence:
+   * being removed now, or unpublished by it and not published since. A page
+   * write naming it is refused, so the picker offers it no longer. Absent for
+   * every other Layout.
+   */
+  readonly removal?: FencedLayoutState;
 }
 
 /** What the editor needs to know about one region's component. */
