@@ -28,7 +28,7 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const HEADING = "00000000-0000-4000-8000-00000000c611";
 
 /** A heading inside a section: enough for every menu to have a target. */
-function pageDocument(): unknown {
+function document(): unknown {
   return {
     formatVersion: 1,
     kind: "page",
@@ -60,7 +60,7 @@ async function createPage(request: APIRequestContext): Promise<string> {
       title: `Panels ${stamp}`,
       slug: `panels-${stamp}`,
       status: "draft",
-      content: pageDocument(),
+      content: document(),
     },
   });
   if (!created.ok()) {
