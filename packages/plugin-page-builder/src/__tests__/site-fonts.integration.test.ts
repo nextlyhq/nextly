@@ -13,6 +13,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { existsSync, rmSync } from "node:fs";
 import {
   createServer,
   type IncomingMessage,
