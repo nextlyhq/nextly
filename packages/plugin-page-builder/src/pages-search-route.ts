@@ -233,6 +233,8 @@ export function parsePagesSearchQuery(url: string | URL): PagesSearchRequest {
 export interface PageCollection {
   readonly slug: string;
   readonly label: string;
+  /** The plural name the registry holds, when it holds one. */
+  readonly pluralLabel?: string;
   /**
    * The Page Builder field the editor opens for, by its form path: the first
    * one the editor reaches that accepts page documents.
@@ -301,6 +303,7 @@ function pageCollectionOf(
   return {
     slug,
     label: labelOf(record, slug),
+    ...pluralLabelOf(record),
     field: field.path,
     // Core's projection of a registry record, which reads the lifecycle
     // switch only when it is a real boolean.
@@ -398,6 +401,18 @@ function labelOf(record: Record<string, unknown>, slug: string): string {
   return typeof record.label === "string" && record.label !== ""
     ? record.label
     : slug;
+}
+
+/** The plural name a registry record holds (`labels.plural`), if any. */
+function pluralLabelOf(record: Record<string, unknown>): {
+  pluralLabel?: string;
+} {
+  const labels = record.labels;
+  if (typeof labels !== "object" || labels === null) return {};
+  const plural = (labels as { plural?: unknown }).plural;
+  return typeof plural === "string" && plural !== ""
+    ? { pluralLabel: plural }
+    : {};
 }
 
 /** One as-caller list read, as the search asks the Direct API for it. */
@@ -878,6 +893,9 @@ export function pageItemOf(
     id: entry.id,
     collection: source.slug,
     collectionLabel: source.label,
+    ...(source.pluralLabel === undefined
+      ? {}
+      : { collectionPluralLabel: source.pluralLabel }),
     field: source.field,
     title: entry.title,
     ...(status === undefined ? {} : { status }),

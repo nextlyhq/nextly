@@ -163,6 +163,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the list", () => {
+  it("heads a group with the collection's plural name when it has one", async () => {
+    await mount([
+      item("a", "Home"),
+      item("b", "Spring launch", {
+        collection: "landing",
+        collectionLabel: "Landing page",
+        collectionPluralLabel: "Landing pages",
+      }),
+    ]);
+    expect(
+      screen.getAllByRole("heading", { level: 3 }).map(h => h.textContent)
+    ).toEqual(["Pages", "Landing pages"]);
+  });
+
   it("heads each collection only when there is more than one", async () => {
     await mount([
       item("a", "Home"),

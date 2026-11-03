@@ -444,7 +444,8 @@ function groupsOf(
   for (const item of items) {
     const group = groups.get(item.collection) ?? {
       collection: item.collection,
-      label: item.collectionLabel,
+      // Plural over a group of them: "Pages", not "Page".
+      label: item.collectionPluralLabel ?? item.collectionLabel,
       items: [],
     };
     group.items.push(item);

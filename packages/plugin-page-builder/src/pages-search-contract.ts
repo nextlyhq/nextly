@@ -94,6 +94,11 @@ export interface PageItem {
   readonly collection: string;
   /** The collection's display name, so a result can say what kind of page it is. */
   readonly collectionLabel: string;
+  /**
+   * The collection's plural name ("Landing pages"), for a heading over its
+   * pages. Absent where the collection names no plural.
+   */
+  readonly collectionPluralLabel?: string;
   /** The Page Builder field the editor opens for, by its name. */
   readonly field: string;
   readonly title: string;

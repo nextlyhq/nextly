@@ -130,6 +130,7 @@ function record(
   options: {
     fields?: unknown[];
     label?: string;
+    labels?: { singular: string; plural: string };
     status?: boolean;
     useAsTitle?: string;
   } = {}
@@ -137,6 +138,7 @@ function record(
   return {
     slug,
     label: options.label ?? slug,
+    ...(options.labels === undefined ? {} : { labels: options.labels }),
     fields: options.fields ?? [
       { name: "title", type: "text" },
       { name: "content", type: "blocks" },
@@ -422,6 +424,31 @@ describe("what each read asks for", () => {
 });
 
 describe("the merged answer", () => {
+  it("names a collection's pages by its plural, where it has one", async () => {
+    const { reads } = readsOver(
+      [
+        record("landing", {
+          label: "Landing page",
+          labels: { singular: "Landing page", plural: "Landing pages" },
+        }),
+        record("pages", { label: "Page" }),
+      ],
+      async args =>
+        rows([{ id: `${args.collection}-1`, title: args.collection }], 1)
+    );
+
+    const answer = await readPagesSearch(request({ limit: 5 }), reads);
+    const byCollection = Object.fromEntries(
+      answer.items.map(item => [item.collection, item.collectionPluralLabel])
+    );
+    // A heading over the group says "Landing pages"; a collection without a
+    // plural sends none, and the panel falls back to its name.
+    expect(byCollection).toEqual({
+      landing: "Landing pages",
+      pages: undefined,
+    });
+  });
+
   it("merges two collections by title, capped at the limit, with the total of both", async () => {
     const { reads } = readsOver(
       [
