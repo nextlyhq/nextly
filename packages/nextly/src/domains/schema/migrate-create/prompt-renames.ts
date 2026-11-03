@@ -11,6 +11,8 @@
 
 import * as p from "@clack/prompts";
 
+import { migrationCreateCancelled } from "../../../cli/errors/areas/migrate-create";
+import { answered } from "../../../cli/utils/prompt-cancelled";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 
 export interface RenameDecision {
@@ -32,11 +34,9 @@ export interface PromptRenamesOptions {
 }
 
 /**
- * F11 PR 3 review fix #3: typed error thrown when the operator cancels
- * a prompt mid-flow (Ctrl-C). The CLI catches this and calls
- * `process.exit(1)`. Keeping the exit out of the domain layer makes
- * promptRenames testable without spying on `process.exit` (a Ctrl-C in
- * a unit test would otherwise terminate the test runner).
+ * The error a cancelled rename prompt once ended `migrate:create` with. A
+ * cancel now ends the run with exit 130 through `promptCancelled`, so
+ * `promptRenames` no longer throws it; `migrate:create` still recognises it.
  */
 export class PromptCancelledError extends Error {
   constructor() {
@@ -83,13 +83,11 @@ export async function promptRenames(
       message: renamePromptMessage(c),
       initialValue: c.defaultSuggestion === "rename",
     });
-    if (p.isCancel(answer)) {
-      // User pressed Ctrl-C mid-prompt. Throw the typed error; the CLI
-      // entry point catches and exits.
-      p.cancel("Cancelled by user.");
-      throw new PromptCancelledError();
-    }
-    decisions.push({ candidate: c, accepted: answer });
+    // Ctrl+C mid-prompt is not a decline: the run ends as interrupted, exit
+    // 130, saying in the shape that no migration was written.
+    if (p.isCancel(answer)) p.cancel("Cancelled by user.");
+    const accepted = await answered(answer, migrationCreateCancelled());
+    decisions.push({ candidate: c, accepted });
   }
   return decisions;
 }

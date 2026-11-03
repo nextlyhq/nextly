@@ -25,9 +25,15 @@ import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { isHTMLElement } from "./dom-kind";
-import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
+import {
+  EditorRail,
+  PANEL_KEYS_LAYER,
+  panelKeyShortcuts,
+  panelLabel,
+  type EditorRailProps,
+} from "./editor-rail";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
-import { HelpDialog } from "./help-dialog";
+import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
   BUILDER_CHROME_CLASS,
@@ -550,6 +556,7 @@ const SCALAR_PREFERENCES = [
   "inspectorHidden",
   "leftPinned",
   "showEmptyElements",
+  "panelKeys",
   "editingBreakpoint",
 ] as const satisfies readonly (keyof ShellPreferences)[];
 
@@ -900,10 +907,15 @@ function railDialogItems(
 function RailAndDialogs({
   active,
   renderSettings,
+  panelKeys,
   ...rail
-}: Omit<EditorRailProps, "onHelp" | "onSettings" | "settingsOpen"> & {
+}: Omit<
+  EditorRailProps,
+  "onHelp" | "onSettings" | "settingsOpen" | "keysOn"
+> & {
   active: boolean;
   renderSettings: BuilderShellProps["renderSettings"];
+  panelKeys: PanelKeysSetting;
 }): React.JSX.Element {
   const help = useRailDialog(active);
   const settings = useRailDialog(active);
@@ -916,12 +928,14 @@ function RailAndDialogs({
     <>
       <EditorRail
         {...rail}
+        keysOn={panelKeys.on}
         {...railDialogItems(help, settings, renderSettings)}
       />
       <HelpDialog
         open={help.open}
         onOpenChange={help.setOpen}
         returnFocus={() => help.opener.current}
+        panelKeys={panelKeys}
       />
       <HostSettings render={renderSettings} dialog={settings} />
     </>
@@ -1250,7 +1264,10 @@ function useSidePanels(
   const inspectorShown = !preferences.inspectorHidden;
   // From the rail. While the left side is hidden, choosing a panel shows it
   // rather than toggling: the author asked to see that panel.
-  const selectPanel = (panel: LeftPanel) =>
+  const selectPanel = (panel: LeftPanel) => {
+    // Closing the open panel, by its item or its key, unmounts what may hold
+    // focus: it goes to the canvas, as hiding a side sends it.
+    if (openPanel === panel) keepFocusInShell(regionRefs.current, ["panel"]);
     update(current =>
       current.leftPanelHidden
         ? { ...current, leftPanel: panel, leftPanelHidden: false }
@@ -1259,6 +1276,7 @@ function useSidePanels(
             leftPanel: panelAfterRailClick(current.leftPanel, panel),
           }
     );
+  };
   /*
    * The top bar's left-panel button. Showing it with no panel chosen opens
    * the first panel the host offers, Add where it offers that.
@@ -1634,6 +1652,18 @@ function ShellRegions({
           openPanel={openPanel}
           isAvailable={isAvailable}
           onSelect={selectPanel}
+          // The panel keys answer only for the shell that is showing and that
+          // the author is in, the check F6 and mod+\ already make, and only
+          // while the author has not turned them off in Help.
+          claimsKeys={() => active && claimsKeys()}
+          panelKeys={{
+            // On unless turned off, as a preference written before there
+            // was a switch reads.
+            on: preferences.panelKeys !== false,
+            onChange: on => update(current => ({ ...current, panelKeys: on })),
+            shortcuts: panelKeyShortcuts(isAvailable),
+            layer: PANEL_KEYS_LAYER,
+          }}
         />
 
         <ResizablePanelGroup

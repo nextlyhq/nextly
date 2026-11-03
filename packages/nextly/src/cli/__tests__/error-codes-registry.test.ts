@@ -220,7 +220,6 @@ describe("the errors a command can end with", () => {
         join("cli", "commands", "generate-types.ts"),
         join("cli", "commands", "component-map-check-command.ts"),
       ],
-      [join("cli", "commands", "add.ts"), join("cli", "commands", "add.ts")],
       [
         join("cli", "commands", "media.ts"),
         join("cli", "commands", "media.ts"),
