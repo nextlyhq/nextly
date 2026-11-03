@@ -65,3 +65,28 @@ export function insertField(
   const next = walk(fields);
   return placed ? next : null;
 }
+
+/**
+ * The position right after `fieldId` among `siblings`, the list that drew it:
+ * before its next sibling, or the end of that list after its last one. This is
+ * where "/" on a field adds, so "Add and add another" from there keeps adding
+ * after it, in order. `parentFieldId` names the container `siblings` belongs
+ * to (none for the top level).
+ *
+ * Read from the drawn list rather than found by id in the whole tree, because
+ * an id is not unique there: a duplicated container's fields keep the ids of
+ * the fields they were copied from. `null` when the field is not in the list.
+ */
+export function positionAfter(
+  siblings: readonly BuilderField[],
+  fieldId: string,
+  parentFieldId?: string
+): FieldInsertPosition | null {
+  const at = siblings.findIndex(field => field.id === fieldId);
+  if (at === -1) return null;
+  const next = siblings[at + 1];
+  return {
+    ...(parentFieldId ? { parentFieldId } : {}),
+    ...(next ? { beforeFieldId: next.id } : {}),
+  };
+}

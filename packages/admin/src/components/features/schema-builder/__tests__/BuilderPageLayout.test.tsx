@@ -104,6 +104,18 @@ describe("BuilderPageLayout", () => {
     expect(onActiveChange).toHaveBeenCalledWith({ kind: "settings" });
   });
 
+  // The toolbar's add opens the picker at the end of the list, the position
+  // with neither a container nor a field to go before.
+  it("opens the picker at the end of the list from the toolbar", async () => {
+    const user = userEvent.setup();
+    const { onActiveChange } = renderLayout();
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+    expect(onActiveChange).toHaveBeenCalledWith({
+      kind: "picker",
+      position: {},
+    });
+  });
+
   it("shows the read-only notice, with its source file, only when locked", () => {
     const { unmount } = renderLayout();
     expect(screen.queryByRole("note")).not.toBeInTheDocument();

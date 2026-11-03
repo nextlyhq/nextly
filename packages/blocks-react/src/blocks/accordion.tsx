@@ -60,7 +60,11 @@ import type { PageContext } from "../context";
 
 import { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
 import { INTERACTIVE } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
 
 export { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
@@ -98,8 +102,11 @@ export const accordion: BlockDefinition<ContainerProps, PageContext> =
   defineBlock({
     name: ACCORDION_BLOCK,
     version: 1,
-    description:
-      "A group of disclosure sections. Restricts its slot to core/accordion-item so a stray block cannot render outside every section and stay permanently visible.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A group of
+    // disclosure sections. Restricts its slot to core/accordion-item so a stray
+    // block cannot render outside every section and stay permanently visible.
+    description: "Questions or topics that open and close.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -110,8 +117,12 @@ export const accordion: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["disclosure", "faq", "collapse", "toggle"],
     },
     props: {
-      as: { type: "select", options: ["div", "section", "article"] },
-      contained: { type: "checkbox" },
+      as: {
+        label: "HTML tag",
+        type: "select",
+        options: ["div", "section", "article"],
+      },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "div", contained: false },
     example: { props: { as: "div" } },
@@ -137,5 +148,7 @@ export const accordion: BlockDefinition<ContainerProps, PageContext> =
     },
     baseStyles: ACCORDION_BASE_STYLES,
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   });

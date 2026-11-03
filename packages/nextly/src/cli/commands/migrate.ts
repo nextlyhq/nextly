@@ -29,7 +29,6 @@
  * ```
  */
 
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -51,9 +50,16 @@ import {
 } from "../../domains/i18n/migration/step-windows";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../../domains/schema/events/schema-events-repository";
 import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
+import {
+  appliedChecksums,
+  checksumOf,
+} from "../../domains/schema/migrate/applied-checksums";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
   assertNotPartiallyApplied,
@@ -133,8 +139,8 @@ import { UserExtSchemaService } from "../../domains/users/services/user-ext-sche
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
 import type { UserConfig } from "../../users/config/types";
-import { exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import { CliError, exitWithError } from "../errors";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   getDialectDisplayName,
@@ -159,6 +165,7 @@ import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
+import { commandRun } from "./command-run";
 import {
   storedPasswordsNotice,
   storedPasswordsOn,
@@ -474,7 +481,7 @@ export async function runMigrate(
           : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
-      exitWithError(logger, err);
+      exitWithError(logger, err, migrateExitCode(err));
     }
 
     // Localization companions, once the schema is in step.
@@ -720,6 +727,8 @@ export interface MigrateCoreDeps {
   runFileMigrationsFn?: typeof runFileMigrations;
   /** The unresolved-attempt refusal; injected for tests (`refuseUnresolvedAppAttempts`). */
   refuseUnresolvedAttemptsFn?: typeof refuseUnresolvedAppAttempts;
+  /** The applied-file checksum check; injected for tests (`assertAppliedFilesUnchanged`). */
+  assertAppliedFilesUnchangedFn?: typeof assertAppliedFilesUnchanged;
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
   withLock?: typeof withMigrateLock;
@@ -888,6 +897,25 @@ export async function previewMigrate(args: {
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
+      );
+    }
+  }
+  // An applied file edited since it ran stops a real run before it applies
+  // anything (`assertAppliedFilesUnchanged`), so the preview names it.
+  if (hasLedger) {
+    const files = await discoverMigrations(
+      args.migrationsDir,
+      logger,
+      dialect,
+      "app"
+    );
+    const { changed } = appliedChecksums(
+      files.map(m => ({ filename: `${m.name}.sql`, checksum: m.checksum })),
+      rows
+    );
+    for (const filename of changed) {
+      logger.info(
+        `  ✖ a real run would refuse before applying anything: \`${filename}\` has changed since it was applied (exit code 2). Restore it, or accept the edit with \`nextly migrate:resolve --applied ${filename}\`.`
       );
     }
   }
@@ -1582,6 +1610,14 @@ export async function migrateCore(
         ...deps,
         command: deps.lockCommand ?? "nextly migrate",
       });
+      // An applied file edited since it ran is refused here too, before the
+      // first write; one recorded without a checksum gets its checksum.
+      await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
+        {
+          ...deps,
+          command: deps.lockCommand ?? "nextly migrate",
+        }
+      );
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
@@ -1758,21 +1794,9 @@ export async function refuseUnresolvedAppAttempts(args: {
   /** The command refusing, as the operator typed it. */
   command: string;
 }): Promise<void> {
-  const hasLedger = await (
-    args.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
-  ).tableExists("nextly_schema_events");
-  if (!hasLedger) return;
-  const repo = new SchemaEventsRepository(args.db, args.dialect);
-  const rows = [
-    ...(await repo.listFileApplies()),
-    ...(await repo.listFailedRollbacks()),
-  ];
-  const files = await discoverMigrations(
-    args.migrationsDir,
-    args.logger,
-    args.dialect,
-    "app"
-  );
+  const history = await readAppHistory(args);
+  if (history === undefined) return;
+  const { files, rows } = history;
   await refuseUnresolvedAttempts({
     files: files.map(m => ({
       filename: `${m.name}.sql`,
@@ -1796,6 +1820,118 @@ export async function refuseUnresolvedAppAttempts(args: {
     readLive: statements => readLiveSchema(args.db, args.dialect, statements),
     command: args.command,
   });
+}
+
+/** What the history checks read: how `readAppHistory` is asked. */
+interface AppHistoryArgs {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+}
+
+/**
+ * The app's migration files as the run reads them, and every attempt and
+ * outcome row of the ledger, for the history checks made before a run's
+ * first write. Undefined where the database has no ledger yet: nothing ran,
+ * so there is nothing to check.
+ */
+async function readAppHistory(args: AppHistoryArgs): Promise<
+  | {
+      files: ParsedMigration[];
+      rows: SchemaEventRow[];
+      repo: SchemaEventsRepository;
+    }
+  | undefined
+> {
+  const hasLedger = await (
+    args.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+  ).tableExists("nextly_schema_events");
+  if (!hasLedger) return undefined;
+  const repo = new SchemaEventsRepository(args.db, args.dialect);
+  const rows = [
+    ...(await repo.listFileApplies()),
+    ...(await repo.listFailedRollbacks()),
+  ];
+  const files = await discoverMigrations(
+    args.migrationsDir,
+    args.logger,
+    args.dialect,
+    "app"
+  );
+  return { files, rows, repo };
+}
+
+/**
+ * Refuses, before the run's first write, while an applied app migration file
+ * has changed since it ran (`appliedChecksums`): the database holds what its
+ * earlier text did, and running the files after it on top of that would build
+ * on a history nobody has. The refusal names every such file and says how to
+ * accept an intended edit; the command exits with code 2 (`migrateExitCode`).
+ *
+ * An applied row recorded without a checksum, by an earlier version or an
+ * earlier `migrate:resolve --applied`, is taken as matching: once nothing is
+ * refused, the file's checksum is recorded on it in place, and the files are
+ * listed.
+ */
+export async function assertAppliedFilesUnchanged(
+  args: AppHistoryArgs & {
+    /** The command refusing, as the operator typed it. */
+    command: string;
+  }
+): Promise<void> {
+  const history = await readAppHistory(args);
+  if (history === undefined) return;
+  const { changed, unrecorded } = appliedChecksums(
+    history.files.map(m => ({
+      filename: `${m.name}.sql`,
+      checksum: m.checksum,
+    })),
+    history.rows
+  );
+  if (changed.length > 0) throw appliedFilesChanged(args.command, changed);
+  for (const row of unrecorded) {
+    await history.repo.recordChecksum(
+      row.outcomeId,
+      row.checksum,
+      "checksum recorded (none was)"
+    );
+  }
+  if (unrecorded.length > 0) {
+    args.logger.info(
+      `Recorded the checksum of ${formatCount(unrecorded.length, "applied migration")} that had none: ${unrecorded.map(row => row.filename).join(", ")}.`
+    );
+  }
+}
+
+/** The refusal for applied files edited since they ran (`MIGRATION_TAMPERED`). */
+function appliedFilesChanged(
+  command: string,
+  changed: readonly string[]
+): CliError {
+  const [only] = changed;
+  const what =
+    changed.length === 1 && only !== undefined
+      ? `\`${only}\` has changed since it was applied, so \`${command}\` ran nothing.`
+      : `${String(changed.length)} applied migrations have changed since they were applied (${changed.map(f => `\`${f}\``).join(", ")}), so \`${command}\` ran nothing.`;
+  return new CliError("MIGRATION_TAMPERED", {
+    what,
+    why: "A file's checksum no longer matches the one recorded when it ran on this database, so the database holds what its earlier text did.",
+    next: "Restore each file as it was when it ran, and put the change in a new migration with `nextly migrate:create`. If the edit is intended and the database already stands as the file now says, accept it with `nextly migrate:resolve --applied <file>`, which compares the database with the file's snapshot (add `--skip-verify` where it has none).",
+    context: { files: [...changed] },
+  });
+}
+
+/**
+ * The exit code `nextly migrate` ends with on `error`: 2 for an applied file
+ * edited since it ran, the code the guide documents, so a deploy script can
+ * tell it from any other failure (1).
+ */
+export function migrateExitCode(error: unknown): 1 | 2 {
+  return error instanceof CliError && error.code === "MIGRATION_TAMPERED"
+    ? 2
+    : 1;
 }
 
 /**
@@ -2299,7 +2435,7 @@ function parseMigrationFile(
   content: string,
   source: MigrationSource = "app"
 ): ParsedMigration {
-  const checksum = createHash("sha256").update(content).digest("hex");
+  const checksum = checksumOf(content);
 
   const checksumMatch = content.match(/^-- Checksum:\s*([a-f0-9]+)/m);
   const originalChecksum = checksumMatch?.[1];
@@ -2341,46 +2477,20 @@ export { splitSqlStatements };
 // pattern from F8 PR 5). Avoids re-implementing UUID v4 generation.
 
 /**
- * Register the migrate command with the program
- *
- * @param program - Commander program instance
+ * The action of `nextly migrate`, loaded when it runs.
  */
-export function registerMigrateCommand(program: Command): void {
-  program
-    .command("migrate")
-    .description("Run all pending database migrations")
-    .option("--dry-run", "Show what would be migrated without executing", false)
-    .option(
-      "--step <n>",
-      "Run only N migrations, plugin modules and app files together",
-      parseInt
-    )
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .option(
-      "--repair-localization",
-      "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",
-      false
-    )
-    .action(async (cmdOptions: MigrateCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+export async function migrateAction(
+  cmdOptions: MigrateCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateOptions = options;
 
-      const resolvedOptions: ResolvedMigrateOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-
-      try {
-        await runMigrate(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runMigrate(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateCommand } from "./migrate.command";

@@ -83,6 +83,8 @@ export interface PreviewPanesProps {
    */
   revision: string;
   children: ReactNode;
+  /** Closed, give what it holds the container's full height; see `PreviewSplit`. */
+  fill?: boolean;
 }
 
 export function PreviewPanes({
@@ -92,6 +94,7 @@ export function PreviewPanes({
   label,
   revision,
   children,
+  fill = false,
 }: PreviewPanesProps): JSX.Element {
   /*
    * ONE component in both states, and the editor at ONE position in the tree.
@@ -145,6 +148,7 @@ export function PreviewPanes({
   return (
     <PreviewSplit
       open={open}
+      fill={fill}
       label={label}
       preferPreviewWidth={requestedWidth}
       preview={

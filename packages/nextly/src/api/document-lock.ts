@@ -34,6 +34,7 @@ import {
   type AuthContext,
 } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di/container";
 import {
   documentLockKey,
@@ -289,7 +290,8 @@ export const readLock = withErrorHandler(async (req: Request) => {
  * `takeover` is the second editor deciding to edit anyway. It is accepted from
  * any authenticated caller because the lock is advisory: refusing the takeover
  * would not stop them editing, it would only stop them saying so, and the
- * displaced holder is told either way.
+ * displaced holder is told either way. A takeover that displaces somebody is
+ * recorded in the document's history, and refused if it cannot be.
  */
 export const acquireLock = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -306,6 +308,10 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
     {
       ownerId: auth.userId,
       ownerLabel: auth.userName ?? auth.userEmail ?? null,
+      // What a takeover's history event credits: the key itself for an API
+      // key, and the person by name only, never by the email above.
+      actor: actorFromAuthContext(auth),
+      personName: auth.userName ?? null,
     },
     {
       takeover: body.takeover === true,

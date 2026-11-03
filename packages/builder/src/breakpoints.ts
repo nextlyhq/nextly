@@ -33,7 +33,6 @@ import {
   authoredBreakpoints,
   BASE_BREAKPOINT,
   BREAKPOINT_AXES,
-  inCascadeOrder,
   MAX_BREAKPOINT_ID_LENGTH,
   MAX_BREAKPOINTS_PER_AXIS,
   type BreakpointAxis,
@@ -66,7 +65,6 @@ export {
   authoredBreakpoints,
   BASE_BREAKPOINT,
   BREAKPOINT_AXES,
-  inCascadeOrder,
   MAX_BREAKPOINTS_PER_AXIS,
 };
 export type { BreakpointAxis, BreakpointDef, BreakpointSet };
@@ -82,6 +80,7 @@ export type BreakpointIssueCode =
   | "id-reserved"
   | "id-duplicate"
   | "label-required"
+  | "label-duplicate"
   | "width-required"
   | "width-not-positive"
   | "width-duplicate"
@@ -156,6 +155,31 @@ export function isUsableWidth(width: number | undefined): width is number {
 }
 
 /**
+ * What is wrong with one row's name, if anything, claiming it on its axis.
+ *
+ * Names are what the device menu shows, and new ids are made from them, so two
+ * rows on one axis with the same name are two buttons nobody can tell apart.
+ * Compared the way a reader would: case and edge spaces aside.
+ */
+function claimLabel(
+  label: string,
+  seen: Set<string>
+): { code: BreakpointIssueCode; message: string } | undefined {
+  const key = label.trim().toLowerCase();
+  if (key.length === 0) {
+    return { code: "label-required", message: "Give this breakpoint a label." };
+  }
+  if (seen.has(key)) {
+    return {
+      code: "label-duplicate",
+      message: `Another breakpoint is already called "${label.trim()}".`,
+    };
+  }
+  seen.add(key);
+  return undefined;
+}
+
+/**
  * Every reason the given set would lose a definition on compilation.
  *
  * Ordered by axis and then by row so an editor can present them beside the
@@ -175,6 +199,7 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
   for (const axis of BREAKPOINT_AXES) {
     const defs = set[axis] ?? [];
     const widthsSeen = new Set<number>();
+    const labelsSeen = new Set<string>();
     let unboundedSeen = false;
     const limit = storedLimitFor(axis);
     // WHICH rows the cap drops, decided the way the compiler decides it: it
@@ -238,9 +263,8 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
         claimedIds.add(id);
       }
 
-      if (def.label.trim().length === 0) {
-        at("label", "label-required", "Give this breakpoint a label.");
-      }
+      const labelIssue = claimLabel(def.label, labelsSeen);
+      if (labelIssue) at("label", labelIssue.code, labelIssue.message);
 
       if (def.maxWidth === undefined) {
         // An unbounded definition means different things per axis, and only the

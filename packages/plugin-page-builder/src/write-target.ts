@@ -17,7 +17,7 @@
 import type { HookContext } from "nextly";
 
 /** How core namespaces a Single's hooks, so a wildcard can tell them apart. */
-const SINGLE_HOOK_NAMESPACE = "single:";
+export const SINGLE_HOOK_NAMESPACE = "single:";
 
 /** The document a write hook may act on. */
 export interface WriteTarget<TApi> {

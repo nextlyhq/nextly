@@ -79,8 +79,29 @@ const customFixtureBlock = defineBlock<{ headline?: string }>({
     ),
 });
 
+/**
+ * A block pointing at one post through a `relation` prop, so the generated
+ * relation control is driven end to end: its search reads the playground's
+ * posts with the author's own access, and the page stores the chosen id.
+ */
+const teaserFixtureBlock = defineBlock<{ post?: string }>({
+  name: "fixture/teaser",
+  version: 1,
+  description:
+    "Exists for the e2e suite: a contributed block that points at one post.",
+  editor: { label: "Test fixture: teaser", category: "Fixtures" },
+  props: { post: { type: "relation", relationTo: "posts", role: "content" } },
+  example: { props: {} },
+  render: ({ props, className }) =>
+    createElement(
+      "p",
+      { className, "data-fixture": "teaser" },
+      props.post ?? "No post chosen"
+    ),
+});
+
 /** Everything the fixture contributes, as the declaration and the editor entry both list it. */
 export const blockFixtureContribution = {
-  blocks: [plainFixtureBlock, customFixtureBlock],
+  blocks: [plainFixtureBlock, customFixtureBlock, teaserFixtureBlock],
   supports: [fixtureToneSupport],
 };

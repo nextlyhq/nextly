@@ -684,35 +684,24 @@ function showNextSteps(cwd: string, context: CommandContext): void {
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-/**
- * Register the init command with the program
- *
- * @param program - Commander program instance
- */
-export function registerInitCommand(program: Command): void {
-  program
-    .command("init")
-    .description("Initialize a new Nextly project")
-    .option("-y, --yes", "Skip prompts and use defaults", false)
-    .option("-f, --force", "Overwrite existing files", false)
-    .action(async (cmdOptions: InitCommandOptions, cmd: Command) => {
-      const globalOpts: GlobalOptions = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/** The action of `nextly init`, loaded when it runs. */
+export async function initAction(cmdOptions: InitCommandOptions, cmd: Command) {
+  const globalOpts: GlobalOptions = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedInitOptions = {
-        ...cmdOptions,
-        cwd: globalOpts.cwd,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-      };
+  const resolvedOptions: ResolvedInitOptions = {
+    ...cmdOptions,
+    cwd: globalOpts.cwd,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+  };
 
-      try {
-        await runInit(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runInit(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
