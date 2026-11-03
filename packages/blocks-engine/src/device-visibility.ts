@@ -40,6 +40,7 @@ import type {
   NodeVisibility,
 } from "./document";
 import { isPlainRecord } from "./plain-record";
+import { defineEntry } from "./safe-record";
 import { breakpointContexts } from "./style/compile-page";
 import type { BreakpointContext } from "./style/compile-page";
 import { visibilityCascade } from "./style/visibility-cascade";
@@ -143,7 +144,9 @@ function minimalDevices(
   for (const context of contexts) {
     const axis = context.axis ?? "viewport";
     const state = states.get(context.id) ?? carried[axis];
-    if (state !== carried[axis]) written[context.id] = state;
+    // Defined rather than assigned: an id is stored data, and assigning to
+    // `"__proto__"` would run the prototype setter and store nothing.
+    if (state !== carried[axis]) defineEntry(written, context.id, state);
     carried[axis] = state;
   }
   return written;
@@ -179,7 +182,7 @@ function foreignDevices(
   const defined = new Set(contexts.map(context => context.id));
   const kept: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(devices ?? {})) {
-    if (!defined.has(id) && !dropped.has(id)) kept[id] = value;
+    if (!defined.has(id) && !dropped.has(id)) defineEntry(kept, id, value);
   }
   return kept;
 }
