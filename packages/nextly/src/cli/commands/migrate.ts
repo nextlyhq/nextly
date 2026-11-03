@@ -147,10 +147,8 @@ import {
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import {
-  requireDatabaseEnv,
-  loadConfigOrExit,
-} from "../utils/command-prerequisites";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
+import { loadConfig } from "../utils/config-loader";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   builderMigrationRemedy,
@@ -226,6 +224,13 @@ interface ResolvedMigrateOptions extends MigrateCommandOptions {
   verbose?: boolean;
   quiet?: boolean;
   cwd?: string;
+  /**
+   * Throw a failure instead of ending the process with it, for a command that
+   * runs `nextly migrate` inside work of its own: `migrate:fresh` holds the
+   * schema lock around it and must release the lock before it exits. The
+   * caller ends the command with the error, through `exitWithError`.
+   */
+  throwOnFailure?: boolean;
 }
 
 /**
@@ -288,22 +293,40 @@ export async function runMigrate(
 
   logger.header("Migrate");
 
+  // Every failure below ends here: the command's exit, or with
+  // `throwOnFailure` a throw its caller ends the command with.
+  // Annotated so the checker reads a call to it as ending the path.
+  const fail: (error: unknown, status?: 1 | 2) => never = (
+    error,
+    status = 1
+  ) => {
+    if (options.throwOnFailure === true) throw error;
+    return exitWithError(logger, error, status);
+  };
+
   logger.debug("Validating database environment...");
-  const dbValidation = requireDatabaseEnv(logger);
+  let dbValidation: ReturnType<typeof databaseEnvOrThrow>;
+  try {
+    dbValidation = databaseEnvOrThrow();
+  } catch (error) {
+    fail(error);
+  }
 
   const dialect = dbValidation.dialect;
   logger.debug(`Database dialect: ${dialect}`);
 
   logger.info("Loading configuration...");
 
-  const configResult = await loadConfigOrExit(
-    {
+  let configResult: Awaited<ReturnType<typeof loadConfig>>;
+  try {
+    configResult = await loadConfig({
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    },
-    logger
-  );
+    });
+  } catch (error) {
+    fail(error);
+  }
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -329,7 +352,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    exitWithError(logger, error);
+    fail(error);
   }
 
   installRegistryResolver(adapter as unknown as DrizzleAdapter);
@@ -481,7 +504,7 @@ export async function runMigrate(
           : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
-      exitWithError(logger, err, migrateExitCode(err));
+      fail(err, migrateExitCode(err));
     }
 
     // Localization companions, once the schema is in step.
@@ -543,7 +566,7 @@ export async function runMigrate(
         }
       }
     } catch (err) {
-      exitWithError(logger, err);
+      fail(err);
     }
 
     // Read-only, once the run has done its own work: name every registry row

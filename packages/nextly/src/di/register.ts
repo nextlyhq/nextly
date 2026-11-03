@@ -286,6 +286,7 @@ import {
   type Container,
   type RestoredRegistrations,
 } from "./container";
+import { withDevelopmentStartSchemaLock } from "./development-start-schema-lock";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -1086,28 +1087,34 @@ async function registerServicesOnce(
 
   registerDomainServices(ctx);
 
-  // After the services are registered, so the workflows can be judged from
-  // inside the reconcile: on the definitions it is about to write, before it
-  // writes them, and before the code-first syncs below.
-  const workflows = await reconcileBuilderTargets({
-    adapter,
-    logger: resolvedLogger,
-    schemaRegistry,
-    transformedConfig,
-    transformedPlugins,
-    deferredExtends,
-    unresolvedRelations,
-    unresolvedPermissions,
-    beforeWrites: changedComponents =>
-      judgeWorkflows(transformedConfig, changedComponents),
-  });
+  // The Builder reconcile and the code-first sync both write registry rows and
+  // storage, so outside production they run inside one hold of the schema lock,
+  // waiting for a migration or sync another process is running. Production
+  // reaches its schema through migrations and takes no lock here.
+  await withDevelopmentStartSchemaLock(adapter, resolvedLogger, async () => {
+    // After the services are registered, so the workflows can be judged from
+    // inside the reconcile: on the definitions it is about to write, before it
+    // writes them, and before the code-first syncs below.
+    const workflows = await reconcileBuilderTargets({
+      adapter,
+      logger: resolvedLogger,
+      schemaRegistry,
+      transformedConfig,
+      transformedPlugins,
+      deferredExtends,
+      unresolvedRelations,
+      unresolvedPermissions,
+      beforeWrites: changedComponents =>
+        judgeWorkflows(transformedConfig, changedComponents),
+    });
 
-  await syncCodeFirstEntities(
-    adapter,
-    resolvedLogger,
-    transformedConfig,
-    workflows
-  );
+    await syncCodeFirstEntities(
+      adapter,
+      resolvedLogger,
+      transformedConfig,
+      workflows
+    );
+  });
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
     adapter,

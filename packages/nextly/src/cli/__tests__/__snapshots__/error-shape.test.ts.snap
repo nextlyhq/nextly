@@ -1046,6 +1046,14 @@ exports[`each code, as a command ends with it > PASSWORD_CLEAR_UNCONFIRMED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/password-clear-unconfirmed  (PASSWORD_CLEAR_UNCONFIRMED)"
 `;
 
+exports[`each code, as a command ends with it > PLAN_CHANGED_AFTER_CONSENT 1`] = `
+"✗ What you agreed to changed before \`nextly prune\` could act on it, so nothing was changed.
+  Why:  You agreed to: dc_tags.
+        It would act on now: dc_tags; dc_tags_locales.
+  Next: Run \`nextly prune\` again to see what it would do now.
+  Docs: https://nextlyhq.com/docs/cli/errors/plan-changed-after-consent  (PLAN_CHANGED_AFTER_CONSENT)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_ADMIN_WIDGET_NOT_JSON 1`] = `
 "✗ Plugin "reviews" contributes an admin widget "stats" that is not JSON (keys: query).
   Why:  It is serialized into /api/admin-meta/workspace, so it may hold only strings, numbers, booleans, null, arrays and plain objects — no functions, class instances, Dates, Maps or bigints. A bigint in query.where throws while the whole workspace payload is serialized, which fails that request for every admin rather than just this card.
