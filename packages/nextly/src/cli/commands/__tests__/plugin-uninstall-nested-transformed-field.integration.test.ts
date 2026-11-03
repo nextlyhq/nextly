@@ -6,7 +6,9 @@
  * The field points at the plugin's own collection, and it is the plugin's:
  * it goes when the plugin goes, so it is no reason to refuse. A field of the
  * app's own in that group pointing at the same collection still is, since
- * dropping the collection would take what the app built on it.
+ * dropping the collection would take what the app built on it, and so is a
+ * field of the app's the transform only moved into that group: moving a
+ * field does not make it the plugin's.
  *
  * The boot that registers both collections, folding the transform in, is
  * the real one, and so is the fold the command's config is read through.
@@ -107,12 +109,16 @@ const NOTES = "nf-notes";
 const NOTES_TABLE = resolveCollectionTableName(NOTES);
 const POSTS_TABLE = resolveCollectionTableName("posts");
 
-/** The app's collection, with a group holding `extra` beside its own field. */
-function posts(extra: FieldConfig[] = []) {
+/**
+ * The app's collection, with a group holding `extra` beside its own field,
+ * and `top` beside the group.
+ */
+function posts(extra: FieldConfig[] = [], top: FieldConfig[] = []) {
   return defineCollection({
     slug: "posts",
     fields: [
       text({ name: "title" }),
+      ...top,
       group({ name: "settings", fields: [text({ name: "theme" }), ...extra] }),
     ],
   });
@@ -137,18 +143,41 @@ const nestNote: EntityTransform = {
   }),
 };
 
-/** The plugin as the boot sees it: its notes, and the transform. */
-const bootPlugin = definePlugin({
-  name: PLUGIN,
-  version: "1.0.0",
-  nextly: ">=0.0.0",
-  contributes: {
-    collections: [
-      defineCollection({ slug: NOTES, fields: [text({ name: "body" })] }),
-    ],
-    transforms: [nestNote],
+/** A transform that moves the app's own `appNote` into `settings`. */
+const moveAppNote: EntityTransform = {
+  target: "posts",
+  transform: entity => {
+    const fields = (entity.fields as FieldConfig[] | undefined) ?? [];
+    const isAppNote = (field: FieldConfig): boolean =>
+      (field as { name?: string }).name === "appNote";
+    const moved = fields.filter(isAppNote);
+    return {
+      ...entity,
+      fields: fields
+        .filter(field => !isAppNote(field))
+        .map(field =>
+          field.type === "group" && field.name === "settings"
+            ? { ...field, fields: [...field.fields, ...moved] }
+            : field
+        ),
+    };
   },
-});
+};
+
+/** The plugin as the boot sees it: its notes, and `transform`. */
+function bootPlugin(transform: EntityTransform) {
+  return definePlugin({
+    name: PLUGIN,
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: {
+      collections: [
+        defineCollection({ slug: NOTES, fields: [text({ name: "body" })] }),
+      ],
+      transforms: [transform],
+    },
+  });
+}
 
 /** `name` quoted as `dialect` quotes a name. */
 function quoted(dialect: Dialect, name: string): string {
@@ -191,12 +220,17 @@ describe.each(getConfiguredTestDialects())(
      * Boots the app with the plugin, and records the plugin's module as
      * applied and its notes' table as the plugin's.
      */
-    async function setUp(appFields: FieldConfig[]): Promise<void> {
-      run.collections = [posts(appFields)];
+    async function setUp(
+      appFields: FieldConfig[],
+      transform: EntityTransform = nestNote,
+      appTop: FieldConfig[] = []
+    ): Promise<void> {
+      const booted = bootPlugin(transform);
+      run.collections = [posts(appFields, appTop)];
       handle = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
-        collections: [posts(appFields)],
-        plugins: [bootPlugin],
+        collections: [posts(appFields, appTop)],
+        plugins: [booted],
       });
       await reconcileCore({
         db: db(),
@@ -206,9 +240,9 @@ describe.each(getConfiguredTestDialects())(
       run.dialect = dialect;
       run.adapter = handle.adapter;
       run.plugin = {
-        ...bootPlugin,
+        ...booted,
         contributes: {
-          ...bootPlugin.contributes,
+          ...booted.contributes,
           schema: { migrations: [module] },
         },
       } satisfies PluginDefinition;
@@ -308,6 +342,25 @@ describe.each(getConfiguredTestDialects())(
       const { publicMessage } = refusal as { publicMessage: string };
       expect(publicMessage).toContain("settings.appNote");
       expect(publicMessage).not.toContain("settings.nfNote");
+      expect(await handle.adapter.tableExists(NOTES_TABLE)).toBe(true);
+    });
+
+    it("still refuses over an app field the transform only moved into that group", async () => {
+      await setUp([], moveAppNote, [
+        relationship({ name: "appNote", relationTo: NOTES }),
+      ]);
+
+      const refusal: unknown = await uninstall().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refusal).toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      });
+      expect((refusal as { publicMessage: string }).publicMessage).toContain(
+        "settings.appNote"
+      );
       expect(await handle.adapter.tableExists(NOTES_TABLE)).toBe(true);
     });
   }

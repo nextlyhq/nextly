@@ -630,16 +630,49 @@ function settleBehaviour(
   }));
 }
 
-/** The fields after a transform: kept ones keep their declarer, new are its. */
+/**
+ * The fields after a transform: kept ones keep their declarer, and a field
+ * at a new path is the transform's only when it is an addition.
+ *
+ * A path is the identity the ledgers know a field by, so a field the
+ * transform moved (the app's `note` into the app's `settings` group) comes
+ * back at a path nobody declared. Taken as the transform's, it would leave
+ * with the plugin on an uninstall, though it is still the app's. So a new
+ * path whose field's name is that of a field the transform took away from
+ * another path keeps that field's declarer: it was moved. And while the
+ * transform took away a field someone else declared, a new field matching
+ * none of them cannot be told from that one renamed as it moved: it is not
+ * counted the transform's either, but the first such field's declarer's.
+ * Only a new field with neither is an addition.
+ */
 function settleFields(
   ledger: OwnershipLedger,
   after: Record<string, unknown>,
   plugin: TransformingPlugin
 ): Map<string, Contributor> {
+  const placed = placedFields(after.fields);
+  const stays = new Set(placed.map(({ path }) => path));
+  const taken = [...ledger.fields].filter(([path]) => !stays.has(path));
+  const othersTaken = taken.filter(([, by]) => by !== plugin.name);
+  const leafOf = (path: string): string => path.split(".").at(-1) ?? path;
+  // Another's over the transform's own, wherever one would do: counting a
+  // field the transform's when it may not be is the costly mistake.
+  const notItsFirst = (
+    entries: ReadonlyArray<[string, Contributor]>
+  ): [string, Contributor] | undefined =>
+    entries.find(([, by]) => by !== plugin.name) ?? entries.at(0);
+  const declarerOfNew = (path: string): Contributor => {
+    const moved = notItsFirst(
+      taken.filter(([from]) => leafOf(from) === leafOf(path))
+    );
+    if (moved !== undefined) return moved[1];
+    const other = othersTaken.at(0);
+    return other === undefined ? plugin.name : other[1];
+  };
   return new Map(
-    placedFields(after.fields).map(({ path }) => [
+    placed.map(({ path }) => [
       path,
-      ledger.fields.has(path) ? ledger.fields.get(path) : plugin.name,
+      ledger.fields.has(path) ? ledger.fields.get(path) : declarerOfNew(path),
     ])
   );
 }
