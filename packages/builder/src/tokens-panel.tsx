@@ -59,6 +59,7 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { ShowMore } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
 import { colourHexOf, colourPairOf } from "./style-colour";
 import {
@@ -632,15 +633,11 @@ function Group({
       ) : (
         <ul className="nx-vars__list">{shown.map(children)}</ul>
       )}
-      {hidden > 0 ? (
-        <button
-          type="button"
-          className="nx-vars__link"
-          onClick={() => setPages(count => count + 1)}
-        >
-          {`Show ${String(Math.min(hidden, PAGE_SIZE))} more`}
-        </button>
-      ) : null}
+      <ShowMore
+        hidden={hidden}
+        pageSize={PAGE_SIZE}
+        onMore={() => setPages(count => count + 1)}
+      />
     </section>
   );
 }

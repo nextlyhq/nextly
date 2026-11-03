@@ -153,7 +153,7 @@ describe("the exposure picker", () => {
       },
     ]);
     // Named once picked, under a name the author may change.
-    const name = screen.getByLabelText(/Name placements see for Title/);
+    const name = screen.getByLabelText(/Name pages see for Title/);
     fireEvent.change(name, { target: { value: "Headline" } });
     expect(seen.value[0]).toMatchObject({ id: "title", label: "Headline" });
   });
@@ -202,7 +202,7 @@ describe("the exposure picker", () => {
     expect(screen.getByLabelText("Title").getAttribute("disabled")).toBeNull();
   });
 
-  it("says when nothing in the selection can be changed per placement", () => {
+  it("says when nothing in the selection can change from one use to another", () => {
     const seen = { value: [] as readonly RequestedProperty[] };
     const bare: BlockNode = {
       id: "x",
@@ -213,7 +213,24 @@ describe("the exposure picker", () => {
     render(<Harness document={page([bare])} selectedIds={["x"]} seen={seen} />);
 
     expect(
-      screen.getByText(/Nothing in this selection can be changed per placement/)
+      screen.getByText(
+        /Nothing in this selection can change from one use to another/
+      )
     ).toBeTruthy();
+  });
+
+  it("asks what each use can change, and says nothing of placements", () => {
+    const seen = { value: [] as readonly RequestedProperty[] };
+    render(
+      <Harness document={page([card("c1")])} selectedIds={["c1"]} seen={seen} />
+    );
+
+    const group = screen.getByRole("group", {
+      name: "What each use can change",
+    });
+    expect(group.textContent).toContain(
+      "Anything left unticked looks the same everywhere it is used."
+    );
+    expect(group.textContent ?? "").not.toMatch(/placement|expos/i);
   });
 });

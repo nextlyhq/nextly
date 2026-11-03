@@ -56,6 +56,7 @@ import { seedPermissions } from "../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../database/seeders/super-admin";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { MetaService } from "../../domains/meta/services/meta-service";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   isFirstAdministratorTaken,
   superAdminRoleHeld,
@@ -78,6 +79,7 @@ import type { CommandContext, GlobalOptions } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import { answered } from "../utils/prompt-cancelled";
 
 import {
   ADMIN_PASSWORD_ENV,
@@ -244,11 +246,17 @@ export function firstAdminSetupFor(
 /** What the command reads from outside: its environment and its terminal. */
 export interface CreateAdminIo {
   env: Record<string, string | undefined>;
-  /** Whether a person can be asked: a terminal on both ends. */
+  /** Whether a person can be asked: `canPrompt`'s answer. */
   interactive: boolean;
-  /** Ask for a value that is not echoed; `null` when the person cancels. */
+  /**
+   * Ask for a value that is not echoed; `null` for no answer. A cancel
+   * (Ctrl+C) ends the run with exit 130 rather than returning.
+   */
   askSecret(message: string): Promise<string | null>;
-  /** Ask for a value; `null` when the person cancels. */
+  /**
+   * Ask for a value; `null` for no answer. A cancel (Ctrl+C) ends the run
+   * with exit 130 rather than returning.
+   */
   ask(message: string): Promise<string | null>;
   /** Connect to the install's database: its steps, and how to let it go. */
   connect(): Promise<{ setup: FirstAdminSetup; close(): Promise<void> }>;
@@ -410,13 +418,14 @@ export async function connectToInstall(context: CommandContext): Promise<{
 
 /** The terminal and environment the command runs with. */
 function processIo(context: CommandContext): CreateAdminIo {
-  const answer = (value: string | symbol): string | null =>
-    p.isCancel(value) ? null : value;
   return {
     env: process.env,
-    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-    askSecret: async message => answer(await p.password({ message })),
-    ask: async message => answer(await p.text({ message })),
+    // The CLI's one answer to whether anyone can be asked: `--non-interactive`
+    // and `CI` say no even at a terminal.
+    interactive: canPrompt(),
+    // Ctrl+C at either prompt ends the run with exit 130 (`answered`).
+    askSecret: async message => answered(await p.password({ message })),
+    ask: async message => answered(await p.text({ message })),
     connect: () => connectToInstall(context),
   };
 }

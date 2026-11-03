@@ -221,6 +221,18 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
 }
 
 /**
+ * A route's refusal in its own words: the per-field reasons when it named
+ * any, else its message, else `fallback` for a rejection that said nothing.
+ */
+export function refusalWords(reason: unknown, fallback: string): string {
+  const named = Object.values(issuesFromRejection(reason));
+  if (named.length > 0) return named.join(" ");
+  return reason instanceof Error && reason.message !== ""
+    ? reason.message
+    : fallback;
+}
+
+/**
  * A stored style change as one step of the editor's undo history. Each half
  * writes the section and answers whether the write was stored.
  */
@@ -777,11 +789,7 @@ export function useFontCatalogueClient(): {
       } catch (reason) {
         // The route's own words: which value the family does not offer, or
         // that the catalogue did not answer.
-        const named = Object.values(issuesFromRejection(reason));
-        if (named.length > 0) return named.join(" ");
-        return reason instanceof Error
-          ? reason.message
-          : "This font could not be added.";
+        return refusalWords(reason, "This font could not be added.");
       }
       await refetch();
       return undefined;

@@ -803,6 +803,25 @@ export const SHARED_STYLE_PAGE_PARAM = "page";
  */
 export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
 
+/**
+ * The usage route's path for some shared styles, each named by its own `id`
+ * parameter, so the browser asks in the shape the route reads.
+ */
+export function sharedStyleUsagePath(ids: readonly string[]): string {
+  const params = new URLSearchParams();
+  for (const id of ids) params.append(SHARED_STYLE_ID_PARAM, id);
+  return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;
+}
+
+/** The where-used route's path for one shared style and one page, from 1. */
+export function sharedStyleWhereUsedPath(id: string, page: number): string {
+  const params = new URLSearchParams({
+    [SHARED_STYLE_ID_PARAM]: id,
+    [SHARED_STYLE_PAGE_PARAM]: String(page),
+  });
+  return `${SHARED_STYLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
+}
+
 /** One document a shared style is used on, as the where-used list names it. */
 export interface SharedStyleUseItem {
   readonly id: string;

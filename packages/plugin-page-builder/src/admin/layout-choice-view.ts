@@ -20,6 +20,11 @@ import type {
   LayoutChoice,
   LayoutChoicesResponse,
 } from "../layout-choices-contract";
+import {
+  pageLayoutRefusal,
+  pickerRemovalNote,
+  type FencedLayoutState,
+} from "../layout-removal/words";
 
 /** What a Layout the author may not read is called, wherever it is named. */
 const UNREADABLE_LAYOUT = "A Layout you can't view";
@@ -52,6 +57,12 @@ export interface StoredLayoutChoice {
 export interface PickerOption {
   readonly value: string;
   readonly label: string;
+  /** A short reason, shown muted after the label. */
+  readonly note?: string;
+  /** The whole reason, as the option's tooltip and accessible description. */
+  readonly description?: string;
+  /** Shown but not offered: a Layout behind Remove Layout's fence. */
+  readonly disabled?: boolean;
 }
 
 /** The Layout a page is drawn inside, as the editor shows it. */
@@ -86,7 +97,9 @@ export interface LayoutPickerView {
  * default where one is usable, and otherwise no header or footer.
  */
 function optionLabel(item: LayoutChoice, site: LayoutSite): string {
-  if (item.published) return item.title;
+  // A Layout behind Remove Layout's fence goes by its name; its reason is the
+  // option's note (`fencedOption`).
+  if (item.removal !== undefined || item.published) return item.title;
   const meanwhile = resolvePageLayout(
     { layout: item.id, noHeaderFooter: false },
     site
@@ -206,7 +219,7 @@ function viewFromList(
     isPublished: id =>
       id === UNREADABLE_DEFAULT || byId.get(id)?.published === true,
   };
-  const options = choiceOptions(items, meta, site);
+  const options = choiceOptions(items, meta, site, named);
   const resolution = resolvePageLayout(
     { layout: named, noHeaderFooter: switchedOff },
     site
@@ -223,15 +236,34 @@ function viewFromList(
   };
 }
 
+/** What a Layout behind the fence adds to its option: why, and not offered. */
+function fencedOption(
+  state: FencedLayoutState,
+  ownChoice: boolean
+): Pick<PickerOption, "note" | "description" | "disabled"> {
+  return {
+    note: pickerRemovalNote(state),
+    description: pageLayoutRefusal(state),
+    disabled: !ownChoice,
+  };
+}
+
 /** The options: the default, published Layouts, unpublished ones, then none. */
 function choiceOptions(
   items: readonly LayoutChoice[],
   meta: LayoutChoicesResponse["meta"],
-  site: LayoutSite
+  site: LayoutSite,
+  selected: string | null = null
 ): PickerOption[] {
+  // A Layout behind Remove Layout's fence is shown, so the author sees why
+  // it is missing, and not offered: a save naming it is refused. The page's
+  // own choice stays selectable, since keeping it is allowed.
   const toOption = (item: LayoutChoice): PickerOption => ({
     value: layoutValue(item.id),
     label: optionLabel(item, site),
+    ...(item.removal === undefined
+      ? {}
+      : fencedOption(item.removal, item.id === selected)),
   });
   return [
     { value: SITE_DEFAULT_VALUE, label: defaultLabel(meta, items) },
@@ -256,7 +288,7 @@ function unknownLayoutView(
     defaultLayout: meta.defaultLayout,
     isPublished: id => byId.get(id)?.published === true,
   };
-  const options = choiceOptions(items, meta, site);
+  const options = choiceOptions(items, meta, site, named);
   return {
     options: [
       ...options.slice(0, -1),

@@ -78,6 +78,7 @@ import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { exitWithError } from "../errors";
+import { CliError } from "../errors/cli-error";
 import {
   createContext,
   type CommandContext,
@@ -98,6 +99,7 @@ import { formatDuration } from "../utils/logger";
 
 import {
   ensureLocalizedCompanions,
+  judgeOrphanRemoval,
   performPermissionSeeding,
   publishExtensionSchema,
   syncCollections,
@@ -145,7 +147,8 @@ export interface DbSyncCommandOptions {
   autoSync?: boolean;
 
   /**
-   * Force auto-sync without data loss warnings
+   * The retired `-f/--force`, which had no effect: given, the run is refused
+   * before it starts.
    * @default false
    */
   force?: boolean;
@@ -164,6 +167,13 @@ export interface DbSyncCommandOptions {
    * @default false
    */
   removeOrphaned?: boolean;
+
+  /**
+   * `--accept-data-loss [targets]`: the data-loss consent, for the push's
+   * column drops (handed on as NEXTLY_ACCEPT_DATA_LOSS) and for what
+   * `--remove-orphaned` deletes. `true` alone, the list when one is given.
+   */
+  acceptDataLoss?: string | boolean;
 }
 
 /**
@@ -356,6 +366,11 @@ export async function runDbSync(
 
           assertPluginFieldDeclarations(configResult.config);
 
+          // Every orphan `--remove-orphaned` would delete, judged with the
+          // data-loss consent before anything below changes the database: a
+          // no, or a consent leaving one out, ends the run with none deleted.
+          await judgeOrphanRemoval(configResult, adapter, options, context);
+
           // Every entity as the registry records it before the syncs below rewrite it, so the
           // companion pass after them can tell a field this run newly translates from one
           // translated before it.
@@ -498,17 +513,33 @@ export function exportDataLossConsent(
   env[ACCEPT_DATA_LOSS_ENV] = flag === true ? "1" : flag;
 }
 
+/** The refusal of `db:sync -f/--force`, which had no effect and is retired. */
+function retiredForce(): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: "db:sync's --force is retired: it had no effect, and is no longer accepted.",
+    why: "Nothing was changed. A sync asks at a terminal before a destructive change; --force never skipped that.",
+    next: "Run it again without -f/--force. Where nobody can be asked, consent to the drops with --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS).",
+    context: { reason: "retired-flag" },
+  });
+}
+
 /** The action of `nextly db:sync`, loaded when it runs. */
 export async function dbSyncAction(
   cmdOptions: DbSyncCommandOptions & {
     promote?: string;
     demote?: string;
-    acceptDataLoss?: string | boolean;
   },
   cmd: Command
 ) {
   const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
   const context = createContext(globalOpts);
+
+  // `-f/--force` never changed what a sync does, so it is refused rather than
+  // honoured, before anything is read or changed, naming the consent a run
+  // that cannot be asked gives instead.
+  if (cmdOptions.force) {
+    exitWithError(context.logger, retiredForce());
+  }
 
   // Surface the flag as an env var so downstream modules (the
   // schema-change prompt, the auto-sync path) pick it up without
