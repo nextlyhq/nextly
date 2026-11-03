@@ -28,6 +28,7 @@ import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
 } from "../../i18n/migration/archive-preflight";
+import { offeredCompanionRename } from "../../i18n/migration/companion-rename";
 import { companionUniqueIndexStatements } from "../../i18n/migration/companion-unique-indexes";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import {
@@ -1796,15 +1797,32 @@ export class DynamicCollectionService extends BaseService {
         // The main table's rename, decided on its own columns as its diff and the refusals above
         // decide it: on every field, a translated field added beside a renamed shared one makes
         // the rename read as a drop and two adds, and the push would drop the column the file
-        // renames. Where main renames nothing, the change's own rename, a translated field's,
-        // which the companion's rename is resolved from.
+        // renames.
         renamed:
           fieldRenameOf(
             this.schemaService.detectFieldRename(mainBefore, mainAfter)
-          ) ??
-          changeRename ??
-          null,
+          ) ?? null,
       });
+      // A translated field's rename is offered on its companion, as the schema dialog offers it
+      // (`offeredCompanionRename`), and the apply refuses a change that leaves it unanswered. The
+      // save answers it `rename`, as it answers the main table's.
+      const companionOffer = await offeredCompanionRename({
+        tableName: collection.tableName,
+        oldFields: oldUserFields,
+        newFields: userDefinedFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+        dialect: this.adapter.dialect,
+        builtBy: "collection",
+      });
+      if (companionOffer) {
+        pushAnswers.renameResolutions.push({
+          tableName: companionOffer.candidate.tableName,
+          fromColumn: companionOffer.candidate.fromColumn,
+          toColumn: companionOffer.candidate.toColumn,
+          choice: "rename",
+        });
+      }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 
       metadataUpdates.fields = userDefinedFields;
