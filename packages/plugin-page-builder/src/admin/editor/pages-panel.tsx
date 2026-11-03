@@ -150,10 +150,9 @@ function PagesPanel({
   });
 
   return (
-    // On the builder's panel surface and text, as Add, Layers and Components
-    // are, so it matches them in light and dark.
+    // In the builder's panel text; the surface is the panel region's own.
     <div
-      className="bg-[color:var(--nx-builder-surface)] text-[color:var(--nx-builder-text)] flex h-full flex-col gap-3 p-3"
+      className="text-[color:var(--nx-builder-text)] flex h-full flex-col gap-3 p-3"
       aria-label="Pages"
     >
       <div className="flex items-center justify-between">
