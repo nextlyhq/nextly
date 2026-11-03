@@ -28,10 +28,18 @@
  */
 
 import {
+  componentLayersLocks,
   componentUsageIn,
   compositionFaults,
   DEFAULT_LIMITS,
+  findNode,
+  heldBaselines,
+  keptForSameComponents,
   lockRefusal,
+  lockRepairRule,
+  placedLockChanges,
+  placementRefusal,
+  placementRepairRule,
   planRepair as planDocumentRepair,
   registryBlockSource,
   registryNestingSource,
@@ -41,6 +49,7 @@ import {
   type ResolvedComposition,
   type ComponentLookup,
   type DocumentLimits,
+  type LocatedPlacementBreak,
   type LockSources,
   type NestingSource,
   type RepairPlan,
@@ -50,7 +59,9 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import {
+  layersLockRefusalFor,
   lockRefusalWording,
+  savedLockBrokenBy,
   type LockEditRefusal,
   type LockRefusalFacts,
 } from "./lock-refusal";
@@ -66,6 +77,46 @@ import {
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
+
+/**
+ * A change made outside the document that the editor's history takes back and
+ * puts forward, such as a write to the site's shared styles.
+ *
+ * Each half resolves whether it took effect. A half that did not (a refused
+ * or failed write) leaves the change where it was, so the step is dropped
+ * rather than kept as an undo that never clears.
+ */
+interface HistoryStep {
+  /** Takes the change back. */
+  readonly undo: () => Promise<boolean>;
+  /** Makes the change again. */
+  readonly redo: () => Promise<boolean>;
+}
+
+/**
+ * One entry of the history: a group of the op layer's inverses, or a step
+ * recorded from outside the document. Both stacks hold the entry to replay
+ * next, so a step on the redo stack is the recorded one with its halves
+ * swapped.
+ */
+type HistoryEntry =
+  | { readonly kind: "ops"; readonly ops: readonly BuilderOp[] }
+  | {
+      readonly kind: "step";
+      readonly step: HistoryStep;
+      /** The step as recorded, kept as it moves between the stacks. */
+      readonly origin: HistoryStep;
+    };
+
+/** The step that replays `step` the other way, for the opposite stack. */
+function reversed(step: HistoryStep): HistoryStep {
+  return { undo: step.redo, redo: step.undo };
+}
+
+/** How many entries change the document, which is what a save point counts. */
+function documentEntries(stack: readonly HistoryEntry[]): number {
+  return stack.filter(entry => entry.kind === "ops").length;
+}
 
 export interface EditorState {
   /** The document as it currently stands. */
@@ -112,10 +163,11 @@ export interface EditorState {
   lockRefusalFor: (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
   /**
    * The repair of everything the document holds that the engine's repair
-   * rules put right (today, its lock breaks), planned by the engine's one
-   * repair planner against the baseline `apply` judges by. Nothing is
-   * applied: a surface shows the plan's steps and, once the author confirms,
-   * applies it as one edit. No steps when there is nothing to repair.
+   * rules put right (its lock breaks, then its placement breaks), planned by
+   * the engine's one repair planner against the baseline `apply` judges by.
+   * Nothing is applied: a surface shows the plan's steps and, once the
+   * author confirms, applies it as one edit. No steps when there is nothing
+   * to repair.
    */
   planRepair: () => RepairPlan;
   /**
@@ -132,8 +184,23 @@ export interface EditorState {
    * holds reads these, so it holds what `apply` refuses.
    */
   lockDefinitions: SlotDefaultSource;
-  undo: () => void;
-  redo: () => void;
+  /**
+   * Take back the newest step, and answer whether it took effect: at once for
+   * a document edit, and as a promise for a recorded step, once its own undo
+   * has answered. So a surface says "Undone" only for a change that was undone.
+   */
+  undo: () => boolean | Promise<boolean>;
+  /** Repeat the newest undone step, answering as `undo` does. */
+  redo: () => boolean | Promise<boolean>;
+  /**
+   * Record a change made outside the document as one step of this history,
+   * when the author makes it, so it takes its place in order among the page's
+   * edits even while it is still being stored. It ends the redo branch, as an
+   * edit does. Answers a function that withdraws the step, for a change that
+   * did not take effect after all.
+   * @experimental
+   */
+  recordStep: (step: HistoryStep) => () => void;
   canUndo: boolean;
   canRedo: boolean;
   /**
@@ -148,7 +215,10 @@ export interface EditorState {
    */
   limits: DocumentLimits;
   /**
-   * How many edits are on the undo stack.
+   * The document's position in its history: the document edits on the undo
+   * stack, plus those that fell off its old end. A recorded step is not one:
+   * it is stored where it was made, so it is no unsaved work here. The same as
+   * the number on the stack until the history passes its bound.
    *
    * Exported because "did anything change" is not answerable from the document
    * alone: an edit and its undo leave a document equal to the original but not
@@ -191,6 +261,12 @@ export interface UseEditorStateArgs {
    */
   onLockRefused?: (refusal: LockEditRefusal) => void;
   /**
+   * A component's name by its id, for the refusal of an edit to a block the
+   * component locks: the page cannot unlock it, so the author is told whose
+   * it is. Absent, the refusal names no component.
+   */
+  componentName?: (componentId: string) => string | undefined;
+  /**
    * Where the locks an edit is held to are read: the block definitions and
    * nesting rules. Defaults to the live registry, so every host's editor holds
    * the locks its saves enforce.
@@ -203,6 +279,40 @@ export interface UseEditorStateArgs {
    * opened stands for it.
    */
   stored?: BlockDocument;
+  /**
+   * Told when an edit was refused because it would put a block where the
+   * placement rule forbids, with the block and the reason. Every editor path
+   * (insert, drag, keyboard, toolbar, paste) ends in an op group here, so this
+   * is the one check none of them can miss, whatever a surface asked first.
+   */
+  onPlacementRefused?: (refusal: LocatedPlacementBreak) => void;
+}
+
+/**
+ * Whether an edit that turned `before` into `after` puts a block where the
+ * placement rule forbids — telling the host which, when it does. A break the
+ * page already held is not the edit's, so it is not refused here.
+ *
+ * Judged on the page itself, without composing its component placements: an
+ * edit composes the page once, for room and locks, and composing each
+ * placement again here would double that on every keystroke. What a placement
+ * draws is judged by the surfaces before they act and by the save.
+ */
+function refusedForPlacement(
+  before: BlockDocument,
+  after: BlockDocument,
+  { onPlacementRefused }: Pick<UseEditorStateArgs, "onPlacementRefused">,
+  limits: DocumentLimits
+): boolean {
+  const refusal = placementRefusal(
+    before,
+    after,
+    { nesting: registryNestingSource(), definitions: registryBlockSource() },
+    limits
+  );
+  if (refusal === undefined) return false;
+  onPlacementRefused?.(refusal);
+  return true;
 }
 
 /**
@@ -270,7 +380,12 @@ function composerFrom(
   return document => {
     let composed = byDocument.get(document);
     if (composed === undefined) {
-      composed = resolveComponentInstances(document, components, { limits });
+      // With the exposure map: the editor's composition is never rendered or
+      // saved, and the canvas reaches a value inside a component through it.
+      composed = resolveComponentInstances(document, components, {
+        limits,
+        exposures: true,
+      });
       byDocument.set(document, composed);
     }
     return composed;
@@ -283,6 +398,8 @@ interface LockJudgement {
   readonly limits: DocumentLimits;
   /** The composed page, for the locks a placement reaches inside a component. */
   readonly compose: Composer | undefined;
+  /** A component's name, for a refusal of a block it locks. */
+  readonly componentName: UseEditorStateArgs["componentName"];
 }
 
 /**
@@ -329,6 +446,68 @@ function lockBreakAdded(
 }
 
 /**
+ * A block a placed component locks in Layers that the edit changes through a
+ * placement, judged as a save judges it (`placedLockChanges`): the composed
+ * page against the same page with every placement as its component holds it,
+ * keeping a value the page already gave the block, before this edit or as
+ * last saved. Named by the component, since the page cannot unlock it.
+ */
+function componentLockAdded(
+  after: BlockDocument,
+  composedAfter: BlockDocument,
+  kept: readonly BlockDocument[],
+  {
+    compose,
+    limits,
+    componentName,
+  }: Pick<LockJudgement, "limits" | "componentName"> & { compose: Composer }
+): LockRefusalFacts | undefined {
+  // Asked of the as-held baseline, not of the page after the edit: an edit
+  // that hides or removes the locked block leaves no lock after it to find,
+  // but the page before it, or as saved, still draws one. A page none of
+  // whose forms draws a component lock composes nothing more.
+  const drawsLock = [composedAfter, ...kept].some(
+    form => componentLayersLocks(form.nodes, limits).size > 0
+  );
+  if (!drawsLock) return undefined;
+  const held = heldBaselines(after, limits).map(level => ({
+    form: compose(level.document).document,
+    placements: level.placements,
+  }));
+  const [change] = placedLockChanges(composedAfter, held, kept, limits);
+  if (change === undefined) return undefined;
+  return componentLockFacts(
+    componentNameOf(after, change.placementId, componentName)
+  );
+}
+
+/** The name of the component a page's placement draws, or "" when none is known. */
+function componentNameOf(
+  page: BlockDocument,
+  placementId: string | undefined,
+  componentName: LockJudgement["componentName"]
+): string {
+  const placement =
+    placementId === undefined ? undefined : findNode(page.nodes, placementId);
+  const componentId = (
+    placement?.props as { componentId?: unknown } | undefined
+  )?.componentId;
+  return typeof componentId === "string"
+    ? (componentName?.(componentId) ?? "")
+    : "";
+}
+
+/** A refusal for a block a component locks, named by the component. */
+function componentLockFacts(name: string): LockRefusalFacts {
+  return {
+    code: "layers-locked",
+    label: name,
+    relation: "component",
+    verb: "change",
+  };
+}
+
+/**
  * The lock break an edit adds to the composed page, judged by the engine's
  * `compositionFaults`, the check a save runs over the same composition.
  *
@@ -341,7 +520,7 @@ function composedLockAdded(
   after: BlockDocument,
   stored: BlockDocument,
   sources: LockSources,
-  { compose, limits }: LockJudgement
+  { compose, limits, componentName }: LockJudgement
 ): LockRefusalFacts | undefined {
   if (compose === undefined) return undefined;
   // A page placing no component has no composed break to add.
@@ -349,6 +528,19 @@ function composedLockAdded(
   if (placed.complete && placed.ids.length === 0) return undefined;
   const composedBefore = compose(before);
   const baselines = [composedBefore.document, compose(stored).document];
+  const composedAfter = compose(after);
+  // A value is kept only under the component that gave it: a placement this
+  // edit switches to another component is left out of the forms it keeps.
+  const kept = [before, stored].map((form, index) => {
+    const same = keptForSameComponents(after, form, limits);
+    return same === form ? baselines[index] : compose(same).document;
+  });
+  const held = componentLockAdded(after, composedAfter.document, kept, {
+    compose,
+    limits,
+    componentName,
+  });
+  if (held !== undefined) return held;
   const lockFaults = (host: BlockDocument, composition: ResolvedComposition) =>
     compositionFaults(host, composition, {
       definitions: sources.definitions,
@@ -357,7 +549,7 @@ function composedLockAdded(
       baselines,
     }).filter(fault => fault.lock !== undefined);
   const had = new Set(lockFaults(before, composedBefore).map(composedBreakKey));
-  const added = lockFaults(after, compose(after)).find(
+  const added = lockFaults(after, composedAfter).find(
     fault => !had.has(composedBreakKey(fault))
   );
   if (added?.lock === undefined) return undefined;
@@ -377,7 +569,12 @@ function composedLockAdded(
 interface AtApply
   extends Pick<
     UseEditorStateArgs,
-    "definitions" | "onRefused" | "onLockRefused" | "locks"
+    | "definitions"
+    | "onRefused"
+    | "onLockRefused"
+    | "locks"
+    | "onPlacementRefused"
+    | "componentName"
   > {
   /** The document as last saved; the document as opened when none is given. */
   readonly stored: BlockDocument;
@@ -386,16 +583,24 @@ interface AtApply
 function atApply(
   host: Pick<
     UseEditorStateArgs,
-    "definitions" | "onRefused" | "onLockRefused" | "locks" | "stored"
+    | "definitions"
+    | "onRefused"
+    | "onLockRefused"
+    | "locks"
+    | "stored"
+    | "onPlacementRefused"
+    | "componentName"
   >,
   opened: BlockDocument
 ): AtApply {
   return {
+    componentName: host.componentName,
     definitions: host.definitions,
     onRefused: host.onRefused,
     onLockRefused: host.onLockRefused,
     locks: host.locks,
     stored: host.stored ?? opened,
+    onPlacementRefused: host.onPlacementRefused,
   };
 }
 
@@ -409,6 +614,9 @@ function useLockDefinitions(
   const host = locks?.definitions;
   return useMemo(() => host ?? registryBlockSource(), [host]);
 }
+
+/** The rules a repair runs, in order. */
+const REPAIR_RULES = [lockRepairRule, placementRepairRule] as const;
 
 /**
  * The store's lock questions, asked of the document as it stands and the
@@ -436,19 +644,35 @@ function useLockQuestions(
   const definitions = locks?.definitions;
   const nesting = locks?.nesting;
   const lockRefusalFor = useCallback(
-    (ops: readonly BuilderOp[]): LockRefusalFacts | undefined =>
-      lockAnswerFor(latestDocument.current, ops, baseline, {
+    (ops: readonly BuilderOp[]): LockRefusalFacts | undefined => {
+      // Read at the question, as the apply reads it.
+      const componentName = composition.current.componentName;
+      return lockAnswerFor(latestDocument.current, ops, baseline, {
         locks: hostLocksOf(definitions, nesting),
         limits,
         compose: composerNow(),
-      }),
-    [latestDocument, limits, composerNow, baseline, definitions, nesting]
+        componentName,
+      });
+    },
+    [
+      latestDocument,
+      composition,
+      limits,
+      composerNow,
+      baseline,
+      definitions,
+      nesting,
+    ]
   );
+
   const planRepair = useCallback(
     (): RepairPlan =>
+      // The lock rule first and the placement rule after it, so a block a
+      // lock repair moves is judged where the lock rule put it.
       planDocumentRepair(
         latestDocument.current,
-        lockSourcesOf(hostLocksOf(definitions, nesting), baseline, limits)
+        lockSourcesOf(hostLocksOf(definitions, nesting), baseline, limits),
+        REPAIR_RULES
       ),
     [latestDocument, limits, baseline, definitions, nesting]
   );
@@ -495,8 +719,9 @@ function useComposer(
 }
 
 /**
- * Whether a fresh edit is refused: the page no longer composes, or the edit
- * adds a lock break. The host is told why, in that order.
+ * Whether a fresh edit is refused: it deletes a block the saved page still
+ * holds locked, the page no longer composes, or the edit adds a lock break.
+ * The host is told why, in that order.
  */
 function refusedAsFresh(
   before: BlockDocument,
@@ -506,16 +731,25 @@ function refusedAsFresh(
     current,
     limits,
     compose,
+    ops,
   }: {
     stored: BlockDocument;
     current: Pick<
       UseEditorStateArgs,
-      "definitions" | "onRefused" | "onLockRefused" | "locks"
+      "definitions" | "onRefused" | "onLockRefused" | "locks" | "componentName"
     >;
     limits: DocumentLimits;
     compose: Composer | undefined;
+    /** The edit's ops, for the saved page's Layers lock on what it deletes. */
+    ops: readonly BuilderOp[];
   }
 ): boolean {
+  // A delete of a block the SAVED page still holds locked, though the author
+  // has unlocked it since: a save would refuse it, so the edit is refused now,
+  // with the way forward.
+  if (reportLayersLock(before, ops, current.onLockRefused, after, stored)) {
+    return true;
+  }
   if (
     compose !== undefined &&
     refusedForRoom(before, after, current, limits, compose)
@@ -532,9 +766,11 @@ function refusedAsFresh(
 }
 
 /**
- * The lock break `ops` would add to `document`, applied only to ask. Ops the
- * document cannot take are the apply's to refuse; they add no lock break,
- * because they add nothing.
+ * The lock `ops` would break in `document`, applied only to ask: a block
+ * locked in Layers first, now or on the saved page for a delete, then the
+ * slot locks a block declares. Ops the document cannot take for another
+ * reason are the apply's to refuse; they add no lock break, because they add
+ * nothing.
  */
 function lockAnswerFor(
   document: BlockDocument,
@@ -542,6 +778,8 @@ function lockAnswerFor(
   stored: BlockDocument,
   judgement: LockJudgement
 ): LockRefusalFacts | undefined {
+  const layers = layersLockRefusalFor(document, ops, stored);
+  if (layers !== undefined) return layers;
   let group;
   try {
     group = applyOps(document, ops, judgement.limits);
@@ -552,13 +790,45 @@ function lockAnswerFor(
   return lockBreakAdded(document, group.document, stored, judgement);
 }
 
+/**
+ * Tell the host which Layers lock refused an edit, and answer whether one did.
+ *
+ * With `after` and `stored`, the edit applied and only the saved page's lock
+ * on a block it deletes is asked (`savedLockBrokenBy`); without them, the
+ * edit was refused by the op layer and the lock it broke is found again.
+ */
+function reportLayersLock(
+  before: BlockDocument,
+  ops: readonly BuilderOp[],
+  onLockRefused: UseEditorStateArgs["onLockRefused"],
+  after?: BlockDocument,
+  stored?: BlockDocument
+): boolean {
+  const found =
+    after === undefined || stored === undefined
+      ? layersLockRefusalFor(before, ops)
+      : savedLockBrokenBy(before, after, stored, ops);
+  if (found === undefined) return false;
+  onLockRefused?.({
+    reason: "locked",
+    sentence: refusalAnnouncement(lockRefusalWording(found)),
+    lock: found,
+  });
+  return true;
+}
+
 /** The lock judgement from what the store reads at apply time. */
 function judgementOf(
-  current: Pick<UseEditorStateArgs, "locks">,
+  current: Pick<UseEditorStateArgs, "locks" | "componentName">,
   limits: DocumentLimits,
   compose: Composer | undefined
 ): LockJudgement {
-  return { locks: current.locks, limits, compose };
+  return {
+    locks: current.locks,
+    limits,
+    compose,
+    componentName: current.componentName,
+  };
 }
 
 /**
@@ -609,6 +879,136 @@ function lockSourcesOf(
 }
 
 /**
+ * The undo and redo stacks, and the depths a render reads from them.
+ *
+ * READONLY groups. A recorded inverse describes the document as it stood when
+ * its op ran, so nothing may append to or reorder one after the fact — the
+ * history would then describe an edit that never happened. `applyOps` returns
+ * them already in undo order and already frozen to the type.
+ */
+function useHistoryStacks(): {
+  depths: { undo: number; redo: number; document: number };
+  push: (
+    entry: HistoryEntry,
+    into: "undo" | "redo" | "new"
+  ) => HistoryEntry | undefined;
+  pop: (from: "undo" | "redo") => HistoryEntry | undefined;
+  remove: (entry: HistoryEntry) => void;
+  withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
+} {
+  const undoStack = useRef<HistoryEntry[]>([]);
+  const redoStack = useRef<HistoryEntry[]>([]);
+  // Mirrors the stack lengths so the flags below are STATE and re-render when
+  // they change. Reading `undoStack.current.length` directly would leave an
+  // undo button disabled after the first edit, because a ref mutation does not
+  // schedule a render.
+  const [depths, setDepths] = useState({ undo: 0, redo: 0, document: 0 });
+  /*
+   * Document edits dropped off the old end. The save point measures the
+   * document's position in its history, and that position does not move
+   * because the history forgets how it got there: counted in, a page saved
+   * before a run of style changes stays saved once its edit falls off.
+   */
+  const forgotten = useRef(0);
+  const sync = useCallback(() => {
+    setDepths({
+      undo: undoStack.current.length,
+      redo: redoStack.current.length,
+      document: documentEntries(undoStack.current) + forgotten.current,
+    });
+  }, []);
+  const push = useCallback(
+    (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
+      let dropped: HistoryEntry | undefined;
+      if (into === "redo") {
+        redoStack.current.push(entry);
+      } else {
+        undoStack.current.push(entry);
+      }
+      if (into === "new") {
+        // Bounded from the OLD end. Dropping the newest would make the most
+        // recent edit unrepeatable, which is the one an author is most likely
+        // to want back.
+        if (undoStack.current.length > MAX_HISTORY) {
+          dropped = undoStack.current.shift();
+          if (dropped?.kind === "ops") forgotten.current += 1;
+        }
+        // A new edit invalidates the redo branch: those inverses were computed
+        // against a document that no longer exists, so replaying one would
+        // apply an edit derived from a tree that has since changed.
+        redoStack.current = [];
+      }
+      sync();
+      return dropped;
+    },
+    [sync]
+  );
+  const pop = useCallback(
+    (from: "undo" | "redo") => {
+      const entry = (from === "undo" ? undoStack : redoStack).current.pop();
+      sync();
+      return entry;
+    },
+    [sync]
+  );
+  const remove = useCallback(
+    (entry: HistoryEntry) => {
+      undoStack.current = undoStack.current.filter(held => held !== entry);
+      redoStack.current = redoStack.current.filter(held => held !== entry);
+      sync();
+    },
+    [sync]
+  );
+  /*
+   * Take a recorded step back out, wherever it sits: undone, it is on the
+   * redo stack under another entry. The entry its recording pushed off a full
+   * history comes back to the old end, since a change that never took effect
+   * must not cost the oldest edit.
+   */
+  const withdraw = useCallback(
+    (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
+      const kept = (held: HistoryEntry) =>
+        held.kind !== "step" || held.origin !== origin;
+      undoStack.current = undoStack.current.filter(kept);
+      redoStack.current = redoStack.current.filter(kept);
+      if (dropped !== undefined && undoStack.current.length < MAX_HISTORY) {
+        undoStack.current.unshift(dropped);
+        if (dropped.kind === "ops") forgotten.current -= 1;
+      }
+      sync();
+    },
+    [sync]
+  );
+  return { depths, push, pop, remove, withdraw };
+}
+
+/**
+ * Replay a recorded step and move it to the other stack at once, so a second
+ * press reaches the entry before it rather than waiting on a write. Dropped
+ * again if the replay did not take effect, for the reason a refused inverse is
+ * not pushed back.
+ */
+function replayStep(
+  { step, origin }: { step: HistoryStep; origin: HistoryStep },
+  into: "undo" | "redo",
+  push: (entry: HistoryEntry, into: "undo" | "redo") => void,
+  remove: (entry: HistoryEntry) => void
+): Promise<boolean> {
+  const moved: HistoryEntry = { kind: "step", step: reversed(step), origin };
+  push(moved, into);
+  return step.undo().then(
+    took => {
+      if (!took) remove(moved);
+      return took;
+    },
+    () => {
+      remove(moved);
+      return false;
+    }
+  );
+}
+
+/**
  * Hold a document and the edits made to it.
  *
  * The document is state and the history is a ref: history changes on every edit
@@ -624,13 +1024,23 @@ export function useEditorState({
   onLockRefused,
   locks,
   stored,
+  onPlacementRefused,
+  componentName,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
   // keyed on it.
   // The document as last saved is read the same way, so a save the host
   // reports takes effect on the very next edit.
-  const host = { definitions, onRefused, onLockRefused, locks, stored };
+  const host = {
+    definitions,
+    onRefused,
+    onLockRefused,
+    locks,
+    stored,
+    onPlacementRefused,
+    componentName,
+  };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
@@ -671,17 +1081,7 @@ export function useEditorState({
     );
   latestDocument.current = document;
 
-  // READONLY groups. A recorded inverse describes the document as it stood when
-  // its op ran, so nothing may append to or reorder one after the fact — the
-  // history would then describe an edit that never happened. `applyOps` returns
-  // them already in undo order and already frozen to the type.
-  const undoStack = useRef<(readonly BuilderOp[])[]>([]);
-  const redoStack = useRef<(readonly BuilderOp[])[]>([]);
-  // Mirrors the stack lengths so the flags below are STATE and re-render when
-  // they change. Reading `undoStack.current.length` directly would leave an
-  // undo button disabled after the first edit, because a ref mutation does not
-  // schedule a render.
-  const [depths, setDepths] = useState({ undo: 0, redo: 0 });
+  const { depths, push, pop, remove, withdraw } = useHistoryStacks();
 
   /**
    * Run an op and record its inverse on the given stack.
@@ -741,6 +1141,17 @@ export function useEditorState({
         // cap, a move onto a node that no longer exists, an update to a node
         // a concurrent edit removed. The caller decides what to say about it.
         // Nothing is committed — see the atomicity note above.
+        //
+        // A block locked in Layers is the one refusal the host is told the
+        // reason for here, in the lock's own words, whichever surface sent the
+        // edit: nothing on the canvas explains it otherwise.
+        if (into === "new") {
+          reportLayersLock(
+            latestDocument.current,
+            ops,
+            composition.current.onLockRefused
+          );
+        }
         return null;
       }
 
@@ -768,33 +1179,29 @@ export function useEditorState({
           current: composition.current,
           limits,
           compose: composerNow(),
+          ops,
         })
+      ) {
+        return null;
+      }
+      // A fresh edit only, for the reason room is: an undo or a redo returns
+      // the page to a state that was accepted when it was made.
+      if (
+        into === "new" &&
+        refusedForPlacement(
+          latestDocument.current,
+          group.document,
+          composition.current,
+          limits
+        )
       ) {
         return null;
       }
 
       const applied = { document: group.document, inverse: group.inverses };
+      const entry: HistoryEntry = { kind: "ops", ops: applied.inverse };
 
-      if (into === "new") {
-        undoStack.current.push(applied.inverse);
-        // Bounded from the OLD end. Dropping the newest would make the most
-        // recent edit unrepeatable, which is the one an author is most likely
-        // to want back.
-        if (undoStack.current.length > MAX_HISTORY) undoStack.current.shift();
-        // A new edit invalidates the redo branch: those inverses were computed
-        // against a document that no longer exists, so replaying one would
-        // apply an edit derived from a tree that has since changed.
-        redoStack.current = [];
-      } else if (into === "undo") {
-        undoStack.current.push(applied.inverse);
-      } else {
-        redoStack.current.push(applied.inverse);
-      }
-
-      setDepths({
-        undo: undoStack.current.length,
-        redo: redoStack.current.length,
-      });
+      push(entry, into);
       // Ahead of `setDocument`, which does not take effect until the next
       // render: two ops applied in one tick must see each other, or the second
       // is folded onto the document the first already replaced.
@@ -814,7 +1221,7 @@ export function useEditorState({
     // would rebuild these callbacks every edit for a value none of them close
     // over. Stable identity is also the point — a stale `run` is now the same
     // `run`, folding onto the tree as it stands.
-    [limits, composerNow]
+    [limits, composerNow, push]
   );
 
   const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
@@ -824,23 +1231,37 @@ export function useEditorState({
     [run]
   );
 
-  const undo = useCallback(() => {
-    const group = undoStack.current.pop();
-    if (group === undefined) return;
-    // Popped before running, and NOT pushed back on failure. A refused undo
-    // means the inverse no longer applies to this document, so keeping it would
-    // leave a step that fails every time it is reached — an undo button that
-    // does nothing and never clears.
-    setDepths(d => ({ ...d, undo: undoStack.current.length }));
-    run(group, "redo");
-  }, [run]);
-
-  const redo = useCallback(() => {
-    const group = redoStack.current.pop();
-    if (group === undefined) return;
-    setDepths(d => ({ ...d, redo: redoStack.current.length }));
-    run(group, "undo");
-  }, [run]);
+  /**
+   * Take the newest entry off one stack and replay it, recording what takes
+   * it back on the other.
+   *
+   * Popped before running, and NOT pushed back on failure. A refused undo
+   * means the inverse no longer applies to this document, so keeping it would
+   * leave a step that fails every time it is reached — an undo button that
+   * does nothing and never clears.
+   */
+  const replay = useCallback(
+    (from: "undo" | "redo"): boolean | Promise<boolean> => {
+      const entry = pop(from);
+      if (entry === undefined) return false;
+      const into = from === "undo" ? "redo" : "undo";
+      if (entry.kind === "step") {
+        return replayStep(entry, into, push, remove);
+      }
+      return run(entry.ops, into) !== null;
+    },
+    [pop, push, remove, run]
+  );
+  const undo = useCallback(() => replay("undo"), [replay]);
+  const redo = useCallback(() => replay("redo"), [replay]);
+  // Bounded and branch-ending exactly as a fresh document edit is.
+  const recordStep = useCallback(
+    (step: HistoryStep) => {
+      const dropped = push({ kind: "step", step, origin: step }, "new");
+      return () => withdraw(step, dropped);
+    },
+    [push, withdraw]
+  );
 
   const select = useCallback(
     (id: string | null, mode: SelectionMode = "replace") =>
@@ -864,10 +1285,11 @@ export function useEditorState({
       lockDefinitions,
       undo,
       redo,
+      recordStep,
       canUndo: depths.undo > 0,
       canRedo: depths.redo > 0,
       limits,
-      undoDepth: depths.undo,
+      undoDepth: depths.document,
     }),
     [
       document,
@@ -881,6 +1303,7 @@ export function useEditorState({
       lockDefinitions,
       undo,
       redo,
+      recordStep,
       depths,
       limits,
     ]

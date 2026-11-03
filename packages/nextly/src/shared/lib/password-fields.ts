@@ -20,6 +20,7 @@ import { readFieldGroupType } from "../../domains/field-groups/storage/field-gro
 import { hiddenColumnNames } from "../../domains/schema/extension/active-schema";
 import { NextlyError } from "../../errors";
 import { systemColumnNames } from "../../lib/system-columns";
+import { addressableFields } from "../addressable-fields";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
 import { rowPairing } from "./denied-change";
@@ -891,6 +892,28 @@ export function hasPasswordField(fields: NamedField[]): boolean {
     field =>
       field.type === "password" ||
       (Boolean(field.fields) && hasPasswordField(field.fields!))
+  );
+}
+
+/**
+ * Whether the top-level field a query key names is a password, or a container
+ * holding one at any depth, in any spelling the key may arrive in.
+ *
+ * Wider than {@link isPasswordFieldName} on purpose: a filter on a group or
+ * repeater matches against its stored JSON, so `contains` on the container
+ * probes the hash of the password inside it without naming it. Matched
+ * against the fields a query can address, so a password inside an unnamed
+ * container, which is a column of the table, is found by its own name.
+ */
+export function queriesPassword(fields: NamedField[], key: string): boolean {
+  const head = key.split(".")[0] ?? key;
+  const wanted = new Set([head, toCamelCase(head), toSnakeCase(head)]);
+  return (addressableFields(fields) as unknown as NamedField[]).some(
+    field =>
+      Boolean(field.name) &&
+      wanted.has(field.name!) &&
+      (field.type === "password" ||
+        (Boolean(field.fields) && hasPasswordField(field.fields!)))
   );
 }
 

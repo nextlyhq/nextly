@@ -36,23 +36,42 @@
  */
 
 import {
+  findNode,
+  isComponentInstance,
+  planConvertToComponent,
+  planDetach,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
   type BlockNode,
+  type DefinitionsById,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
-import { blockDuplication } from "./duplicate-block";
+import type { RefusalWording } from "./drag-refusal";
 import type { Rect } from "./geometry";
-import { keyboardMovePosition } from "./keyboard-move";
-import { layerLabel, pathTo } from "./layers";
-import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
-import { lockBlockingDelete, lockBlockingMove } from "./locking";
+import { placedComponentId } from "./instance-inspector";
+import {
+  keyboardMovePosition,
+  type KeyboardMove,
+  type MoveDirection,
+} from "./keyboard-move";
+import { pathTo } from "./layers";
+import {
+  lockedBlockWording,
+  lockRefusalWording,
+  type LockedVerb,
+  type LockRefusalFacts,
+} from "./lock-refusal";
+import {
+  lockBlockingDelete,
+  lockBlockingEdit,
+  lockBlockingMove,
+} from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp, OpPosition } from "./ops";
 import {
   isRefusal,
   selectionDeletion,
@@ -78,11 +97,11 @@ function lockReason(
 }
 
 /** An action enabled, or dimmed with the lock's reason when one refuses it. */
-function heldByLock(
-  action: ToolbarAction,
+function heldByLock<A extends Pick<ToolbarAction, "enabled" | "reason">>(
+  action: A,
   ask: LockQuestion | undefined,
   ops: readonly BuilderOp[] | undefined
-): ToolbarAction {
+): A {
   if (!action.enabled || ops === undefined) return action;
   const reason = lockReason(ask, ops);
   return reason === undefined ? action : { ...action, enabled: false, reason };
@@ -95,6 +114,12 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
+  | "edit-component"
+  | "save-as-component"
+  | "convert-to-component"
+  | "detach-component"
+  | "duplicate-component"
+  | "update-pattern"
   | "delete";
 
 /** One button's worth of decision. */
@@ -119,19 +144,338 @@ export interface ToolbarAction {
    * remedy is one field away.
    */
   readonly reason?: string;
+  /**
+   * Offered from a menu rather than as a button of its own: the block
+   * toolbar keeps these behind its "More" button, and the context menu groups
+   * them, so the bar stays one short row however many verbs the host adds.
+   */
+  readonly inMenu?: true;
 }
 
 /**
- * What a lock refusal says.
+ * What the host offers for making components from a selection.
  *
- * Names the block only when it is not the selected one. "Caption inside this
- * block is locked" sends an author somewhere to look; repeating the selected
- * block's own name back at them while the bar is drawn against it does not.
+ * Absent where the host has no component library to write to, and then
+ * neither verb is offered at all.
  */
-function lockedBy(locked: BlockNode, selectedId: string): string {
-  return locked.id === selectedId
-    ? "This block is locked."
-    : `${layerLabel(locked)} inside this block is locked.`;
+export interface ComponentVerbsOffer {
+  /**
+   * Whether the author may create and publish components, which both verbs
+   * need: the component is created published. `false` dims both, with
+   * {@link MAKE_COMPONENT_GRANT_REFUSAL}.
+   */
+  readonly mayCreate: boolean;
+  /**
+   * The component definitions the canvas draws, which a detach inlines.
+   * Absent, Detach is not offered.
+   */
+  readonly definitions?: DefinitionsById;
+  /**
+   * Whether the author may update and publish patterns. Absent, "Update
+   * pattern" is not offered; `false` dims it with the reason.
+   */
+  readonly mayUpdatePattern?: boolean;
+}
+
+/** What an author without the grant to update a pattern is told. */
+const UPDATE_PATTERN_GRANT_REFUSAL =
+  "You do not have permission to update and publish patterns.";
+
+/** What an author without the grant to make a component is told. */
+const MAKE_COMPONENT_GRANT_REFUSAL =
+  "You do not have permission to create and publish components.";
+
+/** The id a convert is planned under before the component exists. */
+const PLANNED_COMPONENT_ID = "planned-component";
+
+/**
+ * "Save as component" and "Convert to component", each enabled or dimmed with
+ * the reason, both asked of the planners rather than restated. Save shares
+ * the pattern save's selection rules; convert is planned in full, and the
+ * ops it would apply are put to the editor's lock question, since a slot's
+ * lock can refuse the placement that replaces the run.
+ */
+function componentActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const save: ToolbarAction = {
+    id: "save-as-component",
+    label: "Save as component",
+    enabled: true,
+    inMenu: true,
+  };
+  const convert: ToolbarAction = {
+    id: "convert-to-component",
+    label: "Convert to component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    const reason = MAKE_COMPONENT_GRANT_REFUSAL;
+    return [
+      { ...save, enabled: false, reason },
+      { ...convert, enabled: false, reason },
+    ];
+  }
+  const saving = saveAsPatternRefusal(document, ids, nesting);
+  const converting = planConvertToComponent(
+    document,
+    ids,
+    { collection: "", fields: {} },
+    PLANNED_COMPONENT_ID,
+    {},
+    nesting
+  );
+  return [
+    saving === undefined
+      ? save
+      : { ...save, enabled: false, reason: compositionRefusalReason(saving) },
+    converting.problem === undefined
+      ? heldByLock(convert, ask, converting.pageOps)
+      : {
+          ...convert,
+          enabled: false,
+          reason: compositionRefusalReason(converting),
+        },
+  ];
+}
+
+/**
+ * "Detach" and "Duplicate component" for one selected placement, and nothing
+ * for any other selection, so a menu over a heading does not grow verbs that
+ * could never apply to it. Detach is planned in full against the definitions
+ * the canvas draws, and its ops are put to the editor's lock question.
+ */
+function placementActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  const only = ids.length === 1 ? ids[0] : undefined;
+  if (offer === undefined || only === undefined) return [];
+  const node = findNode(document.nodes, only);
+  if (node === undefined || !isComponentInstance(node)) return [];
+  const actions: ToolbarAction[] = [];
+  if (offer.definitions !== undefined) {
+    const detach: ToolbarAction = {
+      id: "detach-component",
+      label: "Detach from component",
+      enabled: true,
+      inMenu: true,
+    };
+    const plan = planDetach(document, only, offer.definitions, nesting);
+    actions.push(
+      plan.problem === undefined
+        ? heldByLock(detach, ask, plan.pageOps)
+        : { ...detach, enabled: false, reason: compositionRefusalReason(plan) }
+    );
+  }
+  const duplicate: ToolbarAction = {
+    id: "duplicate-component",
+    label: "Duplicate component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: MAKE_COMPONENT_GRANT_REFUSAL,
+    });
+    return actions;
+  }
+  // The copy is made from the component as this author may read it; one the
+  // canvas could not load for them is not one they can copy.
+  const source = (node.props as { componentId?: unknown }).componentId;
+  if (
+    offer.definitions !== undefined &&
+    (typeof source !== "string" || !offer.definitions.has(source))
+  ) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: "This component is not available to copy.",
+    });
+    return actions;
+  }
+  // The re-point is an edit of the placement, so a Layers lock on it or around
+  // it refuses Duplicate as it refuses any edit (`lockBlockingEdit`), in the
+  // one wording; a slot's lock is the lock question's, through `heldByLock`.
+  const held = lockBlockingEdit(document, only);
+  actions.push(
+    held === undefined
+      ? heldByLock(duplicate, ask, [
+          {
+            kind: "update",
+            id: only,
+            patch: {
+              props: { ...node.props, componentId: PLANNED_COMPONENT_ID },
+            },
+          },
+        ])
+      : {
+          ...duplicate,
+          enabled: false,
+          reason: lockedBy(held, only, "change"),
+        }
+  );
+  return actions;
+}
+
+/**
+ * "Update pattern" for a selection that could be saved as one, where the host
+ * offers it: the selection replaces a pattern's content.
+ */
+function updatePatternAction(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined
+): ToolbarAction[] {
+  if (offer?.mayUpdatePattern === undefined) return [];
+  const action: ToolbarAction = {
+    id: "update-pattern",
+    label: "Update a pattern",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayUpdatePattern) {
+    return [
+      { ...action, enabled: false, reason: UPDATE_PATTERN_GRANT_REFUSAL },
+    ];
+  }
+  const refusal = saveAsPatternRefusal(document, ids, nesting);
+  return [
+    refusal === undefined
+      ? action
+      : {
+          ...action,
+          enabled: false,
+          reason: compositionRefusalReason(refusal),
+        },
+  ];
+}
+
+/** Every verb of the menu's component group, in the order it lists them. */
+function compositionActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  return [
+    ...componentActions(document, ids, nesting, offer, ask),
+    ...placementActions(document, ids, nesting, offer, ask),
+    ...updatePatternAction(document, ids, nesting, offer),
+  ];
+}
+
+/**
+ * What a Layers-lock refusal says on a button or a menu item: the headline of
+ * the one wording every surface uses, the locked block by name and where it
+ * sits relative to the selected one. Short, because it is said beside the
+ * verb; the way forward is in the block card and in what a keystroke says.
+ */
+function lockedBy(
+  locked: BlockNode,
+  selectedId: string,
+  verb: LockedVerb
+): string {
+  return lockedBlockWording(locked, selectedId, verb).headline;
+}
+
+/**
+ * Where a block's move in one direction goes: the keyboard move's own answer.
+ *
+ * Passed in by a caller that runs the move, so the availability it shows is
+ * asked with the very function, and the very component definitions, its verb
+ * moves by. The default reads no definitions, as the bar's Move up and Move
+ * down always have — a step within one list needs none.
+ */
+export type MovePosition = (
+  document: BlockDocument,
+  id: string,
+  direction: MoveDirection
+) => KeyboardMove | null;
+
+/**
+ * Whether the placement rule refuses a block's move to `to`, and its words,
+ * or `null` when it allows it. Passed in by a caller that runs the move, so
+ * an item it offers is judged by the very call its verb judges by.
+ */
+export type MoveJudge = (
+  document: BlockDocument,
+  id: string,
+  to: OpPosition
+) => RefusalWording | null;
+
+const POSITION_WITHOUT_DEFINITIONS: MovePosition = (document, id, direction) =>
+  keyboardMovePosition(document.nodes, id, direction);
+
+/** Why a verb that acts on one block is not offered for a set. */
+function oneAtATime(count: number): string {
+  return `Only one block at a time. ${count} are selected.`;
+}
+
+/**
+ * One block's move in one direction, as an action: dimmed when the block is
+ * locked or has nowhere to go that way, and when a slot's lock refuses it.
+ *
+ * Where it goes is the keyboard move's own answer (`keyboardMovePosition`), so
+ * an action offered here is the step its keystroke takes. Whether the
+ * placement rule allows it there is asked when it runs, by the same verb the
+ * keystroke runs, which says why when it does not.
+ */
+function singleMove<Id extends string>(
+  document: BlockDocument,
+  selectedId: string,
+  id: Id,
+  label: string,
+  direction: MoveDirection,
+  ask: LockQuestion | undefined,
+  position: MovePosition = POSITION_WITHOUT_DEFINITIONS,
+  judge?: MoveJudge
+): Omit<ToolbarAction, "id"> & { readonly id: Id } {
+  const moveLock = lockBlockingMove(document, selectedId);
+  if (moveLock !== undefined) {
+    return {
+      id,
+      label,
+      enabled: false,
+      reason: lockedBy(moveLock, selectedId, "move"),
+    };
+  }
+  const to = position(document, selectedId, direction);
+  // The placement rule's refusal, said where the author would press.
+  const refused =
+    to === null || judge === undefined
+      ? null
+      : judge(document, selectedId, to.to);
+  if (refused !== null) {
+    return { id, label, enabled: false, reason: refusalAnnouncement(refused) };
+  }
+  return heldByLock(
+    { id, label, enabled: to !== null },
+    ask,
+    to === null
+      ? undefined
+      : [
+          {
+            kind: "move",
+            id: selectedId,
+            to: to.to,
+            dropSlotIfEmpty: to.dropSlotIfEmpty,
+          },
+        ]
+  );
 }
 
 /**
@@ -261,12 +605,13 @@ function manyBlockActions(
   ids: readonly string[],
   nesting: NestingSource,
   mayCreate: boolean,
-  ask?: LockQuestion
+  ask?: LockQuestion,
+  components?: ComponentVerbsOffer
 ): ToolbarAction[] {
-  const many = `Only one block at a time. ${ids.length} are selected.`;
+  const many = oneAtATime(ids.length);
   const deleteLock = ids
-    .map(id => lockBlockingDelete(document, id))
-    .find(node => node !== undefined);
+    .map(id => ({ id, locked: lockBlockingDelete(document, id) }))
+    .find(held => held.locked !== undefined);
 
   return [
     {
@@ -285,7 +630,8 @@ function manyBlockActions(
       opsOf(selectionDuplication(document, ids))
     ),
     saveAction(document, ids, nesting, mayCreate),
-    deleteLock === undefined
+    ...compositionActions(document, ids, nesting, components, ask),
+    deleteLock?.locked === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: true },
           ask,
@@ -297,7 +643,7 @@ function manyBlockActions(
           enabled: false,
           // ONE lock refuses the whole delete, because the group is applied
           // atomically and there is no half-done delete to fall back to.
-          reason: `${layerLabel(deleteLock)} is locked. Unlock it to delete.`,
+          reason: lockedBy(deleteLock.locked, deleteLock.id, "delete"),
         },
   ];
 }
@@ -351,7 +697,18 @@ export function toolbarActions(
    * with the lock's reason before it is pressed. Optional for a caller that
    * holds no editor; the editor's apply refuses the same ops regardless.
    */
-  lockRefusalFor?: LockQuestion
+  lockRefusalFor?: LockQuestion,
+  /**
+   * What the host offers for making components, or nothing where it has no
+   * component library: then neither verb appears.
+   */
+  components?: ComponentVerbsOffer,
+  /**
+   * Whether the host opens a placed component in its own view. Offered only
+   * for one selected placement, and only by a host that answers it; the host
+   * also withholds it from an author who may not update components.
+   */
+  offersEditComponent: boolean = false
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -366,42 +723,15 @@ export function toolbarActions(
       ids,
       rules,
       mayCreatePattern,
-      lockRefusalFor
+      lockRefusalFor,
+      components
     );
 
-  const moveLock = lockBlockingMove(document, selectedId);
   const deleteLock = lockBlockingDelete(document, selectedId);
 
-  const move = (
-    id: "move-up" | "move-down",
-    label: string,
-    direction: "up" | "down"
-  ): ToolbarAction => {
-    if (moveLock !== undefined) {
-      return {
-        id,
-        label,
-        enabled: false,
-        reason: lockedBy(moveLock, selectedId),
-      };
-    }
-    const to = keyboardMovePosition(document.nodes, selectedId, direction);
-    return heldByLock(
-      { id, label, enabled: to !== null },
-      lockRefusalFor,
-      to === null
-        ? undefined
-        : [
-            {
-              kind: "move",
-              id: selectedId,
-              to: to.to,
-              dropSlotIfEmpty: to.dropSlotIfEmpty,
-            },
-          ]
-    );
-  };
-  const duplication = blockDuplication(document, selectedId);
+  // The very ops the Duplicate verb applies, so what the bar offers and what
+  // a press does cannot disagree.
+  const duplication = selectionDuplication(document, [selectedId]);
   const deletion = blockDeletion(document, selectedId);
 
   return [
@@ -412,8 +742,22 @@ export function toolbarActions(
       // a top-level block with no container to step out to.
       enabled: path.length > 1,
     },
-    move("move-up", "Move up", "up"),
-    move("move-down", "Move down", "down"),
+    singleMove(
+      document,
+      selectedId,
+      "move-up",
+      "Move up",
+      "up",
+      lockRefusalFor
+    ),
+    singleMove(
+      document,
+      selectedId,
+      "move-down",
+      "Move down",
+      "down",
+      lockRefusalFor
+    ),
     // A node's lock deliberately does not stop this. Duplicating neither moves
     // nor removes the original, and refusing would mean an author could not
     // take a copy of the one block they had most deliberately protected — the
@@ -422,11 +766,11 @@ export function toolbarActions(
     heldByLock(
       { id: "duplicate", label: "Duplicate", enabled: duplication !== null },
       lockRefusalFor,
-      duplication === null
-        ? undefined
-        : [{ kind: "insert", node: duplication.node, at: duplication.at }]
+      duplication?.ops
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...editComponentAction(document, selectedId, offersEditComponent),
+    ...compositionActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: deletion !== null },
@@ -445,9 +789,27 @@ export function toolbarActions(
           id: "delete",
           label: "Delete",
           enabled: false,
-          reason: lockedBy(deleteLock, selectedId),
+          reason: lockedBy(deleteLock, selectedId, "delete"),
         },
   ];
+}
+
+/**
+ * "Edit component" for a selected placement, where the host offers it; nothing
+ * for any other block, so a bar over a heading does not grow a dimmed button
+ * that could never apply to it.
+ */
+function editComponentAction(
+  document: BlockDocument,
+  selectedId: string,
+  offered: boolean
+): ToolbarAction[] {
+  // Asked as the verb asks: a placement naming no component has nothing to
+  // open, so it is not offered a control that would do nothing.
+  if (!offered || placedComponentId(document, selectedId) === undefined) {
+    return [];
+  }
+  return [{ id: "edit-component", label: "Edit component", enabled: true }];
 }
 
 /**
@@ -544,4 +906,71 @@ function opsOf(
     | null
 ): readonly BuilderOp[] | undefined {
   return plan === null || !("ops" in plan) ? undefined : plan.ops;
+}
+
+/** The block menu's moves across depth: into the block above, and out. */
+export type DepthMoveId = "move-in" | "move-out";
+
+/** One of them, and the keyboard move it runs. */
+export interface DepthMoveAction extends Omit<ToolbarAction, "id"> {
+  readonly id: DepthMoveId;
+  readonly direction: Extract<MoveDirection, "indent" | "outdent">;
+}
+
+const DEPTH_MOVES: ReadonlyArray<
+  Pick<DepthMoveAction, "id" | "label" | "direction">
+> = [
+  { id: "move-in", label: "Move in", direction: "indent" },
+  { id: "move-out", label: "Move out", direction: "outdent" },
+];
+
+/**
+ * Move in and Move out for the current selection, or `[]` when there is none.
+ *
+ * The menu path to what Alt+ArrowRight and Alt+ArrowLeft do, so every move a
+ * drag in Layers makes has a way without dragging. Decided as the bar decides
+ * Move up and Move down — the keyboard move's position, the node's lock and a
+ * slot's — and run through the same verb the keystroke runs. Kept off the bar
+ * itself, whose five buttons are fixed so the one an author aims at does not
+ * move.
+ *
+ * A set is offered them dimmed with the reason, as the bar dims a verb that
+ * has no meaning for several blocks.
+ */
+export function depthMoveActions(
+  document: BlockDocument,
+  selectedId: string | null,
+  selectedIds?: readonly string[],
+  lockRefusalFor?: LockQuestion,
+  /**
+   * The position the verb these run moves by. A caller that runs them passes
+   * its own, so an item is offered exactly when pressing it would move.
+   */
+  position?: MovePosition,
+  /** The placement rule as the verb asks it, so a refused move is dimmed. */
+  judge?: MoveJudge
+): DepthMoveAction[] {
+  if (selectedId === null || pathTo(document, selectedId).length === 0) {
+    return [];
+  }
+  const ids = selectedIds ?? [selectedId];
+  // A locked block, one inside the selected one or one it sits inside is the
+  // single move's own question (`lockBlockingMove`), answered with its reason.
+  return DEPTH_MOVES.map(move =>
+    ids.length > 1
+      ? { ...move, enabled: false, reason: oneAtATime(ids.length) }
+      : {
+          ...singleMove(
+            document,
+            selectedId,
+            move.id,
+            move.label,
+            move.direction,
+            lockRefusalFor,
+            position,
+            judge
+          ),
+          direction: move.direction,
+        }
+  );
 }

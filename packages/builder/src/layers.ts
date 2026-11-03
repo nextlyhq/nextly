@@ -35,9 +35,41 @@
  * @module layers
  */
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  isComponentInstance,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
-import { blockLabel } from "./inserter";
+import { blockLabel, type SavedComponent } from "./inserter";
+import { storedComponentId } from "./placement-props";
+
+/**
+ * A component's title, by the id a placement stores.
+ *
+ * A placement is one node of the engine's instance type, so its type says only
+ * that it IS a placement; the document holds no title. The library is the one
+ * holder of a component's title, and the host that read it hands this in.
+ */
+export type ComponentTitleOf = (componentId: string) => string | undefined;
+
+/** What a placement reads as when nothing names its component. */
+export const UNNAMED_COMPONENT = "Component";
+
+/**
+ * The title lookup for a library's rows, built once per list.
+ *
+ * A map rather than a search per row, since the tree asks once for every
+ * placement on the page, on every render.
+ */
+export function componentTitles(
+  components: readonly Pick<SavedComponent, "id" | "title">[]
+): ComponentTitleOf {
+  const titles = new Map(
+    components.map(component => [component.id, component.title] as const)
+  );
+  return componentId => titles.get(componentId);
+}
 
 /**
  * One block, as a row in the tree.
@@ -52,8 +84,20 @@ export interface LayerNode {
   readonly type: string;
   /** The instance name if the author gave one, otherwise the block's name. */
   readonly label: string;
-  /** The author has asked the editor not to move or delete this block. */
+  /**
+   * The block is a component placement, so its row is marked as one: its label
+   * may be the component's title, which would otherwise read as a block's own
+   * name.
+   */
+  readonly component: boolean;
+  /** The author has locked this block in Layers. */
   readonly locked: boolean;
+  /**
+   * The name of the block locked in Layers that this one sits inside, when it
+   * is not locked itself: a lock covers everything inside the block, so the
+   * row says it is held and by which block, where the lock is lifted.
+   */
+  readonly lockedBy?: string;
   /**
    * The block declares conditions, so whether it appears depends on the entry.
    *
@@ -108,35 +152,69 @@ export function authoredName(node: BlockNode): string | undefined {
 /**
  * The name an author reads for one block.
  *
- * An instance name wins, because it is the only part an author wrote.
+ * An instance name wins, because it is the only part an author wrote. A
+ * component placement is then named by its component's title: its type's
+ * label, "Component instance", names the engine's mechanism rather than what
+ * the author placed. With no title to read (none handed in, a component the
+ * library no longer holds, a blank title) it is a "Component".
  */
 export function layerLabel(
   node: BlockNode,
-  lookup?: Parameters<typeof blockLabel>[1]
+  lookup?: Parameters<typeof blockLabel>[1],
+  componentTitle?: ComponentTitleOf
 ): string {
+  const named = authoredName(node);
+  if (named !== undefined) return named;
+  if (isComponentInstance(node)) {
+    const id = storedComponentId(node);
+    const title = id === "" ? undefined : componentTitle?.(id)?.trim();
+    return title === undefined || title === "" ? UNNAMED_COMPONENT : title;
+  }
   // Forwarded as given, so an absent lookup keeps `blockLabel`'s own default
   // rather than a second statement of it here.
-  return authoredName(node) ?? blockLabel(node.type, lookup);
+  return blockLabel(node.type, lookup);
 }
 
-/** The document as a tree of rows. */
-export function layersOf(document: BlockDocument): LayerNode[] {
-  const walk = (nodes: readonly BlockNode[]): LayerNode[] =>
-    nodes.map(node => ({
-      id: node.id,
-      type: node.type,
-      label: layerLabel(node),
-      locked: node.locked === true,
-      conditional: hasConditions(node),
-      breakpointHidden: hiddenAtSomeBreakpoint(node),
-      // Declaration order across every slot the node holds. `Object.values`
-      // preserves insertion order for string keys, which is the order the
-      // document was written in — so the tree matches the document rather than
-      // an alphabetical rearrangement of its regions.
-      children: walk(Object.values(node.slots ?? {}).flat()),
-    }));
+/**
+ * The document as a tree of rows.
+ *
+ * `componentTitle` names component placements; see {@link layerLabel}.
+ */
+export function layersOf(
+  document: BlockDocument,
+  componentTitle?: ComponentTitleOf
+): LayerNode[] {
+  // `heldBy` is the nearest locked block above, carried down the walk so the
+  // tree is read once rather than climbed per row.
+  const walk = (
+    nodes: readonly BlockNode[],
+    heldBy: string | undefined
+  ): LayerNode[] =>
+    nodes.map(node => {
+      const label = layerLabel(node, undefined, componentTitle);
+      const locked = node.locked === true;
+      return {
+        id: node.id,
+        type: node.type,
+        label,
+        component: isComponentInstance(node),
+        locked,
+        ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),
+        conditional: hasConditions(node),
+        breakpointHidden: hiddenAtSomeBreakpoint(node),
+        // Declaration order across every slot the node holds. `Object.values`
+        // preserves insertion order for string keys, which is the order the
+        // document was written in — so the tree matches the document rather
+        // than an alphabetical rearrangement of its regions. The nearest lock
+        // is this block's own when it has one.
+        children: walk(
+          Object.values(node.slots ?? {}).flat(),
+          locked ? label : heldBy
+        ),
+      };
+    });
 
-  return walk(document.nodes);
+  return walk(document.nodes, undefined);
 }
 
 /**
@@ -148,7 +226,8 @@ export function layersOf(document: BlockDocument): LayerNode[] {
  */
 export function pathTo(
   document: BlockDocument,
-  id: string | null
+  id: string | null,
+  componentTitle?: ComponentTitleOf
 ): LayerNode[] {
   if (id === null) return [];
 
@@ -161,7 +240,7 @@ export function pathTo(
     return [];
   };
 
-  return find(layersOf(document));
+  return find(layersOf(document, componentTitle));
 }
 
 /**

@@ -17,6 +17,7 @@ import type {
   RowFromSingleSlug,
   FindSingleArgs,
   FindSinglesArgs,
+  FoundSingle,
   SingleListResult,
   SingleSlug,
   UpdateSingleArgs,
@@ -31,12 +32,16 @@ import {
 } from "./helpers";
 
 /**
- * Retrieve the content of a single by slug.
+ * Retrieve the content of a single by slug. With `createIfMissing: false`, a
+ * Single that has no stored document answers `null` and nothing is created.
  */
-export async function findSingle<TSlug extends SingleSlug>(
+export async function findSingle<
+  TSlug extends SingleSlug,
+  TCreate extends boolean | undefined = undefined,
+>(
   ctx: NextlyContext,
-  args: FindSingleArgs<TSlug>
-): Promise<RowFromSingleSlug<TSlug>> {
+  args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
+): Promise<FoundSingle<TSlug, TCreate>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const result = await ctx.singleEntryService.get(args.slug, {
@@ -51,12 +56,24 @@ export async function findSingle<TSlug extends SingleSlug>(
     // service applies the trust gate; nothing is decided here.
     includeWorkingDraft: args.draft,
     ...(args.status === undefined ? {} : { status: args.status }),
+    // Forwarded only when stated, so the service's default (create) holds for
+    // every call that does not ask.
+    ...(args.createIfMissing === undefined
+      ? {}
+      : { createIfMissing: args.createIfMissing }),
     ...accessOptions(config),
     context: config.context,
   });
 
   if (!result.success) {
     throw createErrorFromSingleResult(result);
+  }
+
+  // A success with no document is the service honouring
+  // `createIfMissing: false`; nothing else answers that way. The cast states
+  // what `FoundSingle` already says for such a call: `null` is in its type.
+  if (result.data === undefined) {
+    return null as FoundSingle<TSlug, TCreate>;
   }
 
   let data = result.data as RowFromSingleSlug<TSlug>;
@@ -80,6 +97,8 @@ export async function findSingle<TSlug extends SingleSlug>(
     }
   }
 
+  // A document is in hand, which every `FoundSingle` admits whatever
+  // `TCreate` is.
   return data;
 }
 
