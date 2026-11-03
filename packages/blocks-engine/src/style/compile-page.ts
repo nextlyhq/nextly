@@ -53,6 +53,7 @@ import type { NamedClass } from "./named-class";
 import {
   isUsableNamedClass,
   namedClassName,
+  namedClassesRead,
   orderedNamedClasses,
   orderedNamedClassPositions,
   usableNamedClassPositions,
@@ -2014,10 +2015,7 @@ export function compilePageCss(
   const wholeLibrary: readonly NamedClass[] = Array.isArray(storedLibrary)
     ? (storedLibrary as readonly NamedClass[])
     : [];
-  const library =
-    wholeLibrary.length > MAX_NAMED_CLASSES
-      ? wholeLibrary.slice(0, MAX_NAMED_CLASSES)
-      : wholeLibrary;
+  const library = namedClassesRead(wholeLibrary);
   if (library.length < wholeLibrary.length) {
     pushBoundedWarning(warningAllowance, warnings, {
       path: "/classes",

@@ -18,7 +18,12 @@ import {
   revealDeviceHidden,
   setDeviceVisibility,
 } from "./device-visibility";
-import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
+import type {
+  BlockDocument,
+  BlockNode,
+  BreakpointSet,
+  NodeVisibility,
+} from "./document";
 import { compilePageCss } from "./style/compile-page";
 
 /** Desktop (the base), tablet up to 1024px, mobile up to 640px. */
@@ -357,5 +362,59 @@ describe("revealDeviceHidden", () => {
   it("answers the same document when there is nothing to reveal", () => {
     expect(revealDeviceHidden(page, [])).toBe(page);
     expect(revealDeviceHidden(page, ["absent"])).toBe(page);
+  });
+});
+
+describe("a breakpoint named __proto__", () => {
+  // A breakpoint id is stored data, and an assignment to `"__proto__"` runs
+  // the prototype setter instead of storing an entry.
+  const site: BreakpointSet = {
+    viewport: [{ id: "__proto__", label: "Odd", maxWidth: 800 }],
+    container: [],
+  };
+
+  it("stores a hide under it as an entry of its own", () => {
+    const next = setDeviceVisibility(undefined, site, "__proto__", false);
+    const devices = next?.devices ?? {};
+    expect(Object.keys(devices)).toEqual(["__proto__"]);
+    // Spelled as JSON: `__proto__` in an object literal sets the prototype.
+    expect(shown(next, site)).toEqual(
+      JSON.parse('{"base":true,"__proto__":false}')
+    );
+  });
+
+  it("keeps a stored value under it when the site does not define it", () => {
+    const stored = JSON.parse(
+      '{"devices":{"__proto__":false}}'
+    ) as NodeVisibility;
+    const next = setDeviceVisibility(stored, SITE, "mobile", false);
+    expect(Object.keys(next?.devices ?? {}).sort()).toEqual([
+      "__proto__",
+      "mobile",
+    ]);
+  });
+});
+
+describe("carryDeviceVisibility on the container axis", () => {
+  it("gives a container breakpoint wider than every earlier one the axis's visible start", () => {
+    // The container axis has no base context: nothing held the widths above
+    // the widest container breakpoint, so a wider one added starts visible.
+    const before: BreakpointSet = {
+      viewport: [],
+      container: [{ id: "card", label: "Card", maxWidth: 400 }],
+    };
+    const after: BreakpointSet = {
+      viewport: [],
+      container: [
+        { id: "wide", label: "Wide", maxWidth: 900 },
+        { id: "card", label: "Card", maxWidth: 400 },
+      ],
+    };
+    const next = carryDeviceVisibility(
+      { devices: { card: false } },
+      before,
+      after
+    );
+    expect(shown(next, after)).toEqual({ base: true, wide: true, card: false });
   });
 });

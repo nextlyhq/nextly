@@ -40,6 +40,7 @@ import type {
   NodeVisibility,
 } from "./document";
 import { isPlainRecord } from "./plain-record";
+import { defineEntry } from "./safe-record";
 import { breakpointContexts } from "./style/compile-page";
 import type { BreakpointContext } from "./style/compile-page";
 import { visibilityCascade } from "./style/visibility-cascade";
@@ -143,7 +144,9 @@ function minimalDevices(
   for (const context of contexts) {
     const axis = context.axis ?? "viewport";
     const state = states.get(context.id) ?? carried[axis];
-    if (state !== carried[axis]) written[context.id] = state;
+    // Defined rather than assigned: an id is stored data, and assigning to
+    // `"__proto__"` would run the prototype setter and store nothing.
+    if (state !== carried[axis]) defineEntry(written, context.id, state);
     carried[axis] = state;
   }
   return written;
@@ -179,7 +182,7 @@ function foreignDevices(
   const defined = new Set(contexts.map(context => context.id));
   const kept: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(devices ?? {})) {
-    if (!defined.has(id) && !dropped.has(id)) kept[id] = value;
+    if (!defined.has(id) && !dropped.has(id)) defineEntry(kept, id, value);
   }
   return kept;
 }
@@ -214,7 +217,9 @@ export function setDeviceVisibility(
 
 /**
  * The context of `contexts` whose band holds `width` on `axis`: the narrowest
- * one whose upper bound is at least that width, or the axis's widest context.
+ * one whose upper bound is at least that width. `undefined` when none does,
+ * which happens only on the container axis: it has no unbounded base, so a
+ * width above its widest breakpoint was held by no context at all.
  */
 function coveringContext(
   contexts: readonly BreakpointContext[],
@@ -224,7 +229,7 @@ function coveringContext(
   const onAxis = contexts.filter(
     context => (context.axis ?? "viewport") === axis
   );
-  let covering = onAxis[0];
+  let covering: BreakpointContext | undefined;
   for (const context of onAxis) {
     if ((context.maxWidth ?? Number.POSITIVE_INFINITY) >= width) {
       covering = context;

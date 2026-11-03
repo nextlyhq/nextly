@@ -31,19 +31,25 @@ describe("pages carries no custom CSS surface", () => {
     expect(fieldNames()).not.toContain("customCss");
   });
 
-  it("declares no custom CSS permission; its one permission is the one the make-default route reads", () => {
+  it("declares no custom CSS permission; each it declares is one a route reads", () => {
     // A permission nothing consults grants nothing when held and prevents
     // nothing when withheld, while still being offered to an administrator to
     // assign. So the declared list is exactly the permissions a route reads:
-    // `manage-page-builder-site`, demanded by make-default.
+    // `manage-page-builder-site`, demanded by make-default, and
+    // `lock-page-builder-shared-styles`, demanded by the shared-style lock.
     const declared = pageBuilder().contributes?.permissions ?? [];
     expect(
       declared.map(permission => `${permission.action}-${permission.resource}`)
-    ).toEqual(["manage-page-builder-site"]);
-    const route = pageBuilder().contributes?.routes?.find(candidate =>
-      candidate.path.endsWith("/make-default")
+    ).toEqual(["manage-page-builder-site", "lock-page-builder-shared-styles"]);
+    const routes = pageBuilder().contributes?.routes ?? [];
+    const route = (suffix: string) =>
+      routes.find(candidate => candidate.path.endsWith(suffix));
+    expect(route("/make-default")?.requiredPermission).toBe(
+      "manage-page-builder-site"
     );
-    expect(route?.requiredPermission).toBe("manage-page-builder-site");
+    expect(route("/shared-styles/lock")?.requiredPermission).toBe(
+      "lock-page-builder-shared-styles"
+    );
   });
 });
 
