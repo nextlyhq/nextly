@@ -290,7 +290,10 @@ function SelectControl({
   const stored = typeof shown === "string" ? shown : undefined;
   // A stored value outside the options is shown by the menu, which can say
   // what it is; a row of buttons would show none chosen and replace it.
+  // A block can ask for a menu, so one prop reads the same on every block
+  // whatever options each offers.
   const segmented =
+    prop.schema.display !== "menu" &&
     fitsSideBySide(labels, CONTENT_ROW) &&
     (stored === undefined || prop.options.includes(stored));
   if (segmented) {

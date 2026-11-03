@@ -235,6 +235,12 @@ describe("a few short options in a row", () => {
               options: ["unordered", "ordered"],
               optionLabels: { unordered: "Bulleted", ordered: "Numbered" },
             },
+            as: {
+              type: "select",
+              label: "Element type",
+              options: ["div", "section", "article"],
+              display: "menu",
+            },
             loading: {
               type: "select",
               options: ["lazy", "eager"],
@@ -282,6 +288,14 @@ describe("a few short options in a row", () => {
     const { view } = mountWith({ loading: "lazy" });
     expect(view.queryByRole("radiogroup", { name: "Loading" })).toBeNull();
     expect(view.getByRole("combobox", { name: "Loading" })).toBeDefined();
+  });
+
+  it("keeps a menu where the block asks for one, however short the options", () => {
+    // One prop drawn one way on every block: a block's element type is a
+    // menu whether it offers three tags or four.
+    const { view } = mountWith({ as: "div" });
+    expect(view.queryByRole("radiogroup", { name: "Element type" })).toBeNull();
+    expect(view.getByRole("combobox", { name: "Element type" })).toBeDefined();
   });
 
   it("keeps a menu while the stored value is none of the options", () => {
