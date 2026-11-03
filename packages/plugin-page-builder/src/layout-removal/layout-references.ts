@@ -33,6 +33,7 @@
  *
  * @module layout-removal/layout-references
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
@@ -85,6 +86,21 @@ function isWorkingDraft(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * `read`, or `null` when the page it reads was deleted in the meantime: a page
+ * listed by one read can be gone by the next. Only a missing page reads as
+ * nothing; any other failure is raised, so a fault is never taken for an
+ * absent page.
+ */
+export async function unlessGone<T>(read: Promise<T>): Promise<T | null> {
+  try {
+    return await read;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND")) return null;
+    throw error;
+  }
+}
+
+/**
  * How many working drafts are read at once. A draft is read only by id, so a
  * scan makes one read per published page; they go in batches this size rather
  * than one after another, which bounds both the scan's time and the
@@ -107,13 +123,15 @@ async function workingDraftsNaming(
     const batch = pages.slice(at, at + DRAFT_READS_AT_ONCE);
     const drafts = await Promise.all(
       batch.map(page =>
-        nextly.findByID({
-          collection,
-          id: page.id,
-          draft: true,
-          depth: 0,
-          overrideAccess: true,
-        })
+        unlessGone(
+          nextly.findByID({
+            collection,
+            id: page.id,
+            draft: true,
+            depth: 0,
+            overrideAccess: true,
+          })
+        )
       )
     );
     drafts.forEach((draft, index) => {

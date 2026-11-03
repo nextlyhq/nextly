@@ -57,6 +57,7 @@ import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
 
+import { unlessGone } from "./layout-references";
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
 import { pageLayoutRefusal, type FencedLayoutState } from "./words";
 
@@ -136,13 +137,15 @@ async function currentPage(
   pages: string,
   id: string
 ): Promise<Record<string, unknown> | null> {
-  const read: unknown = await nextly.findByID({
-    collection: pages,
-    id,
-    draft: true,
-    depth: 0,
-    overrideAccess: true,
-  });
+  const read: unknown = await unlessGone(
+    nextly.findByID({
+      collection: pages,
+      id,
+      draft: true,
+      depth: 0,
+      overrideAccess: true,
+    })
+  );
   return typeof read === "object" && read !== null
     ? (read as Record<string, unknown>)
     : null;
@@ -237,13 +240,16 @@ export async function clearPageReference(
   }
   const isDraft = current._isWorkingDraft === true;
   if (!isDraft && current.status === "published") return false;
-  await nextly.update({
-    collection: pages,
-    id: pageId,
-    data: { layout: null },
-    overrideAccess: true,
-  });
-  return true;
+  // A page deleted since the read has nothing left to clear.
+  const cleared = await unlessGone(
+    nextly.update({
+      collection: pages,
+      id: pageId,
+      data: { layout: null },
+      overrideAccess: true,
+    })
+  );
+  return cleared !== null;
 }
 
 /** The page and the Layout a committed page write names, or null. */

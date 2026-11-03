@@ -885,6 +885,68 @@ describe("a long scan under the fence", () => {
   });
 });
 
+describe("a page deleted while the scan reads it", () => {
+  /** The Direct API over `s`, with `gone` deleted after it was listed. */
+  function deletedAfterListing(s: Site, gone: string) {
+    const api = directApi(s);
+    const findByID = api.findByID.bind(api);
+    return Object.assign(Object.create(api) as object, {
+      findByID: async (args: Parameters<typeof api.findByID>[0]) => {
+        if (args.id === gone) throw NextlyError.notFound();
+        return findByID(args);
+      },
+    }) as typeof api;
+  }
+
+  it("reads on past it, still finding a later page's working draft", async () => {
+    const s = site();
+    s.pages.push(
+      { id: "p1", title: "Gone", status: "published", layout: null },
+      { id: "p2", title: "Kept", status: "published", layout: null }
+    );
+    s.pageDrafts.set("p2", { id: "p2", layout: "landing" });
+
+    const scan = await scanLayoutReferences({
+      nextly: deletedAfterListing(s, "p1"),
+      pages: "pages",
+      layoutId: "landing",
+    });
+
+    expect(scan).toEqual({
+      references: [{ id: "p2", title: "Kept", place: "draft" }],
+      complete: true,
+    });
+  });
+
+  it("still clears the other pages a removal left on the Layout", async () => {
+    const s = site();
+    s.layouts.delete("landing");
+    s.pages.push(
+      { id: "p1", title: "Gone", status: "draft", layout: "landing" },
+      { id: "p2", title: "Kept", status: "draft", layout: "landing" }
+    );
+    const d = deps(s);
+    await d.store.mark({
+      layoutId: "landing",
+      action: "delete",
+      token: "stopped",
+      startedBy: null,
+      now: new Date(),
+    });
+    const removal = d.store.rows.get("landing");
+    if (removal === undefined) throw new Error("no row");
+    d.store.rows.set("landing", { ...removal, step: "removed" });
+
+    await settleLayoutRemovals({
+      ...d,
+      nextly: deletedAfterListing(s, "p1"),
+      now: () => new Date(Date.now() + REMOVAL_LEASE_MS + 60_000),
+    });
+
+    expect(s.pages.find(page => page.id === "p2")?.layout).toBeNull();
+  });
+});
+
 describe("the scan's cursor", () => {
   it("still reads a later page's working draft when a page it passed is deleted", async () => {
     const s = site();
