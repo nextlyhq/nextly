@@ -91,6 +91,11 @@ const WRITERS: {
     writes: source => source.includes("playground-dev-server"),
   },
   {
+    lock: "siteDefaultLayout",
+    what: "changes the site's default Layout",
+    writes: source => source.includes("/make-default"),
+  },
+  {
     lock: "siteStyle",
     what: "writes the site style",
     // The Single's own update, or the Settings route the site's breakpoints

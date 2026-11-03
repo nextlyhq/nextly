@@ -14,10 +14,10 @@
  * @module next-layouts
  */
 import {
-  COMPONENT_INSTANCE_TYPE,
-  DOCUMENT_FORMAT_VERSION,
+  layoutRelationId,
+  regionsOf,
   resolvePageLayout,
-  type BlockDocument,
+  type LayoutRegion,
   type LayoutResolution,
   type PageLayoutChoice,
 } from "@nextlyhq/blocks-engine";
@@ -93,25 +93,6 @@ export function cappedLifetime(release: number | false, cap: number): number {
 }
 
 /**
- * The areas a route draws, and where each goes relative to the page.
- *
- * Stated here rather than read from the plugin's area list, which this
- * package cannot import. An area the plugin adds later is simply not drawn
- * until a route knows where it goes, which is the honest answer: a sidebar has
- * no position in "before the page, after the page".
- */
-const REGION_AREAS = ["header", "footer"] as const;
-
-/** One of the areas a route draws. */
-export type RegionArea = (typeof REGION_AREAS)[number];
-
-/** One region to draw: which area, filled by which component. */
-export interface LayoutRegion {
-  readonly area: RegionArea;
-  readonly componentId: string;
-}
-
-/**
  * The provider, checked once when the route is built.
  *
  * A bare function is refused rather than read as a provider for the reason
@@ -137,15 +118,6 @@ export function checkedLayoutsProvider(
   return value as BlocksLayoutsProvider;
 }
 
-/** A relationship value as an id: stored as the id, or populated as the row. */
-function relationId(value: unknown): string | null {
-  if (typeof value === "string") return value.trim() === "" ? null : value;
-  if (typeof value === "object" && value !== null) {
-    return relationId((value as { id?: unknown }).id);
-  }
-  return null;
-}
-
 /** What the entry says about its Layout, read through the configured names. */
 function pageChoice(
   entry: ContentEntry,
@@ -153,7 +125,7 @@ function pageChoice(
 ): PageLayoutChoice {
   const fields = provider.pageFields ?? {};
   return {
-    layout: relationId(entry[fields.layout ?? "layout"]),
+    layout: layoutRelationId(entry[fields.layout ?? "layout"]),
     noHeaderFooter: entry[fields.noHeaderFooter ?? "noHeaderFooter"] === true,
   };
 }
@@ -215,7 +187,7 @@ export async function regionsFor(
       // Filed under the id ASKED for, never under one read off the row: an
       // `afterRead` hook may rewrite the returned id, and a row filed under
       // another key would let one Layout stand in for a different one.
-      if (relationId(row) === id) rows.set(id, row);
+      if (layoutRelationId(row) === id) rows.set(id, row);
     }
   };
   const read = async (id: string | null | undefined): Promise<void> => {
@@ -299,7 +271,7 @@ async function readDefaultLayout(
   const bounded = maxLifetime !== undefined;
   const read = async (): Promise<string | null> => {
     try {
-      return relationId(await provider.readDefault());
+      return layoutRelationId(await provider.readDefault());
     } catch (error) {
       if (!bounded) throw error;
       reportUnreadableDefault(error);
@@ -352,55 +324,4 @@ function reportNoDefault(defaultLayout: string | null): void {
       ? "[nextly] The site has no default Layout, so pages that use the default are drawn with no header or footer until one is set."
       : `[nextly] The site's default Layout (${defaultLayout}) is not published, so pages that use the default are drawn with no header or footer until it is.`
   );
-}
-
-/**
- * The regions a Layout row fills, in the order the route draws them.
- *
- * `areas` is a repeater stored as JSON, so it is read as untrusted data: a row
- * with no area or no component is skipped, and the first row for an area wins
- * (the Layout's own write refuses a repeated area, so a second can only arrive
- * from a write that skipped that check).
- */
-function regionsOf(
-  row: Record<string, unknown> | undefined
-): readonly LayoutRegion[] {
-  const areas = row?.areas;
-  if (!Array.isArray(areas)) return [];
-  const regions: LayoutRegion[] = [];
-  for (const area of REGION_AREAS) {
-    const filled = areas.find(
-      (item: unknown) =>
-        typeof item === "object" &&
-        item !== null &&
-        (item as { area?: unknown }).area === area
-    ) as { component?: unknown } | undefined;
-    const componentId = relationId(filled?.component);
-    if (componentId !== null) regions.push({ area, componentId });
-  }
-  return regions;
-}
-
-/**
- * A document holding one component instance per region.
- *
- * A region is drawn through the SAME composition path as a component on a
- * page, rather than through a renderer of its own: an instance node is what
- * that path already reads, tags, budgets and draws, nested components and
- * drafts included. The node id is fixed per area, so each region's compiled
- * classes are stable from one render to the next.
- */
-export function regionDocument(
-  regions: readonly LayoutRegion[]
-): BlockDocument {
-  return {
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "page",
-    nodes: regions.map(region => ({
-      id: `nextly-region-${region.area}`,
-      type: COMPONENT_INSTANCE_TYPE,
-      version: 1,
-      props: { componentId: region.componentId },
-    })),
-  };
 }
