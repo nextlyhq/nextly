@@ -62,6 +62,8 @@ import {
 import {
   collectDocumentReferences,
   emptyReferences,
+  imageExposureIds,
+  registryMediaProps,
 } from "./transfer-references";
 
 /** An item already on the site. */
@@ -96,6 +98,8 @@ export interface ImportSite {
   /** By the file's media id. */
   readonly media: ReadonlyMap<string, ExistingMedia>;
   readonly isRegistered: (type: string) => boolean;
+  /** The props a block type declares as media; the registry's by default. */
+  readonly mediaProps?: (type: string) => readonly string[];
   /** Whether the caller may manage site settings, which adding a breakpoint needs. */
   readonly mayAddBreakpoints: boolean;
 }
@@ -143,7 +147,7 @@ export interface ImportPlan {
   readonly media: ReadonlyMap<string, MediaFate>;
 }
 
-/** How many renamed candidates a clash is offered before a random suffix. */
+/** How many numbered renames a clash is offered before a fixed suffix. */
 const RENAME_CANDIDATES = 20;
 
 /** The slugs a clashing slug is renamed to, in the order they are tried. */
@@ -192,11 +196,20 @@ export function planImport(
     pattern: planItems("pattern", file.patterns, site.items.pattern, ledger),
     layout: planItems("layout", file.layouts, site.items.layout, ledger),
   };
-  const references = fileReferences(file);
+  const references = fileReferences(
+    file,
+    site.mediaProps ?? registryMediaProps
+  );
   for (const id of references.danglingComponents) {
     ledger.problems.push({
       code: "MISSING_REFERENCE",
       message: `The file places a component (${id}) it does not carry, so it is incomplete.`,
+    });
+  }
+  for (const id of references.danglingMedia) {
+    ledger.problems.push({
+      code: "MISSING_REFERENCE",
+      message: `The file shows a media file (${id}) it does not carry, so it is incomplete.`,
     });
   }
   const order = componentOrder(file, items.component, ledger.problems);
@@ -269,7 +282,8 @@ function planItems(
       continue;
     }
     const slug =
-      renamedSlugs(item.slug).find(free) ?? `${item.slug}-${randomSuffix()}`;
+      renamedSlugs(item.slug).find(free) ??
+      `${item.slug}-${stableSuffix(item.slug)}`;
     const title = `${item.title} (${slug.slice(item.slug.length + 1)})`;
     if (clash === undefined) {
       // A slug taken by a row the file's own items already claimed.
@@ -344,7 +358,7 @@ function planClasses(
     const slug = free(entry.slug)
       ? entry.slug
       : (renamedSlugs(entry.slug).find(free) ??
-        `${entry.slug}-${randomSuffix()}`);
+        `${entry.slug}-${stableSuffix(entry.slug)}`);
     if (named !== undefined) {
       const existing = { id: named.id, name: named.slug };
       if (
@@ -358,7 +372,9 @@ function planClasses(
       ledger.added.push({ kind: "class", fileId: entry.id, name: slug });
     }
     // An id this site already uses for another style is never shared.
-    const id = ids.has(entry.id) ? randomId() : entry.id;
+    const id = ids.has(entry.id)
+      ? `${entry.id}-${stableSuffix(entry.id)}`
+      : entry.id;
     slugs.add(slug);
     ids.add(id);
     map.set(entry.id, id);
@@ -402,7 +418,8 @@ function planTokens(
     }
     const free = (name: string) => !identities.has(name);
     const renamed =
-      renamedSlugs(identity).find(free) ?? `${identity}-${randomSuffix()}`;
+      renamedSlugs(identity).find(free) ??
+      `${identity}-${stableSuffix(identity)}`;
     const existing = { id: identity, name: clash.name };
     if (
       settle(ledger, "token", identity, token.name, existing, renamed) ===
@@ -483,11 +500,18 @@ function rootTitle(file: TransferFile): string {
 }
 
 /** What the file's documents refer to, and how often each breakpoint is used. */
-function fileReferences(file: TransferFile): {
+function fileReferences(
+  file: TransferFile,
+  mediaProps: (type: string) => readonly string[]
+): {
   blockTypes: Set<string>;
   danglingComponents: string[];
+  danglingMedia: string[];
   counts: Map<string, { styles: number; hides: number }>;
 } {
+  const images = new Map(
+    file.components.map(item => [item.id, imageExposureIds(item.content)])
+  );
   const references = emptyReferences();
   const documents: BlockDocument[] = [
     ...file.components.map(item => item.content),
@@ -508,7 +532,10 @@ function fileReferences(file: TransferFile): {
     }
   };
   for (const document of documents) {
-    collectDocumentReferences(document, references, { mediaProps: () => [] });
+    collectDocumentReferences(document, references, {
+      mediaProps,
+      imageExposures: id => images.get(id) ?? new Set(),
+    });
     countStyles(document.settings?.styles);
     if (!Array.isArray(document.nodes)) continue;
     walkNodes(document.nodes, node => {
@@ -526,9 +553,11 @@ function fileReferences(file: TransferFile): {
       if (!carried.has(area.component)) dangling.push(area.component);
     }
   }
+  const media = new Set(file.media.map(entry => entry.id));
   return {
     blockTypes: references.blockTypes,
     danglingComponents: [...new Set(dangling)],
+    danglingMedia: [...references.media].filter(id => !media.has(id)),
     counts,
   };
 }
@@ -690,7 +719,8 @@ function breakpointProblem(
 function freeId(wanted: string, taken: ReadonlySet<string>): string {
   if (!taken.has(wanted)) return wanted;
   return (
-    renamedSlugs(wanted).find(candidate => !taken.has(candidate)) ?? randomId()
+    renamedSlugs(wanted).find(candidate => !taken.has(candidate)) ??
+    `${wanted}-${stableSuffix(wanted)}`
   );
 }
 
@@ -737,12 +767,12 @@ function fingerprintOf(
   return createHash("sha256").update(JSON.stringify(judged)).digest("hex");
 }
 
-function randomSuffix(): string {
-  return crypto.randomUUID().slice(0, 8);
-}
-
-function randomId(): string {
-  return crypto.randomUUID();
+/**
+ * A suffix past the numbered renames, the same for the same name on every
+ * request, so a preview and the import that applies it name a clash alike.
+ */
+function stableSuffix(name: string): string {
+  return createHash("sha256").update(name).digest("hex").slice(0, 8);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

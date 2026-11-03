@@ -209,6 +209,7 @@ export async function sourceSite(t: TestNextly): Promise<SourceSite> {
     },
     altText: "A dot",
   });
+  await t.nextly.media.update({ id: media.id, data: { caption: "One dot" } });
   const inner = await created(t, COMPONENTS_SLUG, {
     title: "Badge",
     slug: unique("badge"),

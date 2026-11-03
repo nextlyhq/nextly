@@ -192,6 +192,16 @@ export function transferFileName(file: TransferFile): string {
  */
 export const IMPORT_ROUTE_PATH = "/transfer/import";
 
+/**
+ * The hook context key an import's judging writes carry. Before anything is
+ * kept, every write the import would make is made and rolled back, so the
+ * site's own checks answer; hooks run for those writes too, and one with an
+ * effect a rollback cannot undo skips it when this key is `true`.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export const TRANSFER_JUDGEMENT_CONTEXT = "pageBuilder.transferJudgement";
+
 /** The kinds of thing in a file that can clash with one already on the site. */
 export type ImportConflictKind =
   | "component"

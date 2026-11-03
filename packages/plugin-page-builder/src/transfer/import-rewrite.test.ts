@@ -78,7 +78,8 @@ describe("rewriteDocument", () => {
     expect(rewritten.settings).toEqual({});
     expect(rewritten.assets).toEqual({ mediaIds: ["m-dst"] });
     const box = rewritten.nodes[0];
-    expect(box?.classes).toEqual(["k-dst", "k-unknown"]);
+    // A class the file does not carry is left behind, never bound by id.
+    expect(box?.classes).toEqual(["k-dst"]);
     expect(box?.styles).toEqual({
       base: {
         base: { padding: { top: { $token: "color.dst" } } },

@@ -136,7 +136,13 @@ function rewriteLook(node: BlockNode, maps: ReferenceMaps): BlockNode {
     else next.styles = styles;
   }
   if (node.classes !== undefined) {
-    next.classes = node.classes.map(id => mapped(maps.classes, id));
+    // A class the file does not carry was no class on the source either (a
+    // removed one, drawing nothing there), so it is left behind rather than
+    // bound to whatever this site holds under the same id.
+    next.classes = node.classes.flatMap(id => {
+      const to = maps.classes.get(id);
+      return to === undefined ? [] : [to];
+    });
   }
   if (node.visibility?.devices !== undefined) {
     const kept = rewriteDevices(node.visibility.devices, maps);

@@ -79,3 +79,13 @@ the caller with the same checks as the admin.
     preview answers `409`; preview again and confirm.
 
 A refused import answers `422`, with each reason in the error's `data.errors`.
+
+Before anything is kept, every write an import would make is made and rolled back, so
+the site's own checks (locks, component loops, field rules) answer in the preview. Hooks
+run for those writes too, with `context["pageBuilder.transferJudgement"]` set to `true`;
+a hook with an effect a rollback cannot undo, such as sending a message, should skip it
+then and act on the write that commits.
+
+Comparing with what the site holds needs read access: an item you may not read is
+renamed around without being named or offered, and a file carrying shared styles,
+variables or media needs you to read the site style or media.

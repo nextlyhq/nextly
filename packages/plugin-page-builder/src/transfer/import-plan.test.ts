@@ -240,6 +240,55 @@ describe("planImport", () => {
     ]);
   });
 
+  it("names a clash past every numbered rename the same way on every request", () => {
+    const taken = new Set([
+      "slug-a",
+      ...Array.from({ length: 20 }, (_, n) => `slug-a-${String(n + 2)}`),
+    ]);
+    const crowded = site({
+      items: {
+        component: {
+          bySlug: new Map([
+            ["slug-a", { id: "mine", title: "Mine", slug: "slug-a" }],
+          ]),
+          taken,
+        },
+        pattern: { bySlug: new Map(), taken: new Set() },
+        layout: { bySlug: new Map(), taken: new Set() },
+      },
+    });
+    const first = planImport(file(), crowded);
+    const second = planImport(file(), crowded);
+    expect(first.items.component.get("a")).toEqual(
+      second.items.component.get("a")
+    );
+    expect(first.preview.fingerprint).toBe(second.preview.fingerprint);
+    expect(
+      taken.has((first.items.component.get("a") as { slug: string }).slug)
+    ).toBe(false);
+  });
+
+  it("refuses a file showing media it does not carry", () => {
+    const plan = planImport(
+      file({
+        components: [
+          component("a", [
+            {
+              id: "i",
+              type: "core/image",
+              version: 1,
+              props: { mediaId: "m-gone" },
+            },
+          ]),
+        ],
+      }),
+      site({ mediaProps: type => (type === "core/image" ? ["mediaId"] : []) })
+    );
+    expect(plan.preview.problems).toEqual([
+      { code: "MISSING_REFERENCE", message: expect.stringContaining("m-gone") },
+    ]);
+  });
+
   it("lists block types the site has not registered and is not ready", () => {
     const plan = planImport(
       file({

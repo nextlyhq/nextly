@@ -27,6 +27,7 @@ import {
   type BlockNode,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -41,6 +42,7 @@ import { PATTERNS_SLUG } from "../collections/patterns";
 import { readLayoutSettings } from "../default-layout/store";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
 import { pageBuilder } from "../plugin";
+import { TRANSFER_JUDGEMENT_CONTEXT } from "../transfer/transfer-contract";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 import type {
   ImportChoices,
@@ -165,6 +167,32 @@ function fileOf(
   };
 }
 
+/** Whether each component create a hook saw was an import's judging write. */
+const judged: boolean[] = [];
+
+/** Set to refuse every site-style write that changes breakpoints. */
+const refuse = { breakpoints: false };
+
+/** A plugin recording, for every component create, whether it was judged. */
+const recorder = definePlugin({
+  name: "@t/transfer-recorder",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    ctx.hooks.on("afterCreate", "components", hook => {
+      const context = (hook as { context?: Record<string, unknown> }).context;
+      judged.push(context?.[TRANSFER_JUDGEMENT_CONTEXT] === true);
+    });
+    ctx.hooks.on("beforeUpdate", `single:${SITE_STYLE_SLUG}`, hook => {
+      const data = (hook as { data?: Record<string, unknown> }).data;
+      if (refuse.breakpoints && data?.breakpoints !== undefined) {
+        throw new Error("This site refuses breakpoint changes.");
+      }
+      return data;
+    });
+  },
+});
+
 describe.each(getConfiguredTestDialects())(
   "importing a transfer file (%s)",
   (dialect: TestDialect) => {
@@ -179,9 +207,11 @@ describe.each(getConfiguredTestDialects())(
       await current?.destroy();
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), recorder],
         seedPublic: true,
       });
+      judged.length = 0;
+      refuse.breakpoints = false;
       // The instance's first user is its super admin, so it is made here and
       // never acts: every author below holds only what it is granted.
       await person(current, "owner");
@@ -335,6 +365,7 @@ describe.each(getConfiguredTestDialects())(
       const image = await t.nextly.media.findByID({ id: mediaId });
       expect(image?.originalFilename).toBe("dot.png");
       expect(image?.size).toBe(PNG.length);
+      expect(image?.caption).toBe("One dot");
 
       const style = await siteStyle(t);
       expect(style.classes?.map(entry => [entry.id, entry.slug])).toEqual([
@@ -947,6 +978,85 @@ describe.each(getConfiguredTestDialects())(
         componentId: component,
         overrides: { kept: "Yes" },
       });
+    });
+
+    it("takes back the shared styles and variables it added when a later site write fails", async () => {
+      const { file } = await exported("patterns", s => s.pattern);
+      const t = await boot();
+      const { cookie } = await holding(t, [
+        ...WRITES_EVERYTHING,
+        "manage-page-builder-site",
+      ]);
+      const before = await snapshot(t);
+      const choices: ImportChoices = {
+        breakpoints: Object.fromEntries(
+          file.breakpoints.map(entry => [entry.id, "add" as const])
+        ),
+      };
+      const seen = await preview(cookie, file, choices);
+      expect(seen.ready).toBe(true);
+
+      refuse.breakpoints = true;
+      const answer = await post(cookie, ["transfer", "import"], {
+        file,
+        choices,
+        expect: seen.fingerprint,
+      });
+
+      expect(answer.status).toBeGreaterThanOrEqual(400);
+      // No shared style or variable is left behind: an empty list where none
+      // was stored reads the same as none.
+      const after = await siteStyle(t);
+      expect(after.classes ?? []).toEqual([]);
+      expect(after.tokens?.tokens ?? []).toEqual([]);
+      const unchanged = (raw: string) => {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        delete parsed.style;
+        return parsed;
+      };
+      expect(unchanged(await snapshot(t))).toEqual(unchanged(before));
+    });
+
+    it("tells the hooks a write is judged, and commits without saying so", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, WRITES_EVERYTHING);
+      const file = fileOf([{ id: "j", nodes: [heading("h")] }]);
+
+      await preview(cookie, file);
+      expect(judged).toEqual([true]);
+
+      const answer = await apply(cookie, file);
+      expect(answer.status).toBe(201);
+      // The apply's own preview, its judgement, then the write that stays.
+      expect(judged).toEqual([true, true, true, false]);
+    });
+
+    it("renames around an item the caller may not read without naming it or offering it", async () => {
+      const t = await boot();
+      const slug = unique("hidden");
+      await created(t, COMPONENTS_SLUG, {
+        title: "Secret header",
+        slug,
+        status: "published",
+        content: { formatVersion: 1, kind: "component", nodes: [heading("s")] },
+      });
+      const { cookie } = await holding(t, [
+        "create-components",
+        "publish-components",
+      ]);
+      const base = fileOf([{ id: "c", nodes: [heading("h")] }]);
+      const file: TransferFile = {
+        ...base,
+        components: base.components.map(item => ({ ...item, slug })),
+      };
+
+      const seen = await preview(cookie, file);
+
+      expect(seen.conflicts).toEqual([]);
+      expect(JSON.stringify(seen)).not.toContain("Secret header");
+      expect(seen.added).toEqual([
+        { kind: "component", fileId: "c", name: "Imported c (2)" },
+      ]);
     });
 
     it("never makes an imported Layout the default, even the source's own default", async () => {

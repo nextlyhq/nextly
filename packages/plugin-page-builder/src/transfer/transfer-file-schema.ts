@@ -144,6 +144,27 @@ const TransferFileSchema = z
         message: "The file does not carry the item it was made from.",
       });
     }
+    // Every list is keyed by the source's ids, which the import maps one to
+    // one; a repeated id would be written twice and mapped once.
+    const keyed: [string, readonly string[]][] = [
+      ["components", file.components.map(item => item.id)],
+      ["patterns", file.patterns.map(item => item.id)],
+      ["layouts", file.layouts.map(item => item.id)],
+      ["classes", file.classes.map(entry => entry.id)],
+      ["tokens", file.tokens.map(token => token.id ?? token.name)],
+      ["breakpoints", file.breakpoints.map(entry => entry.id)],
+      ["media", file.media.map(entry => entry.id)],
+    ];
+    for (const [list, ids] of keyed) {
+      const repeated = ids.find((id, at) => ids.indexOf(id) !== at);
+      if (repeated !== undefined) {
+        issues.addIssue({
+          code: "custom",
+          path: [list],
+          message: `The file lists "${repeated}" twice among its ${list}.`,
+        });
+      }
+    }
     let total = 0;
     file.media.forEach((entry, at) => {
       const bytes = Buffer.from(entry.data, "base64");

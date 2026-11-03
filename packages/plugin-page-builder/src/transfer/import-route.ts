@@ -58,6 +58,7 @@ import {
   asCaller,
   createdId,
   readBodyWith,
+  readOrNull,
   reconcileAfterCommit,
   requirePluginStore,
   storeOf,
@@ -88,6 +89,7 @@ import {
 } from "./import-rewrite";
 import {
   IMPORT_ROUTE_PATH,
+  TRANSFER_JUDGEMENT_CONTEXT,
   type ImportProblem,
   type ImportResult,
   type TransferFile,
@@ -104,7 +106,10 @@ import { imageExposureIds, registryMediaProps } from "./transfer-references";
 /** The context an import runs with: the composition routes', and media. */
 type ImportContext = CompositionRouteContext & {
   services: CompositionRouteContext["services"] & {
-    media: Pick<PluginRouteContext["services"]["media"], "upload" | "delete">;
+    media: Pick<
+      PluginRouteContext["services"]["media"],
+      "upload" | "update" | "delete"
+    >;
   };
 };
 
@@ -248,14 +253,19 @@ async function readSite(
     slug: slugs.siteStyle,
     ...(setup.defaults === undefined ? {} : { defaults: setup.defaults }),
   });
+  // What the caller may not read is not compared with, so the preview says
+  // nothing about it; the import then asks for the read it needs.
+  const can = async (action: string, resource: string) =>
+    (await ctx.caller?.can(action, resource)) === true;
+  const readsStyle = await can("read", slugs.siteStyle);
   return {
     items: {
-      component: await existingItems(slugs.component, file.components),
-      pattern: await existingItems(slugs.pattern, file.patterns),
-      layout: await existingItems(slugs.layout, file.layouts),
+      component: await existingItems(ctx, slugs.component, file.components),
+      pattern: await existingItems(ctx, slugs.pattern, file.patterns),
+      layout: await existingItems(ctx, slugs.layout, file.layouts),
     },
-    classes: usableNamedClasses(style.classes ?? []),
-    tokens: resolveSiteTokens(style.tokens).tokens,
+    classes: readsStyle ? usableNamedClasses(style.classes ?? []) : [],
+    tokens: readsStyle ? resolveSiteTokens(style.tokens).tokens : [],
     // The whole set, its unbounded base row included: a file breakpoint
     // always has a width, so it never matches the base, and the base counts
     // toward an axis's room as the stored set's own check counts it.
@@ -263,15 +273,15 @@ async function readSite(
       viewport: [...(style.breakpoints?.viewport ?? [])],
       container: [...(style.breakpoints?.container ?? [])],
     },
-    media: await existingMedia(file),
+    media: (await can("read", "media")) ? await existingMedia(file) : new Map(),
     isRegistered: type => type === COMPONENT_INSTANCE_TYPE || hasBlock(type),
-    mayAddBreakpoints:
-      (await ctx.caller?.can("manage", "page-builder-site")) === true,
+    mayAddBreakpoints: await can("manage", "page-builder-site"),
   };
 }
 
 /** The rows holding a slug the file uses or would rename one to. */
 async function existingItems(
+  ctx: ImportContext,
   collection: string,
   items: readonly { slug: string }[]
 ): Promise<ExistingItems> {
@@ -297,7 +307,40 @@ async function existingItems(
       if (asked.has(held.slug)) bySlug.set(held.slug, held);
     }
   }
-  return { bySlug, taken };
+  return { bySlug: await readableBy(ctx, collection, bySlug), taken };
+}
+
+/**
+ * The clashes the caller may read. One it may not read keeps its slug taken,
+ * so the file's item is still renamed around it, but it is neither named in
+ * the preview nor offered to point the file at.
+ */
+async function readableBy(
+  ctx: ImportContext,
+  collection: string,
+  clashes: ReadonlyMap<string, { id: string; title: string; slug: string }>
+): Promise<Map<string, { id: string; title: string; slug: string }>> {
+  if (clashes.size === 0) return new Map();
+  const ids = [...clashes.values()].map(clash => clash.id);
+  const readable = new Set<string>();
+  for (let at = 0; at < ids.length; at += 200) {
+    const chunk = ids.slice(at, at + 200);
+    const found = await readOrNull(async () =>
+      requireNextly().find({
+        collection,
+        where: { id: { in: chunk } },
+        ...(await readingAsUser(ctx)),
+        status: "all",
+        select: { id: true },
+        limit: chunk.length,
+        depth: 0,
+      })
+    );
+    // A caller refused the collection outright reads none of it.
+    const rows = (found as { items?: { id?: unknown }[] } | null)?.items ?? [];
+    for (const row of rows) readable.add(String(row.id));
+  }
+  return new Map([...clashes].filter(([, clash]) => readable.has(clash.id)));
 }
 
 /** A row as the clash it is, or nothing when it holds no slug. */
@@ -413,6 +456,14 @@ async function grantProblems(
       "media",
       "upload media",
     ],
+    // Reusing what is here, and comparing with it, is reading it.
+    [
+      file.classes.length > 0 || file.tokens.length > 0,
+      "read",
+      slugs.siteStyle,
+      "read the site style",
+    ],
+    [file.media.length > 0, "read", "media", "read media"],
   ];
   const problems: ImportProblem[] = [];
   for (const [needed, action, resource, words] of needs) {
@@ -554,13 +605,19 @@ async function writeDocuments(
       mediaProps: registryMediaProps,
       imageExposures: (id: string) => images.get(id) ?? new Set<string>(),
     };
+    // A judging write tells the hooks it runs, so one with an effect the
+    // rollback cannot undo (a message sent, a service called) can wait for
+    // the import that commits.
+    const options = commit
+      ? asCaller(ctx)
+      : { ...asCaller(ctx), context: { [TRANSFER_JUDGEMENT_CONTEXT]: true } };
     const create = async (collection: string, data: Record<string, unknown>) =>
       createdId(
         await collections.createEntryInTransaction(
           tx,
           collection,
           data,
-          asCaller(ctx)
+          options
         )
       );
 
@@ -641,24 +698,12 @@ async function applyPlan(
   setup: ImportRouteSetup
 ): Promise<ImportResult> {
   const uploaded = new Map<string, string>();
-  let style: StyleUndo | undefined;
+  // Known before anything is written, so a failure partway through the
+  // site-style writes still takes back the part that landed.
+  const style = styleUndo(plan, slugs, setup.defaults);
+  let written: Written;
   try {
-    for (const entry of file.media) {
-      const fate = plan.media.get(entry.id);
-      if (fate?.action !== "upload") continue;
-      const bytes = Buffer.from(entry.data, "base64");
-      const made = await ctx.services.media.upload(
-        {
-          buffer: bytes,
-          filename: fate.filename,
-          mimeType: entry.mimeType,
-          size: bytes.byteLength,
-          ...(entry.altText === undefined ? {} : { altText: entry.altText }),
-        },
-        asCaller(ctx)
-      );
-      uploaded.set(entry.id, String(made.id));
-    }
+    await uploadMedia(ctx, file, plan, uploaded);
     const media = new Map<string, string>();
     for (const [fileId, fate] of plan.media) {
       media.set(
@@ -666,8 +711,16 @@ async function applyPlan(
         fate.action === "existing" ? fate.id : (uploaded.get(fileId) ?? fileId)
       );
     }
-    style = await writeSiteStyle(ctx, plan, slugs, setup.defaults);
-    const written = await writeDocuments(ctx, file, plan, slugs, media, true);
+    await writeSiteStyle(ctx, plan, style);
+    written = await writeDocuments(ctx, file, plan, slugs, media, true);
+  } catch (error) {
+    await takeBack(ctx, uploaded, style);
+    throw error;
+  }
+  // The documents are committed from here on, so nothing is taken back: an
+  // index the reconciliation could not bring up to date is the usage
+  // health's to report and repair, not a reason to call the import failed.
+  try {
     await reconcileAfterCommit(setup, [
       ...[...written.components.values()].map(documentId => ({
         slug: slugs.component,
@@ -682,27 +735,63 @@ async function applyPlan(
         documentId,
       })),
     ]);
-    const rootFate = plan.items[file.root.kind].get(file.root.id);
-    const rootWritten = {
-      component: written.components,
-      pattern: written.patterns,
-      layout: written.layouts,
-    }[file.root.kind].get(file.root.id);
-    const rootId = rootFate?.action === "existing" ? rootFate.id : rootWritten;
-    return {
-      dryRun: false,
-      preview: plan.preview,
-      ...(rootId === undefined ? {} : { rootId }),
-      created: {
-        components: Object.fromEntries(written.components),
-        patterns: Object.fromEntries(written.patterns),
-        layouts: Object.fromEntries(written.layouts),
-        media: Object.fromEntries(uploaded),
-      },
-    };
   } catch (error) {
-    await takeBack(ctx, uploaded, style);
-    throw error;
+    ctx.logger?.warn(
+      "[page-builder] an import's usage indexes could not be brought up to date",
+      { error }
+    );
+  }
+  const rootFate = plan.items[file.root.kind].get(file.root.id);
+  const rootWritten = {
+    component: written.components,
+    pattern: written.patterns,
+    layout: written.layouts,
+  }[file.root.kind].get(file.root.id);
+  const rootId = rootFate?.action === "existing" ? rootFate.id : rootWritten;
+  return {
+    dryRun: false,
+    preview: plan.preview,
+    ...(rootId === undefined ? {} : { rootId }),
+    created: {
+      components: Object.fromEntries(written.components),
+      patterns: Object.fromEntries(written.patterns),
+      layouts: Object.fromEntries(written.layouts),
+      media: Object.fromEntries(uploaded),
+    },
+  };
+}
+
+/**
+ * Upload the plan's new media as the caller, recording each as it lands so a
+ * later failure can take it back. A caption is set on the new file once it
+ * exists, as the system: the upload takes none, and the file is the import's
+ * own.
+ */
+async function uploadMedia(
+  ctx: ImportContext,
+  file: TransferFile,
+  plan: ImportPlan,
+  uploaded: Map<string, string>
+): Promise<void> {
+  for (const entry of file.media) {
+    const fate = plan.media.get(entry.id);
+    if (fate?.action !== "upload") continue;
+    const bytes = Buffer.from(entry.data, "base64");
+    const made = await ctx.services.media.upload(
+      {
+        buffer: bytes,
+        filename: fate.filename,
+        mimeType: entry.mimeType,
+        size: bytes.byteLength,
+        ...(entry.altText === undefined ? {} : { altText: entry.altText }),
+      },
+      asCaller(ctx)
+    );
+    const id = String(made.id);
+    uploaded.set(entry.id, id);
+    if (entry.caption !== undefined) {
+      await ctx.services.media.update(id, { caption: entry.caption });
+    }
   }
 }
 
@@ -716,20 +805,29 @@ interface StyleUndo {
   readonly defaults: SiteStyleData | undefined;
 }
 
-/** Append the plan's new shared styles, variables and breakpoints. */
-async function writeSiteStyle(
-  ctx: ImportContext,
+/** What the plan's site-style writes add, by the ids they add it under. */
+function styleUndo(
   plan: ImportPlan,
   slugs: Collections,
   defaults: SiteStyleData | undefined
-): Promise<StyleUndo | undefined> {
-  const undo: StyleUndo = {
+): StyleUndo {
+  return {
     classIds: new Set(plan.classes.create.map(entry => entry.id)),
     tokenNames: new Set(plan.tokens.create.map(token => token.name)),
     breakpointIds: new Set(plan.addBreakpoints.map(entry => entry.id)),
     slug: slugs.siteStyle,
     defaults,
   };
+}
+
+/** Append the plan's new shared styles, variables and breakpoints. */
+async function writeSiteStyle(
+  ctx: ImportContext,
+  plan: ImportPlan,
+  undo: StyleUndo
+): Promise<void> {
+  const slugs = { siteStyle: undo.slug };
+  const defaults = undo.defaults;
   const nextly = requireNextly();
   if (plan.classes.create.length > 0 || plan.tokens.create.length > 0) {
     const stored = await nextly.findSingle({
@@ -794,7 +892,6 @@ async function writeSiteStyle(
     }
     await writeBreakpoints(ctx, slugs.siteStyle, set);
   }
-  return undo;
 }
 
 /** The checked breakpoint write, as Settings' route makes it. */
@@ -864,10 +961,16 @@ async function takeBack(
         (now.breakpoints?.[axis] ?? []).filter(
           def => !style.breakpointIds.has(def.id)
         );
-      await writeBreakpoints(ctx, style.slug, {
+      const kept = {
         viewport: without("viewport"),
         container: without("container"),
-      });
+      };
+      // Written back only when the import's breakpoints landed: a write that
+      // failed added none, and there is nothing to take back.
+      const landed =
+        kept.viewport.length !== (now.breakpoints?.viewport ?? []).length ||
+        kept.container.length !== (now.breakpoints?.container ?? []).length;
+      if (landed) await writeBreakpoints(ctx, style.slug, kept);
     }
   } catch (error) {
     ctx.logger?.warn(
