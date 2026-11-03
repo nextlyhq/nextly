@@ -10,6 +10,7 @@
  * @module site-fonts/contract
  */
 import type { FontFaceDef } from "@nextlyhq/blocks-engine";
+import type { PaginationMeta } from "@nextlyhq/plugin-sdk";
 
 /** Where the editor reads the Google Fonts catalogue, through the server. */
 export const SITE_FONTS_CATALOGUE_ROUTE_PATH = "/site/fonts/catalogue";
@@ -52,6 +53,19 @@ export interface CatalogueFamily {
 }
 
 /** What the catalogue route answers. */
+/**
+ * The catalogue as its route answers it: the canonical list envelope, every
+ * family on one page, with where previews load and when the catalogue was
+ * read beside the paging in its meta.
+ */
+export interface FontCatalogueList {
+  readonly items: readonly CatalogueFamily[];
+  readonly meta: PaginationMeta & {
+    readonly previewBase: string;
+    readonly fetchedAt: string;
+  };
+}
+
 export interface FontCatalogueRead {
   readonly families: readonly CatalogueFamily[];
   /**

@@ -24,6 +24,7 @@ import type { FontFaceDef } from "@nextlyhq/blocks-engine";
 import {
   getCachedNextly,
   NextlyError,
+  respondList,
   respondMutation,
 } from "@nextlyhq/plugin-sdk";
 
@@ -40,6 +41,7 @@ import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
   SITE_FONTS_ROUTE_PATH,
   type AddSiteFontAnswer,
+  type FontCatalogueList,
   type FontCatalogueRead,
 } from "./contract";
 import {
@@ -378,7 +380,21 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
       path: SITE_FONTS_CATALOGUE_ROUTE_PATH,
       handler: async (_req, ctx) => {
         await assertMayChangeFonts(ctx);
-        return Response.json(await readCatalogue(ctx), {
+        const read = await readCatalogue(ctx);
+        const total = read.families.length;
+        // Every family on one page: the editor filters and pages the list
+        // itself, so it reads the catalogue once.
+        const meta: FontCatalogueList["meta"] = {
+          total,
+          page: 1,
+          limit: total,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+          previewBase: read.previewBase,
+          fetchedAt: read.fetchedAt,
+        };
+        return respondList([...read.families], meta, {
           headers: { "cache-control": "no-store" },
         });
       },
@@ -400,10 +416,57 @@ function notInCatalogue(): NextlyError {
   });
 }
 
-/** The body as JSON, or nothing when it is not. */
+/**
+ * The most bytes an add's body may have: a family's id, nine weights, two
+ * styles and every script fit in far less.
+ */
+const MAX_ADD_BODY_BYTES = 8 * 1024;
+
+/** An add's body past what any add can be. */
+function bodyTooLarge(): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "body",
+        code: "INVALID_VALUE",
+        message: "That request is larger than adding a font can be.",
+      },
+    ],
+  });
+}
+
+/**
+ * The body as JSON, or nothing when it is not. Read a chunk at a time and
+ * abandoned the moment it passes the limit, so a caller cannot make the
+ * server hold a body of any size before the request is judged.
+ */
 async function bodyOf(req: Request): Promise<unknown> {
+  const stated = Number(req.headers.get("content-length"));
+  if (Number.isFinite(stated) && stated > MAX_ADD_BODY_BYTES) {
+    throw bodyTooLarge();
+  }
+  const reader = req.body?.getReader();
+  if (reader === undefined) return undefined;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    total += chunk.value.byteLength;
+    if (total > MAX_ADD_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw bodyTooLarge();
+    }
+    chunks.push(chunk.value);
+  }
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
   try {
-    return JSON.parse(await req.text()) as unknown;
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     return undefined;
   }

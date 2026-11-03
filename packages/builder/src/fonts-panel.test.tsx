@@ -568,6 +568,25 @@ describe("uploading a font file", () => {
     ).toBe(true);
   });
 
+  it("starts the next file's variable range afresh", async () => {
+    await openUpload(async () => undefined);
+    await chooseFile(woff2("Inter-Variable.woff2"));
+    await chooseWeight("Variable (a range)");
+    fireEvent.change(screen.getByLabelText("From"), {
+      target: { value: "300" },
+    });
+    confirmRights();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+    });
+    await chooseFile(woff2("Other-Variable.woff2"));
+    await chooseWeight("Variable (a range)");
+    expect((screen.getByLabelText("From") as HTMLInputElement).value).toBe(
+      "100"
+    );
+    expect((screen.getByLabelText("To") as HTMLInputElement).value).toBe("900");
+  });
+
   it("offers the file types the host accepts", async () => {
     await openUpload(async () => undefined, ".woff2,font/woff2");
     expect(screen.getByLabelText("Font file").getAttribute("accept")).toBe(
