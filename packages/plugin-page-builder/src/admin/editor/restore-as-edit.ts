@@ -29,16 +29,29 @@ function hasNodes(value: unknown): value is { nodes: unknown[] } {
 }
 
 /**
- * Whether two documents carry the same envelope beside their blocks: their
- * settings and their media index. Compared as stored. No edit changes either
- * (the op layer keeps the current document's), so a restore that would is
- * declined rather than half applied: recovered blocks saved under the current
- * media index would leave the media they use unprotected.
+ * Whether two documents carry the same envelope: everything beside their
+ * blocks (format version, kind, settings, media index, and anything a later
+ * format adds). No edit changes the envelope (the op layer keeps the current
+ * document's), so a restore whose envelope differs is declined rather than
+ * half applied: recovered blocks saved under the current envelope would, say,
+ * leave the media they use unprotected, or be saved as a format they aren't.
  */
 function sameEnvelope(a: BlockDocument, b: BlockDocument): boolean {
-  return (
-    JSON.stringify(a.settings ?? null) === JSON.stringify(b.settings ?? null) &&
-    JSON.stringify(a.assets ?? null) === JSON.stringify(b.assets ?? null)
+  const { nodes: _aNodes, ...aEnvelope } = a;
+  const { nodes: _bNodes, ...bEnvelope } = b;
+  return canonical(aEnvelope) === canonical(bEnvelope);
+}
+
+/** A value as JSON with every object's keys in order, so key order can't differ. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    typeof inner === "object" && inner !== null && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0
+          )
+        )
+      : inner
   );
 }
 
@@ -47,8 +60,9 @@ function sameEnvelope(a: BlockDocument, b: BlockDocument): boolean {
  * recovered blocks placed in order. Atomic, so it lands whole or not at all.
  *
  * Declines (false) a value that isn't a document of the field's kinds, one of
- * another kind than the page, one whose settings or media index differ, and
- * one the editor refuses (a lock, say). The admin then restores the old way.
+ * another kind than the page, one whose envelope differs (format version,
+ * settings, media index, …), and one the editor refuses (a lock, say). The
+ * admin then restores the old way.
  *
  * @param editor - the editor's state: its document and its batch apply
  * @param value - the field's value in the recovery point, unparsed

@@ -107,6 +107,32 @@ describe("restoreAsEdit", () => {
     expect(ids(result.current.document)).toEqual(["a"]);
   });
 
+  it("declines a recovered page in another format, or carrying fields the page doesn't", () => {
+    const { result } = editorOn(page([box("a")]));
+    const older = { ...page([box("c")]), formatVersion: 0 };
+    const extra = { ...page([box("c")]), meta: { kept: true } };
+    expect(restoreAsEdit(result.current, older, ["page"])).toBe(false);
+    expect(restoreAsEdit(result.current, extra, ["page"])).toBe(false);
+    expect(ids(result.current.document)).toEqual(["a"]);
+  });
+
+  it("accepts the same envelope written with its keys in another order", () => {
+    const stored = { ...page([box("a")]), assets: { mediaIds: ["m1"] } };
+    const { result } = editorOn(stored);
+    const recovered = {
+      assets: { mediaIds: ["m1"] },
+      nodes: [box("c")],
+      kind: "page",
+      formatVersion: 1,
+    };
+    let applied = false;
+    act(() => {
+      applied = restoreAsEdit(result.current, recovered, ["page"]);
+    });
+    expect(applied).toBe(true);
+    expect(ids(result.current.document)).toEqual(["c"]);
+  });
+
   it("declines a value that isn't a document", () => {
     const { result } = editorOn(page([box("a")]));
     expect(restoreAsEdit(result.current, "not a page", ["page"])).toBe(false);
