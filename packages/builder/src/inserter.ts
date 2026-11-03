@@ -565,22 +565,59 @@ export function componentEntriesFrom(
       definitions
     );
     if (offered === undefined) continue;
-    entries.push({
-      kind: "component",
-      id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
-      componentId: component.id,
-      label: component.title,
-      description: component.description ?? "",
-      // Every component under the one components group and with the one
-      // component mark, whatever its row declares: see COMPONENT_CATEGORY.
-      category: COMPONENT_CATEGORY,
-      icon: "component",
-      keywords: keywordsOf(component.keywords),
-      ...offered,
-      ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
-    });
+    entries.push(componentEntryOf(component, offered));
   }
   return entries;
+}
+
+/**
+ * The rows {@link componentEntriesFrom} offers no entry for, each as an entry
+ * with nothing in it to place: no roots, and an empty definition.
+ *
+ * For a surface that lists the library to manage it as well as to place from
+ * it. A component saved without content, or with none the canvas could draw,
+ * is still one an author can open and fill, so it is listed, refused, rather
+ * than left out. Never handed to the offers: there is nothing in it to judge
+ * or to place, and the surface says so.
+ */
+export function unplaceableComponentEntries(
+  components: readonly SavedComponent[],
+  definitions: ComponentLookup
+): ComponentInsertEntry[] {
+  const offered = new Set(
+    componentEntriesFrom(components, definitions).map(
+      entry => entry.componentId
+    )
+  );
+  return components
+    .filter(component => !offered.has(component.id))
+    .map(component =>
+      componentEntryOf(component, {
+        document: { formatVersion: 1, kind: "component", nodes: [] },
+        roots: [],
+      })
+    );
+}
+
+/** One stored row as an entry, with the definition and roots it offers. */
+function componentEntryOf(
+  component: SavedComponent,
+  offered: Pick<ComponentInsertEntry, "document" | "roots">
+): ComponentInsertEntry {
+  return {
+    kind: "component",
+    id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
+    componentId: component.id,
+    label: component.title,
+    description: component.description ?? "",
+    // Every component under the one components group and with the one
+    // component mark, whatever its row declares: see COMPONENT_CATEGORY.
+    category: COMPONENT_CATEGORY,
+    icon: "component",
+    keywords: keywordsOf(component.keywords),
+    ...offered,
+    ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
+  };
 }
 
 /**
