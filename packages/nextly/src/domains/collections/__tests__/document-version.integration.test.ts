@@ -233,7 +233,11 @@ describe.each(getConfiguredTestDialects())(
       await createNote(t, { title: "a", code: "taken" });
       const id = idOf(await createNote(t, { title: "b", code: "free" }));
 
-      await expect(updateNote(t, id, { code: "taken" })).rejects.toThrow();
+      // Refused by the database's unique index, inside the update statement.
+      expect(await updateNote(t, id, { code: "taken" })).toMatchObject({
+        success: false,
+        statusCode: 409,
+      });
 
       // The increment belongs to the refused statement's transaction, so it
       // is undone with it: a counter moved by a failed save would make a
