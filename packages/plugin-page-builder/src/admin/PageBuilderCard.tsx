@@ -57,6 +57,7 @@
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
+import type { ComponentTitleOf } from "@nextlyhq/builder";
 import {
   useDocumentLocale,
   useDocumentPreview,
@@ -144,8 +145,15 @@ export interface PageBuilderCardProps {
    * answer, which may be out of date, and the sentence says that rather than
    * "missing". And a retry, because a failed read is the state with a remedy
    * the author can reach from here.
+   *
+   * `titleOf` names a placed component's section by its component's title,
+   * as Layers names it; without it the section is a "Component".
    */
-  components: { state: ComponentLibraryState; retry: () => void };
+  components: {
+    state: ComponentLibraryState;
+    retry: () => void;
+    titleOf?: ComponentTitleOf;
+  };
   /**
    * Everything else this site's rendering depends on, as one bundle.
    *
@@ -544,8 +552,9 @@ export function PageBuilderCard({
   const sections = useMemo(
     // The same resolver and inputs the picture draws with, so the list names
     // exactly the sections drawn above it.
-    () => pageSections(document, entryBlockResolver(), render),
-    [document, render]
+    () =>
+      pageSections(document, entryBlockResolver(), render, components.titleOf),
+    [document, render, components.titleOf]
   );
 
   const said = note ?? (canEdit && href === undefined ? SAVE_FIRST : undefined);

@@ -263,10 +263,12 @@ export {
  */
 export {
   ancestorIds,
+  componentTitles,
   filterLayers,
   layerLabel,
   layersOf,
   pathTo,
+  type ComponentTitleOf,
   type LayerNode,
   type LayerSearch,
 } from "./layers";

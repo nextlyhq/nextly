@@ -194,6 +194,39 @@ describe("the editor's search", () => {
     expect(revealBlock).toHaveBeenCalledWith("welcome");
   });
 
+  it("finds a placed component by its component's title, and says it is one", () => {
+    register();
+    const editor = editorSpy(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "offer",
+            type: "nextly/component-instance",
+            version: 1,
+            props: { componentId: "cmp-offer" },
+          },
+        ],
+      } as BlockDocument,
+      null
+    );
+    mount(editor, {
+      componentTitle: id => (id === "cmp-offer" ? "Pricing card" : undefined),
+    });
+    search("pricing");
+
+    const [row] = rowsUnder("On this page");
+    expect(row?.textContent).toContain("Pricing card");
+    // What it is, in the word Layers uses, not the engine's type.
+    expect(row?.textContent).toContain("Component");
+    expect(row?.textContent).not.toContain("instance");
+
+    // And found by what it is, as a heading is by "heading".
+    search("component");
+    expect(rowsUnder("On this page")[0]?.textContent).toContain("Pricing card");
+  });
+
   it("adds inside the container whose + opened Add, as the panel would", () => {
     register();
     const editor = editorSpy(page(), "hero");
