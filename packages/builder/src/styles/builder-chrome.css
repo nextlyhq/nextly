@@ -2577,17 +2577,22 @@
  * layers, so they win without raising specificity.
  */
 /*
- * A section opening and closing, in the inspector only: 150ms, its height and
+ * A Style section opening and closing (a plugin's own inspector in the
+ * Content tab keeps the shared accordion's motion): 150ms, its height and
  * its opacity eased out together, where the shared accordion's 300ms in-out
  * curve read as slow in a panel opened and closed all day and its height
  * alone made the fields pop in at the end. Unlayered, so it outranks the
  * utility classes the shared component sets.
  */
-.nx-inspector [data-slot="accordion-content"][data-state="open"] {
+.nx-style-inspector
+  [data-section]
+  > [data-slot="accordion-content"][data-state="open"] {
   animation: nx-section-open 150ms ease-out;
 }
 
-.nx-inspector [data-slot="accordion-content"][data-state="closed"] {
+.nx-style-inspector
+  [data-section]
+  > [data-slot="accordion-content"][data-state="closed"] {
   animation: nx-section-close 150ms ease-out;
 }
 
@@ -2627,11 +2632,18 @@
 
 /*
  * An author who asks for less motion gets the section at once. As weighty as
- * the open and closed rules above, and after them, so it wins over both.
+ * the open and closed rules above, and after them, so it wins over both. The
+ * chevron is stilled too, which the shared trigger turns with a transition.
  */
 @media (prefers-reduced-motion: reduce) {
-  .nx-inspector [data-slot="accordion-content"][data-state] {
+  .nx-style-inspector
+    [data-section]
+    > [data-slot="accordion-content"][data-state] {
     animation: none;
+  }
+
+  .nx-style-inspector .nx-style-inspector__section-trigger > svg {
+    transition: none;
   }
 }
 

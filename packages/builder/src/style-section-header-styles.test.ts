@@ -515,16 +515,18 @@ describe("the Content tab's Advanced", () => {
 
 describe("a section opening and closing", () => {
   it("eases its height and opacity out over 150ms", () => {
+    // The Style tab's sections only: a plugin's own inspector in the Content
+    // tab may use the shared accordion and keeps its own motion.
     // The shared accordion's 300ms in-out curve read as slow in a panel opened
     // and closed all day, and its height alone made the fields pop in.
     expect(
       ruleBody(
-        '.nx-inspector [data-slot="accordion-content"][data-state="open"]'
+        '.nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state="open"]'
       )
     ).toContain("animation: nx-section-open 150ms ease-out");
     expect(
       ruleBody(
-        '.nx-inspector [data-slot="accordion-content"][data-state="closed"]'
+        '.nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state="closed"]'
       )
     ).toContain("animation: nx-section-close 150ms ease-out");
     expect(FLAT).toContain(
@@ -550,7 +552,7 @@ describe("a section opening and closing", () => {
     // As weighty as the open and closed rules, and after them, so it wins:
     // a lighter selector lost to them and the section still moved.
     expect(FLAT).toContain(
-      '@media (prefers-reduced-motion: reduce) { .nx-inspector [data-slot="accordion-content"][data-state] { animation: none; } }'
+      '@media (prefers-reduced-motion: reduce) { .nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state] { animation: none; } .nx-style-inspector .nx-style-inspector__section-trigger > svg { transition: none; } }'
     );
   });
 });
