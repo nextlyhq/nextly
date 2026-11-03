@@ -195,9 +195,8 @@ function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
 function getDefaultColumns(fields: FieldConfig[]): string[] {
   // Data fields the form shows, never a hidden one or a layout field.
   const dataFields = fields
-    .filter(isDefaultColumnField)
-    .slice(0, DEFAULT_COLUMN_COUNT)
-    .map(f => f.name);
+    .flatMap(field => (isDefaultColumnField(field) ? [field.name] : []))
+    .slice(0, DEFAULT_COLUMN_COUNT);
 
   // Always include title, slug, id, createdAt and updatedAt.
   // 07-admin-bugs-feedback, the user expects both timestamps visible
