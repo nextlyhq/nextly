@@ -1052,6 +1052,19 @@
   color: var(--nx-accent-foreground);
 }
 
+/*
+ * A placement's mark in the component colour, as Layers draws a placement, so
+ * the card reads as a component's before its description is.
+ */
+.nx-inspector[data-instance] .nx-block-card__icon {
+  background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent);
+}
+
+/* On the icon itself, past its own muted colour, as Layers does. */
+.nx-inspector[data-instance] .nx-block-card__icon .nx-block-icon {
+  color: var(--nx-builder-component);
+}
+
 /* The name over its one-line description, taking the room between the
    tile and the menu. */
 .nx-block-card__text {
@@ -1287,30 +1300,29 @@
 }
 
 /*
- * Where a row's value came from, as a badge the author reads beside it. Quiet
- * for an inherited value, which is the ordinary state; the accent for an
- * override, because that is the row whose reset undoes THEIR edit; and a
- * dashed outline for a cleared one, which is a value deliberately absent
- * rather than one nobody set.
+ * Where a row's value came from, as a quiet line under the field ("From the
+ * component", "Set on this page") in sentence case at the panel's small size,
+ * where a 10px capitalised tag read as an internal term. Muted for the
+ * ordinary state; the accent for a value set on this page, the row whose
+ * reset undoes the author's own edit; and a dashed outline for a cleared one,
+ * a value deliberately absent rather than one nobody set.
  */
 .nx-inspector__source {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0 0.375rem;
+  padding: 0;
   border-radius: 999px;
-  font-size: 0.625rem;
-  font-weight: 500;
-  line-height: 1.6;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
+  background: transparent;
 }
 
 .nx-inspector__source-icon {
-  width: 0.6875rem;
-  height: 0.6875rem;
+  width: 0.75rem;
+  height: 0.75rem;
   flex: none;
 }
 
@@ -1322,16 +1334,14 @@
   color: var(--nx-destructive);
 }
 
-.nx-inspector__source[data-source="instance"] {
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
-}
-
+/*
+ * Set or cleared on this page: the accent, in the same quiet line. A cleared
+ * value is told from an inherited one by its words and its icon, not by
+ * colour or an outline.
+ */
+.nx-inspector__source[data-source="instance"],
 .nx-inspector__source[data-source="cleared"] {
   color: var(--nx-primary);
-  background: transparent;
-  outline: 1px dashed color-mix(in oklch, var(--nx-primary) 50%, transparent);
-  outline-offset: -1px;
 }
 
 /*
@@ -6637,16 +6647,52 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   pointer-events: none;
 }
 
-/* A placement's variant, under its title in the placement's inspector. */
+/*
+ * A placement's variant, under its title in the placement's inspector: one
+ * field row, laid out by the fields' own rules, set off from the fields below.
+ */
 .nx-variant-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
   margin-bottom: 1rem;
 }
 
-.nx-variant-picker .nx-inspector__heading {
+/*
+ * A chosen media item: a small picture beside its name, the name cut short
+ * on one line with the whole of it in its tooltip, and its alt text below.
+ */
+.nx-inspector__media-chosen {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.nx-inspector__media-thumb {
+  flex: none;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+.nx-inspector__media-text {
+  min-inline-size: 0;
+}
+
+.nx-inspector__media-name {
   margin: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A checkbox beside the words it names, kept apart from them. */
+.nx-inspector__check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 /*
