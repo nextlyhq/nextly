@@ -1201,6 +1201,29 @@ export class GoingLiveRelationsBatch {
   }
 }
 
+/**
+ * The batch a judgement of one entry reads its stored relations through. Off
+ * a transaction, the batch it is judged with, read ahead of any lock. On a
+ * transaction, that batch only where it holds this entry alone, which the
+ * transaction has locked, so every language judged in it reads the entry's
+ * relations once; a batch holding any other entry is never shared there,
+ * since those rows are not locked yet and another writer could change them
+ * before the transaction reaches them. Otherwise a batch of its own.
+ *
+ * @internal
+ */
+export function relationsBatchFor(args: {
+  entryId: string;
+  onTransaction: boolean;
+  shared: GoingLiveRelationsBatch | undefined;
+}): GoingLiveRelationsBatch {
+  const { shared } = args;
+  const sharable =
+    shared !== undefined &&
+    (!args.onTransaction || shared.holdsOnly(args.entryId));
+  return sharable ? shared : new GoingLiveRelationsBatch([args.entryId]);
+}
+
 /** What reading a batch's stored relations needs. */
 interface StoredRelationsRead {
   entryIds: readonly string[];
@@ -5145,14 +5168,11 @@ export class CollectionMutationService extends BaseService {
       (await reachesLocalizedFieldGroup(args.fields, slug =>
         service.getComponentDefinition(slug, executor)
       ));
-    // On `tx`, a batch is shared only where it holds this row alone, which
-    // the transaction has locked: every language judged in it then reads the
-    // row's relations once.
-    const shared = args.relations.batch;
-    const batch =
-      (args.tx === undefined || shared?.holdsOnly(args.entryId) === true
-        ? shared
-        : undefined) ?? new GoingLiveRelationsBatch([args.entryId]);
+    const batch = relationsBatchFor({
+      entryId: args.entryId,
+      onTransaction: args.tx !== undefined,
+      shared: args.relations.batch,
+    });
     return batch.read(
       args.entryId,
       byLanguage ? args.language : undefined,
