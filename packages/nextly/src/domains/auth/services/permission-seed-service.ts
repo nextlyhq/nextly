@@ -1349,44 +1349,76 @@ export class PermissionSeedService extends BaseService {
     return inPermissionSweep(() => this.cleanupOrphanedPermissionsRows());
   }
 
+  /**
+   * The permissions `cleanupOrphanedPermissions` would retire, read without
+   * retiring any. `removing` names entities about to be deleted, by kind:
+   * their permissions are counted as orphaned too, since the cleanup that
+   * follows their deletion retires them. Lets a command list what a cleanup
+   * deletes and take consent for it before the first deletion. Throws when
+   * the registries or the permissions cannot be read.
+   */
+  async findOrphanedPermissions(
+    removing: {
+      collections?: readonly string[];
+      singles?: readonly string[];
+      fieldGroups?: readonly string[];
+    } = {}
+  ): Promise<Array<{ id: string; slug: string; resource: string }>> {
+    const orphaned = await this.orphanedPermissionRows(removing);
+    return orphaned.map(({ id, slug, resource }) => ({ id, slug, resource }));
+  }
+
+  /**
+   * Every permission no known resource or declaring package accounts for:
+   * the one answer both the cleanup and `findOrphanedPermissions` read.
+   */
+  private async orphanedPermissionRows(
+    removing: {
+      collections?: readonly string[];
+      singles?: readonly string[];
+      fieldGroups?: readonly string[];
+    } = {}
+  ) {
+    // Each kind's slugs less those about to go: a slug a removed entity
+    // shares with a kept one of another kind stays known through the kept one.
+    const remaining = (
+      slugs: readonly string[],
+      going: readonly string[] = []
+    ) => slugs.filter(slug => !going.includes(slug));
+    const knownResources = new Set([
+      ...(SYSTEM_RESOURCES as readonly string[]),
+      ...remaining(await this.getAllCollectionSlugs(), removing.collections),
+      ...remaining(await this.getAllSingleSlugs(), removing.singles),
+      ...remaining(await this.getAllComponentSlugs(), removing.fieldGroups),
+    ]);
+
+    // listPermissions returns `{data, meta}` directly and throws on DB
+    // errors; the caller decides what a failure means.
+    const allPerms = await this.permissionService.listPermissions({
+      page: 1,
+      limit: 10000,
+      // The whole point of this pass is to find what the rest of the app is
+      // deliberately not shown.
+      includeOrphaned: true,
+    });
+
+    return allPerms.data.filter(perm => isRubbish(perm, knownResources));
+  }
+
   private async cleanupOrphanedPermissionsRows(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
     try {
-      const collectionSlugs = await this.getAllCollectionSlugs();
-      const singleSlugs = await this.getAllSingleSlugs();
-      const componentSlugs = await this.getAllComponentSlugs();
-      const knownResources = new Set([
-        ...(SYSTEM_RESOURCES as readonly string[]),
-        ...collectionSlugs,
-        ...singleSlugs,
-        ...componentSlugs,
-      ]);
+      for (const perm of await this.orphanedPermissionRows()) {
+        result.total++;
 
-      // PR 4 migration: listPermissions now returns `{data, meta}` directly
-      // and throws on DB errors. Failures bubble up to the outer catch
-      // below, matching the legacy "if (!allPerms.data) return result"
-      // graceful-degradation behavior.
-      const allPerms = await this.permissionService.listPermissions({
-        page: 1,
-        limit: 10000,
-        // The whole point of this pass is to find what the rest of the app is
-        // deliberately not shown.
-        includeOrphaned: true,
-      });
-
-      for (const perm of allPerms.data) {
-        if (isRubbish(perm, knownResources)) {
-          result.total++;
-
-          if (await this.retirePermissionRow(perm.id)) {
-            result.created++;
-            this.logger.info?.(
-              `Cleaned up orphaned permission "${perm.slug}" (resource: ${perm.resource})`
-            );
-          } else {
-            result.skipped++;
-          }
+        if (await this.retirePermissionRow(perm.id)) {
+          result.created++;
+          this.logger.info?.(
+            `Cleaned up orphaned permission "${perm.slug}" (resource: ${perm.resource})`
+          );
+        } else {
+          result.skipped++;
         }
       }
 

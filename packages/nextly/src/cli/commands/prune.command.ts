@@ -2,7 +2,7 @@
  * The declaration of `nextly prune`: its options and help, with the action
  * loaded from `./prune` only when the command runs.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { lazyAction } from "../lazy-action";
@@ -15,6 +15,12 @@ export function registerPruneCommand(program: Command): void {
       "Drop orphaned plugin/code schema (retained by default — never auto-dropped)"
     )
     .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .option("--force", "Deprecated: use --accept-data-loss", false)
+    // The earlier spelling of the consent, honoured for one release with a
+    // notice naming --accept-data-loss, and kept out of the help.
+    .addOption(
+      new Option("--force", "Deprecated: use --accept-data-loss")
+        .default(false)
+        .hideHelp()
+    )
     .action(lazyAction(async () => (await import("./prune")).pruneAction));
 }

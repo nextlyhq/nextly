@@ -25,9 +25,15 @@ import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { isHTMLElement } from "./dom-kind";
-import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
+import {
+  EditorRail,
+  PANEL_KEYS_LAYER,
+  panelKeyShortcuts,
+  panelLabel,
+  type EditorRailProps,
+} from "./editor-rail";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
-import { HelpDialog } from "./help-dialog";
+import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
   BUILDER_CHROME_CLASS,
@@ -550,6 +556,7 @@ const SCALAR_PREFERENCES = [
   "inspectorHidden",
   "leftPinned",
   "showEmptyElements",
+  "panelKeys",
   "editingBreakpoint",
 ] as const satisfies readonly (keyof ShellPreferences)[];
 
@@ -598,6 +605,15 @@ const REQUIRED_HOST_TOKEN = "--nx-background";
  * ARE being applied, and the other one's absence means what it says.
  */
 const OWN_STYLESHEET_TOKEN = "--nx-builder-surface";
+
+/**
+ * The one surface both sides of the editor sit on, the rail's own: the left
+ * panels and the Inspector read as one frame around the canvas, divided from it
+ * by the resize handle's single line, and a panel paints nothing of its own
+ * behind its content. One class, so the two sides cannot drift apart.
+ */
+const SIDE_PANEL_CLASS =
+  "bg-[color:var(--nx-builder-surface)] h-full overflow-auto";
 
 /**
  * Tell a developer when the design system's stylesheet has not been loaded.
@@ -891,10 +907,15 @@ function railDialogItems(
 function RailAndDialogs({
   active,
   renderSettings,
+  panelKeys,
   ...rail
-}: Omit<EditorRailProps, "onHelp" | "onSettings" | "settingsOpen"> & {
+}: Omit<
+  EditorRailProps,
+  "onHelp" | "onSettings" | "settingsOpen" | "keysOn"
+> & {
   active: boolean;
   renderSettings: BuilderShellProps["renderSettings"];
+  panelKeys: PanelKeysSetting;
 }): React.JSX.Element {
   const help = useRailDialog(active);
   const settings = useRailDialog(active);
@@ -907,12 +928,14 @@ function RailAndDialogs({
     <>
       <EditorRail
         {...rail}
+        keysOn={panelKeys.on}
         {...railDialogItems(help, settings, renderSettings)}
       />
       <HelpDialog
         open={help.open}
         onOpenChange={help.setOpen}
         returnFocus={() => help.opener.current}
+        panelKeys={panelKeys}
       />
       <HostSettings render={renderSettings} dialog={settings} />
     </>
@@ -1241,7 +1264,10 @@ function useSidePanels(
   const inspectorShown = !preferences.inspectorHidden;
   // From the rail. While the left side is hidden, choosing a panel shows it
   // rather than toggling: the author asked to see that panel.
-  const selectPanel = (panel: LeftPanel) =>
+  const selectPanel = (panel: LeftPanel) => {
+    // Closing the open panel, by its item or its key, unmounts what may hold
+    // focus: it goes to the canvas, as hiding a side sends it.
+    if (openPanel === panel) keepFocusInShell(regionRefs.current, ["panel"]);
     update(current =>
       current.leftPanelHidden
         ? { ...current, leftPanel: panel, leftPanelHidden: false }
@@ -1250,6 +1276,7 @@ function useSidePanels(
             leftPanel: panelAfterRailClick(current.leftPanel, panel),
           }
     );
+  };
   /*
    * The top bar's left-panel button. Showing it with no panel chosen opens
    * the first panel the host offers, Add where it offers that.
@@ -1625,6 +1652,18 @@ function ShellRegions({
           openPanel={openPanel}
           isAvailable={isAvailable}
           onSelect={selectPanel}
+          // The panel keys answer only for the shell that is showing and that
+          // the author is in, the check F6 and mod+\ already make, and only
+          // while the author has not turned them off in Help.
+          claimsKeys={() => active && claimsKeys()}
+          panelKeys={{
+            // On unless turned off, as a preference written before there
+            // was a switch reads.
+            on: preferences.panelKeys !== false,
+            onChange: on => update(current => ({ ...current, panelKeys: on })),
+            shortcuts: panelKeyShortcuts(isAvailable),
+            layer: PANEL_KEYS_LAYER,
+          }}
         />
 
         <ResizablePanelGroup
@@ -1684,9 +1723,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label={panelLabel(openPanel)}
-                  // The one surface every left panel sits on, the rail's own:
-                  // a panel paints nothing of its own behind its content.
-                  className="bg-[color:var(--nx-builder-surface)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {/* Keyed by the panel, because the prop's contract says the
                       result is keyed by the panel and React's default
@@ -1749,7 +1786,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label="Inspector"
-                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {inspector}
                 </aside>

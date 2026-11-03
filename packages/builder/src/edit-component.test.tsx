@@ -219,11 +219,11 @@ describe("the banner over a component's own view", () => {
     expect(back).toHaveBeenCalledTimes(1);
   });
 
-  it("says when every placement changes in the band's own tooltip, not a pill", () => {
+  it("says when every page changes in the band's own tooltip, not a pill", () => {
     render(<ComponentBanner name="Hero" pages={undefined} />);
     const banner = screen.getByRole("region", { name: "Editing a component" });
     expect(banner.getAttribute("title")).toBe(
-      "Every placement updates when you save."
+      "Every page that uses it updates when you save."
     );
     // Read to a screen reader too, which a tooltip alone is not.
     expect(banner.getAttribute("aria-describedby")).not.toBeNull();

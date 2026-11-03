@@ -4,7 +4,7 @@
  * Implements `nextly prune` — explicitly drop orphaned plugin/code schema
  * (collections in the registry that are no longer in the config). Orphans are
  * never dropped without the data-loss consent: with none, a terminal is asked
- * and a run with no terminal lists them and drops nothing.
+ * and a run that cannot ask lists them, drops nothing and exits 1.
  *
  * **Runtime restriction:** CLI-only. Do NOT import from runtime code.
  *
@@ -31,16 +31,15 @@ import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
 } from "../../domains/i18n/migration/teardown-entity-i18n";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   countDeletions,
-  isInteractiveTerminal,
   judgeDataLoss,
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import type { ExtensionSchemaRecord } from "../../domains/schema/ownership/dependent-elements";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
-import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
@@ -54,6 +53,7 @@ import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
   readDataLossConsent,
+  requireConsented,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 
@@ -86,7 +86,8 @@ interface RunPruneArgs {
   /**
    * Whether the tables listed may be dropped: the data-loss consent's
    * judgement (`pruneApproval`). False drops nothing; a throw stops the run
-   * before anything changes.
+   * before anything changes, as `pruneApproval` does for every outcome but
+   * consent.
    */
   approve: (deletions: Deletion[]) => Promise<boolean>;
   /**
@@ -306,11 +307,11 @@ export function pruneConsent(
 /**
  * The `approve` a prune runs with: the tables counted where the database
  * answers, then judged by the consent. Covered, or agreed to at a terminal,
- * they are dropped. With no consent and no terminal, the refusal is printed
- * as the listing — the command still lists what it would drop, as it always
- * has, and now names the consent that drops it — and nothing is dropped. A
- * consent naming tables that leaves one out is refused outright: the
- * operator named what may go, and this is not it.
+ * they are dropped. Otherwise the run stops before anything is dropped, and
+ * exits 1: a no at the terminal names the consent that drops without asking;
+ * with no consent and nobody to ask, the refusal lists what it would drop and
+ * that consent; and a consent naming tables that leaves one out is refused
+ * outright: the operator named what may go, and this is not it.
  */
 export function pruneApproval(args: {
   consent: DataLossConsent;
@@ -328,19 +329,8 @@ export function pruneApproval(args: {
       ask: args.ask,
       print: args.print,
     });
-    if (verdict.kind === "proceed") return true;
-    if (verdict.kind === "declined") {
-      args.print("Nothing was dropped.");
-      return false;
-    }
-    if (verdict.reason === "needs-consent") {
-      args.print(verdict.message);
-      return false;
-    }
-    throw NextlyError.invalidInput({
-      message: verdict.message,
-      logContext: { reason: "data-loss-not-covered" },
-    });
+    requireConsented(verdict);
+    return true;
   };
 }
 
@@ -403,7 +393,7 @@ export async function runPruneCommand(
         countArchivedTranslations(drizzleAdapter, dialect, slug),
       approve: pruneApproval({
         consent,
-        interactive: isInteractiveTerminal(),
+        interactive: canPrompt(),
         ask: askToDeleteInTerminal,
         print: line => logger.info(line),
         db: drizzleAdapter.getDrizzle(),

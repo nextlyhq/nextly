@@ -23,7 +23,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 
-import { exitWithError, printCliError } from "../errors";
+import { exitWithError } from "../errors";
 import { packageInstallFailed } from "../errors/areas/commands";
 import {
   createContext,
@@ -140,10 +140,9 @@ export async function runAdd(
     logger.info(`Installing ${pc.cyan(pkg)} with ${pc.yellow(pm)}…`);
     const code = await runInstall(pm, args, cwd);
     if (code !== 0) {
-      // The package manager's own failing code is the command's, so the shape is printed here
-      // and the exit keeps that code rather than the 1 `exitWithError` ends with.
-      printCliError(logger, packageInstallFailed(pm, pkg, code));
-      process.exit(code || 1);
+      // A failed install is a failed run, so it ends with the shared 1; the
+      // package manager's own code is named in the message instead.
+      exitWithError(logger, packageInstallFailed(pm, pkg, code));
     }
     logger.success(`Installed ${pkg}`);
   }
