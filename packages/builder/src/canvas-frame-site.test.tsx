@@ -244,6 +244,25 @@ describe("the canvas frame on a page the site serves", () => {
     expect(Number.parseFloat(cue?.style.top ?? "0")).toBeGreaterThan(0);
   });
 
+  it("takes a cue away with the part the site's layout removes", async () => {
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    const cues = () => container.querySelectorAll(".nx-site-chrome-cue");
+    expect(cues()).toHaveLength(4);
+    // The site's own client code drops its header, with no navigation.
+    await act(async () => {
+      frameDocument(frame).getElementById("site-header")?.remove();
+      await Promise.resolve();
+    });
+    expect(cues()).toHaveLength(3);
+  });
+
   it("falls back to the blank page, and says why, when the page loaded is not the route", () => {
     const onSourceFallback =
       vi.fn<(reason: CanvasFrameFallback | null) => void>();

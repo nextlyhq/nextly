@@ -292,7 +292,7 @@ function FramedCanvas({
    * runs once it exists. It is created once and kept: see the module docblock.
    */
   const [frame, setFrame] = React.useState<HTMLIFrameElement | null>(null);
-  const { shown, refuse } = useShownSource(source, onSourceFallback);
+  const { shown, pending, refuse } = useShownSource(source, onSourceFallback);
   const { page, mountPoint } = useFramePage(frame, shown, refuse);
   const siteChrome = useSiteChrome(page, mountPoint);
 
@@ -320,7 +320,7 @@ function FramedCanvas({
           ref={setFrame}
           className="nx-canvas-frame__page"
           title={canvasFrameTitle(title)}
-          {...frameDocumentProps(shown)}
+          {...frameDocumentProps(shown, pending)}
           // Laid out at the device's size and painted at the zoom.
           style={{ width, height, transform: `scale(${String(scale)})` }}
         />
@@ -346,12 +346,14 @@ function FramedCanvas({
 }
 
 /**
- * What the iframe is given to load its page: the site's page by URL, or the
- * editor's blank page as `srcdoc`.
+ * What the iframe is given to load its page: the site's page by URL, the
+ * editor's blank page as `srcdoc`, or nothing while the choice is pending.
  */
 function frameDocumentProps(
-  source: CanvasFrameSource
-): { src: string } | { srcDoc: string } {
+  source: CanvasFrameSource,
+  pending: boolean
+): { src: string } | { srcDoc: string } | Record<string, never> {
+  if (pending) return {};
   return "src" in source ? { src: source.src } : { srcDoc: source.srcDoc };
 }
 
@@ -423,20 +425,33 @@ function frameScale(
  * tried afresh. A page on another origin is refused before it is ever loaded:
  * its document could be neither reached nor drawn into, and loading it would
  * still run its scripts.
+ *
+ * Which origin the editor is on is known only in the browser. Until then —
+ * on the server, and in the render that hydrates what the server sent — a
+ * site's page is `pending`: neither it nor the blank page is asked for, so
+ * the server's markup and the browser's first render agree, and the frame
+ * loads once the origin is known.
  */
 function useShownSource(
   source: CanvasFrameSource,
   onSourceFallback: CanvasFrameProps["onSourceFallback"]
 ): {
   shown: CanvasFrameSource;
+  pending: boolean;
   refuse: (reason: CanvasFrameFallback) => void;
 } {
+  const editorOrigin = React.useSyncExternalStore(
+    staysTheSame,
+    readEditorOrigin,
+    noOriginYet
+  );
+  const pending = "src" in source && editorOrigin === null;
   const [refusal, setRefusal] = React.useState<{
     readonly source: CanvasFrameSource;
     readonly reason: CanvasFrameFallback;
   } | null>(null);
   const reason: CanvasFrameFallback | null =
-    "src" in source && !onEditorOrigin(source.src)
+    "src" in source && !pending && !onOrigin(source.src, editorOrigin)
       ? "other-origin"
       : refusal !== null && refusal.source === source
         ? refusal.reason
@@ -455,17 +470,36 @@ function useShownSource(
     // fallback, so a host given that has nothing to be told.
     if (asked) latest.current?.(reason);
   }, [asked, reason]);
-  return { shown: reason === null ? source : SRCDOC_FRAME_SOURCE, refuse };
+  return {
+    shown: reason === null ? source : SRCDOC_FRAME_SOURCE,
+    pending,
+    refuse,
+  };
+}
+
+/** The editor's origin never changes while it runs, so nothing to hear. */
+function staysTheSame(): () => void {
+  return () => undefined;
+}
+
+/** The editor window's own origin, read in the browser. */
+function readEditorOrigin(): string | null {
+  return typeof location === "undefined" ? null : location.origin;
+}
+
+/** On the server, and while hydrating, the origin is not known yet. */
+function noOriginYet(): null {
+  return null;
 }
 
 /**
- * Whether a URL is on the origin of the editor's own window, so the frame's
- * document will be one the editor can reach.
+ * Whether a URL is on the editor's own origin, so the frame's document will be
+ * one the editor can reach.
  */
-function onEditorOrigin(src: string): boolean {
-  if (typeof location === "undefined") return false;
+function onOrigin(src: string, origin: string | null): boolean {
+  if (origin === null) return false;
   try {
-    return new URL(src, location.href).origin === location.origin;
+    return new URL(src, origin).origin === origin;
   } catch {
     return false;
   }
@@ -530,49 +564,18 @@ function useFramePage(
           : next
       );
     };
-    /*
-     * `loaded` is whether a `load` just reported this document. Read on mount
-     * instead, a document that is not the route's may be the empty one every
-     * frame starts with while the route is still on its way, so it is waited
-     * for rather than refused — within the deadline, like everything else a
-     * site's page has to do before the canvas can be drawn in it.
-     */
+    // `loaded` is whether a `load` just reported this document: see
+    // `readSitePage`.
     const read = (loaded: boolean): void => {
       unwatch?.();
       unwatch = null;
       if (loaded) wait.disarm();
       const doc = documentOf(frame);
-      if (!("src" in source)) {
+      if ("src" in source) {
+        unwatch = readSitePage(doc, loaded, source, { show, wait, refuse });
+      } else {
         show(doc);
-        return;
       }
-      // Read on mount, a page at another address is the one an earlier source
-      // left behind while this one's request is on its way: never this
-      // source's, however ready it looks.
-      if (
-        !loaded &&
-        doc !== null &&
-        !isPageAt(doc.URL, doc.baseURI, source.src)
-      ) {
-        show(null);
-        wait.arm();
-        return;
-      }
-      if (doc === null || !source.served(doc)) {
-        show(null);
-        if (!loaded) wait.arm();
-        else refuse(doc === null ? "other-origin" : "not-served");
-        return;
-      }
-      // Ready, or waiting for readiness again: the site's root can take the
-      // mount point away without the frame loading anything.
-      const settle = (): void => {
-        show(doc);
-        if (source.ready(doc)) wait.disarm();
-        else wait.arm();
-      };
-      unwatch = source.watch(doc, settle);
-      settle();
     };
     const onLoad = (): void => read(true);
     read(false);
@@ -584,6 +587,58 @@ function useFramePage(
     };
   }, [frame, source, refuse]);
   return reading;
+}
+
+/** What reading a site's page in the frame acts through. */
+interface SitePageReader {
+  readonly show: (doc: Document | null) => void;
+  readonly wait: { arm: () => void; disarm: () => void };
+  readonly refuse: (reason: CanvasFrameFallback) => void;
+}
+
+/**
+ * Read the frame's document as a site's page: show it once it is the source's
+ * and ready, wait for it within the deadline, or refuse it. Answers the way to
+ * stop watching its readiness, when it is the route's page.
+ *
+ * `loaded` is whether a `load` just reported this document. Read on mount
+ * instead, a page at another address is the one an earlier source left behind
+ * while this one's request is on its way — never this source's, however ready
+ * it looks — and a page that is not the route's may be the empty one every
+ * frame starts with, so both are waited for rather than refused.
+ */
+function readSitePage(
+  doc: Document | null,
+  loaded: boolean,
+  source: SiteFrameSource,
+  { show, wait, refuse }: SitePageReader
+): (() => void) | null {
+  if (!loaded && leftBehind(doc, source.src)) {
+    show(null);
+    wait.arm();
+    return null;
+  }
+  if (doc === null || !source.served(doc)) {
+    show(null);
+    if (!loaded) wait.arm();
+    else refuse(doc === null ? "other-origin" : "not-served");
+    return null;
+  }
+  // Ready, or waiting for readiness again: the site's root can take the
+  // mount point away without the frame loading anything.
+  const settle = (): void => {
+    show(doc);
+    if (source.ready(doc)) wait.disarm();
+    else wait.arm();
+  };
+  const unwatch = source.watch(doc, settle);
+  settle();
+  return unwatch;
+}
+
+/** Whether a document is a page other than the one `src` names. */
+function leftBehind(doc: Document | null, src: string): boolean {
+  return doc !== null && !isPageAt(doc.URL, doc.baseURI, src);
 }
 
 /**
@@ -662,6 +717,53 @@ function markBeside(
   return true;
 }
 
+/**
+ * Forget the chrome the site's layout took away: no longer chrome, its cue
+ * goes with it rather than staying over the canvas it uncovered. Answers
+ * whether anything went.
+ */
+function dropDetached(
+  drawn: Element[],
+  ancestors: readonly Element[],
+  seen: Set<Element>
+): boolean {
+  const kept = drawn.filter(
+    element =>
+      element.parentElement !== null &&
+      ancestors.includes(element.parentElement)
+  );
+  if (kept.length === drawn.length) return false;
+  for (const element of drawn)
+    if (!kept.includes(element)) seen.delete(element);
+  drawn.splice(0, drawn.length, ...kept);
+  return true;
+}
+
+/**
+ * Mark what is new beside the mount point and its ancestors, adding what
+ * draws to `drawn`. Answers whether anything was added.
+ */
+function markArrivals(
+  mountPoint: HTMLElement,
+  ancestors: readonly Element[],
+  drawn: Element[],
+  seen: Set<Element>,
+  marked: Set<Element>
+): boolean {
+  let added = false;
+  for (const parent of ancestors) {
+    for (const beside of Array.from(parent.children)) {
+      const onThePath = beside === mountPoint || ancestors.includes(beside);
+      if (onThePath || seen.has(beside)) continue;
+      if (markBeside(beside, seen, marked)) {
+        drawn.push(beside);
+        added = true;
+      }
+    }
+  }
+  return added;
+}
+
 /** The mount point's ancestors below the body, and the body itself. */
 function ancestorsUpToBody(
   mountPoint: HTMLElement,
@@ -706,15 +808,9 @@ function useSiteChrome(
     const marked = new Set<Element>();
     const drawn: Element[] = [];
     const mark = (): void => {
-      const before = drawn.length;
-      for (const parent of ancestors) {
-        for (const beside of Array.from(parent.children)) {
-          const onThePath = beside === mountPoint || ancestors.includes(beside);
-          if (onThePath || seen.has(beside)) continue;
-          if (markBeside(beside, seen, marked)) drawn.push(beside);
-        }
-      }
-      if (drawn.length !== before) setChrome([...drawn]);
+      const dropped = dropDetached(drawn, ancestors, seen);
+      const added = markArrivals(mountPoint, ancestors, drawn, seen, marked);
+      if (dropped || added) setChrome([...drawn]);
     };
     mark();
     const Mutations = page.defaultView?.MutationObserver;
