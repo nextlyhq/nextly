@@ -179,12 +179,34 @@ describe("locking and removing", () => {
       });
     };
     const { result } = renderHook(() => useSharedStylesClient());
+    let words_: string | undefined;
     let refusal: unknown;
     await act(async () => {
-      refusal = await result.current.remove(["c-card"]);
+      words_ = await result.current.remove(["c-card"]);
+      refusal = await result.current.removeWithReason?.(["c-card"]);
     });
-    // In its words, and marked as the route's in-use refusal.
+    // `remove` answers words, as it always has; `removeWithReason` marks
+    // the route's in-use refusal.
+    expect(words_).toBe(words);
     expect(refusal).toEqual({ reason: words, inUse: true });
+  });
+
+  it("marks a conflict refusal as saying nothing of use", async () => {
+    writeBehaviour = async () => {
+      throw Object.assign(new Error("Nothing was removed. Card is locked."), {
+        status: 409,
+        code: "CONFLICT",
+      });
+    };
+    const { result } = renderHook(() => useSharedStylesClient());
+    let refusal: unknown;
+    await act(async () => {
+      refusal = await result.current.removeWithReason?.(["c-card"]);
+    });
+    expect(refusal).toEqual({
+      reason: "Nothing was removed. Card is locked.",
+      inUse: false,
+    });
   });
 
   it("answers a refusal in the route's own words, and reads nothing again", async () => {
@@ -194,17 +216,14 @@ describe("locking and removing", () => {
       );
     };
     const { result } = renderHook(() => useSharedStylesClient());
-    let refusal: unknown;
+    let refusal: string | undefined;
     await act(async () => {
       refusal = await result.current.remove(["c-card"]);
     });
 
-    // Any other refusal says nothing of use.
-    expect(refusal).toEqual({
-      reason:
-        "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet.",
-      inUse: false,
-    });
+    expect(refusal).toBe(
+      "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet."
+    );
     expect(refetches).toBe(0);
   });
 });

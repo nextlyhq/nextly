@@ -163,7 +163,7 @@ export function useSharedStylesClient(): SharedStylesAccess {
     [send]
   );
 
-  const remove = useCallback(
+  const removeWithReason = useCallback(
     async (ids: readonly string[]) => {
       const answer = await send(SHARED_STYLE_REMOVE_ROUTE_PATH, { ids });
       if (answer === undefined) return undefined;
@@ -172,8 +172,9 @@ export function useSharedStylesClient(): SharedStylesAccess {
           answer.refused,
           "These shared styles could not be removed."
         ),
-        // The route's in-use refusal names its code; a lock or a count no
-        // longer whole refuses with another, and says nothing of use.
+        // The route's in-use refusal names its code, whichever check found
+        // the use; a lock or a count no longer whole refuses with another,
+        // and says nothing of use.
         inUse: validationIssues(answer.refused).some(
           issue => issue.code === SHARED_STYLE_IN_USE_CODE
         ),
@@ -182,8 +183,14 @@ export function useSharedStylesClient(): SharedStylesAccess {
     [send]
   );
 
+  // The words alone, as `remove` has always answered.
+  const remove = useCallback(
+    async (ids: readonly string[]) => (await removeWithReason(ids))?.reason,
+    [removeWithReason]
+  );
+
   return useMemo(
-    () => ({ usage, uses, lock, remove }),
-    [usage, uses, lock, remove]
+    () => ({ usage, uses, lock, remove, removeWithReason }),
+    [usage, uses, lock, remove, removeWithReason]
   );
 }

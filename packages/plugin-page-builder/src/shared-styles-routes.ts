@@ -454,14 +454,18 @@ function storedRefusals(
 async function usageRefusals(
   removable: readonly { id: string; name: string }[],
   usage: SharedStyleUsageSource
-): Promise<string[]> {
+): Promise<{ reasons: string[]; used: boolean }> {
   const health = await usage.health();
   if (!indexIsWhole(health)) {
-    return [
-      "Some pages are still being counted, so no shared style can be removed yet.",
-    ];
+    return {
+      reasons: [
+        "Some pages are still being counted, so no shared style can be removed yet.",
+      ],
+      used: false,
+    };
   }
   const reasons: string[] = [];
+  let used = false;
   const counted = await usage.documentsUsingEach(
     removable.map(style => style.id),
     health
@@ -471,6 +475,7 @@ async function usageRefusals(
     const found = counted.get(id) ?? { collections: [], complete: false };
     const documents = documentCountOf(found);
     if (documents > 0) {
+      used = true;
       reasons.push(
         `${name} is used on ${documents} ${documents === 1 ? "document" : "documents"}.`
       );
@@ -478,7 +483,31 @@ async function usageRefusals(
       reasons.push(`${name}'s uses could not all be counted.`);
     }
   }
-  return reasons;
+  return { reasons, used };
+}
+
+/**
+ * The refusal when a removal is refused: the in-use refusal, carrying
+ * {@link SHARED_STYLE_IN_USE_CODE}, when any style is used, so the editor
+ * reads every "it is used" alike, whichever check found it; else a conflict.
+ * Either names every reason, so nothing is half removed.
+ */
+function removalRefusal(
+  message: string,
+  used: boolean,
+  classIds: readonly string[]
+): NextlyError {
+  if (used) {
+    return NextlyError.validation({
+      errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
+      logContext: { classIds },
+    });
+  }
+  return NextlyError.conflict({
+    reason: "state",
+    message,
+    logContext: { classIds },
+  });
 }
 
 /**
@@ -547,13 +576,14 @@ export async function removeSharedStyles(
   const classes = await store.read();
   const { reasons, removable } = storedRefusals(ids, classes, configClassIds);
   // Read just before the write, never taken from what the panel showed.
-  reasons.push(...(await usageRefusals(removable, usage)));
+  const counted = await usageRefusals(removable, usage);
+  reasons.push(...counted.reasons);
   if (reasons.length > 0) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message: `Nothing was removed. ${reasons.join(" ")}`,
-      logContext: { classIds: ids },
-    });
+    throw removalRefusal(
+      `Nothing was removed. ${reasons.join(" ")}`,
+      counted.used,
+      ids
+    );
   }
   // Only once the index found nothing: its refusals name every reason
   // cheaply, and this read walks every document the builder opens.
