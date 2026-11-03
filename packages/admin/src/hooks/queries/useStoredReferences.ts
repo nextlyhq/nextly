@@ -306,6 +306,28 @@ function rememberMerge<T extends Doc>(
 }
 
 /**
+ * The merge the editor is handed, if any.
+ *
+ * Reads still apart after every retry drop it, since a save from it would
+ * write it back over the newer document; but not when a read failed. They are
+ * apart then because one could not be made. A read that fails after the
+ * document is on screen leaves the editor in place, edits and all, for the
+ * lock surface to hold read-only; only one that ends the document replaces the
+ * editor with the error.
+ */
+function documentOnScreen<T>(
+  merge: Merge<T> | null,
+  scope: string,
+  reads: { spent: boolean; readFailed: boolean; failure: Error | null }
+): T | undefined {
+  const dropped = reads.spent && !reads.readFailed;
+  if (dropped || merge?.scope !== scope || endsDocument(reads.failure)) {
+    return undefined;
+  }
+  return merge.document;
+}
+
+/**
  * Merges the populated read with the depth-0 read once both have settled on
  * the same version of the document.
  *
@@ -353,21 +375,11 @@ export function useWithStoredReferences<T extends Doc>({
   if (agree && rememberMerge(last, pair, scope, readAt)) retries.reset();
 
   const failure = readError(populated, stored, retries.spent);
-  // Reads still apart after every retry drop the merge, since a save from it
-  // would write it back over the newer document; but not when a read failed.
-  // They are apart then because one could not be made, and the copy on screen
-  // stays, read-only, until a read succeeds.
-  const dropped =
-    retries.spent && populated.error === null && stored.error === null;
-  const merged =
-    !dropped && last.current?.scope === scope
-      ? last.current.document
-      : undefined;
-  // A read that fails after the document is on screen leaves the editor in
-  // place, edits and all, for the lock surface to hold read-only; only a read
-  // that never produced a document, or one that ends it, replaces the editor
-  // with the error.
-  const document = endsDocument(failure) ? undefined : merged;
+  const document = documentOnScreen(last.current, scope, {
+    spent: retries.spent,
+    readFailed: populated.error !== null || stored.error !== null,
+    failure,
+  });
   const error = document === undefined ? failure : null;
   const { refetch: refetchPopulated } = populated;
   const { refetch: refetchStored } = stored;
