@@ -39,6 +39,15 @@ export function adoptPerLanguageStorage(enabled: boolean | undefined): void {
   if (!state.chosen) setPerLanguageStorage(enabled === true);
 }
 
+/**
+ * Forget the choice, as a process that has not booted yet holds none. For tests: the choice is
+ * process-wide, so a test that publishes one puts this back when it is done.
+ */
+export function _resetPerLanguageStorage(): void {
+  state.enabled = false;
+  state.chosen = false;
+}
+
 /** Whether every translatable field is kept per language from the start. Defaults to false. */
 export function perLanguageStorageEnabled(): boolean {
   return state.enabled;

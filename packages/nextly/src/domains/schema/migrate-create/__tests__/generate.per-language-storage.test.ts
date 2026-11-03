@@ -10,7 +10,10 @@ import { join, resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { setPerLanguageStorage } from "../../../i18n/per-language-storage";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 import { generateMigration, type MinimalConfigEntity } from "../generate";
 
 const NOW = new Date("2026-10-30T12:00:00.000Z");
@@ -62,7 +65,7 @@ describe("generateMigration under per-language storage", () => {
     migrationsDir = await mkdtemp(join(tmpdir(), "nextly-per-language-"));
   });
 
-  afterEach(() => setPerLanguageStorage(false));
+  afterEach(() => _resetPerLanguageStorage());
 
   it("gives a collection that is not marked translatable its companion, and leaves its translatable columns to it", async () => {
     setPerLanguageStorage(true);

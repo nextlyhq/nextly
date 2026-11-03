@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  _resetPerLanguageStorage,
   assertPerLanguageStorageUnchanged,
   perLanguageStorageEnabled,
   publishesPerLanguage,
@@ -9,7 +10,7 @@ import {
   storesPerLanguage,
 } from "../per-language-storage";
 
-afterEach(() => setPerLanguageStorage(false));
+afterEach(() => _resetPerLanguageStorage());
 
 /** A process that has not chosen yet: nothing pinned on `globalThis`, and a fresh module. */
 async function freshProcess() {
