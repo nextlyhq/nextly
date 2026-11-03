@@ -153,9 +153,19 @@ export function componentDeleteRewriteService(
     },
     rewrite: async args => {
       const run = await fence().runFor(args.componentId, "delete");
+      if (run === null) {
+        throw NextlyError.notFound({
+          logContext: {
+            reason: "host-rewrite-no-run",
+            componentId: args.componentId,
+          },
+        });
+      }
       // A precondition, so before any host is read: the run's writes are its
-      // starter's, and nobody else's request may make them.
-      if (run !== null && run.startedBy !== runStarterOf(args.caller)) {
+      // starter's, and nobody else's request may make them. The run checked
+      // here is the one walked: its id is handed on, and nothing looks the
+      // component's run up again.
+      if (run.startedBy !== runStarterOf(args.caller)) {
         throw NextlyError.forbidden({
           logContext: {
             reason: "host-rewrite-not-the-starter",
@@ -163,7 +173,7 @@ export function componentDeleteRewriteService(
           },
         });
       }
-      return rewriteAsCaller(install(), fence(), progress(), args);
+      return rewriteAsCaller(install(), fence(), progress(), args, run.id);
     },
   };
 }
@@ -173,7 +183,9 @@ function rewriteAsCaller(
   installed: RewriteInstall,
   fence: ReturnType<typeof fenceStore>,
   progress: ReturnType<typeof progressStore>,
-  args: ComponentDeleteRewriteArgs
+  args: ComponentDeleteRewriteArgs,
+  /** The run whose starter was just checked against the caller. */
+  runId: string
 ): Promise<RewriteReport> {
   const site: RewriteSite = {
     ...installed.site,
@@ -191,8 +203,7 @@ function rewriteAsCaller(
       write: siteHostWriter(site),
     },
     {
-      componentId: args.componentId,
-      purpose: "delete",
+      runId,
       step: componentDeleteStep({
         componentId: args.componentId,
         definitions: (ids, form) =>

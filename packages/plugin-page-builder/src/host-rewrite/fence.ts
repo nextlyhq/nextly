@@ -83,6 +83,8 @@ export interface FenceStore {
   ): Promise<{ readonly opened: boolean; readonly run: DeletionRun }>;
   /** The run for a component and purpose, or `null` when none is open. */
   runFor(componentId: string, purpose: RunPurpose): Promise<DeletionRun | null>;
+  /** One run by its id, or `null` once it is closed. */
+  runById(runId: string): Promise<DeletionRun | null>;
   /**
    * Move a run from one phase to another, with where its final walk stopped.
    * Answers false, changing nothing, when the run is no longer in `from`: a
@@ -165,6 +167,13 @@ export function fenceStore(
 
   return {
     runFor,
+    runById: async runId => {
+      const row = await db
+        .select(componentDeletions)
+        .where(eq(columns().id, runId))
+        .first();
+      return row === null ? null : runOf(row);
+    },
     open: async (componentId, purpose, startedBy) => {
       try {
         const run = await db.transaction(tx =>

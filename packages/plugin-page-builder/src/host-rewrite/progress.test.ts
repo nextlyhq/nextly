@@ -17,10 +17,11 @@ const columns = new Proxy(
 );
 
 /**
- * A database whose transactions keep their inserts only when they finish,
- * and whose run-table update fails when told to.
+ * A database whose transactions keep their writes only when they finish, and
+ * whose run-table update fails when told to. The hosts table holds one row
+ * for `doc` when `held` names its state.
  */
-function database(failPhaseUpdate: boolean) {
+function database(failPhaseUpdate: boolean, held?: string) {
   const committed: Record<string, unknown>[] = [];
   const surface = (staged: Record<string, unknown>[]) => ({
     table: () => columns as never,
@@ -30,14 +31,19 @@ function database(failPhaseUpdate: boolean) {
           table === componentDeletions
             ? [{ id: "run-1", componentId: "card", purpose: "delete" }]
             : [],
+        first: async () =>
+          table === componentDeletionHosts && held !== undefined
+            ? { hostKey: "doc", state: held }
+            : null,
       }),
     }),
-    update: (table: unknown) => ({
+    update: (table: unknown, set: Record<string, unknown>) => ({
       where: async () => {
         if (table === componentDeletions && failPhaseUpdate) {
           throw new Error("the connection dropped");
         }
-        return 0;
+        if (table === componentDeletionHosts) staged.push({ update: set });
+        return 1;
       },
     }),
     insert: async (table: unknown, row: Record<string, unknown>) => {
@@ -80,6 +86,45 @@ describe("re-queueing a document written while fenced", () => {
         hostKey: "doc",
         state: "pending",
       }),
+    ]);
+  });
+});
+
+describe("reopening a finished run's left documents", () => {
+  it("marks nothing pending when the run cannot leave done", async () => {
+    const { db, committed } = database(true, "left");
+
+    await expect(
+      progressStore(db as never, "sqlite").reopenLeft("run-1")
+    ).rejects.toThrow("the connection dropped");
+
+    expect(committed).toEqual([]);
+  });
+
+  it("CONTROL: marks the left documents pending when the run moves too", async () => {
+    const { db, committed } = database(false, "left");
+
+    await expect(
+      progressStore(db as never, "sqlite").reopenLeft("run-1")
+    ).resolves.toBe(true);
+
+    expect(committed).toEqual([{ update: { state: "pending", reason: null } }]);
+  });
+});
+
+describe("recording a document's state", () => {
+  it("updates a row that already holds the state rather than inserting it again", async () => {
+    // A row whose state an update would not change: MySQL counts it as no row.
+    const { db, committed } = database(false, "unchanged");
+
+    await progressStore(db as never, "mysql").record(
+      "run-1",
+      "doc",
+      "unchanged"
+    );
+
+    expect(committed).toEqual([
+      { update: { state: "unchanged", reason: null } },
     ]);
   });
 });

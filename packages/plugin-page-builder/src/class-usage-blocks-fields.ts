@@ -225,11 +225,17 @@ export interface BlocksFieldReach {
  * ones under named groups too.
  */
 export function blocksFieldReach(
-  collection: BlocksFieldsCollection | null | undefined
+  collection: BlocksFieldsCollection | null | undefined,
+  /** How many containers the walk may expand; see {@link MAX_EXPANSIONS}. */
+  maxExpansions: number = MAX_EXPANSIONS
 ): BlocksFieldReach {
   const fields = collection?.fields;
   if (!Array.isArray(fields)) return { fields: [], unreachable: false };
-  return walkDeclarations(fields, collection?.localized === true);
+  return walkDeclarations(
+    fields,
+    collection?.localized === true,
+    maxExpansions
+  );
 }
 
 /**
@@ -238,6 +244,16 @@ export function blocksFieldReach(
  * which a reader treats as a possible use rather than as none.
  */
 const MAX_GROUP_DEPTH = 16;
+
+/**
+ * How many containers one walk expands in all. The depth bound alone does not
+ * bound the work: a named group holding several named groups that each list
+ * it back makes a new path on every branch, so the paths below the depth
+ * bound grow exponentially with the branching. Past this many expansions the
+ * walk stops expanding and reports the rest as unreachable, which a reader
+ * treats as a possible use. Far above what a real configuration declares.
+ */
+const MAX_EXPANSIONS = 10_000;
 
 /** Where a frame of the walk is: the path so far, and whether it is fixed. */
 type WalkMode = "fixed" | "hidden";
@@ -259,7 +275,8 @@ interface WalkFrame {
  */
 function walkDeclarations(
   fields: readonly unknown[],
-  collectionLocalized: boolean
+  collectionLocalized: boolean,
+  maxExpansions: number
 ): BlocksFieldReach {
   let unreachable = false;
   const found: ReachedBlocksField[] = [];
@@ -295,6 +312,7 @@ function walkDeclarations(
   // reached at a fixed path beneath it, and a repeater's children are walked
   // only to NOTICE a blocks field there, never to reach one.
   const stack: WalkFrame[] = [{ fields, index: 0, mode: "fixed", path: [] }];
+  const budget = { left: maxExpansions };
 
   while (stack.length > 0) {
     const frame = stack[stack.length - 1];
@@ -306,7 +324,8 @@ function walkDeclarations(
     frame.index += 1;
 
     const step = stepFor(field, frame, collectionLocalized);
-    if (!takeStep(step, field, frame, { stack, expanded, seen, found })) {
+    const state = { stack, expanded, seen, found, budget };
+    if (!takeStep(step, field, frame, state)) {
       unreachable = true;
     }
   }
@@ -320,6 +339,8 @@ interface WalkState {
   readonly expanded: WeakMap<object, Set<string>>;
   readonly seen: Set<string>;
   readonly found: ReachedBlocksField[];
+  /** The expansions this walk may still make; see {@link MAX_EXPANSIONS}. */
+  readonly budget: { left: number };
 }
 
 /**
@@ -340,6 +361,8 @@ function takeStep(
     // a walk over author-supplied nesting finite, since a group may list
     // itself.
     if (step.frame.path.length > MAX_GROUP_DEPTH) return false;
+    if (state.budget.left <= 0) return false;
+    state.budget.left -= 1;
     descend(state.stack, field as object, step.frame, state.expanded);
     return true;
   }

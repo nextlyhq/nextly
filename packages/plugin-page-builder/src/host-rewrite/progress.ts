@@ -47,6 +47,13 @@ export interface ProgressStore {
    * its converting walk, so it is read again whichever write committed last.
    */
   requeue(componentIds: readonly string[], documentKey: string): Promise<void>;
+  /**
+   * A finished run asked again: mark every document it left as pending and
+   * move it from done back to its converting walk, in one transaction, so a
+   * crash between the two cannot leave a done run with no left documents.
+   * Answers false, changing nothing, when it left none.
+   */
+  reopenLeft(runId: string): Promise<boolean>;
 }
 
 /** The dialect, as `ctx.dialect` names it. */
@@ -78,7 +85,12 @@ async function writeRow(
   const h = handle.table(componentDeletionHosts);
   const where = and(eq(h.deletionId, runId), eq(h.hostKey, documentKey));
   if (where === undefined) return;
-  if ((await handle.update(componentDeletionHosts, set).where(where)) > 0) {
+  // Whether the row exists is read, not inferred from an update's count:
+  // MySQL counts changed rows, so recording the state a row already holds
+  // would read as no row at all.
+  const held = await handle.select(componentDeletionHosts).where(where).first();
+  if (held !== null) {
+    await handle.update(componentDeletionHosts, set).where(where);
     return;
   }
   await handle.insert(componentDeletionHosts, {
@@ -153,5 +165,29 @@ export function progressStore(
         });
       }
     },
+    reopenLeft: runId =>
+      db.transaction(async tx => {
+        const h = tx.table(componentDeletionHosts);
+        const left = and(eq(h.deletionId, runId), eq(h.state, "left"));
+        if (left === undefined) return false;
+        if (
+          (await tx.select(componentDeletionHosts).where(left).first()) === null
+        ) {
+          return false;
+        }
+        // Each statement moves a value (left to pending, done to
+        // converting), so no dialect reads it as matching nothing.
+        await tx
+          .update(componentDeletionHosts, { state: "pending", reason: null })
+          .where(left);
+        const t = tx.table(componentDeletions);
+        const done = and(eq(t.id, runId), eq(t.phase, "done"));
+        if (done !== undefined) {
+          await tx
+            .update(componentDeletions, { phase: "converting", cursor: null })
+            .where(done);
+        }
+        return true;
+      }),
   };
 }

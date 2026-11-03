@@ -31,7 +31,7 @@ import {
   type RewriteReport,
   type StepOutcome,
 } from "./contract";
-import type { DeletionRun, FenceStore, RunPurpose } from "./fence";
+import type { DeletionRun, FenceStore } from "./fence";
 import type { HostState, ProgressStore } from "./progress";
 import { scannedOutcomes } from "./scan";
 import { storedHash } from "./stored-hash";
@@ -117,8 +117,8 @@ export type HostWriter = (write: HostWrite) => Promise<WriteResult>;
 
 /** Everything a run is walked with. */
 export interface RewriteDeps {
-  readonly fence: Pick<FenceStore, "runFor" | "advance">;
-  readonly progress: Pick<ProgressStore, "record" | "all">;
+  readonly fence: Pick<FenceStore, "runById" | "advance">;
+  readonly progress: Pick<ProgressStore, "record" | "all" | "reopenLeft">;
   readonly source: HostSource;
   readonly read: HostReader;
   /**
@@ -131,10 +131,13 @@ export interface RewriteDeps {
 
 /** What one call of {@link rewriteHosts} is asked to do. */
 export interface RewriteArgs {
-  /** The component whose run this is; its run must be open. */
-  readonly componentId: string;
-  /** Which of the component's runs: a `delete` run, or a `strip-retired` one. */
-  readonly purpose: RunPurpose;
+  /**
+   * The run to walk, by its id: the run the caller has already checked it may
+   * walk. Only that run is read again, for its current phase; a run opened in
+   * its place since, under the same component, is a different id and is not
+   * walked.
+   */
+  readonly runId: string;
   readonly step: HostStep;
   /** How many times one host is read again after a concurrent edit. */
   readonly maxAttempts?: number;
@@ -188,13 +191,10 @@ export async function rewriteHosts(
   deps: RewriteDeps,
   args: RewriteArgs
 ): Promise<RewriteReport> {
-  const run = await deps.fence.runFor(args.componentId, args.purpose);
+  const run = await deps.fence.runById(args.runId);
   if (run === null) {
     throw NextlyError.notFound({
-      logContext: {
-        reason: "host-rewrite-no-run",
-        componentId: args.componentId,
-      },
+      logContext: { reason: "host-rewrite-no-run", runId: args.runId },
     });
   }
   const tally: Tally = {
@@ -334,14 +334,7 @@ async function retryLeft(
   deps: RewriteDeps,
   run: DeletionRun
 ): Promise<DeletionRun | null> {
-  const left = (await deps.progress.all(run.id)).filter(
-    row => row.state === "left"
-  );
-  if (left.length === 0) return null;
-  for (const row of left) {
-    await deps.progress.record(run.id, row.documentKey, "pending");
-  }
-  await deps.fence.advance(run.id, "done", "converting", null);
+  if (!(await deps.progress.reopenLeft(run.id))) return null;
   return { ...run, phase: "converting", cursor: null };
 }
 

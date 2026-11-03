@@ -114,7 +114,7 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
 
   const deps: RewriteDeps = {
     fence: {
-      runFor: async () => run,
+      runById: async id => (id === run.id ? run : null),
       advance: async (_id, from: RunPhase, to: RunPhase, cursor) => {
         if (run.phase !== from) return false;
         run = { ...run, phase: to, cursor };
@@ -133,6 +133,14 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
           state,
           reason: reasons.get(documentKey) ?? null,
         })),
+      reopenLeft: async () => {
+        const left = [...progress].filter(([, state]) => state === "left");
+        if (left.length === 0) return false;
+        for (const [key] of left) progress.set(key, "pending");
+        if (run.phase === "done")
+          run = { ...run, phase: "converting", cursor: null };
+        return true;
+      },
     },
     source: {
       async *documents(cursor) {
@@ -193,7 +201,7 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
   };
 }
 
-const args = { componentId: "card", purpose: "delete" as const, step };
+const args = { runId: "run-1", step };
 
 /** Every host's live value, by id. */
 function liveOf(s: ReturnType<typeof site>): Record<string, Value | null> {
@@ -542,5 +550,19 @@ describe("rewriting every host of a component", () => {
     expect(s.writes).toEqual([]);
     expect(s.progress.size).toBe(0);
     expect(s.run().phase).toBe("converting");
+  });
+
+  it("walks only the run it was given, never one opened in its place", async () => {
+    const s = site({ a: { published: { copies: 1 } } });
+    const read: string[] = [];
+    s.hooks.afterRead = id => read.push(id);
+    // The checked run was closed and another opened for the same component.
+    s.setRun({ id: "run-2" });
+
+    await expect(rewriteHosts(s.deps, args)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(read).toEqual([]);
+    expect(s.writes).toEqual([]);
   });
 });

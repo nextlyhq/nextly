@@ -803,5 +803,29 @@ describe.each(getConfiguredTestDialects())(
         })
       );
     });
+
+    it("records a document both walks find unchanged once, in that state", async () => {
+      const { t, svc, cookie } = await boot();
+      const cardId = await card(t);
+      await note(t, "Note", [copyOf("i1", cardId)]);
+      await open(cookie, cardId);
+
+      await rewriteToTheEnd(cookie, cardId);
+
+      // The component's own document holds no copy of itself, so the
+      // converting walk and the final walk both record it unchanged: the second
+      // record writes the state the row already holds.
+      const own = documentKeyOf({
+        kind: "collection",
+        slug: COMPONENTS_SLUG,
+        id: cardId,
+      });
+      const rows = (await svc.progress(cardId)).filter(
+        row => row.documentKey === own
+      );
+      expect(rows).toEqual([
+        { documentKey: own, state: "unchanged", reason: null },
+      ]);
+    });
   }
 );

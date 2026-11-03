@@ -650,4 +650,84 @@ describe("reaching blocks fields through named groups", () => {
       unaddressable: true,
     });
   });
+
+  it("stops a branching cycle of named groups within a fixed budget, reporting it unreachable", () => {
+    // Ten named groups, each listing the root group back: every trip round the
+    // cycle is a new path, so only a total budget bounds the work.
+    const root: { type: string; name: string; fields: unknown[] } = {
+      type: "group",
+      name: "root",
+      fields: [{ type: "blocks", name: "body" }],
+    };
+    for (let branch = 0; branch < 10; branch += 1) {
+      root.fields.push({
+        type: "group",
+        name: `b${String(branch)}`,
+        fields: [root],
+      });
+    }
+
+    const started = Date.now();
+    const reach = blocksFieldReach({ fields: [root] });
+
+    expect(reach.unreachable).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(reach.fields[0]?.path).toEqual(["root", "body"]);
+  });
+
+  it("reports what lies past its expansion budget as unreachable", () => {
+    // Three nested named groups, no cycle: a budget of two expands the first
+    // two only, and the field in the third is reported, not dropped.
+    const reach = blocksFieldReach(
+      {
+        fields: [
+          {
+            type: "group",
+            name: "a",
+            fields: [
+              {
+                type: "group",
+                name: "b",
+                fields: [
+                  {
+                    type: "group",
+                    name: "c",
+                    fields: [{ type: "blocks", name: "body" }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      2
+    );
+
+    expect(reach.fields).toEqual([]);
+    expect(reach.unreachable).toBe(true);
+    // CONTROL: with room, the field is reached.
+    expect(
+      blocksFieldReach({
+        fields: [
+          {
+            type: "group",
+            name: "a",
+            fields: [
+              {
+                type: "group",
+                name: "b",
+                fields: [
+                  {
+                    type: "group",
+                    name: "c",
+                    fields: [{ type: "blocks", name: "body" }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }).fields.map(field => field.path)
+    ).toEqual([["a", "b", "c", "body"]]);
+  });
 });
