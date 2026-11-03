@@ -14,7 +14,8 @@
  *
  * A signed-in caller who holds `read-site-style`, or who may UPDATE something
  * the builder edits: the pages, the components (in the store they live in),
- * any other collection or Single declaring a blocks field the builder opens.
+ * any other collection or live Single declaring a blocks field the builder
+ * opens (a removed code-first Single's leftover registry row does not count).
  * Asked through `ctx.caller.can`, the framework's own answer for a session or
  * an API key, before anything is read. Nobody else: not an anonymous caller,
  * and not one who may only read those documents.
@@ -34,6 +35,7 @@ import { getCachedNextly, NextlyError, respondDoc } from "@nextlyhq/plugin-sdk";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
+import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
   SITE_STYLE_ROUTE_PATH,
   type StoredSiteStyle,
@@ -62,6 +64,8 @@ export interface SiteStyleRouteContext extends PageCollectionsContext {
   readonly caller: {
     can(action: string, resource: string): Promise<boolean>;
   } | null;
+  /** The app's configuration, for which code-first Singles it still declares. */
+  readonly config: { readonly singles?: unknown };
   readonly services: PageCollectionsContext["services"] & {
     readonly singles: {
       list(options: { offset: number; limit: number }): Promise<unknown>;
@@ -88,11 +92,29 @@ function opensInBuilder(record: unknown): boolean {
   return editorBlocksFields(record).length > 0;
 }
 
-/** Every declared Single that holds a blocks field the builder opens, by slug. */
+/**
+ * Whether a registry row is a Single the app has now: built in the admin, or
+ * declared in code and still in configuration. A removed code-first Single's
+ * row outlives it, and so do role grants on its permission, so a former editor
+ * of it must not pass for an editor of something the builder opens. Where the
+ * configuration's Singles cannot be read, no code-first row is taken as live.
+ */
+function isLiveSingle(
+  row: unknown,
+  declared: ReadonlySet<string> | undefined
+): boolean {
+  if (declared === undefined) {
+    return (row as { source?: unknown } | null)?.source !== "code";
+  }
+  return !isOrphanedSingle(row, declared);
+}
+
+/** Every live Single that holds a blocks field the builder opens, by slug. */
 async function singlesTheBuilderOpens(
   ctx: SiteStyleRouteContext
 ): Promise<string[]> {
   const slugs: string[] = [];
+  const declared = declaredSingleSlugs(ctx);
   for (let page = 0; page < SINGLES_PAGES_MAX; page += 1) {
     const listed = await ctx.services.singles.list({
       offset: page * SINGLES_PAGE_SIZE,
@@ -102,7 +124,13 @@ async function singlesTheBuilderOpens(
     if (!Array.isArray(data) || data.length === 0) break;
     for (const row of data) {
       const slug = slugOf(row);
-      if (slug !== undefined && opensInBuilder(row)) slugs.push(slug);
+      if (
+        slug !== undefined &&
+        isLiveSingle(row, declared) &&
+        opensInBuilder(row)
+      ) {
+        slugs.push(slug);
+      }
     }
     const read = page * SINGLES_PAGE_SIZE + data.length;
     if (typeof total !== "number" || read >= total) break;

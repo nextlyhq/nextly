@@ -28,11 +28,21 @@ function context(
     collections?: readonly unknown[];
     singles?: readonly unknown[];
     renamed?: Record<string, string>;
+    /** The Singles configuration declares; every listed one when absent. */
+    declared?: unknown;
   } = {}
 ): SiteStyleRouteContext & { asked: string[] } {
   const asked: string[] = [];
   return {
     asked,
+    config: {
+      singles:
+        "declared" in registry
+          ? registry.declared
+          : (registry.singles ?? []).map(row => ({
+              slug: (row as { slug: string }).slug,
+            })),
+    },
     self: {
       collections: { ...registry.renamed },
       singles: {},
@@ -113,6 +123,60 @@ describe("who may read the site style through the editor's route", () => {
     expect(
       await mayReadSiteStyle(context(["update-homepage"], { singles }), {})
     ).toBe(true);
+  });
+
+  it("refuses the former editor of a code-first Single configuration no longer declares", async () => {
+    // A removed Single's registry row stays readable, and so do the role
+    // grants on its permission; neither is a document the builder opens now.
+    const singles = [
+      { slug: "old-home", source: "code", fields: [blocks("content")] },
+    ];
+    expect(
+      await mayReadSiteStyle(
+        context(["update-old-home"], { singles, declared: [] }),
+        {}
+      )
+    ).toBe(false);
+  });
+
+  it("admits the editor of a code-first Single configuration declares", async () => {
+    const singles = [
+      { slug: "homepage", source: "code", fields: [blocks("content")] },
+    ];
+    expect(
+      await mayReadSiteStyle(
+        context(["update-homepage"], {
+          singles,
+          declared: [{ slug: "homepage" }],
+        }),
+        {}
+      )
+    ).toBe(true);
+  });
+
+  it("admits the editor of a Single built in the admin, which no configuration declares", async () => {
+    const singles = [
+      { slug: "landing", source: "ui", fields: [blocks("content")] },
+    ];
+    expect(
+      await mayReadSiteStyle(
+        context(["update-landing"], { singles, declared: [] }),
+        {}
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a code-first Single when configuration's Singles cannot be read", async () => {
+    // Unable to tell a live Single from a removed one, the gate refuses.
+    const singles = [
+      { slug: "homepage", source: "code", fields: [blocks("content")] },
+    ];
+    expect(
+      await mayReadSiteStyle(
+        context(["update-homepage"], { singles, declared: undefined }),
+        {}
+      )
+    ).toBe(false);
   });
 
   it("refuses an author whose only update is on something the builder does not open", async () => {
