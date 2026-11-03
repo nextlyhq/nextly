@@ -119,6 +119,16 @@ export type PublicSingleResult = Record<string, unknown> | null;
 export interface PublicReader {
   find(query: PublicReadQuery): Promise<PublicReadResult>;
   count(query: PublicCountQuery): Promise<number>;
+}
+
+/**
+ * The public reader with a Single's read beside the lists'. A separate
+ * interface, so a reader written against {@link PublicReader}'s two reads
+ * still is one.
+ *
+ * @experimental
+ */
+export interface PublicSourceReader extends PublicReader {
   /**
    * One Single, published, with the fields the public may read. `null` when
    * there is nothing a visitor may see: no document, one never published, or
@@ -547,11 +557,58 @@ function selectedFrom(
   );
 }
 
+/** The hidden fields of a source, from the module that reads the registry. */
+async function hiddenOf(
+  kind: "collection" | "single",
+  slug: string
+): Promise<ReadonlySet<string>> {
+  const { hiddenFieldPaths } = await import("./declared-fields");
+  return hiddenFieldPaths({ kind, slug });
+}
+
+/**
+ * Refuse a filter or a sort naming a hidden field, before reading: the rows a
+ * filter keeps, and the order a sort puts them in, would reveal the value
+ * every row is stripped of.
+ */
+function assertNotHidden(
+  query: Pick<PublicReadQuery, "filters" | "sort">,
+  hidden: ReadonlySet<string>
+): void {
+  if (hidden.size === 0) return;
+  const named = [
+    ...(query.filters ?? []).map(row => row.field),
+    ...sortKeys(query.sort).map(key => key.replace(/^-/, "")),
+  ];
+  const refused = [...new Set(named.filter(name => hidden.has(name)))].sort();
+  if (refused.length > 0) {
+    refuse(
+      "field-hidden",
+      `A public list cannot filter or sort by ${refused.map(name => `"${name}"`).join(", ")}: the field is hidden, so no row shows it.`,
+      { fields: refused }
+    );
+  }
+}
+
+/** A row or a document without its hidden fields. */
+async function withoutHiddenFields(
+  document: Record<string, unknown>,
+  hidden: ReadonlySet<string>
+): Promise<Record<string, unknown>> {
+  if (hidden.size === 0) return document;
+  const { withoutHidden } = await import("./declared-fields");
+  return withoutHidden(document, hidden);
+}
+
 /** A reader bound to a route, over a Direct API's `find` and `findSingle`.
  *
  * `find` alone is enough for lists, so a page route can hand over the content
  * reader it already holds: a count is a one-row read of ids whose total is the
  * answer, under the same fixed options. A Single's read needs `findSingle`.
+ *
+ * A field declared hidden never comes back, and a list may not filter or sort
+ * on one, by core's sensitive-field rule; the Direct API returns such a field
+ * to any caller its field rules allow.
  *
  * Each read runs as no one: detached from any request being served and from
  * any person the operation around it is made as. A page rendered while an
@@ -563,20 +620,31 @@ function selectedFrom(
 export function createPublicReader(
   nextly: PublicReaderSource,
   binding: PublicReaderBinding = {}
-): PublicReader {
+): PublicSourceReader {
   const read = (args: FindArgs) => readAsVisitor(() => nextly.find(args));
   return Object.freeze({
     async find(query: PublicReadQuery): Promise<PublicReadResult> {
-      const result = await read(toPublicFind(query, binding));
-      return { items: result.items, meta: result.meta };
+      const args = toPublicFind(query, binding);
+      const hidden = await hiddenOf("collection", query.collection);
+      assertNotHidden(query, hidden);
+      const result = await read(args);
+      return {
+        items: await Promise.all(
+          result.items.map(item => withoutHiddenFields(item, hidden))
+        ),
+        meta: result.meta,
+      };
     },
     async count(query: PublicCountQuery): Promise<number> {
       // Only what narrows a count: a sort, a window or a selection would be
       // judged, and could fail, for a read whose rows nobody sees.
       assertCountKeys(query);
-      const result = await read(
-        toPublicFind({ ...query, limit: 1, select: ["id"] }, binding)
+      const args = toPublicFind(
+        { ...query, limit: 1, select: ["id"] },
+        binding
       );
+      assertNotHidden(query, await hiddenOf("collection", query.collection));
+      const result = await read(args);
       return result.meta.total;
     },
     async findSingle(query: PublicSingleQuery): Promise<PublicSingleResult> {
@@ -589,11 +657,16 @@ export function createPublicReader(
           logContext: { reason: "public-read-single-unsupported" },
         });
       }
+      const hidden = await hiddenOf("single", query.slug);
       try {
         const document = await readAsVisitor(() =>
           findSingle.call(nextly, args)
         );
-        return document === null ? null : selectedFrom(document, query.select);
+        if (document === null) return null;
+        return selectedFrom(
+          await withoutHiddenFields(document, hidden),
+          query.select
+        );
       } catch (error) {
         // The Single route's answer: missing, unpublished and refused all
         // read as nothing here, so the result does not tell them apart.

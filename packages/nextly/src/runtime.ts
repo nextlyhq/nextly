@@ -141,6 +141,7 @@ export type {
   PublicReadResult,
   PublicSingleQuery,
   PublicSingleResult,
+  PublicSourceReader,
 } from "./runtime/routing/public-reader";
 
 // What a binding on a published page reads besides a list, `@experimental`
@@ -155,6 +156,7 @@ export {
 export {
   bindingFieldShapes,
   type BindingFieldShape,
+  type BindingFieldShapesOptions,
   type BindingSourceRef,
 } from "./runtime/routing/binding-field-shapes";
 

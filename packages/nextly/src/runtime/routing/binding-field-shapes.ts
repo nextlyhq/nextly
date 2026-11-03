@@ -67,6 +67,22 @@ const REF = z.union([
   z.object({ single: z.string().min(1) }).strict(),
 ]);
 
+/**
+ * What the shapes are for.
+ *
+ * @experimental
+ */
+export interface BindingFieldShapesOptions {
+  /**
+   * The language of the page the shapes are checked for. A field rule that
+   * answers by language is told it, as a read in it would be; absent, the
+   * rules are told every configured language.
+   */
+  locale?: string;
+}
+
+const OPTIONS = z.object({ locale: z.string().min(1).optional() }).strict();
+
 const OPTION = z.union([z.string(), z.object({ value: z.string() })]);
 
 /**
@@ -214,6 +230,9 @@ export async function fieldShapesOf(
  * may read, as the anonymous visitor may read them; `undefined` when the
  * source does not exist or the visitor may read none of it.
  *
+ * The rules are told the language `options.locale` names, or every configured
+ * language, never the one an enclosing operation set.
+ *
  * Judged as no one, as the public reader's reads are: neither the key of an
  * API request a page renders during nor a plugin person the operation around
  * it is made as can widen or narrow the answer.
@@ -221,7 +240,8 @@ export async function fieldShapesOf(
  * @experimental
  */
 export async function bindingFieldShapes(
-  ref: BindingSourceRef
+  ref: BindingSourceRef,
+  options: BindingFieldShapesOptions = {}
 ): Promise<readonly BindingFieldShape[] | undefined> {
   const parsed = REF.safeParse(ref);
   if (!parsed.success) {
@@ -230,14 +250,27 @@ export async function bindingFieldShapes(
       logContext: { reason: "binding-source-invalid" },
     });
   }
+  const asked = OPTIONS.safeParse(options);
+  if (!asked.success) {
+    throw NextlyError.invalidInput({
+      message: "Field shapes take a language and nothing else.",
+      logContext: { reason: "binding-shapes-options-invalid" },
+    });
+  }
   const source =
     "collection" in parsed.data
       ? { kind: "collection" as const, slug: parsed.data.collection }
       : { kind: "single" as const, slug: parsed.data.single };
-  const { visitorFields } = await import("./visitor-fields");
-  return readAsVisitor(async () => {
-    const visible = await visitorFields(source);
-    if (visible === undefined) return undefined;
-    return Object.freeze(await fieldShapesOf(visible.fields, visible.readable));
-  });
+  const { inReadLanguage, visitorFields } = await import("./visitor-fields");
+  // The language is pinned inside the visitor frame, so the gate and every
+  // field rule are told the page's language and nothing the caller set.
+  return readAsVisitor(() =>
+    inReadLanguage(asked.data.locale, async () => {
+      const visible = await visitorFields(source);
+      if (visible === undefined) return undefined;
+      return Object.freeze(
+        await fieldShapesOf(visible.fields, visible.readable)
+      );
+    })
+  );
 }

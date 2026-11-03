@@ -192,6 +192,18 @@ describe("fieldShapesOf", () => {
 });
 
 describe("bindingFieldShapes", () => {
+  it.each([[{ locale: "" }], [{ locale: 5 }], [{ locale: "fr", user: {} }]])(
+    "refuses %j as options, before reading anything",
+    async options => {
+      await expect(
+        bindingFieldShapes(
+          { collection: "posts" },
+          options as unknown as Parameters<typeof bindingFieldShapes>[1]
+        )
+      ).rejects.toThrow(/a language and nothing else/);
+    }
+  );
+
   it.each([
     [{}],
     [{ collection: "" }],

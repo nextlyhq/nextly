@@ -14,6 +14,7 @@ import {
   select,
   text,
 } from "../../../config";
+import { withRuleLanguage } from "../../../auth/access/rule-language";
 import { runAsPrincipal } from "../../../auth/principal-scope";
 import { container } from "../../../di/container";
 import { makePrincipal } from "../../../plugins/principals/principal";
@@ -29,10 +30,11 @@ import type {
 import { nextlySiteSettingsTags } from "../../cache/nextly-tags";
 import { readPublicSiteSettings } from "../../site-settings-read";
 import { bindingFieldShapes } from "../binding-field-shapes";
-import { createPublicReader, type PublicReader } from "../public-reader";
+import { createPublicReader, type PublicSourceReader } from "../public-reader";
 
 const POSTS = "pss_posts";
 const CLOSED = "pss_closed";
+const INTL = "pss_intl";
 const BANNER = "pss_banner";
 const UNPUBLISHED = "pss_unpublished";
 const NEVER_WRITTEN = "pss_never_written";
@@ -56,6 +58,8 @@ const singles = () => [
     fields: [
       text({ name: "headline" }),
       text({ name: "internal", access: { read: () => false } }),
+      // Kept out of the admin, and so out of every public read.
+      text({ name: "adminNote", admin: { hidden: true } }),
     ],
   }),
   defineSingle({
@@ -89,6 +93,8 @@ const collections = () => [
         name: "memberNote",
         access: { read: ({ principal }) => principal !== null },
       }),
+      // Declared hidden, with no rule of its own.
+      text({ name: "adminOnly", admin: { hidden: true } }),
       select({
         name: "kind",
         options: [
@@ -110,7 +116,22 @@ const collections = () => [
         fields: [
           text({ name: "summary" }),
           text({ name: "draftNote", access: { read: () => false } }),
+          text({ name: "adminKey", admin: { hidden: true } }),
         ],
+      }),
+    ],
+  }),
+  // Stored per language, so its rules are told the language a read asks for.
+  defineCollection({
+    slug: INTL,
+    localized: true,
+    access: { read: () => true },
+    fields: [
+      text({ name: "title", localized: true }),
+      // Readable only when the rules are told French.
+      text({
+        name: "frenchNote",
+        access: { read: ({ locale }) => locale === "fr" },
       }),
     ],
   }),
@@ -125,7 +146,7 @@ describe.each(getConfiguredTestDialects())(
   "the public sources a binding reads (%s)",
   dialect => {
     let t: TestNextly;
-    let reader: PublicReader;
+    let reader: PublicSourceReader;
     const spy = new RecordingRevalidator();
 
     beforeAll(async () => {
@@ -137,6 +158,7 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         seedPublic: true,
+        localization: { locales: ["en", "fr"], defaultLocale: "en" },
         collections: collections(),
         singles: singles(),
       });
@@ -145,6 +167,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           headline: "Hello",
           internal: "staff only",
+          adminNote: "admin eyes",
           status: "published",
         },
       });
@@ -152,6 +175,20 @@ describe.each(getConfiguredTestDialects())(
         slug: UNPUBLISHED,
         data: { headline: "Not yet", status: "draft" },
       });
+      for (const [title, adminOnly] of [
+        ["First", "a1"],
+        ["Second", "a2"],
+      ]) {
+        await t.nextly.create({
+          collection: POSTS,
+          data: {
+            title,
+            adminOnly,
+            seo: { summary: "s", adminKey: "k" },
+            status: "published",
+          },
+        });
+      }
       reader = createPublicReader(t.nextly);
     });
 
@@ -169,6 +206,21 @@ describe.each(getConfiguredTestDialects())(
         const single = await reader.findSingle({ slug: BANNER });
         expect(single?.headline).toBe("Hello");
         expect(single).not.toHaveProperty("internal");
+      });
+
+      it("leaves out a field declared hidden, which has no rule", async () => {
+        const trusted = await t.nextly.findSingle({ slug: BANNER });
+        // The control: the hidden field is stored and a read returns it.
+        expect(trusted.adminNote).toBe("admin eyes");
+
+        const single = await reader.findSingle({ slug: BANNER });
+        expect(single?.headline).toBe("Hello");
+        expect(single).not.toHaveProperty("adminNote");
+        const selected = await reader.findSingle({
+          slug: BANNER,
+          select: ["adminNote"],
+        });
+        expect(selected).not.toHaveProperty("adminNote");
       });
 
       it("narrows the document to its id and the fields named", async () => {
@@ -198,6 +250,61 @@ describe.each(getConfiguredTestDialects())(
         await expect(
           t.nextly.findSingle({ slug: NEVER_WRITTEN, createIfMissing: false })
         ).resolves.toBeNull();
+      });
+    });
+
+    describe("find and count", () => {
+      it("leave out a field declared hidden, nested ones too", async () => {
+        const trusted = await t.nextly.find({ collection: POSTS, limit: 10 });
+        // The control: the hidden fields are stored and a read returns them.
+        expect(trusted.items.map(item => item.adminOnly).sort()).toEqual([
+          "a1",
+          "a2",
+        ]);
+        expect(JSON.stringify(trusted.items)).toContain("adminKey");
+
+        const { items } = await reader.find({ collection: POSTS, limit: 10 });
+        expect(items).toHaveLength(2);
+        for (const item of items) {
+          expect(item).not.toHaveProperty("adminOnly");
+          expect(item.seo).toEqual({ summary: "s" });
+        }
+      });
+
+      it("refuse to filter or sort by a field declared hidden", async () => {
+        const refusal = (run: () => Promise<unknown>) =>
+          run().then(
+            () => "",
+            (error: unknown) => String(error)
+          );
+        expect(
+          await refusal(() =>
+            reader.find({
+              collection: POSTS,
+              filters: [{ field: "adminOnly", op: "equals", value: "a1" }],
+            })
+          )
+        ).toContain("adminOnly");
+        expect(
+          await refusal(() =>
+            reader.find({ collection: POSTS, sort: ["-adminOnly"] })
+          )
+        ).toContain("adminOnly");
+        expect(
+          await refusal(() =>
+            reader.count({
+              collection: POSTS,
+              filters: [{ field: "adminOnly", op: "equals", value: "a1" }],
+            })
+          )
+        ).toContain("adminOnly");
+        // The control: the same count on a shown field answers.
+        await expect(
+          reader.count({
+            collection: POSTS,
+            filters: [{ field: "title", op: "equals", value: "First" }],
+          })
+        ).resolves.toBe(1);
       });
     });
 
@@ -273,6 +380,39 @@ describe.each(getConfiguredTestDialects())(
         // rule's answer for a visitor.
         expect(names).toContain("title");
         expect(names).not.toContain("memberNote");
+      });
+
+      it("leaves out the fields declared hidden", async () => {
+        const shapes = await bindingFieldShapes({ collection: POSTS });
+        const names = shapes?.map(shape => shape.name);
+        expect(names).toContain("title");
+        expect(names).not.toContain("adminOnly");
+        const seo = shapes?.find(shape => shape.name === "seo");
+        expect(seo?.fields?.map(shape => shape.name)).not.toContain("adminKey");
+        const single = await bindingFieldShapes({ single: BANNER });
+        expect(single?.map(shape => shape.name)).not.toContain("adminNote");
+      });
+
+      it("tells the rules the language asked for, and never an enclosing one", async () => {
+        const names = async (
+          run: () => ReturnType<typeof bindingFieldShapes>
+        ) => (await run())?.map(shape => shape.name) ?? [];
+        const outside = await names(() =>
+          bindingFieldShapes({ collection: INTL })
+        );
+        const inside = await names(() =>
+          withRuleLanguage({ locale: "fr", locales: ["fr"] }, () =>
+            bindingFieldShapes({ collection: INTL })
+          )
+        );
+        expect(inside).toEqual(outside);
+        expect(outside).not.toContain("frenchNote");
+        // The control: asked for French, the rule allows the field.
+        expect(
+          await names(() =>
+            bindingFieldShapes({ collection: INTL }, { locale: "fr" })
+          )
+        ).toContain("frenchNote");
       });
 
       it("leaves out a Single's hidden field", async () => {
