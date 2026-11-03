@@ -4797,7 +4797,7 @@ fieldset.nx-inspector__fields {
   display: flex;
 }
 
-.nx-shared-styles__filters .nx-vars__seg > button {
+.nx-shared-styles__filter {
   flex: 1 1 0;
   text-align: center;
 }

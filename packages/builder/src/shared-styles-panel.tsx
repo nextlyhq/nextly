@@ -467,6 +467,7 @@ function FilterBar({
             <button
               key={candidate}
               type="button"
+              className="nx-shared-styles__filter"
               aria-pressed={filter === candidate}
               aria-label={
                 count === undefined ? word : `${word} ${String(count)}`
