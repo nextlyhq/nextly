@@ -2629,8 +2629,10 @@ function ControlValue({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   // Read before any branch, as hooks must be: a folded union offers the
-  // variables either of its arms takes.
+  // variables either of its arms takes, and a side of the spacing box has
+  // room for a held variable's name and its clear, not a ◇ as well.
   const fold = React.useContext(FoldedUnion);
+  const compact = React.useContext(CompactSides);
   if (clearOnly) {
     return (
       <RetainedValue
@@ -2689,34 +2691,17 @@ function ControlValue({
    * variable's NAME as a literal, which compiles to nothing.
    */
   if (isTokenRef(stored)) {
-    const identity = stored.$token;
     return (
-      <div className="nx-style-inspector__numeric">
-        <VariableChip
-          leaf={variableLeafOf(control.leaf, fold)}
-          tokens={tokens}
-          identity={identity}
-          label={actionName}
-          labelledBy={labelledBy}
-          onClear={() => {
-            // Removing the variable puts the typed field back in the chip's
-            // place, and the ✕ that held focus is gone: focus goes to that
-            // field once it is drawn, rather than falling to the page.
-            if (onCommit(null) === "refused") return;
-            requestAnimationFrame(() => {
-              document.getElementById(id)?.focus();
-            });
-          }}
-        />
-        <VariableChoice
-          leaf={variableLeafOf(control.leaf, fold)}
-          tokens={tokens}
-          bound
-          current={identity}
-          label={actionName}
-          onPick={picked => onCommit({ $token: picked })}
-        />
-      </div>
+      <HeldVariable
+        id={id}
+        labelledBy={labelledBy}
+        leaf={variableLeafOf(control.leaf, fold)}
+        identity={stored.$token}
+        actionName={actionName}
+        tokens={tokens}
+        compact={compact}
+        onCommit={onCommit}
+      />
     );
   }
   // A value the editing surface below cannot represent. Drawing it anyway is
@@ -2746,6 +2731,68 @@ function ControlValue({
       describedBy={describedBy}
       onCommit={onCommit}
     />
+  );
+}
+
+/**
+ * A field holding a variable: the chip naming it, and the ◇ to choose
+ * another, or, in a side of the spacing box, where there is no room for both,
+ * the chip alone with its name as the way to choose.
+ */
+function HeldVariable({
+  id,
+  labelledBy,
+  leaf,
+  identity,
+  actionName,
+  tokens,
+  compact,
+  onCommit,
+}: {
+  /** The id the typed field takes again once the variable is cleared. */
+  id: string;
+  labelledBy: string;
+  /** The leaf the field's variables are offered for; see `variableLeafOf`. */
+  leaf: StyleLeaf;
+  identity: string;
+  actionName: string;
+  tokens: SiteTokenSet | undefined;
+  compact: boolean;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const pick = (picked: string): CommitOutcome => onCommit({ $token: picked });
+  const clear = (): void => {
+    // Removing the variable puts the typed field back in the chip's place, and
+    // the ✕ that held focus is gone: focus goes to that field once it is
+    // drawn, rather than falling to the page.
+    if (onCommit(null) === "refused") return;
+    requestAnimationFrame(() => {
+      document.getElementById(id)?.focus();
+    });
+  };
+  return (
+    <div className="nx-style-inspector__numeric">
+      <VariableChip
+        // In a side the name itself opens the list.
+        {...(compact ? { onPick: pick } : {})}
+        leaf={leaf}
+        tokens={tokens}
+        identity={identity}
+        label={actionName}
+        labelledBy={labelledBy}
+        onClear={clear}
+      />
+      {compact ? null : (
+        <VariableChoice
+          leaf={leaf}
+          tokens={tokens}
+          bound
+          current={identity}
+          label={actionName}
+          onPick={pick}
+        />
+      )}
+    </div>
   );
 }
 

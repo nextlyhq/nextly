@@ -59,3 +59,29 @@ describe("a hidden ◇ takes no clicks", () => {
     expect(declares(selector, "pointer-events: auto")).toBe(true);
   });
 });
+
+describe("a side of a box", () => {
+  it("draws its ◇ inside the side, never over the label or the side above", () => {
+    const body = bodiesOf(
+      ".nx-style-inspector__side-box .nx-variable-choice"
+    ).join(" ");
+    expect(body).toContain("position: absolute");
+    expect(body).toContain("inset-inline-end:");
+    expect(body).toContain("inset-block-start:");
+    expect(body).not.toContain("inset-block-end: 100%");
+  });
+
+  it("keeps a held variable's clear in the side's own row", () => {
+    const body = bodiesOf(
+      ".nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button"
+    ).join(" ");
+    expect(body).toContain("position: static");
+    expect(body).toContain("opacity: 1");
+  });
+
+  it("lets a held variable's name shrink, so the field keeps the grid", () => {
+    expect(declares(".nx-variable-chip__text", "contain: inline-size")).toBe(
+      true
+    );
+  });
+});

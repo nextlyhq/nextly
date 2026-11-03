@@ -613,3 +613,56 @@ describe("a held variable whose name another shares", () => {
     ).toBeDefined();
   });
 });
+
+describe("a spacing side holding a variable", () => {
+  it("names it, opens the list from the name, and clears it, with no separate ◇", () => {
+    // Drawn as the box only where the element's axes are known.
+    register({ spacing: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: {
+            base: {
+              [BASE_BREAKPOINT]: {
+                padding: { blockStart: { $token: "space.sm" } },
+              },
+            },
+          } as NodeStyles,
+        },
+      ] as BlockNode[],
+    } as BlockDocument);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        tokens={TOKENS}
+        sideOrientation={{ writingMode: "horizontal-tb", direction: "ltr" }}
+      />
+    );
+    const padding = fieldsOf("padding");
+    expect(document.querySelector(".nx-spacing-box")).not.toBeNull();
+    // A side of the box is named by its place on screen.
+    const chip = padding.getByRole("group", { name: "Padding top" });
+    // The name is the way to choose another, as a colour's trigger is.
+    const choose = within(chip).getByRole("button", {
+      name: /^Variables for Padding .+: Sm$/,
+    });
+    // No ◇ beside it: the side has room for the name and its clear alone.
+    const side = chip.closest("[data-side]") as HTMLElement;
+    expect(
+      within(side).queryByRole("button", { name: /^Variables for [^:]+$/ })
+    ).toBeNull();
+    fireEvent.click(choose);
+    fireEvent.click(screen.getByRole("option", { name: "Space 4 1rem" }));
+    expect(written(editor)).toContain('{"$token":"space.4"}');
+    fireEvent.click(
+      within(chip).getByRole("button", { name: /^Clear Padding/ })
+    );
+    expect(editor.applyAll).toHaveBeenCalledTimes(2);
+  });
+});

@@ -2743,6 +2743,38 @@
   white-space: nowrap;
 }
 
+/*
+ * A held variable's name takes the room the row has rather than asking for
+ * its own: sized by its text, a long name widened the control column and
+ * pushed the row's label left of the grid and its buttons past its edge.
+ */
+.nx-variable-chip__text {
+  flex: 1 1 0;
+  contain: inline-size;
+}
+
+/* A held variable's name as the way to choose another, in a narrow side. */
+.nx-style-inspector__token .nx-variable-chip__choose {
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  padding-inline: 0.125rem;
+  overflow: hidden;
+  font-size: inherit;
+  color: var(--nx-foreground);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-style-inspector__token .nx-variable-chip__choose:hover {
+  text-decoration: underline;
+}
+
+.nx-style-inspector__token .nx-variable-chip__choose:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
 .nx-variable-choice__value,
 .nx-variable-chip__value {
   font-size: var(--text-xs);
@@ -6023,10 +6055,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * A side's ◇, over the side rather than under its value, so a box of eight
- * sides does not grow a row for a control most of them are not using.
- * Flush with the side, so a pointer moving up to it stays over the field
- * the whole way and the field's hover holds.
+ * A side's ◇, inside the side at its end rather than beside or above it: a
+ * box of eight sides has no room for a ninth control per row, and above the
+ * side it covered the label or the side above. The side's text makes room
+ * for it while it shows, so neither covers the other.
  */
 .nx-style-inspector__side-box .nx-style-inspector__numeric {
   position: relative;
@@ -6035,10 +6067,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 .nx-style-inspector__side-box .nx-variable-choice {
   position: absolute;
   z-index: 2;
-  inset-block-end: 100%;
-  inset-inline-end: 0;
+  inset-block-start: 0.125rem;
+  inset-inline-end: 0.125rem;
   background: var(--nx-popover);
-  box-shadow: var(--shadow-md);
+}
+
+.nx-style-inspector__side-box
+  .nx-style-inspector__numeric:is(:hover, :focus-within)
+  > input {
+  padding-inline-end: 1.625rem;
 }
 
 /* A side shows a held variable by name only; its value would not fit. */
@@ -6062,6 +6099,32 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 [data-side] .nx-variable-choice[data-state="open"] {
   opacity: 1;
   pointer-events: auto;
+}
+
+/*
+ * A side holding a variable: its name, then its clear, both in the side's own
+ * row and always shown, where a clear drawn over the box below hid it until
+ * hover and covered the box when it showed.
+ */
+.nx-spacing-box .nx-style-inspector__token.nx-variable-chip {
+  gap: 0;
+  padding-inline: 0.125rem 0;
+  font-size: var(--text-xs);
+}
+
+/* The name gets every pixel the side has left beside its clear. */
+.nx-spacing-box .nx-style-inspector__token .nx-variable-chip__choose {
+  padding-inline: 0;
+}
+
+.nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button {
+  position: static;
+  margin: 0;
+  padding: 0;
+  opacity: 1;
+  pointer-events: auto;
+  background: none;
+  box-shadow: none;
 }
 
 /*
@@ -6274,12 +6337,6 @@ label[data-named-above] .nx-style-inspector__field-label-text {
     position: static;
     opacity: 1;
     pointer-events: auto;
-    box-shadow: none;
-  }
-
-  .nx-style-inspector__side-box .nx-variable-choice {
-    position: static;
-    background: none;
     box-shadow: none;
   }
 

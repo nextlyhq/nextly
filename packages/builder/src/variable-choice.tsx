@@ -69,6 +69,12 @@ export interface VariableChoiceProps {
   readonly label: string;
   /** A variable was picked: its identity, to store as `{ $token }`. */
   readonly onPick: (identity: string) => void;
+  /**
+   * The held variable's name, drawn as the trigger in place of the ◇, as a
+   * colour's trigger names its variable. For a field too narrow for both a
+   * name and a ◇: a side of the spacing box.
+   */
+  readonly named?: string;
 }
 
 /** What {@link VariablesMenuItem} is given: the same, less `bound`. */
@@ -95,6 +101,11 @@ export interface VariableChipProps {
    * chip is named by {@link label}; with it, by the words an author sees.
    */
   readonly labelledBy?: string;
+  /**
+   * Makes the variable's name the way to choose another, for a field with no
+   * room for a ◇ beside the chip. Left out, the name is text alone.
+   */
+  readonly onPick?: (identity: string) => void;
 }
 
 /**
@@ -124,6 +135,7 @@ export function VariableChoice({
   current,
   label,
   onPick,
+  named,
 }: VariableChoiceProps): React.JSX.Element | null {
   const offered = useOffered(leaf, tokens);
   const [open, setOpen] = React.useState(false);
@@ -135,19 +147,32 @@ export function VariableChoice({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          ref={trigger}
-          type="button"
-          className="nx-variable-choice"
-          aria-label={`Variables for ${label}`}
-          title="Use a variable"
-          // Kept in view while the field holds a variable, so the way to
-          // choose another is where the author last found it.
-          data-bound={bound ? "" : undefined}
-          data-empty={empty ? "" : undefined}
-        >
-          <Diamond aria-hidden="true" size={14} />
-        </button>
+        {named === undefined ? (
+          <button
+            ref={trigger}
+            type="button"
+            className="nx-variable-choice"
+            aria-label={`Variables for ${label}`}
+            title="Use a variable"
+            // Kept in view while the field holds a variable, so the way to
+            // choose another is where the author last found it.
+            data-bound={bound ? "" : undefined}
+            data-empty={empty ? "" : undefined}
+          >
+            <Diamond aria-hidden="true" size={14} />
+          </button>
+        ) : (
+          <button
+            ref={trigger}
+            type="button"
+            className="nx-variable-chip__choose"
+            // Named as a colour's trigger is: the field, then what it holds.
+            aria-label={`Variables for ${label}: ${named}`}
+            title={named}
+          >
+            {named}
+          </button>
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="end"
@@ -208,7 +233,11 @@ function focusAfterPick(
     return;
   }
   const kept = chain.find(ancestor => ancestor.isConnected);
-  kept?.querySelector<HTMLElement>(".nx-variable-choice")?.focus();
+  kept
+    ?.querySelector<HTMLElement>(
+      ".nx-variable-choice, .nx-variable-chip__choose"
+    )
+    ?.focus();
 }
 
 /**
@@ -369,6 +398,7 @@ export function VariableChip({
   label,
   onClear,
   labelledBy,
+  onPick,
 }: VariableChipProps): React.JSX.Element {
   const mode = useCanvasTokenMode();
   const variable = variableFor(identity, tokens, mode);
@@ -391,7 +421,19 @@ export function VariableChip({
       {/* One line, cut with an ellipsis where the field is narrow, with the
           whole name on hover. */}
       <span className="nx-variable-chip__text" title={name}>
-        <span className="nx-variable-chip__name">{name}</span>
+        {onPick === undefined || offered.length === 0 ? (
+          <span className="nx-variable-chip__name">{name}</span>
+        ) : (
+          <VariableChoice
+            leaf={leaf}
+            tokens={tokens}
+            bound
+            current={identity}
+            label={label}
+            onPick={onPick}
+            named={name}
+          />
+        )}
         {variable === undefined ? null : (
           <>
             {" "}
