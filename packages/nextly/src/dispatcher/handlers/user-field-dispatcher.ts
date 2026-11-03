@@ -69,9 +69,11 @@ function withUserFieldChangeExcluded<T>(
       logger: getLoggerFromDI() ?? consoleLogger,
       label,
       // May create the lock table only in development, as a collection save may. In production
-      // the application's role can hold data rights and no DDL rights, so the save takes the lock
-      // wherever its table exists and never creates it; its `user_ext` change then comes from
-      // `nextly migrate`, as before.
+      // the application's role can hold data rights and no DDL rights, so the save never creates
+      // the lock table: it takes the lock wherever that table exists, and runs its best-effort
+      // `user_ext` DDL (a statement the role may not run is skipped, as before) under it. On a
+      // database that has not run `nextly migrate` since the lock table was added, the table is
+      // absent and that DDL runs unlocked, the residual `withMigrationExcluded` documents.
       issuesDdl: process.env.NODE_ENV === "development",
     },
     async () => {
