@@ -225,7 +225,9 @@ vi.mock("./editor/settings-dialog", () => ({
   },
 }));
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The editor mount asks for the variant-use writer; no case here opens a
   // component, so it is never called.
   usePluginRouteMutation: () => ({

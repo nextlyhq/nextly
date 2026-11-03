@@ -31,6 +31,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
 import {
+  readPluginRoute,
   useSingleDocument,
   useUpdateSingleDocument,
   validationIssues,
@@ -50,6 +51,12 @@ import {
   SITE_BREAKPOINTS_ROUTE_PATH,
   type SiteBreakpointsRequest,
 } from "../library-contract";
+import {
+  SITE_FONTS_CATALOGUE_ROUTE_PATH,
+  SITE_FONTS_ROUTE_PATH,
+  type AddSiteFontRequest,
+  type FontCatalogueRead,
+} from "../site-fonts/contract";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import {
   readSiteStyleRecord,
@@ -441,4 +448,51 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   return { save, saving: mutation.isPending };
+}
+
+/**
+ * Reading the Google Fonts catalogue and adding a family from it, both through
+ * the server: the editor's browser never asks the catalogue's api itself.
+ *
+ * An add is a site save made at once rather than a step of the editor's undo
+ * history; Remove in the Fonts tab is the way back. The style is read again
+ * afterwards, so the canvas and the tab draw the new faces.
+ */
+export function useFontCatalogueClient(): {
+  readonly load: (signal: AbortSignal) => Promise<FontCatalogueRead>;
+  readonly add: (request: AddSiteFontRequest) => Promise<string | undefined>;
+} {
+  const { refetch } = useSingleDocument(SITE_STYLE_SLUG);
+  const load = useCallback(async (signal: AbortSignal) => {
+    const read = await readPluginRoute<FontCatalogueRead>({
+      plugin: PAGE_BUILDER_PLUGIN_NAME,
+      path: SITE_FONTS_CATALOGUE_ROUTE_PATH,
+      signal,
+    });
+    if (read === undefined) throw new Error("The catalogue answered nothing.");
+    return read;
+  }, []);
+  const add = useCallback(
+    async (request: AddSiteFontRequest): Promise<string | undefined> => {
+      try {
+        await writePluginRoute<AddSiteFontRequest>({
+          plugin: PAGE_BUILDER_PLUGIN_NAME,
+          path: SITE_FONTS_ROUTE_PATH,
+          body: request,
+        });
+      } catch (reason) {
+        // The route's own words: which value the family does not offer, or
+        // that the catalogue did not answer.
+        const named = Object.values(issuesFromRejection(reason));
+        if (named.length > 0) return named.join(" ");
+        return reason instanceof Error
+          ? reason.message
+          : "This font could not be added.";
+      }
+      await refetch();
+      return undefined;
+    },
+    [refetch]
+  );
+  return useMemo(() => ({ load, add }), [load, add]);
 }

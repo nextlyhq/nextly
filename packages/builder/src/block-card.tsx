@@ -96,32 +96,46 @@ export function BlockCard({
   return (
     <div className="nx-block-card" data-block-card="">
       <div className="nx-block-card__head">
-        <BlockIconMark icon={icon} size={16} />
-        {renaming && onRename !== undefined ? (
-          <RenameField
-            name={name}
-            onDone={next => {
-              setRenaming(false);
-              if (next !== undefined && next !== name) onRename(next);
-            }}
-          />
-        ) : (
-          <h2
-            className="nx-block-card__title"
-            onDoubleClick={
-              onRename === undefined ? undefined : () => setRenaming(true)
-            }
-          >
-            {name === "" ? (
-              type
-            ) : (
-              <>
-                {name}
-                <span className="nx-block-card__type"> · {type}</span>
-              </>
-            )}
-          </h2>
-        )}
+        {/* The block's mark on a tile, as the design draws it, so the card
+            reads as the block's own header rather than one more row. */}
+        <span className="nx-block-card__icon">
+          <BlockIconMark icon={icon} size={16} />
+        </span>
+        <div className="nx-block-card__text">
+          {renaming && onRename !== undefined ? (
+            <RenameField
+              name={name}
+              onDone={next => {
+                setRenaming(false);
+                if (next !== undefined && next !== name) onRename(next);
+              }}
+            />
+          ) : (
+            <h2
+              className="nx-block-card__title"
+              onDoubleClick={
+                onRename === undefined ? undefined : () => setRenaming(true)
+              }
+            >
+              {name === "" ? (
+                type
+              ) : (
+                <>
+                  {name}
+                  <span className="nx-block-card__type"> · {type}</span>
+                </>
+              )}
+            </h2>
+          )}
+          {/* One line under the name. Cut short on screen, so the whole
+              sentence stays in the element, where a screen reader reads it,
+              and in its title, for a pointer. */}
+          {description === "" ? null : (
+            <p className="nx-block-card__description" title={description}>
+              {description}
+            </p>
+          )}
+        </div>
         <CardMenu
           title={title}
           locked={lock.layers}
@@ -133,9 +147,6 @@ export function BlockCard({
           verbs={verbs}
         />
       </div>
-      {description === "" ? null : (
-        <p className="nx-block-card__description">{description}</p>
-      )}
       <LockLines lock={lock} reasonId={reasonId} />
     </div>
   );
