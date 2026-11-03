@@ -171,7 +171,7 @@ function classEntriesById(raw: unknown): Map<string, Record<string, unknown>> {
 }
 
 /** The name a refusal calls a shared style by: its name, else its slug. */
-function sharedStyleName(entry: Record<string, unknown>): string {
+export function sharedStyleName(entry: Record<string, unknown>): string {
   if (typeof entry.label === "string" && entry.label.trim() !== "") {
     return entry.label;
   }

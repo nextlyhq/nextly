@@ -647,7 +647,9 @@ function withUsableMarks(
   index: number,
   issues: string[]
 ): NamedClass {
-  const record: Readonly<Record<string, unknown>> = entry;
+  // Read as unknown: the type states what a usable entry holds, while a
+  // stored one may hold anything under these keys.
+  const record: { readonly label?: unknown; readonly locked?: unknown } = entry;
   // The name is display text, judged by the engine's one rule for a label, so
   // a shared style's name and a variable's are held to the same line.
   const labelIssue = tokenLabelIssue(record.label);

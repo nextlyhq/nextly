@@ -90,7 +90,7 @@ const DOCUMENT_COLUMN = "entityKey";
  * something is used, and one that splits the count by kind of document, read
  * the same buckets the count adds up, so the three can never disagree.
  */
-interface DocumentsUsing {
+export interface DocumentsUsing {
   /**
    * Each collection holding a referencing document, with that document's id.
    * A `null` id is a row whose document column held nothing: counted, since
@@ -111,7 +111,7 @@ interface DocumentsUsing {
  * The index decides which rows count — it owns whether a marker sits beside its
  * references and how to exclude one — and this decides what the buckets mean.
  */
-async function listDocumentsUsing<TRow extends UsageSubject>(args: {
+export async function listDocumentsUsing<TRow extends UsageSubject>(args: {
   index: UsageIndex<TRow>;
   read: GroupedUsageReader;
   referenceId: string;
@@ -187,11 +187,13 @@ export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
   health: UsageIndexHealth;
 }): Promise<UsageCount> {
   const found = await listDocumentsUsing(args);
-  return {
-    documents: found.collections.reduce(
-      (sum, entry) => sum + entry.documents.length,
-      0
-    ),
-    complete: found.complete,
-  };
+  return { documents: documentCountOf(found), complete: found.complete };
+}
+
+/** How many documents a listing holds: the one count of a listing. */
+export function documentCountOf(found: DocumentsUsing): number {
+  return found.collections.reduce(
+    (sum, entry) => sum + entry.documents.length,
+    0
+  );
 }

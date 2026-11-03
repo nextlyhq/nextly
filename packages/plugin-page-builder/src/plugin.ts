@@ -33,6 +33,7 @@ import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
+import { classUsageIndex } from "./class-usage-reconcile";
 import {
   classUsageDocumentRowReader,
   ownIndexReader,
@@ -92,7 +93,10 @@ import {
 } from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
-import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  type SharedStyleUsageKind,
+} from "./library-contract";
 import {
   componentLibraryRoute,
   DEFAULT_COMPONENT_STORE,
@@ -110,6 +114,10 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import {
+  LOCK_SHARED_STYLES_DECLARATION,
+  sharedStyleRoutes,
+} from "./shared-styles-routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
@@ -121,6 +129,7 @@ import {
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
+import { listDocumentsUsing } from "./usage-count";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -1366,6 +1375,52 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // The Design panel's shared styles: lock and unlock one, how widely
+        // each is used and where, and removing the unused. Usage is read from
+        // the class usage index the installed host maintains.
+        ...sharedStyleRoutes({
+          configClassIds: new Set(
+            (configStyle.classes ?? []).map(entry => entry.id)
+          ),
+          usage: ctx => {
+            const index =
+              ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
+              CLASS_USAGE_INDEX_SLUG;
+            const kinds = new Map<string, SharedStyleUsageKind>([
+              [
+                componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                "components",
+              ],
+              [
+                ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                "patterns",
+              ],
+              [ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
+            ]);
+            return {
+              health: () =>
+                usageHealthService(requireInstalled).read(
+                  classUsageIndex,
+                  index
+                ),
+              documentsUsing: async (classId, health) =>
+                listDocumentsUsing({
+                  index: classUsageIndex,
+                  read: usageCountReader(
+                    await requireInstalled().nextly(),
+                    index
+                  ),
+                  referenceId: classId,
+                  health,
+                }),
+              // Every other collection with a page builder field holds pages,
+              // as the editor's page search reads them.
+              kindOf: collection => kinds.get(collection) ?? "pages",
+            };
+          },
+        }),
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,
@@ -1381,6 +1436,10 @@ export const pageBuilder = (
           description:
             "Change the site's breakpoints, and choose its default Layout.",
         },
+        // Locking a shared style is its own grant, distinct from changing
+        // Design (`update-site-style`), so a lock protects a style from every
+        // Design manager who does not hold it. Asked by the lock route alone.
+        LOCK_SHARED_STYLES_DECLARATION,
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
