@@ -126,9 +126,10 @@ describe("ChromeTooltip", () => {
 });
 
 /**
- * Bounded, as every source scan is: it reads `@nextlyhq/ui` imports by name,
- * and counts a namespace import as importing every part, so a tooltip part
- * reached any other way (a re-export, a dynamic import) walks past it. It catches the
+ * Bounded, as every source scan is: it reads every way a module loads
+ * `@nextlyhq/ui` (an import, a re-export, `export *`, a dynamic `import()`),
+ * and a module that loads it some other way, through a variable holding the
+ * specifier or a second package that re-exports it, walks past it. It catches the
  * import a new control reaches for without thinking, which is the one that
  * stuck over the canvas.
  */
@@ -136,28 +137,59 @@ describe("the builder's chrome tooltips", () => {
   const SRC_DIR = dirname(fileURLToPath(import.meta.url));
   const PARTS = new Set(["Tooltip", "TooltipTrigger", "TooltipContent"]);
 
+  /** A module-export name's text, an identifier or a string literal. */
+  function nameOf(node: AstNode): string {
+    if (node.type === "Identifier") return node.name;
+    return node.type === "Literal" ? String(node.value) : "";
+  }
+
+  /**
+   * Every tooltip part a module reaches from `@nextlyhq/ui`: imported by name,
+   * re-exported by name, or reached wholesale by a namespace import, an
+   * `export *` or a dynamic `import()`, which a scan by name cannot follow and
+   * so counts as reaching them all.
+   */
   function partsImported(text: string, file: string): string[] {
     const found: string[] = [];
     walk(parseSource(text, file).program, (node: AstNode) => {
+      if (node.type === "ImportExpression") {
+        if (
+          node.source.type === "Literal" &&
+          node.source.value === "@nextlyhq/ui"
+        ) {
+          found.push("import()");
+        }
+        return;
+      }
+      if (node.type === "ExportAllDeclaration") {
+        if (node.source.value === "@nextlyhq/ui") found.push("export *");
+        return;
+      }
+      if (node.type === "ExportNamedDeclaration") {
+        if (node.source?.value !== "@nextlyhq/ui") return;
+        for (const specifier of node.specifiers) {
+          if (PARTS.has(nameOf(specifier.local))) {
+            found.push(nameOf(specifier.local));
+          }
+        }
+        return;
+      }
       if (
         node.type !== "ImportDeclaration" ||
         node.source.value !== "@nextlyhq/ui"
       ) {
         return;
       }
-      for (const specifier of node.specifiers) {
-        // A namespace import reaches every part by property, which a scan by
-        // name cannot follow, so it counts as importing them all.
+      for (const specifier of node.specifiers ?? []) {
         if (specifier.type === "ImportNamespaceSpecifier") {
           found.push("* (namespace)");
           continue;
         }
         if (
           specifier.type === "ImportSpecifier" &&
-          specifier.imported.type === "Identifier" &&
-          PARTS.has(specifier.imported.name)
+          PARTS.has(nameOf(specifier.imported))
         ) {
-          found.push(specifier.imported.name);
+          found.push(nameOf(specifier.imported));
         }
       }
     });
