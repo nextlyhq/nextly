@@ -33,7 +33,7 @@
  *
  * @module exposure-planners
  */
-import type { PropSchema } from "./block";
+import { optionLabel, type PropSchema } from "./block";
 import { editableComponent, editVerdict } from "./component-edit";
 import { nodeLocks } from "./content-only-exposures";
 import type {
@@ -502,7 +502,7 @@ function pointAtProp(
 
   const pointer = { nodeId: target.nodeId, propPath: target.propPath };
   if (type !== "select") return { ...pointer, type };
-  const options = selectOptions(schema.options);
+  const options = selectOptions(schema);
   if (options.length === 0) return { problem: "not-exposable" };
   return { ...pointer, type, options };
 }
@@ -520,15 +520,18 @@ function declaredProp(
  * A select prop's choices, in the shape an exposure stores.
  *
  * A block declares each as a bare string or as `{ value, label }`; a bare
- * string is its own label. Anything else is skipped, since an exposure offers
- * only choices the inspector can draw.
+ * string is labelled as the block's inspector labels it, by its
+ * `optionLabels` entry or as itself, so a placement offers the same words.
+ * Anything else is skipped, since an exposure offers only choices the
+ * inspector can draw.
  */
-function selectOptions(declared: unknown): { value: string; label: string }[] {
+function selectOptions(schema: PropSchema): { value: string; label: string }[] {
+  const declared = schema.options;
   if (!Array.isArray(declared)) return [];
   const options: { value: string; label: string }[] = [];
   for (const option of declared.slice(0, MAX_ENVELOPE_ENTRIES)) {
     if (typeof option === "string") {
-      options.push({ value: option, label: option });
+      options.push({ value: option, label: optionLabel(schema, option) });
     } else if (
       isPlainRecord(option) &&
       typeof option.value === "string" &&

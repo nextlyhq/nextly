@@ -8,8 +8,8 @@
  *
  * ## Styles are made from a block
  *
- * There is no "+" here. A shared style is made from a block's own look, so
- * the empty tab says where they come from.
+ * There is no "+" here. A shared style is made from a block's own look, with
+ * "Save as shared style…" on the block, so the empty tab says that.
  *
  * ## Counts are read a page of rows at a time
  *
@@ -36,15 +36,13 @@ import {
   PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@nextlyhq/ui";
 import { Lock, Moon, Search } from "lucide-react";
 import * as React from "react";
 
 import { useSurvivingReport } from "./builder-notices";
+import { ChromeTooltip } from "./chrome-tooltip";
 import { EDITOR_WORDS } from "./editor-words";
 import type { TokenMode } from "./font-library";
 import {
@@ -722,7 +720,7 @@ function StyleList({
   if (rows.length === 0) {
     return (
       <p className="nx-vars__empty">
-        {`${EDITOR_WORDS.sharedStyles} you make from a block show here.`}
+        {`No ${SHARED_STYLES_WORD} yet. Select a block and choose Save as shared style…`}
       </p>
     );
   }
@@ -1150,12 +1148,11 @@ function DarkModeTip({
   if (!shown) return children;
   return (
     <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>{children}</TooltipTrigger>
-        <TooltipContent side="right">
-          {SHARED_STYLE_DARK_UNREADABLE}
-        </TooltipContent>
-      </Tooltip>
+      {/* The editor's own tooltip, which closes as the pointer moves onto the
+          canvas; to the right of the row, as before. */}
+      <ChromeTooltip side="right" content={SHARED_STYLE_DARK_UNREADABLE}>
+        {children}
+      </ChromeTooltip>
     </TooltipProvider>
   );
 }

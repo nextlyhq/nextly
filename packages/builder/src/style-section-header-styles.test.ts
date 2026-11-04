@@ -118,12 +118,61 @@ describe("a jump to another tier's value", () => {
   });
 });
 
+describe("a length field's unit", () => {
+  it("is a small suffix inside the field, the two one bordered control", () => {
+    const box = ruleBody(
+      ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit)"
+    );
+    expect(box).toContain("border: 1px solid var(--nx-input)");
+    expect(box).toContain("background: var(--nx-background)");
+    // The field inside gives its own border up to the box.
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child"
+      )
+    ).toContain("border: 0");
+    const unit = ruleBody(
+      ".nx-style-inspector__numeric .nx-style-inspector__unit"
+    );
+    expect(unit).toContain("border: 0");
+    expect(unit).toContain("color: var(--nx-muted-foreground)");
+    expect(unit).toContain("font-size: var(--text-xs)");
+  });
+
+  it("draws a refusal's border on the whole control", () => {
+    // The field gave its border up to the box, so the box shows the refusal.
+    expect(
+      ruleBody(
+        '.nx-style-inspector__numeric:has(> .nx-style-inspector__unit):has( [aria-invalid="true"] )'
+      )
+    ).toContain("border-color: var(--nx-destructive)");
+  });
+
+  it("keeps four characters of the number in view beside the unit", () => {
+    // A narrow control column used to cut "-0.035" to "-0.03" beside the menu.
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child"
+      )
+    ).toContain("min-width: calc(4ch + 1.5rem)");
+  });
+
+  it("draws the focus ring on the whole control, the field's own given up", () => {
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit):focus-within"
+      )
+    ).toContain("outline: 2px solid var(--nx-ring)");
+  });
+});
+
 describe("the Font control in a style row", () => {
   it("is as tall as the lists and fields beside it", () => {
-    // The shared list trigger and text field are 40px (2.5rem); the font
-    // picker was 28px, the one short control in Typography.
+    // The shared list trigger and text field take the control-height token,
+    // the density's 28px in the inspector; the picker takes the same token, so
+    // it is never the one control of another height in Typography.
     expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
-      "height: 2.5rem"
+      "height: var(--nx-control-height)"
     );
   });
 });
@@ -461,5 +510,169 @@ describe("the Content tab's Advanced", () => {
         ".nx-inspector__advanced[open] > summary > .nx-inspector__advanced-chevron"
       )
     ).toContain("rotate: 90deg");
+  });
+});
+
+describe("a section opening and closing", () => {
+  it("eases its height and opacity out over 150ms", () => {
+    // The Style tab's sections only: a plugin's own inspector in the Content
+    // tab may use the shared accordion and keeps its own motion.
+    // The shared accordion's 300ms in-out curve read as slow in a panel opened
+    // and closed all day, and its height alone made the fields pop in.
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("animation: nx-section-open 150ms ease-out");
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state="closed"]'
+      )
+    ).toContain("animation: nx-section-close 150ms ease-out");
+    expect(FLAT).toContain(
+      "@keyframes nx-section-open { from { height: 0; opacity: 0; overflow: hidden; } to { height: var(--radix-accordion-content-height); opacity: 1; overflow: hidden; } }"
+    );
+    expect(FLAT).toContain(
+      "@keyframes nx-section-close { from { height: var(--radix-accordion-content-height); opacity: 1; overflow: hidden; } to { height: 0; opacity: 0; overflow: hidden; } }"
+    );
+  });
+
+  it("clips its fields while it moves, though an open section shows its overflow", () => {
+    // An open section is overflow-visible for a field's focus tooltip; while
+    // opening, that drew the fields over the headings below. The keyframes
+    // hold it clipped for exactly the animation, so the open rule applies after.
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("overflow: visible");
+  });
+
+  it("does not move at all for an author who asks for less motion", () => {
+    // As weighty as the open and closed rules, and after them, so it wins:
+    // a lighter selector lost to them and the section still moved.
+    expect(FLAT).toContain(
+      '@media (prefers-reduced-motion: reduce) { .nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state] { animation: none; } .nx-style-inspector .nx-style-inspector__section-trigger > svg { transition: none; } }'
+    );
+  });
+});
+
+describe("the inspector at the editor's density", () => {
+  it("sizes every control to the density's height and its text to 12px", () => {
+    // The shared controls size from these tokens, so pointing them at the
+    // density's one height reaches every field, select and button at once.
+    // On both roots: a host may draw the Style panel on its own, with no
+    // inspector around it.
+    const root = ruleBody(":is(.nx-inspector, .nx-style-inspector)");
+    expect(root).toContain(
+      "--nx-control-height: var(--nx-builder-control-height)"
+    );
+    expect(root).toContain(
+      "--nx-control-height-sm: var(--nx-builder-control-height)"
+    );
+    expect(root).toContain("font-size: var(--nx-builder-font-size)");
+    expect(root).toContain("line-height: var(--nx-builder-line-height)");
+    expect(
+      ruleBody(
+        ':is(.nx-inspector, .nx-style-inspector) :is(input, textarea, button, label, [data-slot="select-trigger"])'
+      )
+    ).toContain("font-size: var(--nx-builder-font-size)");
+  });
+
+  it("titles a style section at 12px semibold", () => {
+    const title = ruleBody(".nx-style-inspector__section-label");
+    expect(title).toContain("font-size: var(--nx-builder-title-size)");
+    expect(title).toContain("font-weight: var(--nx-builder-title-weight)");
+  });
+
+  it("sizes the controls that set their own size to the density too", () => {
+    // A row's name that is not a <label>, the Advanced toggle and the font
+    // picker each kept their own size beside the 28px, 12px rows.
+    expect(ruleBody(".nx-inspector__field-name")).toContain(
+      "font-size: var(--nx-builder-font-size)"
+    );
+    const advanced = ruleBody(".nx-inspector__advanced > summary");
+    expect(advanced).toContain("font-size: var(--nx-builder-title-size)");
+    expect(advanced).toContain("font-weight: var(--nx-builder-title-weight)");
+    expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
+      "height: var(--nx-control-height)"
+    );
+  });
+
+  it("keeps a field's text inside its 28px, and every control at that height", () => {
+    // The shared input's 10px vertical padding left about 6px for a 16px line
+    // at 28px; a placement row kept a 40px floor; a segmented button came out
+    // at 26px from its own padding.
+    const input = ruleBody(
+      ':is(.nx-inspector, .nx-style-inspector) input[data-slot="input"]'
+    );
+    expect(input).toContain("padding-block: 0");
+    expect(input).toContain("line-height: var(--nx-builder-line-height)");
+    // A placement row's name cell takes the control height: pinned in
+    // instance-inspector-styles.test.ts with the row's grid.
+    const segment = ruleBody(".nx-style-inspector__toggle > button");
+    expect(segment).toContain("height: var(--nx-control-height)");
+    expect(segment).toContain("padding: 0 0.5rem");
+  });
+
+  it("sets notes at the density's text size and rows its gap apart", () => {
+    expect(ruleBody(".nx-inspector__note")).toContain(
+      "font-size: var(--nx-builder-font-size)"
+    );
+    expect(ruleBody(".nx-inspector__fields")).toContain(
+      "gap: var(--nx-builder-row-gap)"
+    );
+  });
+});
+
+describe("a rich-text field in the Content tab", () => {
+  it("is drawn as a field at least the control's height", () => {
+    // An unstyled element is as tall as its one 16px line, or nothing when
+    // empty: under the 24px a target needs, which axe refused.
+    const field = ruleBody(".nx-inspector__rich-text");
+    expect(field).toContain("min-height: var(--nx-control-height)");
+    expect(field).toContain("border: 1px solid var(--nx-input)");
+    expect(field).toContain("cursor: text");
+    expect(ruleBody(".nx-inspector__rich-text:focus-visible")).toContain(
+      "outline: 2px solid var(--nx-ring)"
+    );
+  });
+});
+
+describe("the inspector's Content and Style tabs", () => {
+  it("are underlined tabs, set at the start of the panel, over one divider", () => {
+    // Tabs, not a segmented control: Content and Style are two views of one
+    // block, not a choice of value, and the choices beside them are drawn
+    // differently on purpose.
+    const list = ruleBody(".nx-inspector__tablist");
+    expect(list).toContain("justify-content: flex-start");
+    expect(list).toContain("height: var(--nx-builder-control-height)");
+    // The builder's border token, which more contrast promotes.
+    expect(list).toContain(
+      "border-block-end: 1px solid var(--nx-builder-border)"
+    );
+    expect(list).toContain("background: transparent");
+    const tab = ruleBody(".nx-inspector__tab");
+    expect(tab).toContain("flex: none");
+    expect(tab).toContain("font-size: var(--nx-builder-font-size)");
+    expect(tab).toContain("font-weight: 600");
+    expect(tab).toContain("border-block-end: 2px solid transparent");
+    expect(tab).toContain("color: var(--nx-muted-foreground)");
+    const active = ruleBody('.nx-inspector__tab[data-state="active"]');
+    expect(active).toContain(
+      "color: var(--nx-builder-text, var(--nx-foreground))"
+    );
+    expect(active).toContain("border-block-end-color: var(--nx-foreground)");
+    expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
+      "outline: 2px solid var(--nx-ring)"
+    );
+  });
+
+  it("keeps the open tab's line in forced colours", () => {
+    // Forced colours replace the palette; the line is named in system colours
+    // so the open tab stays marked.
+    expect(FLAT).toContain(
+      '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"] { border-block-end-color: CanvasText; } }'
+    );
   });
 });

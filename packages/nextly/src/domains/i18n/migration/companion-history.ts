@@ -199,6 +199,7 @@ const COMPANION_EFFECT: Record<
   "create-only": addColumns,
   enable: addColumns,
   joins: addColumns,
+  adds: addColumns,
   disable: columns => {
     columns.clear();
     return "dropped";

@@ -55,6 +55,7 @@ import {
 import {
   idChunks,
   scanLayoutReferences,
+  stoppedAtBudget,
   type PageReference,
   type ReferenceScan,
 } from "./layout-references";
@@ -77,7 +78,9 @@ export type SettleOutcome =
   /** A promotion raced an unpublish: the default repair puts the default right. */
   | "left-to-repair"
   /** Another run restored it, or the default moved on meanwhile. */
-  | "moved-on";
+  | "moved-on"
+  /** The scan after the write could not read a page: left to the sweep. */
+  | "unchecked";
 
 /** What the check after the write needs beyond a restore. */
 export type SettleDeps = RestoreDeps & {
@@ -85,6 +88,8 @@ export type SettleDeps = RestoreDeps & {
     Pick<DefaultLayoutDirectApi, "find" | "findByID">;
   /** The RESOLVED pages slug. */
   readonly pagesSlug: string;
+  /** The scans' page-read budget; the default is the scan's own. */
+  readonly budget?: number;
 };
 
 /**
@@ -99,10 +104,8 @@ export type SettleDeps = RestoreDeps & {
 export async function undoUnpublishIfPagesNameIt(
   deps: Pick<
     SettleDeps,
-    "nextly" | "slugs" | "pagesSlug" | "store" | "warn"
-  > & {
-    readonly budget?: number;
-  },
+    "nextly" | "slugs" | "pagesSlug" | "store" | "warn" | "budget"
+  >,
   layoutId: string,
   token: string
 ): Promise<ReferenceScan | null> {
@@ -126,37 +129,70 @@ export async function undoUnpublishIfPagesNameIt(
 }
 
 /**
+ * Clear `layoutId` from one page, answering whether it did. A page that can't
+ * be read or written is logged and left, so it does not stop the others being
+ * cleared; the page's own after-write look, or the site default it draws,
+ * covers it.
+ */
+async function clearOne(
+  deps: SettleDeps,
+  pageId: string,
+  layoutId: string
+): Promise<boolean> {
+  try {
+    return await clearPageReference(
+      deps.nextly,
+      deps.pagesSlug,
+      pageId,
+      layoutId
+    );
+  } catch (error) {
+    deps.warn(
+      "[page-builder] a page a Layout removal left on that Layout could not be cleared",
+      {
+        pageId,
+        layoutId,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+    return false;
+  }
+}
+
+/**
  * Clear the Layout from every page a write in flight left on it: the scan
  * once more, after the removal's own write, clearing each unpublished page and
  * each working draft that names it (`clearPageReference`). A live row is left,
  * since no write changes it without publishing its draft. Never throws: a page
  * that cannot be cleared is logged, and the page's own after-write look, or the
  * site default it draws, covers it.
+ *
+ * Answers the pages whose live row names the Layout, and whether the check
+ * is done: a scan that did not read every page (a page still there that could
+ * not be read, or a scan that failed) leaves the removal for the sweep to try
+ * again. A scan that stopped at its budget is done, logged, since every retry
+ * would stop at the same page; the scan before the write read every page, and
+ * a page past the budget left on the Layout draws the site default in its
+ * place.
  */
 async function clearPagesLeftOnIt(
   deps: SettleDeps,
   removal: LayoutRemoval
-): Promise<PageReference[]> {
+): Promise<{ live: PageReference[]; done: boolean }> {
   const live: PageReference[] = [];
   try {
     const scan = await scanLayoutReferences({
       nextly: deps.nextly,
       pages: deps.pagesSlug,
       layoutId: removal.layoutId,
+      ...(deps.budget === undefined ? {} : { budget: deps.budget }),
     });
     for (const reference of scan.references) {
       if (reference.place === "live") {
         live.push(reference);
         continue;
       }
-      if (
-        await clearPageReference(
-          deps.nextly,
-          deps.pagesSlug,
-          reference.id,
-          removal.layoutId
-        )
-      ) {
+      if (await clearOne(deps, reference.id, removal.layoutId)) {
         deps.warn(
           "[page-builder] a page write in flight was cleared to the site default because its Layout is being removed",
           {
@@ -168,16 +204,30 @@ async function clearPagesLeftOnIt(
         );
       }
     }
+    if (stoppedAtBudget(scan)) {
+      deps.warn(
+        "[page-builder] the check after a Layout removal stopped at its page-read budget; pages past it were not checked, and one left on the Layout draws the site default in its place",
+        { layoutId: removal.layoutId }
+      );
+      return { live, done: true };
+    }
+    if (!scan.complete) {
+      deps.warn(
+        "[page-builder] the check after a Layout removal could not read every page; the removal is kept and the sweep will try again",
+        { layoutId: removal.layoutId, unread: [...scan.unread] }
+      );
+    }
+    return { live, done: scan.complete };
   } catch (error) {
     deps.warn(
-      "[page-builder] the pages a Layout removal left could not all be checked",
+      "[page-builder] the pages a Layout removal left could not all be checked; the removal is kept and the sweep will try again",
       {
         layoutId: removal.layoutId,
         error: error instanceof Error ? error.message : String(error),
       }
     );
+    return { live, done: false };
   }
-  return live;
 }
 
 /**
@@ -195,8 +245,11 @@ export async function settleRemoval(
   deps: SettleDeps,
   removal: LayoutRemoval
 ): Promise<SettledRemoval> {
-  const live = await clearPagesLeftOnIt(deps, removal);
-  return { outcome: await settleDefault(deps, removal), live };
+  const cleared = await clearPagesLeftOnIt(deps, removal);
+  // Not settled while a page went unread: the row and its copy stay, and the
+  // sweep runs this check again.
+  if (!cleared.done) return { outcome: "unchecked", live: cleared.live };
+  return { outcome: await settleDefault(deps, removal), live: cleared.live };
 }
 
 /** The default half of the check after the write. */
@@ -291,7 +344,12 @@ async function sweepOne(
       await settleRemoval(deps, removal);
       return;
     case "restoring":
-      if (await resumeRestore(deps, removal)) return;
+      // A row that records its Layout is finished, or settled when that
+      // Layout was deleted since, by the resume itself.
+      if (removal.copy?.restoredAs !== undefined) {
+        await resumeRestore(deps, removal);
+        return;
+      }
       deps.warn(
         "[page-builder] a Layout's restore stopped part-way; check the Layouts list for a restored copy",
         { layoutId: removal.layoutId }

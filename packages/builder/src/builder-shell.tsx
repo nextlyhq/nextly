@@ -34,6 +34,7 @@ import {
 } from "./editor-rail";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
+import { HoveredBlockProvider } from "./hovered-block";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
   BUILDER_CHROME_CLASS,
@@ -915,8 +916,11 @@ function RailAndDialogs({
 > & {
   active: boolean;
   renderSettings: BuilderShellProps["renderSettings"];
-  panelKeys: PanelKeysSetting;
+  panelKeys: Pick<PanelKeysSetting, "on" | "onChange">;
 }): React.JSX.Element {
+  // This editor's own panel-key layer, so Help can find its keys among a
+  // second editor's on the same page.
+  const keysLayer = `${PANEL_KEYS_LAYER} ${React.useId()}`;
   const help = useRailDialog(active);
   const settings = useRailDialog(active);
   useSettingsRequest(
@@ -929,13 +933,19 @@ function RailAndDialogs({
       <EditorRail
         {...rail}
         keysOn={panelKeys.on}
+        keysLayer={keysLayer}
         {...railDialogItems(help, settings, renderSettings)}
       />
       <HelpDialog
         open={help.open}
         onOpenChange={help.setOpen}
         returnFocus={() => help.opener.current}
-        panelKeys={panelKeys}
+        panelKeys={{
+          ...panelKeys,
+          shortcuts: panelKeyShortcuts(rail.isAvailable, keysLayer),
+          layer: keysLayer,
+          family: PANEL_KEYS_LAYER,
+        }}
       />
       <HostSettings render={renderSettings} dialog={settings} />
     </>
@@ -1661,8 +1671,6 @@ function ShellRegions({
             // was a switch reads.
             on: preferences.panelKeys !== false,
             onChange: on => update(current => ({ ...current, panelKeys: on })),
-            shortcuts: panelKeyShortcuts(isAvailable),
-            layer: PANEL_KEYS_LAYER,
           }}
         />
 
@@ -2034,7 +2042,7 @@ export function BuilderShell({
   const notices = supplied ?? own;
 
   return (
-    <ShortcutProvider>
+    <ShellProviders>
       {/* The same manager, listening in the canvas's frame as well, so a key
           pressed with focus inside the page reaches every binding above. */}
       <CanvasFrameShortcuts />
@@ -2256,6 +2264,23 @@ export function BuilderShell({
           </div>
         </div>
       </TooltipProvider>
+    </ShellProviders>
+  );
+}
+
+/**
+ * What every shell provides to everything inside it: the shortcut manager,
+ * and one hovered block for its panels and its canvas, so a Layers row the
+ * pointer is over outlines its block on the page.
+ */
+function ShellProviders({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <ShortcutProvider>
+      <HoveredBlockProvider>{children}</HoveredBlockProvider>
     </ShortcutProvider>
   );
 }

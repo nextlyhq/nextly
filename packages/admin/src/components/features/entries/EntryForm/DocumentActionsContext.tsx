@@ -34,6 +34,7 @@ import {
   type EntryFormProviderProps,
 } from "./EntryFormProvider";
 import type { RecoveryPointState, StoredDocument } from "./SaveStateIndicator";
+import { useReportUnsavedWork } from "./UnsavedWorkContext";
 import {
   useDocumentActionBindings,
   type DocumentActionBindings,
@@ -93,6 +94,13 @@ export function DocumentActionsHost({
   children: ReactNode;
 }): JSX.Element {
   const documentActions = useDocumentActionBindings(input);
+  /*
+   * A write the document depends on, still on its way, is unsaved work: the
+   * page would be left with it unfinished. Reported here, where the writes
+   * are tracked for as long as the form lives, so the leave guard asks even
+   * after the surface that started one (the page builder) has closed.
+   */
+  useReportUnsavedWork("tracked-writes", documentActions.writesPending);
   const { entry } = input;
   const stored = useMemo(() => storedStateOf(entry), [entry]);
   return (

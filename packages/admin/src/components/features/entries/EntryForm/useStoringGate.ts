@@ -41,6 +41,8 @@ export interface StoringGate {
   lastStore: LastStore;
   /** Whether a storing action is readying the work or a tracked write is in flight. */
   inFlight: boolean;
+  /** Whether a tracked write is still on its way. */
+  writesPending: boolean;
   /** The label and message of a tracked write whose latest attempt failed. */
   trackedFailure: { label: string; message: string } | null;
 }
@@ -241,6 +243,7 @@ export function useStoringGate(scope: string): StoringGate {
     storing,
     lastStore,
     inFlight: readying > 0 || writes.current.pending.size > 0,
+    writesPending: writes.current.pending.size > 0,
     trackedFailure: firstFailure(writes.current.failed),
   };
 }

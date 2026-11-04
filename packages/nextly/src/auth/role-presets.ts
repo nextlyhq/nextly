@@ -26,6 +26,12 @@ export interface PresetContext {
   isSystem: boolean;
   /** True when a plugin declared the permission. */
   isPlugin: boolean;
+  /**
+   * True when a workflow seeded the permission: one of its steps' own actions, or
+   * `publish-without-review`. No preset grants one: who may approve, or publish past review, is
+   * each project's decision, made by granting it to a role.
+   */
+  isWorkflow: boolean;
 }
 
 /** One permission, as a preset sees it. */
@@ -82,7 +88,8 @@ export const ROLE_PRESETS: RolePreset[] = [
     // Everything but escalation. Someone who can edit roles can give
     // themselves anything, so an admin who is not a super admin stops there.
     // Reading them is fine — it is changing them that escalates.
-    grants: ({ action, resource }) =>
+    grants: ({ action, resource }, { isWorkflow }) =>
+      !isWorkflow &&
       !(ESCALATION_RESOURCES.has(resource) && !READ_ONLY_ACTIONS.has(action)),
   },
   {
@@ -93,8 +100,8 @@ export const ROLE_PRESETS: RolePreset[] = [
     // Content, whatever the project's content turns out to be. A system
     // resource is the framework's own furniture and not an editor's business,
     // with media the exception because content needs images.
-    grants: ({ resource }, { isSystem, isPlugin }) =>
-      (!isSystem && !isPlugin) || resource === "media",
+    grants: ({ resource }, { isSystem, isPlugin, isWorkflow }) =>
+      !isWorkflow && ((!isSystem && !isPlugin) || resource === "media"),
   },
   {
     slug: "author",
@@ -107,8 +114,8 @@ export const ROLE_PRESETS: RolePreset[] = [
     // publish but can unpublish is a strange half-authority. `manage` is
     // excluded because it is a superset we cannot see inside, which is exactly
     // what an author should not hold.
-    grants: ({ action, resource }, { isSystem, isPlugin }) => {
-      if (isPlugin) return false;
+    grants: ({ action, resource }, { isSystem, isPlugin, isWorkflow }) => {
+      if (isPlugin || isWorkflow) return false;
       if (isSystem && resource !== "media") return false;
       return !["delete", "publish", "unpublish", "manage"].includes(action);
     },
@@ -122,15 +129,21 @@ export const ROLE_PRESETS: RolePreset[] = [
   },
 ];
 
-/** Which permissions a preset resolves to, against the live permission list. */
-export function resolvePreset(
+/**
+ * Which permissions a preset resolves to, against the live permission list. `isWorkflow` says which
+ * ones a workflow seeded (`workflowSeededPermissions`), which only the seeder, reading the attached
+ * workflows, can tell.
+ */
+export function resolvePreset<P extends PresetPermission>(
   preset: RolePreset,
-  permissions: PresetPermission[]
-): PresetPermission[] {
+  permissions: P[],
+  isWorkflow: (permission: P) => boolean = () => false
+): P[] {
   return permissions.filter(permission =>
     preset.grants(permission, {
       isSystem: isSystemResource(permission.resource),
       isPlugin: permission.owner !== null,
+      isWorkflow: isWorkflow(permission),
     })
   );
 }
@@ -156,6 +169,10 @@ export function presetsGrantingReadOf(slug: string): string[] {
     owner: null,
   };
   return ROLE_PRESETS.filter(preset =>
-    preset.grants(permission, { isSystem: false, isPlugin: false })
+    preset.grants(permission, {
+      isSystem: false,
+      isPlugin: false,
+      isWorkflow: false,
+    })
   ).map(preset => preset.slug);
 }

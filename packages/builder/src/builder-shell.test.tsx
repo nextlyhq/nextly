@@ -317,20 +317,45 @@ describe("the rail's panel keys", () => {
     expect(tip.textContent?.replace(/\s+/g, "")).toBe("LayersL");
   });
 
-  it("closes an item's tooltip when the pointer moves into the canvas frame", async () => {
-    // A frame is another document: once the pointer is in it, this one sees
-    // no move that could tell the tooltip it was left, and it stayed open over
-    // the canvas.
+  it("keeps a keyboard-focused item's tooltip open when the pointer enters the frame", async () => {
+    // The tooltip is the focused item's only visible name. Reached by Tab, so
+    // the focus is a keyboard user's and shows as such.
     renderShell();
+    fireEvent.keyDown(document.body, { key: "Tab" });
     act(() => railItem("Layers").focus());
+    expect(railItem("Layers").matches(":focus-visible")).toBe(true);
     await screen.findByRole("tooltip");
     const frame = document.createElement("iframe");
     document.body.append(frame);
 
     fireEvent.pointerOver(frame);
 
-    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    expect(screen.getByRole("tooltip")).toBeTruthy();
     frame.remove();
+  });
+
+  it("closes a pointer-opened tooltip when the pointer moves into the canvas frame", () => {
+    // A frame is another document: once the pointer is in it, this one sees
+    // no move that could tell the tooltip it was left, and it stayed open over
+    // the canvas.
+    vi.useFakeTimers();
+    try {
+      renderShell();
+      fireEvent.pointerMove(railItem("Layers"), { pointerType: "mouse" });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.getByRole("tooltip")).toBeTruthy();
+      const frame = document.createElement("iframe");
+      document.body.append(frame);
+
+      fireEvent.pointerOver(frame);
+
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      frame.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lists in Help only its own editor's panel keys, with two on the page", async () => {
@@ -2350,6 +2375,19 @@ describe("zooming from the keyboard", () => {
     fireEvent.keyDown(document, { key: "0", ctrlKey: true, metaKey: false });
     fireEvent.keyDown(document, { key: "0", metaKey: true, ctrlKey: false });
     expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+  });
+
+  it("lists fitting in Help under Shift+1 alone, not a second key cap for the same press", async () => {
+    zoomShell({ zoom: 1.5 });
+    fireEvent.click(
+      within(
+        screen.getByRole("navigation", { name: "Editor panels" })
+      ).getByRole("button", { name: "Help" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    const row = within(dialog).getByText("Fit the page to the canvas");
+    const caps = row.parentElement?.querySelectorAll("kbd") ?? [];
+    expect([...caps].map(cap => cap.textContent)).toEqual(["Shift+1"]);
   });
 
   it("fits the canvas on Shift+1, whichever character the layout gives", () => {

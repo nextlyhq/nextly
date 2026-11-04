@@ -83,35 +83,43 @@ export function VariantPicker({
   };
 
   return (
-    <section className="nx-variant-picker" data-variant-picker="">
-      <Label htmlFor={id} className="nx-inspector__heading">
-        Variant
-      </Label>
-      {choice.removed ? (
-        <RemovedVariant onClear={() => choose(undefined)} disabled={disabled} />
-      ) : (
-        <Select
-          value={
-            choice.chosen === undefined ? NONE : encodeVariant(choice.chosen)
-          }
-          disabled={disabled}
-          onValueChange={next =>
-            choose(next === NONE ? undefined : next.slice(1))
-          }
-        >
-          <SelectTrigger id={id} size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NONE}>Default</SelectItem>
-            {choice.options.map(option => (
-              <SelectItem key={option.id} value={encodeVariant(option.id)}>
-                {optionLabel(option)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+    // A row like the fields below it, its label beside the menu, inside the
+    // fields' container so it stacks with them when the rail is narrow.
+    <section
+      className="nx-inspector__fields nx-variant-picker"
+      data-variant-picker=""
+    >
+      <div className="nx-inspector__field">
+        <Label htmlFor={id}>Variant</Label>
+        {choice.removed ? (
+          <RemovedVariant
+            onClear={() => choose(undefined)}
+            disabled={disabled}
+          />
+        ) : (
+          <Select
+            value={
+              choice.chosen === undefined ? NONE : encodeVariant(choice.chosen)
+            }
+            disabled={disabled}
+            onValueChange={next =>
+              choose(next === NONE ? undefined : next.slice(1))
+            }
+          >
+            <SelectTrigger id={id} size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Default</SelectItem>
+              {choice.options.map(option => (
+                <SelectItem key={option.id} value={encodeVariant(option.id)}>
+                  {optionLabel(option)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
     </section>
   );
 }

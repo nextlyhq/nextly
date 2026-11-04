@@ -82,6 +82,21 @@ export const EMPTY_CONTAINER_SELECTOR: string =
   `.${CANVAS_ROOT_CLASS} [${SLOTS_ATTRIBUTE}]:empty`;
 
 /**
+ * A rendered text element emptied of its words: a block's own heading or
+ * paragraph, or a value a component placement exposes, cleared.
+ *
+ * The frame's sheet gives it a line of height, so an author can still click
+ * what they cleared rather than lose it at zero height. TEXT only: a spacer or
+ * an image that draws nothing inside it has a size of its own, and the canvas
+ * keeps it as the published page does. Under the same preference as an empty
+ * container, so a page seen as a visitor will see it collapses as published.
+ */
+export const EMPTY_TEXT_SELECTOR: string =
+  `.${BUILDER_CHROME_CLASS}:not([${EMPTY_ELEMENTS_ATTRIBUTE}="hidden"]) ` +
+  `.${CANVAS_ROOT_CLASS} :is([data-nx-node], [data-nx-prop])` +
+  `:is(h1, h2, h3, h4, h5, h6, p, li, blockquote, figcaption, dt, dd, pre):empty`;
+
+/**
  * The block's first declared slot, when it holds nothing.
  *
  * FIRST rather than any: a block with several regions has an order, and the

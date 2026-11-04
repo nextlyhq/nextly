@@ -122,6 +122,10 @@ In code, set `localized: true` on the field (or remove `localized: false` from a
 
 A field whose type, length or precision changes in the same change is refused, because its value would be copied into a column of the new shape: save the new type with the field still shared, then make it translated.
 
+### When a translated field is added
+
+Adding a translated field to a collection, Single or field group that is already translated is recorded in its migration. `nextly migrate:create` writes a file that adds the field's column to the translations table, and `nextly migrate:down` removes it again. The file needs this version of Nextly or a newer one to run.
+
 ### When your migrations predate the record of translated fields
 
 Snapshots written by early versions of Nextly don't record which fields are translated. Every snapshot written now does, and a new project always has the record. When the latest snapshot predates it and your project has translations (a localization migration file, or a collection, Single or field group the latest snapshot's settings say was translated, as when your change turns its translation off), `nextly migrate:create` can't tell which fields are translated. Planning a change on a guess could lose a field's values as it moves between translated and shared, so it refuses every change and writes nothing ([`TRANSLATIONS_UNRECORDED`](/docs/cli/errors/translations-unrecorded)) until you record the translated fields once. A project with no translations is unaffected, and its first translated entity is planned as usual. A database where `db:sync` or a development sync made a translations table that no migration file records is read the same way, so don't mix `db:sync` and `nextly migrate` on one database.

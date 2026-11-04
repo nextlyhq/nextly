@@ -86,8 +86,13 @@ export interface PanelKeysSetting {
    * second editor's on the same page.
    */
   shortcuts: readonly ActiveShortcut[];
-  /** The layer they register in, whose bindings Help leaves to `shortcuts`. */
+  /** The layer they register in: this editor's own. */
   layer: string;
+  /**
+   * The name every editor's panel-key layer begins with. Help leaves all of
+   * them to `shortcuts`, a second editor's included.
+   */
+  family: string;
 }
 
 /**
@@ -100,10 +105,27 @@ function listedShortcuts(
   panelKeys: PanelKeysSetting | undefined
 ): readonly ActiveShortcut[] {
   if (panelKeys === undefined) return active;
-  return [
-    ...active.filter(shortcut => shortcut.layer !== panelKeys.layer),
-    ...(panelKeys.on ? panelKeys.shortcuts : []),
-  ];
+  const panelKeysOf = (shortcut: ActiveShortcut) =>
+    shortcut.layer.startsWith(panelKeys.family);
+  const others = active.filter(shortcut => !panelKeysOf(shortcut));
+  const own = panelKeys.on ? panelKeys.shortcuts : [];
+  // In this editor's own layer's place in the manager's order, so a binding
+  // below it never takes its rows and one above it still does; last where it
+  // registered none.
+  const at = active.findIndex(shortcut => shortcut.layer === panelKeys.layer);
+  if (at === -1) return [...others, ...own];
+  const before = active.slice(0, at).filter(shortcut => !panelKeysOf(shortcut));
+  return [...before, ...own, ...others.slice(before.length)];
+}
+
+/** What the switch's hint says: the keys this editor offers, by name. */
+function panelKeysHint(shortcuts: readonly ActiveShortcut[]): string {
+  const letters = new Intl.ListFormat("en", { type: "conjunction" }).format(
+    shortcuts.map(shortcut => shortcut.keys.toUpperCase())
+  );
+  const what =
+    letters === "" ? "Single letters open panels" : `${letters} open panels`;
+  return `${what}. Turn them off if you use speech input or press them by accident.`;
 }
 
 /**
@@ -123,8 +145,7 @@ function PanelKeysSwitch({
       <div className="space-y-0.5">
         <Label htmlFor={id}>Single-letter shortcuts</Label>
         <p id={hintId} className="text-xs text-muted-foreground">
-          A, L, P, C and D open panels. Turn them off if you use speech input or
-          press them by accident.
+          {panelKeysHint(setting.shortcuts)}
         </p>
       </div>
       <Switch
