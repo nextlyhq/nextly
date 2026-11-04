@@ -272,6 +272,13 @@ export interface VersionRow {
  */
 export type AutosaveSupersession = "by-you" | "by-another" | "unknown";
 
+/**
+ * The most later versions an autosave read looks at to say whose they are.
+ * Past it, the point is from an older version someone else may have written:
+ * opening an editor never reads a long history.
+ */
+const LATER_VERSIONS_READ = 20;
+
 /** Metadata view of a version row (everything except the snapshot). */
 export type VersionMeta = Omit<VersionRow, "snapshot">;
 
@@ -525,11 +532,14 @@ export class VersionsRepository {
     const where = this.workingDraftWhere(input.ref, input.locale);
     // Project only the id: the existence check must not transfer the (possibly
     // large) snapshot of the row it is about to overwrite.
-    const existing = await this.db.select<{ id: string }>(TABLE, {
-      columns: ["id"],
-      where,
-      limit: 1,
-    });
+    const existing = await this.db.select<{ id: string; revision: number }>(
+      TABLE,
+      {
+        columns: ["id", "revision"],
+        where,
+        limit: 1,
+      }
+    );
     if (existing[0]) {
       await this.db.update(
         TABLE,
@@ -537,6 +547,9 @@ export class VersionsRepository {
           snapshot: serializedSnapshot,
           createdBy: input.createdBy ?? null,
           updatedAt: now,
+          // Advanced on every rewrite, so a recovery point's base can tell the
+          // draft was written after it began.
+          revision: existing[0].revision + 1,
         },
         where
       );
@@ -1101,16 +1114,18 @@ export class VersionsRepository {
     const where = this.autosaveWhere(input.ref, createdBy);
     // Project only the id: the existence check must not transfer the (possibly
     // large) snapshot of the row it is about to overwrite.
-    const existing = await this.db.select<{ id: string; revision: number }>(
-      TABLE,
-      {
-        // `revision` rides along so the update can compare against the value
-        // this read OBSERVED rather than against a clock.
-        columns: ["id", "revision"],
-        where,
-        limit: 1,
-      }
-    );
+    const existing = await this.db.select<{
+      id: string;
+      revision: number;
+      locale: string | null;
+    }>(TABLE, {
+      // `revision` rides along so the update can compare against the value
+      // this read OBSERVED rather than against a clock; `locale`, so a point
+      // moving to another language takes that language's base.
+      columns: ["id", "revision", "locale"],
+      where,
+      limit: 1,
+    });
     if (existing[0]) {
       // Compare-and-set on the timestamp, not a blind overwrite. Two tabs
       // belonging to the same author race here: A can read the row, pause, and
@@ -1132,6 +1147,7 @@ export class VersionsRepository {
           // Computed from the OBSERVED value rather than read again, so the
           // value written is the successor of the one being compared against.
           revision: existing[0].revision + 1,
+          ...(await this.rewriteBase(input, existing[0].locale)),
         },
         // Flattened into the same conjunction rather than nested, so the
         // predicate stays one readable list of conditions.
@@ -1279,6 +1295,22 @@ export class VersionsRepository {
    * coin toss.
    */
   /**
+   * The base a rewrite of an autosave row carries: none, keeping the one it
+   * began with, unless the point moves to another language, where it is a new
+   * point and takes that language's base.
+   */
+  private async rewriteBase(
+    input: { ref: VersionRef; locale?: string | null },
+    storedLocale: string | null
+  ): Promise<
+    { baseVersionNo: number; baseDraftRevision: number } | Record<string, never>
+  > {
+    const locale = input.locale ?? null;
+    if ((storedLocale ?? null) === locale) return {};
+    return this.documentBase(input.ref, locale);
+  }
+
+  /**
    * Where a document stands now: its newest durable version_no (0 for none)
    * and its working draft's revision in `locale` (-1 for none). Both are
    * counters this table keeps, so comparing two of them asks no clock.
@@ -1318,9 +1350,12 @@ export class VersionsRepository {
     const versionsMoved = now.baseVersionNo !== point.baseVersionNo;
     const draftMoved = now.baseDraftRevision !== point.baseDraftRevision;
     if (!versionsMoved && !draftMoved) return undefined;
-    // A working-draft row records who began the draft, not who last changed
-    // it, so a change to it is no one's in particular.
+    // A working-draft change is no one's in particular here: when in doubt,
+    // offer the point.
     if (draftMoved) return "by-another";
+    const written = now.baseVersionNo - point.baseVersionNo;
+    // Too many to read on an open, or a sequence gone backwards: someone else.
+    if (written <= 0 || written > LATER_VERSIONS_READ) return "by-another";
     const later = await this.db.select<{ createdBy: string | null }>(TABLE, {
       columns: ["createdBy"],
       where: {
@@ -1331,10 +1366,13 @@ export class VersionsRepository {
           { column: "versionNo", op: ">=", value: point.baseVersionNo + 1 },
         ],
       },
+      limit: written,
     });
     const author = point.createdBy;
+    // Every one of them must still be here: retention prunes versions, and a
+    // pruned one could be anyone's, so a gap counts as someone else's.
     return author !== null &&
-      later.length > 0 &&
+      later.length === written &&
       later.every(row => row.createdBy === author)
       ? "by-you"
       : "by-another";

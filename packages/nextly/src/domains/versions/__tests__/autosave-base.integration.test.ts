@@ -130,6 +130,68 @@ describe.each(getConfiguredTestDialects())(
       expect(await verdict(ref, "u1")).toBe("unknown");
     });
 
+    it("sees an existing working draft rewritten after the point began", async () => {
+      const ref = doc();
+      const draft = (v: number) =>
+        repo.upsertWorkingDraft({
+          ref,
+          locale: null,
+          snapshot: { v },
+          createdBy: "u1",
+        });
+      await draft(1);
+      await autosave(ref, "u1", 10);
+      expect(await verdict(ref, "u1")).toBeUndefined();
+      await draft(2);
+      expect(await verdict(ref, "u1")).toBe("by-another");
+    });
+
+    it("counts a version retention pruned as someone else's", async () => {
+      // The author's own newer version survives, another's between was pruned:
+      // what is left could not say who wrote the gap.
+      const ref = doc();
+      await durable(ref, 1, "u1");
+      await autosave(ref, "u1", 10);
+      await durable(ref, 2, "u2");
+      await durable(ref, 3, "u1");
+      await handle.adapter.delete("nextly_versions", {
+        and: [
+          { column: "entryId", op: "=", value: ref.entryId },
+          { column: "versionNo", op: "=", value: 2 },
+        ],
+      });
+      expect(await verdict(ref, "u1")).toBe("by-another");
+    });
+
+    it("reads no long history to answer, past which the point is someone else's", async () => {
+      const ref = doc();
+      await autosave(ref, "u1", 10);
+      for (let v = 1; v <= 21; v += 1) await durable(ref, v, "u1");
+      expect(await verdict(ref, "u1")).toBe("by-another");
+    });
+
+    it("takes the new language's base when the point moves to it", async () => {
+      const ref = doc();
+      await repo.upsertWorkingDraft({
+        ref,
+        locale: "fr",
+        snapshot: { v: 1 },
+        createdBy: "u2",
+      });
+      const recordIn = (locale: string, v: number) =>
+        repo.upsertAutosave({
+          ref,
+          status: "draft",
+          snapshot: { v },
+          locale,
+          createdBy: "u1",
+        });
+      await recordIn("en", 10);
+      await recordIn("fr", 11);
+      // Nothing written since it began in French.
+      expect(await verdict(ref, "u1")).toBeUndefined();
+    });
+
     it("answers for a Single as for a collection's entry", async () => {
       const ref = doc("single");
       await autosave(ref, "u1", 10);
