@@ -7770,11 +7770,6 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   cursor: pointer;
 }
 
-.nx-style-inspector__decoration-style:disabled {
-  color: var(--nx-builder-text-muted);
-  cursor: default;
-}
-
 /*
  * The popover is mounted outside the inspector, so it takes the inspector's
  * density itself: 12px text, and the shared controls at the control height.

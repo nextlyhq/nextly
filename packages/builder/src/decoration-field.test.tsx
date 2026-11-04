@@ -15,6 +15,7 @@ import {
   composeDecoration,
   parseDecoration,
 } from "./decoration-field";
+import { InheritedValue } from "./inherited-value";
 
 beforeAll(() => {
   // Radix's select and popover measure and scroll, which jsdom does not do.
@@ -32,9 +33,12 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-function mount(stored?: string) {
-  const onCommit = vi.fn(() => "applied" as const);
-  render(
+function field(
+  stored: string | undefined,
+  onCommit: () => "applied",
+  describedBy?: string
+) {
+  return (
     <>
       <span id="decoration-label">Decoration</span>
       <DecorationField
@@ -42,12 +46,24 @@ function mount(stored?: string) {
         labelledBy="decoration-label"
         stored={stored}
         actionName="Decoration"
-        describedBy={undefined}
+        describedBy={describedBy}
         onCommit={onCommit}
       />
     </>
   );
-  return onCommit;
+}
+
+function mount(stored?: string, describedBy?: string) {
+  const onCommit = vi.fn(() => "applied" as const);
+  const view = render(field(stored, onCommit, describedBy));
+  return Object.assign(onCommit, {
+    rerender: (next: string | undefined) =>
+      view.rerender(field(next, onCommit, describedBy)),
+  });
+}
+
+function openStyle(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Decoration style" }));
 }
 
 describe("parseDecoration", () => {
@@ -69,6 +85,16 @@ describe("parseDecoration", () => {
       line: "overline",
       thickness: "from-font",
     });
+    // A thickness CSS computes is still a thickness, not a colour.
+    expect(parseDecoration("underline calc(1px + 0.1em)")).toEqual({
+      line: "underline",
+      thickness: "calc(1px + 0.1em)",
+    });
+    expect(parseDecoration("underline max(1px, 0.1em) red")).toEqual({
+      line: "underline",
+      thickness: "max(1px, 0.1em)",
+      color: "red",
+    });
   });
 
   it("leaves to the text field a value the icons cannot draw", () => {
@@ -78,6 +104,9 @@ describe("parseDecoration", () => {
     expect(parseDecoration("red")).toBeUndefined();
     expect(parseDecoration("underline dotted dashed")).toBeUndefined();
     expect(parseDecoration("underline var(--site-line)")).toBeUndefined();
+    // A word that is no colour is not read as one.
+    expect(parseDecoration("underline banana")).toBeUndefined();
+    expect(parseDecoration("underline attr(data-x)")).toBeUndefined();
     expect(parseDecoration("")).toBeUndefined();
   });
 });
@@ -123,19 +152,85 @@ describe("DecorationField", () => {
   });
 
   it("offers the line's style only once there is a line to style", () => {
-    mount();
+    // The popover itself stays reachable, for the decoration written as CSS.
+    for (const stored of [undefined, "none"]) {
+      mount(stored);
+      openStyle();
+      expect(
+        screen
+          .getByRole("combobox", { name: "Line style" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+      expect(
+        screen
+          .getByRole("textbox", { name: "Thickness" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+      expect(
+        screen
+          .getByRole("textbox", { name: "Line colour" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+      cleanup();
+    }
+  });
+
+  it("writes a decoration the icons cannot draw as CSS, from its popover", () => {
+    const onCommit = mount();
+    openStyle();
+    const css = screen.getByRole("textbox", { name: "Decoration as CSS" });
+    fireEvent.change(css, { target: { value: "underline overline" } });
+    fireEvent.blur(css);
+    expect(onCommit).toHaveBeenCalledWith("underline overline");
+  });
+
+  it("keeps the inherited style, thickness and colour when the line changes here", () => {
+    const onCommit = vi.fn(() => "applied" as const);
+    render(
+      <InheritedValue.Provider value="underline wavy 2px red">
+        {field(undefined, onCommit)}
+      </InheritedValue.Provider>
+    );
+    // The inherited line is the one the icons mark.
+    expect(
+      screen
+        .getByRole("radio", { name: "Underline, inherited" })
+        .getAttribute("aria-checked")
+    ).toBe("false");
     expect(
       screen
         .getByRole("button", { name: "Decoration style" })
         .hasAttribute("disabled")
-    ).toBe(true);
-    cleanup();
-    mount("none");
-    expect(
-      screen
-        .getByRole("button", { name: "Decoration style" })
-        .hasAttribute("disabled")
-    ).toBe(true);
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("radio", { name: "Overline" }));
+    expect(onCommit).toHaveBeenCalledWith("overline wavy 2px red");
+  });
+
+  it("moves the popover's thickness and colour with a stored change", () => {
+    const onCommit = mount("underline 2px red");
+    openStyle();
+    onCommit.rerender("underline 3px blue");
+    const thickness = screen.getByRole("textbox", { name: "Thickness" });
+    const colour = screen.getByRole("textbox", { name: "Line colour" });
+    expect((thickness as HTMLInputElement).value).toBe("3px");
+    expect((colour as HTMLInputElement).value).toBe("blue");
+    fireEvent.blur(thickness);
+    fireEvent.blur(colour);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("points the popover's controls at a refusal", () => {
+    mount("underline", "decoration-error");
+    openStyle();
+    for (const control of [
+      screen.getByRole("combobox", { name: "Line style" }),
+      screen.getByRole("textbox", { name: "Thickness" }),
+      screen.getByRole("textbox", { name: "Line colour" }),
+      screen.getByRole("textbox", { name: "Decoration as CSS" }),
+    ]) {
+      expect(control.getAttribute("aria-describedby")).toBe("decoration-error");
+      expect(control.getAttribute("aria-invalid")).toBe("true");
+    }
   });
 
   it("sets the line's style, thickness and colour in its popover", () => {

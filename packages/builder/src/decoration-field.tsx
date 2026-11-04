@@ -9,13 +9,14 @@
  * it back from them: the line alone where nothing else is set (`underline`),
  * or the line with its style, thickness and colour (`underline wavy 2px
  * red`). A value it cannot read into those parts (two lines at once, a
- * variable that could stand for any of them) is left to the text field, so
- * nothing the CSS can say becomes unreachable.
+ * variable that could stand for any of them, a word that is no colour) is left
+ * to the text field, and the popover writes one as CSS, so nothing the CSS can
+ * say becomes unreachable.
  *
  * @module decoration-field
  */
 
-import type { StyleValue } from "@nextlyhq/blocks-engine";
+import { cssColor, type StyleValue } from "@nextlyhq/blocks-engine";
 import {
   Input,
   Popover,
@@ -33,6 +34,7 @@ import * as React from "react";
 // Enter commits without submitting the entry form the builder sits in.
 import { commitOnEnter } from "./commit-on-enter";
 import { IconChoiceField } from "./icon-choice-field";
+import { InheritedValue } from "./inherited-value";
 import type { AlignmentGroup } from "./style-alignment-icons";
 import { keywordLabel } from "./style-keyword-labels";
 
@@ -52,6 +54,13 @@ const STYLES = ["solid", "double", "dotted", "dashed", "wavy"] as const;
 /** A thickness as CSS writes one: a keyword, or a length or percentage. */
 const THICKNESS =
   /^(?:auto|from-font|\+?(?:\d+(?:\.\d+)?|\.\d+)(?:px|em|rem|ex|ch|pt|%)?)$/i;
+
+/** A length CSS computes; no colour is written as one of these. */
+const COMPUTED_LENGTH = /^(?:calc|min|max|clamp)\(/i;
+
+function isThickness(token: string): boolean {
+  return THICKNESS.test(token) || COMPUTED_LENGTH.test(token);
+}
 
 /** The shorthand's parts, split on whitespace outside parentheses. */
 function tokensOf(text: string): string[] {
@@ -77,16 +86,16 @@ function partOf(token: string): keyof DecorationParts | "unreadable" {
   const word = token.toLowerCase();
   if ((LINES as readonly string[]).includes(word)) return "line";
   if ((STYLES as readonly string[]).includes(word)) return "style";
-  if (THICKNESS.test(word)) return "thickness";
-  // A variable may stand for any part, or several.
-  if (/^(?:var|env)\(/i.test(word)) return "unreadable";
-  return "color";
+  if (isThickness(word)) return "thickness";
+  // The colour is one the page's own check reads as a colour. A variable may
+  // stand for any part, or several, and that check refuses it too.
+  return cssColor(token) === undefined ? "unreadable" : "color";
 }
 
 /**
  * A stored decoration as its parts, in any order the shorthand allows, or
  * `undefined` for one the icons cannot draw: no line, two lines, two of one
- * part, or a variable.
+ * part, a variable, or a word that is none of the parts.
  */
 export function parseDecoration(text: string): DecorationParts | undefined {
   const parts: Record<string, string> = {};
@@ -151,29 +160,38 @@ export function DecorationField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  const parts =
-    typeof stored === "string" ? parseDecoration(stored) : undefined;
+  const own = typeof stored === "string" ? parseDecoration(stored) : undefined;
+  const inherited = React.useContext(InheritedValue);
+  const inheritedParts =
+    stored === undefined && inherited !== undefined
+      ? parseDecoration(inherited)
+      : undefined;
+  // What a change starts from: the value set here, or else the one inherited,
+  // so a line changed here keeps the style, thickness and colour it showed.
+  const parts = own ?? inheritedParts;
   // A part changed keeps the others: a line changed keeps its style.
   const write = (next: Partial<DecorationParts>) =>
     onCommit(
       composeDecoration({ line: parts?.line ?? "underline", ...parts, ...next })
     );
-  const styled = parts !== undefined && parts.line !== "none";
   return (
     <div className="nx-style-inspector__decoration">
-      <IconChoiceField
-        id={id}
-        labelledBy={labelledBy}
-        group={LINE_GROUP}
-        stored={parts?.line}
-        actionName={actionName}
-        describedBy={describedBy}
-        onCommit={line =>
-          line === null || typeof line !== "string"
-            ? onCommit(null)
-            : write({ line })
-        }
-      />
+      {/* The icons mark the inherited line, not the whole shorthand. */}
+      <InheritedValue.Provider value={inheritedParts?.line ?? inherited}>
+        <IconChoiceField
+          id={id}
+          labelledBy={labelledBy}
+          group={LINE_GROUP}
+          stored={own?.line}
+          actionName={actionName}
+          describedBy={describedBy}
+          onCommit={line =>
+            line === null || typeof line !== "string"
+              ? onCommit(null)
+              : write({ line })
+          }
+        />
+      </InheritedValue.Provider>
       <Popover>
         <PopoverTrigger asChild>
           <button
@@ -181,7 +199,6 @@ export function DecorationField({
             className="nx-style-inspector__decoration-style"
             aria-label={`${actionName} style`}
             title="Style…"
-            disabled={!styled}
           >
             {/* The strip's last segment, as More is on the other icon
                 choices: its name says what it opens. */}
@@ -192,9 +209,18 @@ export function DecorationField({
             with it, and the popover's own rule gives it the inspector's
             density. */}
         <PopoverContent className="nx-builder-tokens nx-style-inspector__decoration-popover">
-          {parts === undefined ? null : (
-            <DecorationStyle parts={parts} write={write} />
-          )}
+          <DecorationStyle
+            parts={parts}
+            write={write}
+            describedBy={describedBy}
+          >
+            <DecorationCss
+              stored={typeof stored === "string" ? stored : undefined}
+              actionName={actionName}
+              describedBy={describedBy}
+              onCommit={onCommit}
+            />
+          </DecorationStyle>
         </PopoverContent>
       </Popover>
     </div>
@@ -212,29 +238,53 @@ const STYLE_LABELS: Readonly<Record<string, string>> = {
 };
 
 /**
- * The line's style, thickness and colour. A thickness is written only once
- * it is one CSS reads, and a colour only as one value; leaving either empty
- * removes it.
+ * A draft that follows the value it edits: a stored change (an undo, a shared
+ * style's update) moves it, so leaving the field never writes back the value
+ * that change replaced.
+ */
+function useDraft(
+  value: string | undefined
+): [string, React.Dispatch<React.SetStateAction<string>>] {
+  const [draft, setDraft] = React.useState(value ?? "");
+  React.useEffect(() => {
+    setDraft(value ?? "");
+  }, [value]);
+  return [draft, setDraft];
+}
+
+/**
+ * The line's style, thickness and colour, offered once there is a line to
+ * style. A thickness is written only once it is one CSS reads, and a colour
+ * only as one; leaving either empty removes it.
  */
 function DecorationStyle({
   parts,
   write,
+  describedBy,
+  children,
 }: {
-  parts: DecorationParts;
+  parts: DecorationParts | undefined;
   write: (next: Partial<DecorationParts>) => CommitOutcome;
+  describedBy: string | undefined;
+  children: React.ReactNode;
 }): React.JSX.Element {
-  const [thickness, setThickness] = React.useState(parts.thickness ?? "");
-  const [color, setColor] = React.useState(parts.color ?? "");
+  const [thickness, setThickness] = useDraft(parts?.thickness);
+  const [color, setColor] = useDraft(parts?.color);
+  const disabled = parts === undefined || parts.line === "none";
+  const refusal = {
+    "aria-describedby": describedBy,
+    "aria-invalid": describedBy === undefined ? undefined : true,
+  } as const;
   const commitThickness = () => {
     const text = thickness.trim();
-    if (text === (parts.thickness ?? "")) return;
-    if (text !== "" && !THICKNESS.test(text)) return;
+    if (text === (parts?.thickness ?? "")) return;
+    if (text !== "" && !isThickness(text)) return;
     write({ thickness: text === "" ? undefined : text });
   };
   const commitColor = () => {
     const text = color.trim();
-    if (text === (parts.color ?? "")) return;
-    if (tokensOf(text).length > 1) return;
+    if (text === (parts?.color ?? "")) return;
+    if (text !== "" && cssColor(text) === undefined) return;
     write({ color: text === "" ? undefined : text });
   };
   return (
@@ -242,12 +292,13 @@ function DecorationStyle({
       <label className="nx-style-inspector__decoration-part">
         <span>Line style</span>
         <Select
-          value={parts.style ?? ""}
+          value={parts?.style ?? ""}
+          disabled={disabled}
           onValueChange={style =>
             write({ style: style === "" ? undefined : style })
           }
         >
-          <SelectTrigger aria-label="Line style">
+          <SelectTrigger aria-label="Line style" {...refusal}>
             <SelectValue placeholder="Default" />
           </SelectTrigger>
           <SelectContent>
@@ -265,6 +316,8 @@ function DecorationStyle({
         <span>Thickness</span>
         <Input
           aria-label="Thickness"
+          {...refusal}
+          disabled={disabled}
           placeholder="Auto"
           value={thickness}
           onChange={event => setThickness(event.target.value)}
@@ -276,6 +329,8 @@ function DecorationStyle({
         <span>Colour</span>
         <Input
           aria-label="Line colour"
+          {...refusal}
+          disabled={disabled}
           placeholder="Text colour"
           value={color}
           onChange={event => setColor(event.target.value)}
@@ -283,6 +338,46 @@ function DecorationStyle({
           onKeyDown={event => commitOnEnter(event, commitColor)}
         />
       </label>
+      {children}
     </div>
+  );
+}
+
+/**
+ * The decoration as CSS, for what the icons cannot draw: two lines at once,
+ * a variable. Written as typed once the author leaves the field; emptied, it
+ * removes the decoration set here.
+ */
+function DecorationCss({
+  stored,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  stored: string | undefined;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const [text, setText] = useDraft(stored);
+  const commit = () => {
+    const written = text.trim();
+    if (written === (stored ?? "")) return;
+    onCommit(written === "" ? null : written);
+  };
+  return (
+    <label className="nx-style-inspector__decoration-part">
+      <span>Write as CSS</span>
+      <Input
+        aria-label={`${actionName} as CSS`}
+        aria-describedby={describedBy}
+        aria-invalid={describedBy === undefined ? undefined : true}
+        placeholder="underline overline"
+        value={text}
+        onChange={event => setText(event.target.value)}
+        onBlur={commit}
+        onKeyDown={event => commitOnEnter(event, commit)}
+      />
+    </label>
   );
 }
