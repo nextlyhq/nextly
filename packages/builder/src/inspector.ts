@@ -19,6 +19,7 @@ import {
   contentPropsOf,
   getBlock,
   findNode,
+  isLinkableUrl,
   locateNode,
   nodeLocks,
   registryBlockSource,
@@ -75,6 +76,13 @@ export interface EditableProp {
   readonly supported: boolean;
   /** The options a `select` offers, empty for every other type. */
   readonly options: readonly string[];
+  /**
+   * Whether the inspector draws a control for it: `false` for a prop that
+   * applies only without another that is set, as a linked button's "Acts as",
+   * and for a choice with nothing to pick. Listed even so, since a component
+   * may still expose it to pages that clear what hides it.
+   */
+  readonly offered: boolean;
   /**
    * Whether a lock fixes this prop where the block sits: it is not content,
    * and the block is inside an area locked to its content. Shown, not hidden,
@@ -259,14 +267,6 @@ export function propLabel(name: string, schema: PropSchema): string {
     : fieldLabel(name);
 }
 
-/** What an author calls one of a select's options, or the option itself. */
-export function optionLabel(schema: PropSchema, option: string): string {
-  const named = schema.optionLabels;
-  if (typeof named !== "object" || named === null) return option;
-  const given = (named as Record<string, unknown>)[option];
-  return typeof given === "string" && given.trim() !== "" ? given : option;
-}
-
 /** Read a schema's `options`, which is untyped by construction. */
 function optionsOf(schema: PropSchema): readonly string[] {
   const declared = schema.options;
@@ -288,6 +288,55 @@ function optionsOf(schema: PropSchema): readonly string[] {
  * nothing to half the selection.
  */
 export type LockState = "locked" | "unlocked" | "mixed";
+
+/**
+ * Whether a prop is offered at all.
+ *
+ * Left out: a prop that applies only while others are empty
+ * (`onlyWithout`), once any of them is set, as a button's "Acts as" means
+ * nothing once the button links to a URL or an entry. Each entry names one
+ * prop, or several that only together are something, as an entry link is a
+ * collection and an entry. Also left out: a choice with fewer than two
+ * options, which offers nothing to pick, as a column's one HTML tag, unless
+ * what is stored is not that option, since the choice is then how it is put
+ * back.
+ */
+function offered(
+  schema: PropSchema,
+  value: unknown,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>>,
+  options: readonly string[]
+): boolean {
+  const without = schema.onlyWithout;
+  const entries: readonly unknown[] =
+    typeof without === "string"
+      ? [without]
+      : Array.isArray(without)
+        ? without
+        : [];
+  const setHere = (name: unknown): boolean =>
+    typeof name === "string" && isSet(declared[name], values[name]);
+  const hidden = entries.some(entry =>
+    Array.isArray(entry)
+      ? entry.length > 0 && entry.every(setHere)
+      : setHere(entry)
+  );
+  if (hidden) return false;
+  if (schema.type !== "select" || options.length >= 2) return true;
+  return isSet(undefined, value) && !options.includes(String(value));
+}
+
+/**
+ * Whether a stored prop value is there: anything but absent or empty text,
+ * and for a URL, only one a page can follow. The engine's rule, the one the
+ * renderer reads, so a refused `javascript:` link that renders no link
+ * leaves the block offering what it does without one.
+ */
+function isSet(schema: PropSchema | undefined, value: unknown): boolean {
+  if (schema?.type === "url") return isLinkableUrl(value);
+  return value !== undefined && value !== null && value !== "";
+}
 
 /**
  * The lock across a set.
@@ -365,6 +414,13 @@ export function inspectSelection(
           )?.[name],
           supported: hasContentControl(schema.type),
           options: optionsOf(schema),
+          offered: offered(
+            schema,
+            node.props[name],
+            node.props,
+            declared,
+            optionsOf(schema)
+          ),
           readOnly: designLock !== undefined && !content.has(name),
         },
       ];

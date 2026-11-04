@@ -195,7 +195,7 @@ describe("the sentence a double-click on unexposed text raises", () => {
     const inspection = inspect(placed({ variant: "v1" }));
     if (inspection === null) throw new Error("expected an inspection");
     expect(partOfComponentSentence({ ...inspection, label: "Header" })).toBe(
-      "Part of Header, Dark variant. Its exposed fields are in the panel; the rest is edited on the component itself."
+      "Part of Header, Dark variant. Its fields are in the panel; the rest is edited on the component itself."
     );
   });
 

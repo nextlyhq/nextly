@@ -197,6 +197,7 @@ import {
   chainCoversVersion,
   DOCUMENT_REVISION_COLUMN,
   languageCountersBeforeContent,
+  type SelectsRows,
   languageRevisionsOf,
   storedRevisionsOf,
 } from "../../versions/document-revision";
@@ -2603,8 +2604,7 @@ export class CollectionQueryService extends BaseService {
   ) {
     const table = companion?.companionTableName ?? null;
     return languageCountersBeforeContent(
-      (statement, values) =>
-        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
+      this.adapter.getDrizzle<SelectsRows>(),
       {
         dialect: this.dialect,
         languagesTable:

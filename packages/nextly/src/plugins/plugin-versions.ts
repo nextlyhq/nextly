@@ -55,6 +55,7 @@ import {
 } from "../domains/versions/versions-repository";
 import type { VersionsService } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
+import { assertNoOpenTransaction } from "../shared/lib/open-transaction";
 
 import {
   pluginVersionPins,
@@ -480,6 +481,17 @@ export function pluginVersionWrites(
 
     deleteWorkingDraft(ref, locale, opts) {
       return asCalled(opts, async resolved => {
+        // A collection's or Single's discard takes the document's row lock in
+        // a transaction of its own. Inside the plugin's open transaction,
+        // which may hold that lock, it would wait on it until the database
+        // gave up, on the dialects whose transactions take a connection each;
+        // it is refused at once instead, on every dialect.
+        if (ref.scopeKind === "collection" || ref.scopeKind === "single") {
+          assertNoOpenTransaction(
+            getService("adapter"),
+            "versions.deleteWorkingDraft"
+          );
+        }
         const writer = await checkedWriter(ref, resolved, "discard", {
           locale,
         });

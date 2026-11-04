@@ -13,8 +13,13 @@
 import { DARK_MODE_ATTRIBUTE, type TokenMode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-/** The mode the nearest marker names, or `null` where none does. */
-function nearestMarker(element: Element): TokenMode | null {
+/**
+ * The mode the nearest marker names, or `null` where none does.
+ *
+ * Exported so the inspector reads the canvas's mode by the same rule the
+ * canvas states it by, rather than by a second reading of the markers.
+ */
+export function nearestThemeMode(element: Element): TokenMode | null {
   const mode = element
     .closest(`[${DARK_MODE_ATTRIBUTE}]`)
     ?.getAttribute(DARK_MODE_ATTRIBUTE);
@@ -43,7 +48,7 @@ export function useNearestThemeMarker(
     const element = root.current;
     if (element === null) return;
     const write = (): void => {
-      const mode = nearestMarker(element);
+      const mode = nearestThemeMode(element);
       if (mode === null) element.removeAttribute(NEAREST_THEME_ATTRIBUTE);
       else element.setAttribute(NEAREST_THEME_ATTRIBUTE, mode);
     };

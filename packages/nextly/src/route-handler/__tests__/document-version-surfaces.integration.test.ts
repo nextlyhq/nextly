@@ -312,5 +312,35 @@ describe.each(getConfiguredTestDialects())(
       expect(removed).toBe(1);
       expect(await read()).not.toBe(held);
     });
+
+    it("refuses a trusted plugin's discard inside its own transaction, rather than waiting on it", async () => {
+      // The discard takes the document's lock in a transaction of its own,
+      // which a row the plugin's transaction wrote would hold it from.
+      const t = await boot(dialect);
+      const created = (await t.nextly.create({
+        collection: DRAFTED as never,
+        data: { title: "live", status: "published" },
+        overrideAccess: true,
+      } as never)) as unknown as { item?: Record<string, unknown> };
+      const id = String(created.item?.id);
+      await t.nextly.update({
+        collection: DRAFTED as never,
+        id,
+        data: { title: "held" },
+        overrideAccess: true,
+      } as never);
+      const ref = { scopeKind: "collection", scopeSlug: DRAFTED, entryId: id };
+
+      await expect(
+        services!.withTransaction(async tx => {
+          await services!.updateEntryInTransaction(tx, DRAFTED, id, {
+            title: "written in the plugin's transaction",
+          });
+          return versions!.deleteWorkingDraft(ref as never, null);
+        })
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      // Nothing discarded: the draft is still there to discard afterwards.
+      expect(await versions!.deleteWorkingDraft(ref as never, null)).toBe(1);
+    }, 60_000);
   }
 );

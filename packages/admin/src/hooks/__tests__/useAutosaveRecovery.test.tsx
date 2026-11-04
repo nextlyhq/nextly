@@ -24,6 +24,12 @@ vi.mock("@admin/services/versionApi", () => ({
   versionApi: { getAutosave: getSpy },
 }));
 
+/** The account signed in to this tab, which a test may change. */
+const signedIn = vi.hoisted(() => ({ id: "author-1" as string | null }));
+vi.mock("@admin/hooks/useCurrentUserId", () => ({
+  useCurrentUserId: () => signedIn.id,
+}));
+
 import { useAutosaveRecovery } from "../useAutosaveRecovery";
 
 const SCOPE = { kind: "collection" as const, slug: "posts", entryId: "e1" };
@@ -43,9 +49,13 @@ function wrapper({ children }: { children: ReactNode }) {
  * through one: a stubbed `reset` would let a test pass while the values never
  * reached the form, and `isDirty` is exactly the thing being asserted.
  */
-function useRecoveryHarness(scope: VersionScope | null) {
-  const form = useForm<Record<string, unknown>>({ defaultValues: STORED });
-  const recovery = useAutosaveRecovery({ scope, form });
+function useRecoveryHarness(
+  scope: VersionScope | null,
+  stored: Record<string, unknown> = STORED,
+  locale: string | null = null
+) {
+  const form = useForm<Record<string, unknown>>({ defaultValues: stored });
+  const recovery = useAutosaveRecovery({ scope, form, locale });
   /*
    * `isDirty` is READ DURING RENDER and returned, deliberately.
    *
@@ -58,12 +68,21 @@ function useRecoveryHarness(scope: VersionScope | null) {
   return { form, recovery, isDirty: form.formState.isDirty };
 }
 
-function renderRecovery(scope: VersionScope | null) {
-  return renderHook(() => useRecoveryHarness(scope), { wrapper });
+function renderRecovery(
+  scope: VersionScope | null,
+  stored?: Record<string, unknown>,
+  locale?: string | null
+) {
+  return renderHook(() => useRecoveryHarness(scope, stored, locale), {
+    wrapper,
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // "Not now" is remembered for the tab; each test starts a fresh tab.
+  window.sessionStorage.clear();
+  signedIn.id = "author-1";
 });
 
 /**
@@ -121,6 +140,308 @@ describe("useAutosaveRecovery", () => {
    * reloads must still be offered the work rather than finding it gone because
    * they closed a banner.
    */
+  it("offers nothing for a recovery point that holds what the document stores", async () => {
+    // An author who undid back to the saved document left this behind; the
+    // test above, with a different title, is the offer this one withholds.
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+
+    const { result } = renderRecovery(SCOPE);
+
+    await waitFor(() => expect(result.current.recovery.isResolved).toBe(true));
+    expect(result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps a put-off recovery point put off across a reload in this tab, and offers a newer one", async () => {
+    const point = (updatedAt: string) => ({
+      snapshot: { title: "recovered" },
+      updatedAt,
+      locale: null,
+    });
+    getSpy.mockResolvedValue(point("2026-08-17T10:00:00.000Z"));
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    // The editor loaded again: the same recovery point stays put off.
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+    again.unmount();
+
+    // Edits made since recorded a newer one, which is offered.
+    getSpy.mockResolvedValue(point("2026-08-17T11:00:00.000Z"));
+    const newer = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(newer.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("offers a point rewritten in the same second with newer work, after the earlier one was put off", async () => {
+    // SQLite stores the time to the second: the time alone cannot tell the
+    // two points apart, and the newer work must not be hidden.
+    const at = "2026-08-17T10:00:00.000Z";
+    getSpy.mockResolvedValue({
+      snapshot: { title: "first" },
+      updatedAt: at,
+      locale: null,
+    });
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    getSpy.mockResolvedValue({
+      snapshot: { title: "second" },
+      updatedAt: at,
+      locale: null,
+    });
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("offers a point lacking a field, whether withheld or deleted, rather than risk hiding work", async () => {
+    // A point the server stripped of a password is still offered: passing over
+    // a missing key would also pass over a JSON property an edit deleted.
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED, meta: { a: 1 } },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const deleted = renderRecovery(SCOPE, { ...STORED, meta: { a: 1, b: 2 } });
+    await waitFor(() =>
+      expect(deleted.result.current.recovery.offer).not.toBeNull()
+    );
+    deleted.unmount();
+
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const withheld = renderRecovery(SCOPE, { ...STORED, secret: "" });
+    await waitFor(() =>
+      expect(withheld.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("judges a point equal to the document only in the language it was recorded in", async () => {
+    // A point from another language can hold values equal to this one's
+    // stored document while differing from its own.
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: "fr",
+    });
+    const other = renderRecovery(SCOPE, STORED, "en");
+    await waitFor(() =>
+      expect(other.result.current.recovery.offer).not.toBeNull()
+    );
+    other.unmount();
+
+    const same = renderRecovery(SCOPE, STORED, "fr");
+    await waitFor(() =>
+      expect(same.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(same.result.current.recovery.offer).toBeNull();
+  });
+
+  it("offers a point in another language stored in the same second with the same values, after one was put off", async () => {
+    const at = "2026-08-17T10:00:00.000Z";
+    getSpy.mockResolvedValue({
+      snapshot: { title: "same" },
+      updatedAt: at,
+      locale: "en",
+    });
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    getSpy.mockResolvedValue({
+      snapshot: { title: "same" },
+      updatedAt: at,
+      locale: "fr",
+    });
+    const other = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(other.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("offers another account signed in to the same tab its own point, despite one put off", async () => {
+    // Recovery points are each author's own, and so is a "Not now".
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    signedIn.id = "author-2";
+    const other = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(other.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("keeps a Not now pressed before the account is known, once it is", async () => {
+    // The recovery read can answer before the signed-in account does: the
+    // put-off waits for it rather than being stored under no one.
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    signedIn.id = "author-1";
+    first.rerender();
+    first.unmount();
+
+    // The editor loaded again, the account known from the start.
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps a Not now held for the account with the document it was pressed on", async () => {
+    // The editor can move to another document before the account is known:
+    // the put-off belongs to the first, and must not land on the second.
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const moving = renderHook(
+      ({ scope }: { scope: VersionScope }) => useRecoveryHarness(scope),
+      { wrapper, initialProps: { scope: SCOPE as VersionScope } }
+    );
+    await waitFor(() =>
+      expect(moving.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => moving.result.current.recovery.dismiss());
+    moving.rerender({ scope: OTHER });
+    signedIn.id = "author-1";
+    moving.rerender({ scope: OTHER });
+    moving.unmount();
+
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(first.result.current.recovery.offer).toBeNull();
+    first.unmount();
+
+    const second = renderRecovery(OTHER);
+    await waitFor(() =>
+      expect(second.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("keeps a held Not now while the account is still unknown, across a move and back", async () => {
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const moving = renderHook(
+      ({ scope }: { scope: VersionScope }) => useRecoveryHarness(scope),
+      { wrapper, initialProps: { scope: SCOPE as VersionScope } }
+    );
+    await waitFor(() =>
+      expect(moving.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => moving.result.current.recovery.dismiss());
+    moving.rerender({ scope: OTHER });
+    moving.rerender({ scope: SCOPE });
+
+    await waitFor(() =>
+      expect(moving.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(moving.result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps a Not now pressed before the account is known across a reload", async () => {
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    // Reloaded before the account answered.
+    first.unmount();
+
+    signedIn.id = "author-1";
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps every Not now pressed before the account is known, not only the last", async () => {
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    for (const scope of [SCOPE, OTHER]) {
+      const one = renderRecovery(scope);
+      await waitFor(() =>
+        expect(one.result.current.recovery.offer).not.toBeNull()
+      );
+      act(() => one.result.current.recovery.dismiss());
+      one.unmount();
+    }
+
+    signedIn.id = "author-1";
+    for (const scope of [SCOPE, OTHER]) {
+      const back = renderRecovery(scope);
+      await waitFor(() =>
+        expect(back.result.current.recovery.isResolved).toBe(true)
+      );
+      expect(back.result.current.recovery.offer).toBeNull();
+      back.unmount();
+    }
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },

@@ -955,7 +955,94 @@ export function defaultSiteTokens(): SiteToken[] {
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ...SPACING_DEFAULTS.map(
+      ({ name, value, description }): SiteToken => ({
+        name,
+        kind: "dimension",
+        values: { light: spacingValue(value) },
+        description,
+      })
+    ),
   ];
+}
+
+/**
+ * A spacing default: one length, or a fluid one that grows with the viewport
+ * from `min` to `max` along `preferred`.
+ */
+type SpacingValue =
+  | string
+  | { readonly min: string; readonly preferred: string; readonly max: string };
+
+/** One row of {@link SPACING_DEFAULTS}. */
+interface SpacingDefault {
+  readonly name: string;
+  readonly value: SpacingValue;
+  readonly description: string;
+}
+
+/**
+ * The spacing every block starts from, in ONE table.
+ *
+ * Blocks carry no outer margin: the space between two blocks is their
+ * container's gap, and the space inside a band is its padding. Each row is a
+ * site token, so the blocks reference it by name and a site changing one value
+ * moves every block reading it, with no block changed.
+ *
+ * Responsive through `clamp()` rather than per breakpoint, because a token has
+ * one value per colour mode and none per width. `vw` resolves against the
+ * device being previewed in the editor too, since the canvas is its own frame.
+ * What each row resolves to at a phone, tablet and desktop width is pinned in
+ * `site-tokens.test.ts`.
+ */
+const SPACING_DEFAULTS: readonly SpacingDefault[] = [
+  {
+    name: "space.stack",
+    value: { min: "1rem", preferred: "0.875rem + 0.5vw", max: "1.25rem" },
+    description: "The space a container puts between the blocks it holds.",
+  },
+  {
+    name: "space.section-y",
+    value: { min: "3rem", preferred: "2rem + 4vw", max: "5rem" },
+    description: "A section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A section's padding beside its content.",
+  },
+  {
+    name: "space.columns",
+    value: { min: "1rem", preferred: "0.5rem + 2vw", max: "2rem" },
+    description: "The space between columns, and between gallery images.",
+  },
+  {
+    name: "space.card",
+    value: { min: "1rem", preferred: "0.75rem + 1vw", max: "1.5rem" },
+    description: "A card's padding around its content.",
+  },
+  {
+    name: "space.paragraph",
+    value: "1em",
+    description: "The space between the paragraphs of rich text.",
+  },
+  {
+    name: "button.padding-y",
+    value: "0.75rem",
+    description: "A button's padding above and below its label.",
+  },
+  {
+    name: "button.padding-x",
+    value: "1.25rem",
+    description: "A button's padding beside its label.",
+  },
+];
+
+/** A spacing default as the CSS a token stores. */
+function spacingValue(value: SpacingValue): string {
+  return typeof value === "string"
+    ? value
+    : `clamp(${value.min}, ${value.preferred}, ${value.max})`;
 }
 
 /**

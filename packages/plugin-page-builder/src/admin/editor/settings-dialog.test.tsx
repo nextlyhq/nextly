@@ -97,7 +97,11 @@ const MANAGER: SiteSettingsRead = {
 /** Renders the dialog again with the current read, as a refetch would. */
 let reshow: () => void = () => {};
 
-function show(onOpenChange = vi.fn(), pageLayout?: ReactElement) {
+function show(
+  onOpenChange = vi.fn(),
+  pageLayout?: ReactElement,
+  seoFields = true
+) {
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
   const element = (): ReactElement => (
@@ -109,6 +113,7 @@ function show(onOpenChange = vi.fn(), pageLayout?: ReactElement) {
         pageFields={<input aria-label="Title" defaultValue="About us" />}
         {...(pageLayout === undefined ? {} : { pageLayout })}
         share={{ title: "Who we are", description: "We build tools." }}
+        seoFields={seoFields}
         breakpoints={{
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
@@ -161,6 +166,29 @@ describe("the Settings dialog", () => {
     expect(
       screen.getByText("Approximate: your site's metadata may differ.")
     ).toBeTruthy();
+  });
+
+  it("says the SEO plugin adds the sharing fields, only where the page has none", () => {
+    show(vi.fn(), undefined, false);
+    expect(screen.getByText(/The SEO plugin adds fields/)).toBeTruthy();
+    cleanup();
+
+    // With the SEO plugin's fields, they are among the page's own: no line.
+    show(vi.fn(), undefined, true);
+    expect(screen.queryByText(/The SEO plugin adds fields/)).toBeNull();
+  });
+
+  it("says when This page saves, and leaves Site to its own banner", async () => {
+    show();
+    expect(
+      screen.getByText("Saved with the page when you Save or Publish.")
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    // The banner says it applies at once; a footer would say it twice.
+    expect(
+      screen.queryByText("Saved with the page when you Save or Publish.")
+    ).toBeNull();
+    expect(screen.queryByText(/save as you change them/)).toBeNull();
   });
 
   it("offers no Site tab to a role that may not manage the site", () => {

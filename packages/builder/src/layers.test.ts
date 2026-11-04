@@ -7,7 +7,7 @@
  *
  * @module layers.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearBlocks,
@@ -19,6 +19,7 @@ import {
 
 import {
   ancestorIds,
+  blockNameOf,
   componentTitles,
   filterLayers,
   layerLabel,
@@ -175,6 +176,44 @@ describe("a component placement's name", () => {
       "Box",
       "Hero banner",
     ]);
+  });
+
+  it("reads the same on the canvas's tag, found by address anywhere in the page", () => {
+    register();
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: { children: [placement("a", "cmp-hero")] },
+      }),
+    ]);
+
+    expect(blockNameOf(document, "a", titles)).toBe("Hero banner");
+    expect(blockNameOf(document, "box", titles)).toBe("Box");
+    // An address the page no longer holds names nothing.
+    expect(blockNameOf(document, "gone", titles)).toBeUndefined();
+  });
+
+  it("reads the page once for every name the canvas asks, and again only for a new page", () => {
+    register();
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: {
+          children: [placement("a", "cmp-hero"), placement("b", "cmp-hero")],
+        },
+      }),
+    ]);
+    const asked = vi.fn(titles);
+    // The canvas asks for a placement's name every time it draws its frame.
+    for (let draw = 0; draw < 3; draw += 1) {
+      expect(blockNameOf(document, "a", asked)).toBe("Hero banner");
+    }
+    expect(blockNameOf(document, "b", asked)).toBe("Hero banner");
+    expect(blockNameOf(document, "box", asked)).toBe("Box");
+    // One read of the page named every placement on it, once each, however
+    // often a name was asked.
+    expect(asked).toHaveBeenCalledTimes(2);
+    // An edit is a new page, read afresh.
+    const edited = documentOf([placement("a", "cmp-blank")]);
+    expect(blockNameOf(edited, "a", asked)).toBe("Component");
   });
 
   it("names the placement holding a lock by its title", () => {

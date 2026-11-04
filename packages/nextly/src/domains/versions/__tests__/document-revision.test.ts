@@ -104,4 +104,17 @@ describe("attachDocumentVersions", () => {
       })
     ).toThrow();
   });
+
+  it("leaves no version a hook set on a row that matches no stored document", () => {
+    const rows: Record<string, unknown>[] = [
+      { id: "rewritten", _rev: "99" },
+      { _rev: "98" },
+    ];
+    attachDocumentVersions(rows, {
+      stored: new Map([["a", 3]]),
+      localization: undefined,
+      locale: undefined,
+    });
+    expect(rows).toEqual([{ id: "rewritten" }, {}]);
+  });
 });

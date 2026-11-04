@@ -41,6 +41,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   validationIssues: () => [],
   readPluginRoute: async () => undefined,
   writePluginRoute: async () => undefined,
+  // Outside a document editor, where there is no Save to run before.
+  useBeforeDocumentAction: () => {},
+  // The form's storing gate, absent here: nothing is tracked.
+  useTrackedWrite: () => () => {},
 }));
 
 const { useSiteStyleHistory } = await import("./site-style-history");

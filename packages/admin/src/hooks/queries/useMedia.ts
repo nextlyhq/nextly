@@ -33,6 +33,7 @@ import {
   type UseInfiniteQueryResult,
   type InfiniteData,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
@@ -279,6 +280,21 @@ export function useInfiniteMedia(
  */
 export function useMediaItem(mediaId?: string): UseQueryResult<Media, Error> {
   return useQuery<Media, Error>({
+    ...mediaItemQuery(mediaId ?? ""),
+    enabled: !!mediaId,
+  });
+}
+
+/**
+ * The one query a media item is read by, so every reader of an item shares its
+ * cache: {@link useMediaItem} and {@link useMediaResolver} ask for an id once
+ * between them.
+ */
+function mediaItemQuery(mediaId: string): {
+  queryKey: readonly ["media", string];
+  queryFn: () => Promise<Media>;
+} {
+  return {
     queryKey: ["media", mediaId],
     queryFn: async () => {
       if (!mediaId) {
@@ -286,8 +302,41 @@ export function useMediaItem(mediaId?: string): UseQueryResult<Media, Error> {
       }
       return await getMediaById(mediaId);
     },
-    enabled: !!mediaId,
-  });
+  };
+}
+
+/**
+ * How long a media item read for drawing stays fresh before it is read again.
+ * A page drawn in the editor asks for each of its images whenever a block is
+ * drawn afresh; within this time those asks are answered from the cache, and
+ * an edit to an item through the library invalidates it at once.
+ */
+const MEDIA_DRAWN_FRESH_MS = 60_000;
+
+/**
+ * Read a media item by id, outside a component's render: for code that draws
+ * a page and resolves its images as it goes.
+ *
+ * Through the same query as {@link useMediaItem}, so an item is fetched once
+ * however many images name it, and a read in flight is shared rather than
+ * repeated. Answers `null` for an item that cannot be read, so one missing
+ * image does not stop a page being drawn. The function is stable for the
+ * component's life.
+ *
+ * @experimental
+ */
+export function useMediaResolver(): (mediaId: string) => Promise<Media | null> {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (mediaId: string) =>
+      queryClient
+        .fetchQuery<Media, Error, Media, readonly ["media", string]>({
+          ...mediaItemQuery(mediaId),
+          staleTime: MEDIA_DRAWN_FRESH_MS,
+        })
+        .catch(() => null),
+    [queryClient]
+  );
 }
 
 /**

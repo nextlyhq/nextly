@@ -32,9 +32,10 @@ export interface DocumentLockHolder {
  *
  * A discriminated result rather than a thrown error, because "somebody else is
  * editing this" is an ordinary answer the interface has to RENDER — with a name
- * and a countdown in it — not an exception. The HTTP layer turns `held` into a
- * 409 carrying the same holder; a thrown error would have to smuggle that
- * through log context, which is not public.
+ * and a countdown in it — not an exception. The HTTP layer answers `held` with
+ * a 200 whose item is this outcome, holder included, as it answers
+ * `acquired`; a thrown error would have to smuggle the holder through log
+ * context, which is not public.
  *
  * 🔴 `claimToken` is returned ONLY on success, and only to the caller that
  * succeeded. It identifies this acquisition, and every later heartbeat and
