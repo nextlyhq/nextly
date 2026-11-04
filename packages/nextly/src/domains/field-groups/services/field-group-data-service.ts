@@ -200,6 +200,9 @@ export class FieldGroupDataService {
    * table read once for them all; see
    * `FieldGroupQueryService.populateComponentDataByLanguage`.
    */
+  // Reached through the component-subtree reader's optional dependency, which
+  // the dead-code gate cannot trace to the class.
+  // fallow-ignore-next-line unused-class-member
   populateComponentDataByLanguage(
     params: Parameters<
       FieldGroupQueryService["populateComponentDataByLanguage"]
