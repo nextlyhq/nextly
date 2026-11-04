@@ -26,6 +26,21 @@ export interface LaidOutEntity {
   localized?: unknown;
 }
 
+/**
+ * The live table named `name`, as the catalog reports it. MySQL with `lower_case_table_names=1`
+ * (the default on macOS and Windows) reports every table in lower case, and its table names are
+ * compared without case there, so a mixed-case `dbName` is found under either spelling.
+ */
+function liveTable<T extends { name: string }>(
+  tables: readonly T[],
+  name: string,
+  dialect: SupportedDialect
+): T | undefined {
+  if (dialect !== "mysql") return tables.find(table => table.name === name);
+  const lower = name.toLowerCase();
+  return tables.find(table => table.name.toLowerCase() === lower);
+}
+
 /** What the refusal needs of the adapter: its dialect and a handle to introspect through. */
 interface LayoutAdapter {
   dialect: SupportedDialect;
@@ -91,7 +106,7 @@ export async function refuseMixedStorage(
     candidates.map(({ entity }) => entity.tableName)
   );
   const found = candidates.flatMap(({ entity, columns }) => {
-    const live = snapshot.tables.find(table => table.name === entity.tableName);
+    const live = liveTable(snapshot.tables, entity.tableName, adapter.dialect);
     if (!live) return [];
     const present = new Set(live.columns.map(column => column.name));
     const onMain = columns.filter(column => present.has(column));
@@ -138,7 +153,7 @@ async function refuseValuesKeptPerLanguage(
     ])
   );
   const columnsOf = (name: string) => {
-    const live = snapshot.tables.find(table => table.name === name);
+    const live = liveTable(snapshot.tables, name, adapter.dialect);
     return live ? new Set(live.columns.map(column => column.name)) : null;
   };
   const found = candidates.flatMap(({ entity, columns }) => {
