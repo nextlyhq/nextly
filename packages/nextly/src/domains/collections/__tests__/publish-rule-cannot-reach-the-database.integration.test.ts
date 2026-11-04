@@ -258,7 +258,11 @@ describe.each(getConfiguredTestDialects())(
       });
     }, 90_000);
 
-    it("ends a publish whose collection rule could not run, naming the collection", async () => {
+    // A collection's publish rule is asked on the pool before the write's
+    // transaction opens, so its own query has a connection even when the pool
+    // holds one: the publish completes on every dialect. A publish that asked
+    // it inside the transaction would wait out the bound here instead.
+    it("lets a collection rule asked before the transaction query, on a one-connection pool", async () => {
       const probe: Probe = { armed: false, does: "query", calls: 0 };
       const { entries, t } = await boot(dialect, probe, "collection");
       const id = await heldEntry(entries);
@@ -272,16 +276,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(probe.calls, JSON.stringify(published)).toBeGreaterThan(0);
-      if (!pooled(dialect)) {
-        expect(published.success, JSON.stringify(published)).toBe(true);
-        return;
-      }
-      expect(published.statusCode, JSON.stringify(published)).toBe(503);
-      expect(published).toMatchObject({
-        code: "RULE_COULD_NOT_RUN",
-        publicData: { subject: POSTS },
-      });
-      expect(await stillPending(t, id)).toBe(true);
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      expect(await guardedLive(entries, id)).toBe("edited");
+      expect(await stillPending(t, id)).toBe(false);
     }, 90_000);
 
     it("still refuses a publish whose collection rule throws for any other reason", async () => {
