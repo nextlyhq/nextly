@@ -147,23 +147,6 @@ type EditorView = EditorMount &
   };
 
 /**
- * Whether the empty-container appender should be suppressed right now.
- *
- * Two independent reasons collapse into one boolean here, named, rather than
- * inlined at the JSX call site: a drag in progress, where the document is
- * mid-change, and the author having turned empty-container chrome off, where
- * the container this control would sit over has collapsed to zero height. A
- * bare `||` at the call site reads as one condition; naming it is what says
- * these are two unrelated causes that happen to share an operator.
- */
-function emptyContainerAppenderHidden(
-  dragging: boolean,
-  showEmptyElements: boolean
-): boolean {
-  return dragging || !showEmptyElements;
-}
-
-/**
  * What stands where the canvas will be, while a read it cannot draw without is
  * still coming or has failed.
  *
@@ -576,7 +559,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     spacingScrub,
     slots,
     blocks,
-    showEmptyElements,
     openInsertPanel,
     locale,
     canvasSource,
@@ -658,7 +640,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
-            showEmptyElements={showEmptyElements}
             overlay={
               <>
                 <VariantPreviewTag name={view.preview.previewing} />
@@ -705,19 +686,14 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 />
                 {/*
                   Suppressed during a drag for the same reason the toolbar and
-                  the bands are, and while the author has turned empty-container
-                  chrome off: the placeholder box collapses to zero height under
-                  the same preference, and a "+" left floating over nothing
-                  would make the preference lie about what a visitor sees.
+                  the bands are. Shown otherwise: empty containers always draw
+                  their placeholder box, so the "+" over it always has one.
                 */}
                 <EmptyContainerAppenders
                   document={editor.document}
                   slots={slots}
                   blocks={blocks}
-                  hidden={emptyContainerAppenderHidden(
-                    dragging,
-                    showEmptyElements
-                  )}
+                  hidden={dragging}
                   onAppend={nodeId => {
                     // Select the container and open Add to add INSIDE it,
                     // said explicitly: selecting a container never implies
@@ -1094,7 +1070,6 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentVerbs,
     availablePanels,
     openPanelRequest,
-    setShowEmptyElements,
     setZoom,
     appliedScale,
     deviceRequest,
@@ -1116,10 +1091,6 @@ function EditorBody<TFieldValues extends FieldValues>({
         // which lives on the canvas below rather than beside the rail that
         // normally opens a panel.
         openPanelRequest={openPanelRequest}
-        // The read half of the same gap: mirrors the shell's own preference
-        // so the appender below can be suppressed by the SAME switch that
-        // already suppresses the placeholder box it sits over.
-        onShowEmptyElementsChange={setShowEmptyElements}
         onZoomChange={setZoom}
         // The device being edited: chosen here, held and stored by the shell,
         // and reported back so the canvas and the inspector follow it.

@@ -175,9 +175,6 @@ describe("preferences round-trip", () => {
     layouts: {
       "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
     },
-    // Always shown: the editor no longer offers to hide empty containers, so
-    // there is no other value a round trip could carry.
-    showEmptyElements: true,
     // Non-default for the same reason, and FIXED rather than fit: fit is the
     // default, and it is also what a read falls back to when it cannot make
     // sense of what was stored — so a round trip carrying fit would pass
@@ -193,6 +190,33 @@ describe("preferences round-trip", () => {
     const store = memoryStore();
     writePreferences(store, stored);
     expect(readPreferences(store)).toEqual(stored);
+  });
+
+  it("loads a record carrying the removed showEmptyElements whole, without it", () => {
+    // Every other field is non-default (the round-trip record above), so a
+    // read that refused the record, or fell back to the defaults on meeting an
+    // unknown key, cannot also produce this answer. Compared with `toEqual`
+    // against the exact record, so a read that carried the old field through
+    // fails as well.
+    // Built from what the editor writes, so every field is in its stored
+    // spelling, with the old field added the way an earlier release wrote it.
+    const written = memoryStore();
+    writePreferences(written, stored);
+    const record: unknown = JSON.parse(written.value ?? "null");
+    if (typeof record !== "object" || record === null) {
+      throw new Error("the editor wrote no record");
+    }
+    const store = memoryStore(
+      JSON.stringify({ ...record, showEmptyElements: false })
+    );
+    const read = readPreferences(store);
+    expect(read).toEqual(stored);
+
+    // Writing what was read drops the old field for good.
+    const rewritten = memoryStore();
+    writePreferences(rewritten, read);
+    const after: unknown = JSON.parse(rewritten.value ?? "null");
+    expect(after).not.toHaveProperty("showEmptyElements");
   });
 
   it("falls back to fitting when the stored zoom is not one", () => {
@@ -263,9 +287,6 @@ describe("preferences round-trip", () => {
       leftPanelHidden: false,
       inspectorHidden: false,
       layouts: { "canvas,inspector": { canvas: 70, inspector: 30 } },
-      // Absent from the stored JSON above, so it falls back the same way
-      // `leftPinned` does here rather than surfacing as `undefined`.
-      showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
       zoom: DEFAULT_PREFERENCES.zoom,
       editingBreakpoint: DEFAULT_PREFERENCES.editingBreakpoint,
       // Absent as well, as in every record written before the keys could be
@@ -294,36 +315,6 @@ describe("preferences round-trip", () => {
       expect(readPreferences(store).layouts).toEqual({});
     }
   });
-});
-
-describe("the show-empty-elements preference", () => {
-  it("defaults to showing them", () => {
-    const store = { read: () => null, write: () => undefined };
-    expect(readPreferences(store).showEmptyElements).toBe(true);
-  });
-
-  it("reads a stored false as shown, so no empty container disappears", () => {
-    // The control that wrote false is gone, and an author who once hid empty
-    // containers would have no way to bring them back.
-    const store = {
-      read: () => JSON.stringify({ showEmptyElements: false }),
-      write: () => undefined,
-    };
-    expect(readPreferences(store).showEmptyElements).toBe(true);
-  });
-
-  it("falls back to the default for a non-boolean", () => {
-    // A stored value can arrive from a hand-edited localStorage entry or an
-    // older shape. Anything that is not a boolean says nothing about intent.
-    const store = {
-      read: () => JSON.stringify({ showEmptyElements: "no" }),
-      write: () => undefined,
-    };
-    expect(readPreferences(store).showEmptyElements).toBe(true);
-  });
-
-  // No round trip of a stored false: hiding empty containers was removed
-  // with its control, so a false written then reads back as shown (above).
 });
 
 describe("the rail's items, in the order an author meets them", () => {
@@ -375,7 +366,6 @@ describe("preferences saved before panels had parts", () => {
       layouts: {
         "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
       },
-      showEmptyElements: true,
       panelKeys: true,
     });
   });
