@@ -353,7 +353,7 @@ test.describe("the Components panel", () => {
     await saveDraft(page);
 
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
-    await expect(page.getByText("Start your page")).toHaveCount(0);
+    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
   });
 
   test("takes a drag anywhere on an empty page", async ({ page }) => {
@@ -378,7 +378,7 @@ test.describe("the Components panel", () => {
     await page.mouse.move(x + 24, aimY, { steps: 8 });
     await page.mouse.move(to.x + to.width / 2, aimY, { steps: 12 });
     // The start card goes while the drag is under way.
-    await expect(page.getByText("Start your page")).toHaveCount(0);
+    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
     await page.mouse.up();
     await saveDraft(page);
 
