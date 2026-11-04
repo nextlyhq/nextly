@@ -132,6 +132,13 @@ describe("builderChecklist", () => {
     }
   );
 
+  it("names Add block for a document of a kind it does not know", () => {
+    const document = { ...documentOf([]), kind: "a-future-kind" } as never;
+    expect(step(document, "add-block")?.hint).toBe(
+      "Click Add block, or open Add in the left rail."
+    );
+  });
+
   it("counts the first block as done once one is there", () => {
     expect(step(documentOf([heading("a")]), "add-block")?.done).toBe(true);
   });

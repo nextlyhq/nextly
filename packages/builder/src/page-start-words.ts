@@ -45,9 +45,19 @@ const WORDS_OF_KIND: Record<BlockDocument["kind"], keyof typeof WORDS> = {
   template: "blocks",
 };
 
-/** The words for a document of this kind. */
+/**
+ * The words for a document of this kind.
+ *
+ * Block wording for a kind this editor does not know. The engine's forgiving
+ * read lets a stored document through with a kind newer than the code, and
+ * the type cannot see that, so the lookup is asked as an own property: a kind
+ * spelled like one of an object's inherited names (`toString`) is unknown
+ * too, not a function to index with.
+ */
 export function startWords(
   kind: BlockDocument["kind"]
 ): (typeof WORDS)[keyof typeof WORDS] {
-  return WORDS[WORDS_OF_KIND[kind]];
+  return WORDS[
+    Object.hasOwn(WORDS_OF_KIND, kind) ? WORDS_OF_KIND[kind] : "blocks"
+  ];
 }

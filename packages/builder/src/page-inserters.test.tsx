@@ -241,6 +241,18 @@ describe("an empty page", () => {
     }
   );
 
+  it.each(["a-future-kind", "toString"])(
+    "speaks of blocks in a document of a kind it does not know (%s)",
+    async kind => {
+      // A stored document can carry a kind newer than this editor: the
+      // engine's forgiving read lets it through, and the card still draws.
+      mount({ formatVersion: 1, kind, nodes: [] } as never);
+      await act(async () => undefined);
+      expect(screen.getByText("Add the first block")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
+    }
+  );
+
   it("follows the scroller when it scrolls the empty page", async () => {
     // The scroller around the canvas is outside it, and its scroll reaches no
     // listener on the canvas: the card is re-centred on what it now shows.
