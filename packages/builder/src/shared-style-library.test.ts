@@ -348,6 +348,10 @@ describe("a row's tile in dark mode", () => {
     const shadow = String(tile.specimen.textShadow ?? "");
     expect(shadow).toContain("#111827");
     expect(shadow).toContain("#f9fafb");
+    // And no stroke over them: one would hide the inner dark halo, and could
+    // itself be the colour of a background it cannot measure. Set inline, so
+    // it wins over any stroke a class supplies.
+    expect(tile.specimen.WebkitTextStroke).toBe("0");
   });
 
   it("outlines text it cannot show reads on a colour it cannot measure", () => {

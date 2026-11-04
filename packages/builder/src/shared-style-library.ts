@@ -520,6 +520,10 @@ function outlinedSpecimen(
   return {
     ...specimen,
     textShadow: `0 0 1px ${dark ?? "currentcolor"}, 0 0 3px ${light ?? "currentcolor"}`,
+    // No stroke over the halos, whatever a class supplies: one would hide the
+    // inner dark halo, and could be the very colour of a background this
+    // cannot measure.
+    WebkitTextStroke: "0",
   };
 }
 

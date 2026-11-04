@@ -15,20 +15,28 @@ import { BACKGROUND_JOBS_DOCS_HREF } from "./docs-links";
 /** The repository's `docs/` folder, which the site publishes. */
 const DOCS = fileURLToPath(new URL("../../../docs/", import.meta.url));
 
-/** A heading's anchor as the docs site writes it. */
-function anchorOf(heading: string): string {
-  return heading
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-");
-}
-
-/** The anchors of a published page's headings. */
-function anchorsIn(page: string): string[] {
+/** The headings of a published page, as written. */
+function headingsIn(page: string): string[] {
   const source = readFileSync(`${DOCS}${page}/index.mdx`, "utf8");
   return [...source.matchAll(/^#{2,6}\s+(.+)$/gm)].map(match =>
-    anchorOf(match[1] ?? "")
+    (match[1] ?? "").trim()
+  );
+}
+
+/**
+ * The one heading a link's anchor names, and only where every common
+ * slugger gives the same id: a heading of plain letters, digits and spaces,
+ * whose id is its words lowercased and joined by hyphens, appearing once (a
+ * second would be given a numbered id). The docs site is rendered elsewhere,
+ * so this asks no more of its slugger than that; a heading that gains
+ * punctuation, inline markup or a twin fails here, to be looked at, rather
+ * than being judged by a guess at the renderer's rules.
+ */
+function headingNamedBy(page: string, anchor: string): string[] {
+  return headingsIn(page).filter(
+    heading =>
+      /^[A-Za-z0-9 ]+$/.test(heading) &&
+      heading.toLowerCase().split(/ +/).join("-") === anchor
   );
 }
 
@@ -36,6 +44,8 @@ describe("links to a section of the docs", () => {
   it("points the background jobs link at a heading the jobs page has", () => {
     const url = new URL(BACKGROUND_JOBS_DOCS_HREF);
     expect(url.pathname).toBe("/docs/jobs");
-    expect(anchorsIn("jobs")).toContain(url.hash.slice(1));
+    expect(headingNamedBy("jobs", url.hash.slice(1))).toEqual([
+      "Running the queue",
+    ]);
   });
 });

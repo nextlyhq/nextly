@@ -203,6 +203,36 @@ describe("the rows", () => {
     ).toBe("spacing");
   });
 
+  it("names the code name when two rows of one name are of one kind too", () => {
+    // `space.card` and `spacing.card` are both spacing steps called "Card":
+    // the kind cannot tell them apart, the code name can.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "spacing.card",
+              kind: "dimension",
+              values: { light: "32px" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Card · space\.card,/).getAttribute("aria-label")).toBe(
+      "Card · space.card, 24px"
+    );
+    expect(row(/^Card · spacing\.card,/).getAttribute("aria-label")).toBe(
+      "Card · spacing.card, 32px"
+    );
+  });
+
   it("says no kind for one name shown in two groups, whose headings tell them apart", () => {
     // The body font and the body type size both read "Body", each under its
     // own heading.

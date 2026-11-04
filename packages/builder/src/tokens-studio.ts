@@ -785,21 +785,32 @@ function kindWordOf(row: TokenRow): string {
 
 /**
  * A group's rows with their kind added where two or more share a name,
- * ignoring case, as {@link labelClashes} compares names.
+ * ignoring case, as {@link labelClashes} compares names. Where the kinds
+ * clash as well (`space.card` and `spacing.card`, both spacing steps called
+ * "Card"), the code name, which no two variables share, tells them apart.
  */
 function withKindWhereNamesClash(
   entries: readonly VariableEntry[]
 ): VariableEntry[] {
-  const count = new Map<string, number>();
-  for (const { label } of entries) {
-    const key = label.toLowerCase();
-    count.set(key, (count.get(key) ?? 0) + 1);
-  }
-  return entries.map(entry =>
-    (count.get(entry.label.toLowerCase()) ?? 0) > 1
-      ? { ...entry, kindWord: kindWordOf(entry.row) }
-      : entry
+  const count = (keys: readonly string[]) => {
+    const seen = new Map<string, number>();
+    for (const key of keys) seen.set(key, (seen.get(key) ?? 0) + 1);
+    return seen;
+  };
+  const names = count(entries.map(entry => entry.label.toLowerCase()));
+  const kinds = count(
+    // JSON, so no label can run into its kind.
+    entries.map(entry =>
+      JSON.stringify([entry.label.toLowerCase(), kindWordOf(entry.row)])
+    )
   );
+  return entries.map(entry => {
+    const name = entry.label.toLowerCase();
+    if ((names.get(name) ?? 0) < 2) return entry;
+    const kind = kindWordOf(entry.row);
+    const unique = (kinds.get(JSON.stringify([name, kind])) ?? 0) < 2;
+    return { ...entry, kindWord: unique ? kind : entry.row.name };
+  });
 }
 
 /**
