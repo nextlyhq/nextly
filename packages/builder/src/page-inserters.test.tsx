@@ -228,6 +228,19 @@ describe("an empty page", () => {
     expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
   });
 
+  it.each(["pattern", "region", "template"])(
+    "speaks of blocks in an empty %s, which has no sections either",
+    async kind => {
+      // Only a page is built of sections; every other kind of document holds
+      // blocks at its top level.
+      mount({ formatVersion: 1, kind, nodes: [] } as never);
+      await act(async () => undefined);
+      expect(screen.queryByText("Start your page")).toBeNull();
+      expect(screen.getByText("Add the first block")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
+    }
+  );
+
   it("follows the scroller when it scrolls the empty page", async () => {
     // The scroller around the canvas is outside it, and its scroll reaches no
     // listener on the canvas: the card is re-centred on what it now shows.

@@ -1,7 +1,7 @@
 /**
  * What the editor says about starting an empty document, and about adding at
- * its top level: of sections on a page, of blocks in a component, which has
- * no sections. One source for the canvas's start card and gaps and for the
+ * its top level: of sections on a page, of blocks in every other kind of
+ * document. One source for the canvas's start card and gaps and for the
  * Getting started checklist, so the checklist names the control that is there.
  *
  * @module page-start-words
@@ -10,18 +10,18 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 /**
- * What the start card and a gap's "+" say: of sections on a page, of blocks in
- * a component, which has no sections.
+ * What the start card and a gap's "+" say: of sections on a page, of blocks
+ * in a document built of blocks.
  */
 const WORDS = {
-  page: {
+  sections: {
     title: "Start your page",
     hint: "Add a section, or drag one here from the panel.",
     start: "Add section",
     gap: "Add a section here",
     after: "Add a section after",
   },
-  component: {
+  blocks: {
     title: "Add the first block",
     hint: "Add a block, or drag one here from the panel.",
     start: "Add block",
@@ -30,9 +30,24 @@ const WORDS = {
   },
 } as const;
 
+/**
+ * Which words each kind of document speaks. Only a page is built of sections;
+ * a pattern, a component, a Layout region and a collection template hold
+ * blocks at their top level (a section among them, where the rules allow).
+ * Every kind is named, so a kind the engine adds fails to type-check here
+ * rather than quietly reading as a page.
+ */
+const WORDS_OF_KIND: Record<BlockDocument["kind"], keyof typeof WORDS> = {
+  page: "sections",
+  pattern: "blocks",
+  component: "blocks",
+  region: "blocks",
+  template: "blocks",
+};
+
 /** The words for a document of this kind. */
 export function startWords(
   kind: BlockDocument["kind"]
 ): (typeof WORDS)[keyof typeof WORDS] {
-  return WORDS[kind === "component" ? "component" : "page"];
+  return WORDS[WORDS_OF_KIND[kind]];
 }
