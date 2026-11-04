@@ -9756,6 +9756,13 @@ export class CollectionMutationService extends BaseService {
       ctx;
     const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
     if (!this.fieldGroupDataService || heldComponentNames.length === 0) return;
+    // The language the held instances are judged in: the draft's key, or,
+    // for a document with no languages, the one the request named. Instance
+    // rows and the library they read are kept per language whether or not
+    // the host is, so the request's language is the one an ordinary update
+    // and the draft's snapshot use; without it they read the default. An
+    // empty one is no language, as the write's own locale check reads it.
+    const judgedIn = draftLocale ?? (params.locale || undefined);
     await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
       parentId: params.entryId,
       parentTable: collectionTableName(collection, params.collectionName),
@@ -9769,7 +9776,7 @@ export class CollectionMutationService extends BaseService {
       ),
       // The language this held write is keyed under: the request's, or the
       // companion's write locale when the patch touched localized columns.
-      locale: draftLocale ?? undefined,
+      locale: judgedIn,
       req: params.user ? { user: params.user } : {},
       // Who the write is made as, for each instance's own field rules: the
       // caller and trust the entry's own fields are judged with.
@@ -9785,7 +9792,7 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         params.entryId,
         tx,
-        draftLocale ?? undefined,
+        judgedIn,
         this.writtenPayload(
           sentFields(ctx.updatePayload),
           [ctx.manyToManyData, ctx.componentFieldData],
