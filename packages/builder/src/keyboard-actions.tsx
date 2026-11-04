@@ -30,7 +30,6 @@ import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
-import { focusBlockToolbar } from "./canvas-chrome";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
@@ -296,6 +295,16 @@ export function useSelectionActionsContext(): ToolbarAction[] | null {
  */
 const DepthMovesContext = React.createContext<readonly DepthMoveAction[]>([]);
 
+const ToolbarFocusContext = React.createContext<ToolbarFocusSlot | null>(null);
+
+/**
+ * The nearest provider's toolbar focus slot, or `null` outside one: the
+ * block toolbar puts its focus call here for Alt+F10.
+ */
+export function useToolbarFocusSlot(): ToolbarFocusSlot | null {
+  return React.useContext(ToolbarFocusContext);
+}
+
 /** The provider's Move in and Move out, for the block menu. */
 export function useDepthMoveActions(): readonly DepthMoveAction[] {
   return React.useContext(DepthMovesContext);
@@ -512,7 +521,16 @@ export interface BlockKeyboardActionsResult {
    * itself runs, so an item is offered exactly when pressing it would move.
    */
   readonly depthMoves: readonly DepthMoveAction[];
+  /**
+   * Where this editor's block toolbar puts the call that focuses it, for
+   * Alt+F10 to make. Held per editor rather than looked up in the document,
+   * which may hold another editor's toolbar first.
+   */
+  readonly toolbarFocus: ToolbarFocusSlot;
 }
+
+/** Holds the call that focuses an editor's block toolbar, while it is drawn. */
+export type ToolbarFocusSlot = React.MutableRefObject<(() => void) | null>;
 
 /**
  * Register the move bindings for as long as the caller is mounted.
@@ -572,6 +590,9 @@ export function useBlockKeyboardActions({
   // the document from that render.
   const latest = React.useRef(editor);
   latest.current = editor;
+  const toolbarFocus: ToolbarFocusSlot = React.useRef<(() => void) | null>(
+    null
+  );
 
   const deleteSelected = React.useCallback(() => {
     const editorNow = latest.current;
@@ -896,9 +917,7 @@ export function useBlockKeyboardActions({
         description: "Move focus to the selected block's toolbar",
         when: () => latest.current.selectedId !== null,
         whenTyping: true,
-        run: () => {
-          if (typeof document !== "undefined") focusBlockToolbar(document);
-        },
+        run: () => toolbarFocus.current?.(),
       },
       {
         keys: "mod+z",
@@ -1239,6 +1258,7 @@ export function useBlockKeyboardActions({
     nesting: nestingSource,
     selectionActions,
     depthMoves,
+    toolbarFocus,
   };
 }
 
@@ -1309,6 +1329,7 @@ export function BlockKeyboardActions({
     nesting: rules,
     selectionActions: offered,
     depthMoves,
+    toolbarFocus,
   } = useBlockKeyboardActions(options);
 
   /*
@@ -1359,10 +1380,12 @@ export function BlockKeyboardActions({
       <SelectionActionsContext.Provider value={offered}>
         <DepthMovesContext.Provider value={depthMoves}>
           <BlockActionsContext.Provider value={actions}>
-            <p aria-live="polite" role="status" className="nx-sr-only">
-              {announcement}
-            </p>
-            {children}
+            <ToolbarFocusContext.Provider value={toolbarFocus}>
+              <p aria-live="polite" role="status" className="nx-sr-only">
+                {announcement}
+              </p>
+              {children}
+            </ToolbarFocusContext.Provider>
           </BlockActionsContext.Provider>
         </DepthMovesContext.Provider>
       </SelectionActionsContext.Provider>

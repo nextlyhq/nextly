@@ -80,7 +80,10 @@ import {
   overlaySpaceOf,
   scrollEventTarget,
 } from "./geometry-dom";
-import { useBlockActionsContext } from "./keyboard-actions";
+import {
+  useBlockActionsContext,
+  useToolbarFocusSlot,
+} from "./keyboard-actions";
 import { layerLabel } from "./layers";
 import { lockBlockingEdit } from "./locking";
 import { useSelectionActions } from "./selection-actions";
@@ -137,6 +140,25 @@ export function BlockToolbar({
 }: BlockToolbarProps): React.JSX.Element | null {
   const verbs = useBlockActionsContext();
   const bar = React.useRef<HTMLDivElement | null>(null);
+
+  /*
+   * Alt+F10's call, put in this editor's slot while the bar is drawn: focus
+   * at the bar's tab stop, the one button of its roving set that holds
+   * `tabindex="0"`. Through the editor's own slot rather than a search of the
+   * document, which may hold another editor's bar first.
+   */
+  const focusSlot = useToolbarFocusSlot();
+  React.useEffect(() => {
+    if (focusSlot === null) return;
+    const focus = (): void => {
+      const stop = bar.current?.querySelector<HTMLElement>('[tabindex="0"]');
+      stop?.focus();
+    };
+    focusSlot.current = focus;
+    return () => {
+      if (focusSlot.current === focus) focusSlot.current = null;
+    };
+  }, [focusSlot]);
   const [placement, setPlacement] = React.useState<ToolbarPlacement | null>(
     null
   );

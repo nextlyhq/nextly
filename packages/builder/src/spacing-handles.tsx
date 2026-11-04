@@ -279,8 +279,8 @@ function applied(editor: EditorState, result: StyleWrite): string | undefined {
     : undefined;
 }
 
-/** Whether two bands would put their handles on the very same pixels. */
-function sameEdge(
+/** Whether two bands' handles, each placed alone, would share any pixels. */
+function handlesOverlap(
   one: SpacingBand,
   other: SpacingBand,
   outwardOf: (band: SpacingBand) => boolean
@@ -289,19 +289,34 @@ function sameEdge(
   const a = handleRect(one, outwardOf(one));
   const b = handleRect(other, outwardOf(other));
   return (
-    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
   );
 }
 
-/** How a handle shares its band with another handle on the same pixels. */
+/**
+ * The stretch two overlapping handles split between them: the union of their
+ * bands along the side's axis, and which half this one takes.
+ */
 interface HandleShare {
-  /** Another handle lands on the same pixels, so the band is split. */
-  readonly shared: boolean;
-  /** This handle is the one moved aside, to the half away from the edge. */
-  readonly nudged: boolean;
+  readonly low: number;
+  readonly room: number;
+  /** This handle takes the half at the block's outside: the margin's. */
+  readonly outer: boolean;
 }
 
-const ALONE: HandleShare = { shared: false, nudged: false };
+/** The share of `band`'s handle beside `other`'s, which it overlaps. */
+function shareWith(band: SpacingBand, other: SpacingBand): HandleShare {
+  const across = band.side === "top" || band.side === "bottom";
+  const from = (rect: Rect) => (across ? rect.y : rect.x);
+  const to = (rect: Rect) =>
+    across ? rect.y + rect.height : rect.x + rect.width;
+  const low = Math.min(from(band.rect), from(other.rect));
+  const high = Math.max(to(band.rect), to(other.rect));
+  return { low, room: high - low, outer: band.box === "margin" };
+}
 
 /**
  * Where a handle's strip sits on its band.
@@ -315,20 +330,40 @@ const ALONE: HandleShare = { shared: false, nudged: false };
  * A band thinner than the strip is the strip, all of it; one thinner than
  * {@link HANDLE_FLOOR_PX} gets that much, centred on it.
  *
- * `share` splits a band two handles land on: a negative margin's band is
- * laid inside the border edge, exactly where padding's is. The earlier one
- * takes the half away from the moving edge, so both strips take pointer events
- * and neither leaves the space it describes.
+ * `share` splits the stretch two handles would overlap on. A negative
+ * margin's band is laid inside the border edge, where padding's is, so the two
+ * start at one edge; the padding's, drawn later, would otherwise take every
+ * press there. The margin takes the half at the block's outside and the
+ * padding the half inside it, the order the two boxes have, so both strips
+ * take pointer events.
  */
 function handleRect(
   band: SpacingBand,
   outward: boolean,
-  share: HandleShare = ALONE,
+  share?: HandleShare,
   scale = 1
 ): Rect {
   const { rect, side } = band;
   const across = side === "top" || side === "bottom";
   const far = side === "bottom" || side === "right";
+  const size = HANDLE_SCREEN_PX / scale;
+  const floor = HANDLE_FLOOR_PX / scale;
+  const at = (from: number, thickness: number): Rect =>
+    across
+      ? { x: rect.x, y: from, width: rect.width, height: thickness }
+      : { x: from, y: rect.y, width: thickness, height: rect.height };
+
+  if (share !== undefined) {
+    const { low, room } = share;
+    const thickness = Math.max(Math.min(size, room / 2), floor);
+    // Centred as a pair where the two need more room than there is.
+    const centring = thickness * 2 > room ? (room - thickness * 2) / 2 : 0;
+    // The block's outside is the low end on the top and left, the high end on
+    // the bottom and right.
+    const offset = centring + (share.outer ? 0 : thickness);
+    return at(far ? low + room - offset - thickness : low + offset, thickness);
+  }
+
   /*
    * The edge that MOVES when the value grows, which is where the control
    * belongs. `outward` says which one that is, and it is a property of neither
@@ -338,21 +373,10 @@ function handleRect(
   const atMax = far === outward;
   const low = across ? rect.y : rect.x;
   const room = across ? rect.height : rect.width;
-  // In the band's units: the layer over a frame is scaled with the page, and
-  // the strip keeps its own size on screen.
-  const thickness = Math.max(
-    Math.min(HANDLE_SCREEN_PX / scale, share.shared ? room / 2 : room),
-    HANDLE_FLOOR_PX / scale
-  );
-  // How far into the band from its moving edge the strip begins. Where the
-  // strips need more room than the band has, they are centred on it instead.
-  const needed = share.shared ? thickness * 2 : thickness;
-  const inset =
-    (needed > room ? (room - needed) / 2 : 0) + (share.nudged ? thickness : 0);
-  const from = atMax ? low + room - inset - thickness : low + inset;
-  return across
-    ? { x: rect.x, y: from, width: rect.width, height: thickness }
-    : { x: from, y: rect.y, width: thickness, height: rect.height };
+  const thickness = Math.max(Math.min(size, room), floor);
+  // A band thinner than the floor: the strip centred on it.
+  const inset = thickness > room ? (room - thickness) / 2 : 0;
+  return at(atMax ? low + room - inset - thickness : low + inset, thickness);
 }
 
 /** The words an author reads for one side of one box. */
@@ -1246,28 +1270,23 @@ export function SpacingHandles({
          */
         if (!writable.has(band.box)) return null;
         /*
-         * Sharing the band where two handles would land on the same pixels.
+         * Split with another handle where the two would overlap.
          *
-         * A negative margin's band is laid inside the border edge, exactly where
-         * padding's is — so `margin-top: -16px` with `padding-top: 16px` gives
-         * two bands with identical rectangles and therefore two identical
-         * handles. Same stacking, and padding is drawn later, so it takes every
-         * press and the margin's control is advertised and unreachable.
-         *
-         * The EARLIER band moves aside, into the band both of them occupy.
+         * A negative margin's band is laid inside the border edge, where
+         * padding's is — so `margin-top: -16px` beside `padding-top: 20px`
+         * gives two bands from one edge. Padding is drawn later, so its handle
+         * would take every press there and the margin's control would be
+         * advertised and unreachable.
          */
         const outward = drawnEdgeOf(band);
+        const partner = drawn.find(
+          (other, at) =>
+            at !== index && handlesOverlap(band, other, drawnEdgeOf)
+        );
         const rect = handleRect(
           band,
           outward,
-          {
-            shared: drawn.some(
-              (other, at) => at !== index && sameEdge(band, other, drawnEdgeOf)
-            ),
-            nudged: drawn
-              .slice(index + 1)
-              .some(later => sameEdge(band, later, drawnEdgeOf)),
-          },
+          partner === undefined ? undefined : shareWith(band, partner),
           handleScale
         );
         return (

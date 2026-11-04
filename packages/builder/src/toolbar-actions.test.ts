@@ -801,6 +801,21 @@ describe("toolbarPlacement", () => {
     expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
   });
 
+  it("stays at the top of the screen for a tall block just under it, with no room below on screen", () => {
+    // Below a block taller than the rest of the screen is off it: the bar goes
+    // to the screen's top, over the block, rather than out of reach.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 0, y: 610, width: 500, height: 1000 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("pinned");
+    expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
+  });
+
   it("is left where it is for a block scrolled wholly out of view", () => {
     const screen = { top: 600, bottom: 1400 };
     expect(

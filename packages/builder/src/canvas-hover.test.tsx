@@ -16,6 +16,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearBlocks,
@@ -140,5 +141,55 @@ describe("pointing at a block on the canvas", () => {
     expect(pointed()).toBe("nothing");
     fireEvent.pointerMove(inner);
     expect(pointed()).toBe("nothing");
+  });
+
+  it("lets go of the hovered block in the commit that starts the drag, before a paint", async () => {
+    /*
+     * Outside `act`, which flushes every effect before it returns and so
+     * cannot tell the two phases apart. A mutation observer's callback runs as
+     * a microtask straight after React commits the drag, before the browser
+     * paints and before a passive effect runs: what it reads is what the first
+     * frame of the drag shows.
+     */
+    const flags = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const before = flags.IS_REACT_ACT_ENVIRONMENT;
+    flags.IS_REACT_ACT_ENVIRONMENT = false;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const settle = async (done: () => boolean) => {
+      for (let tries = 0; tries < 50 && !done(); tries += 1) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    };
+    try {
+      root.render(canvas());
+      await settle(() => node("inner") !== null);
+      const inner = node("inner");
+      if (inner === null) throw new Error("no inner block");
+      fireEvent.pointerMove(inner);
+      await settle(() => pointed() === "inner");
+      expect(pointed()).toBe("inner");
+
+      const shown = new Promise<string | null>(resolve => {
+        const observer = new MutationObserver(() => {
+          if (host.querySelector("[data-nx-dragging]") === null) return;
+          observer.disconnect();
+          resolve(pointed());
+        });
+        observer.observe(host, {
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      });
+      root.render(canvas(true));
+      expect(await shown).toBe("nothing");
+    } finally {
+      root.unmount();
+      host.remove();
+      flags.IS_REACT_ACT_ENVIRONMENT = before;
+    }
   });
 });

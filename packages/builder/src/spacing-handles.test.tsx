@@ -1356,6 +1356,39 @@ describe("two handles that would land on the same pixels", () => {
     expect(marginTop).not.toBe(paddingTop);
   });
 
+  it("splits two bands of different depths that start at one edge", () => {
+    // A borderless block with `margin-top: -16px` and `padding-top: 20px`:
+    // both bands start at the border edge, one deeper than the other. Each
+    // handle filling its own band would leave the padding's, drawn later,
+    // over the whole of the margin's.
+    mount([
+      {
+        box: "margin",
+        side: "top",
+        rect: { x: 0, y: 100, width: 50, height: 16 },
+        label: "-16",
+        negative: true,
+      },
+      {
+        box: "padding",
+        side: "top",
+        rect: { x: 0, y: 100, width: 50, height: 20 },
+        label: "20",
+        negative: false,
+      },
+    ]);
+    const span = (name: string) => {
+      const { top, height } = handle(name).style;
+      return {
+        from: parseFloat(top),
+        to: parseFloat(top) + parseFloat(height),
+      };
+    };
+    const margin = span("top margin");
+    const padding = span("top padding");
+    expect(margin.to <= padding.from || padding.to <= margin.from).toBe(true);
+  });
+
   it("leaves handles that do not coincide where they were", () => {
     mount([
       {

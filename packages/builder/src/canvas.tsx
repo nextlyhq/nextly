@@ -1815,7 +1815,10 @@ function useCanvasHover(
   onPointerLeave: () => void;
 } {
   const setHovered = useHoveredBlockSetter();
-  useEffect(() => {
+  // In the layout phase, so the frame that first draws the drag never also
+  // draws the hovered outline its marks replace: a passive effect runs after
+  // that paint.
+  useIsomorphicLayoutEffect(() => {
     if (dragging) setHovered(null);
   }, [dragging, setHovered]);
   // Nothing stays pointed at once the canvas goes.

@@ -922,7 +922,7 @@ export function toolbarPlacement(
 ): ToolbarPlacement {
   const above = block.y - toolbar.height - gap;
   const below = block.y + block.height + gap;
-  const side = toolbarSide(block, toolbar, gap, screen, above);
+  const side = toolbarSide(block, toolbar, gap, screen, above, below);
 
   // The clamp is skipped when the bar is wider than the canvas, because there
   // is no position that satisfies both edges and clamping would silently choose
@@ -937,24 +937,29 @@ export function toolbarPlacement(
 }
 
 /**
- * Which side the bar takes. Below only when above would leave the screen and
- * the block's top is on it; a block near the BOTTOM keeps the bar above it,
- * where it is still visible, since flipping there would push it under the
- * fold for no gain. Pinned to the screen's top over a tall block scrolled past
- * its top while still filling the screen below the bar; above for a block
- * wholly out of view.
+ * Which side the bar takes. Below only when above would leave the screen, the
+ * block's top is on it and the bar fits on screen under the block; a block
+ * near the BOTTOM keeps the bar above it, where it is still visible, since
+ * flipping there would push it under the fold for no gain. Pinned to the
+ * screen's top over a block that fills the screen below the bar: one whose top
+ * is scrolled away, or one too tall for the bar to fit under it on screen.
+ * Above for a block wholly out of view.
  */
 function toolbarSide(
   block: Rect,
   toolbar: ToolbarSize,
   gap: number,
   screen: ToolbarScreen,
-  above: number
+  above: number,
+  below: number
 ): ToolbarPlacement["side"] {
   if (above >= screen.top) return "above";
-  if (block.y >= screen.top) return "below";
   const stillShown =
     block.y + block.height >= screen.top + toolbar.height + gap;
+  if (block.y >= screen.top) {
+    const fitsBelow = below + toolbar.height <= screen.bottom;
+    return fitsBelow || !stillShown ? "below" : "pinned";
+  }
   return stillShown ? "pinned" : "above";
 }
 
