@@ -253,6 +253,127 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    // A component kept per language whose shared and translated children are
+    // each valid in one language's draft but not together: English with mode
+    // A and label X, German with mode B and label Y, and a validator that
+    // refuses label X with mode B. Whichever shared mode were written last
+    // would pair with the other language's label, a document no gate judged.
+    // Publishing every language is refused before anything is written, with
+    // both changes still pending. The plausible broken implementation judges
+    // each language's draft alone and puts the combination live.
+    it("refuses a publish whose languages would combine a component's shared and translated children into an invalid one", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "panel",
+            localized: true,
+            fields: [
+              text({ name: "mode", localized: false }),
+              text({
+                name: "label",
+                validate: (value, { data }) =>
+                  value === "X" && data.mode === "B"
+                    ? "Label X does not go with mode B."
+                    : true,
+              }),
+            ],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: () => true },
+            fields: [
+              text({ name: "siteName" }),
+              fieldGroup({ name: "panel", component: "panel" }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      for (const locale of ["en", "de"]) {
+        expect(
+          (
+            await save(singles, locale, {
+              siteName: locale,
+              panel: { mode: "A", label: "Y" },
+              status: "published",
+            })
+          ).success
+        ).toBe(true);
+      }
+      expect(await pendingLocales()).toEqual([]);
+      const enSaved = await save(singles, "en", {
+        panel: { mode: "A", label: "X" },
+      });
+      expect(enSaved.success, JSON.stringify(enSaved)).toBe(true);
+      expect(await pendingLocales()).toEqual(["en"]);
+      const deSaved = await save(singles, "de", {
+        panel: { mode: "B", label: "Y" },
+      });
+      expect(deSaved.success, JSON.stringify(deSaved)).toBe(true);
+
+      // POPULATION CONTROL: both languages hold a change.
+      expect(await pendingLocales()).toEqual(["de", "en"]);
+
+      await expect(
+        singles.publishAllLocales(SLUG, { overrideAccess: true })
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        publicData: { reason: "shared-edits-unmergeable", fields: ["panel"] },
+      });
+      const en = (await liveIn(singles, "en")).panel as Record<string, unknown>;
+      const de = (await liveIn(singles, "de")).panel as Record<string, unknown>;
+      expect({ en: [en.mode, en.label], de: [de.mode, de.label] }).toEqual({
+        en: ["A", "Y"],
+        de: ["A", "Y"],
+      });
+      expect(await pendingLocales()).toEqual(["de", "en"]);
+    });
+
+    // Two languages making the same edit to a translated component's shared
+    // part do not disagree: whichever language's copy goes last holds the
+    // other's edit too, so the publish puts it live, each language keeping
+    // its own words. The plausible broken implementation refuses any shared
+    // edit while two languages publish, whether or not they agree; the case
+    // above, where the two disagree, is the control that still refuses.
+    it("publishes the same shared edit of a translated component made in two languages", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      expect(
+        (await save(singles, "es", { banner: { words: "ES 2", code: "c2" } }))
+          .success
+      ).toBe(true);
+      expect(
+        (await save(singles, "en", { banner: { words: "EN 2", code: "c2" } }))
+          .success
+      ).toBe(true);
+
+      const published = await singles.publishAllLocales(SLUG, {
+        overrideAccess: true,
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const en = (await liveIn(singles, "en")).banner as Record<
+        string,
+        unknown
+      >;
+      const es = (await liveIn(singles, "es")).banner as Record<
+        string,
+        unknown
+      >;
+      expect({ en: [en.words, en.code], es: [es.words, es.code] }).toEqual({
+        en: ["EN 2", "c2"],
+        es: ["ES 2", "c2"],
+      });
+      expect(await pendingLocales()).toEqual([]);
+    });
+
     it("publishes a translated component's shared edit when it is the only language pending", async () => {
       const singles = await boot(dialect);
       await live(singles);
