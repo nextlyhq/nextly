@@ -26,6 +26,8 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+// Enter commits without submitting the entry form the builder sits in.
+import { commitOnEnter } from "./commit-on-enter";
 import { InheritedValue } from "./inherited-value";
 import { CSS_NUMBER } from "./style-numeric";
 
@@ -253,9 +255,7 @@ function CssRatio({
       value={text}
       onChange={event => setText(event.target.value)}
       onBlur={commit}
-      onKeyDown={event => {
-        if (event.key === "Enter") commit();
-      }}
+      onKeyDown={event => commitOnEnter(event, commit)}
     />
   );
 }
@@ -314,9 +314,7 @@ function CustomRatio({
         value={width}
         onChange={event => setWidth(event.target.value)}
         onBlur={commit}
-        onKeyDown={event => {
-          if (event.key === "Enter") commit();
-        }}
+        onKeyDown={event => commitOnEnter(event, commit)}
       />
       <span aria-hidden="true">:</span>
       <Input
@@ -326,9 +324,7 @@ function CustomRatio({
         value={height}
         onChange={event => setHeight(event.target.value)}
         onBlur={commit}
-        onKeyDown={event => {
-          if (event.key === "Enter") commit();
-        }}
+        onKeyDown={event => commitOnEnter(event, commit)}
       />
     </div>
   );

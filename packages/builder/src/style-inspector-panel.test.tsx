@@ -4721,6 +4721,22 @@ describe("opacity in percent", () => {
     });
   });
 
+  it("commits a typed percent on Enter without submitting the entry", () => {
+    // The builder mounts inside the entry's form.
+    const submitted = vi.fn((event: React.FormEvent) => event.preventDefault());
+    register({ effects: true });
+    const editor = editorFor(documentOf());
+    render(
+      <form onSubmit={submitted}>
+        <StyleInspectorPanel editor={editor} />
+      </form>
+    );
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "40" } });
+    expect(fireEvent.keyDown(field, { key: "Enter" })).toBe(false);
+    expect(submitted).not.toHaveBeenCalled();
+  });
+
   it("passes a CSS-wide keyword through, unscaled", () => {
     const editor = mount({ effects: true });
     const field = screen.getByRole("textbox", { name: "Opacity" });

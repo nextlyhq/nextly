@@ -202,4 +202,51 @@ describe("AspectRatioField", () => {
     expect(trigger.textContent).toBe("auto 4 / 3");
     expect(trigger.hasAttribute("data-inherited")).toBe(true);
   });
+
+  it("commits on Enter without submitting the entry it is mounted inside", () => {
+    // The builder mounts inside the entry's form, where an unprevented Enter
+    // saves or publishes the whole entry.
+    const submitted = vi.fn((event: React.FormEvent) => event.preventDefault());
+    const onCommit = vi.fn(() => "applied" as const);
+    render(
+      <form onSubmit={submitted}>
+        <AspectRatioField
+          id="ratio"
+          labelledBy="ratio"
+          stored="5 / 4"
+          actionName="Aspect ratio"
+          describedBy={undefined}
+          onCommit={onCommit}
+        />
+      </form>
+    );
+    const width = screen.getByRole("textbox", { name: "Aspect ratio width" });
+    fireEvent.change(width, { target: { value: "6" } });
+    const enter = fireEvent.keyDown(width, { key: "Enter" });
+    expect(enter).toBe(false);
+    expect(onCommit).toHaveBeenCalledWith("6 / 4");
+  });
+
+  it("commits a ratio written as CSS on Enter without submitting the entry", () => {
+    const submitted = vi.fn((event: React.FormEvent) => event.preventDefault());
+    const onCommit = vi.fn(() => "applied" as const);
+    render(
+      <form onSubmit={submitted}>
+        <AspectRatioField
+          id="ratio"
+          labelledBy="ratio"
+          stored={undefined}
+          actionName="Aspect ratio"
+          describedBy={undefined}
+          onCommit={onCommit}
+        />
+      </form>
+    );
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "Write as CSS…" }));
+    const css = screen.getByRole("textbox", { name: "Aspect ratio as CSS" });
+    fireEvent.change(css, { target: { value: "auto 4 / 3" } });
+    expect(fireEvent.keyDown(css, { key: "Enter" })).toBe(false);
+    expect(onCommit).toHaveBeenCalledWith("auto 4 / 3");
+  });
 });
