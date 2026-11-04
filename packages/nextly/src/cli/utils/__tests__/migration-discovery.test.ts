@@ -251,6 +251,47 @@ describe("migration-discovery", () => {
       }
     );
 
+    // A folder that cannot be listed is not an empty one: read as empty, every
+    // mark would name a deleted file and a changed marked file would go unseen.
+    it.skipIf(process.getuid?.() === 0)(
+      "refuses when the folder cannot be listed",
+      async () => {
+        await fs.chmod(testDir, 0o000);
+        try {
+          await expect(
+            readMigrationFolder(testDir, "postgresql")
+          ).rejects.toMatchObject({ code: "EACCES" });
+        } finally {
+          await fs.chmod(testDir, 0o755);
+        }
+      }
+    );
+
+    it("reads a folder that is not there as holding no migrations", async () => {
+      const folder = await readMigrationFolder(
+        path.join(testDir, "absent"),
+        "postgresql"
+      );
+      expect(folder.groups.size).toBe(0);
+      expect(folder.oldBuilderFiles).toEqual([]);
+    });
+
+    it("sets aside a file on a declared junction table only when the set is handed in", async () => {
+      const file = "1730000000002_drop_tags.sql";
+      await createMigrationFile(
+        file,
+        'DROP TABLE IF EXISTS "dc_tags";\nDROP TABLE IF EXISTS "tag_links";'
+      );
+      const declared = await readMigrationFolder(
+        testDir,
+        "postgresql",
+        new Set(["tag_links"])
+      );
+      expect(declared.oldBuilderFiles.map(f => f.file)).toContain(file);
+      const none = await readMigrationFolder(testDir, "postgresql");
+      expect(none.partialBuilderFiles.map(f => f.file)).toContain(file);
+    });
+
     it("discoverMigrationGroups reads the same migrations", async () => {
       const groups = await discoverMigrationGroups(testDir, "postgresql");
       expect(groups.has("1730000000000_create_posts")).toBe(false);

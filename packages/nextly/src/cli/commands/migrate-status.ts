@@ -62,7 +62,10 @@ import {
   registryDisagreementLines,
   type RegistryDisagreements,
 } from "../../domains/schema/migrate/registry-consistency";
-import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import {
+  knownJunctionsOf,
+  resolveDeclaredSchema,
+} from "../../domains/schema/migrate/resolved-schema";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { describeError } from "../../errors/index";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -332,11 +335,19 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
+    // Read as `nextly migrate` reads the folder. A manifest that cannot be
+    // read is the registry check's to report; until then none is declared.
+    const knownJunctions = await knownJunctionsOf(
+      { ...configResult, projectRoot: cwd },
+      { orNone: true }
+    );
+
     const migrationFiles = await migrationEntries({
       plugin: options.plugin,
       plugins: configResult.config.plugins ?? [],
       migrationsDir,
       dialect,
+      knownJunctions,
     });
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
@@ -344,12 +355,14 @@ export async function runMigrateStatus(
       adapter as unknown as DrizzleAdapter,
       dialect,
       options.plugin,
-      migrationsDir
+      migrationsDir,
+      knownJunctions
     );
     const ignoredOldBuilderFiles = await nameOldBuilderFiles({
       plugin: options.plugin,
       migrationsDir,
       dialect,
+      knownJunctions,
       changed: ledger.changedOldBuilderFiles,
       json: options.json,
       logger,
@@ -437,12 +450,17 @@ async function nameOldBuilderFiles(args: {
   plugin: string | undefined;
   migrationsDir: string;
   dialect: SupportedDialect;
+  knownJunctions: ReadonlySet<string> | undefined;
   changed: readonly ChangedOldBuilderFile[] | undefined;
   json: boolean | undefined;
   logger: CommandContext["logger"];
 }): Promise<string[]> {
   if (args.plugin !== undefined) return [];
-  const folder = await readMigrationFolder(args.migrationsDir, args.dialect);
+  const folder = await readMigrationFolder(
+    args.migrationsDir,
+    args.dialect,
+    args.knownJunctions
+  );
   const lines = [
     ...folder.oldBuilderFiles.map(oldBuilderFileLine),
     ...(args.changed ?? []).map(changedOldBuilderFileLine),
@@ -469,19 +487,23 @@ export async function migrationEntries(args: {
   plugins: readonly PluginDefinition[];
   migrationsDir: string;
   dialect: SupportedDialect;
+  /** The run's declared junction tables, which old Builder files may touch. */
+  knownJunctions?: ReadonlySet<string>;
 }): Promise<MigrationEntry[]> {
   return args.plugin
     ? pluginModuleEntries(args.plugins, args.plugin)
-    : discoverMigrations(args.migrationsDir, args.dialect);
+    : discoverMigrations(args.migrationsDir, args.dialect, args.knownJunctions);
 }
 
 async function discoverMigrations(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  knownJunctions: ReadonlySet<string> | undefined
 ): Promise<ParsedMigration[]> {
-  const migrations = (await readableMigrationFiles(migrationsDir, dialect)).map(
-    ({ baseName, filePath, content }) =>
-      parseMigrationFile(baseName, filePath, content)
+  const migrations = (
+    await readableMigrationFiles(migrationsDir, dialect, knownJunctions)
+  ).map(({ baseName, filePath, content }) =>
+    parseMigrationFile(baseName, filePath, content)
   );
 
   return migrations;
@@ -530,7 +552,9 @@ export async function readStatusLedger(
    * files are left out, as every reader leaves them out, and the marked files
    * that changed since are named in `changedOldBuilderFiles`.
    */
-  migrationsDir?: string
+  migrationsDir?: string,
+  /** The run's declared junction tables, which old Builder files may touch. */
+  knownJunctions?: ReadonlySet<string>
 ): Promise<{
   applied: MigrationRecord[];
   rollbacks: SchemaEventRow[];
@@ -546,7 +570,7 @@ export async function readStatusLedger(
     return { applied: ledgerRecords(fileApplies, plugin), rollbacks };
   }
   const oldBuilder = await readOldBuilderLedger(
-    { migrationsDir, dialect },
+    { migrationsDir, dialect, knownJunctions },
     repo,
     [...fileApplies, ...rollbacks]
   );

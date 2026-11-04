@@ -63,6 +63,7 @@ import {
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
+import { knownJunctionsOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
   marksNoTransaction,
@@ -1013,6 +1014,8 @@ export async function downDatabaseDeps(args: {
    * leaves them out (`readOldBuilderLedger`).
    */
   migrationsDir?: string;
+  /** The run's declared junction tables, which old Builder files may touch. */
+  knownJunctions?: ReadonlySet<string>;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1068,7 +1071,11 @@ export async function downDatabaseDeps(args: {
       const rows = await repo.listFileApplies();
       if (plugin !== undefined || args.migrationsDir === undefined) return rows;
       const { ignoredRows } = await readOldBuilderLedger(
-        { migrationsDir: args.migrationsDir, dialect },
+        {
+          migrationsDir: args.migrationsDir,
+          dialect,
+          knownJunctions: args.knownJunctions,
+        },
         repo,
         rows
       );
@@ -1196,6 +1203,11 @@ export async function runMigrateDown(
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
+    // Read as `nextly migrate` reads the folder.
+    const knownJunctions = await knownJunctionsOf({
+      ...configResult,
+      projectRoot: cwd,
+    });
 
     if (options.forceUnlock) {
       const { forceUnlock } = await import(
@@ -1260,6 +1272,7 @@ export async function runMigrateDown(
         dialect,
         plugin: pluginModules(configResult.config.plugins, plugin),
         migrationsDir,
+        knownJunctions,
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,
@@ -1284,6 +1297,7 @@ export async function runMigrateDown(
                 dialect,
                 migrationsDir,
                 logger,
+                knownJunctions,
                 command: "nextly migrate:down",
               };
               await refuseUnresolvedAppAttempts(history);

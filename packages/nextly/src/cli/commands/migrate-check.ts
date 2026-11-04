@@ -56,6 +56,7 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
+import { knownJunctionsOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -294,11 +295,18 @@ export async function runMigrateCheck(
     logger: { warn: m => logger.warn(m) },
   });
 
+  // Read as `nextly migrate` reads the folder.
+  const knownJunctions = await knownJunctionsOf({
+    ...configResult,
+    projectRoot: cwd,
+  });
+
   await runChecks({
     migrationsDir,
     desiredSnapshot,
     appStream,
     dialect,
+    knownJunctions,
     // Each entity with its settings, as `migrate:create` records them.
     entities: withBuilderSettingsAll(merged, manifest),
     logger,
@@ -325,6 +333,8 @@ export async function runChecks(args: {
    * check is skipped.
    */
   dialect?: SupportedDialect;
+  /** The declared junction tables, which old Builder files may touch. */
+  knownJunctions?: ReadonlySet<string>;
   /**
    * The declared entities with their settings, compared with the newest
    * snapshot's settings record. Omitted, settings are not checked.
@@ -349,6 +359,7 @@ export async function runChecks(args: {
     sqlFiles,
     migrationsDir,
     args.dialect,
+    args.knownJunctions,
     logger
   );
 
@@ -413,7 +424,11 @@ export async function runChecks(args: {
   // check cannot tell a pending file from an applied one, which never runs
   // again.
   if (args.dialect !== undefined) {
-    const judged = await judgeStatements(migrationsDir, args.dialect);
+    const judged = await judgeStatements(
+      migrationsDir,
+      args.dialect,
+      args.knownJunctions
+    );
     for (const file of judged.outsideTransaction) {
       logger.info(
         `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
@@ -505,10 +520,15 @@ async function withoutOldBuilderFiles(
   sqlFiles: string[],
   migrationsDir: string,
   dialect: SupportedDialect | undefined,
+  knownJunctions: ReadonlySet<string> | undefined,
   logger: CommandContext["logger"]
 ): Promise<string[]> {
   if (dialect === undefined) return sqlFiles;
-  const folder = await readMigrationFolder(migrationsDir, dialect);
+  const folder = await readMigrationFolder(
+    migrationsDir,
+    dialect,
+    knownJunctions
+  );
   const ignored = new Set(folder.oldBuilderFiles.map(f => f.file));
   for (const file of folder.oldBuilderFiles) {
     logger.info(oldBuilderFileLine(file));
@@ -557,14 +577,19 @@ function settingsInStep(
  */
 export async function judgeStatements(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  knownJunctions?: ReadonlySet<string>
 ): Promise<{
   outsideTransaction: string[];
   refused: { file: string; message: string }[];
 }> {
   const outsideTransaction: string[] = [];
   const refused: { file: string; message: string }[] = [];
-  const groups = await discoverMigrationGroups(migrationsDir, dialect);
+  const groups = await discoverMigrationGroups(
+    migrationsDir,
+    dialect,
+    knownJunctions
+  );
   for (const baseName of getSortedBaseNames(groups)) {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
     if (file === undefined) continue;

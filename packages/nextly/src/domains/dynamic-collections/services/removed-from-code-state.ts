@@ -172,8 +172,8 @@ async function migrationDrops(
 
 /**
  * Whether `dir` is a folder this process can list. The discovery answers an
- * empty list for a folder it cannot read, which is not the same as a folder
- * with no migrations in it.
+ * empty list for a folder that is not there and refuses one it cannot list;
+ * neither says which entities a migration drops, so both read as no files.
  */
 async function folderReadable(dir: string): Promise<boolean> {
   try {

@@ -64,6 +64,8 @@ export interface PendingEntitiesOptions {
    * file that will really run is still outstanding.
    */
   dialect: SupportedDialect;
+  /** The run's declared junction tables, which old Builder files may touch. */
+  knownJunctions?: ReadonlySet<string>;
   isApplied: IsAppliedFn;
   logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void };
 }
@@ -170,7 +172,11 @@ export async function readPendingEntities(
   const { migrationsDir, dialect, isApplied, logger } = options;
   const pending = noPendingEntities();
 
-  const groups = await discoverMigrationGroups(migrationsDir, dialect);
+  const groups = await discoverMigrationGroups(
+    migrationsDir,
+    dialect,
+    options.knownJunctions
+  );
 
   for (const [baseName, group] of groups) {
     if (await isApplied(`${baseName}.sql`)) continue;

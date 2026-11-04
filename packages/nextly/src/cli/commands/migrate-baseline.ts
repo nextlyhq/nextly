@@ -125,7 +125,8 @@ async function listManagedTables(
  */
 async function listMigrationFiles(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  knownJunctions: ReadonlySet<string> | undefined
 ): Promise<string[]> {
   let entries: string[];
   try {
@@ -134,7 +135,11 @@ async function listMigrationFiles(
     if ((err as { code?: string }).code === "ENOENT") return [];
     throw err;
   }
-  const { oldBuilderFiles } = await readMigrationFolder(migrationsDir, dialect);
+  const { oldBuilderFiles } = await readMigrationFolder(
+    migrationsDir,
+    dialect,
+    knownJunctions
+  );
   const ignored = new Set(oldBuilderFiles.map(f => f.file));
   return entries.filter(f => f.endsWith(".sql") && !ignored.has(f)).sort();
 }
@@ -151,7 +156,11 @@ async function listMigrationFiles(
 async function firstAppliedMigration(
   repo: SchemaEventsRepository,
   adapter: CLIDatabaseAdapter,
-  folder: { migrationsDir: string; dialect: SupportedDialect }
+  folder: {
+    migrationsDir: string;
+    dialect: SupportedDialect;
+    knownJunctions: ReadonlySet<string> | undefined;
+  }
 ): Promise<string | undefined> {
   if (!(await ledgerExists(adapter))) return undefined;
   // Past the existence check, a failure is a real one — permissions, a wrong
@@ -433,7 +442,8 @@ export async function baselineCore(
       const latest = await loadLatestSnapshot(metaDir);
       const existingMigrations = await listMigrationFiles(
         migrationsDir,
-        dialect
+        dialect,
+        deps.knownJunctions
       );
 
       const known = deps.knownJunctions ?? new Set<string>();
@@ -466,6 +476,7 @@ export async function baselineCore(
         appliedMigration: await firstAppliedMigration(repo, adapter, {
           migrationsDir,
           dialect,
+          knownJunctions: deps.knownJunctions,
         }),
       });
 

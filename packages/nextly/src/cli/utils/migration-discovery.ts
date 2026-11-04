@@ -79,7 +79,14 @@ export interface MigrationFolder {
  */
 export async function readMigrationFolder(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The junction tables the configuration and the Builder's manifest declare
+   * by name (`MigrationFileFacts.declaredJunctions`). Omitted, none is, and a
+   * file touching such a table is partial: a reader that runs or rolls back
+   * files passes the set its run resolves.
+   */
+  declaredJunctions?: ReadonlySet<string>
 ): Promise<MigrationFolder> {
   const folder: MigrationFolder = {
     groups: new Map(),
@@ -89,8 +96,12 @@ export async function readMigrationFolder(
   let files: string[];
   try {
     files = await readdir(migrationsDir);
-  } catch {
-    return folder;
+  } catch (error) {
+    // A folder that is not there holds no migrations. One that cannot be
+    // listed may hold any, so the failure travels: read as empty, every mark
+    // would name a deleted file and a changed marked file would go unseen.
+    if ((error as { code?: string }).code === "ENOENT") return folder;
+    throw error;
   }
   const kept: string[] = [];
   for (const file of files.filter(f => f.endsWith(".sql"))) {
@@ -109,6 +120,7 @@ export async function readMigrationFolder(
       content,
       hasSnapshot: await exists(snapshot),
       dialect,
+      ...(declaredJunctions === undefined ? {} : { declaredJunctions }),
     });
     const checksum = checksumOf(content);
     if (kind.kind === "old-builder") {
@@ -183,9 +195,11 @@ async function exists(path: string): Promise<boolean> {
  */
 export async function discoverMigrationGroups(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  declaredJunctions?: ReadonlySet<string>
 ): Promise<Map<string, MigrationGroup>> {
-  return (await readMigrationFolder(migrationsDir, dialect)).groups;
+  return (await readMigrationFolder(migrationsDir, dialect, declaredJunctions))
+    .groups;
 }
 
 /**
@@ -195,9 +209,14 @@ export async function discoverMigrationGroups(
  */
 export async function migrationFilesInRunOrder(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  declaredJunctions?: ReadonlySet<string>
 ): Promise<{ baseName: string; filePath: string | undefined }[]> {
-  const groups = await discoverMigrationGroups(migrationsDir, dialect);
+  const groups = await discoverMigrationGroups(
+    migrationsDir,
+    dialect,
+    declaredJunctions
+  );
   return getSortedBaseNames(groups).map(baseName => {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
     return {
@@ -215,12 +234,14 @@ export async function migrationFilesInRunOrder(
  */
 export async function readableMigrationFiles(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  declaredJunctions?: ReadonlySet<string>
 ): Promise<{ baseName: string; filePath: string; content: string }[]> {
   const files: { baseName: string; filePath: string; content: string }[] = [];
   for (const { baseName, filePath } of await migrationFilesInRunOrder(
     migrationsDir,
-    dialect
+    dialect,
+    declaredJunctions
   )) {
     if (filePath === undefined) continue;
     try {

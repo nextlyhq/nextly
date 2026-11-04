@@ -36,6 +36,7 @@ import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
+import { knownJunctionsOf } from "../../domains/schema/migrate/resolved-schema";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
@@ -881,7 +882,15 @@ async function checkMigrationStatus(
 
     // Discover migration files
     const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
+    // The files counted are the ones `nextly migrate` reads.
+    const migrationFiles = await discoverMigrations(
+      migrationsDir,
+      dialect,
+      await knownJunctionsOf(
+        { ...configResult, projectRoot: cwd },
+        { orNone: true }
+      )
+    );
 
     // Get applied migrations from database
     const appliedMigrations = await getAppliedMigrations(
@@ -919,15 +928,16 @@ async function checkMigrationStatus(
  */
 async function discoverMigrations(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  knownJunctions: ReadonlySet<string> | undefined
 ): Promise<ParsedMigration[]> {
-  return (await readableMigrationFiles(migrationsDir, dialect)).map(
-    ({ baseName, filePath, content }) => ({
-      name: baseName,
-      filePath,
-      checksum: createHash("sha256").update(content).digest("hex"),
-    })
-  );
+  return (
+    await readableMigrationFiles(migrationsDir, dialect, knownJunctions)
+  ).map(({ baseName, filePath, content }) => ({
+    name: baseName,
+    filePath,
+    checksum: createHash("sha256").update(content).digest("hex"),
+  }));
 }
 
 /**

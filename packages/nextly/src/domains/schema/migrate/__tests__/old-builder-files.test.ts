@@ -404,3 +404,47 @@ describe.each(["postgresql", "sqlite"] as const)(
     });
   }
 );
+
+// A many-to-many field can name its own junction table, a name nothing ties
+// to the collection. The names the configuration and the Builder's manifest
+// declare are handed in and count as the entity's own; any other name stays
+// partial, so a file touching it is never set aside on a guess.
+describe.each<Dialect>(["postgresql", "mysql"])(
+  "a declared junction table on %s",
+  dialect => {
+    const declared = new Set(["post_tag_links"]);
+    const classify = (name: string, content: string, junctions?: Set<string>) =>
+      classifyMigrationFile(
+        facts({
+          name,
+          content,
+          dialect,
+          ...(junctions ? { declaredJunctions: junctions } : {}),
+        })
+      );
+    const create = `CREATE TABLE ${q("dc_posts", dialect)} (${q("id", dialect)} text);${BREAK}CREATE TABLE ${q("post_tag_links", dialect)} (${q("id", dialect)} text);`;
+    const drop = `DROP TABLE IF EXISTS ${q("dc_posts", dialect)};\nDROP TABLE IF EXISTS ${q("post_tag_links", dialect)};`;
+
+    it("ignores a create file that builds a declared junction", () => {
+      expect(
+        classify("1730000000011_create_posts.sql", create, declared)
+      ).toEqual({ kind: "old-builder", entity: "posts" });
+    });
+
+    it("ignores a drop file that drops a declared junction", () => {
+      expect(classify("1730000000012_drop_posts.sql", drop, declared)).toEqual({
+        kind: "old-builder",
+        entity: "posts",
+      });
+    });
+
+    it.each([
+      ["no names are declared", undefined],
+      ["the name is not among them", new Set(["other_links"])],
+    ])("keeps the file partial when %s", (_n, junctions) => {
+      expect(classify("1730000000012_drop_posts.sql", drop, junctions)).toEqual(
+        { kind: "partial", lacks: ["scope"] }
+      );
+    });
+  }
+);

@@ -93,6 +93,8 @@ export interface ReconcileMetadataDeps {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
   migrationsDir: string;
+  /** The run's declared junction tables, which old Builder files may touch. */
+  knownJunctions?: ReadonlySet<string>;
   logger: ReconcileLogger;
   /** Seam for tests; defaults to the real snapshot reader. */
   registerFn?: typeof registerFromMigrations;
@@ -341,7 +343,15 @@ export async function reconcileMigrationMetadata(
   const load = deps.readPendingEntitiesFn ?? readPendingEntities;
   let awaiting: PendingEntities;
   try {
-    awaiting = await load({ migrationsDir, dialect, isApplied, logger });
+    awaiting = await load({
+      migrationsDir,
+      dialect,
+      isApplied,
+      logger,
+      ...(deps.knownJunctions === undefined
+        ? {}
+        : { knownJunctions: deps.knownJunctions }),
+    });
   } catch (error) {
     awaiting = noPendingEntities();
     logger.warn(

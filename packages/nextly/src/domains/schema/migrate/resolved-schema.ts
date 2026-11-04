@@ -249,3 +249,22 @@ export async function resolveDeclaredSchema(
     ]),
   };
 }
+
+/**
+ * The junction tables the configuration and the Builder's manifest declare by
+ * name (`ResolvedSchema.knownJunctions`), for a reader of the migrations
+ * folder: an old Builder file touching one is set aside as `nextly migrate`
+ * sets it aside. With `orNone`, a manifest that cannot be read declares none,
+ * so such a file is read as a migration, for a reader that only reports.
+ */
+export async function knownJunctionsOf(
+  args: ResolveSchemaArgs,
+  options: { orNone?: boolean } = {}
+): Promise<ReadonlySet<string> | undefined> {
+  try {
+    return (await resolveDeclaredSchema(args)).knownJunctions;
+  } catch (error) {
+    if (options.orNone === true) return undefined;
+    throw error;
+  }
+}

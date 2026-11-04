@@ -142,11 +142,20 @@ function changedSinceMarked(
  * ledger's rows.
  */
 export async function readOldBuilderLedger(
-  args: { migrationsDir: string; dialect: SupportedDialect },
+  args: {
+    migrationsDir: string;
+    dialect: SupportedDialect;
+    /** The run's declared junction tables (`readMigrationFolder`). */
+    knownJunctions?: ReadonlySet<string>;
+  },
   repo: Pick<SchemaEventsRepository, "currentOldBuilderMarks">,
   rows: readonly Pick<SchemaEventRow, "filename">[]
 ): Promise<OldBuilderLedger> {
-  const folder = await readMigrationFolder(args.migrationsDir, args.dialect);
+  const folder = await readMigrationFolder(
+    args.migrationsDir,
+    args.dialect,
+    args.knownJunctions
+  );
   return judgeOldBuilderLedger({
     oldBuilderFiles: folder.oldBuilderFiles,
     partialBuilderFiles: folder.partialBuilderFiles,

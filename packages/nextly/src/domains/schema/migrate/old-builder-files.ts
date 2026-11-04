@@ -57,6 +57,13 @@ export interface MigrationFileFacts {
   /** Whether `meta/<base name>.snapshot.json` stands beside it. */
   hasSnapshot: boolean;
   dialect: SupportedDialect;
+  /**
+   * The junction tables the configuration and the Builder's manifest name
+   * with `options.junctionTable`, which nothing in their name ties to a
+   * collection: a statement on one stays inside the entity. Omitted, none is
+   * declared, and a file touching such a table is partial.
+   */
+  declaredJunctions?: ReadonlySet<string>;
 }
 
 /** (a): the timestamp, the verb and the rest of the name the Builder gave it. */
@@ -245,6 +252,8 @@ function staysInEntity(
   );
   if (statements.length === 0) return false;
   const read = dropOnly ? tablesDroppedBy : tablesChangedIn;
+  const owns = (table: string) =>
+    entity.owns(table) || file.declaredJunctions?.has(table) === true;
   return statements.every(statement => {
     if (!dropOnly && writesOwnRegistryRow(entity, statement, file.dialect)) {
       return true;
@@ -256,11 +265,7 @@ function staysInEntity(
       return indexes.every(index => isOwnIndex(entity, index));
     }
     const tables = read(statement, file.dialect);
-    return (
-      tables !== undefined &&
-      tables.length > 0 &&
-      tables.every(table => entity.owns(table))
-    );
+    return tables !== undefined && tables.length > 0 && tables.every(owns);
   });
 }
 
