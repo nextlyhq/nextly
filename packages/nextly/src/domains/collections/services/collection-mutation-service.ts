@@ -173,6 +173,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
+  recordOverwriteEvent,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -303,6 +304,7 @@ import {
   takeLiveSharedValuesInto,
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
+import { overwriteRecordOf } from "../../versions/overwrite-record";
 import {
   certainlyStale,
   type DecodedVersion,
@@ -1904,6 +1906,23 @@ export class CollectionMutationService extends BaseService {
       tx,
       { adapter: this.adapter },
       { subject: { kind: "collection", slug: collection, id }, ...save }
+    ).catch(err => {
+      // See `recordHistoryEvent`: the transaction must not keep the write.
+      throw markWriteIntegrityFailure(err);
+    });
+  }
+
+  /** An overwrite in this document's history; see `recordOverwriteEvent`. */
+  private recordOverwriteHistory(
+    tx: TransactionContext,
+    collection: string,
+    id: string,
+    overwrite: Omit<Parameters<typeof recordOverwriteEvent>[2], "subject">
+  ): Promise<void> {
+    return recordOverwriteEvent(
+      tx,
+      { adapter: this.adapter },
+      { subject: { kind: "collection", slug: collection, id }, ...overwrite }
     ).catch(err => {
       // See `recordHistoryEvent`: the transaction must not keep the write.
       throw markWriteIntegrityFailure(err);
@@ -11323,8 +11342,9 @@ export class CollectionMutationService extends BaseService {
           // does not exist.
           await tx.lockRow(tableName, params.entryId);
           // The main row's version, read under the lock as it is now: a save
-          // committed since the caller read leaves it out of date.
-          await refuseIfMainMoved(
+          // committed since the caller read leaves it out of date. Kept for an
+          // overwrite, whose history names whom it replaced from this read.
+          const mainBefore = await refuseIfMainMoved(
             tx,
             this.dialect,
             versionCheck,
@@ -12918,6 +12938,22 @@ export class CollectionMutationService extends BaseService {
             },
             params.user?.id ?? null
           );
+
+          // An overwrite is recorded whatever the document keeps, in this
+          // transaction, so a save that cannot record it is not kept either.
+          if (versionCheck.kind === "overwrite") {
+            await this.recordOverwriteHistory(
+              tx,
+              params.collectionName,
+              params.entryId,
+              {
+                actor: actorForWrite(params.actor, params.user),
+                personName: params.user?.name ?? null,
+                locale: judgedLocale ?? null,
+                ...overwriteRecordOf(versionCheck, { main: mainBefore?.main }),
+              }
+            );
+          }
 
           writtenVersion = await documentVersionOn(tx, {
             dialect: this.dialect,

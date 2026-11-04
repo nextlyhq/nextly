@@ -16,7 +16,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
+import {
+  superAdminUser,
+  userWhoMay,
+} from "../../__tests__/fixtures/permission-holders";
 import { grantPublic } from "../../__tests__/helpers/public-role";
 import { defineCollection, defineSingle, text } from "../../config";
 import type { ContentEventSubject } from "../../domains/content-events/record";
@@ -30,6 +33,7 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
+import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
 
 /** No content history: a save records no event of its own. */
@@ -150,15 +154,16 @@ async function rest(
   method: "GET" | "POST" | "PATCH",
   path: string[],
   body?: Doc,
-  query = ""
+  key?: string
 ): Promise<{ status: number; json: Doc }> {
   const handlers = createDynamicHandlers();
   const res = await handlers[method](
-    new Request(`http://localhost/api/${path.join("/")}${query}`, {
+    new Request(`http://localhost/api/${path.join("/")}`, {
       method,
       headers: {
         origin: "http://localhost",
         "content-type": "application/json",
+        ...(key ? { authorization: `Bearer ${key}` } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     }),
@@ -182,6 +187,21 @@ async function refusalOf(call: () => Promise<unknown>): Promise<string> {
     return String((error as { code?: unknown }).code);
   }
   return "applied";
+}
+
+/**
+ * A full-access API key of a super-admin: the bulk routes take a signed-in
+ * caller, never a visitor.
+ */
+async function adminKey(t: TestNextly): Promise<string> {
+  const admin = await superAdminUser(t, "user-ow-admin");
+  const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
+  const { key } = await keys.createApiKey(admin, {
+    name: "bulk",
+    tokenType: "full-access",
+    expiresIn: "unlimited",
+  });
+  return key;
 }
 
 /** A stored row, read raw: the oracle for what was written. */
@@ -289,6 +309,21 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(singleDirect.notice).toBe("by Direct");
       expect(singleDirect).not.toHaveProperty("_overwrite");
+      // Both recorded in the Single's history, the first naming Ben.
+      const singleOverwrites = (
+        await historyOf(t, {
+          kind: "single",
+          slug: SETTINGS,
+          id: String(singleDirect.id),
+        })
+      ).filter(e => e.kind === "overwritten");
+      expect(singleOverwrites.map(e => e.payload)).toEqual([
+        expect.objectContaining({ given: "stale" }),
+        expect.objectContaining({
+          given: "stale",
+          replaced: expect.objectContaining({ kind: "person", id: BEN.id }),
+        }),
+      ]);
     }, 120_000);
 
     it("the three surfaces accept the same overwrite name from a caller holding only the update permission", async () => {
@@ -494,6 +529,7 @@ describe.each(getConfiguredTestDialects())(
       ]);
       const id = await noteBenChanged(t);
       const other = String((await create(t, NOTES, { title: "other" })).id);
+      const key = await adminKey(t);
       const bad = { title: "never", _overwrite: "yes" };
 
       const answers = {
@@ -521,16 +557,20 @@ describe.each(getConfiguredTestDialects())(
             : result;
         }),
         bulkByIds: await refusalOf(() =>
-          rest("POST", ["collections", NOTES, "entries", "bulk-update"], {
-            ids: [id, other],
-            data: bad,
-          })
+          rest(
+            "POST",
+            ["collections", NOTES, "entries", "bulk-update"],
+            { ids: [id, other], data: bad },
+            key
+          )
         ),
         bulkByQuery: await refusalOf(() =>
-          rest("PATCH", ["collections", NOTES, "entries"], {
-            where: { id: { in: [id, other] } },
-            data: bad,
-          })
+          rest(
+            "PATCH",
+            ["collections", NOTES, "entries"],
+            { where: { id: { in: [id, other] } }, data: bad },
+            key
+          )
         ),
         single: await refusalOf(() =>
           rest("PATCH", ["singles", SETTINGS], {
@@ -551,20 +591,26 @@ describe.each(getConfiguredTestDialects())(
 
     it("overwrites each document of a bulk update by ids and by query, recording each naming no one", async () => {
       const t = await boot(dialect);
-      await grantPublic(t, [`read-${NOTES}`, `update-${NOTES}`]);
+      const key = await adminKey(t);
       const a = await noteBenChanged(t);
       const b = await noteBenChanged(t);
 
       const byIds = await rest(
         "POST",
         ["collections", NOTES, "entries", "bulk-update"],
-        { ids: [a, b], data: { title: "by ids", _overwrite: true } }
+        { ids: [a, b], data: { title: "by ids", _overwrite: true } },
+        key
       );
       expect(byIds.status, JSON.stringify(byIds.json)).toBeLessThan(300);
-      const byQuery = await rest("PATCH", ["collections", NOTES, "entries"], {
-        where: { id: { in: [a, b] } },
-        data: { title: "by query", _overwrite: true },
-      });
+      const byQuery = await rest(
+        "PATCH",
+        ["collections", NOTES, "entries"],
+        {
+          where: { id: { in: [a, b] } },
+          data: { title: "by query", _overwrite: true },
+        },
+        key
+      );
       expect(byQuery.status, JSON.stringify(byQuery.json)).toBeLessThan(300);
 
       for (const id of [a, b]) {
