@@ -685,6 +685,38 @@ describe("the hovered block's mark", () => {
     expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("300px");
   });
 
+  it("leaves the tag of a block wholly left of the screen where it is", async () => {
+    // Nothing of the outline is on screen, so there is nothing to tag there:
+    // moved in, the tag would be drawn at the screen's edge, cut to nothing.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "b") {
+          return new DOMRect(-900, 100, 500, 50);
+        }
+        return new DOMRect(-900, 0, 2000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <HoveredBlockProvider>
+          <PointAt id="b" />
+          <Canvas
+            document={leaves}
+            siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+            overlay={<CanvasMarks nameOf={() => "Intro text"} />}
+          />
+        </HoveredBlockProvider>
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    const mark = hoveredIn(container)[0] as HTMLElement;
+    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("0px");
+  });
+
   it("is left to the ring on a block already selected", async () => {
     const { container } = render(
       <HoveredBlockProvider>

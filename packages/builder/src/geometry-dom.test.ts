@@ -1304,6 +1304,65 @@ describe("the part of a scroller on screen, in canvas content coordinates", () =
     });
   });
 
+  it("leaves out an ordinary scroller's scrollbar", () => {
+    // A classic 15px scrollbar down the right and along the bottom: what the
+    // scroller shows is its client box, not its border box.
+    const region = document.createElement("section");
+    region.getBoundingClientRect = () =>
+      ({
+        x: 40,
+        y: 56,
+        left: 40,
+        top: 56,
+        width: 900,
+        height: 800,
+        bottom: 856,
+      }) as DOMRect;
+    Object.defineProperty(region, "clientWidth", { value: 885 });
+    Object.defineProperty(region, "clientHeight", { value: 785 });
+    const root = document.createElement("div");
+    region.appendChild(root);
+    document.body.appendChild(region);
+    root.getBoundingClientRect = () =>
+      ({
+        x: 40,
+        y: -144,
+        left: 40,
+        top: -144,
+        width: 900,
+        height: 3000,
+      }) as DOMRect;
+
+    expect(visibleBandOf(region, root)).toEqual({
+      x: 0,
+      y: 200,
+      width: 885,
+      height: 785,
+    });
+  });
+
+  it("leaves out a frame viewport's scrollbar", () => {
+    const inner = frameDocument();
+    const view = inner.defaultView;
+    const scroller = inner.scrollingElement;
+    if (view === null || scroller === null) throw new Error("no frame realm");
+    Object.defineProperty(view, "innerWidth", { value: 800 });
+    Object.defineProperty(view, "innerHeight", { value: 600 });
+    Object.defineProperty(scroller, "clientWidth", { value: 785 });
+    Object.defineProperty(scroller, "clientHeight", { value: 600 });
+    const root = inner.createElement("div");
+    inner.body.appendChild(root);
+    root.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, left: 0, top: 0, width: 785, height: 4000 }) as DOMRect;
+
+    expect(visibleBandOf(scroller, root)).toEqual({
+      x: 0,
+      y: 0,
+      width: 785,
+      height: 600,
+    });
+  });
+
   it("is an ordinary scroller's own rectangle", () => {
     const region = document.createElement("section");
     region.getBoundingClientRect = () =>

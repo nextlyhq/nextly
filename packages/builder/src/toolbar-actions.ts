@@ -972,14 +972,19 @@ export function toolbarPlacement(
   const below = block.y + block.height + gap;
   const side = toolbarSide(block, toolbar, gap, screen, above, below);
 
-  // Kept to the canvas, and to the part of it on screen where that is given.
-  // The clamp is skipped when the bar is wider than that, because there is no
-  // position that satisfies both edges and clamping would silently choose the
-  // right one — leaving the first buttons, which are the ones an author
-  // reaches for, off-screen.
-  const minX = Math.max(0, screen.left ?? 0);
+  // Kept to the canvas, and to the part of it on screen where that is given
+  // and the block crosses it: a block wholly off the side keeps its bar with
+  // it, rather than one at the screen's edge over another block. The clamp is
+  // skipped when the bar is wider than that, because there is no position that
+  // satisfies both edges and clamping would silently choose the right one —
+  // leaving the first buttons, which are the ones an author reaches for,
+  // off-screen.
+  const left = screen.left ?? Number.NEGATIVE_INFINITY;
+  const right = screen.right ?? Number.POSITIVE_INFINITY;
+  const crosses = block.x < right && block.x + block.width > left;
+  const minX = Math.max(0, crosses ? left : 0);
   const maxX =
-    Math.min(canvas.width, screen.right ?? Number.POSITIVE_INFINITY) -
+    Math.min(canvas.width, crosses ? right : Number.POSITIVE_INFINITY) -
     toolbar.width;
   const x = maxX <= minX ? minX : Math.min(Math.max(block.x, minX), maxX);
 

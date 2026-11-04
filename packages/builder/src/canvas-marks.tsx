@@ -634,10 +634,14 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         tag: "below",
         tagEdge: "left",
         // In from the screen's left edge as far as the outline runs past it,
-        // so a block scrolled partly off the side keeps its name in view.
+        // so a block scrolled partly off the side keeps its name in view. Not
+        // for one wholly off it: there is nothing on screen to tag.
         tagInset: {
           bottom: 0,
-          side: Math.max(0, onScreen.x - outline.rect.x),
+          side:
+            outline.rect.x + outline.rect.width > onScreen.x
+              ? Math.max(0, onScreen.x - outline.rect.x)
+              : 0,
         },
         hoveredAddress: hovered,
         // From the top of what is on screen, as the placement's tag is.

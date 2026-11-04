@@ -844,6 +844,20 @@ describe("toolbarPlacement", () => {
     expect(at.x).toBe(300);
   });
 
+  it("stays with a block scrolled wholly off the side, rather than at the screen's edge", () => {
+    // The block is left of what is shown: a bar clamped to the screen would
+    // sit at its edge, away from the block and over another one.
+    const screen = { top: 0, bottom: 900, left: 1100, right: 1900 };
+    const at = toolbarPlacement(
+      { x: 0, y: 200, width: 500, height: 100 },
+      bar,
+      { width: 2000, height: 3000 },
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.x).toBe(0);
+  });
+
   it("is left where it is for a block scrolled wholly out of view", () => {
     const screen = { top: 600, bottom: 1400 };
     expect(
