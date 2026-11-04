@@ -189,6 +189,7 @@ import {
 } from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { overwriteRecordOf } from "../../versions/overwrite-record";
 import { hasLifecycle } from "../../versions/recorded-status";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
@@ -202,8 +203,8 @@ import {
   type TakenLiveValues,
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
-import { overwriteRecordOf } from "../../versions/overwrite-record";
 import {
+  type DocumentRevisionState,
   givenOf,
   judgedLanguage,
   type PartState,
@@ -1233,6 +1234,39 @@ export class SingleMutationService extends BaseService {
   }
 
   /** A save in this Single's history; see `recordSaveEvent`. */
+  /**
+   * Record an overwrite in this Single's history, when the update said to
+   * overwrite: whatever the Single keeps, in the write's transaction, so a
+   * save that cannot record it is not kept either. Whom it replaced is read
+   * from `before`, the rows as the save found them before writing.
+   */
+  private async recordOverwriteIfAsked(
+    tx: TransactionContext,
+    check: VersionCheck,
+    target: { slug: string; id: string; options: UpdateSingleOptions },
+    before: {
+      main: DocumentRevisionState | undefined;
+      language: PartState | undefined;
+      locale: string | undefined;
+    }
+  ): Promise<void> {
+    if (check.kind !== "overwrite") return;
+    await recordOverwriteEvent(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "single", slug: target.slug, id: target.id },
+        actor: actorForWrite(target.options.actor ?? null, target.options.user),
+        personName: target.options.user?.name ?? null,
+        locale: before.locale ?? null,
+        ...overwriteRecordOf(check, {
+          main: before.main?.main,
+          language: before.language,
+        }),
+      }
+    );
+  }
+
   private recordSingleSave(
     tx: TransactionContext,
     slug: string,
@@ -3860,7 +3894,8 @@ export class SingleMutationService extends BaseService {
                 savedBy,
                 staleWrite
               );
-              if (before && judgedLocale === writeLocale) languageBefore = before;
+              // Set only for an overwrite of the language this save judges.
+              languageBefore = before;
               await writeCompanionValues({
                 tx,
                 dialect: this.adapter.dialect,
@@ -4888,24 +4923,16 @@ export class SingleMutationService extends BaseService {
               );
             }
 
-            // An overwrite is recorded whatever the Single keeps, in this
-            // transaction, so a save that cannot record it is not kept either.
-            if (versionCheck.kind === "overwrite") {
-              await recordOverwriteEvent(
-                tx,
-                { adapter: this.adapter },
-                {
-                  subject: { kind: "single", slug, id: existingDoc.id },
-                  actor,
-                  personName: options.user?.name ?? null,
-                  locale: judgedLocale ?? null,
-                  ...overwriteRecordOf(versionCheck, {
-                    main: mainBefore?.main,
-                    language: languageBefore,
-                  }),
-                }
-              );
-            }
+            await this.recordOverwriteIfAsked(
+              tx,
+              versionCheck,
+              { slug, id: existingDoc.id, options },
+              {
+                main: mainBefore,
+                language: languageBefore,
+                locale: judgedLocale,
+              }
+            );
 
             // A receipt a caller pinned for this Single is kept here, in the
             // write's own transaction, so it commits exactly when the write

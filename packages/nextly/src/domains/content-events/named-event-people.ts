@@ -23,6 +23,20 @@ interface NamedEvent {
   payload: Record<string, unknown> | null;
 }
 
+/** A non-empty string, or null. */
+function idOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** An overwrite's replaced person's id: only a person, never a key or a member. */
+function replacedPersonId(payload: NamedEvent["payload"]): string | null {
+  const replaced = payload?.replaced as
+    | { kind?: unknown; id?: unknown }
+    | null
+    | undefined;
+  return replaced?.kind === "person" ? idOrNull(replaced.id) : null;
+}
+
 /**
  * The person `event` keeps by id, and the payload key their name goes under:
  * a takeover's displaced holder, or the person an overwrite replaced. Null
@@ -30,24 +44,13 @@ interface NamedEvent {
  * a member, or nobody it can name).
  */
 function keptPerson(event: NamedEvent): { id: string; nameKey: string } | null {
-  if (event.kind === TAKEOVER_CONTENT_EVENT_KIND.name) {
-    const fromId = event.payload?.fromId;
-    return typeof fromId === "string" && fromId.length > 0
-      ? { id: fromId, nameKey: "fromName" }
-      : null;
-  }
-  if (event.kind === CORE_CONTENT_EVENT_KINDS.overwritten.name) {
-    const replaced = event.payload?.replaced as
-      | { kind?: unknown; id?: unknown }
-      | null
-      | undefined;
-    return replaced?.kind === "person" &&
-      typeof replaced.id === "string" &&
-      replaced.id.length > 0
-      ? { id: replaced.id, nameKey: "replacedName" }
-      : null;
-  }
-  return null;
+  const [id, nameKey] =
+    event.kind === TAKEOVER_CONTENT_EVENT_KIND.name
+      ? [idOrNull(event.payload?.fromId), "fromName"]
+      : event.kind === CORE_CONTENT_EVENT_KINDS.overwritten.name
+        ? [replacedPersonId(event.payload), "replacedName"]
+        : [null, ""];
+  return id === null ? null : { id, nameKey };
 }
 
 /**
