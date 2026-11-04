@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The page builder says why every dimmed block action is dimmed, in the block toolbar and the context menu, the edges of a container included ("Already the first block here", "Already at the top level of the page"). Escape while typing on the canvas keeps what was typed and ends the edit; a second Escape selects the block's parent. Where the page refuses the write, the passage stays open with the words in it, and a second Escape lets them go.
+The page builder says why every dimmed block action is dimmed, in the block toolbar and the context menu, the edges of a container included ("Already at the top here", "Already at the top level of the page"). Escape while typing on the canvas keeps what was typed and ends the edit; a second Escape selects the block's parent. Where the page refuses the write, the text stays open with the words in it, and a second Escape lets them go; a held Escape key does not count as a second press.

@@ -52,6 +52,7 @@ import {
 } from "./exposed-inline";
 import { namedTarget } from "./inline-target";
 import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
+import type { BuilderOp } from "./ops";
 
 /** The attribute naming the element an author is currently typing into. */
 export const EDITING_ATTRIBUTE = "data-nx-editing";
@@ -246,6 +247,24 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     return element;
   }, []);
 
+  /**
+   * The op that stores what the element holds, or `null` when there is
+   * nothing to store: an unchanged value, or one that stopped being editable
+   * while the caret was in it — see `inlineTextOp`.
+   */
+  const commitOp = useCallback(
+    (current: InlineTextEditing, next: string): BuilderOp | null =>
+      current.exposure === undefined
+        ? inlineTextOp(
+            editorRef.current.document,
+            current.nodeId,
+            current.prop,
+            next
+          )
+        : exposedCommitOp(editorRef.current, current.exposure, next),
+    []
+  );
+
   const commit = useCallback(() => {
     const element = elementRef.current;
     const current = editingRef.current;
@@ -255,19 +274,29 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     const next = element?.textContent ?? null;
     release();
     if (current === null || next === null) return null;
-    const op =
-      current.exposure === undefined
-        ? inlineTextOp(
-            editorRef.current.document,
-            current.nodeId,
-            current.prop,
-            next
-          )
-        : exposedCommitOp(editorRef.current, current.exposure, next);
-    // `null` for an unchanged value and for one that stopped being editable
-    // while the caret was in it — see `inlineTextOp`.
+    const op = commitOp(current, next);
     return op === null ? null : editorRef.current.apply(op);
-  }, [release]);
+  }, [commitOp, release]);
+
+  /**
+   * The keyboard's way out: the write is made first and the edit ends only
+   * once the page has taken it. A refused write (a size cap, a lock that
+   * arrived) leaves the line open with the words in it, because they are the
+   * author's only copy; `true` says so. Leaving the line by blur cannot keep
+   * it open, so that exit stays with {@link commit}.
+   */
+  const commitOrHold = useCallback((): boolean => {
+    const element = elementRef.current;
+    const current = editingRef.current;
+    if (element === null || current === null) {
+      release();
+      return false;
+    }
+    const op = commitOp(current, element.textContent ?? "");
+    if (op !== null && editorRef.current.apply(op) === null) return true;
+    release();
+    return false;
+  }, [commitOp, release]);
 
   const cancel = useCallback(() => {
     const element = elementRef.current;
@@ -356,15 +385,27 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     element.focus();
     selectAll(element);
 
+    /*
+     * Set when a keyboard exit's write was refused and the line stayed open.
+     * The next deliberate Escape then lets the words go: the author's way out
+     * of a write the page will not take.
+     */
+    let refused = false;
     const onKeyDown = (event: KeyboardEvent) => {
       // Escape keeps what was typed and ends the edit, as Enter does on a
       // line: the editor's design asks for it, and an author pressing Escape
       // to get out of the text expects their words to stay. Stopped here, so
-      // it is the NEXT Escape that selects the block's parent.
+      // it is the NEXT Escape that selects the block's parent. A held key's
+      // auto-repeat is not a second press, so it neither writes nor discards.
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        commit();
+        if (event.repeat) return;
+        if (refused) {
+          cancel();
+          return;
+        }
+        refused = commitOrHold();
         return;
       }
       if (event.key !== "Enter") return;
@@ -376,7 +417,8 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
       // from one type to the other changes this with it.
       if (target?.multiline === true) return;
       event.preventDefault();
-      commit();
+      if (event.repeat) return;
+      refused = commitOrHold();
     };
     /*
      * Stopped at the element rather than by teaching the canvas about editing.
@@ -398,7 +440,7 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [editing, cancel, commit, canvasDocument]);
+  }, [editing, cancel, commit, commitOrHold, canvasDocument]);
 
   return { editing, begin, commit, cancel, onDoubleClick };
 }

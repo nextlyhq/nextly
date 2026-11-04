@@ -74,9 +74,10 @@ function page(): void {
     </div>`;
 }
 
-function escape(element: Element): void {
+/** One Escape keydown; `repeat` is what a held key's auto-repeat sends. */
+function escape(element: Element, repeat = false): void {
   element.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, repeat })
   );
 }
 
@@ -101,6 +102,38 @@ describe("Escape while typing", () => {
     );
     expect(result.current.editing).toBeNull();
     expect(caption.textContent).toBe("A better caption");
+  });
+
+  it("leaves a line open when the write is refused, and lets it go on a second Escape", () => {
+    // A refused write (a size cap, a lock that arrived) stores nothing, so
+    // the words on screen are the author's only copy until they choose to
+    // let them go.
+    registerArticle();
+    page();
+    const editor = editorState();
+    editor.apply.mockImplementation(() => null);
+    const { result } = renderHook(() => useInlineText(editor));
+    act(() => {
+      result.current.begin("a", "caption");
+    });
+    const caption = document.querySelector('[data-nx-prop="caption"]');
+    if (caption === null) throw new Error("no caption");
+    caption.textContent = "A better caption";
+
+    act(() => escape(caption));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(result.current.editing).not.toBeNull();
+    expect(caption.textContent).toBe("A better caption");
+
+    // A held key repeats; that is not a second, deliberate press.
+    act(() => escape(caption, true));
+    expect(result.current.editing).not.toBeNull();
+    expect(caption.textContent).toBe("A better caption");
+
+    act(() => escape(caption));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(result.current.editing).toBeNull();
+    expect(caption.textContent).toBe("A caption");
   });
 
   it("keeps the typing in a passage, and ends the edit", async () => {
@@ -182,6 +215,10 @@ describe("Escape while typing", () => {
 
     await act(async () => escape(passage));
     expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(result.current.editing).not.toBeNull();
+
+    // Holding the key down repeats it; the repeat must not discard.
+    await act(async () => escape(passage, true));
     expect(result.current.editing).not.toBeNull();
 
     await act(async () => escape(passage));

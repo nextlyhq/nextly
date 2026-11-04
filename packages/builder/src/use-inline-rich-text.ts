@@ -672,13 +672,15 @@ export function useInlineRichText(
      * does; the NEXT Escape selects the block's parent. Where the write is
      * refused the passage stays open with the words in it, and a second
      * Escape then lets them go: the author's deliberate way out of a write
-     * the page will not take.
+     * the page will not take. A held key's auto-repeat is not that second
+     * press: it would destroy the words before the author let go of the key.
      */
     let refused = false;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      if (event.repeat) return;
       if (refused) {
         cancel();
         return;

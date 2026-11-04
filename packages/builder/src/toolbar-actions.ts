@@ -503,13 +503,17 @@ function singleMove<Id extends string>(
 }
 
 /**
- * Why a block cannot move one step, when there is simply nowhere to go: said
- * as plainly as a lock is, since a dimmed item with no reason reads as broken.
+ * Why a block, or a set moving as one, cannot move one step when there is
+ * simply nowhere to go: said as plainly as a lock is, since a dimmed item with
+ * no reason reads as broken. Worded to stay true for every `null` the keyboard
+ * move gives: an indent is refused both with no block above and with one
+ * whose several regions leave none to name, and the set's edge is its first
+ * or last block's.
  */
 const EDGE_REASONS: Record<MoveDirection, string> = {
-  up: "Already the first block here",
-  down: "Already the last block here",
-  indent: "No block above to move into",
+  up: "Already at the top here",
+  down: "Already at the bottom here",
+  indent: "No block just above that it can go into",
   outdent: "Already at the top level of the page",
 };
 
@@ -521,9 +525,8 @@ const EDGE_REASONS: Record<MoveDirection, string> = {
  * holds the rest, and asking it here keeps the bar agreeing with the keyboard
  * rather than testing those rules a second time.
  *
- * `null` is the edge of the container, which is dimmed WITHOUT a reason —
- * exactly as a single block at the end of its list is. Nothing needs saying
- * about a step that has nowhere to go.
+ * `null` is the edge of the container, which is dimmed with the same reason
+ * a single block at the end of its list gives.
  */
 function moveAction(
   document: BlockDocument,
@@ -534,7 +537,8 @@ function moveAction(
   ask?: LockQuestion
 ): ToolbarAction {
   const plan = selectionMove(document, ids, direction);
-  if (plan === null) return { id, label, enabled: false };
+  if (plan === null)
+    return { id, label, enabled: false, reason: EDGE_REASONS[direction] };
   if (isRefusal(plan))
     return { id, label, enabled: false, reason: plan.reason };
   return heldByLock({ id, label, enabled: true }, ask, plan.ops);
@@ -811,11 +815,10 @@ export function toolbarActions(
       id: "select-parent",
       label: "Select parent",
       // The path always ends at the selection itself, so a length of one means
-      // a top-level block with no container to step out to.
+      // a top-level block with no container to step out to: the outdent's
+      // reason, since it is the same fact.
       enabled: path.length > 1,
-      ...(path.length > 1
-        ? {}
-        : { reason: "Already at the top level of the page" }),
+      ...(path.length > 1 ? {} : { reason: EDGE_REASONS.outdent }),
     },
     singleMove(
       document,
