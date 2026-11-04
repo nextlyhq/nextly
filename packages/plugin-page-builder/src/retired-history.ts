@@ -8,17 +8,21 @@
  * from being minted under it, and the values placements still hold under that
  * id would come back on the new field. The table is therefore not the only
  * source: history keeps every definition that went live, so the retired ids
- * can always be derived again, as every field and slot id any published
- * version exposed minus the ids the newest published version exposes.
+ * can always be derived again.
+ *
+ * They are derived as the publish hook records them: for each published
+ * version, the ids the published version before it exposed and it does not.
+ * An id dropped once stays retired even if a later version exposes it again,
+ * as it would had the record been made: a restore of a definition from before
+ * the removal does not bring the field back.
  *
  * Only versions whose content was served count. A field a draft added and the
  * next draft dropped was never on a page, so nothing holds values under it,
  * and retiring it would record what no publish ever did.
  *
  * The repair only adds. An id the table holds stays retired whatever history
- * says, so a restore that brings an old definition back cannot un-retire one;
- * and the store skips rows it holds, so the repair is safe to run any number
- * of times, including twice at once.
+ * says, and the store skips rows it holds, so the repair is safe to run any
+ * number of times, including twice at once.
  *
  * @module retired-history
  */
@@ -62,12 +66,17 @@ const VERSIONS_PER_PAGE = 50;
 /**
  * How many listing pages one derivation reads, and how many published
  * snapshots it loads: the bounds a component with an unusually long history
- * is read under. Past either, the derivation says it is incomplete, and keeps
- * what it found, which is the newest part of the history and the part a lost
- * record is in.
+ * is read under. Past either, the derivation says it is incomplete.
  */
 const MAX_PAGES = 100;
 const MAX_SERVED_SNAPSHOTS = 500;
+
+/**
+ * How many snapshots are read at once: enough that a first read of a long
+ * history is not one round trip per version, few enough that one component
+ * does not take the pool.
+ */
+const SNAPSHOTS_AT_ONCE = 8;
 
 /** How many components' history the memo keeps. */
 const MEMO_SIZE = 256;
@@ -76,20 +85,23 @@ const MEMO_SIZE = 256;
 interface Folded {
   /** The newest version number read. */
   readonly through: number;
-  /** Every id a served version exposed. */
-  readonly ever: RetiredExposures;
-  /** The ids the newest served version exposes, if one was read. */
-  readonly current: RetiredExposures | undefined;
+  /** Every id a published version dropped. */
+  readonly retired: RetiredExposures;
+  /**
+   * The ids the newest published definition read exposes: what the next
+   * published version is compared with.
+   */
+  readonly newest: RetiredExposures | undefined;
 }
 
 /**
  * What the derivation has already read of each component's history.
  *
- * History only grows: a version, once recorded, is never rewritten, so the ids
- * the versions up to a number exposed stay what they were, and the next
+ * History only grows: a version, once recorded, is never rewritten, so what
+ * the versions up to a number dropped stays what it was, and the next
  * derivation reads only what was recorded since. Retention may prune old
- * versions later; what they exposed is kept here, which is the point. Kept
- * per process and bounded, the oldest entry going first.
+ * versions later; what they dropped is kept here. Kept per process and
+ * bounded, the oldest entry going first, and only from a complete read.
  */
 export interface RetiredHistoryMemo {
   get(key: string): Folded | undefined;
@@ -131,14 +143,17 @@ export interface RetiredHistoryArgs {
 export interface DerivedRetired {
   readonly retired: RetiredExposures;
   /**
-   * False when the bounds stopped the read before the oldest version, or the
-   * newest published definition could not be read. The ids are then the ones
-   * found, never more.
+   * False when the bounds stopped the read before the oldest version, or a
+   * published definition could not be read, so a removal may be missing. The
+   * ids are then the ones found, never more.
    */
   readonly complete: boolean;
 }
 
 const NONE: RetiredExposures = { properties: [], slots: [] };
+
+/** What one published version says about the definition. */
+type Exposure = RetiredExposures | "absent" | "unreadable";
 
 /** The ids a component's published history retired. */
 export async function deriveRetired(
@@ -157,13 +172,12 @@ export async function deriveRetired(
   );
   const known = args.memo?.get(key);
   const walk = await walkHistory(args, ref, known);
-  // The live definition is the one to subtract. Unreadable, it cannot be
-  // replaced by an older one: an id the live one still exposes would then read
-  // as retired, and its values would be stripped from pages that show it.
-  if (walk.served[0] === null) return { retired: NONE, complete: false };
   const folded = foldWalk(walk, known);
-  if (walk.reached && folded.through > 0) args.memo?.set(key, folded);
-  return { retired: retiredOf(folded), complete: walk.reached };
+  // A definition that could not be read may have dropped an id, and the
+  // derivation cannot say which.
+  const complete = walk.reached && !walk.served.includes("unreadable");
+  if (complete && folded.through > 0) args.memo?.set(key, folded);
+  return { retired: folded.retired, complete };
 }
 
 /** A walk down one component's history, newest first. */
@@ -172,8 +186,8 @@ interface Walk {
   newest: number | undefined;
   /** The last version number listed, where the next page starts below. */
   cursor: number | undefined;
-  /** Each served version's ids, newest first; null where unreadable. */
-  readonly served: (RetiredExposures | null)[];
+  /** What each published version says, newest first. */
+  readonly served: Exposure[];
   /** Whether it reached the oldest version, or the part the memo holds. */
   reached: boolean;
   /** Whether it has stopped, at the end or at a bound. */
@@ -198,10 +212,8 @@ async function walkHistory(
       limit: VERSIONS_PER_PAGE,
       ...(walk.cursor === undefined ? {} : { cursor: walk.cursor }),
     });
-    for (const row of rows) {
-      if (walk.done) break;
-      await stepTo(args, ref, known, row, walk);
-    }
+    const load = toLoad(args, known, rows, walk);
+    walk.served.push(...(await loadAll(args, ref, load)));
     if (!walk.done && rows.length < VERSIONS_PER_PAGE) {
       walk.reached = true;
       walk.done = true;
@@ -210,49 +222,94 @@ async function walkHistory(
   return walk;
 }
 
-/** Take one listed version into the walk, loading it only if it was served. */
-async function stepTo(
+/**
+ * The published versions of one listed page to load, newest first. Marks the
+ * walk done where it meets what the memo holds, or its bound.
+ */
+function toLoad(
+  args: RetiredHistoryArgs,
+  known: Folded | undefined,
+  rows: readonly { versionNo: number | null; status: string }[],
+  walk: Walk
+): number[] {
+  const load: number[] = [];
+  for (const row of rows) {
+    const versionNo = row.versionNo;
+    if (typeof versionNo !== "number") continue;
+    if (known !== undefined && versionNo <= known.through) {
+      walk.reached = true;
+      walk.done = true;
+      break;
+    }
+    walk.newest ??= versionNo;
+    walk.cursor = versionNo;
+    if (args.lifecycle && row.status !== "published") continue;
+    if (walk.served.length + load.length === MAX_SERVED_SNAPSHOTS) {
+      walk.done = true;
+      break;
+    }
+    load.push(versionNo);
+  }
+  return load;
+}
+
+/** What each of these versions says, a few reads at a time, in order. */
+async function loadAll(
   args: RetiredHistoryArgs,
   ref: ComponentHistoryRef,
-  known: Folded | undefined,
-  row: { versionNo: number | null; status: string },
-  walk: Walk
-): Promise<void> {
-  const versionNo = row.versionNo;
-  if (typeof versionNo !== "number") return;
-  if (known !== undefined && versionNo <= known.through) {
-    walk.reached = true;
-    walk.done = true;
-    return;
+  versionNos: readonly number[]
+): Promise<Exposure[]> {
+  const loaded: Exposure[] = [];
+  for (let at = 0; at < versionNos.length; at += SNAPSHOTS_AT_ONCE) {
+    const versions = await Promise.all(
+      versionNos
+        .slice(at, at + SNAPSHOTS_AT_ONCE)
+        .map(versionNo => args.history.get(ref, versionNo))
+    );
+    for (const version of versions) {
+      loaded.push(exposedIn(version.snapshot, args.componentField));
+    }
   }
-  walk.newest ??= versionNo;
-  walk.cursor = versionNo;
-  if (args.lifecycle && row.status !== "published") return;
-  if (walk.served.length === MAX_SERVED_SNAPSHOTS) {
-    walk.done = true;
-    return;
-  }
-  const version = await args.history.get(ref, versionNo);
-  walk.served.push(exposedIn(version.snapshot, args.componentField));
+  return loaded;
 }
 
 /**
- * What the walk and the memo know together. The memo's part counts only when
- * the walk reached it: a walk its bound stopped has a gap between the two.
+ * What the walk and the memo know together: each published version compared
+ * with the one before it. The memo's part counts only when the walk reached
+ * it, since a walk its bound stopped has a gap between the two.
  */
 function foldWalk(walk: Walk, known: Folded | undefined): Folded {
-  const readable = walk.served.filter(
-    (ids): ids is RetiredExposures => ids !== null
+  const joined = walk.reached ? known : undefined;
+  const definitions = walk.served.filter(
+    (exposure): exposure is RetiredExposures => typeof exposure !== "string"
   );
-  const joined = walk.reached && known !== undefined ? known : undefined;
+  // Oldest last: the memo's newest definition precedes everything read now.
+  const ordered =
+    joined?.newest === undefined
+      ? definitions
+      : [...definitions, joined.newest];
+  const dropped = ordered
+    .slice(0, -1)
+    .map((after, index) => droppedFrom(ordered[index + 1], after));
   return {
     through: walk.newest ?? known?.through ?? 0,
-    ever: union(joined === undefined ? readable : [...readable, joined.ever]),
-    current: readable[0] ?? joined?.current,
+    retired: union([...dropped, joined?.retired ?? NONE]),
+    newest: definitions[0] ?? joined?.newest,
   };
 }
 
-/** Every id any of these exposes, once each, in the order first seen. */
+/** The ids `before` exposes that `after` does not. */
+function droppedFrom(
+  before: RetiredExposures,
+  after: RetiredExposures
+): RetiredExposures {
+  return {
+    properties: before.properties.filter(id => !after.properties.includes(id)),
+    slots: before.slots.filter(id => !after.slots.includes(id)),
+  };
+}
+
+/** Every id any of these holds, once each, in the order first seen. */
 function union(all: readonly RetiredExposures[]): RetiredExposures {
   return {
     properties: [...new Set(all.flatMap(ids => ids.properties))],
@@ -260,24 +317,19 @@ function union(all: readonly RetiredExposures[]): RetiredExposures {
   };
 }
 
-/** Every id served once and not served now. */
-function retiredOf(folded: Folded): RetiredExposures {
-  const current = folded.current;
-  if (current === undefined) return NONE;
-  return {
-    properties: folded.ever.properties.filter(
-      id => !current.properties.includes(id)
-    ),
-    slots: folded.ever.slots.filter(id => !current.slots.includes(id)),
-  };
-}
-
-/** The ids a version's snapshot exposes, or null when it holds no definition. */
-function exposedIn(snapshot: unknown, field: string): RetiredExposures | null {
+/**
+ * What a version's snapshot says about the definition: the ids it exposes,
+ * `absent` when it holds none (a row saved before its definition, which says
+ * nothing about which ids went), or `unreadable` when it holds one this cannot
+ * read.
+ */
+function exposedIn(snapshot: unknown, field: string): Exposure {
   const row = typeof snapshot === "string" ? parsed(snapshot) : snapshot;
-  if (!isPlainRecord(row)) return null;
-  const document = asDocument(row[field]);
-  return document === null ? null : exposureIdsOf(document);
+  if (!isPlainRecord(row)) return "unreadable";
+  const value = row[field];
+  if (value === null || value === undefined) return "absent";
+  const document = asDocument(value);
+  return document === null ? "unreadable" : exposureIdsOf(document);
 }
 
 /** `JSON.parse`, answering `undefined` rather than throwing. */
@@ -317,24 +369,17 @@ export interface ReconcileArgs extends RetiredHistoryArgs {
  * The component's retired ids, the table's and history's together, with any
  * the table lacks recorded.
  *
- * Raises when either read fails, so a caller about to mint never goes ahead on
- * a partial answer. A record that fails is logged, and the derived ids are
- * still answered: they are retired whether or not the table holds them yet,
- * and the next repair records them.
+ * Raises when either read fails, or when history could not be read whole,
+ * so a caller about to mint never goes ahead on a partial answer: what was
+ * found is recorded first. A record that fails is logged, and the derived ids
+ * are still answered: they are retired whether or not the table holds them
+ * yet, and the next repair records them.
  */
 export async function reconcileRetired(
   args: ReconcileArgs,
   componentId: string
 ): Promise<RetiredExposures> {
   const derived = await deriveRetired(args, componentId);
-  if (!derived.complete) {
-    args.logger.warn(
-      `[page-builder] the history of component "${componentId}" was not read ` +
-        "to its start, so a field it retired before the part read may be " +
-        "missing from its retired ids.",
-      { componentId }
-    );
-  }
   const held = (await args.store.of([componentId])).get(componentId) ?? NONE;
   const missing: RetiredExposures = {
     properties: derived.retired.properties.filter(
@@ -352,6 +397,13 @@ export async function reconcileRetired(
         { componentId, retired: missing, error }
       );
     }
+  }
+  if (!derived.complete) {
+    throw new Error(
+      `[page-builder] the history of component "${componentId}" could not ` +
+        "be read whole, so a field it retired may be missing from its " +
+        "retired ids; no field id is offered until it can."
+    );
   }
   return {
     properties: [...held.properties, ...missing.properties],

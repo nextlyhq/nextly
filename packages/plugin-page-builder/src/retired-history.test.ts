@@ -177,6 +177,45 @@ describe("the retired ids history implies", () => {
     });
   });
 
+  it("keep an id a later published version exposes again", async () => {
+    const { history } = memoryHistory([
+      published(["title", "body"]),
+      published(["body"]),
+      published(["title", "body"]),
+    ]);
+
+    expect(await deriveRetired(args(history), "hero")).toEqual({
+      retired: { properties: ["title"], slots: [] },
+      complete: true,
+    });
+  });
+
+  it("read a version holding no definition as saying nothing", async () => {
+    const { history } = memoryHistory([
+      published(["title"]),
+      { status: "published", content: null },
+      published(["title"]),
+    ]);
+
+    expect(await deriveRetired(args(history), "hero")).toEqual({
+      retired: { properties: [], slots: [] },
+      complete: true,
+    });
+  });
+
+  it("are incomplete when an older published definition cannot be read", async () => {
+    const { history } = memoryHistory([
+      published(["title", "body"]),
+      { status: "published", content: "not json" },
+      published(["body"]),
+    ]);
+
+    expect(await deriveRetired(args(history), "hero")).toEqual({
+      retired: { properties: ["title"], slots: [] },
+      complete: false,
+    });
+  });
+
   it("are none for a component with no history", async () => {
     const { history } = memoryHistory([]);
 
@@ -214,6 +253,29 @@ describe("reading a long history", () => {
     await deriveRetired(args(history), "hero");
 
     expect(gets).toEqual([3, 1]);
+  });
+
+  it("loads snapshots a few at a time, not one round trip each", async () => {
+    const memory = memoryHistory(
+      Array.from({ length: 20 }, (_, index) => published([`f${index}`]))
+    );
+    let inFlight = 0;
+    let most = 0;
+    const history: ComponentHistory = {
+      list: memory.history.list,
+      get: async (ref, versionNo) => {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        inFlight -= 1;
+        return memory.history.get(ref, versionNo);
+      },
+    };
+
+    const derived = await deriveRetired(args(history), "hero");
+
+    expect(most).toBe(8);
+    expect(derived.retired.properties).toHaveLength(19);
   });
 
   it("stops at its bound, keeping the newest part and saying it is incomplete", async () => {
@@ -406,19 +468,20 @@ describe("the repair", () => {
     ).rejects.toThrow("database down");
   });
 
-  it("warns when the history was not read to its start", async () => {
-    const { history } = memoryHistory(
-      Array.from({ length: 501 }, () => published([]))
-    );
-    const { store } = memoryStore();
-    const log = logger();
+  it("fails after recording what it found, when history was not read whole", async () => {
+    const { history } = memoryHistory([
+      published(["oldest"]),
+      ...Array.from({ length: 500 }, (_, index) =>
+        published(index === 0 ? ["older"] : [])
+      ),
+    ]);
+    const { store, recorded } = memoryStore();
 
-    await reconcileRetired(
-      { ...args(history), store, logger: log.logger },
-      "hero"
-    );
-
-    expect(log.warnings).toHaveLength(1);
-    expect(log.warnings[0]!.message).toContain('"hero"');
+    await expect(
+      reconcileRetired({ ...args(history), store, ...logger() }, "hero")
+    ).rejects.toThrow('"hero"');
+    expect(recorded).toEqual([
+      { componentId: "hero", retired: { properties: ["older"], slots: [] } },
+    ]);
   });
 });

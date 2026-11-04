@@ -216,6 +216,31 @@ describe.each(getConfiguredTestDialects())(
       expect(await retiredRows(t)).toHaveLength(1);
     });
 
+    it("keeps a lost retirement after a later publish exposes the id again", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      await save(t, heroId, ["body"], "published");
+      for (const row of await retiredRows(t)) {
+        await t.nextly.delete({
+          collection: COMPONENT_RETIRED_SLUG,
+          id: String(row.id),
+          overrideAccess: true,
+        });
+      }
+      // With the record lost, nothing strips the id from a definition that
+      // brings it back, so this publish exposes it again.
+      await save(t, heroId, ["title", "body"], "published");
+      const cookie = await reader(t);
+
+      expect((await facts(cookie, heroId)).retired).toEqual({
+        properties: ["title"],
+        slots: [],
+      });
+      expect(triples(await retiredRows(t))).toEqual([
+        [heroId, "property", "title"],
+      ]);
+    });
+
     it("does not retire a field only a draft held", async () => {
       const t = await boot();
       const heroId = await publishedHero(t);
