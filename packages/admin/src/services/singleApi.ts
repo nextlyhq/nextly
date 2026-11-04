@@ -24,6 +24,10 @@ import type {
 } from "../lib/api/response-types";
 
 import type {
+  PublishAllLanguageOutcome,
+  PublishAllPreview,
+} from "./publishAllPreview";
+import type {
   FieldResolution,
   SchemaApplyResponse,
   SchemaPreviewResponse,
@@ -124,9 +128,14 @@ type SingleApiType = {
     data: Record<string, unknown>,
     options?: { locale?: string; keepalive?: boolean }
   ) => Promise<SingleDocument>;
-  readonly publishAllLocales: (
+  readonly publishAllLocales: (slug: string) => Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }>;
+  readonly previewPublishAllLocales: (
     slug: string
-  ) => Promise<{ id: string; status?: string }>;
+  ) => Promise<PublishAllPreview>;
 };
 
 /**
@@ -348,17 +357,31 @@ export const singleApi: SingleApiType = {
    */
   publishAllLocales: async (
     slug: string
-  ): Promise<{ id: string; status?: string }> => {
+  ): Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }> => {
     // The route answers with the action envelope (`{ message, ...data }`)
     // rather than a document, since publishing changes status and returns no
-    // content the editor did not already have.
+    // content the editor did not already have. It carries each language's
+    // outcome, which the result message names language by language.
     return protectedApi.post<{
       message: string;
       slug: string;
       id: string;
       status?: string;
+      languages?: PublishAllLanguageOutcome[];
     }>(`/singles/${slug}/publish-all`, {});
   },
+
+  /**
+   * What publishing every language of a Single would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   * Hits `GET /api/singles/{slug}/publish-all`.
+   */
+  previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
+    protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
 } as const;
 
 // ============================================================

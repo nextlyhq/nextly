@@ -64,6 +64,7 @@ export const EDITABLE_EXPOSED_TYPES = [
   "link",
   "visibility",
   "image",
+  "richText",
 ] as const;
 
 /** One exposed property, with everything a row needs to draw itself. */

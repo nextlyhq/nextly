@@ -23,7 +23,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { CSS_NUMBER } from "./style-numeric";
+import { CSS_NUMBER, steppedValue } from "./style-numeric";
 
 /** How a folded property is edited. */
 export type FoldedControl = "font-weight" | "number-or-length";
@@ -125,6 +125,24 @@ export function lineHeightFromText(text: string): StyleValue | null {
   if (!CSS_NUMBER.test(trimmed)) return trimmed;
   const number = Number(trimmed);
   return Number.isFinite(number) ? number : trimmed;
+}
+
+/**
+ * Where a drag on the line height's label starts: the text in the field, or,
+ * while it is empty, the value it shows from another tier — as every number
+ * field starts — so dragging an inherited `1.5` writes an override from 1.5.
+ * `undefined` where that is not one number or one length.
+ */
+export function lineHeightScrubOrigin(
+  draft: string,
+  inherited: string | undefined
+): string | number | undefined {
+  const text = trimCssWhitespace(draft) === "" ? (inherited ?? "") : draft;
+  const value = lineHeightFromText(text);
+  const leaf = lineHeightLeafFor(text);
+  if (value === null || leaf === undefined) return undefined;
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  return steppedValue(leaf, value, 0) === undefined ? undefined : value;
 }
 
 /**

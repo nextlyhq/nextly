@@ -144,7 +144,7 @@ describe("the editor's Delete", () => {
 });
 
 describe("an action the page contributes", () => {
-  it("is told the document as the form holds it, an unsaved title included", async () => {
+  it("is told the document as the form holds it, an unsaved title included, and that it is unsaved", async () => {
     // The page sits above the form, so the saved entry is all it has; the
     // title being typed lives only in the form until it is saved.
     holding("read-categories", "update-categories");
@@ -183,6 +183,7 @@ describe("an action the page contributes", () => {
 
     expect(chosen).toHaveBeenCalledWith({
       values: expect.objectContaining({ title: "Edited headline" }),
+      dirty: true,
     });
   });
 });
@@ -229,9 +230,9 @@ describe("the other ways to publish", () => {
     ).toBeTruthy();
   });
 
-  it("are rows of More on a clean published document, beside a plain Save", async () => {
-    // Saving leads there, and they are not ways to save: an arrow on Save
-    // would offer scheduling as a kind of saving.
+  it("hang off Save on a clean published document, so it can still be scheduled to come down", async () => {
+    // Nothing to publish, so the arrow holds the ways to do it later, and
+    // More keeps its own rows.
     holding("read-categories", "update-categories", "publish-categories");
     editing("published");
     const bar = await screen.findByTestId("document-bar");
@@ -240,10 +241,10 @@ describe("the other ways to publish", () => {
       within(bar).getByRole("button", { name: /^save changes$/i })
     ).toBeTruthy();
     expect(
-      within(bar).queryByRole("button", { name: "More ways to publish" })
-    ).toBeNull();
-    expect(await menuActions()).toEqual(
-      expect.arrayContaining(["schedule-publish", "add-to-release"])
+      within(bar).getByRole("button", { name: "More ways to publish" })
+    ).toBeTruthy();
+    expect(await menuActions()).not.toEqual(
+      expect.arrayContaining(["schedule-publish"])
     );
   });
 });

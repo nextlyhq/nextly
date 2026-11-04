@@ -727,32 +727,37 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
 
 /**
  * One style's change applied to the stored classes as a replay finds them:
- * the classes with that style changed, nothing to write, or nothing it can do
- * once the style is no longer stored (it is not recreated).
+ * the stored tier with that style changed, nothing to write, or nothing it
+ * can do once the style is neither stored nor in the site's code (a removed
+ * style is not recreated).
  */
 function classChangeOn(
   held: unknown,
+  configured: readonly NamedClass[] | undefined,
   classId: string,
   change: SharedStyleChange
 ): SiteStyleReplayed {
-  const entries: readonly unknown[] = Array.isArray(held) ? held : [];
-  const at = entries.findIndex(
-    entry =>
-      typeof entry === "object" &&
-      entry !== null &&
-      (entry as { id?: unknown }).id === classId
+  const entries = (Array.isArray(held) ? held : []).filter(
+    (entry): entry is NamedClass => typeof entry === "object" && entry !== null
   );
-  const entry = entries[at] as NamedClass | undefined;
+  const at = entries.findIndex(entry => entry.id === classId);
+  // A style the site's code supplies is stored only while it differs from
+  // the code's, so after an undo the stored tier may not hold it: its
+  // styles are then the code's.
+  const entry = entries[at] ?? configured?.find(each => each.id === classId);
   if (entry === undefined) return { kind: "gone" };
   const out = change(entry.styles);
   if (out.kind === "refused") return { kind: "gone" };
   if (out.kind === "unchanged") return { kind: "unchanged" };
-  return {
-    kind: "write",
-    value: entries.map((each, index) =>
-      index === at ? { ...entry, styles: out.styles } : each
-    ),
-  };
+  const changed = { ...entry, styles: out.styles };
+  const next =
+    at === -1
+      ? [...entries, changed]
+      : entries.map((each, index) => (index === at ? changed : each));
+  // Only what differs from the code is stored, as a forward write stores
+  // it: an undo that brings a supplied style back to the code's drops it,
+  // so a later change in code shows.
+  return { kind: "write", value: classOverrideOf(configured, next) };
 }
 
 /** A section save's refusal in words, or the fallback when it gave none. */
@@ -836,6 +841,10 @@ function useWriteClassStyles(
   configured: readonly NamedClass[] | undefined
 ) {
   const { reserve } = useSaveSiteStyle();
+  // The code's styles as they are when a step is undone or redone, not when
+  // it was made: the code may change while the step waits in the history.
+  const configuredNow = useRef(configured);
+  configuredNow.current = configured;
   return useCallback(
     async (
       classId: string,
@@ -884,8 +893,10 @@ function useWriteClassStyles(
          */
         const undo = change.invert(entry.styles);
         const result = await slot.save(classOverrideOf(configured, next), {
-          undo: held => classChangeOn(held, classId, undo),
-          redo: held => classChangeOn(held, classId, change),
+          undo: held =>
+            classChangeOn(held, configuredNow.current, classId, undo),
+          redo: held =>
+            classChangeOn(held, configuredNow.current, classId, change),
         });
         const refused = refusalOf(
           result,
@@ -924,16 +935,23 @@ function useRenameClass(
   /** Release the pending name, but only if this attempt is still the live one. */
   endRename: (classId: string, attempt: number) => void
 ) {
-  const { save: saveSection } = useSaveSiteStyle();
+  const { reserve } = useSaveSiteStyle();
   return useCallback(
     async (
       classId: string,
       name: { label: string; slug: string }
     ): Promise<ClassRenameOutcome> => {
       const mine = beginRename(classId, name.label);
+      /*
+       * The history place is taken NOW, as a style edit's is: a rename
+       * queued behind writes still being stored would otherwise take its
+       * place only once they answered, after a page edit made meanwhile.
+       */
+      const slot = reserve("classes");
       try {
         return await writes.run<ClassRenameOutcome>(async existing => {
           if (existing === undefined) {
+            slot.cancel();
             return {
               result: {
                 ok: false as const,
@@ -949,10 +967,8 @@ function useRenameClass(
               ? { ...entry, label: name.label, slug: name.slug }
               : entry
           );
-          const result = await saveSection(
-            "classes",
-            classOverrideOf(configured, next)
-          );
+          // A refused save withdraws its place itself.
+          const result = await slot.save(classOverrideOf(configured, next));
           if (result.saved) return { result: { ok: true as const }, next };
           const reasons = Object.values(result.issues);
           return {
@@ -980,7 +996,7 @@ function useRenameClass(
         endRename(classId, mine);
       }
     },
-    [writes, configured, saveSection, beginRename, endRename]
+    [writes, configured, reserve, beginRename, endRename]
   );
 }
 
