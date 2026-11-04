@@ -8,6 +8,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  MAX_COMPOSED_DEPTH,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
@@ -213,6 +214,29 @@ describe("what a publish would leave unpublished", () => {
       })
     );
     expect(plan).toEqual({ components: [], layout: "landing", missing: 0 });
+  });
+
+  it("names a chain as deep as the render composes, and nothing past it", async () => {
+    // Twenty unpublished components, each placing the next, under a host
+    // that allows deep node trees: the render composes components only
+    // MAX_COMPOSED_DEPTH levels deep, so the rest are never a hole publishing
+    // could fill, and are not named.
+    const chain = Array.from({ length: 20 }, (_, i) => `c${String(i)}`);
+    const store = reads({
+      components: Object.fromEntries(
+        chain.map((id, i) => [
+          id,
+          { live: false, places: chain.slice(i + 1, i + 2) },
+        ])
+      ),
+    });
+    const plan = await planPublishReadiness(
+      { documents: [page(chain.slice(0, 1))], layout: null },
+      { ...store, limits: { ...LIMITS, maxDepth: 40 } }
+    );
+    expect(plan.components).toEqual(
+      chain.slice(0, MAX_COMPOSED_DEPTH).reverse()
+    );
   });
 
   it("names a component placed in two documents once", async () => {

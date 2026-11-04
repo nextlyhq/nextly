@@ -47,7 +47,6 @@ import {
   NextlyError,
   respondMutation,
   type PluginRouteContext,
-  type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
@@ -64,7 +63,7 @@ import {
 } from "./component-store-source";
 import { asCaller } from "./composition-route-kit";
 import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
-import { componentReadPermission, type ComponentStore } from "./library-route";
+import type { ComponentStore } from "./library-route";
 import {
   MAX_PUBLISHED_DEPENDENCIES,
   MAX_READINESS_DOCUMENTS,
@@ -76,13 +75,6 @@ import {
   type RefusedDependency,
   type UnpublishedDependency,
 } from "./publish-readiness-contract";
-
-/**
- * How many times the walk is repeated with newly named components supplied.
- * Each round reaches one level deeper; the composition depth limit stops far
- * sooner, so this only guards the loop.
- */
-const MAX_ROUNDS = 16;
 
 /** The reads the plan makes, every one as the system. */
 export interface ReadinessReads {
@@ -162,7 +154,13 @@ async function unpublishedComponents(
   const planned = new Map<string, unknown>();
   const gone = new Set<string>();
   const source = supplying(reads, planned);
-  for (let round = 0; round < MAX_ROUNDS; round += 1) {
+  // Until a fixed point, as the render's own discovery runs, never for a
+  // fixed number of rounds: a supplied definition can free node budget and
+  // reveal another missing id at the same depth, so rounds can outnumber
+  // levels. It ends on its own: a round goes on only when it names an id not
+  // yet planned or gone, and both only grow, over the components the store
+  // holds.
+  for (;;) {
     const asked = await askedFor(
       documents,
       source,
@@ -322,10 +320,29 @@ async function titlesAsCaller(
 ): Promise<Map<string, string>> {
   const titles = new Map<string, string>();
   if (ids.length === 0) return titles;
+  for (const item of await readableAsCaller(ctx, nextly, collection, ids)) {
+    const row = item as Record<string, unknown>;
+    if (typeof row.id === "string") titles.set(row.id, titleOf(row.title));
+  }
+  return titles;
+}
+
+/** A stored title as the dialog names it. */
+function titleOf(value: unknown): string {
+  const title = typeof value === "string" ? value.trim() : "";
+  return title === "" ? "Untitled" : title;
+}
+
+/** The rows among `ids` the caller may read, through core's read access. */
+async function readableAsCaller(
+  ctx: Pick<PluginRouteContext, "caller">,
+  nextly: Reader,
+  collection: string,
+  ids: readonly string[]
+): Promise<unknown[]> {
   const identity = await ctx.caller?.identity();
-  let found: { items: unknown[] };
   try {
-    found = await nextly.find({
+    const found = await nextly.find({
       collection,
       where: { id: { in: [...ids] } },
       limit: ids.length,
@@ -337,18 +354,12 @@ async function titlesAsCaller(
         ? {}
         : { actor: identity.authenticatedScope }),
     });
+    return found.items;
   } catch (error) {
     // A caller who may not read the collection at all reads none of it.
-    if (NextlyError.isForbidden(error)) return titles;
+    if (NextlyError.isForbidden(error)) return [];
     throw error;
   }
-  for (const item of found.items) {
-    const row = item as Record<string, unknown>;
-    if (typeof row.id !== "string") continue;
-    const title = typeof row.title === "string" ? row.title.trim() : "";
-    titles.set(row.id, title === "" ? "Untitled" : title);
-  }
-  return titles;
 }
 
 /** Whether the caller holds every grant named, on `resource`. */
@@ -536,19 +547,20 @@ function refusalReason(error: unknown): string {
  *
  * Every write is a status-only update through core's collection service, the
  * same write a document's own Publish makes, so core's publish rule and the
- * document's own validation decide each one. One refusal does not stop the
+ * document's own validation decide each one. That is the route's whole
+ * authorization: it names no permission of its own, since a Layout's author
+ * may publish a Layout without reading any component, and a permission on
+ * one collection would refuse a write core allows on the other. One refusal does not stop the
  * rest: the author asked for each of them, and the page publishes regardless.
  */
 export function publishDependenciesRoute(setup: PublishReadinessSetup): {
   method: "POST";
   path: string;
-  requiredPermission: (scope: PluginRoutePermissionScope) => string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: PUBLISH_DEPENDENCIES_ROUTE_PATH,
-    requiredPermission: componentReadPermission(setup.store),
     handler: async (req, ctx) => {
       const body = await bodyOf(req, PUBLISH_BODY);
       const stores = storesOf(ctx, setup.store);

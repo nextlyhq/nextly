@@ -17,6 +17,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { JSX } from "react";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -297,6 +298,21 @@ describe("before a publish", () => {
     expect(asked).toEqual([
       ["/publish-readiness", { documents: [DOCUMENT, second], layout: null }],
     ]);
+  });
+
+  it("renders a form's field on the server, where no field has registered", () => {
+    // The admin's entry screen is server-rendered before it hydrates, and a
+    // store subscription without a server answer throws there.
+    function Field() {
+      return useFormPublishOffer({
+        form: {},
+        name: "content",
+        value: () => DOCUMENT,
+        layout: null,
+        subject: "page",
+      });
+    }
+    expect(() => renderToString(<Field />)).not.toThrow();
   });
 
   it("leaves out a component the author unticks", async () => {

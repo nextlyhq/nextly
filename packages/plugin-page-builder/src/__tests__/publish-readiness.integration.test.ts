@@ -161,6 +161,8 @@ describe.each(getConfiguredTestDialects())(
     let siteEditor = "";
     /** Publishes pages and reads Layouts; may not read components at all. */
     let blindAuthor = "";
+    /** Publishes pages and Layouts; may not read components at all. */
+    let layoutAuthor = "";
     let card = "";
     let badge = "";
     let header = "";
@@ -230,6 +232,12 @@ describe.each(getConfiguredTestDialects())(
       blindAuthor = await keyHolding("blind-author", [
         ...pageGrants,
         `read-${LAYOUTS_SLUG}`,
+      ]);
+      layoutAuthor = await keyHolding("layout-author", [
+        ...pageGrants,
+        `read-${LAYOUTS_SLUG}`,
+        `update-${LAYOUTS_SLUG}`,
+        `publish-${LAYOUTS_SLUG}`,
       ]);
       siteEditor = await keyHolding("site-editor", [
         ...pageGrants,
@@ -353,6 +361,30 @@ describe.each(getConfiguredTestDialects())(
       const published = await setStatus(PAGES_SLUG, page, pageAuthor);
       expect(published.status, await published.clone().text()).toBe(200);
       expect(await statusOf(PAGES_SLUG, page)).toBe("published");
+    });
+
+    it("publishes a Layout for an author who may publish it but read no component", async () => {
+      // A Layout of its own, so the cases that publish `landing` are not
+      // reordered by this one.
+      const plain = idOf(
+        await direct.create({
+          collection: LAYOUTS_SLUG,
+          data: { title: "Plain", slug: "plain", areas: [], status: "draft" },
+          overrideAccess: true,
+        })
+      );
+      const res = await route(PUBLISH_DEPENDENCIES_ROUTE_PATH, layoutAuthor, {
+        dependencies: [{ kind: "layout", id: plain }],
+      });
+      expect(res.status, await res.clone().text()).toBe(200);
+      const { item } = (await res.json()) as {
+        item: PublishDependenciesResult;
+      };
+      expect(item).toEqual({
+        published: [{ kind: "layout", id: plain }],
+        refused: [],
+      });
+      expect(await statusOf(LAYOUTS_SLUG, plain)).toBe("published");
     });
 
     it("offers everything to an author who may publish it, and publishes it as them", async () => {

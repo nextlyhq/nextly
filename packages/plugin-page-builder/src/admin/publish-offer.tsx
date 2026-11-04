@@ -250,7 +250,10 @@ export function useFormPublishOffer(input: {
       fields.listeners.add(listener);
       return () => fields.listeners.delete(listener);
     },
-    () => fields.values.keys().next().value === input.name
+    () => fields.values.keys().next().value === input.name,
+    // On the server no field has registered yet, and none asks; the client
+    // elects the first once its effects run.
+    () => false
   );
   return usePublishOffer({
     documents: () => [...fields.values.values()].map(read => read()),
