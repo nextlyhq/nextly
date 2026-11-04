@@ -182,4 +182,24 @@ describe("AspectRatioField", () => {
     fireEvent.blur(css);
     expect(onCommit).toHaveBeenCalledWith("auto 4 / 3");
   });
+
+  it("shows a stored ratio once one arrives, closing the CSS it was written in", () => {
+    const onCommit = mount();
+    fireEvent.click(screen.getByRole("combobox", { name: "Aspect ratio" }));
+    fireEvent.click(screen.getByRole("option", { name: "Write as CSS…" }));
+    onCommit.rerender("16 / 9");
+    expect(
+      screen.getByRole("combobox", { name: "Aspect ratio" }).textContent
+    ).toBe("16:9");
+    expect(
+      screen.queryByRole("textbox", { name: "Aspect ratio as CSS" })
+    ).toBeNull();
+  });
+
+  it("shows an inherited ratio the menu has no words for, as it is written", () => {
+    mount(undefined, { inherited: "auto 4 / 3" });
+    const trigger = screen.getByRole("combobox", { name: "Aspect ratio" });
+    expect(trigger.textContent).toBe("auto 4 / 3");
+    expect(trigger.hasAttribute("data-inherited")).toBe(true);
+  });
 });

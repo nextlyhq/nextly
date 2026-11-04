@@ -2748,13 +2748,14 @@ describe("where a control's value came from", () => {
   });
 
   it("shows an inherited opacity in percent, however small its number is written", () => {
-    // `0.0000001` arrives as `1e-7`, which is a number CSS reads.
+    // `0.0000001` arrives as `1e-7`, which is a number CSS reads: shown in
+    // percent, unrounded.
     mountCarded([fromCard({ property: "opacity", value: "1e-7" })], {
       effects: true,
     });
     // By the label's start: the label also holds the source caption.
     const field = screen.getByRole("textbox", { name: /^Opacity/ });
-    expect(field.getAttribute("placeholder")).toBe("0");
+    expect(field.getAttribute("placeholder")).toBe("0.00001");
   });
 
   it("leaves the swatch unpainted for an inherited colour it cannot resolve here", () => {
@@ -4709,6 +4710,17 @@ describe("opacity in percent", () => {
     expect(screen.getByRole("textbox", { name: "Opacity" })).toBeDefined();
   });
 
+  it("keeps a typed percent's precision, dividing it by 100 and no more", () => {
+    // The number is the exact path; only the slider is whole percent.
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "12.345" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.12345 } } } },
+    });
+  });
+
   it("passes a CSS-wide keyword through, unscaled", () => {
     const editor = mount({ effects: true });
     const field = screen.getByRole("textbox", { name: "Opacity" });
@@ -4744,15 +4756,15 @@ describe("an aspect ratio", () => {
 });
 
 describe("an image's fit", () => {
-  it("is named Image fit, its CSS name in the label's tooltip", () => {
-    // "Object fit" is how CSS names it; on an image the author is fitting
-    // the image.
+  it("is named Fit, its CSS name in the label's tooltip", () => {
+    // "Object fit" is how CSS names it. Plain "Fit", since the same row fits
+    // a video, an embed or a canvas as well as an image.
     mount(
       { dimensions: true },
       { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
     );
-    expect(screen.getByRole("radiogroup", { name: "Image fit" })).toBeDefined();
-    expect(screen.getByText("Image fit").closest("label")?.title).toMatch(
+    expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
+    expect(screen.getByText("Fit").closest("label")?.title).toMatch(
       /^Object fit/
     );
   });

@@ -116,30 +116,37 @@ export function drawsAspectRatio(stored: StyleValue | undefined): boolean {
 type RatioMode = "menu" | "custom" | "css";
 
 /**
- * What the menu shows: the stored ratio as the field draws it; a ratio
- * reaching this block from another tier, shown where Not set would and marked
- * as inherited; whether the custom numbers are open; and the menu's value.
+ * What the menu shows: the stored ratio as the field draws it, whether the
+ * custom numbers are open, and the menu's value.
  */
 function ratioMenu(
   stored: StyleValue | undefined,
-  inherited: string | undefined,
   mode: RatioMode
 ): {
   choice: AspectRatioChoice | undefined;
-  inheritedChoice: AspectRatioChoice | undefined;
   custom: boolean;
   value: string;
 } {
   const choice =
     typeof stored === "string" ? aspectRatioChoice(stored) : undefined;
-  const inheritedChoice =
-    stored === undefined && inherited !== undefined
-      ? aspectRatioChoice(inherited)
-      : undefined;
   const custom = choice?.kind === "custom" || mode === "custom";
   const preset = choice?.kind === "preset" ? choice.value : "";
   const value = mode === "css" ? AS_CSS : custom ? CUSTOM : preset;
-  return { choice, inheritedChoice, custom, value };
+  return { choice, custom, value };
+}
+
+/**
+ * The ratio reaching this block from another tier, shown where Not set would
+ * while nothing is stored here: by its name, or as written where the menu
+ * has no words for it (`auto 4 / 3`).
+ */
+function inheritedLabel(
+  stored: StyleValue | undefined,
+  inherited: string | undefined
+): string | undefined {
+  if (stored !== undefined || inherited === undefined) return undefined;
+  const choice = aspectRatioChoice(inherited);
+  return choice === undefined ? inherited : choiceLabel(choice);
 }
 
 export function AspectRatioField({
@@ -157,15 +164,16 @@ export function AspectRatioField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  const inherited = React.useContext(InheritedValue);
+  const inherited = inheritedLabel(stored, React.useContext(InheritedValue));
   // Custom and CSS are chosen before anything is typed, so each is the
-  // field's own state until a ratio is stored.
+  // field's own state until a ratio is stored; a stored change (one written
+  // here, an undo, a shared style's update) closes it, so a stale draft is
+  // never left open over the value that replaced it.
   const [mode, setMode] = React.useState<RatioMode>("menu");
-  const { choice, inheritedChoice, custom, value } = ratioMenu(
-    stored,
-    inherited,
-    mode
-  );
+  React.useEffect(() => {
+    setMode("menu");
+  }, [stored]);
+  const { choice, custom, value } = ratioMenu(stored, mode);
   const invalid = describedBy === undefined ? undefined : true;
   return (
     <div className="nx-style-inspector__ratio">
@@ -185,17 +193,11 @@ export function AspectRatioField({
           aria-labelledby={labelledBy}
           aria-describedby={describedBy}
           aria-invalid={invalid}
-          {...(value === "" && inheritedChoice !== undefined
+          {...(value === "" && inherited !== undefined
             ? { "data-inherited": "" }
             : {})}
         >
-          <SelectValue
-            placeholder={
-              inheritedChoice === undefined
-                ? "Not set"
-                : choiceLabel(inheritedChoice)
-            }
-          />
+          <SelectValue placeholder={inherited ?? "Not set"} />
         </SelectTrigger>
         <SelectContent>
           {PRESETS.map(preset => (

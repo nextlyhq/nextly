@@ -5073,9 +5073,18 @@ function textNumber(text: string): number | undefined {
  */
 const SectionHeld = React.createContext(false);
 
-/** A fraction as a percent, to two places. */
+/**
+ * A fraction as a percent, and back: multiplied or divided by 100 and no
+ * more, to twelve significant figures, which drops the binary noise of the
+ * division (`12.345 / 100` is `0.12345000000000001`) without rounding a
+ * value an author typed.
+ */
 function percentOf(fraction: number): number {
-  return Math.round(fraction * 10000) / 100;
+  return Number((fraction * 100).toPrecision(12));
+}
+
+function fractionOf(percent: number): number {
+  return Number((percent / 100).toPrecision(12));
 }
 
 /** A stored opacity as the percent the field shows; anything else as stored. */
@@ -5095,7 +5104,7 @@ function fromPercent(value: StyleValue | null): StyleValue | null {
       : typeof value === "string"
         ? textNumber(value)
         : undefined;
-  return number === undefined ? value : Math.round(number * 100) / 10000;
+  return number === undefined ? value : fractionOf(number);
 }
 
 /**
@@ -5213,7 +5222,7 @@ function OpacitySlider({
       onValueChange={([next]) => setPreview(next)}
       onValueCommit={([next]) => {
         setPreview(undefined);
-        if (next !== undefined) onCommit(Math.round(next * 100) / 10000);
+        if (next !== undefined) onCommit(fractionOf(next));
       }}
       thumbs={[
         {
