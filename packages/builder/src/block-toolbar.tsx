@@ -100,7 +100,12 @@ import {
 
 /** A rectangle on screen as the top and bottom a toolbar keeps to. */
 function screenBand(rect: Rect): ToolbarScreen {
-  return { top: rect.y, bottom: rect.y + rect.height };
+  return {
+    top: rect.y,
+    bottom: rect.y + rect.height,
+    left: rect.x,
+    right: rect.x + rect.width,
+  };
 }
 
 const ICONS: Record<ToolbarActionId, LucideIcon> = {

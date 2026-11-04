@@ -4880,6 +4880,24 @@ function ContrastNote({
   );
 }
 
+/**
+ * Keywords a menu leaves out, still accepted when typed and still shown when
+ * stored: a font size's absolute sizes say no size an author can picture
+ * ("x-large"), where the type scale above them does.
+ */
+const UNOFFERED_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
+  "font-size": [
+    "xx-small",
+    "x-small",
+    "small",
+    "medium",
+    "large",
+    "x-large",
+    "xx-large",
+    "xxx-large",
+  ],
+};
+
 /** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({
   writingMode: "horizontal-tb",
@@ -5234,12 +5252,11 @@ function NumericField({
                 {choice}
               </SelectItem>
             ))}
-            {keywords.length === 0 ? null : <SelectSeparator />}
-            {keywords.map(keyword => (
-              <SelectItem key={keyword} value={keyword} title={keyword}>
-                {keywordLabel(control.leaf.cssProperty, keyword)}
-              </SelectItem>
-            ))}
+            <KeywordItems
+              cssProperty={control.leaf.cssProperty}
+              keywords={keywords}
+              draft={draft}
+            />
           </SelectContent>
         </Select>
       ) : null}
@@ -5255,6 +5272,37 @@ function NumericField({
         onPick={identity => onCommit({ $token: identity })}
       />
     </div>
+  );
+}
+
+/**
+ * A unit menu's keywords after a line, in words with the CSS spelling in the
+ * tooltip; see style-keyword-labels. Those a menu leaves out are left out
+ * unless the field holds one.
+ */
+function KeywordItems({
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  const unoffered = UNOFFERED_KEYWORDS[cssProperty] ?? [];
+  const offered = keywords.filter(
+    keyword => keyword === draft || !unoffered.includes(keyword)
+  );
+  if (offered.length === 0) return null;
+  return (
+    <>
+      <SelectSeparator />
+      {offered.map(keyword => (
+        <SelectItem key={keyword} value={keyword} title={keyword}>
+          {keywordLabel(cssProperty, keyword)}
+        </SelectItem>
+      ))}
+    </>
   );
 }
 

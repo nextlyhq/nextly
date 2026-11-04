@@ -629,7 +629,7 @@ describe("removing unused shared styles", () => {
     ).toMatchObject({
       code: "CONFLICT",
       publicMessage:
-        "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet.",
+        "Nothing was removed. Some pages haven't been counted yet, so no shared style can be removed.",
     });
     expect(write).not.toHaveBeenCalled();
   });

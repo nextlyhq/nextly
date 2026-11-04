@@ -634,16 +634,32 @@ export function containerEdges(root: Element): {
  * against that never holds the pointer or the message at all.
  */
 function visibleClientRect(scroller: Element): Rect {
+  /*
+   * The CLIENT box where the scroller has one: a classic scrollbar takes its
+   * width out of what the scroller shows, and chrome kept to the border box
+   * would sit under it. `clientWidth` is 0 for a scroller with no layout box,
+   * where there is no scrollbar to leave out either, so the outer size stands.
+   */
+  const inner = (outer: number, client: number): number =>
+    client > 0 ? Math.min(outer, client) : outer;
   const view = scroller.ownerDocument.defaultView;
   if (view !== null && scroller === scroller.ownerDocument.scrollingElement) {
-    return { x: 0, y: 0, width: view.innerWidth, height: view.innerHeight };
+    return {
+      x: 0,
+      y: 0,
+      width: inner(view.innerWidth, scroller.clientWidth),
+      height: inner(view.innerHeight, scroller.clientHeight),
+    };
   }
   const box = scroller.getBoundingClientRect();
+  // `clientLeft` and `clientTop` are the border, and a scrollbar on the left
+  // in a right-to-left scroller.
+  const laidOut = scroller.clientWidth > 0;
   return {
-    x: box.left,
-    y: box.top,
-    width: box.width,
-    height: box.bottom - box.top,
+    x: box.left + (laidOut ? scroller.clientLeft : 0),
+    y: box.top + (scroller.clientHeight > 0 ? scroller.clientTop : 0),
+    width: inner(box.width, scroller.clientWidth),
+    height: inner(box.bottom - box.top, scroller.clientHeight),
   };
 }
 

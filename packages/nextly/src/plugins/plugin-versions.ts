@@ -37,7 +37,8 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import { runAsPrincipal } from "../auth/principal-scope";
-import type { RequestActor } from "../auth/request-actor";
+import { SYSTEM_ACTOR, type RequestActor } from "../auth/request-actor";
+import { getService } from "../di";
 import {
   authorizeChecked,
   checkedCaller,
@@ -54,6 +55,7 @@ import {
 } from "../domains/versions/versions-repository";
 import type { VersionsService } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
+import { assertNoOpenTransaction } from "../shared/lib/open-transaction";
 
 import {
   pluginVersionPins,
@@ -355,6 +357,40 @@ function refuseOtherAuthor(
  * id, so a discard made with a key is refused rather than recorded against
  * the key's owner, who did not make it. The count is of the drafts removed.
  */
+/**
+ * A trusted plugin's discard of a working draft: through the document's own
+ * service, as every other discard goes, never straight to the draft table. The
+ * service deletes the draft under the document's lock and, in the same
+ * transaction, moves the document's version: what a reader of the draft would
+ * see has changed. Page history has no document version, so it keeps the
+ * direct delete.
+ */
+async function discardTrusted(
+  ref: VersionRef,
+  locale: string | null,
+  service: () => VersionsService
+): Promise<number> {
+  if (ref.scopeKind === "collection") {
+    return getService("collectionsHandler")
+      .getEntryService()
+      .discardWorkingDraftCounted({
+        collectionName: ref.scopeSlug,
+        entryId: ref.entryId,
+        locale,
+        actor: SYSTEM_ACTOR,
+      });
+  }
+  if (ref.scopeKind === "single") {
+    return getService("singleEntryService").discardWorkingDraftCounted({
+      slug: ref.scopeSlug,
+      entryId: ref.entryId,
+      locale,
+      actor: SYSTEM_ACTOR,
+    });
+  }
+  return service().deleteWorkingDraft(ref, locale);
+}
+
 async function discardAsWriter(
   ref: VersionRef,
   locale: string | null,
@@ -445,10 +481,21 @@ export function pluginVersionWrites(
 
     deleteWorkingDraft(ref, locale, opts) {
       return asCalled(opts, async resolved => {
+        // A collection's or Single's discard takes the document's row lock in
+        // a transaction of its own. Inside the plugin's open transaction,
+        // which may hold that lock, it would wait on it until the database
+        // gave up, on the dialects whose transactions take a connection each;
+        // it is refused at once instead, on every dialect.
+        if (ref.scopeKind === "collection" || ref.scopeKind === "single") {
+          assertNoOpenTransaction(
+            getService("adapter"),
+            "versions.deleteWorkingDraft"
+          );
+        }
         const writer = await checkedWriter(ref, resolved, "discard", {
           locale,
         });
-        if (!writer) return service().deleteWorkingDraft(ref, locale);
+        if (!writer) return discardTrusted(ref, locale, service);
         return discardAsWriter(ref, locale, writer);
       });
     },

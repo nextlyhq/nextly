@@ -43,6 +43,7 @@ import * as React from "react";
 
 import { useSurvivingReport } from "./builder-notices";
 import { ChromeTooltip } from "./chrome-tooltip";
+import { BACKGROUND_JOBS_DOCS_HREF } from "./docs-links";
 import { EDITOR_WORDS } from "./editor-words";
 import type { TokenMode } from "./font-library";
 import {
@@ -187,12 +188,15 @@ const PAGE_SIZE = 50;
 export const USAGE_RECOUNT_MS = 15_000;
 
 /**
- * How many times the rows are asked again when the host does not say whether
- * the site is still being counted: five minutes of recounts, so a host
- * written before `counting` existed neither stops while counting nor polls
- * for ever where the counts cannot finish.
+ * How many times in a row the rows are asked again with nothing changing:
+ * five minutes of recounts. A site says it is counting when the backfill
+ * still has pages to count, but only a scheduler running the site's jobs
+ * counts them, so on a site with none it says so for ever; and a host
+ * written before `counting` existed does not say at all. Either way the tab
+ * stops asking rather than polling for as long as it stays open, and any
+ * change in the counts, or a style not read before, renews it.
  */
-export const USAGE_RECOUNT_UNKNOWN_MAX = 20;
+export const USAGE_RECOUNT_IDLE_MAX = 20;
 
 /** The words for a refusal that came with none. */
 const UNEXPLAINED_REFUSAL = "This shared style could not be renamed.";
@@ -363,6 +367,7 @@ export function SharedStylesPanel({
             query={query.trim()}
             withheld={notes.withheld}
             note={notes.note}
+            jobs={notes.jobs}
           >
             {shown.map(row => (
               <StyleRow
@@ -401,7 +406,7 @@ export function SharedStylesPanel({
           />
         </section>
         {/* Said by the one counting note when that is showing. */}
-        <FloorNote note={notes.floor} />
+        <FloorNote note={notes.floor} jobs={notes.jobs} />
       </div>
     </div>
   );
@@ -565,11 +570,40 @@ function issueBesideList(
 /** The note under the list while every count is a floor, in its reason's words. */
 function FloorNote({
   note,
+  jobs,
 }: {
   note: string | undefined;
+  jobs: boolean;
 }): React.JSX.Element | null {
   if (note === undefined) return null;
-  return <p className="nx-vars__note">{note}</p>;
+  return (
+    <>
+      <p className="nx-vars__note">{note}</p>
+      {jobs ? <CountedBy /> : null}
+    </>
+  );
+}
+
+/**
+ * Who counts the pages, beside a note that some are not counted yet. The
+ * counts are filled in by one of the site's background jobs, which nothing
+ * runs on a site with no scheduler, so there the counts never finish; this
+ * says so, and links to how the jobs are run, rather than promising a wait.
+ */
+function CountedBy(): React.JSX.Element {
+  return (
+    <p className="nx-vars__note">
+      {"Pages are counted by the site's background jobs. "}
+      <a
+        className="nx-vars__link"
+        href={BACKGROUND_JOBS_DOCS_HREF}
+        target="_blank"
+        rel="noreferrer"
+      >
+        How background jobs run
+      </a>
+    </p>
+  );
 }
 
 /** The read-only line, a usage read that failed, and a refused rename. */
@@ -635,6 +669,8 @@ function countingNotes(
   note: string | undefined;
   /** The floor note's words: nothing while the one note says it. */
   floor: string | undefined;
+  /** Whether a note says pages are not counted yet, so who counts them. */
+  jobs: boolean;
 } {
   const one = withheld && reason !== undefined;
   const words =
@@ -649,6 +685,7 @@ function countingNotes(
     one,
     note: one ? words.one : undefined,
     floor: one || reason === undefined ? undefined : words.floor,
+    jobs: reason === "counting",
   };
 }
 
@@ -671,10 +708,12 @@ function unusedWithheld(
  */
 function WithheldList({
   note,
+  jobs,
   listed,
   children,
 }: {
   note: string | undefined;
+  jobs: boolean;
   listed: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -686,6 +725,7 @@ function WithheldList({
       >
         {note ?? SHARED_STYLE_UNUSED_UNCERTAIN}
       </p>
+      {jobs ? <CountedBy /> : null}
       {listed ? <ul className="nx-vars__list">{children}</ul> : null}
     </>
   );
@@ -699,6 +739,7 @@ function StyleList({
   query,
   withheld,
   note,
+  jobs,
   children,
 }: {
   rows: readonly SharedStyleRow[];
@@ -716,15 +757,18 @@ function StyleList({
    * own; Remove unused points at it for why it waits.
    */
   note: string | undefined;
+  /** Whether that note says pages are not counted yet, so who counts them. */
+  jobs: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
-  if (
-    withheld &&
-    rows.length > 0 &&
-    (note !== undefined || found.length === 0)
-  ) {
+  // Whenever Unused holds a row back it says so, beside the rows it lists.
+  if (withheld && rows.length > 0) {
     return (
-      <WithheldList note={note} listed={found.length > 0}>
+      <WithheldList
+        note={note}
+        jobs={jobs && note !== undefined}
+        listed={found.length > 0}
+      >
         {children}
       </WithheldList>
     );
@@ -816,8 +860,8 @@ function countingOf(
 
 /**
  * Whether the rows on screen are due another read on the recount timer: while
- * their counts are floors the site is still counting, or may be, the latter
- * only {@link USAGE_RECOUNT_UNKNOWN_MAX} times.
+ * their counts are floors the site is still counting, or may be, and fewer
+ * than {@link USAGE_RECOUNT_IDLE_MAX} recounts have changed nothing.
  */
 function recountDue(args: {
   access: SharedStylesAccess | undefined;
@@ -829,10 +873,20 @@ function recountDue(args: {
   if (args.access === undefined || args.whole !== false || args.failed) {
     return false;
   }
-  return (
-    args.counting === "yes" ||
-    (args.counting === "unknown" && args.recounts < USAGE_RECOUNT_UNKNOWN_MAX)
-  );
+  return args.counting !== "no" && args.recounts < USAGE_RECOUNT_IDLE_MAX;
+}
+
+/**
+ * The usage of `ids` as one value, so a recount that moved any of it is told
+ * from one that changed nothing. Each style's whole answer, not a summary of
+ * it: a page use added as a component use goes keeps the total and changes
+ * what the row says. JSON, for the reason {@link idsKey} is.
+ */
+function progressKey(
+  styles: ReadonlyMap<string, SharedStyleReach>,
+  ids: readonly string[]
+): string {
+  return JSON.stringify(ids.map(id => styles.get(id) ?? null));
 }
 
 /** What the reads kept: each style's usage, and the health it was read under. */
@@ -899,6 +953,19 @@ function useUsage(
   const counting = countingOf(state.readings, ids);
   const [recount, setRecount] = React.useState(0);
   const recounted = React.useRef(recount);
+  // The recount the budget runs from: renewed whenever styles not read
+  // before are read, so a style made after the budget was spent is still
+  // asked about again, not only once, and whenever the counts change, so a
+  // site still getting on with its counting is asked until it is done.
+  const budgetFrom = React.useRef(0);
+  const progress = progressKey(state.styles, ids);
+  const progressSeen = React.useRef(progress);
+  // Before the timer's effect, which reads the budget this may renew.
+  React.useEffect(() => {
+    if (progressSeen.current === progress) return;
+    progressSeen.current = progress;
+    budgetFrom.current = recount;
+  }, [progress, recount]);
   React.useEffect(() => {
     // Only while the site is still being counted, or may be: floors that
     // nothing will make whole (content the index cannot reach) are not asked
@@ -908,7 +975,7 @@ function useUsage(
       whole,
       counting,
       failed: state.failed,
-      recounts: recount,
+      recounts: recount - budgetFrom.current,
     });
     if (!due) return;
     const timer = setTimeout(
@@ -928,6 +995,7 @@ function useUsage(
       id => id !== "" && (again || !known.current.has(id))
     );
     if (unread.length === 0) return;
+    if (!again) budgetFrom.current = recount;
     return readInto(access, unread, setState);
   }, [access, key, recount]);
   // Styles asked about again on their own, after a write the server refused.
@@ -1186,6 +1254,8 @@ function RowContent({
         style={tile.page}
         data-dark-unreadable={tile.darkUnreadable ? "" : undefined}
       >
+        {/* Outlined: its outline is inline, chosen against its own
+            background; the class marks it. */}
         <span
           className={
             tile.outlined
@@ -1214,12 +1284,28 @@ function RowContent({
           In code
         </span>
       ) : null}
-      {reach === undefined ? null : (
-        <span className="nx-vars__chip" aria-hidden="true">
-          {sharedStyleReachChip(reach)}
-        </span>
-      )}
+      {reach === undefined ? null : <ReachChip reach={reach} />}
     </>
+  );
+}
+
+/** A row's count, muted while it is a zero not counted yet. */
+function ReachChip({ reach }: { reach: SharedStyleReach }): React.JSX.Element {
+  const chip = sharedStyleReachChip(reach);
+  return (
+    <span
+      className={
+        chip.uncounted
+          ? "nx-vars__chip nx-shared-styles__count--uncounted"
+          : "nx-vars__chip"
+      }
+      aria-hidden="true"
+      // Each kind in words on hover, which "5 places" totals; the row's
+      // name says the same to a screen reader.
+      title={sharedStyleReachSentence(undefined, reach) || undefined}
+    >
+      {chip.words}
+    </span>
   );
 }
 

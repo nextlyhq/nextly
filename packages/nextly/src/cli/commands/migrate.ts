@@ -61,6 +61,7 @@ import {
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
+import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
   assertNotPartiallyApplied,
   applyFailedError,
@@ -739,6 +740,11 @@ export interface MigrateCoreDeps {
    * against the database.
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
+  /**
+   * Seam for tests; defaults to adding the per-document columns each content table lacks
+   * (`addDocumentColumns`).
+   */
+  documentColumnsFn?: (deps: MigrateCoreDeps) => Promise<void>;
   /**
    * Runs inside the lock once the migration files have applied and before their metadata is
    * recorded (Phase 3). A throw stops the run there: the files that ran stay applied and in the
@@ -1619,6 +1625,15 @@ async function runMigrationStreams(
   return { pluginModulesApplied, applied };
 }
 
+/** The per-document columns every content table needs (`addDocumentColumns`). */
+async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
+  await addDocumentColumns({
+    db: deps.db,
+    dialect: deps.dialect,
+    logger: { info: m => deps.logger.info(m) },
+  });
+}
+
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
@@ -1755,6 +1770,10 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
+      // Before the app's files as well as after them (below, once Phase 3 has
+      // recorded the registry): a file written after these columns existed may
+      // rebuild a SQLite table, copying them from the live one.
+      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
       await recordAppTableOwners(deps);
       ({ pluginModulesApplied, applied } = await runMigrationStreams(
         deps,
@@ -1812,6 +1831,11 @@ export async function migrateCore(
           }. The tables are in place; run \`nextly migrate\` again to record it.`
         );
       }
+
+      // After the files and after Phase 3: a file written before these
+      // columns creates tables without them, and an entity whose registry
+      // row only Phase 3 records is found only once it has.
+      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
     },
     {
       command: deps.lockCommand ?? "nextly migrate",
