@@ -428,7 +428,7 @@ export async function nameVerdict(
  * row: it has never been published. What the outcomes report and what the
  * events record both read this, so the two agree on which language was live.
  */
-export function languageStatusBefore(
+function languageStatusBefore(
   locale: string,
   args: {
     defaultLocale: string;
