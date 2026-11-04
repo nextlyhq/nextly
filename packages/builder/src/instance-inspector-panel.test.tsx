@@ -1005,6 +1005,19 @@ describe("an exposed rich text", () => {
     expect(attach).not.toHaveBeenCalled();
   });
 
+  it("is read-only on a placement locked in Layers, which holds every row", async () => {
+    // A disabled fieldset does not stop typing in a `contenteditable`, so
+    // the passage is told.
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich({ ...instance(), locked: true }, { loadRichTextEditor: load });
+    const field = screen.getByRole("textbox", { name: "Body" });
+    expect(field.getAttribute("aria-readonly")).toBe("true");
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).not.toHaveBeenCalled();
+  });
+
   it("says it is not editable where the host lends no rich-text editor", () => {
     // The Content tab's words for this ("edited on the canvas here") are not
     // true of a placement, whose canvas passage is the component's.

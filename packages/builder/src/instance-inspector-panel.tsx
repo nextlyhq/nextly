@@ -72,7 +72,7 @@ import {
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { markExposedParts } from "./exposed-outline";
-import { HeldByLock } from "./held-by-lock";
+import { HeldByLock, HeldHere } from "./held-by-lock";
 import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {
   resetOverrideOp,
@@ -603,6 +603,8 @@ function ExposedRichTextField({
   onSet: SetExposed;
 }): React.JSX.Element {
   const services = React.useContext(ContentServicesContext);
+  // Held by the placement's Layers lock or a lock inside the component.
+  const held = React.useContext(HeldHere);
   if (services?.loadRichTextEditor === undefined) {
     return <NotEditable row={row} />;
   }
@@ -613,7 +615,7 @@ function ExposedRichTextField({
       value={row.value}
       // Passed to the passage itself: a held row's wrapper disables its
       // fieldset, which does not stop typing in a `contenteditable`.
-      disabled={row.heldBy !== undefined}
+      disabled={held}
       onCommit={value => onSet(row.id, value)}
       services={services}
     />

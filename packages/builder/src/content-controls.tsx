@@ -680,6 +680,18 @@ interface RichTextSession {
   hold(): void;
 }
 
+/**
+ * A passage as one string, to tell one stored passage from another; empty
+ * for one that cannot be written out (a cycle), which no stored one is.
+ */
+function passageKey(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 /** The Content tab's rich-text prop: its name, and the passage under it. */
 function RichTextControl({
   id,
@@ -823,11 +835,25 @@ export function RichTextField({
   // the element rather than rendered as children: the editor takes the
   // element's contents over once attached, and React must not own them.
   const preview = isRichTextValue(value) ? richTextToPlainText(value) : "";
+  // A stored passage that changes under words the document refused (a Reset,
+  // an undo) is what the page now holds: the refused draft is let go and the
+  // field shows the stored one, rather than the draft and its notice sitting
+  // over a value that has moved on. Keyed on the whole passage, so a change
+  // its plain text would not show is still seen.
+  const storedKey = passageKey(value);
+  const refusedNow = React.useRef(refused);
+  refusedNow.current = refused;
+  const latestLetGo = React.useRef(letGo);
+  latestLetGo.current = letGo;
   React.useEffect(() => {
+    const live = session.current;
+    if (live !== null && refusedNow.current === "unsaved") {
+      latestLetGo.current(live);
+    }
     if (session.current === null && field.current !== null) {
       field.current.textContent = preview;
     }
-  }, [preview]);
+  }, [storedKey, preview]);
 
   // A passage left open when the block changes or the panel goes is finished,
   // so nothing typed is lost and the shared editor is never left held. Read
