@@ -18,6 +18,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -42,12 +43,7 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["container", "wrapper", "band", "region"],
     },
     props: {
-      as: {
-        label: "Element type",
-        display: "menu",
-        type: "select",
-        options: ["section", "header", "footer", "main"],
-      },
+      as: htmlTagProp(["section", "header", "footer", "main"]),
       contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "section", contained: true },

@@ -25,6 +25,7 @@
 
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   findNode,
   type BlockDocument,
   type BlockInspectorProps,
@@ -32,6 +33,7 @@ import {
   type BreakpointSet,
   type ComponentLookup,
   type ComponentPath,
+  type NodeStyles,
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -48,7 +50,6 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
-import { deviceLabel } from "./breakpoint-switcher";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
   ComponentFieldsContext,
@@ -69,7 +70,6 @@ import {
   UnsupportedField,
   type ContentServices,
 } from "./content-controls";
-import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
 import { HeldByLock } from "./held-by-lock";
@@ -85,6 +85,7 @@ import {
   lockStatusOf,
   lockViewOf,
   propIsWritable,
+  propLabel,
   propPatch,
   renameOp,
   selectedNode,
@@ -101,6 +102,12 @@ import {
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
+import {
+  StyleTargetBar,
+  useStyleTarget,
+  type SharedStylesHost,
+  type StyleTargetBarProps,
+} from "./style-target";
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
@@ -146,17 +153,23 @@ export interface InspectorPanelProps {
    * Declared here only to CARRY it: this panel has no opinion about classes,
    * and the meaning of each — including why an absent library is a read in
    * flight rather than a host opting out — lives on
-   * {@link StyleInspectorPanelProps.classLibrary}.
+   * {@link StyleTargetBarProps.library}.
    *
    * Forwarded rather than left out because a prop the chain drops is invisible:
    * the surface renders in isolation, its tests pass, and every real selection
    * in the shipped editor shows nothing.
    */
-  classLibrary?: StyleInspectorPanelProps["classLibrary"];
+  classLibrary?: StyleTargetBarProps["library"];
   /** Why the library is absent, when it is. Carried, not interpreted. */
-  classLibraryAbsence?: StyleInspectorPanelProps["classLibraryAbsence"];
-  /** Create a class and apply it to the selected block. Opts the surface in. */
-  onCreateClass?: StyleInspectorPanelProps["onCreateClass"];
+  classLibraryAbsence?: StyleTargetBarProps["libraryAbsence"];
+  /**
+   * What the host lends for shared styles: the author's right, the write that
+   * stores a style, and the reads of its reach. Without it a block's shared
+   * styles are listed but cannot become the target.
+   *
+   * @experimental Settles with the shared-styles editor.
+   */
+  sharedStyles?: SharedStylesHost;
   /**
    * The site's fonts, carried to the Style tab's Font control. See
    * {@link StyleInspectorPanelProps.fonts}.
@@ -751,6 +764,7 @@ function SelectionInspector({
             breakpoint={breakpoint}
             cascade={cascade}
             previewContainer={previewContainer}
+            verbs={verbs}
           />
         </TabsContent>
       </Tabs>
@@ -878,6 +892,39 @@ function ContentTab({
 }
 
 /**
+ * Where an edit lands, as the bar's second line says it: the devices the
+ * value reaches, in words rather than as a breakpoint's id.
+ */
+function barPlace(
+  breakpoints: BreakpointSet | undefined,
+  breakpoint: BreakpointId | undefined
+): { device: string } {
+  return { device: editReach(breakpoints, breakpoint ?? BASE_BREAKPOINT) };
+}
+
+/**
+ * The State menu the bar carries, bound to the host's choice, or nothing when
+ * the host cannot act on one. Its dots read the TARGET's styles (the block's,
+ * or the shared style being edited), so a state is marked where the edit goes.
+ */
+function stateControlFor(
+  state: StyleState,
+  styleState: StyleStateBinding | undefined,
+  holder: { styles?: NodeStyles } | null,
+  breakpoints: BreakpointSet | undefined
+): React.JSX.Element | undefined {
+  if (styleState?.onChange === undefined) return undefined;
+  return (
+    <StyleStateField
+      state={state}
+      onSelect={styleState.onChange}
+      node={holder}
+      breakpoints={breakpoints}
+    />
+  );
+}
+
+/**
  * The Style tab: the bar that says what an edit changes, then the style
  * controls themselves.
  */
@@ -895,10 +942,9 @@ function StyleTab({
   liveBreakpoints,
   onJumpToBreakpoint,
   tokens,
-  classLibrary,
-  classLibraryAbsence,
-  onCreateClass,
   fonts,
+  // The bar's own inputs, kept together: the library, the host and the verbs.
+  ...shared
 }: Pick<
   InspectorPanelProps,
   | "editor"
@@ -913,7 +959,8 @@ function StyleTab({
   | "tokens"
   | "classLibrary"
   | "classLibraryAbsence"
-  | "onCreateClass"
+  | "sharedStyles"
+  | "verbs"
   | "fonts"
 > & {
   styleNode: ReturnType<typeof selectedNode>;
@@ -921,6 +968,12 @@ function StyleTab({
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
+  // ONE holder of what an edit changes, read by the bar and the controls.
+  const { target, choose } = useStyleTarget(
+    editor,
+    shared.classLibrary,
+    shared.sharedStyles
+  );
   return (
     <>
       {/*
@@ -929,18 +982,23 @@ function StyleTab({
       and an author would have edited a value before meeting the thing
       that says which state the value belongs to.
     */}
-      <EditingBar
-        target={{ kind: "block" }}
-        device={editedDevice(breakpoints, breakpoint ?? BASE_BREAKPOINT)}
+      <StyleTargetBar
+        editor={editor}
+        target={target}
+        onChoose={choose}
+        library={shared.classLibrary}
+        libraryAbsence={shared.classLibraryAbsence}
+        host={shared.sharedStyles}
+        verbs={shared.verbs}
+        {...barPlace(breakpoints, breakpoint)}
+        breakpoints={breakpoints}
         state={state}
-        stateControl={
-          <StyleStateField
-            state={state}
-            onSelect={styleState?.onChange}
-            node={styleNode}
-            breakpoints={breakpoints}
-          />
-        }
+        stateControl={stateControlFor(
+          state,
+          styleState,
+          target.kind === "shared" ? target.style : styleNode,
+          breakpoints
+        )}
       />
       <StyleInspectorPanel
         editor={editor}
@@ -955,9 +1013,7 @@ function StyleTab({
         liveBreakpoints={liveBreakpoints}
         onJumpToBreakpoint={onJumpToBreakpoint}
         tokens={tokens}
-        classLibrary={classLibrary}
-        classLibraryAbsence={classLibraryAbsence}
-        onCreateClass={onCreateClass}
+        target={target}
         fonts={fonts}
       />
     </>
@@ -1223,7 +1279,12 @@ function ContentFields({
   /** The component's own view, when the document is a component. */
   fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
-  if (inspection.props.length === 0) {
+  // A prop the inspector leaves out draws no control, but in a component's
+  // view keeps its expose icon: a page may clear what hides it.
+  const drawn = inspection.props.filter(
+    prop => prop.offered || fields !== undefined
+  );
+  if (drawn.length === 0) {
     return (
       <p className="nx-inspector__note">
         This block has no editable properties.
@@ -1232,8 +1293,13 @@ function ContentFields({
   }
   return (
     <div className="nx-inspector__fields">
-      {inspection.props.map(prop => {
-        const field = (
+      {drawn.map(prop => {
+        // Named as the block names it, so its icon is not drawn bare.
+        const field = !prop.offered ? (
+          <p className="nx-inspector__note">
+            {propLabel(prop.name, prop.schema)}
+          </p>
+        ) : (
           <HeldByLock
             // Keyed by node AND prop: a bare prop name would let React reuse
             // one block's field for the next block's same-named prop, so the
@@ -1355,13 +1421,25 @@ function ManyBlocksPanel({
 }
 
 /**
- * The device the Style tab edits, named as the device switcher names it, so
- * the bar and the switcher beside it agree. A tier the switcher does not offer
- * (a container tier) is named by its own definition.
+ * The devices an edit at one tier reaches: the unconditional tier reaches
+ * "All devices"; a narrower one reaches itself and every narrower one on its
+ * axis ("Tablet and smaller"), or only itself when it is the narrowest
+ * ("Mobile"). Read from the site's own breakpoints in the engine's order
+ * (`breakpointContexts`: each axis widest first), named by each definition's
+ * own label, so a site with its own breakpoints is described in its words.
  */
-function editedDevice(
+function editReach(
   breakpoints: BreakpointSet | undefined,
   id: BreakpointId
 ): string {
-  return deviceLabel(breakpoints, id) ?? breakpointLabel(breakpoints, id);
+  if (id === BASE_BREAKPOINT) return "All devices";
+  const contexts = breakpointContexts(breakpoints);
+  const at = contexts.findIndex(context => context.id === id);
+  const label = breakpointLabel(breakpoints, id);
+  if (at === -1) return label;
+  const axis = contexts[at]?.axis;
+  const narrower = contexts
+    .slice(at + 1)
+    .some(context => context.axis === axis);
+  return narrower ? `${label} and smaller` : label;
 }

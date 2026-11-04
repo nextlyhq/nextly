@@ -201,3 +201,25 @@ describe("a segmented choice's selected state", () => {
     );
   });
 });
+
+describe("Visible on", () => {
+  it("is separate toggles, a gap between them, each with its own edge", () => {
+    // A joined strip reads as "pick one"; this is "pick any".
+    expect(ruleBody(CHROME, ".nx-visible-on")).toContain("gap: 0.375rem");
+    const button = ruleBody(CHROME, ".nx-visible-on > button");
+    expect(button).toContain("border-inline-start-width: 1px");
+    expect(button).toContain("border-radius: var(--radius-md)");
+  });
+
+  it("marks the device being edited with a dot, not a line", () => {
+    const marker = ruleBody(
+      CHROME,
+      ".nx-visible-on > button[data-editing]::before"
+    );
+    expect(marker).toContain("border-radius: 50%");
+    expect(marker).toContain("background: var(--nx-ring)");
+    expect(
+      ruleBody(CHROME, ".nx-visible-on > button[data-editing]")
+    ).not.toContain("box-shadow");
+  });
+});

@@ -655,6 +655,18 @@ export class PermissionService extends BaseService {
   }
 
   /**
+   * Who declared the permission for `action` on `resource`: a plugin's or app's name, `null` for
+   * the framework's own seed, or `undefined` when there is no such permission.
+   */
+  async ownerOf(
+    action: string,
+    resource: string
+  ): Promise<string | null | undefined> {
+    const row = await this.findByActionResource(action, resource);
+    return row ? ((row as { owner?: string | null }).owner ?? null) : undefined;
+  }
+
+  /**
    * The permission row for an action and resource, or null. Matched without
    * regard to case, as `listPermissions` matches.
    */

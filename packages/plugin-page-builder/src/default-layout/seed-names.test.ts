@@ -26,9 +26,7 @@ describe("the seeded Layout's title", () => {
 
   it("skips every numbered title already held, and fills a gap", () => {
     expect(
-      seedTitle(
-        new Set(["Site layout", "Site layout 2", "Site layout 3"])
-      )
+      seedTitle(new Set(["Site layout", "Site layout 2", "Site layout 3"]))
     ).toBe("Site layout 4");
     expect(seedTitle(new Set(["Site layout", "Site layout 3"]))).toBe(
       "Site layout 2"

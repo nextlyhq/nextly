@@ -685,6 +685,22 @@ export function canvasScroller(
 }
 
 /**
+ * What of a canvas is on screen, in the chrome's coordinates: the part of the
+ * page its scroller shows, where the canvas cuts off anything drawn past it;
+ * the whole page where nothing scrolls it. The marks and the block toolbar
+ * keep to it, so a tag or a bar is never drawn where the canvas cuts it off.
+ */
+export function onScreenOf(space: OverlaySpace): Rect {
+  const { root } = space;
+  const scroller = canvasScroller(root, space.frame !== null);
+  return space.place(
+    scroller === null
+      ? canvasContentRect(root, root)
+      : visibleBandOf(scroller, root)
+  );
+}
+
+/**
  * Where a scroller's `scroll` events are dispatched.
  *
  * At the element for an ordinary scroller, and at its DOCUMENT for a
