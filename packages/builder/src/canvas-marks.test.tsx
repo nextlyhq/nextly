@@ -653,6 +653,38 @@ describe("the hovered block's mark", () => {
     expect(mark?.hasAttribute("data-hover-tag-inside")).toBe(false);
   });
 
+  it("moves its tag in from the screen's left edge on a block that starts left of it", async () => {
+    // The canvas scrolled sideways: the block starts 300px left of what the
+    // scroller shows, and its tag moves in by as much, onto the screen.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "b") {
+          return new DOMRect(-300, 100, 800, 50);
+        }
+        return new DOMRect(-300, 0, 1500, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <HoveredBlockProvider>
+          <PointAt id="b" />
+          <Canvas
+            document={leaves}
+            siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+            overlay={<CanvasMarks nameOf={() => "Intro text"} />}
+          />
+        </HoveredBlockProvider>
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    const mark = hoveredIn(container)[0] as HTMLElement;
+    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("300px");
+  });
+
   it("is left to the ring on a block already selected", async () => {
     const { container } = render(
       <HoveredBlockProvider>

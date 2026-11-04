@@ -239,6 +239,13 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
+  if (mark.kind === "hovered") {
+    // The hovered block's name tag moves in from the side the screen cuts.
+    return {
+      ...box,
+      "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+    } as React.CSSProperties;
+  }
   if (!mark.hidden) return box;
   return {
     ...box,
@@ -625,8 +632,13 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         locked: false,
         hidden: false,
         tag: "below",
-        tagEdge: "right",
-        tagInset: NO_INSET,
+        tagEdge: "left",
+        // In from the screen's left edge as far as the outline runs past it,
+        // so a block scrolled partly off the side keeps its name in view.
+        tagInset: {
+          bottom: 0,
+          side: Math.max(0, onScreen.x - outline.rect.x),
+        },
         hoveredAddress: hovered,
         // From the top of what is on screen, as the placement's tag is.
         hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,

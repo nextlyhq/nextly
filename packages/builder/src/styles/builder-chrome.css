@@ -3670,9 +3670,10 @@
 .nx-canvas-mark[data-mark="hovered"][data-hover-label]::before {
   content: attr(data-hover-label);
   position: absolute;
-  left: 0;
+  /* In from the left edge as far as the screen cuts the outline off there. */
+  left: var(--nx-tag-inset-side, 0px);
   bottom: 100%;
-  max-width: 100%;
+  max-width: calc(100% - var(--nx-tag-inset-side, 0px));
   overflow: hidden;
   padding: 1px 6px;
   border-radius: 4px 4px 0 0;
