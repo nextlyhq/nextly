@@ -18,6 +18,7 @@ import {
   isPlainRecord,
   isTokenRef,
   newId,
+  STYLE_STATES,
   type BlockDocument,
   type BlockNode,
   type BreakpointSet,
@@ -27,6 +28,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { liveBreakpointsFor } from "./breakpoints";
 import {
   appliedClasses,
   newClassName,
@@ -544,76 +546,130 @@ function uncoveredStyles(
   return left;
 }
 
-/** One value kept only where a mask sets something, side by side for a composite. */
-function maskedValue(
-  value: StyleValue,
-  mask: StyleValue | undefined
-): StyleValue | undefined {
-  if (mask === undefined) return undefined;
-  if (!isComposite(value) || !isComposite(mask)) return value;
-  let kept: Record<string, StyleValue> = {};
-  for (const [key, inner] of ownEntries<StyleValue>(value)) {
-    const left = maskedValue(
-      inner,
-      Object.hasOwn(mask, key) ? mask[key] : undefined
-    );
-    if (left !== undefined) kept = withKey(kept, key, left);
-  }
-  return Object.keys(kept).length > 0 ? kept : undefined;
+/** One value a tier sets for one property: a composite's sides one by one. */
+interface StyleLeafValue {
+  /** The property and the path inside it, as one comparable key. */
+  readonly key: string;
+  readonly path: readonly string[];
+  readonly value: StyleValue;
 }
 
-/** One breakpoint's values kept only where a mask sets them, property by property. */
-function maskedValues(
-  values: object,
-  mask: Record<string, StyleValue>
-): Record<string, StyleValue> {
-  let set: Record<string, StyleValue> = {};
-  for (const [property, value] of ownEntries<StyleValue>(values)) {
-    const left = maskedValue(
-      value,
-      Object.hasOwn(mask, property) ? mask[property] : undefined
-    );
-    if (left !== undefined) set = withKey(set, property, left);
+/** One breakpoint's values as leaves, a composite's sides each their own. */
+function leavesOf(
+  values: unknown,
+  path: readonly string[] = []
+): StyleLeafValue[] {
+  const leaves: StyleLeafValue[] = [];
+  for (const [key, value] of ownEntries<StyleValue>(values)) {
+    const at = [...path, key];
+    if (isComposite(value)) leaves.push(...leavesOf(value, at));
+    else leaves.push({ key: JSON.stringify(at), path: at, value });
   }
-  return set;
+  return leaves;
 }
 
 /**
- * The later styles' values at narrower breakpoints that the block must hold
- * too once a detached value is copied onto it at a wider one.
- *
- * The block's own values are emitted after every shared style, so a value
- * copied onto the block at a wide breakpoint would beat, at every narrower
- * one, a later style's value that wins there today. Copying that later value
- * onto the block at its own breakpoint keeps the same result at every width.
- * Widths are ranked in the engine's order (`breakpointContexts`: the base,
- * then each axis widest first); one the site does not define ranks narrowest.
+ * One state at one width band: the rules that apply there, in the order the
+ * compiler writes them inside a tier (`STYLE_STATES` outer, then the site's
+ * contexts widest first), so the last that sets a value is the one shown.
  */
-function narrowerWins(
-  copied: NodeStyles,
-  later: NodeStyles,
-  breakpoints: BreakpointSet | undefined
-): NodeStyles {
-  const rank = new Map(
-    breakpointContexts(breakpoints).map((context, index) => [context.id, index])
-  );
-  const rankOf = (id: string): number => rank.get(id) ?? Infinity;
-  let kept: Record<string, Record<string, Record<string, StyleValue>>> = {};
-  for (const [state, byBreakpoint] of ownEntries<object>(later)) {
-    const copiedTiers = ownEntries<object>(ownRecord(copied, state));
-    for (const [breakpoint, values] of ownEntries<object>(byBreakpoint)) {
-      // What the block will hold for this state at every wider breakpoint.
-      const wider = copiedTiers
-        .filter(([at]) => rankOf(at) < rankOf(breakpoint))
-        .reduce<
-          Record<string, StyleValue>
-        >((laid, [, set]) => overlaidValues(laid, set), {});
-      const set = maskedValues(values, wider);
-      if (Object.keys(set).length === 0) continue;
-      kept = withKey(
-        kept,
+interface LookSituation {
+  readonly state: StyleState;
+  readonly breakpoint: string;
+  readonly states: readonly StyleState[];
+  readonly breakpoints: readonly string[];
+}
+
+/**
+ * Every state at every width band the site defines, in an order where a
+ * value written at one situation's own place reaches only situations after
+ * it: base before the interaction states, and each state's widths widest
+ * first.
+ */
+function lookSituations(set: BreakpointSet | undefined): LookSituation[] {
+  const contexts = breakpointContexts(set).map(context => context.id);
+  const situations: LookSituation[] = [];
+  for (const state of STYLE_STATES) {
+    for (const breakpoint of contexts) {
+      // The contexts that match within this one's band, by the reader the
+      // inspector asks the same question with.
+      const live = new Set<string>(liveBreakpointsFor(set, breakpoint));
+      situations.push({
         state,
-        withKey(ownRecord(kept, state), breakpoint, set)
+        breakpoint,
+        states: state === "base" ? ["base"] : ["base", state],
+        breakpoints: contexts.filter(id => live.has(id)),
+      });
+    }
+  }
+  return situations;
+}
+
+/**
+ * The value each leaf shows in one situation, from tiers in the order the
+ * page writes them: every rule has one weight (a state's selector is
+ * wrapped in `:where()`), so the last applying rule wins.
+ */
+function shownIn(
+  tiers: readonly NodeStyles[],
+  situation: LookSituation
+): Map<string, StyleLeafValue> {
+  const shown = new Map<string, StyleLeafValue>();
+  for (const tier of tiers) {
+    for (const state of situation.states) {
+      const byBreakpoint = ownRecord<unknown>(tier, state);
+      for (const breakpoint of situation.breakpoints) {
+        for (const leaf of leavesOf(ownRecord(byBreakpoint, breakpoint))) {
+          shown.set(leaf.key, leaf);
+        }
+      }
+    }
+  }
+  return shown;
+}
+
+/** An envelope holding one leaf at one state and breakpoint. */
+function styleOfLeaf(
+  state: string,
+  breakpoint: string,
+  leaf: StyleLeafValue
+): NodeStyles {
+  let value: StyleValue = leaf.value;
+  for (const key of [...leaf.path.slice(1)].reverse()) {
+    value = withKey<StyleValue>({}, key, value);
+  }
+  const values = withKey<StyleValue>({}, leaf.path[0] ?? "", value);
+  return withKey({}, state, withKey({}, breakpoint, values));
+}
+
+/**
+ * The block's styles once a set of shared styles stops applying, holding
+ * what the page shows today in every state and at every width.
+ *
+ * Each situation is compared before and after, and where a leaf would show
+ * something else, the value it shows today is written on the block at that
+ * situation's own place: the last rule to apply there, since the block's
+ * rules come after every style's. Situations are taken in an order where
+ * such a write reaches only those still to come, so each is settled once.
+ * The block's own values always win already, so they are kept as they are.
+ */
+function lookKept(
+  before: readonly NodeStyles[],
+  after: readonly NodeStyles[],
+  own: NodeStyles,
+  set: BreakpointSet | undefined
+): NodeStyles {
+  let kept = own;
+  for (const situation of lookSituations(set)) {
+    const now = shownIn([...after, kept], situation);
+    for (const [key, was] of shownIn([...before, own], situation)) {
+      const shown = now.get(key);
+      if (shown !== undefined && sameStyleValue(shown.value, was.value)) {
+        continue;
+      }
+      kept = overlaidStyles(
+        kept,
+        styleOfLeaf(situation.state, situation.breakpoint, was)
       );
     }
   }
@@ -622,13 +678,12 @@ function narrowerWins(
 
 /**
  * "Detach": keep the look on this block only. The style is taken off the
- * block, and the values it gives the block today are copied onto it, under
- * the block's own. A value a style later in library order sets at the same
- * place is not the detached style's to give (that style wins it now), so it is
- * left out; where a later style sets the property at a narrower breakpoint,
- * its value there is copied too, since the block's own copy would otherwise
- * beat it. So the block looks the same at every width. A page edit, so a
- * locked style may be detached; the block's own lock refuses.
+ * block, and the block is given what it needs to show what it shows today, in
+ * every state and at every width: the detached style's values where they win,
+ * and, since the block's own rules come after every style's, a later style's
+ * narrower or interaction-state value wherever the copy would otherwise beat
+ * it. The block's own values are kept as they are. A page edit, so a locked
+ * style may be detached; the block's own lock refuses.
  *
  * @param worn - every shared style the block wears, in library order
  */
@@ -643,23 +698,17 @@ export function planDetachSharedStyle(
   const held = editableNode(document, nodeId, view);
   if (!held.ok) return held;
   const node = held.node;
-  // The later styles' values as they apply together, a later one winning.
-  const later = worn
-    .slice(worn.findIndex(row => row.id === style.id) + 1)
-    .reduce<NodeStyles>((laid, row) => overlaidStyles(laid, row.styles), {});
-  // What the detached style wins at its own breakpoints, and the later
-  // values the block must then hold at narrower ones to keep the same look.
-  const copied = uncoveredStyles(style.styles, later);
-  const winning = overlaidStyles(
-    copied,
-    narrowerWins(copied, later, breakpoints)
-  );
+  // The styles in the order the page writes them, the detached one among
+  // them (first, should the list not hold it), and the same without it.
+  const listed = worn.some(row => row.id === style.id);
+  const before = [...(listed ? [] : [style]), ...worn].map(row => row.styles);
+  const after = worn.filter(row => row.id !== style.id).map(row => row.styles);
   return {
     ok: true,
     ops: [
       nodeStylesAndClassesOp(
         nodeId,
-        overlaidStyles(winning, node.styles),
+        lookKept(before, after, node.styles ?? {}, breakpoints),
         withClassRemoved(node.classes ?? [], style.id)
       ),
     ],
