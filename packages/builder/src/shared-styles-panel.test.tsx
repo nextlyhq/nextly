@@ -16,6 +16,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -862,6 +863,51 @@ describe("counting the pages now", () => {
     });
     expect(count).toHaveBeenCalledTimes(2);
     await screen.findByRole("button", { name: "Card, .nx-c-card, On 3 pages" });
+  });
+
+  it("offers a count again once a later read says counting can get further", async () => {
+    // The count said nothing more could be counted; then the site gained
+    // something to count (a new scope, a failed write marked), and a later
+    // read says so. The final word gives way to it.
+    const base = accessOf().access;
+    let counting = true;
+    const count = vi.fn(async (): Promise<SharedStylesCount> => {
+      counting = false;
+      return { kind: "counted", whole: false, counting: false };
+    });
+    const access: SharedStylesAccess = {
+      ...base,
+      count,
+      usage: vi.fn(async (ids: readonly string[]) => ({
+        whole: false,
+        counting,
+        mayLock: false,
+        mayCount: true,
+        styles: new Map(ids.map(id => [id, reach({ pages: 1 }, false)])),
+      })),
+    };
+    const view = await panel({ library: [CARD], access });
+    await act(async () => {
+      fireEvent.click(countNow() as HTMLElement);
+    });
+    expect(countNow()).toBeNull();
+    // Something new to count; a style made meanwhile is read, and that read
+    // says so.
+    counting = true;
+    await act(async () => {
+      view.rerender(
+        <SharedStylesPanel
+          library={[CARD, HERO]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+          access={access}
+        />
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(countNow()).not.toBeNull());
+    expect(screen.queryByText("The pages left can't be counted.")).toBeNull();
   });
 
   it("offers no further count when the answer says counting cannot get further", async () => {
