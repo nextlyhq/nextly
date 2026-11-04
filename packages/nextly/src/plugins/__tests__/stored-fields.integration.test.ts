@@ -1,0 +1,808 @@
+/**
+ * A plugin's conditional write and its stored read, on every configured
+ * dialect.
+ *
+ * The write is judged inside its own transaction, under the entry's row lock,
+ * so these race it against an author's save in both commit orders with a
+ * seam that pauses one writer INSIDE its transaction, after its writes and
+ * before its commit, and lets it commit only once the other writer has
+ * entered its own transaction: by then that writer has done everything it
+ * does before its transaction opens, so a check made there would have seen
+ * the paused writer's change uncommitted. No sleeps decide the order.
+ *
+ * - The author commits first: the conditional write refuses with a conflict
+ *   and changes nothing, on the live row, on the working draft, and for a
+ *   publish when a draft appeared that its writer did not see.
+ * - The conditional write commits first: it lands, and the author's save
+ *   lands after it.
+ *
+ * The stored read returns what is stored whatever a collection's or a
+ * field's `afterRead` hook does to an ordinary read, for the live row, the
+ * working draft and a language; and both are judged by the caller's access.
+ */
+
+// Set before the harness boots (env validation reads it once).
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+import { grantTo } from "../../__tests__/fixtures/permission-holders";
+import { resetSessionStandingForTests } from "../../auth/session/session-standing";
+import type { CollectionConfig } from "../../collections/config/define-collection";
+import { storedValueHash } from "../../domains/collections/services/stored-field-read";
+import { NextlyError } from "../../errors";
+import type { PluginStoredValue } from "../contributions";
+import { definePlugin } from "../plugin-context";
+import type { PluginRouteIdentity } from "../routes/route-types";
+import {
+  readStoredFields,
+  updateIfUnchanged,
+  type PluginStoredDocument,
+} from "../stored-fields";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../test-nextly";
+
+/** A plugin field type stored as JSON, as a blocks field is. */
+const DOC_TYPE = {
+  type: "doc",
+  storage: "json",
+  component: "@test/doc/admin#Doc",
+} as const;
+
+/** What the read hooks below put in place of the stored values. */
+const HIDDEN = { hiddenBy: "afterRead" };
+
+/** Which writer an async chain belongs to, for the transaction seam. */
+type Writer = "author" | "plugin";
+const writerOf = new AsyncLocalStorage<Writer>();
+
+/**
+ * Every seam's release, run after each test: a writer that failed before its
+ * transaction never releases the paused one, which would otherwise hold its
+ * lock (on SQLite, the one writer) through every test after it.
+ */
+const releases: (() => void)[] = [];
+
+/**
+ * Pauses `pausing`'s first transaction after its callback, holding its lock,
+ * until `releasing` enters a transaction of its own. Records, for each
+ * writer, whether its first transaction took a row lock: the content write's
+ * transaction does, so the seam is shown to sit in the write itself.
+ */
+function raceSeam(t: TestNextly, pausing: Writer, releasing: Writer) {
+  const adapter = t.adapter as unknown as {
+    transaction<T>(
+      work: (tx: {
+        lockRow(table: string, id: string): Promise<void>;
+      }) => Promise<T>,
+      ...rest: unknown[]
+    ): Promise<T>;
+  };
+  const original = adapter.transaction.bind(adapter);
+  const locked = new Map<Writer, boolean>();
+  let letCommit = (): void => undefined;
+  const mayCommit = new Promise<void>(resolve => {
+    letCommit = resolve;
+  });
+  releases.push(() => letCommit());
+  let signalPaused = (): void => undefined;
+  const paused = new Promise<void>(resolve => {
+    signalPaused = resolve;
+  });
+  const state = { paused: false, released: false };
+  vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
+    const who = writerOf.getStore();
+    const first = who !== undefined && !locked.has(who);
+    if (who !== undefined && first) locked.set(who, false);
+    // Released on entry, before queueing: SQLite runs one transaction at a
+    // time, so the released writer must commit for this one to start.
+    if (first && who === releasing) {
+      state.released = true;
+      letCommit();
+    }
+    return original(
+      async tx => {
+        if (first && who !== undefined) {
+          const lockRow = tx.lockRow.bind(tx);
+          tx.lockRow = async (table, id) => {
+            locked.set(who, true);
+            return lockRow(table, id);
+          };
+        }
+        const out = await work(tx);
+        if (first && who === pausing) {
+          state.paused = true;
+          signalPaused();
+          await mayCommit;
+        }
+        return out;
+      },
+      ...rest
+    );
+  });
+  return { paused, locked, state, letCommit };
+}
+
+/** The error a promise rejected with. */
+async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the promise to reject");
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a plugin's conditional write and stored read (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let editor: PluginRouteIdentity;
+    let reader: PluginRouteIdentity;
+    let stranger: PluginRouteIdentity;
+    let owner: PluginRouteIdentity;
+
+    beforeAll(async () => {
+      const plugin = definePlugin({
+        name: "@test/stored-fields",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: { fieldTypes: [DOC_TYPE] },
+        init(ctx) {
+          // A site's collection-level read hook that removes a field from
+          // every ordinary read.
+          for (const slug of ["hooked", "worded"]) {
+            ctx.hooks.on("afterRead", slug, hook => {
+              const strip = (row: unknown) =>
+                typeof row === "object" && row !== null
+                  ? { ...row, extra: HIDDEN }
+                  : row;
+              return Array.isArray(hook.data)
+                ? hook.data.map(strip)
+                : strip(hook.data);
+            });
+          }
+        },
+      });
+      // A field-level read hook that replaces the field's value.
+      const hiddenBody = {
+        name: "body",
+        type: "doc",
+        hooks: { afterRead: [() => HIDDEN] },
+      };
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        plugins: [plugin],
+        collections: [
+          {
+            slug: "pages",
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            slug: "drafted",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            slug: "hooked",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              hiddenBody,
+              { name: "extra", type: "doc" },
+              { name: "secret", type: "doc", access: { read: () => true } },
+              { name: "title", type: "text" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            slug: "worded",
+            localized: true,
+            fields: [
+              { ...hiddenBody, localized: true },
+              { name: "extra", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+        ],
+        singles: [
+          {
+            slug: "site",
+            fields: [{ name: "body", type: "doc" }],
+          } as never,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const users = t.nextly as unknown as {
+        users: {
+          create(a: {
+            email: string;
+            password: string;
+            data: Record<string, unknown>;
+          }): Promise<{ item: { id: string } }>;
+        };
+      };
+      const person = async (name: string) =>
+        (
+          await users.users.create({
+            email: `${name}@example.com`,
+            password: "Password123!",
+            data: { name, isActive: true },
+          })
+        ).item.id;
+      // The install's first account holds super-admin; the others are judged
+      // by what they are granted.
+      owner = { user: { id: await person("owner") } };
+      const content = ["pages", "drafted", "hooked", "worded"];
+      const editorId = await person("editor");
+      for (const action of ["read", "update", "publish"]) {
+        await grantTo(t, editorId, action, content);
+      }
+      const readerId = await person("reader");
+      await grantTo(t, readerId, "read", content);
+      const strangerId = await person("stranger");
+      editor = { user: { id: editorId } };
+      reader = { user: { id: readerId } };
+      stranger = { user: { id: strangerId } };
+    }, 120_000);
+
+    afterEach(() => {
+      for (const release of releases.splice(0)) release();
+      vi.restoreAllMocks();
+    });
+
+    afterAll(async () => {
+      resetSessionStandingForTests();
+      await t?.destroy();
+    });
+
+    async function created(
+      collection: string,
+      data: Record<string, unknown>
+    ): Promise<string> {
+      const result = await t.nextly.create({
+        collection,
+        data,
+        overrideAccess: true,
+      } as never);
+      return String((result.item as { id: unknown }).id);
+    }
+
+    /** The author's save, made as the editor in the author's chain. */
+    function authorSaves(
+      collection: string,
+      id: string,
+      data: Record<string, unknown>
+    ): Promise<unknown> {
+      return writerOf.run("author", () =>
+        t.nextly.update({
+          collection,
+          id,
+          data,
+          user: editor.user,
+          overrideAccess: false,
+        } as never)
+      );
+    }
+
+    /** One field as the stored read returns it, read as the editor. */
+    async function stored(
+      document: PluginStoredDocument,
+      field: string,
+      form: "published" | "draft",
+      locale?: string
+    ): Promise<PluginStoredValue> {
+      const read = await readStoredFields(editor, {
+        ...document,
+        fields: [field],
+        form,
+        ...(locale === undefined ? {} : { locale }),
+      });
+      if (read.kind !== "found") throw new Error("expected a stored entry");
+      const value = read.values[field];
+      if (value === undefined) throw new Error(`no value for ${field}`);
+      return value;
+    }
+
+    /** The hash of a field as the stored read returns it. */
+    async function hashOf(
+      document: PluginStoredDocument,
+      field: string,
+      form: "published" | "draft"
+    ): Promise<string> {
+      return storedValueHash(await stored(document, field, form));
+    }
+
+    describe("the live row", () => {
+      it("refuses the conditional write and changes nothing when the author's save commits first", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await hashOf(page, "body", "published");
+
+        const seam = raceSeam(t, "author", "plugin");
+        const author = authorSaves("pages", id, { body: { v: "author" } });
+        await Promise.race([seam.paused, author.catch(() => undefined)]);
+        const refusal = await rejectionOf(
+          writerOf.run("plugin", () =>
+            updateIfUnchanged(editor, {
+              ...page,
+              data: { body: { v: "plugin" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          )
+        );
+        seam.letCommit();
+        await author;
+
+        expect(seam.state).toEqual({ paused: true, released: true });
+        expect(seam.locked.get("author")).toBe(true);
+        expect(seam.locked.get("plugin")).toBe(true);
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "author" },
+        });
+      });
+
+      it("lands the conditional write when it commits first, and the author's save after it", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await hashOf(page, "body", "published");
+
+        const seam = raceSeam(t, "plugin", "author");
+        const plugin = writerOf.run("plugin", () =>
+          updateIfUnchanged(editor, {
+            ...page,
+            data: { body: { v: "plugin" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        await Promise.race([seam.paused, plugin.catch(() => undefined)]);
+        await authorSaves("pages", id, { title: "author" }).finally(
+          seam.letCommit
+        );
+        await plugin;
+
+        expect(seam.state).toEqual({ paused: true, released: true });
+        expect(seam.locked.get("plugin")).toBe(true);
+        expect(seam.locked.get("author")).toBe(true);
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "plugin" },
+        });
+        const row = (await t.nextly.findByID({
+          collection: "pages",
+          id,
+          overrideAccess: true,
+        } as never)) as { title?: unknown };
+        expect(row.title).toBe("author");
+      });
+    });
+
+    describe("the working draft", () => {
+      /** A published entry holding a pending working draft of `body`. */
+      async function publishedWithDraft(): Promise<string> {
+        const id = await created("drafted", {
+          title: "t",
+          body: { v: "live" },
+          status: "published",
+        });
+        await t.nextly.update({
+          collection: "drafted",
+          id,
+          data: { body: { v: "draft" } },
+          overrideAccess: true,
+        } as never);
+        return id;
+      }
+
+      it("refuses a conditional save of the draft when the author's draft save commits first", async () => {
+        const id = await publishedWithDraft();
+        const entry = { collection: "drafted", id };
+        expect(await stored(entry, "body", "draft")).toEqual({
+          kind: "value",
+          value: { v: "draft" },
+        });
+        const hash = await hashOf(entry, "body", "draft");
+
+        const seam = raceSeam(t, "author", "plugin");
+        const author = authorSaves("drafted", id, { body: { v: "author" } });
+        await Promise.race([seam.paused, author.catch(() => undefined)]);
+        const refusal = await rejectionOf(
+          writerOf.run("plugin", () =>
+            updateIfUnchanged(editor, {
+              ...entry,
+              data: { body: { v: "plugin" } },
+              expect: { field: "body", form: "draft", hash },
+            })
+          )
+        );
+        seam.letCommit();
+        await author;
+
+        expect(seam.state).toEqual({ paused: true, released: true });
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await stored(entry, "body", "draft")).toEqual({
+          kind: "value",
+          value: { v: "author" },
+        });
+        expect(await stored(entry, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "live" },
+        });
+      });
+
+      it("lands a conditional save of the draft that commits first, and the author's draft save after it", async () => {
+        const id = await publishedWithDraft();
+        const entry = { collection: "drafted", id };
+        const hash = await hashOf(entry, "body", "draft");
+
+        const seam = raceSeam(t, "plugin", "author");
+        const plugin = writerOf.run("plugin", () =>
+          updateIfUnchanged(editor, {
+            ...entry,
+            data: { body: { v: "plugin" } },
+            expect: { field: "body", form: "draft", hash },
+          })
+        );
+        await Promise.race([seam.paused, plugin.catch(() => undefined)]);
+        await authorSaves("drafted", id, { title: "author" }).finally(
+          seam.letCommit
+        );
+        await plugin;
+
+        expect(seam.state).toEqual({ paused: true, released: true });
+        expect(await stored(entry, "body", "draft")).toEqual({
+          kind: "value",
+          value: { v: "plugin" },
+        });
+        const pending = (await t.nextly.findByID({
+          collection: "drafted",
+          id,
+          draft: true,
+          overrideAccess: true,
+        } as never)) as { title?: unknown };
+        expect(pending.title).toBe("author");
+        expect(await stored(entry, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "live" },
+        });
+      });
+
+      it("refuses a conditional publish when the author's draft appeared first, whatever the field holds", async () => {
+        const id = await created("drafted", {
+          title: "t",
+          body: { v: "live" },
+          status: "published",
+        });
+        const entry = { collection: "drafted", id };
+        const hash = await hashOf(entry, "body", "published");
+
+        // The author's draft leaves `body` alone, so the live hash still holds.
+        const seam = raceSeam(t, "author", "plugin");
+        const author = authorSaves("drafted", id, { title: "draft title" });
+        await Promise.race([seam.paused, author.catch(() => undefined)]);
+        const refusal = await rejectionOf(
+          writerOf.run("plugin", () =>
+            updateIfUnchanged(editor, {
+              ...entry,
+              data: { body: { v: "plugin" }, status: "published" },
+              expect: {
+                field: "body",
+                form: "published",
+                hash,
+                noPendingDraft: true,
+              },
+            })
+          )
+        );
+        seam.letCommit();
+        await author;
+
+        expect(seam.state).toEqual({ paused: true, released: true });
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await hashOf(entry, "body", "published")).toBe(hash);
+        const live = (await t.nextly.findByID({
+          collection: "drafted",
+          id,
+          overrideAccess: true,
+        } as never)) as { title?: unknown };
+        expect(live.title).toBe("t");
+      });
+
+      it("publishes when no draft is pending and the live value is the one read", async () => {
+        const id = await created("drafted", {
+          title: "t",
+          body: { v: "live" },
+          status: "published",
+        });
+        const entry = { collection: "drafted", id };
+        const hash = await hashOf(entry, "body", "published");
+        await updateIfUnchanged(editor, {
+          ...entry,
+          data: { body: { v: "plugin" }, status: "published" },
+          expect: {
+            field: "body",
+            form: "published",
+            hash,
+            noPendingDraft: true,
+          },
+        });
+        expect(await stored(entry, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "plugin" },
+        });
+      });
+    });
+
+    describe("a Single", () => {
+      it("refuses a conditional write to a Single whose value changed since it was read, and lands one that did not", async () => {
+        await t.nextly.updateSingle({
+          slug: "site",
+          data: { body: { v: 0 } },
+          overrideAccess: true,
+        } as never);
+        const site = { single: "site" };
+        const read = await readStoredFields(owner, {
+          ...site,
+          fields: ["body"],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the Single");
+        const hash = await storedValueHash(
+          read.values.body ?? { kind: "absent" }
+        );
+
+        await t.nextly.updateSingle({
+          slug: "site",
+          data: { body: { v: "author" } },
+          overrideAccess: true,
+        } as never);
+        const refusal = await rejectionOf(
+          updateIfUnchanged(owner, {
+            ...site,
+            data: { body: { v: "plugin" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+
+        const now = await readStoredFields(owner, {
+          ...site,
+          fields: ["body"],
+          form: "published",
+        });
+        if (now.kind !== "found") throw new Error("expected the Single");
+        expect(now.values.body).toEqual({
+          kind: "value",
+          value: { v: "author" },
+        });
+        await updateIfUnchanged(owner, {
+          ...site,
+          data: { body: { v: "plugin" } },
+          expect: {
+            field: "body",
+            form: "published",
+            hash: await storedValueHash(now.values.body ?? { kind: "absent" }),
+          },
+        });
+        const after = await readStoredFields(owner, {
+          ...site,
+          fields: ["body"],
+          form: "published",
+        });
+        expect(after).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "plugin" } } },
+        });
+      });
+    });
+
+    describe("the stored read", () => {
+      it("returns the live row and the working draft as stored, whatever the read hooks do", async () => {
+        const id = await created("hooked", {
+          title: "t",
+          body: { v: "live" },
+          extra: { e: "live" },
+          status: "published",
+        });
+        await t.nextly.update({
+          collection: "hooked",
+          id,
+          data: { body: { v: "draft" }, extra: { e: "draft" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "hooked", id };
+
+        // The control: an ordinary read is reshaped by both hooks.
+        const ordinary = (await t.nextly.findByID({
+          collection: "hooked",
+          id,
+          overrideAccess: true,
+        } as never)) as Record<string, unknown>;
+        expect(ordinary.body).toEqual(HIDDEN);
+        expect(ordinary.extra).toEqual(HIDDEN);
+
+        expect(
+          await readStoredFields(editor, {
+            ...entry,
+            fields: ["body", "extra"],
+            form: "published",
+          })
+        ).toEqual({
+          kind: "found",
+          values: {
+            body: { kind: "value", value: { v: "live" } },
+            extra: { kind: "value", value: { e: "live" } },
+          },
+        });
+        expect(
+          await readStoredFields(editor, {
+            ...entry,
+            fields: ["body", "extra"],
+            form: "draft",
+          })
+        ).toEqual({
+          kind: "found",
+          values: {
+            body: { kind: "value", value: { v: "draft" } },
+            extra: { kind: "value", value: { e: "draft" } },
+          },
+        });
+      });
+
+      it("returns each language as stored, whatever the read hooks do", async () => {
+        const id = await created("worded", {
+          body: { v: "en" },
+          extra: { e: "shared" },
+        });
+        await t.nextly.update({
+          collection: "worded",
+          id,
+          locale: "de",
+          data: { body: { v: "de" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "worded", id };
+
+        const ordinary = (await t.nextly.findByID({
+          collection: "worded",
+          id,
+          locale: "de",
+          overrideAccess: true,
+        } as never)) as Record<string, unknown>;
+        expect(ordinary.body).toEqual(HIDDEN);
+
+        for (const [locale, body] of [
+          ["en", { v: "en" }],
+          ["de", { v: "de" }],
+        ] as const) {
+          expect(
+            await readStoredFields(editor, {
+              ...entry,
+              fields: ["body", "extra"],
+              form: "published",
+              locale,
+            })
+          ).toEqual({
+            kind: "found",
+            values: {
+              body: { kind: "value", value: body },
+              extra: { kind: "value", value: { e: "shared" } },
+            },
+          });
+        }
+      });
+
+      it("returns only the fields asked for, and refuses one a read rule governs or of a built-in type", async () => {
+        const id = await created("hooked", {
+          title: "t",
+          body: { v: "live" },
+          extra: { e: "live" },
+          secret: { s: 1 },
+        });
+        const entry = { collection: "hooked", id };
+        expect(
+          await readStoredFields(editor, {
+            ...entry,
+            fields: ["extra"],
+            form: "published",
+          })
+        ).toEqual({
+          kind: "found",
+          values: { extra: { kind: "value", value: { e: "live" } } },
+        });
+        for (const field of ["secret", "title"]) {
+          const refusal = await rejectionOf(
+            readStoredFields(editor, {
+              ...entry,
+              fields: [field],
+              form: "published",
+            })
+          );
+          expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+        }
+      });
+    });
+
+    describe("access", () => {
+      it("refuses the conditional write to a person who may read but not update, and changes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const read = await readStoredFields(reader, {
+          ...page,
+          fields: ["body"],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the entry");
+        const hash = await storedValueHash(
+          read.values.body ?? { kind: "absent" }
+        );
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(reader, {
+            ...page,
+            data: { body: { v: "plugin" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isForbidden(refusal)).toBe(true);
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses the stored read to a person who may not read, and the draft form to one who may not update", async () => {
+        const id = await created("drafted", {
+          title: "t",
+          body: { v: "live" },
+          status: "published",
+        });
+        const entry = { collection: "drafted", id };
+        const asked = {
+          ...entry,
+          fields: ["body"],
+          form: "published",
+        } as const;
+
+        expect(await readStoredFields(reader, asked)).toMatchObject({
+          kind: "found",
+        });
+        expect(
+          NextlyError.isForbidden(
+            await rejectionOf(readStoredFields(stranger, asked))
+          )
+        ).toBe(true);
+        expect(
+          NextlyError.isForbidden(
+            await rejectionOf(
+              readStoredFields(reader, { ...asked, form: "draft" })
+            )
+          )
+        ).toBe(true);
+      });
+    });
+  }
+);

@@ -20,8 +20,18 @@
  * neither, and the working-draft overlay decided by the same rule the preview
  * read uses (`resolveDraftOverlay`), so "the draft" means one thing everywhere.
  *
- * It reads ONE field and returns only that field's value. What a caller may
- * name is decided by the caller of this module; nothing here widens it.
+ * It returns only the fields it is asked for, read from one row and one
+ * working draft however many there are. What a caller may name is decided by
+ * the caller of this module, as a {@link FieldScope}; nothing here widens it.
+ *
+ * It is also where a conditional write is judged. A writer that read a stored
+ * value and computed a replacement from it registers what it read against the
+ * context object it hands its write ({@link expectStoredValue}), and the write
+ * path reads the value again HERE, on its own transaction, once it holds the
+ * entry's row lock ({@link holdStoredExpectation}). The read the writer made and the read
+ * the write path makes are the same read, and both are hashed by
+ * {@link storedValueHash}, so the two can only disagree when the stored value
+ * did.
  *
  * @module domains/collections/services/stored-field-read
  */
@@ -139,14 +149,102 @@ function registryRecords(connection: StoredFieldConnection): RegistryRecords {
 }
 
 /**
+ * Which fields a stored read may answer. A field outside it is refused by
+ * name rather than answered, because answering would make the scope the
+ * caller set a suggestion.
+ */
+export interface FieldScope {
+  /** What a refusal says the scope is, as one sentence; empty to say nothing. */
+  readonly only: string;
+  /** Whether a field declared with `type` is one this read may answer. */
+  admits(type: string): boolean;
+  /**
+   * Why a field the scope admits by type must still not be answered, asked of
+   * the field's top-level name; `undefined` where nothing stops it.
+   */
+  refusal?(entity: StoredEntityFacts, topLevel: string): string | undefined;
+}
+
+/** What a {@link FieldScope} is told about the entity a field belongs to. */
+export interface StoredEntityFacts {
+  readonly kind: "collection" | "single";
+  readonly slug: string;
+  readonly fields: readonly FieldDefinition[];
+}
+
+/** The scope of a field type's validator: the values of its own type alone. */
+function scopeOfType(allowedType: string): FieldScope {
+  return {
+    only: `Only top-level "${allowedType}" fields, or ones inside named groups, can be read.`,
+    admits: type => type === allowedType,
+  };
+}
+
+/**
+ * Every field the path rule reaches, whatever its type: for judging a write
+ * against what its writer read, which answers no value to anyone.
+ */
+const EVERY_FIELD: FieldScope = { only: "", admits: () => true };
+
+/** What one stored read of several fields of one document is pointed at. */
+export type StoredFieldsTarget = DistributiveOmit<
+  PluginStoredValueTarget,
+  "field"
+> & {
+  /** Each field's name at top level, or its path through named groups. */
+  readonly fields: readonly string[];
+};
+
+/** `Omit` taken of each member of a union, so the union survives it. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
+
+/** What one stored read of several fields found. */
+export interface StoredFieldsRead {
+  /** Whether the entry, or the single's row, is stored at all. */
+  readonly found: boolean;
+  /** Each field asked for, by the name or path it was asked by. */
+  readonly values: ReadonlyMap<string, PluginStoredValue>;
+  /**
+   * Whether a working draft is pending where a preview would show it. Asked
+   * only of a `draft` read, or of one made with `askDraft`; `false` otherwise.
+   */
+  readonly workingDraft: boolean;
+}
+
+/**
  * Read one stored field of one entry or single, as `form` holds it: a
  * top-level field, or one inside named groups, named by its path
  * (`hero.body`).
  *
  * `allowedType` is the only field type this read will return: a field of any
  * other type, or a field the entity does not declare at top level or inside
- * named groups, is refused by name rather than answered, because answering
- * would make the scope the caller set a suggestion.
+ * named groups, is refused by name rather than answered.
+ *
+ * The one-field case of {@link readStoredFieldsOn}, which says how each form
+ * and language is read.
+ */
+export async function readStoredField(
+  connection: StoredFieldConnection,
+  allowedType: string,
+  target: StoredFieldTarget,
+  records: RegistryRecords = registryRecords(connection)
+): Promise<PluginStoredValue> {
+  const { field, ...document } = target;
+  const read = await readStoredFieldsOn(
+    connection,
+    scopeOfType(allowedType),
+    { ...document, fields: [field] },
+    { records }
+  );
+  return read.values.get(field) ?? { kind: "absent" };
+}
+
+/**
+ * Read stored fields of one entry or single, as `form` holds them, each a
+ * top-level field or one inside named groups named by its path (`hero.body`).
+ * Every field must be one `scope` admits.
  *
  * A named group stores its value whole, in one column of the group's name, so
  * a field inside one is read from that column and then walked to by name. The
@@ -158,67 +256,109 @@ function registryRecords(connection: StoredFieldConnection): RegistryRecords {
  * receives. A language that stores nothing for it is absent rather than
  * another language's value, so a caller judging a write against it measures
  * against the field's starting value, which refuses more and never less.
+ *
+ * The row is read once and the working draft once, whatever the number of
+ * fields. `askDraft` asks whether a working draft is pending on a `published`
+ * read too, without reading values from it.
  */
-export async function readStoredField(
+export async function readStoredFieldsOn(
   connection: StoredFieldConnection,
-  allowedType: string,
-  target: StoredFieldTarget,
-  records: RegistryRecords = registryRecords(connection)
-): Promise<PluginStoredValue> {
-  const entity = await storedEntity(connection, records, target, allowedType);
-  const path = storedFieldPath(entity, target, allowedType);
+  scope: FieldScope,
+  target: StoredFieldsTarget,
+  options: { records?: RegistryRecords; askDraft?: boolean } = {}
+): Promise<StoredFieldsRead> {
+  const records = options.records ?? registryRecords(connection);
+  const fields = [...new Set(target.fields)];
+  const entity = await storedEntity(connection, records, target, scope);
+  const paths = fields.map(field => ({
+    field,
+    path: storedFieldPath(entity, { ...target, field }, scope),
+  }));
   const locale = target.locale ?? connection.defaultLocale ?? null;
   // Only a top-level field can be kept per language on its own: a field
   // inside a group is stored in the group's value, and a group kept per
   // language is refused by the path above.
-  const perLanguage =
-    path.within.length === 0
-      ? companionFieldOf(entity, path.column)
-      : undefined;
+  const placed = paths.map(({ field, path }) => ({
+    field,
+    path,
+    perLanguage:
+      path.within.length === 0
+        ? companionFieldOf(entity, path.column)
+        : undefined,
+  }));
 
   const row = await storedRow(
     connection,
     entity,
     target,
-    path.column,
-    perLanguage
+    placed
+      .filter(({ perLanguage }) => perLanguage === undefined)
+      .map(({ path }) => path.column)
   );
-  if (row === undefined) return { kind: "absent" };
-  const shown = await shownValue(connection, entity, target, {
-    id: String(row.id),
-    column: path.column,
-    stored: row[path.column],
-    perLanguage,
-    locale,
-  });
-  const reached =
-    shown === undefined ? undefined : valueWithin(shown.value, path.within);
-  if (reached === undefined) return { kind: "absent" };
-  // Only a column's own value is stored encoded. A value reached inside a
-  // group was decoded with the group, and decoding it again would turn a
-  // string holding JSON text ("123", "null") into what that text says.
-  return {
-    kind: "value",
-    value:
-      path.within.length === 0
-        ? decoded(reached.value, allowedType)
-        : reached.value,
-  };
+  if (row === undefined) {
+    return {
+      found: false,
+      values: new Map(fields.map(field => [field, { kind: "absent" }])),
+      workingDraft: false,
+    };
+  }
+  const id = String(row.id);
+  const draft =
+    target.form === "draft" || options.askDraft === true
+      ? await pendingWorkingDraft(connection, entity, id, locale)
+      : undefined;
+
+  const values = new Map<string, PluginStoredValue>();
+  for (const { field, path, perLanguage } of placed) {
+    const shown = await shownValue(
+      connection,
+      entity,
+      { ...target, field },
+      {
+        id,
+        column: path.column,
+        stored: row[path.column],
+        perLanguage,
+        locale,
+        draft: target.form === "draft" ? draft : undefined,
+      }
+    );
+    const reached =
+      shown === undefined ? undefined : valueWithin(shown.value, path.within);
+    // Only a column's own value is stored encoded. A value reached inside a
+    // group was decoded with the group, and decoding it again would turn a
+    // string holding JSON text ("123", "null") into what that text says.
+    values.set(
+      field,
+      reached === undefined
+        ? { kind: "absent" }
+        : {
+            kind: "value",
+            value:
+              path.within.length === 0
+                ? decoded(reached.value, path.type)
+                : reached.value,
+          }
+    );
+  }
+  return { found: true, values, workingDraft: draft !== undefined };
 }
 
 /**
  * Where a stored read's field is kept: the column its top-level field is
- * stored in, and the names that lead from that column's value to the field.
+ * stored in, the names that lead from that column's value to the field, and
+ * the type the field is declared with.
  */
 interface StoredFieldPath {
   readonly column: string;
   /** Empty for a top-level field; the group names after the first, then the field's own. */
   readonly within: readonly string[];
+  readonly type: string;
 }
 
 /**
  * The column `target.field` is read from, refusing a path that does not lead
- * through named groups alone to a field of `allowedType`.
+ * through named groups alone to a field `scope` admits.
  *
  * Only a named group is walked. A repeater's rows, a field-group instance and
  * a presentational group are not: a row is named by its index, which a write
@@ -231,16 +371,19 @@ interface StoredFieldPath {
 function storedFieldPath(
   entity: StoredEntity,
   target: StoredFieldTarget,
-  allowedType: string
+  scope: FieldScope
 ): StoredFieldPath {
-  const refuse = (why: string) => refused(target, allowedType, why);
+  const refuse = (why: string) => refused(target, scope.only, why);
   const names = target.field.split(".");
+  const column = names[0] ?? target.field;
   const fields = innermostGroupFields(entity, names.slice(0, -1), refuse);
   const field = fields.find(entry => entry.name === names.at(-1));
-  if (field?.type !== allowedType) {
+  if (field === undefined || !scope.admits(field.type)) {
     throw refuse("is not a field of that type");
   }
-  return { column: names[0] ?? target.field, within: names.slice(1) };
+  const why = scope.refusal?.(entity, column);
+  if (why !== undefined) throw refuse(why);
+  return { column, within: names.slice(1), type: field.type };
 }
 
 /** A named group: a `group` field that declares fields of its own. */
@@ -326,10 +469,13 @@ function valueWithin(
 }
 
 /**
- * The value `target.form` shows: for `draft`, the pending working draft where
- * a preview would show it; otherwise, and where none is shown, the stored
- * value, read from the language's own companion row for a field kept per
- * language and from the main row for any other.
+ * The value a read shows: the pending working draft's, where `at.draft` is
+ * the one a `draft` read shows and it carries the column; otherwise the
+ * stored value, read from the language's own companion row for a field kept
+ * per language and from the main row for any other.
+ *
+ * A draft that does not carry the column leaves the stored value standing,
+ * which is what promoting it would do.
  */
 async function shownValue(
   connection: StoredFieldConnection,
@@ -342,13 +488,17 @@ async function shownValue(
     readonly stored: unknown;
     readonly perLanguage: CompanionField | undefined;
     readonly locale: string | null;
+    readonly draft: PendingDraft | undefined;
   }
 ): Promise<{ value: unknown } | undefined> {
-  const drafted =
-    target.form === "draft"
-      ? await workingDraftValue(connection, entity, at.column, at.id, at.locale)
-      : undefined;
-  if (drafted !== undefined) return drafted;
+  const snapshot = at.draft?.snapshot;
+  if (
+    typeof snapshot === "object" &&
+    snapshot !== null &&
+    Object.hasOwn(snapshot, at.column)
+  ) {
+    return { value: (snapshot as Record<string, unknown>)[at.column] };
+  }
   return at.perLanguage === undefined
     ? { value: at.stored }
     : languageValue(connection, at.perLanguage, at.id, at.locale, target);
@@ -379,15 +529,20 @@ interface StoredEntity {
 async function storedEntity(
   connection: StoredFieldConnection,
   records: RegistryRecords,
-  target: StoredFieldTarget,
-  allowedType: string
+  target: StoredFieldsTarget,
+  scope: FieldScope
 ): Promise<StoredEntity> {
+  // A refusal names the field where one was asked for, as it always has.
+  const named: RefusedTarget =
+    target.fields.length === 1
+      ? { ...target, field: target.fields[0] }
+      : target;
   if ("single" in target) {
     const single = await getService("singleRegistryService").getSingleBySlug(
       target.single,
       connection.executor
     );
-    if (single === null) throw refused(target, allowedType, "names no single");
+    if (single === null) throw refused(named, scope.only, "names no single");
     return {
       kind: "single",
       slug: target.single,
@@ -400,7 +555,7 @@ async function storedEntity(
   }
   const collection = await records(target.collection);
   if (collection === null) {
-    throw refused(target, allowedType, "names no collection");
+    throw refused(named, scope.only, "names no collection");
   }
   return {
     kind: "collection",
@@ -459,22 +614,21 @@ function companionFieldOf(
 
 /**
  * The entity's stored row: the entry by id, or the single's one row. Its id,
- * which keys the companion rows and the working draft, and `column` where the
- * main row holds it.
+ * which keys the companion rows and the working draft, and each of `columns`,
+ * the ones the main row holds of what is read.
  */
 async function storedRow(
   connection: StoredFieldConnection,
   entity: StoredEntity,
-  target: StoredFieldTarget,
-  column: string,
-  perLanguage: CompanionField | undefined
+  target: StoredFieldsTarget,
+  columns: readonly string[]
 ): Promise<Record<string, unknown> | undefined> {
   const rows = await connection.db.select<Record<string, unknown>>(
     entity.tableName,
     {
       // Only what is asked for: a row can hold other large values, and a
       // composition reads up to a hundred definitions in one save.
-      columns: perLanguage === undefined ? ["id", column] : ["id"],
+      columns: ["id", ...new Set(columns)],
       ...("single" in target
         ? {}
         : { where: { and: [{ column: "id", op: "=", value: target.id }] } }),
@@ -537,22 +691,25 @@ async function languageValue(
   return value === null || value === undefined ? undefined : { value };
 }
 
+/** A pending working draft a preview would show, as its version row holds it. */
+interface PendingDraft {
+  readonly snapshot: unknown;
+}
+
 /**
- * `column`'s value in the pending working draft, where a preview would show it.
+ * The pending working draft, where a preview would show it.
  *
- * `undefined` where the preview would show the stored value: the document has
+ * `undefined` where the preview would show the stored row: the document has
  * no draft lifecycle, none is pending, or the shared rule declines to overlay
- * it. A draft that does not carry the column leaves the stored value standing,
- * which is what promoting it would do. A document kept per language keeps a
- * draft per language, so the one looked for is `locale`'s.
+ * it. A document kept per language keeps a draft per language, so the one
+ * looked for is `locale`'s.
  */
-async function workingDraftValue(
+async function pendingWorkingDraft(
   connection: StoredFieldConnection,
   entity: StoredEntity,
-  column: string,
   id: string,
   locale: string | null
-): Promise<{ value: unknown } | undefined> {
+): Promise<PendingDraft | undefined> {
   const facts = draftDocumentFacts({
     ...(entity.record as DraftDocumentConfig),
     localized: entity.localized,
@@ -592,11 +749,7 @@ async function workingDraftValue(
   // wait behind the very connection the transaction holds.
   const schemas = await resolveComponentSchemas(fields, connection.executor);
   if (!overlay(schemas).overlay) return undefined;
-
-  const snapshot = draft.snapshot;
-  if (typeof snapshot !== "object" || snapshot === null) return undefined;
-  if (!Object.hasOwn(snapshot, column)) return undefined;
-  return { value: (snapshot as Record<string, unknown>)[column] };
+  return { snapshot: draft.snapshot };
 }
 
 /**
@@ -630,12 +783,226 @@ function parsedJson(value: string): unknown {
  * that says which; the names in it are the ones that code passed.
  */
 function refused(
-  target: StoredFieldTarget,
-  allowedType: string,
+  target: RefusedTarget,
+  only: string,
   why: string
 ): NextlyError {
+  const document = "single" in target ? target.single : target.collection;
+  const named =
+    target.field === undefined ? document : `${document}.${target.field}`;
   return NextlyError.invalidInput({
-    message: `"${"single" in target ? target.single : target.collection}.${target.field}" cannot be read here: it ${why}.${allowedType === "" ? "" : ` Only top-level "${allowedType}" fields, or ones inside named groups, can be read.`}`,
-    logContext: { ...target, allowedType },
+    message: `"${named}" cannot be read here: it ${why}.${only === "" ? "" : ` ${only}`}`,
+    logContext: { ...target, only },
+  });
+}
+
+/** What a refusal names: the document, and the field where there is one. */
+type RefusedTarget = DistributiveOmit<PluginStoredValueTarget, "field"> & {
+  readonly field?: string;
+};
+
+/** What "nothing stored" hashes as: distinct from the canonical JSON of any value. */
+const ABSENT_HASH_INPUT = "\u0000absent";
+
+/**
+ * The fingerprint of one stored value, for telling whether it changed: the
+ * SHA-256 of its canonical JSON, as hex.
+ *
+ * Two reads of one value must agree however the database hands it back:
+ * PostgreSQL's `jsonb` and MySQL's `JSON` reorder an object's keys, so every
+ * object's keys are sorted before hashing. Arrays keep their order, which is
+ * part of what a document means. Nothing stored and a stored `null` hash
+ * alike: a main-row column holding NULL and a language row holding nothing
+ * both store nothing.
+ *
+ * The one hash a conditional write is judged by, on both sides: the writer
+ * hashes what it read, and the write path hashes what it reads again under
+ * the row lock ({@link storedExpectationRefusal}).
+ */
+export async function storedValueHash(
+  stored: PluginStoredValue
+): Promise<string> {
+  const text =
+    stored.kind === "absent" ||
+    stored.value === null ||
+    stored.value === undefined
+      ? ABSENT_HASH_INPUT
+      : canonicalJson(stored.value);
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text)
+  );
+  return Array.from(new Uint8Array(digest), byte =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+}
+
+/** `value` as JSON with every object's keys sorted. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) => {
+    if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
+      return inner;
+    }
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(inner).sort()) {
+      sorted[key] = (inner as Record<string, unknown>)[key];
+    }
+    return sorted;
+  });
+}
+
+/** What a conditional write expects to find stored when it takes the row lock. */
+export interface StoredExpectation {
+  /** The field, at top level or by its path through named groups. */
+  readonly field: string;
+  /** The form the writer read: the live row, or the working draft's view. */
+  readonly form: "published" | "draft";
+  /** {@link storedValueHash} of the value the writer read. */
+  readonly hash: string;
+  /** Refuse the write where a working draft is pending, whatever it holds. */
+  readonly noPendingDraft?: boolean;
+}
+
+/** The document an expectation is for. */
+export interface ExpectedDocument {
+  readonly kind: "collection" | "single";
+  readonly slug: string;
+  /** The entry, for a collection document; a Single has one document per slug. */
+  readonly id?: string;
+}
+
+/** One conditional write's expectation, and whether its write path judged it. */
+export interface PinnedExpectation {
+  readonly document: ExpectedDocument;
+  readonly expect: StoredExpectation;
+  /** Set once the expectation held under the row lock of the write's own transaction. */
+  checked: boolean;
+}
+
+/**
+ * Expectations by the context object of the one write each is for.
+ *
+ * Keyed by the object's identity: the writer hands its write a context object
+ * of its own, and every write path hands its hooks a copy of the context it
+ * was called with, so no other write, a hook's own write to the same document
+ * among them, ever carries it. Concurrent writes each carry their own, so an
+ * author's save is never judged by what a plugin read. Weak, so a write that
+ * never reaches its path leaves nothing behind.
+ */
+const expectations = new WeakMap<object, PinnedExpectation>();
+
+/** Register `pin` as what the write called with `context` must find stored. */
+export function expectStoredValue(
+  context: Record<string, unknown>,
+  pin: PinnedExpectation
+): void {
+  expectations.set(context, pin);
+}
+
+/**
+ * Refuse, by throwing, a write whose caller registered an expectation for
+ * `context` that no longer holds; nothing happens for any other write. Called
+ * by a write path inside its transaction, once it holds the entry's row lock
+ * and before it writes, with the context it was called with. The refusal is
+ * also kept on `refused`, for a path whose adapter wraps what is thrown out of
+ * its transaction.
+ */
+export async function holdStoredExpectation(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  on: {
+    readonly tx: VersionsDbApi & { getDrizzle(): unknown };
+    readonly localization: { readonly defaultLocale: string } | undefined;
+    readonly locale: string | undefined;
+  },
+  refused: { refusal?: NextlyError } = {}
+): Promise<void> {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin === undefined || !sameDocument(pin.document, document)) return;
+  refused.refusal = await storedExpectationRefusal(
+    pin,
+    {
+      db: on.tx,
+      executor: on.tx.getDrizzle(),
+      defaultLocale: on.localization?.defaultLocale ?? null,
+    },
+    on.locale
+  );
+  if (refused.refusal !== undefined) throw refused.refusal;
+}
+
+/** Whether a write is to the document an expectation was made for. */
+function sameDocument(
+  expected: ExpectedDocument,
+  written: ExpectedDocument
+): boolean {
+  return (
+    expected.kind === written.kind &&
+    expected.slug === written.slug &&
+    (written.kind === "single" || expected.id === written.id)
+  );
+}
+
+/**
+ * The refusal of a write whose writer read something other than what is
+ * stored now, or `undefined` where the expectation holds.
+ *
+ * Called by a write path inside its transaction, once it holds the entry's
+ * row lock and before it writes: the lock is what every writer of the
+ * document takes first, so nothing can change the value between this read and
+ * the write. On PostgreSQL and MySQL that lock is `SELECT ... FOR UPDATE`; on
+ * SQLite the write transaction already holds the database's one writer. Read
+ * on `connection`, the transaction's own, in the write's language.
+ *
+ * Refused as a conflict: the caller reads the document again and decides
+ * again. A write that publishes asks `noPendingDraft` too, because a draft
+ * that leaves this field alone reads the same here and would still be put
+ * live by the publish.
+ */
+async function storedExpectationRefusal(
+  pin: PinnedExpectation,
+  connection: StoredFieldConnection,
+  locale: string | undefined
+): Promise<NextlyError | undefined> {
+  const { document, expect } = pin;
+  const read = await readStoredFieldsOn(
+    connection,
+    EVERY_FIELD,
+    {
+      ...(document.kind === "single"
+        ? { single: document.slug }
+        : { collection: document.slug, id: document.id ?? "" }),
+      fields: [expect.field],
+      form: expect.form,
+      ...(locale === undefined ? {} : { locale }),
+    },
+    { askDraft: expect.noPendingDraft === true }
+  );
+  const now = await storedValueHash(
+    read.values.get(expect.field) ?? { kind: "absent" }
+  );
+  const changed =
+    now !== expect.hash
+      ? "stored-value-changed"
+      : expect.noPendingDraft === true && read.workingDraft
+        ? "working-draft-pending"
+        : undefined;
+  if (changed === undefined) {
+    pin.checked = true;
+    return undefined;
+  }
+  return NextlyError.conflict({
+    reason: "state",
+    message:
+      "This content changed after it was read, so the write was not made. Read it again and decide again.",
+    logContext: {
+      cause: changed,
+      kind: document.kind,
+      slug: document.slug,
+      ...(document.id === undefined ? {} : { id: document.id }),
+      field: expect.field,
+      form: expect.form,
+      ...(locale === undefined ? {} : { locale }),
+    },
   });
 }

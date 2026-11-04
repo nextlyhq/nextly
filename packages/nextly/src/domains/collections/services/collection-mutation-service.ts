@@ -355,7 +355,7 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
-import { entryWriteContext } from "./stored-field-read";
+import { entryWriteContext, holdStoredExpectation } from "./stored-field-read";
 import {
   prepareWriteMatch,
   writeMatchOf,
@@ -10148,9 +10148,9 @@ export class CollectionMutationService extends BaseService {
     let outOfDateShared:
       | { fields: string[]; live: Record<string, unknown> }
       | undefined;
-    // A promotion refused under the row lock, for what its stored relations
-    // hold once locked; read after the transaction, as the adapter wraps
-    // what is thrown out of it.
+    // A write refused under the row lock: a promotion, for what its stored
+    // relations hold once locked, or a conditional write, for a value no
+    // longer the one its writer read; read after the transaction, as above.
     const lockedPromotion: { refusal?: NextlyError } = {};
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
@@ -11059,6 +11059,19 @@ export class CollectionMutationService extends BaseService {
               params.entryId,
               writeFilters
             )
+          );
+          // A conditional write is judged here, under the lock and after the
+          // access it owes, against the value as committed now; a refused one
+          // writes nothing.
+          await holdStoredExpectation(
+            params.context,
+            {
+              kind: "collection",
+              slug: params.collectionName,
+              id: params.entryId,
+            },
+            { tx, localization: this.localization, locale: params.locale },
+            lockedPromotion
           );
 
           // The status event uses the true prior value even after a conflict
