@@ -21,7 +21,7 @@
  *
  * @module admin/BlocksField.classes.test
  */
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +49,8 @@ const saved: Array<Record<string, unknown>> = [];
 /** How many times the top bar's breakpoint manager has been mounted. */
 let managerMounts = 0;
 /** The steps the editor's history was handed. */
+/** When set, every save waits on it before it answers. */
+let saveGate: Promise<void> | undefined;
 const recorded: Array<{
   undo: () => Promise<boolean>;
   redo: () => Promise<boolean>;
@@ -264,6 +266,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useUpdateSingleDocument: () => ({
     mutateAsync: async (value: Record<string, unknown>) => {
       saved.push(value);
+      // Held open while a test needs a save still on its way.
+      if (saveGate !== undefined) await saveGate;
       if (saveResult instanceof Error) throw saveResult;
       return saveResult;
     },
@@ -272,6 +276,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
 }));
 
 const { PageBuilderView } = await import("./editor/PageBuilderView");
+const { useClassSurface } = await import("./editor/site-style-studios");
+const { SiteStyleHistoryContext } = await import("./site-style-client");
 
 /**
  * The blocks field's declaration, as the admin hands it to the view. Typed at
@@ -375,6 +381,7 @@ beforeEach(() => {
   saveResult = { success: true };
   saved.length = 0;
   recorded.length = 0;
+  saveGate = undefined;
   managerMounts = 0;
 });
 
@@ -645,6 +652,55 @@ describe("writing a shared style's styles while it is the target", () => {
       await recorded[0]?.undo();
     });
     expect(saved.at(-1)).toEqual({ classes: [stored] });
+  });
+});
+
+describe("a rename's place in the history", () => {
+  it("is taken when the rename is asked for, not when the writes before it are stored", async () => {
+    // A rename queued behind a style edit still on its way: a page edit made
+    // meanwhile must come after the rename in the history, as it was made.
+    const card = { id: "c-card", slug: "card", orderIndex: 0, styles: {} };
+    const steps: unknown[] = [];
+    const history = {
+      record: (step: unknown) => {
+        steps.push(step);
+        return () => {
+          steps.splice(steps.indexOf(step), 1);
+        };
+      },
+      settled: new Map(),
+    };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={history as never}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    const { result } = renderHook(
+      () => useClassSurface({ classes: [card] }, false, null, undefined),
+      { wrapper }
+    );
+    let release = (): void => {};
+    saveGate = new Promise(done => {
+      release = done;
+    });
+    let both: Promise<unknown> = Promise.resolve();
+    act(() => {
+      both = Promise.all([
+        result.current.writeStyles("c-card", setting("opacity", 0.5) as never),
+        result.current.rename("c-card", { label: "Box", slug: "box" }),
+      ]);
+    });
+    // Both places taken before the first save has answered.
+    expect(steps).toHaveLength(2);
+
+    await act(async () => {
+      release();
+      await both;
+    });
+    expect(steps).toHaveLength(2);
+    expect(saved.at(-1)).toMatchObject({
+      classes: [{ id: "c-card", label: "Box", slug: "box" }],
+    });
   });
 });
 

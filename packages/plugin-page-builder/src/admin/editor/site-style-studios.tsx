@@ -929,16 +929,23 @@ function useRenameClass(
   /** Release the pending name, but only if this attempt is still the live one. */
   endRename: (classId: string, attempt: number) => void
 ) {
-  const { save: saveSection } = useSaveSiteStyle();
+  const { reserve } = useSaveSiteStyle();
   return useCallback(
     async (
       classId: string,
       name: { label: string; slug: string }
     ): Promise<ClassRenameOutcome> => {
       const mine = beginRename(classId, name.label);
+      /*
+       * The history place is taken NOW, as a style edit's is: a rename
+       * queued behind writes still being stored would otherwise take its
+       * place only once they answered, after a page edit made meanwhile.
+       */
+      const slot = reserve("classes");
       try {
         return await writes.run<ClassRenameOutcome>(async existing => {
           if (existing === undefined) {
+            slot.cancel();
             return {
               result: {
                 ok: false as const,
@@ -954,10 +961,8 @@ function useRenameClass(
               ? { ...entry, label: name.label, slug: name.slug }
               : entry
           );
-          const result = await saveSection(
-            "classes",
-            classOverrideOf(configured, next)
-          );
+          // A refused save withdraws its place itself.
+          const result = await slot.save(classOverrideOf(configured, next));
           if (result.saved) return { result: { ok: true as const }, next };
           const reasons = Object.values(result.issues);
           return {
@@ -985,7 +990,7 @@ function useRenameClass(
         endRename(classId, mine);
       }
     },
-    [writes, configured, saveSection, beginRename, endRename]
+    [writes, configured, reserve, beginRename, endRename]
   );
 }
 
