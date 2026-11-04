@@ -85,7 +85,12 @@ const releases: (() => void)[] = [];
  * writer, whether its first transaction took a row lock: the content write's
  * transaction does, so the seam is shown to sit in the write itself.
  */
-function raceSeam(t: TestNextly, pausing: Writer, releasing: Writer) {
+function raceSeam(
+  t: TestNextly,
+  pausing: Writer,
+  releasing: Writer,
+  dialect: TestDialect
+) {
   const adapter = t.adapter as unknown as {
     transaction<T>(
       work: (tx: {
@@ -108,8 +113,14 @@ function raceSeam(t: TestNextly, pausing: Writer, releasing: Writer) {
   const state = { paused: false, released: false };
   vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
     // A read-only transaction (a stored read's snapshot) is not the write the
-    // seam is about, and passes through untouched.
+    // seam is about, and passes through. On SQLite it still waits behind the
+    // paused writer, which holds the database's one writer, so there the
+    // releasing writer's snapshot is the earliest it can go on: it releases.
     if ((rest[0] as { readOnly?: boolean } | undefined)?.readOnly === true) {
+      if (dialect === "sqlite" && writerOf.getStore() === releasing) {
+        state.released = true;
+        letCommit();
+      }
       return original(work, ...rest);
     }
     const who = writerOf.getStore();
@@ -393,7 +404,7 @@ describe.each(getConfiguredTestDialects())(
         const page = { collection: "pages", id };
         const hash = await hashOf(page, "body", "published");
 
-        const seam = raceSeam(t, "author", "plugin");
+        const seam = raceSeam(t, "author", "plugin", dialect);
         const author = authorSaves("pages", id, { body: { v: "author" } });
         await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
@@ -423,7 +434,7 @@ describe.each(getConfiguredTestDialects())(
         const page = { collection: "pages", id };
         const hash = await hashOf(page, "body", "published");
 
-        const seam = raceSeam(t, "plugin", "author");
+        const seam = raceSeam(t, "plugin", "author", dialect);
         const plugin = writerOf.run("plugin", () =>
           updateIfUnchanged(editor, {
             ...page,
@@ -479,7 +490,7 @@ describe.each(getConfiguredTestDialects())(
         });
         const hash = await hashOf(entry, "body", "draft");
 
-        const seam = raceSeam(t, "author", "plugin");
+        const seam = raceSeam(t, "author", "plugin", dialect);
         const author = authorSaves("drafted", id, { body: { v: "author" } });
         await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
@@ -511,7 +522,7 @@ describe.each(getConfiguredTestDialects())(
         const entry = { collection: "drafted", id };
         const hash = await hashOf(entry, "body", "draft");
 
-        const seam = raceSeam(t, "plugin", "author");
+        const seam = raceSeam(t, "plugin", "author", dialect);
         const plugin = writerOf.run("plugin", () =>
           updateIfUnchanged(editor, {
             ...entry,
@@ -553,7 +564,7 @@ describe.each(getConfiguredTestDialects())(
         const hash = await hashOf(entry, "body", "published");
 
         // The author's draft leaves `body` alone, so the live hash still holds.
-        const seam = raceSeam(t, "author", "plugin");
+        const seam = raceSeam(t, "author", "plugin", dialect);
         const author = authorSaves("drafted", id, { title: "draft title" });
         await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
