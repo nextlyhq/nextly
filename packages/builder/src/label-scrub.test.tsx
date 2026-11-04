@@ -46,19 +46,15 @@ function Field({ field }: { field: LabelScrubField }): null {
   return null;
 }
 
-function fieldSpies(): LabelScrubField & {
-  show: ReturnType<typeof vi.fn>;
-  commit: ReturnType<typeof vi.fn>;
-  reset: ReturnType<typeof vi.fn>;
-} {
+function fieldSpies() {
   return {
     origin: "12px",
-    at: (_from, delta) => `${12 + delta}px`,
+    at: (_from: LabelScrubField["origin"], delta: number) => `${12 + delta}px`,
     draft: "12",
-    show: vi.fn(),
-    commit: vi.fn(),
-    reset: vi.fn(),
-  };
+    show: vi.fn<LabelScrubField["show"]>(),
+    commit: vi.fn<LabelScrubField["commit"]>(),
+    reset: vi.fn<LabelScrubField["reset"]>(),
+  } satisfies LabelScrubField;
 }
 
 describe("LabelScrubRow", () => {
