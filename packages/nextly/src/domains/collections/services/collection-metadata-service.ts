@@ -23,7 +23,10 @@ import { clearRegistryRowCache } from "../../dynamic-collections/services/collec
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import { applyCollectionSchemaChange } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -274,7 +277,13 @@ export class CollectionMetadataService extends BaseService {
   private async registerRuntimeSchema(
     tableName: string,
     fields: FieldDefinition[],
-    options?: { hasStatus?: boolean; localized?: boolean }
+    options?: {
+      hasStatus?: boolean;
+      localized?: boolean;
+      // Whether the companion keeps a `_status` of its own: per-language publishing, which only
+      // a translated Draft/Published collection has. The main table's flag when not given.
+      companionStatus?: boolean;
+    }
   ): Promise<void> {
     try {
       const { generateRuntimeSchema } = await import(
@@ -321,7 +330,7 @@ export class CollectionMetadataService extends BaseService {
           fields: fields,
           dialect,
           localized: true,
-          status: options?.hasStatus === true,
+          status: options?.companionStatus ?? options?.hasStatus === true,
         });
         if (companion) {
           this.fileManager.refreshSchema(
@@ -490,6 +499,9 @@ export class CollectionMetadataService extends BaseService {
                 // i18n: register the main table without translatable columns and register
                 // the companion, so reads/writes route localized fields correctly.
                 localized: storesPerLanguage(data),
+                // As the migration laid it out: a collection that is not translated publishes
+                // as a document, so its companion has no `_status` even when it is Draft/Published.
+                companionStatus: publishesPerLanguage(data),
               }
             );
           } else {

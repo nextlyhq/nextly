@@ -355,6 +355,38 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ heading: "Made in the Builder", count: 4 });
     });
 
+    // A Draft/Published collection that is not translated publishes as a document, so its
+    // per-language table holds no `_status`: the process the Builder created it in must not
+    // expect one either.
+    it("writes an entry to a Draft/Published collection the Schema Builder just made", async () => {
+      const t = await boot(dialect, true);
+      vi.stubEnv("NODE_ENV", "development");
+      const handler = t.getService("collectionsHandler") as unknown as {
+        createCollection(
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const made = await handler.createCollection({
+        name: "notices",
+        label: "Notice",
+        status: true,
+        fields: [{ name: "heading", type: "text" }],
+      });
+      expect(made.success, JSON.stringify(made)).toBe(true);
+      expect(
+        (await columnsOf(t, ["dc_notices_locales"])).dc_notices_locales
+      ).not.toContain("_status");
+
+      const created = await t.nextly.create({
+        collection: "notices",
+        data: { heading: "Made with a status" },
+      });
+      const id = (created.item as { id: string }).id;
+      expect(
+        await t.nextly.findByID({ collection: "notices", id })
+      ).toMatchObject({ heading: "Made with a status" });
+    });
+
     // A unique translatable field is unique within each language, as on a translated collection.
     it("refuses a second entry with the same value of a unique translatable field", async () => {
       current = await createTestNextly({
