@@ -302,6 +302,16 @@ export function useSelectionActionsContext(): ToolbarAction[] | null {
  */
 const DepthMovesContext = React.createContext<readonly DepthMoveAction[]>([]);
 
+const ToolbarFocusContext = React.createContext<ToolbarFocusSlot | null>(null);
+
+/**
+ * The nearest provider's toolbar focus slot, or `null` outside one: the
+ * block toolbar puts its focus call here for Alt+F10.
+ */
+export function useToolbarFocusSlot(): ToolbarFocusSlot | null {
+  return React.useContext(ToolbarFocusContext);
+}
+
 /** The provider's Move in and Move out, for the block menu. */
 export function useDepthMoveActions(): readonly DepthMoveAction[] {
   return React.useContext(DepthMovesContext);
@@ -533,7 +543,21 @@ export interface BlockKeyboardActionsResult {
    * itself runs, so an item is offered exactly when pressing it would move.
    */
   readonly depthMoves: readonly DepthMoveAction[];
+  /**
+   * Where this editor's block toolbar puts the call that finds its tab stop,
+   * for Alt+F10 to focus. Held per editor rather than looked up in the
+   * document, which may hold another editor's toolbar first.
+   */
+  readonly toolbarFocus: ToolbarFocusSlot;
 }
+
+/**
+ * Holds the call that finds an editor's block toolbar's tab stop, which
+ * answers `null` while no bar is drawn.
+ */
+export type ToolbarFocusSlot = React.MutableRefObject<
+  (() => HTMLElement | null) | null
+>;
 
 /**
  * Register the move bindings for as long as the caller is mounted.
@@ -594,6 +618,9 @@ export function useBlockKeyboardActions({
   // the document from that render.
   const latest = React.useRef(editor);
   latest.current = editor;
+  const toolbarFocus: ToolbarFocusSlot = React.useRef<
+    (() => HTMLElement | null) | null
+  >(null);
 
   const deleteSelected = React.useCallback(() => {
     const editorNow = latest.current;
@@ -907,6 +934,23 @@ export function useBlockKeyboardActions({
         when: () => latest.current.selectedId !== null,
         whenTyping: false,
         run: () => deleteSelected(),
+      },
+      {
+        /*
+         * `alt+F10`, the editor convention for reaching a block's toolbar
+         * from the keyboard: from the canvas, or from text being edited inside
+         * the block, which is why it also runs while typing.
+         */
+        keys: "alt+F10",
+        description: "Move focus to the selected block's toolbar",
+        // Only while a bar is drawn to take focus: a host may render the
+        // keystrokes alone, and the bar goes while a block is dragged. The key
+        // is then left to the browser rather than taken to do nothing.
+        when: () =>
+          latest.current.selectedId !== null &&
+          (toolbarFocus.current?.() ?? null) !== null,
+        whenTyping: true,
+        run: () => toolbarFocus.current?.()?.focus(),
       },
       {
         keys: "mod+z",
@@ -1293,6 +1337,7 @@ export function useBlockKeyboardActions({
     nesting: nestingSource,
     selectionActions,
     depthMoves,
+    toolbarFocus,
   };
 }
 
@@ -1363,6 +1408,7 @@ export function BlockKeyboardActions({
     nesting: rules,
     selectionActions: offered,
     depthMoves,
+    toolbarFocus,
   } = useBlockKeyboardActions(options);
 
   /*
@@ -1413,10 +1459,12 @@ export function BlockKeyboardActions({
       <SelectionActionsContext.Provider value={offered}>
         <DepthMovesContext.Provider value={depthMoves}>
           <BlockActionsContext.Provider value={actions}>
-            <p aria-live="polite" role="status" className="nx-sr-only">
-              {announcement}
-            </p>
-            {children}
+            <ToolbarFocusContext.Provider value={toolbarFocus}>
+              <p aria-live="polite" role="status" className="nx-sr-only">
+                {announcement}
+              </p>
+              {children}
+            </ToolbarFocusContext.Provider>
           </BlockActionsContext.Provider>
         </DepthMovesContext.Provider>
       </SelectionActionsContext.Provider>
