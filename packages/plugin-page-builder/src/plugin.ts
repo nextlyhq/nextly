@@ -140,6 +140,7 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
+import { siteStyleExpiry } from "./site-style-expiry";
 import { referableClassIds } from "./site-style-record";
 import { siteStyleRoute } from "./site-style-route";
 import {
@@ -952,6 +953,7 @@ export const pageBuilder = (
   let spacingSetup: {
     store: SpacingModeStore;
     slugs: SpacingModeSlugs;
+    siteStyle: string;
     warn: (message: string, meta?: Record<string, unknown>) => void;
   } | null = null;
 
@@ -967,9 +969,14 @@ export const pageBuilder = (
 
   /** The step's deps for one run, the Direct API resolved at call time. */
   const spacingModeDeps = async (): Promise<SpacingModeAtStartDeps> => {
-    const { store, slugs } = requireSpacingSetup();
+    const { store, slugs, siteStyle, warn } = requireSpacingSetup();
     const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-    return { store, slugs, nextly: await getCachedNextly() };
+    return {
+      store,
+      slugs,
+      nextly: await getCachedNextly(),
+      expire: () => siteStyleExpiry(warn)(siteStyle),
+    };
   };
 
   /**
@@ -1103,6 +1110,9 @@ export const pageBuilder = (
           layouts: defaultLayoutSetup.slugs.layouts,
           settings: defaultLayoutSetup.slugs.settings,
         },
+        // The RESOLVED Site Style slug, whose cached reads a recorded model
+        // expires.
+        siteStyle: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
         warn: (message, meta) => ctx.logger.warn(message, meta),
       };
 
@@ -1646,7 +1656,11 @@ export const pageBuilder = (
         siteStyleRoute(componentStoreOf(opts)),
         // The owner's choice of how blocks are spaced, asked of the same
         // permission a Site Style write needs.
-        spacingModeRoute(),
+        // A choice expires the cached pages that read the site style, and says
+        // so in the plugin's log when it cannot.
+        spacingModeRoute(slug =>
+          siteStyleExpiry(requireSpacingSetup().warn)(slug)
+        ),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
         // The Design panel's shared styles: lock and unlock one, how widely

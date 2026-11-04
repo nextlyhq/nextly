@@ -223,7 +223,9 @@ update the site style.
 
 The choice is kept in the plugin's own table `page_builder__site_options`, created by
 the plugin's migration (`npx nextly migrate`). A route that renders with
-`loadSiteStyle({ nextly })` reads it with the rest of the site style.
+`loadSiteStyle({ nextly })` reads it with the rest of the site style, and a change to it
+expires the cached pages that name the `site-style` single among their `singles`, as a
+saved variable does.
 
 ## The bottom bar
 

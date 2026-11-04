@@ -663,6 +663,58 @@ describe("a page drawn inside its Layout", () => {
  * release bound is stubbed to "none scheduled" (`false`), so a read carries a
  * number only where something capped it.
  */
+describe("a classic site through the route", () => {
+  const box = (id: string, children: unknown[]) => ({
+    id,
+    type: "core/box",
+    version: 1,
+    props: {},
+    slots: { children },
+  });
+
+  /** A page and its header, each a box of blocks, on a site in `mode`. */
+  async function drawn(mode: "classic" | "gaps") {
+    return render(
+      {
+        page: {
+          content: doc([
+            box("pb", [heading("p1", "One"), heading("p2", "Two")]),
+          ]),
+          layout: "main",
+        },
+        components: {
+          ...COMPONENTS,
+          "main-header": definition([
+            box("hb", [heading("h1", "Head"), heading("h2", "Line")]),
+          ]),
+        },
+      },
+      {
+        extra: {
+          // The site's style the way a host's route reads it: through a
+          // provider, which names the single its read depends on.
+          siteStyles: {
+            read: async () => ({ breakpoints: BREAKPOINTS, spacingMode: mode }),
+            singles: ["site-style"],
+          },
+        },
+      }
+    );
+  }
+
+  it("compiles the page and its Layout's regions under the classic model", async () => {
+    const { html } = await drawn("classic");
+    expect(html).toContain("Head");
+    expect(html).not.toContain("nx-pb-gap");
+    expect(html).toMatch(
+      /:where\(h2\) \{[^}]*margin-block-end: 0\.5em; margin-block-start: 1\.5em/
+    );
+    // The control: the same site on container gaps marks both boxes.
+    const gaps = await drawn("gaps");
+    expect(gaps.html).toContain("nx-pb-gap");
+  });
+});
+
 describe("a page with no usable default", () => {
   async function withRelease<T>(
     release: number | false,

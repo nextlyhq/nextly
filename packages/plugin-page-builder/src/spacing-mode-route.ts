@@ -18,6 +18,7 @@ import {
   SPACING_MODE_ROUTE_PATH,
   type SpacingModeResult,
 } from "./library-contract";
+import { siteStyleExpiry, type SiteStyleExpiry } from "./site-style-expiry";
 import { SITE_STYLE_SLUG } from "./site-style-storage";
 import { spacingModeStore } from "./spacing-mode-store";
 
@@ -38,10 +39,15 @@ export interface SpacingModeRouteContext {
   dialect: Parameters<typeof spacingModeStore>[1];
 }
 
-/** Record the owner's choice, once the caller is admitted. */
+/**
+ * Record the owner's choice, once the caller is admitted, then expire the
+ * cached pages that read the site style, so the next render is drawn under
+ * the new model.
+ */
 export async function chooseSpacingMode(
   req: Request,
-  ctx: SpacingModeRouteContext
+  ctx: SpacingModeRouteContext,
+  expire: SiteStyleExpiry = siteStyleExpiry(() => undefined)
 ): Promise<Response> {
   // A precondition, so first: nothing is read or written for a caller who may
   // not change the site's design.
@@ -53,6 +59,7 @@ export async function chooseSpacingMode(
   }
   const { mode } = await readBody(req);
   await spacingModeStore(ctx.db, ctx.dialect).choose(mode);
+  await expire(style);
   return respondMutation<SpacingModeResult>(
     "The space between blocks was changed.",
     { spacingMode: mode }
@@ -87,7 +94,7 @@ async function readBody(
  * `requiredPermission`: the permission is the Site Style Single's own update,
  * whose slug a host may rename, so the handler asks for it by resolved slug.
  */
-export function spacingModeRoute(): {
+export function spacingModeRoute(expire?: SiteStyleExpiry): {
   method: "POST";
   path: string;
   handler: (req: Request, ctx: SpacingModeRouteContext) => Promise<Response>;
@@ -95,6 +102,6 @@ export function spacingModeRoute(): {
   return {
     method: "POST",
     path: SPACING_MODE_ROUTE_PATH,
-    handler: chooseSpacingMode,
+    handler: (req, ctx) => chooseSpacingMode(req, ctx, expire),
   };
 }

@@ -47,6 +47,11 @@ export interface SpacingModeAtStartDeps {
   readonly nextly: Pick<Nextly, "find" | "findSingle">;
   readonly store: Pick<SpacingModeStore, "read" | "adoptIfUnset">;
   readonly slugs: SpacingModeSlugs;
+  /**
+   * Expire the cached pages that read the site style, once a model is
+   * recorded: a page cached before the step ran was drawn under no model.
+   */
+  readonly expire?: () => Promise<void>;
 }
 
 /** What the site is, for the one decision this step makes. */
@@ -108,7 +113,9 @@ export async function settleSpacingModeOnce(
   const mode = spacingModeFor(verdict);
   // Refused when another instance or the owner recorded one meanwhile, and
   // then that one stands.
-  return (await deps.store.adoptIfUnset(mode)) ? mode : "kept";
+  if (!(await deps.store.adoptIfUnset(mode))) return "kept";
+  await deps.expire?.();
+  return mode;
 }
 
 /** Whether a collection holds any row but `exceptId`, drafts included. */

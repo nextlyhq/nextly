@@ -114,4 +114,28 @@ describe("settleSpacingModeOnce", () => {
     expect(outcome).toBe("deferred");
     expect(writes).toEqual([]);
   });
+
+  it("expires the cached site style once it records a model, and only then", async () => {
+    const expiries: string[] = [];
+    const run = (adopted: boolean, recorded: "gaps" | null) =>
+      settleSpacingModeOnce({
+        nextly: site({ pages: ["p"] }, null).nextly,
+        slugs: SLUGS,
+        store: {
+          read: () => Promise.resolve(recorded),
+          adoptIfUnset: () => Promise.resolve(adopted),
+        },
+        expire: () => {
+          expiries.push(recorded ?? (adopted ? "recorded" : "refused"));
+          return Promise.resolve();
+        },
+      });
+    expect(await run(true, null)).toBe("classic");
+    expect(expiries).toEqual(["recorded"]);
+    // Another instance or the owner recorded one first: that write expired it.
+    expect(await run(false, null)).toBe("kept");
+    // Already recorded: nothing changed, so nothing is expired.
+    expect(await run(true, "gaps")).toBe("kept");
+    expect(expiries).toEqual(["recorded"]);
+  });
 });

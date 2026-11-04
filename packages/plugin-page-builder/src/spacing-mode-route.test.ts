@@ -65,4 +65,46 @@ describe("chooseSpacingMode", () => {
     });
     expect(read()).toBe(false);
   });
+
+  it("expires the RESOLVED Site Style's cached reads after recording the choice", async () => {
+    const order: string[] = [];
+    const ctx = {
+      ...context({ can: () => Promise.resolve(true) }),
+      db: recordingDb(order),
+    };
+    const { req } = request();
+    const response = await chooseSpacingMode(req, ctx, slug => {
+      order.push(`expire:${slug}`);
+      return Promise.resolve();
+    });
+    expect(response.status).toBe(200);
+    // After the write, so a render it lets through reads the new model.
+    expect(order).toEqual(["write", "expire:renamed-style"]);
+  });
+
+  it("expires nothing for a caller it refuses", async () => {
+    const expired: string[] = [];
+    const { req } = request();
+    await expect(
+      chooseSpacingMode(req, context(null), slug => {
+        expired.push(slug);
+        return Promise.resolve();
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(expired).toEqual([]);
+  });
 });
+
+/** A database whose one update answers that it changed a row, and says so. */
+function recordingDb(order: string[]): PluginDatabase {
+  const chain = {
+    where: () => {
+      order.push("write");
+      return Promise.resolve(1);
+    },
+  };
+  return {
+    table: () => new Proxy({}, { get: (_t, key) => String(key) }),
+    update: () => chain,
+  } as unknown as PluginDatabase;
+}

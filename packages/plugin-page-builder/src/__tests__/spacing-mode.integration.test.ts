@@ -16,6 +16,9 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import { eq } from "@nextlyhq/plugin-sdk/db";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
@@ -28,6 +31,8 @@ import {
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
+import { Suspense, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
@@ -42,9 +47,10 @@ import {
   PAGE_BUILDER_PLUGIN_NAME,
   SPACING_MODE_ROUTE_PATH,
 } from "../library-contract";
+import { pageBuilderLayouts } from "../page-layouts";
 import { pageBuilder } from "../plugin";
 import { siteOptions } from "../schema/tables";
-import { loadSiteStyle } from "../site-style-storage";
+import { loadSiteStyle, SITE_STYLE_SLUG } from "../site-style-storage";
 import {
   settleSpacingModeAtStart,
   settleSpacingModeOnce,
@@ -301,6 +307,138 @@ describe.each(getConfiguredTestDialects())(
       expect((await loadSiteStyle({ nextly: t.nextly })).spacingMode).toBe(
         "classic"
       );
+    });
+
+    it("hands it to a render whose reader wraps the instance without its services", async () => {
+      const t = await boot();
+      await store().choose("classic");
+      // The reader a host's route builds, as the docs and the playground do:
+      // the reads a page needs and nothing else, no plugin services among them.
+      const reader = {
+        find: (args: Parameters<TestNextly["nextly"]["find"]>[0]) =>
+          t.nextly.find(args),
+        findSingle: (args: Parameters<TestNextly["nextly"]["findSingle"]>[0]) =>
+          t.nextly.findSingle(args),
+      };
+      expect((await loadSiteStyle({ nextly: reader })).spacingMode).toBe(
+        "classic"
+      );
+    });
+
+    it("serves a page and its Layout's header under the recorded model, through the route a site builds", async () => {
+      const t = await boot();
+      const idOf = (created: unknown) =>
+        String((created as { item: { id: string | number } }).item.id);
+      const heading = (id: string, text: string) => ({
+        id,
+        type: "core/heading",
+        version: 1,
+        props: { text, level: "h2" },
+      });
+      const box = (id: string, children: unknown[]) => ({
+        id,
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: { children },
+      });
+      const header = idOf(
+        await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Header",
+            slug: "header",
+            content: {
+              formatVersion: 1,
+              kind: "component",
+              nodes: [
+                box("hb", [heading("h1", "Head"), heading("h2", "Line")]),
+              ],
+            },
+            status: "published",
+          },
+          overrideAccess: true,
+        })
+      );
+      const main = idOf(
+        await t.nextly.create({
+          collection: LAYOUTS_SLUG,
+          data: {
+            title: "Main",
+            slug: "main",
+            areas: [{ area: "header", component: header }],
+            status: "published",
+          },
+          overrideAccess: true,
+        })
+      );
+      await t.nextly.create({
+        collection: PAGES_SLUG,
+        data: {
+          title: "About",
+          slug: "about",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [box("pb", [heading("p1", "Body"), heading("p2", "More")])],
+          },
+          layout: main,
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+
+      // The reader a site's route builds, as the docs and the playground do:
+      // the reads a page needs and none of the instance's plugin services.
+      const reader = {
+        find: (args: never) => t.nextly.find(args),
+        findByID: (args: never) => t.nextly.findByID(args),
+        findSingle: (args: never) => t.nextly.findSingle(args),
+        media: { findByID: (args: never) => t.nextly.media.findByID(args) },
+      };
+      const route = createBlocksPage({
+        collections: [PAGES_SLUG],
+        field: "content",
+        nextly: reader as never,
+        blocks: createBlockResolver(coreBlocks),
+        styleContext: {
+          breakpoints: {
+            viewport: [{ id: "base", label: "Desktop" }],
+            container: [],
+          },
+        },
+        siteStyles: {
+          read: () => loadSiteStyle({ nextly: reader }),
+          singles: [SITE_STYLE_SLUG],
+        },
+        layouts: pageBuilderLayouts({ nextly: reader as never }),
+      });
+      const served = async (): Promise<string> => {
+        let element = (await route.ContentPage({
+          params: { slug: ["about"] },
+        })) as ReactElement<{ children: ReactElement }>;
+        // Past the route's Suspense boundary, as the App Router renders it.
+        if (element.type === Suspense) {
+          const body = element.props.children;
+          const Body = body.type as (props: unknown) => Promise<ReactElement>;
+          element = (await Body(body.props)) as typeof element;
+        }
+        return renderToStaticMarkup(element);
+      };
+
+      await store().choose("classic");
+      const classic = await served();
+      expect(classic).toContain("Head");
+      expect(classic).toContain("Body");
+      expect(classic).not.toContain("nx-pb-gap");
+      expect(classic).toMatch(
+        /:where\(h2\) \{[^}]*margin-block-end: 0\.5em; margin-block-start: 1\.5em/
+      );
+
+      // The control, and the switch reaching the next render.
+      await store().choose("gaps");
+      const gaps = await served();
+      expect(gaps).toContain("nx-pb-gap");
     });
 
     describe("the owner's route", () => {
