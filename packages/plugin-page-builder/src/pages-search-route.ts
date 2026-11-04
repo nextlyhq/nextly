@@ -76,6 +76,7 @@ import {
 import {
   entryOf,
   findAsCaller,
+  readSavedAsCaller,
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "./entry-reads";
@@ -1445,6 +1446,20 @@ function directPagesSearchReads(
   };
 }
 
+/**
+ * The search's reads, and one more the address needs: a page read as it is
+ * SAVED, its working draft included, since a Save that does not publish
+ * stores one.
+ */
+export interface PageAddressReads extends PagesSearchReads {
+  readSaved(args: {
+    readonly collection: string;
+    readonly id: string;
+    readonly select: Record<string, boolean>;
+    readonly locale?: string;
+  }): Promise<Record<string, unknown> | null>;
+}
+
 /** One page's address, as the route will read it once its query is checked. */
 export interface PageAddressRequest {
   readonly page: PageReference;
@@ -1489,7 +1504,7 @@ export function parsePageAddressQuery(url: string | URL): PageAddressRequest {
  */
 export async function readPageAddress(
   request: PageAddressRequest,
-  reads: PagesSearchReads
+  reads: PageAddressReads
 ): Promise<PageAddressResponse> {
   const primary = reads.pagesCollection();
   const template = reads.pagePath?.();
@@ -1500,18 +1515,16 @@ export async function readPageAddress(
   const source = pageCollectionIn(records, reads.stores(), primary);
   if (source === undefined) return { path: null };
   const pathFields = templateFields(template, recordNamed(records, primary));
-  const answer = await reads.find({
+  const row = await reads.readSaved({
     collection: primary,
-    where: { id: { equals: request.page.id } },
+    id: request.page.id,
     select: {
       id: true,
       ...Object.fromEntries(pathFields.map(name => [name, true] as const)),
     },
-    limit: 1,
     ...(request.locale === undefined ? {} : { locale: request.locale }),
   });
-  const row = answer.items[0];
-  if (row === undefined) return { path: null };
+  if (row === null) return { path: null };
   return {
     path: pathOf(row, { ...source, pathTemplate: template }).path ?? null,
   };
@@ -1535,10 +1548,10 @@ export function pageAddressRoute(
     path: PAGE_ADDRESS_ROUTE_PATH,
     handler: async (req, ctx) =>
       Response.json(
-        await readPageAddress(
-          parsePageAddressQuery(req.url),
-          directPagesSearchReads(ctx, store, pagePath)
-        )
+        await readPageAddress(parsePageAddressQuery(req.url), {
+          ...directPagesSearchReads(ctx, store, pagePath),
+          readSaved: args => readSavedAsCaller(ctx, args),
+        })
       ),
   };
 }

@@ -14,6 +14,7 @@ import type { PaginationMeta, WhereFilter } from "nextly";
 import { readableTitleText } from "nextly/config";
 import { requireNextly } from "nextly/runtime";
 
+import { readOrNull } from "./composition-route-kit";
 import { ENTRIES_UNTITLED, type EntryItem } from "./entries-contract";
 import { readingAsUser } from "./library-route";
 
@@ -69,6 +70,39 @@ export async function findAsCaller(
     ...(args.locale === undefined ? {} : { locale: args.locale }),
   });
   return { items: result.items, meta: result.meta };
+}
+
+/**
+ * One entry as it is SAVED, read as the caller: its working draft where one
+ * waits, else the stored row. A Save that does not publish stores a working
+ * draft, so a list read, which answers with the live row, would report what
+ * the entry was before that Save. `null` where the caller may not read it or
+ * it does not exist.
+ */
+export async function readSavedAsCaller(
+  ctx: Pick<PluginRouteContext, "caller">,
+  args: {
+    readonly collection: string;
+    readonly id: string;
+    readonly select: Record<string, boolean>;
+    readonly locale?: string;
+  }
+): Promise<Record<string, unknown> | null> {
+  const row = await readOrNull(async () =>
+    requireNextly().findByID({
+      collection: args.collection,
+      id: args.id,
+      ...(await readingAsUser(ctx)),
+      status: "all",
+      draft: true,
+      depth: 0,
+      select: args.select,
+      ...(args.locale === undefined ? {} : { locale: args.locale }),
+    })
+  );
+  return row !== null && typeof row === "object"
+    ? (row as Record<string, unknown>)
+    : null;
 }
 
 /**

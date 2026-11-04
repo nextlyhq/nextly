@@ -28,6 +28,7 @@ import {
   readPageAddress,
   readPagesSearch,
   type PagesFindArgs,
+  type PageAddressReads,
   type PagesSearchReads,
   type PagesSearchRequest,
   findPageCollection,
@@ -1434,13 +1435,20 @@ describe("one page's address", () => {
     { name: "content", type: "blocks" },
   ];
 
+  /** The search's reads over `records`, and the saved-page read recorded. */
+  function addressReads(
+    records: unknown[],
+    saved: Record<string, unknown> | null
+  ): { reads: PageAddressReads; readSaved: ReturnType<typeof vi.fn> } {
+    const { reads } = readsOver(records, async () => rows([]));
+    const readSaved = vi.fn(async () => saved);
+    return { reads: { ...reads, readSaved }, readSaved };
+  }
+
   it("resolves the saved page's path as the search does, reading only what it names", async () => {
-    const { reads, find } = readsOver(
+    const { reads, readSaved } = addressReads(
       [record("pages", { fields: FIELDS })],
-      async () =>
-        rows([
-          { id: "p-1", title: "Pricing", slug: "pricing", section: "plans" },
-        ])
+      { id: "p-1", title: "Pricing", slug: "pricing", section: "plans" }
     );
 
     const answer = await readPageAddress(
@@ -1449,20 +1457,21 @@ describe("one page's address", () => {
     );
 
     expect(answer).toEqual({ path: "/plans/pricing" });
-    const args = find.mock.calls[0]?.[0] as PagesFindArgs;
-    expect(args.where).toEqual({ id: { equals: "p-1" } });
-    expect(args.select).toEqual({ id: true, section: true, slug: true });
-    expect(args.locale).toBe("fr");
-    expect(args.limit).toBe(1);
+    expect(readSaved).toHaveBeenCalledWith({
+      collection: "pages",
+      id: "p-1",
+      select: { id: true, section: true, slug: true },
+      locale: "fr",
+    });
   });
 
   it("has none for another collection's page, nor where the host states no path", async () => {
-    const { reads, find } = readsOver(
+    const { reads, readSaved } = addressReads(
       [
         record("pages", { fields: FIELDS }),
         record("landing", { fields: FIELDS }),
       ],
-      async () => rows([{ id: "l-1", title: "Promo", slug: "promo" }])
+      { id: "l-1", title: "Promo", slug: "promo" }
     );
 
     await expect(
@@ -1475,25 +1484,22 @@ describe("one page's address", () => {
       readPageAddress({ page: { collection: "pages", id: "p-1" } }, reads)
     ).resolves.toEqual({ path: null });
     // Neither is read: there is no address to make.
-    expect(find).not.toHaveBeenCalled();
+    expect(readSaved).not.toHaveBeenCalled();
   });
 
   it("has none for a page the caller cannot read, or one with no slug yet", async () => {
-    const { reads } = readsOver(
-      [record("pages", { fields: FIELDS })],
-      async () => rows([])
-    );
+    const gone = addressReads([record("pages", { fields: FIELDS })], null);
     await expect(
       readPageAddress(
         { page: { collection: "pages", id: "gone" } },
-        { ...reads, pagePath: () => "/{slug}" }
+        { ...gone.reads, pagePath: () => "/{slug}" }
       )
     ).resolves.toEqual({ path: null });
 
-    const unslugged = readsOver(
-      [record("pages", { fields: FIELDS })],
-      async () => rows([{ id: "p-2", title: "Draft" }])
-    );
+    const unslugged = addressReads([record("pages", { fields: FIELDS })], {
+      id: "p-2",
+      title: "Draft",
+    });
     await expect(
       readPageAddress(
         { page: { collection: "pages", id: "p-2" } },
