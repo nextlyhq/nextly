@@ -46,7 +46,11 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { applyCompanionTransition } from "../../domains/i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
-import { publishesPerLanguage } from "../../domains/i18n/per-language-storage";
+import {
+  perLanguageStorageEnabled,
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import {
   companionHasStatusColumn,
   liveCompanionShape,
@@ -891,6 +895,16 @@ const COLLECTIONS_METHODS: Record<
           // collection into a DISABLE transition, restoring the companion's
           // columns onto the main table and archiving it.
           const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+          // Where its translatable values were and are stored, which every storage step below
+          // reads: per language when it is translated, or always under per-language storage, where
+          // turning translation on or off moves nothing. `wasLocalized`/`isLocalized` stay the
+          // product's answer: the localization precondition and the flag the registry keeps.
+          const wasStoredPerLanguage = storesPerLanguage({
+            localized: wasLocalized,
+          });
+          const isStoredPerLanguage = storesPerLanguage({
+            localized: isLocalized,
+          });
           // i18n: enabling Internationalization needs the app-level
           // `localization` config — without it the companion reconcile below
           // would move translatable columns into a table the runtime cannot
@@ -1013,8 +1027,8 @@ const COLLECTIONS_METHODS: Record<
               oldFields: (collection.fields ??
                 []) as unknown as FieldDefinition[],
               newFields: fields as unknown as FieldDefinition[],
-              wasLocalized,
-              isLocalized,
+              wasLocalized: wasStoredPerLanguage,
+              isLocalized: isStoredPerLanguage,
               dialect,
               builtBy: "collection",
             }
@@ -1027,8 +1041,8 @@ const COLLECTIONS_METHODS: Record<
             oldFields: (collection.fields ??
               []) as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
+            wasLocalized: wasStoredPerLanguage,
+            isLocalized: isStoredPerLanguage,
             renamed: companionRename,
           });
 
@@ -1068,8 +1082,8 @@ const COLLECTIONS_METHODS: Record<
             oldFields: (collection.fields ??
               []) as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
+            wasLocalized: wasStoredPerLanguage,
+            isLocalized: isStoredPerLanguage,
             // This apply's push refuses a main-table column drop the admin did not confirm.
             mainDropsConfirmed: true,
           });
@@ -1093,7 +1107,7 @@ const COLLECTIONS_METHODS: Record<
           // localized columns. Without this, a localized collection edited in the
           // builder has its translatable columns omitted from main (correct) but
           // NOWHERE to store per-language values. Runs in-process (no migration file).
-          if (wasLocalized || isLocalized) {
+          if (wasStoredPerLanguage || isStoredPerLanguage) {
             try {
               const oldFields = (collection.fields ??
                 []) as unknown as FieldDefinition[];
@@ -1103,7 +1117,7 @@ const COLLECTIONS_METHODS: Record<
                 `${tableName}_locales`
               );
               const companionHasStatus =
-                companionExists && wasLocalized && isLocalized
+                companionExists && wasStoredPerLanguage && isStoredPerLanguage
                   ? await companionHasStatusColumn(
                       adapter,
                       `${tableName}_locales`
@@ -1118,9 +1132,16 @@ const COLLECTIONS_METHODS: Record<
                 tableName,
                 dialect,
                 defaultLocale,
-                status: collection.status === true,
-                wasLocalized,
-                isLocalized,
+                // Under per-language storage a per-language `_status` only where it publishes each
+                // language on its own; otherwise the Draft/Published flag, as it has always been.
+                status: perLanguageStorageEnabled()
+                  ? publishesPerLanguage({
+                      localized: isLocalized,
+                      status: collection.status,
+                    })
+                  : collection.status === true,
+                wasLocalized: wasStoredPerLanguage,
+                isLocalized: isStoredPerLanguage,
                 // The PERSISTED status, which is what the disable restore needs: it decides whether
                 // main carried `status` and the companion `_status` before this apply. `collection`
                 // here is the registry record, so this is the prior state for the same reason
@@ -1301,7 +1322,10 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               fields as FieldDefinition[],
               dialect,
-              { localized: isLocalized, status: collection.status === true }
+              {
+                localized: isStoredPerLanguage,
+                status: collection.status === true,
+              }
             );
             getCollectionsHandlerFromDI()?.refreshCollectionSchema(
               tableName,
@@ -1311,7 +1335,7 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               freshTable
             );
-            if (isLocalized) {
+            if (isStoredPerLanguage) {
               const companion = buildCompanionRuntimeTable({
                 slug: p.collectionName,
                 tableName,
