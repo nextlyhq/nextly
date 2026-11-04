@@ -2782,6 +2782,55 @@ describe("where a control's value came from", () => {
       `[data-property="${property}"] .nx-style-inspector__provenance-source`
     )?.textContent;
 
+  it("lays out a shared target's controls by its own display, not the block's", () => {
+    // Card stores `display: flex`; this block overrides it to `block`. While
+    // Card is the target, its flex controls are the ones being edited, so
+    // they show, though the block on the canvas is not a flex container.
+    register({ layout: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: { base: { [BASE_BREAKPOINT]: { display: "block" } } },
+        },
+      ],
+    } as never);
+    const cardStyles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+    } as NodeStyles;
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: { id: "cls-1", name: "Card", styles: cardStyles } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "display", value: "flex" }),
+              entry({ property: "display", value: "block" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.queryByRole("radiogroup", { name: "Justify" })
+    ).not.toBeNull();
+  });
+
   it("shows an inherited value in its field, and where it came from beside the label", () => {
     // The value an author sees on the canvas, where a generic hint said
     // nothing about it. Shown as the placeholder, so it reads as not set here

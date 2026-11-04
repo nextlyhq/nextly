@@ -588,7 +588,7 @@ function StyleInspectorBody({
     variantAt: (property, path) => chosenForms[formKey(property, path)],
     media: rendersMedia(renderedTag),
     breakpoints,
-    cascade: cascadeFor(cascade, subject),
+    cascade: targetCascade(target, cascadeFor(cascade, subject)),
     // A shared target's values are the style's own, so the controls show
     // and offer what the style stores rather than what the block does.
     styles: targetStyles(target),
@@ -3283,6 +3283,16 @@ function ReadOnlyNote({
       {reason}
     </p>
   );
+}
+
+/**
+ * The cascade the inspection judges which controls show by: the block's, or
+ * none for a shared target, whose display is read from the style's own
+ * styles, not from the block's cascade, which the block or a later style may
+ * override.
+ */
+function targetCascade<T>(target: StyleTarget, cascade: T): T | undefined {
+  return target.kind === "shared" ? undefined : cascade;
 }
 
 /** The values a shared target shows, or `undefined` while the block is the target. */
