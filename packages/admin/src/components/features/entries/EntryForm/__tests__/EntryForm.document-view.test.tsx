@@ -56,6 +56,7 @@ const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
       isResolved: true,
       dismiss: () => {},
       restore: () => {},
+      take: () => {},
     },
   },
 }));
@@ -501,6 +502,34 @@ describe("EntryForm with a document view", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
   });
 
+  it("changes nothing in the view until the offer is confirmed", async () => {
+    // The recovery asks about a current offer again before restoring it, and
+    // may refuse it; the view goes and comes back only once it is confirmed.
+    lifecycle.length = 0;
+    let confirm: () => void = () => undefined;
+    const restore = vi.fn((apply?: () => void) => {
+      confirm = () => act(() => (apply ?? (() => undefined))());
+    });
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+      take: vi.fn(() => {
+        lifecycle.push("restore");
+      }),
+    };
+    renderView();
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(lifecycle).toEqual(["mount"]);
+
+    confirm();
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    expect(lifecycle).toEqual(["mount", "unmount", "restore", "mount"]);
+  });
+
   it("draws the view afresh when recovered work is restored", async () => {
     // A restore replaces the form's values from outside the view, and a view
     // may keep a working copy read once at mount, as the Page Builder does. So
@@ -511,13 +540,17 @@ describe("EntryForm with a document view", () => {
     // Page Builder does, for a takeover) would otherwise write its pre-restore
     // copy over the restored values, and the new mount would read those.
     lifecycle.length = 0;
-    const restore = vi.fn(() => {
+    // The recovery's take writes the values; its restore runs the view's
+    // steps in place of the take once the offer is confirmed.
+    const take = vi.fn(() => {
       lifecycle.push("restore");
     });
+    const restore = vi.fn((apply?: () => void) => (apply ?? take)());
     recovery.current = {
       ...recovery.current,
       offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
       restore,
+      take,
     };
     renderView();
     expect(mounted).toHaveBeenCalledTimes(1);
@@ -655,11 +688,13 @@ describe("EntryForm with a document view", () => {
       return <DocumentSaveIndicator />;
     }
     registerComponent(CHIP_VIEW, ChipView);
-    const restore = vi.fn();
+    const take = vi.fn();
+    const restore = vi.fn((apply?: () => void) => (apply ?? take)());
     recovery.current = {
       ...recovery.current,
       offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
       restore,
+      take,
     };
     renderView({ documentView: { component: CHIP_VIEW, onExit } });
 
@@ -735,18 +770,21 @@ describe("EntryForm with a document view", () => {
     }
 
     function offerRecovery() {
-      // As the recovery's own restore does: the snapshot into the form, kept
-      // dirty against the stored defaults.
-      const restore = vi.fn(() => {
+      // As the recovery's own take does: the snapshot into the form, kept
+      // dirty against the stored defaults. Its restore, the offer confirmed,
+      // runs the caller's steps in place of the take.
+      const take = vi.fn(() => {
         formOf.reset?.(snapshot, { keepDefaultValues: true });
       });
+      const restore = vi.fn((apply?: () => void) => (apply ?? take)());
       recovery.current = {
         ...recovery.current,
         offer: { savedAt: new Date(), snapshot },
         dismiss: vi.fn(),
         restore,
+        take,
       };
-      return { restore };
+      return { restore, take };
     }
 
     function open() {

@@ -29,10 +29,14 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createAdapter } from "../../../database/factory";
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { ServiceContainer } from "../../../services";
+import { consoleLogger } from "../../../services/shared";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { reconcileCompanionUniqueIndexes } from "../runtime/companion-unique-reconcile";
 import {
@@ -235,6 +239,51 @@ describe.each(getConfiguredTestDialects())(
 
     // The Schema Builder lays an entity it creates out as the site does: a collection, a Single and
     // a component made there, none marked translatable, keep their translatable fields per language.
+    it("gives a translatable field a Schema Builder save adds its column in the per-language table", async () => {
+      const t = await boot(dialect, true);
+      vi.stubEnv("NODE_ENV", "development");
+      const handler = t.getService("collectionsHandler") as unknown as {
+        createCollection(
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const made = await handler.createCollection({
+        name: "memos",
+        label: "Memo",
+        fields: [{ name: "heading", type: "text" }],
+      });
+      expect(made.success, JSON.stringify(made)).toBe(true);
+      const { schemaVersion } = (await new DynamicCollectionRegistryService(
+        t.adapter,
+        consoleLogger
+      ).getCollection("memos")) as { schemaVersion?: number };
+
+      // The memos collection is not marked translatable, so only the setting keeps the new
+      // field's values per language.
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "memos" },
+        {
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "summary", type: "text" },
+          ],
+          confirmed: true,
+          schemaVersion: schemaVersion ?? 1,
+        }
+      );
+
+      const created = await t.nextly.create({
+        collection: "memos",
+        data: { heading: "h", summary: "Kept per language" },
+      });
+      const id = (created.item as { id: string }).id;
+      expect(
+        await t.nextly.findByID({ collection: "memos", id })
+      ).toMatchObject({ heading: "h", summary: "Kept per language" });
+    });
+
     it("keeps the translatable fields of a collection, a Single and a component made in the Schema Builder per language", async () => {
       const t = await boot(dialect, true);
       // The Schema Builder applies what it creates in development.
@@ -304,6 +353,38 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await t.nextly.findByID({ collection: "posts", id })
       ).toMatchObject({ heading: "Made in the Builder", count: 4 });
+    });
+
+    // A Draft/Published collection that is not translated publishes as a document, so its
+    // per-language table holds no `_status`: the process the Builder created it in must not
+    // expect one either.
+    it("writes an entry to a Draft/Published collection the Schema Builder just made", async () => {
+      const t = await boot(dialect, true);
+      vi.stubEnv("NODE_ENV", "development");
+      const handler = t.getService("collectionsHandler") as unknown as {
+        createCollection(
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const made = await handler.createCollection({
+        name: "notices",
+        label: "Notice",
+        status: true,
+        fields: [{ name: "heading", type: "text" }],
+      });
+      expect(made.success, JSON.stringify(made)).toBe(true);
+      expect(
+        (await columnsOf(t, ["dc_notices_locales"])).dc_notices_locales
+      ).not.toContain("_status");
+
+      const created = await t.nextly.create({
+        collection: "notices",
+        data: { heading: "Made with a status" },
+      });
+      const id = (created.item as { id: string }).id;
+      expect(
+        await t.nextly.findByID({ collection: "notices", id })
+      ).toMatchObject({ heading: "Made with a status" });
     });
 
     // A unique translatable field is unique within each language, as on a translated collection.

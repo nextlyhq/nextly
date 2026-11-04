@@ -1,13 +1,16 @@
 "use client";
 
 /**
- * The frame the canvas is drawn in: an iframe the editor owns, at the width
- * and height of the device being previewed, scaled to fit the room the panels
- * leave.
+ * The frame the canvas is drawn in: an iframe the editor owns, at the width of
+ * the device being previewed, fitted to the room the panels leave, and as tall
+ * as that room at the scale it is painted at. A page taller than the room
+ * scrolls inside it, as in a visitor's browser window. A host that states a
+ * height gets a frame of that height, fitted both ways.
  *
  * A frame of its own is what makes the canvas a real viewport. Inside it `vw`,
- * `vh`, a hand-written `@media` rule and the site's container queries answer
- * for the device being previewed rather than for the admin window, the site's
+ * a hand-written `@media` rule and the site's container queries answer for the
+ * device being previewed rather than for the admin window, and `vh` for the
+ * canvas window the author looks through; the site's
  * sheet goes in exactly as it is published, and nothing of the admin's theme or
  * stylesheet reaches the page — nor anything of the page's the admin.
  *
@@ -19,15 +22,17 @@
  * **One iframe element for the life of the editor.** It is never re-keyed: a
  * new iframe starts from a blank page before its content loads — visibly in
  * Firefox — and everything portalled into the old one is lost with it.
- * Changing device changes its width and height, nothing else.
+ * Changing device changes its width, nothing else.
  *
  * **`srcdoc`, never a blob URL.** The admin's content security policy allows
  * frames from its own origin only, which a blob is not; a `srcdoc` document is
  * same-origin with the admin and is not subject to it.
  *
- * **Zoom is a transform.** The frame is laid out at the device's size and
+ * **Zoom is a transform.** The frame is laid out at the device's width and
  * painted at the zoom by `transform: scale()`, inside a box sized to the painted
- * result, so the page's layout never depends on how much room the editor has.
+ * result, so the zoom never changes the page's widths, its media queries or its
+ * container queries. Only the window's height follows the room, as a browser
+ * window's does.
  *
  * **Chrome is drawn over it, in the editor's document.** The layer above the
  * frame is clipped to the frame's viewport, its content box is laid over the
@@ -54,13 +59,18 @@ import {
   CANVAS_FRAME_SHEET,
   SITE_CHROME_ATTRIBUTE,
 } from "./canvas-frame-sheet";
-import { frameFitScale, previewHeight, type FrameSize } from "./canvas-width";
+import {
+  frameFillingRegion,
+  frameFitScale,
+  type FrameSize,
+} from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isHTMLElement } from "./dom-kind";
 import { frameContentOrigin, pointToHost } from "./geometry";
 import {
   CANVAS_FRAME_BOX_ATTRIBUTE,
   CANVAS_LAYER_ATTRIBUTE,
+  CHROME_BLEED,
   frameInsetOf,
   framePaintedScale,
   frameViewportOf,
@@ -195,12 +205,16 @@ export interface CanvasFrameProps {
   /** The width the page is laid out at: the device being previewed. */
   width: number;
   /**
-   * The height the page is laid out at. Derived from the width when left out,
-   * by {@link previewHeight}, so `vh` follows the device and never the room the
-   * panels leave.
+   * The height the page is laid out at, fitted into the region with the width.
+   * Left out, the frame fills the region's height at any zoom and a taller
+   * page scrolls inside it, as in a visitor's browser window; `vh` then
+   * answers for that window. See {@link frameFillingRegion}.
    */
   height?: number;
-  /** The zoom: fitting both dimensions into the region, or a chosen scale. */
+  /**
+   * The zoom: fitting the device's width into the region (both dimensions,
+   * where the host states a height), or a chosen scale.
+   */
   zoom?: CanvasZoom;
   /** The scale the frame is painted at, reported as it changes. */
   onScale?: (scale: number) => void;
@@ -273,7 +287,7 @@ export function CanvasFrame(props: CanvasFrameProps): React.JSX.Element {
 
 function FramedCanvas({
   width,
-  height = previewHeight(width),
+  height: statedHeight,
   zoom = FIT_ZOOM,
   onScale,
   title,
@@ -297,8 +311,7 @@ function FramedCanvas({
   const siteChrome = useSiteChrome(page, mountPoint);
 
   const region = useRegionSize(stage);
-  const size: FrameSize = { width, height };
-  const scale = frameScale(size, region, zoom);
+  const { height, scale } = frameLayout(width, statedHeight, region, zoom);
   useReportedScale(scale, onScale);
 
   const viewport = useFrameViewport(frame, page, width, height);
@@ -415,6 +428,28 @@ function frameScale(
     if (chosen !== null) return chosen;
   }
   return frameFitScale(size, region ?? {});
+}
+
+/**
+ * The height the page is laid out at and the scale it is painted at.
+ *
+ * A height the host states is laid out as given and fitted both ways; without
+ * one, the frame fills the region's height at any zoom and the page scrolls
+ * inside it (see `frameFillingRegion`).
+ */
+function frameLayout(
+  width: number,
+  statedHeight: number | undefined,
+  region: Partial<FrameSize> | undefined,
+  zoom: CanvasZoom
+): { readonly height: number; readonly scale: number } {
+  if (statedHeight === undefined) {
+    return frameFillingRegion(width, region, zoom);
+  }
+  return {
+    height: statedHeight,
+    scale: frameScale({ width, height: statedHeight }, region, zoom),
+  };
 }
 
 /**
@@ -719,13 +754,16 @@ function markBeside(
 
 /**
  * Forget the chrome the site's layout took away: no longer chrome, its cue
- * goes with it rather than staying over the canvas it uncovered. Answers
- * whether anything went.
+ * goes with it rather than staying over the canvas it uncovered, and it gets
+ * back the state it had, since the site may put the same node to use again.
+ * An element the site made inert itself stays so. Answers whether anything
+ * went.
  */
 function dropDetached(
   drawn: Element[],
   ancestors: readonly Element[],
-  seen: Set<Element>
+  seen: Set<Element>,
+  marked: Set<Element>
 ): boolean {
   const kept = drawn.filter(
     element =>
@@ -733,8 +771,12 @@ function dropDetached(
       ancestors.includes(element.parentElement)
   );
   if (kept.length === drawn.length) return false;
-  for (const element of drawn)
-    if (!kept.includes(element)) seen.delete(element);
+  for (const element of drawn) {
+    if (kept.includes(element)) continue;
+    seen.delete(element);
+    element.removeAttribute(SITE_CHROME_ATTRIBUTE);
+    if (marked.delete(element)) element.removeAttribute("inert");
+  }
   drawn.splice(0, drawn.length, ...kept);
   return true;
 }
@@ -808,7 +850,7 @@ function useSiteChrome(
     const marked = new Set<Element>();
     const drawn: Element[] = [];
     const mark = (): void => {
-      const dropped = dropDetached(drawn, ancestors, seen);
+      const dropped = dropDetached(drawn, ancestors, seen, marked);
       const added = markArrivals(mountPoint, ancestors, drawn, seen, marked);
       if (dropped || added) setChrome([...drawn]);
     };
@@ -942,8 +984,8 @@ function useFrameViewport(
  *   the one selector that decides whether an empty container shows its
  *   placeholder answers the same in the frame as in the editor's document.
  * - The admin's tokens the page's own chrome reads (see `usePageTokens`).
- * - The page's language and direction, or the editor document's where it
- *   states none.
+ * - The page's language and direction: those named, else the page's own, else
+ *   the editor document's, so a site page keeps the language it states.
  */
 function usePageMarkers(
   frame: HTMLIFrameElement | null,
@@ -963,42 +1005,57 @@ function usePageMarkers(
     root.classList.add(BUILDER_CHROME_CLASS);
     // Named, the editor's theme; otherwise whatever the page itself states,
     // which on a page the site serves is the site's own, live mode.
-    stateTheme(root, theme);
+    stateMarker(root, "data-nx-theme", theme);
     stateAttribute(
       root,
       EMPTY_ELEMENTS_ATTRIBUTE,
       showEmptyElements ? undefined : "hidden"
     );
-    stateAttribute(root, "lang", lang ?? editorRoot?.lang);
-    stateAttribute(root, "dir", dir ?? editorRoot?.dir);
+    stateMarker(root, "lang", lang, editorRoot?.lang);
+    stateMarker(root, "dir", dir, editorRoot?.dir);
   }, [frame, page, theme, showEmptyElements, lang, dir]);
 }
 
 /**
- * The theme a page's root stated when the editor began naming one, held only
- * while the editor names one, so naming none again gives the page's own back.
+ * What a page's root stated for each marker when the editor began writing
+ * one, held only while the editor writes it, so writing none again gives the
+ * page's own back.
  */
-const SITE_THEMES = new WeakMap<Element, string | undefined>();
+const PAGE_MARKERS = new WeakMap<Element, Map<string, string | undefined>>();
 
 /**
- * State the editor's theme on a page's root, or leave the page's own.
+ * State a marker on a page's root: the one named, else the page's own, else
+ * the fallback where the page states none.
  *
- * Only an override is written. With none named, the attribute is left alone,
- * so a site that switches its own mode after hydrating keeps it, unless the
- * editor had been naming one: then the page's value from before that comes
- * back, once.
+ * Only what the editor supplies is written. With nothing to write, the
+ * attribute is left alone, so a site that switches its own mode after
+ * hydrating keeps it, unless the editor had been writing one: then the page's
+ * value from before that comes back, once.
  */
-function stateTheme(root: Element, theme: string | undefined): void {
-  if (theme !== undefined) {
-    if (!SITE_THEMES.has(root)) {
-      SITE_THEMES.set(root, root.getAttribute("data-nx-theme") ?? undefined);
-    }
-    root.setAttribute("data-nx-theme", theme);
+function stateMarker(
+  root: Element,
+  name: string,
+  named: string | undefined,
+  fallback?: string
+): void {
+  let held = PAGE_MARKERS.get(root);
+  const own = held?.has(name)
+    ? held.get(name)
+    : (root.getAttribute(name) ?? undefined);
+  const value =
+    named ?? (own === undefined || own === "" ? fallback : undefined);
+  if (value === undefined || value === "") {
+    if (held?.has(name) !== true) return;
+    stateAttribute(root, name, own);
+    held.delete(name);
     return;
   }
-  if (!SITE_THEMES.has(root)) return;
-  stateAttribute(root, "data-nx-theme", SITE_THEMES.get(root));
-  SITE_THEMES.delete(root);
+  if (held === undefined) {
+    held = new Map();
+    PAGE_MARKERS.set(root, held);
+  }
+  if (!held.has(name)) held.set(name, own);
+  root.setAttribute(name, value);
 }
 
 /** Set an attribute to a value, or remove it where there is none to state. */
@@ -1213,10 +1270,13 @@ function useLayerPlacement(
         painted
       );
       const viewport = frameViewportOf(parts.frame);
-      box.style.left = `${String(origin.x)}px`;
-      box.style.top = `${String(origin.y)}px`;
-      box.style.width = `${String((viewport?.width ?? 0) * painted)}px`;
-      box.style.height = `${String((viewport?.height ?? 0) * painted)}px`;
+      // The viewport, and CHROME_BLEED past it on every side, where a ring
+      // outside a block flush with the page's edge is drawn; the content is
+      // moved back by as much, so nothing drawn in it moves.
+      box.style.left = `${String(origin.x - CHROME_BLEED)}px`;
+      box.style.top = `${String(origin.y - CHROME_BLEED)}px`;
+      box.style.width = `${String((viewport?.width ?? 0) * painted + 2 * CHROME_BLEED)}px`;
+      box.style.height = `${String((viewport?.height ?? 0) * painted + 2 * CHROME_BLEED)}px`;
       if (root === null) {
         content.hidden = true;
         return;
@@ -1233,7 +1293,7 @@ function useLayerPlacement(
         origin: { x: 0, y: 0 },
         scale: painted,
       });
-      content.style.transform = `translate(${String(at.x)}px, ${String(at.y)}px)`;
+      content.style.transform = `translate(${String(at.x + CHROME_BLEED)}px, ${String(at.y + CHROME_BLEED)}px)`;
       content.style.width = `${String(root.offsetWidth * painted)}px`;
       content.style.height = `${String(root.offsetHeight * painted)}px`;
     };

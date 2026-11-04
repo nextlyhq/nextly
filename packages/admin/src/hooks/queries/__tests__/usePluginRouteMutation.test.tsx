@@ -494,6 +494,35 @@ describe("writePluginRoute", () => {
     expect(postSpy).not.toHaveBeenCalled();
   });
 
+  it("sends a write asked to outlive the page with keepalive, beside its token", async () => {
+    putSpy.mockResolvedValue(null);
+    await writePluginRoute({
+      plugin: "@acme/plugin",
+      path: "/site/thing",
+      method: "PUT",
+      body: { value: 1 },
+      keepalive: true,
+    });
+    expect(putSpy).toHaveBeenCalledWith(
+      "/plugins/@acme/plugin/site/thing",
+      { value: 1 },
+      { headers: { "x-csrf-token": "token" }, keepalive: true }
+    );
+  });
+
+  it("sends an ordinary request when the body is larger than keepalive allows", async () => {
+    postSpy.mockResolvedValue(null);
+    await writePluginRoute({
+      plugin: "@acme/plugin",
+      path: "/site/thing",
+      body: { value: "x".repeat(64 * 1024) },
+      keepalive: true,
+    });
+    expect(postSpy.mock.calls[0]?.[2]).toEqual({
+      headers: { "x-csrf-token": "token" },
+    });
+  });
+
   it("rejects with the refusal, where the hook would resolve undefined", async () => {
     const refusal = new Error(
       "The site's breakpoints are changed in Settings."

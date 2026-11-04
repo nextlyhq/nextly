@@ -567,6 +567,39 @@ export function useDocumentLock({
     };
     void acquire(false);
 
+    /**
+     * Hand the claim back as the page goes away, and ask again if it returns.
+     *
+     * 🔴 Closing the tab, reloading and following a link out run no React
+     * cleanup, so the release below never fires for them and a colleague waits
+     * out a whole lease for an editor nobody has open. `pagehide` is the one
+     * signal every way of leaving sends, and `keepalive` lets the request finish
+     * after the page has gone. Sent once: the token is forgotten as it goes, so
+     * neither the cleanup nor a second `pagehide` finds anything to send.
+     *
+     * A page the browser keeps in its back-forward cache can be shown again,
+     * holding nothing, so it claims again as an editor opening does.
+     */
+    const onLeave = () => {
+      if (token === null) return;
+      const sent = token;
+      token = null;
+      void protectedApi
+        .delete(
+          "/document-lock",
+          { ...ref, claimToken: sent },
+          { keepalive: true }
+        )
+        .catch(() => undefined);
+    };
+    const onReturn = (event: PageTransitionEvent) => {
+      if (cancelled || !event.persisted) return;
+      setState({ status: "acquiring" });
+      void acquire(false);
+    };
+    window.addEventListener("pagehide", onLeave);
+    window.addEventListener("pageshow", onReturn);
+
     const heartbeat = setInterval(() => {
       if (cancelled) return;
 
@@ -652,6 +685,8 @@ export function useDocumentLock({
       // and refuses a document it does not own, so a late reply cannot wake an
       // editor that has gone or one looking at something else.
       clearInterval(heartbeat);
+      window.removeEventListener("pagehide", onLeave);
+      window.removeEventListener("pageshow", onReturn);
       if (token !== null) release(token);
     };
   }, [active, ref]);

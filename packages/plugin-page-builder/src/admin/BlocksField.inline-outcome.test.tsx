@@ -68,6 +68,12 @@ let beforeAction: ((action: string) => void | Promise<void>) | undefined;
 /** The save-as-pattern verb the editor published, so a test can run it. */
 let offeredSaveVerb: (() => void) | undefined;
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/ui", async importOriginal => {
   // Spread rather than replaced: the shell below is the REAL module and draws
   // real components from here, so a closed literal would blank them.
@@ -227,6 +233,12 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
@@ -276,6 +288,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: (handler: (action: string) => void) => {
     beforeAction = handler;
   },

@@ -33,6 +33,7 @@ import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
+import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
 import {
   keyboardMovePosition,
@@ -54,6 +55,7 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import type { SharedStyleOffer } from "./shared-style-target";
 import {
   depthMoveActions,
   SAVE_PATTERN_GRANT_REFUSAL,
@@ -199,6 +201,11 @@ export interface BlockActions {
    */
   readonly saveAsPattern: () => void;
   /**
+   * Begin saving the block's look as a shared style, handed to the host as
+   * the pattern save is. Absent where the host offers no shared styles.
+   */
+  readonly saveAsSharedStyle?: () => void;
+  /**
    * Open the selected placement's component in its own view, through the
    * host. Like Save as pattern it runs no op: where the component opens, and
    * whether this author may, are the host's. Silent for any other selection.
@@ -294,6 +301,16 @@ export function useSelectionActionsContext(): ToolbarAction[] | null {
  * Empty outside a provider, where there is no verb to run them.
  */
 const DepthMovesContext = React.createContext<readonly DepthMoveAction[]>([]);
+
+const ToolbarFocusContext = React.createContext<ToolbarFocusSlot | null>(null);
+
+/**
+ * The nearest provider's toolbar focus slot, or `null` outside one: the
+ * block toolbar puts its focus call here for Alt+F10.
+ */
+export function useToolbarFocusSlot(): ToolbarFocusSlot | null {
+  return React.useContext(ToolbarFocusContext);
+}
 
 /** The provider's Move in and Move out, for the block menu. */
 export function useDepthMoveActions(): readonly DepthMoveAction[] {
@@ -437,6 +454,21 @@ export interface BlockKeyboardActionsOptions {
    * forms. Absent, neither verb is offered.
    */
   components?: ComponentVerbsHost;
+  /**
+   * Saving a block's look as a shared style, where the host has the site's
+   * shared styles: what it knows of them and the author's right, and the
+   * gesture that opens its form. Absent, the verb is not offered.
+   */
+  sharedStyles?: SharedStyleVerbHost;
+}
+
+/**
+ * The host's side of "Save as shared style…".
+ *
+ * @experimental Settles with the shared-styles editor.
+ */
+export interface SharedStyleVerbHost extends SharedStyleOffer {
+  readonly onSaveAsSharedStyle: () => void;
 }
 
 /**
@@ -511,7 +543,21 @@ export interface BlockKeyboardActionsResult {
    * itself runs, so an item is offered exactly when pressing it would move.
    */
   readonly depthMoves: readonly DepthMoveAction[];
+  /**
+   * Where this editor's block toolbar puts the call that finds its tab stop,
+   * for Alt+F10 to focus. Held per editor rather than looked up in the
+   * document, which may hold another editor's toolbar first.
+   */
+  readonly toolbarFocus: ToolbarFocusSlot;
 }
+
+/**
+ * Holds the call that finds an editor's block toolbar's tab stop, which
+ * answers `null` while no bar is drawn.
+ */
+export type ToolbarFocusSlot = React.MutableRefObject<
+  (() => HTMLElement | null) | null
+>;
 
 /**
  * Register the move bindings for as long as the caller is mounted.
@@ -537,6 +583,7 @@ export function useBlockKeyboardActions({
   onSaveAsPattern,
   onEditComponent,
   components,
+  sharedStyles,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
@@ -571,6 +618,9 @@ export function useBlockKeyboardActions({
   // the document from that render.
   const latest = React.useRef(editor);
   latest.current = editor;
+  const toolbarFocus: ToolbarFocusSlot = React.useRef<
+    (() => HTMLElement | null) | null
+  >(null);
 
   const deleteSelected = React.useCallback(() => {
     const editorNow = latest.current;
@@ -886,6 +936,23 @@ export function useBlockKeyboardActions({
         run: () => deleteSelected(),
       },
       {
+        /*
+         * `alt+F10`, the editor convention for reaching a block's toolbar
+         * from the keyboard: from the canvas, or from text being edited inside
+         * the block, which is why it also runs while typing.
+         */
+        keys: "alt+F10",
+        description: "Move focus to the selected block's toolbar",
+        // Only while a bar is drawn to take focus: a host may render the
+        // keystrokes alone, and the bar goes while a block is dragged. The key
+        // is then left to the browser rather than taken to do nothing.
+        when: () =>
+          latest.current.selectedId !== null &&
+          (toolbarFocus.current?.() ?? null) !== null,
+        whenTyping: true,
+        run: () => toolbarFocus.current?.()?.focus(),
+      },
+      {
         keys: "mod+z",
         description: "Undo the last change",
         // Not while the caret is in a block's text.
@@ -1143,6 +1210,23 @@ export function useBlockKeyboardActions({
   );
 
   /*
+   * What the host knows of the site's shared styles, kept by its two values
+   * so a host building a fresh object each render does not rebuild the list.
+   */
+  const sharedLibrary = sharedStyles?.library;
+  const sharedMayChange = sharedStyles?.mayChange;
+  const sharedOffer = React.useMemo(
+    () =>
+      sharedMayChange === undefined
+        ? undefined
+        : { library: sharedLibrary, mayChange: sharedMayChange },
+    [sharedLibrary, sharedMayChange]
+  );
+
+  // What the lock view is read from, so the list below depends on them alone.
+  const { composed, lockDefinitions } = editor;
+
+  /*
    * The verb list, computed ONCE for every surface below.
    *
    * See {@link SelectionActionsContext}: the save preflight builds the document
@@ -1159,7 +1243,15 @@ export function useBlockKeyboardActions({
         mayCreatePattern,
         editor.lockRefusalFor,
         componentOffer,
-        onEditComponent !== undefined
+        onEditComponent !== undefined,
+        // With the editor's lock view, the source the save dialog judges by,
+        // so an area locked to its content dims the verb here too.
+        sharedOffer === undefined
+          ? undefined
+          : {
+              ...sharedOffer,
+              view: lockViewOf({ composed, lockDefinitions }),
+            }
       ),
     [
       editor.document,
@@ -1170,8 +1262,27 @@ export function useBlockKeyboardActions({
       editor.lockRefusalFor,
       onEditComponent,
       componentOffer,
+      sharedOffer,
+      composed,
+      lockDefinitions,
     ]
   );
+  /*
+   * "Save as shared style…", refused in words before the host is asked, as
+   * the component verbs are: a dimmed verb stays focusable in the toolbar.
+   */
+  const onSaveAsSharedStyle = sharedStyles?.onSaveAsSharedStyle;
+  const saveAsSharedStyle = React.useCallback(() => {
+    const offered = selectionActions.find(
+      action => action.id === "save-as-shared-style"
+    );
+    if (offered === undefined) return;
+    if (!offered.enabled) {
+      if (offered.reason !== undefined) announce(offered.reason);
+      return;
+    }
+    onSaveAsSharedStyle?.();
+  }, [selectionActions, onSaveAsSharedStyle, announce]);
   const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
 
   const actions = React.useMemo<BlockActions>(
@@ -1186,8 +1297,10 @@ export function useBlockKeyboardActions({
       detachComponent: () => runComponentVerb("detach-component"),
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),
+      saveAsSharedStyle,
     }),
     [
+      saveAsSharedStyle,
       moveSelected,
       deleteSelected,
       duplicateSelected,
@@ -1224,6 +1337,7 @@ export function useBlockKeyboardActions({
     nesting: nestingSource,
     selectionActions,
     depthMoves,
+    toolbarFocus,
   };
 }
 
@@ -1294,6 +1408,7 @@ export function BlockKeyboardActions({
     nesting: rules,
     selectionActions: offered,
     depthMoves,
+    toolbarFocus,
   } = useBlockKeyboardActions(options);
 
   /*
@@ -1344,10 +1459,12 @@ export function BlockKeyboardActions({
       <SelectionActionsContext.Provider value={offered}>
         <DepthMovesContext.Provider value={depthMoves}>
           <BlockActionsContext.Provider value={actions}>
-            <p aria-live="polite" role="status" className="nx-sr-only">
-              {announcement}
-            </p>
-            {children}
+            <ToolbarFocusContext.Provider value={toolbarFocus}>
+              <p aria-live="polite" role="status" className="nx-sr-only">
+                {announcement}
+              </p>
+              {children}
+            </ToolbarFocusContext.Provider>
           </BlockActionsContext.Provider>
         </DepthMovesContext.Provider>
       </SelectionActionsContext.Provider>

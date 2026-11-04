@@ -20,10 +20,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@nextlyhq/ui";
 import {
   AlignCenter,
@@ -54,8 +51,16 @@ import {
   ArrowRightToLine,
   ArrowUp,
   Baseline,
+  CaseLower,
+  CaseSensitive,
+  CaseUpper,
   Circle,
+  Columns3,
+  EyeOff,
+  Grid2x2,
+  Minus,
   MoreHorizontal,
+  RectangleHorizontal,
   StretchHorizontal,
   StretchVertical,
   WrapText,
@@ -63,8 +68,14 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { ChromeTooltip } from "./chrome-tooltip";
 import { InheritedValue } from "./inherited-value";
 import type { AlignmentGroup, AlignmentOption } from "./style-alignment-icons";
+import {
+  foldKeyword,
+  keywordLabel,
+  menuKeywords,
+} from "./style-keyword-labels";
 
 /** The icons the mapping names, by their lucide export name. */
 const ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -96,6 +107,14 @@ const ICONS: Readonly<Record<string, LucideIcon>> = {
   ArrowRightToLine,
   ArrowUp,
   Baseline,
+  CaseLower,
+  CaseSensitive,
+  CaseUpper,
+  Columns3,
+  EyeOff,
+  Grid2x2,
+  Minus,
+  RectangleHorizontal,
   StretchHorizontal,
   StretchVertical,
   WrapText,
@@ -120,7 +139,7 @@ function inheritedMark(
   option: AlignmentOption,
   inherited: string | undefined
 ): { "aria-label": string; "data-inherited"?: "" } {
-  return option.value === inherited
+  return inherited !== undefined && option.value === foldKeyword(inherited)
     ? { "aria-label": `${option.label}, inherited`, "data-inherited": "" }
     : { "aria-label": option.label };
 }
@@ -150,7 +169,12 @@ export function IconChoiceField({
   const inherited = React.useContext(InheritedValue);
   const shownInherited = stored === undefined ? inherited : undefined;
   const { options } = group;
-  const chosen = options.findIndex(option => option.value === current);
+  // Matched as CSS reads a keyword, so an imported `FLEX` chooses Flex.
+  const iconFor = (value: string | undefined) =>
+    value === undefined
+      ? -1
+      : options.findIndex(option => option.value === foldKeyword(value));
+  const chosen = iconFor(current);
   const buttons = React.useRef<(HTMLButtonElement | null)[]>([]);
 
   // Moves and chooses together, as a radio group's arrow keys do.
@@ -178,14 +202,21 @@ export function IconChoiceField({
 
   // A refused value marks every control, so whichever is focused says so.
   const invalid = describedBy === undefined ? undefined : true;
-  // A stored spelling neither the icons nor the list carry (the engine
-  // accepts "inherit" and other spellings): listed first in More, as stored,
-  // so an active declaration never reads as unset.
-  const unknown =
-    current !== undefined && chosen === -1 && !group.rest.includes(current)
-      ? current
-      : undefined;
-  const more = unknown === undefined ? group.rest : [unknown, ...group.rest];
+  // A stored spelling the icons do not draw (the engine accepts "inherit"
+  // and other spellings): in More, as stored, in the place of a value it
+  // reads the same as or else first, so an active declaration never reads as
+  // unset and is never listed twice.
+  // So is an inherited value no icon draws, so the field shows what the
+  // canvas uses rather than nothing at all.
+  const unlisted =
+    current !== undefined
+      ? chosen === -1
+        ? current
+        : ""
+      : shownInherited !== undefined && iconFor(shownInherited) === -1
+        ? shownInherited
+        : "";
+  const more = menuKeywords(group.cssProperty, group.rest, unlisted);
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -204,44 +235,44 @@ export function IconChoiceField({
               const stop = index === Math.max(chosen, 0);
               const Icon = ICONS[option.icon] ?? Circle;
               return (
-                <Tooltip key={option.value}>
-                  <TooltipTrigger asChild>
-                    <button
-                      ref={button => {
-                        buttons.current[index] = button;
-                      }}
-                      type="button"
-                      // The field label's `for` lands here: a label reaches
-                      // only a labelable element, and this is the group's
-                      // way in.
-                      {...(stop ? { id } : {})}
-                      role="radio"
-                      aria-checked={checked}
-                      {...inheritedMark(option, shownInherited)}
-                      aria-invalid={invalid}
-                      tabIndex={stop ? 0 : -1}
-                      data-icon={option.icon}
-                      className="nx-icon-choice__option"
-                      onClick={() => onCommit(checked ? null : option.value)}
-                      onKeyDown={event => onKeyDown(event, index)}
-                    >
-                      <Icon
-                        size={16}
-                        aria-hidden="true"
-                        style={iconStyle(option)}
-                        {...(iconClass(option) === undefined
-                          ? {}
-                          : { className: iconClass(option) })}
-                      />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>{option.label}</TooltipContent>
-                </Tooltip>
+                // Below the icons, over the next row: above, it covered the
+                // value of the row before.
+                <ChromeTooltip key={option.value} content={option.label}>
+                  <button
+                    ref={button => {
+                      buttons.current[index] = button;
+                    }}
+                    type="button"
+                    // The field label's `for` lands here: a label reaches
+                    // only a labelable element, and this is the group's
+                    // way in.
+                    {...(stop ? { id } : {})}
+                    role="radio"
+                    aria-checked={checked}
+                    {...inheritedMark(option, shownInherited)}
+                    aria-invalid={invalid}
+                    tabIndex={stop ? 0 : -1}
+                    data-icon={option.icon}
+                    className="nx-icon-choice__option"
+                    onClick={() => onCommit(checked ? null : option.value)}
+                    onKeyDown={event => onKeyDown(event, index)}
+                  >
+                    <Icon
+                      size={16}
+                      aria-hidden="true"
+                      style={iconStyle(option)}
+                      {...(iconClass(option) === undefined
+                        ? {}
+                        : { className: iconClass(option) })}
+                    />
+                  </button>
+                </ChromeTooltip>
               );
             })}
           </div>
           {more.length === 0 ? null : (
             <OtherValues
+              cssProperty={group.cssProperty}
               values={more}
               current={current}
               actionName={actionName}
@@ -276,12 +307,15 @@ function iconStyle(
  * of them is the value, then that value's own spelling.
  */
 function OtherValues({
+  cssProperty,
   values,
   current,
   actionName,
   describedBy,
   onCommit,
 }: {
+  /** The property the values are named for. */
+  cssProperty: string;
   values: readonly string[];
   current: string | undefined;
   actionName: string;
@@ -308,7 +342,7 @@ function OtherValues({
         aria-label={
           shows === undefined
             ? `More ${actionName} values`
-            : `More ${actionName} values, showing ${shows}`
+            : `More ${actionName} values, showing ${keywordLabel(cssProperty, shows)}`
         }
         aria-describedby={describedBy}
         aria-invalid={describedBy === undefined ? undefined : true}
@@ -318,9 +352,10 @@ function OtherValues({
         />
       </SelectTrigger>
       <SelectContent>
+        {/* In words, the CSS spelling in the tooltip; see style-keyword-labels. */}
         {values.map(other => (
-          <SelectItem key={other} value={other}>
-            {other}
+          <SelectItem key={other} value={other} title={other}>
+            {keywordLabel(cssProperty, other)}
           </SelectItem>
         ))}
       </SelectContent>

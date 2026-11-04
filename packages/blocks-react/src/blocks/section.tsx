@@ -12,11 +12,13 @@ import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
 import {
+  CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
   containerContentModel,
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -41,12 +43,7 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["container", "wrapper", "band", "region"],
     },
     props: {
-      as: {
-        label: "Element type",
-        display: "menu",
-        type: "select",
-        options: ["section", "header", "footer", "main"],
-      },
+      as: htmlTagProp(["section", "header", "footer", "main"]),
       contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "section", contained: true },
@@ -59,6 +56,22 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       // container rather than only the ones that thought to declare a default.
       children: {},
     },
+    // A band pads itself: room above and below its content and a gutter beside
+    // it, each a site token so a site retunes every section in one place. The
+    // values grow with the viewport (see `space.section-y` and `space.gutter`).
+    baseStyles: {
+      base: {
+        base: {
+          padding: {
+            blockStart: { $token: "space.section-y" },
+            blockEnd: { $token: "space.section-y" },
+            inlineStart: { $token: "space.gutter" },
+            inlineEnd: { $token: "space.gutter" },
+          },
+        },
+      },
+    },
+    childGap: CONTAINER_CHILD_GAP,
     supports: CONTAINER_SUPPORTS,
     // What it is as HTML follows the tag it renders.
     contentModel: containerContentModel,

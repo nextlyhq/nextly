@@ -20,8 +20,8 @@ import type { Logger } from "../../../shared/types";
 import {
   fillCompanionFields,
   type LocalizedFieldRef,
-  populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  populateCompanionFieldsByLanguage,
   selectRowsWithCompanion,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -105,6 +105,41 @@ interface TranslationPlan {
 interface JoinedTranslations {
   plan: TranslationPlan;
   rows: Record<string, unknown>[];
+}
+
+/**
+ * One language a component read is asked for: the locale, and the fallback
+ * it is read with, as {@link PopulateComponentDataParams} names them.
+ */
+export interface ComponentReadLanguage {
+  locale?: string;
+  fallbackLocale?: ComponentFallbackLocale;
+}
+
+/**
+ * The languages a one-language component read falls back through. An absent `locale` is the
+ * default, as the parent read treats no explicit `?locale`, so a default-language read still
+ * overlays the component's translations instead of returning the omitted main-table columns. A
+ * language read exactly as stored is taken as named, active or not: a removed language is kept,
+ * and validating it would read the default's values in its place. Otherwise the chain comes from
+ * the shared resolver, so a component read falls back exactly as the collection and Single reads
+ * around it do; `requested` is resolved and never `all` here, so the chain is never null, and the
+ * fallback keeps the contract this path always had rather than asserting.
+ */
+function componentLocaleChain(
+  localization: SanitizedLocalizationConfig,
+  locale: string | undefined,
+  fallbackLocale: ComponentFallbackLocale | undefined
+): string[] {
+  const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
+  const requested =
+    exact && locale !== undefined
+      ? locale
+      : resolveRequestedLocale(localization, locale);
+  if (exact) return [requested];
+  return (
+    resolveLocaleChain(localization, requested, fallbackLocale) ?? [requested]
+  );
 }
 
 export interface PopulateComponentDataParams {
@@ -348,26 +383,204 @@ export class FieldGroupQueryService extends BaseService {
    * `executor` mirrors the one the instance read uses: a snapshot assembled inside
    * a write transaction has just written these companion rows on that connection,
    * and a pooled read would not see them.
+   *
+   * The one-language case of {@link overlayLocalizedComponentByLanguage}.
    */
-  private async overlayLocalizedComponent(
+  private overlayLocalizedComponent(
     meta: DynamicFieldGroupRecord,
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: ComponentFallbackLocale,
     executor?: unknown,
     /** A failed translation read propagates rather than returning shared values. */
+    strict = false
+  ): Promise<void> {
+    return this.overlayLocalizedComponentByLanguage(
+      meta,
+      [{ dataArray, locale, fallbackLocale }],
+      executor,
+      strict
+    );
+  }
+
+  /**
+   * {@link overlayLocalizedComponent} for several languages at once, each over
+   * its own copy of the instances and with its own fallback: the companion is
+   * read ONCE for every language's chain, and each copy is then resolved by
+   * its own chain, as an overlay of that language alone resolves it.
+   */
+  private async overlayLocalizedComponentByLanguage(
+    meta: DynamicFieldGroupRecord,
+    byLanguage: readonly (ComponentReadLanguage & {
+      dataArray: Record<string, unknown>[];
+    })[],
+    executor?: unknown,
+    /** A failed translation read propagates rather than returning shared values. */
     strict = false,
-    // The translations the instances were read with, when they came in the same statement.
+    // The translations the instances were read with, when they came in the same statement: only
+    // for a read of one language, whose chain the join was planned for.
     joined?: JoinedTranslations | null
   ): Promise<void> {
-    if (
-      !this.localization ||
-      !storesPerLanguage(meta) ||
-      dataArray.length === 0
-    ) {
+    const localization = this.localization;
+    const languages = byLanguage.filter(
+      language => language.dataArray.length > 0
+    );
+    if (joined) {
+      // Read with the instances, so there is nothing left to query.
+      const { localizedFields } = joined.plan.companion;
+      for (const { dataArray } of languages) {
+        fillCompanionFields({
+          rows: dataArray,
+          companionRows: joined.rows,
+          localizedFields,
+          localeChain: joined.plan.localeChain,
+          idKey: "id",
+        });
+        this.decodeJsonLocalizedValues(meta, localizedFields, dataArray, false);
+        await this.stripOverlaidPasswords(
+          meta,
+          localizedFields,
+          dataArray,
+          false,
+          executor
+        );
+      }
       return;
     }
-    const companion = buildCompanionSchema({
+    // Whether its values are kept per language at all: when it is translated, or under
+    // per-language storage for every component.
+    if (!localization || !storesPerLanguage(meta) || languages.length === 0) {
+      return;
+    }
+    const companion = this.companionOf(meta);
+    if (!companion) return;
+
+    const named: {
+      dataArray: Record<string, unknown>[];
+      localeChain: string[];
+    }[] = [];
+    for (const { dataArray, locale, fallbackLocale } of languages) {
+      // `?locale=all` (admin/export): the parent read projects its own localized fields as
+      // language-keyed maps, so mirror that for the embedded component's translatable fields —
+      // otherwise they would be missing entirely (the main comp_* table omits those columns).
+      if (locale === EVERY_TRANSLATION) {
+        await this.overlayEveryTranslation(
+          meta,
+          companion,
+          dataArray,
+          localization.locales.map(l => l.code),
+          executor,
+          strict
+        );
+        continue;
+      }
+      named.push({
+        dataArray,
+        localeChain: componentLocaleChain(localization, locale, fallbackLocale),
+      });
+    }
+    if (named.length === 0) return;
+    // Resolved before the overlay runs, because inside a transaction it can only be read and the
+    // read itself must not be what fails.
+    const readiness = await this.companionReadiness(companion, executor);
+    // Within the database's limit on a statement's parameters, in as many
+    // reads as that takes; the rows are filled only once every read has
+    // succeeded, so a contained failure leaves none half translated, with a
+    // raw value or a password the strip below never saw.
+    const overlay = () =>
+      populateCompanionFieldsByLanguage({
+        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+          typeof populateCompanionFieldsByLanguage
+        >[0]["db"],
+        companionTable: companion.table,
+        localizedFields: companion.localizedFields,
+        byLanguage: named.map(({ dataArray, localeChain }) => ({
+          rows: dataArray,
+          localeChain,
+        })),
+        idKey: "id",
+        readiness,
+        maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
+      });
+
+    const ran = await this.runContainedOverlay(
+      meta.slug,
+      companion.companionTableName,
+      executor,
+      strict,
+      overlay
+    );
+    if (!ran) return;
+    for (const { dataArray } of named) {
+      this.decodeJsonLocalizedValues(
+        meta,
+        companion.localizedFields,
+        dataArray,
+        false
+      );
+      await this.stripOverlaidPasswords(
+        meta,
+        companion.localizedFields,
+        dataArray,
+        false,
+        executor
+      );
+    }
+  }
+
+  /**
+   * The overlay of a read of every translation: each translatable field as a
+   * map by language, for every configured language.
+   */
+  private async overlayEveryTranslation(
+    meta: DynamicFieldGroupRecord,
+    companion: NonNullable<ReturnType<typeof buildCompanionSchema>>,
+    dataArray: Record<string, unknown>[],
+    configuredLocales: string[],
+    executor: unknown,
+    strict: boolean
+  ): Promise<void> {
+    const allReadiness = await this.companionReadiness(companion, executor);
+    const ran = await this.runContainedOverlay(
+      meta.slug,
+      companion.companionTableName,
+      executor,
+      strict,
+      () =>
+        populateCompanionFieldsAllLocales({
+          db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+            typeof populateCompanionFieldsAllLocales
+          >[0]["db"],
+          companionTable: companion.table,
+          localizedFields: companion.localizedFields,
+          rows: dataArray,
+          locales: configuredLocales,
+          idKey: "id",
+          readiness: allReadiness,
+          maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
+        })
+    );
+    if (!ran) return;
+    this.decodeJsonLocalizedValues(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      true
+    );
+    await this.stripOverlaidPasswords(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      true,
+      executor
+    );
+  }
+
+  /** The component's per-language table, or null when it has no translatable field. */
+  private companionOf(
+    meta: DynamicFieldGroupRecord
+  ): ReturnType<typeof buildCompanionSchema> {
+    return buildCompanionSchema({
       slug: meta.slug,
       tableName: meta.tableName,
       fields: meta.fields as { name: string; type: string }[],
@@ -375,103 +588,6 @@ export class FieldGroupQueryService extends BaseService {
       // Components are never Draft/Published — companion has no `_status`.
       status: false,
     });
-    if (!companion) return;
-
-    // `?locale=all` (admin/export): the parent read projects its own localized fields as
-    // language-keyed maps, so mirror that for the embedded component's translatable fields —
-    // otherwise they would be missing entirely (the main comp_* table omits those columns).
-    if (locale === EVERY_TRANSLATION) {
-      const allReadiness = await this.companionReadiness(companion, executor);
-      // Read out here: the narrowing the guard above established does not survive into the
-      // closure, and re-asserting it there would be a cast rather than a check.
-      const configuredLocales = this.localization.locales.map(l => l.code);
-      const ran = await this.runContainedOverlay(
-        meta.slug,
-        companion.companionTableName,
-        executor,
-        strict,
-        () =>
-          populateCompanionFieldsAllLocales({
-            db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-              typeof populateCompanionFieldsAllLocales
-            >[0]["db"],
-            companionTable: companion.table,
-            localizedFields: companion.localizedFields,
-            rows: dataArray,
-            locales: configuredLocales,
-            idKey: "id",
-            readiness: allReadiness,
-            maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
-          })
-      );
-      if (!ran) return;
-      this.decodeJsonLocalizedValues(
-        meta,
-        companion.localizedFields,
-        dataArray,
-        true
-      );
-      await this.stripOverlaidPasswords(
-        meta,
-        companion.localizedFields,
-        dataArray,
-        true,
-        executor
-      );
-      return;
-    }
-
-    const plan =
-      joined?.plan ??
-      (await this.translationPlan(meta, locale, fallbackLocale, executor));
-    if (!plan) return;
-    if (joined) {
-      // Read with the instances, so there is nothing left to query.
-      fillCompanionFields({
-        rows: dataArray,
-        companionRows: joined.rows,
-        localizedFields: plan.companion.localizedFields,
-        localeChain: plan.localeChain,
-        idKey: "id",
-      });
-    } else {
-      const overlay = () =>
-        populateCompanionFields({
-          db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-            typeof populateCompanionFields
-          >[0]["db"],
-          companionTable: plan.companion.table,
-          localizedFields: plan.companion.localizedFields,
-          rows: dataArray,
-          localeChain: plan.localeChain,
-          idKey: "id",
-          readiness: plan.readiness,
-          // Within the database's limit on a statement's parameters, in as many reads as that
-          // takes; the rows are filled only once every read has succeeded.
-          maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
-        });
-      const ran = await this.runContainedOverlay(
-        meta.slug,
-        plan.companion.companionTableName,
-        executor,
-        strict,
-        overlay
-      );
-      if (!ran) return;
-    }
-    this.decodeJsonLocalizedValues(
-      meta,
-      companion.localizedFields,
-      dataArray,
-      false
-    );
-    await this.stripOverlaidPasswords(
-      meta,
-      companion.localizedFields,
-      dataArray,
-      false,
-      executor
-    );
   }
 
   /**
@@ -486,46 +602,40 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale: ComponentFallbackLocale | undefined,
     executor: unknown
   ): Promise<TranslationPlan | null> {
+    const localization = this.localization;
     if (
-      !this.localization ||
+      !localization ||
       !storesPerLanguage(meta) ||
       locale === EVERY_TRANSLATION
     ) {
       return null;
     }
-    const companion = buildCompanionSchema({
-      slug: meta.slug,
-      tableName: meta.tableName,
-      fields: meta.fields as { name: string; type: string }[],
-      dialect: this.adapter.dialect,
-      // Components are never Draft/Published — companion has no `_status`.
-      status: false,
-    });
+    const companion = this.companionOf(meta);
     if (!companion) return null;
-    // Resolve an absent `locale` to the default (the parent read treats no explicit `?locale` as
-    // the default locale), so a default-locale read still overlays the component's companion
-    // values instead of returning the omitted main-table columns.
-    // A language read exactly as stored is taken as named, active or not: a
-    // removed language is kept, and validating it would read the default's
-    // values in its place.
-    const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
-    const requested =
-      exact && locale !== undefined
-        ? locale
-        : resolveRequestedLocale(this.localization, locale);
-    // Through the shared resolver, so a component read falls back exactly as
-    // the collection and single reads around it do. `requested` is already
-    // resolved and is never `all` here, so the chain is never null; the
-    // fallback keeps the contract this path always had rather than asserting.
-    const localeChain = exact
-      ? [requested]
-      : (resolveLocaleChain(this.localization, requested, fallbackLocale) ?? [
-          requested,
-        ]);
+    const localeChain = componentLocaleChain(
+      localization,
+      locale,
+      fallbackLocale
+    );
     // Resolved before anything reads the companion, because inside a transaction it can only be
     // read and the read itself must not be what fails.
     const readiness = await this.companionReadiness(companion, executor);
     return { companion, localeChain, readiness };
+  }
+
+  /**
+   * The plan for reading a component's translations with its instances, when the read asks for
+   * one language. Several languages are read from one instance read with a chain each, so their
+   * translations are read after it, together.
+   */
+  private oneLanguagePlan(
+    meta: DynamicFieldGroupRecord,
+    languages: readonly ComponentReadLanguage[],
+    executor: unknown
+  ): Promise<TranslationPlan | null> {
+    if (languages.length !== 1) return Promise.resolve(null);
+    const [{ locale, fallbackLocale }] = languages;
+    return this.translationPlan(meta, locale, fallbackLocale, executor);
   }
 
   /**
@@ -651,10 +761,37 @@ export class FieldGroupQueryService extends BaseService {
 
   /**
    * Populate component data for a single parent entry.
+   *
+   * The one-language case of {@link populateComponentDataByLanguage}.
    */
   async populateComponentData(
     params: PopulateComponentDataParams
   ): Promise<Record<string, unknown>> {
+    const [populated] = await this.populateComponentDataInEach(params, [
+      { locale: params.locale, fallbackLocale: params.fallbackLocale },
+    ]);
+    return populated;
+  }
+
+  /**
+   * {@link populateComponentData} for several languages at once, each with its
+   * own fallback: every component table is read once for them all, and each
+   * localized one's companion once for every language's chain. Each language
+   * gets its own copy of the entry, resolved as a read of that language alone
+   * resolves it. In the order the languages were asked.
+   */
+  async populateComponentDataByLanguage(
+    params: Omit<PopulateComponentDataParams, "locale" | "fallbackLocale"> & {
+      languages: readonly ComponentReadLanguage[];
+    }
+  ): Promise<Record<string, unknown>[]> {
+    return this.populateComponentDataInEach(params, params.languages);
+  }
+
+  private async populateComponentDataInEach(
+    params: Omit<PopulateComponentDataParams, "locale" | "fallbackLocale">,
+    languages: readonly ComponentReadLanguage[]
+  ): Promise<Record<string, unknown>[]> {
     const {
       entry,
       parentTable,
@@ -662,16 +799,14 @@ export class FieldGroupQueryService extends BaseService {
       depth = DEFAULT_COMPONENT_DEPTH,
       currentDepth = 0,
       select,
-      locale,
-      fallbackLocale,
       executor,
       strict = false,
       access = { trusted: TRUSTS_EVERY_COLLECTION },
     } = params;
     const entryId = entry.id as string;
-    if (!entryId) return entry;
+    if (!entryId) return languages.map(() => entry);
 
-    const result = { ...entry };
+    const results = languages.map(() => ({ ...entry }));
 
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
@@ -686,51 +821,50 @@ export class FieldGroupQueryService extends BaseService {
       // catch below can only answer that from the resolved field.
       const f = withResolvedFieldGroupReferences(field);
       try {
+        let values: unknown[] | undefined;
         if (f.components && f.components.length > 0) {
-          result[fieldName] = await this.populateMultiComponentField(
+          values = await this.populateMultiComponentField(
             entryId,
             parentTable,
             fieldName,
             f,
             depth,
             currentDepth,
-            locale,
-            fallbackLocale,
+            languages,
             executor,
             strict,
             access
           );
         } else if (f.component) {
-          if (f.repeatable) {
-            result[fieldName] = await this.populateRepeatableField(
-              entryId,
-              parentTable,
-              fieldName,
-              f.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              executor,
-              strict,
-              access
-            );
-          } else {
-            result[fieldName] = await this.populateSingleField(
-              entryId,
-              parentTable,
-              fieldName,
-              f.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              executor,
-              strict,
-              access
-            );
-          }
+          values = f.repeatable
+            ? await this.populateRepeatableField(
+                entryId,
+                parentTable,
+                fieldName,
+                f.component,
+                depth,
+                currentDepth,
+                languages,
+                executor,
+                strict,
+                access
+              )
+            : await this.populateSingleField(
+                entryId,
+                parentTable,
+                fieldName,
+                f.component,
+                depth,
+                currentDepth,
+                languages,
+                executor,
+                strict,
+                access
+              );
         }
+        values?.forEach((value, index) => {
+          results[index][fieldName] = value;
+        });
       } catch (error) {
         // In strict mode a read failure must roll the write back rather than
         // ship a payload with silently-missing component data.
@@ -739,11 +873,13 @@ export class FieldGroupQueryService extends BaseService {
           fieldName,
           error: error instanceof Error ? error.message : String(error),
         });
-        result[fieldName] = this.getPopulateDefaultValue(f);
+        for (const result of results) {
+          result[fieldName] = this.getPopulateDefaultValue(f);
+        }
       }
     }
 
-    return result;
+    return results;
   }
 
   /**
@@ -860,6 +996,11 @@ export class FieldGroupQueryService extends BaseService {
     });
   }
 
+  /**
+   * A single component field's instance, in each language asked: the row is
+   * read once and deserialized for each language, so no language's overlay
+   * reaches another's copy.
+   */
   private async populateSingleField(
     parentId: string,
     parentTable: string,
@@ -867,12 +1008,11 @@ export class FieldGroupQueryService extends BaseService {
     componentSlug: string,
     depth: number,
     currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
+    languages: readonly ComponentReadLanguage[],
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<(Record<string, unknown> | null)[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
       executor
@@ -886,39 +1026,51 @@ export class FieldGroupQueryService extends BaseService {
       fieldName,
       executor,
       strict,
-      await this.translationPlan(meta, locale, fallbackLocale, executor)
+      await this.oneLanguagePlan(meta, languages, executor)
     );
 
-    if (rows.length === 0) return null;
+    if (rows.length === 0) return languages.map(() => null);
 
-    let data = this.deserializeComponentRow(
-      rows[0],
-      componentFields,
-      false,
-      await this.passwordReach(componentFields, executor)
-    );
-    // i18n: overlay translatable fields from the companion for the requested locale.
-    await this.overlayLocalizedComponent(
+    const reach = await this.passwordReach(componentFields, executor);
+    const byLanguage = languages.map(language => ({
+      ...language,
+      dataArray: [
+        this.deserializeComponentRow(
+          ownCopy(rows[0], languages.length),
+          componentFields,
+          false,
+          reach
+        ),
+      ],
+    }));
+    // i18n: overlay translatable fields from the companion for each requested locale.
+    await this.overlayLocalizedComponentByLanguage(
       meta,
-      [data],
-      locale,
-      fallbackLocale,
+      byLanguage,
       executor,
       strict,
       joined
     );
-    data = await this.expandComponentRelationships(
-      data,
-      componentSlug,
-      componentFields,
-      depth,
-      currentDepth + 1,
-      access
-    );
-
-    return data;
+    const results: Record<string, unknown>[] = [];
+    for (const { dataArray } of byLanguage) {
+      results.push(
+        await this.expandComponentRelationships(
+          dataArray[0],
+          componentSlug,
+          componentFields,
+          depth,
+          currentDepth + 1,
+          access
+        )
+      );
+    }
+    return results;
   }
 
+  /**
+   * A repeatable component field's instances, in each language asked: the
+   * rows are read once and deserialized for each language.
+   */
   private async populateRepeatableField(
     parentId: string,
     parentTable: string,
@@ -926,12 +1078,11 @@ export class FieldGroupQueryService extends BaseService {
     componentSlug: string,
     depth: number,
     currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
+    languages: readonly ComponentReadLanguage[],
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<Record<string, unknown>[][]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
       executor
@@ -945,37 +1096,52 @@ export class FieldGroupQueryService extends BaseService {
       fieldName,
       executor,
       strict,
-      await this.translationPlan(meta, locale, fallbackLocale, executor)
+      await this.oneLanguagePlan(meta, languages, executor)
     );
 
     const reach = await this.passwordReach(componentFields, executor);
-    let dataArray = rows.map(row =>
-      this.deserializeComponentRow(row, componentFields, false, reach)
-    );
+    const byLanguage = languages.map(language => ({
+      ...language,
+      dataArray: rows.map(row =>
+        this.deserializeComponentRow(
+          ownCopy(row, languages.length),
+          componentFields,
+          false,
+          reach
+        )
+      ),
+    }));
 
     // i18n: overlay translatable fields per instance from the companion.
-    await this.overlayLocalizedComponent(
+    await this.overlayLocalizedComponentByLanguage(
       meta,
-      dataArray,
-      locale,
-      fallbackLocale,
+      byLanguage,
       executor,
       strict,
       joined
     );
 
-    dataArray = await this.expandComponentRelationshipsMany(
-      dataArray,
-      componentSlug,
-      componentFields,
-      depth,
-      currentDepth + 1,
-      access
-    );
-
-    return dataArray;
+    const results: Record<string, unknown>[][] = [];
+    for (const { dataArray } of byLanguage) {
+      results.push(
+        await this.expandComponentRelationshipsMany(
+          dataArray,
+          componentSlug,
+          componentFields,
+          depth,
+          currentDepth + 1,
+          access
+        )
+      );
+    }
+    return results;
   }
 
+  /**
+   * A dynamic zone's instances, in each language asked: each allowed
+   * component's rows are read once, and each instance deserialized for each
+   * language.
+   */
   private async populateMultiComponentField(
     parentId: string,
     parentTable: string,
@@ -983,12 +1149,11 @@ export class FieldGroupQueryService extends BaseService {
     field: FieldGroupFieldConfig,
     depth: number,
     currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
+    languages: readonly ComponentReadLanguage[],
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<Record<string, unknown>[][]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
       row: ComponentRow;
@@ -1028,35 +1193,42 @@ export class FieldGroupQueryService extends BaseService {
         (b.row[STORAGE_FORMAT.columns.order] ?? 0)
     );
 
-    const results: Record<string, unknown>[] = [];
+    const results: Record<string, unknown>[][] = languages.map(() => []);
     for (const { row, fields, slug } of allRows) {
-      let data = this.deserializeComponentRow(
-        row,
-        fields,
-        true,
-        await this.passwordReach(fields, executor)
-      );
+      const reach = await this.passwordReach(fields, executor);
+      const byLanguage = languages.map(language => ({
+        ...language,
+        dataArray: [
+          this.deserializeComponentRow(
+            ownCopy(row, languages.length),
+            fields,
+            true,
+            reach
+          ),
+        ],
+      }));
       // i18n: overlay translatable fields from the row's component companion. getComponent
       // is registry-cached, so the per-row meta lookup is cheap; dynamic-zone instances
       // may span several component types, each with its own companion.
       const meta = await this.registryService.getComponent(slug, executor);
-      await this.overlayLocalizedComponent(
+      await this.overlayLocalizedComponentByLanguage(
         meta,
-        [data],
-        locale,
-        fallbackLocale,
+        byLanguage,
         executor,
         strict
       );
-      data = await this.expandComponentRelationships(
-        data,
-        slug,
-        fields,
-        depth,
-        currentDepth + 1,
-        access
-      );
-      results.push(data);
+      for (const [index, { dataArray }] of byLanguage.entries()) {
+        results[index].push(
+          await this.expandComponentRelationships(
+            dataArray[0],
+            slug,
+            fields,
+            depth,
+            currentDepth + 1,
+            access
+          )
+        );
+      }
     }
 
     return results;
@@ -1737,4 +1909,15 @@ export class FieldGroupQueryService extends BaseService {
       )
     );
   }
+}
+
+/**
+ * The row a language's copy is built from: its own deep copy when several
+ * languages are read from one row, so a driver's already-parsed JSON value is
+ * never one object shared by every language's copy, where a change made to
+ * one language's copy would reach the others. One language reads the row as
+ * it is, as a one-language read always has.
+ */
+function ownCopy<Row>(row: Row, languages: number): Row {
+  return languages > 1 ? structuredClone(row) : row;
 }
