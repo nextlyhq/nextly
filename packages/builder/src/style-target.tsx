@@ -134,8 +134,19 @@ export function useStyleTarget(
     },
     [nodeId]
   );
+  // A block whose design is held (locked, or inside contentOnly) keeps the
+  // block as the target: its shared style's values are its design here, and
+  // editing them from this block would change that design all the same. A
+  // choice made before the hold landed falls back with it.
+  const held =
+    nodeId === null
+      ? undefined
+      : designReadOnlyReason(editor.document, nodeId, lockViewOf(editor));
   const read =
-    chosen !== null && chosen.nodeId === nodeId && host !== undefined
+    chosen !== null &&
+    chosen.nodeId === nodeId &&
+    host !== undefined &&
+    held === undefined
       ? worn.find(row => row.id === chosen.id)
       : undefined;
   const queued = useQueuedStyles(read, host);
@@ -392,6 +403,8 @@ export function StyleTargetBar({
       onTargetChange={host === undefined ? undefined : onChoose}
       {...chipActions(editor, nodeId, worn, report, breakpoints)}
       chipActionsHeld={held}
+      // The shared chips too: choosing one would edit the held design.
+      targetHeld={held}
       sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
       actions={
         nodeId === null || worn.length > 0 || held !== undefined ? null : (

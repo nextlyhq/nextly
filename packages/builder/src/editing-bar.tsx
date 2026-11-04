@@ -73,6 +73,12 @@ export interface EditingBarProps {
   readonly onDetach?: (id: string) => void;
   /** Why the chip's actions are held (the block's lock), shown in its menu. */
   readonly chipActionsHeld?: string;
+  /**
+   * Why a shared style can't be made the target (the block's design is held,
+   * which its shared styles' values are part of), said on each such chip.
+   * The chips stay reachable so the reason can be read.
+   */
+  readonly targetHeld?: string;
   /** What line one offers after the chips: apply or save a shared style. */
   readonly actions?: React.ReactNode;
   /** Why a shared target's values can't be changed, when they can't. */
@@ -102,6 +108,7 @@ export function EditingBar({
   onRemove,
   onDetach,
   chipActionsHeld,
+  targetHeld,
   actions,
   sharedReadOnly,
   device,
@@ -159,6 +166,7 @@ export function EditingBar({
                 tone="shared"
                 active={activeId === chip.id}
                 onSelect={onTargetChange}
+                held={targetHeld}
               />
               <ChipMenu
                 chip={chip}
@@ -294,6 +302,7 @@ function TargetChip({
   tone,
   active,
   onSelect,
+  held,
 }: {
   id: string | null;
   name: string;
@@ -304,20 +313,26 @@ function TargetChip({
   tone: "local" | "shared";
   active: boolean;
   onSelect: ((id: string | null) => void) | undefined;
+  /** Why this chip can't become the target, said in its tooltip. */
+  held?: string | undefined;
 }): React.JSX.Element {
+  // Held, not disabled: a disabled button can't be reached to read why.
+  const refused = held !== undefined && !active;
+  const words = chipWords({ id, name, className, locked, active });
   return (
     <button
       type="button"
       className="nx-editing-bar__chip"
       data-tone={tone}
       data-target-chip={id ?? ""}
-      {...chipWords({ id, name, className, locked, active })}
+      {...words}
+      {...(refused ? { "aria-disabled": true, title: held } : {})}
       aria-pressed={active}
       // One tab stop for the group: the target. The arrows reach the rest.
       tabIndex={active ? 0 : -1}
       disabled={onSelect === undefined && !active}
       onClick={() => {
-        if (!active) onSelect?.(id);
+        if (!active && !refused) onSelect?.(id);
       }}
     >
       {name}

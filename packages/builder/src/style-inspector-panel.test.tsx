@@ -252,6 +252,8 @@ describe("the shared style target", () => {
       styles?: NodeStyles;
       library?: (typeof card | typeof hero)[];
       mayChange?: boolean;
+      /** The block locked, which holds its design as contentOnly does. */
+      locked?: boolean;
       writeStyles?: (
         classId: string,
         change: never
@@ -276,6 +278,7 @@ describe("the shared style target", () => {
             ? {}
             : { classes: options.classes }),
           ...(options.styles === undefined ? {} : { styles: options.styles }),
+          ...(options.locked === true ? { locked: true } : {}),
         },
       ] as BlockNode[],
     } as BlockDocument;
@@ -430,6 +433,37 @@ describe("the shared style target", () => {
     expect(bar().querySelector("[data-edit-state]")?.textContent).toBe(
       "Normal"
     );
+  });
+
+  it("holds the shared style chips while the block's design is held, and every field with them", () => {
+    // A locked or contentOnly block's design is fixed on this page. Editing
+    // the shared style it wears from here would change that design all the
+    // same, so the chip says why it is held and the target stays the block.
+    mountTarget({ classes: ["c-card"], locked: true });
+    const card = chip("Card");
+    expect(card.getAttribute("aria-disabled")).toBe("true");
+    expect(card.title).toMatch(/Locked: it can't be moved, deleted or edited/);
+
+    fireEvent.click(card);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    expect(card.getAttribute("aria-pressed")).toBe("false");
+    expect(bar().textContent).not.toContain("Editing shared style");
+    expect(
+      (screen.getByLabelText("Opacity") as HTMLInputElement).matches(
+        ":disabled"
+      )
+    ).toBe(true);
+    // No write the bar offers: no Save as, no Move to.
+    expect(screen.queryByText(/Save as shared style/)).toBeNull();
+    expect(screen.queryByText(/Move to/)).toBeNull();
+  });
+
+  it("lets the shared style chip be chosen on a block nothing holds", () => {
+    // The positive control for the hold above.
+    mountTarget({ classes: ["c-card"] });
+    expect(chip("Card").getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(chip("Card"));
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("returns to This block on Escape, and with Edit this block only", () => {
