@@ -898,6 +898,12 @@ describe("counting the pages now", () => {
     });
     expect(screen.queryByRole("button", { name: "Count again" })).toBeNull();
     expect(screen.queryByText("Some pages are still to count.")).toBeNull();
+    // Nor a fresh Count now: the answer said another count cannot get
+    // further, so the row says that instead of offering one.
+    expect(countNow()).toBeNull();
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "The pages left can't be counted."
+    );
   });
 
   it("says why a count was refused, in its own words", async () => {

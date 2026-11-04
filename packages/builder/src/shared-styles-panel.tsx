@@ -637,16 +637,19 @@ function CountedBy({
   // a link, since they go somewhere.
   return (
     <div className="nx-shared-styles__count-row">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="nx-shared-styles__count-now"
-        disabled={counter.busy}
-        onClick={counter.run}
-      >
-        {countNowWords(counter)}
-      </Button>
+      {/* None once a count said another cannot get further. */}
+      {counter.final ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="nx-shared-styles__count-now"
+          disabled={counter.busy}
+          onClick={counter.run}
+        >
+          {countNowWords(counter)}
+        </Button>
+      )}
       {/* What the last count found, said as it changes. */}
       <span className="nx-vars__note" role="status">
         {counter.said ?? ""}
@@ -673,7 +676,29 @@ interface CountNow {
   readonly said: string | undefined;
   /** Whether a count left pages to count, so the next one goes on. */
   readonly again: boolean;
+  /**
+   * Whether the last count said no further count can get anywhere: what is
+   * left cannot be counted, so none is offered until the counts are read
+   * again and say otherwise.
+   */
+  readonly final: boolean;
   readonly run: () => void;
+}
+
+/** What a count says when what is left cannot be counted at all. */
+const SHARED_STYLE_CANNOT_COUNT_MORE = "The pages left can't be counted.";
+
+/** What the row says after a count: nothing once every page is counted. */
+function countFound(answer: {
+  readonly whole: boolean;
+  readonly counting: boolean;
+}):
+  | { readonly said: string; readonly again: boolean; readonly final?: true }
+  | undefined {
+  if (answer.whole) return undefined;
+  return answer.counting
+    ? { said: SHARED_STYLE_STILL_TO_COUNT, again: true }
+    : { said: SHARED_STYLE_CANNOT_COUNT_MORE, again: false, final: true };
 }
 
 /** What a count that failed with no words of its own says. */
@@ -694,7 +719,8 @@ function useCountNow(
 ): CountNow | undefined {
   const [busy, setBusy] = React.useState(false);
   const [found, setFound] = React.useState<
-    { readonly said: string; readonly again: boolean } | undefined
+    | { readonly said: string; readonly again: boolean; readonly final?: true }
+    | undefined
   >(undefined);
   const count = access?.count;
   const run = React.useCallback(() => {
@@ -712,11 +738,7 @@ function useCountNow(
         // Another count is offered only when the answer says one would get
         // further: pages left that cannot be counted are not "still to
         // count", whatever the panel last read.
-        setFound(
-          answer.counting
-            ? { said: SHARED_STYLE_STILL_TO_COUNT, again: true }
-            : undefined
-        );
+        setFound(countFound(answer));
       })
       // A host that throws rather than answering a refusal: said all the
       // same, so the button is not left saying it is counting.
@@ -730,6 +752,7 @@ function useCountNow(
     busy,
     said: found?.said,
     again: found?.again === true,
+    final: found?.final === true,
     run,
   };
 }
