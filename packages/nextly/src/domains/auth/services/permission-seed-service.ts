@@ -814,8 +814,11 @@ export class PermissionSeedService extends BaseService {
     for (const action of workflowPermissionActions(attached.workflow)) {
       result.total++;
       try {
+        // A row already there keeps its owner and group: an app's, a plugin's, or an admin's own
+        // ownerless permission the step happens to name is not made the workflow's. Only a row
+        // the seeder creates is stored under the workflow group.
         const owner = await permissions.ownerOf(action, entitySlug);
-        if (typeof owner === "string") {
+        if (owner !== undefined) {
           result.skipped++;
           continue;
         }

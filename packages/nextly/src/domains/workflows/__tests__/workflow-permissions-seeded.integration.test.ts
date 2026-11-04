@@ -110,6 +110,47 @@ describe.each(getConfiguredTestDialects())(
       expect(rows("publish-without-review", "tags")).toEqual([]);
     });
 
+    it("leaves an admin's own permission a workflow step uses unmarked, so a detached workflow can't take it", async () => {
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            versions: { drafts: true },
+            workflow: reviewWorkflow(),
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const permissions = new PermissionService(
+        current.getService("adapter"),
+        current.getService("logger")
+      );
+      // The admin made `approve-posts` before the workflow asked for it: owned by no one, in no group.
+      await permissions.ensurePermission(
+        "approve",
+        "posts",
+        "Approve posts",
+        "approve-posts"
+      );
+
+      await seedAllPermissions();
+
+      const listed = (
+        await permissions.listPermissions({
+          limit: 100000,
+          includeOrphaned: true,
+        })
+      ).data as unknown as Listed[];
+      const row = (action: string) =>
+        listed.find(p => p.action === action && p.resource === "posts");
+      // Not marked as the workflow's, so the presets go on granting it once the workflow is gone.
+      expect(row("approve")?.group).toBeNull();
+      // The row the seeder made is the workflow's.
+      expect(row("publish-without-review")?.group).toBe("workflow");
+    });
+
     it("gives no preset role a permission the workflow seeds", async () => {
       const drafts = { status: true, versions: { drafts: true } } as const;
       current = await createTestNextly({
