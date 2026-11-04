@@ -183,6 +183,53 @@ describe("holding a lost removal", () => {
     });
   });
 
+  it("reads down to the version it is given, past ten later publishes", async () => {
+    const memory = memoryHolder();
+    const pins = pinsOver(
+      memoryHistory([
+        { status: "published", fields: ["title"] },
+        { status: "published", fields: [] },
+        ...Array.from({ length: 12 }, () => ({
+          status: "published",
+          fields: [],
+        })),
+      ]),
+      memory
+    );
+
+    expect(await pins.hold("hero", TITLE, true, { newerThan: 1 })).toBe(true);
+    expect(Object.fromEntries(memory.slots)).toEqual({
+      "removal-2-before": 1,
+      "removal-2": 2,
+    });
+  });
+
+  it("takes only the newest publish's removal when told to", async () => {
+    const memory = memoryHolder();
+    const reexposed = pinsOver(
+      memoryHistory([
+        { status: "published", fields: ["title"] },
+        { status: "published", fields: [] },
+        { status: "published", fields: ["title"] },
+      ]),
+      memory
+    );
+    const removed = pinsOver(
+      memoryHistory([
+        { status: "published", fields: ["title"] },
+        { status: "published", fields: [] },
+      ]),
+      memory
+    );
+
+    expect(
+      await reexposed.hold("hero", TITLE, true, { newestOnly: true })
+    ).toBe(false);
+    expect(await removed.hold("hero", TITLE, true, { newestOnly: true })).toBe(
+      true
+    );
+  });
+
   it("takes only a removal newer than the version it is given", async () => {
     const memory = memoryHolder();
     const pins = pinsOver(
@@ -194,7 +241,7 @@ describe("holding a lost removal", () => {
       memory
     );
 
-    expect(await pins.hold("hero", TITLE, true, 3)).toBe(false);
+    expect(await pins.hold("hero", TITLE, true, { newerThan: 3 })).toBe(false);
     expect(memory.slots.size).toBe(0);
     expect(await pins.newestVersion("hero")).toBe(3);
   });

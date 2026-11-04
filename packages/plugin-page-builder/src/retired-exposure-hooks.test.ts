@@ -385,21 +385,28 @@ describe("recording retired ids at publish", () => {
    * Pins that record what they are asked to do. `shows` answers, look by
    * look, whether the removal is in history yet; true from then on.
    */
-  function recordingPins(shows: (boolean | "fails")[] = []) {
+  function recordingPins(
+    shows: (boolean | "fails")[] = [],
+    newest: () => Promise<number> = async () => 7
+  ) {
     const calls: string[] = [];
     let looks = 0;
     const pins: RetiredPins = {
-      hold: async (componentId, dropped, lifecycle, newerThan) => {
+      hold: async (componentId, dropped, lifecycle, since) => {
         calls.push(
           `hold ${componentId} ${dropped.properties.join(",")} ${lifecycle}` +
-            (newerThan === undefined ? "" : ` >${newerThan}`)
+            (since === undefined
+              ? ""
+              : "newerThan" in since
+                ? ` >${since.newerThan}`
+                : " newest")
         );
         const shown = shows[looks] ?? true;
         looks += 1;
         if (shown === "fails") throw new Error("database down");
         return shown;
       },
-      newestVersion: async () => 7,
+      newestVersion: newest,
       release: async componentId => {
         calls.push(`release ${componentId}`);
       },
@@ -490,6 +497,28 @@ describe("recording retired ids at publish", () => {
     expect(new Set(calls)).toEqual(new Set(["hold hero title true >7"]));
   });
 
+  it("takes only the newest publish's removal when history before the commit cannot be read", async () => {
+    const { pins, calls } = recordingPins([true], async () => {
+      throw new Error("database down");
+    });
+    const failing: RetiredStore = {
+      of: async () => new Map(),
+      retire: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run } = harness({ store: failing, pins });
+
+    await run("afterUpdate", COMPONENTS, {
+      ...published(definition(["title"]), definition([])),
+      executor: {},
+    });
+
+    await vi.waitFor(() =>
+      expect(calls).toEqual(["hold hero title true newest"])
+    );
+  });
+
   it("keeps looking after a look that fails", async () => {
     const { pins, calls } = recordingPins(["fails", true]);
     const failing: RetiredStore = {
@@ -513,7 +542,7 @@ describe("recording retired ids at publish", () => {
 
   it("holds nothing for a transaction's removal that never shows, and says so", async () => {
     const { pins, calls } = recordingPins(
-      Array.from({ length: 60 }, () => false)
+      Array.from({ length: 70 }, () => false)
     );
     const failing: RetiredStore = {
       of: async () => new Map(),
@@ -533,7 +562,7 @@ describe("recording retired ids at publish", () => {
         warnings.some(warning => warning.message.includes("never showed"))
       ).toBe(true)
     );
-    expect(calls).toHaveLength(60);
+    expect(calls).toHaveLength(70);
   });
 
   it("releases nothing from inside a caller's transaction", async () => {

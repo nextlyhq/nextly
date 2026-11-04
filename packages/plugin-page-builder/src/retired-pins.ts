@@ -59,14 +59,19 @@ export interface RetiredPins {
    * Pin the published versions either side of the newest removal of one of
    * these ids: a published version exposing it, and the next published one,
    * which does not. A later publish exposing it again does not hide the
-   * removal behind it. Only a removal made by a version newer than
-   * `newerThan` counts. Answers whether it pinned.
+   * removal behind it. Answers whether it pinned.
+   *
+   * `since` narrows which removal counts, for one written in a transaction
+   * that may not have committed yet: `newerThan` takes only a removal made by
+   * a version newer than that number, read down to it however many versions
+   * followed; `newestOnly` takes only a removal made by the newest published
+   * version.
    */
   hold(
     componentId: string,
     dropped: RetiredExposures,
     lifecycle: boolean,
-    newerThan?: number
+    since?: { newerThan: number } | { newestOnly: true }
   ): Promise<boolean>;
   /** The newest version number the component's history shows, or 0. */
   newestVersion(componentId: string): Promise<number>;
@@ -107,18 +112,25 @@ export function retiredPins<Tx>(args: {
     entryId: componentId,
   });
   return {
-    hold: async (componentId, dropped, lifecycle, newerThan = 0) => {
+    hold: async (componentId, dropped, lifecycle, since) => {
       const holder = args.holder();
       if (holder === undefined) return false;
       const ref = refOf(componentId);
+      const floor =
+        since !== undefined && "newerThan" in since ? since.newerThan : 0;
       const pair = await removalOf(
         args.history(),
         ref,
         args.componentField,
         dropped,
-        lifecycle
+        { lifecycle, floor }
       );
-      if (pair === undefined || pair.after <= newerThan) return false;
+      // The scan stops at the first version at or below the floor, so a pair
+      // it finds was made above it.
+      if (pair === undefined) return false;
+      if (since !== undefined && "newestOnly" in since && !pair.newest) {
+        return false;
+      }
       await args.transaction(async tx => {
         await holder.pin(
           ref,
@@ -170,17 +182,20 @@ async function removalOf(
   ref: ComponentHistoryRef,
   field: string,
   dropped: RetiredExposures,
-  lifecycle: boolean
-): Promise<{ before: number; after: number } | undefined> {
+  scan: { lifecycle: boolean; floor: number }
+): Promise<{ before: number; after: number; newest: boolean } | undefined> {
   let newer: { versionNo: number; exposure: RetiredExposures } | undefined;
-  for await (const versionNo of servedVersions(history, ref, lifecycle)) {
+  let newest: number | undefined;
+  for await (const versionNo of servedVersions(history, ref, scan)) {
+    newest ??= versionNo;
     const exposure = exposedIn(
       (await history.get(ref, versionNo)).snapshot,
       field
     );
     if (typeof exposure === "string") continue;
     if (newer !== undefined && dropsAny(exposure, newer.exposure, dropped)) {
-      return { before: versionNo, after: newer.versionNo };
+      const after = newer.versionNo;
+      return { before: versionNo, after, newest: after === newest };
     }
     newer = { versionNo, exposure };
   }
@@ -188,22 +203,25 @@ async function removalOf(
 }
 
 /**
- * The served versions' numbers, newest first, paged past drafts, at most
- * {@link MAX_SEARCHED} of them from at most {@link MAX_PAGES} pages.
+ * The served versions' numbers, newest first, paged past drafts, from at most
+ * {@link MAX_PAGES} pages. With no floor, at most {@link MAX_SEARCHED} of
+ * them; with one, every one down to the first at or below it, which is the
+ * version a removal made above the floor is compared with.
  */
 async function* servedVersions(
   history: ComponentHistory,
   ref: ComponentHistoryRef,
-  lifecycle: boolean
+  scan: { lifecycle: boolean; floor: number }
 ): AsyncGenerator<number> {
   let cursor: number | undefined;
   let served = 0;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const rows = await history.list(ref, pageAfter(cursor));
-    for (const versionNo of servedIn(rows, lifecycle)) {
-      if (served === MAX_SEARCHED) return;
+    for (const versionNo of servedIn(rows, scan.lifecycle)) {
+      if (scan.floor === 0 && served === MAX_SEARCHED) return;
       served += 1;
       yield versionNo;
+      if (scan.floor > 0 && versionNo <= scan.floor) return;
     }
     if (rows.length < VERSIONS_PER_PAGE) return;
     cursor = oldestIn(rows) ?? cursor;

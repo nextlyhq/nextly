@@ -116,10 +116,11 @@ export interface RetiredExposureHooksArgs {
    */
   pins?: RetiredPins;
   /**
-   * How long to wait between looks for a removal written inside a caller's
-   * transaction to commit. A second by default; a test waits for nothing.
+   * The wait before each look for a removal written inside a caller's
+   * transaction to commit. Short at first, then a second; a test waits for
+   * nothing.
    */
-  commitWait?: () => Promise<void>;
+  commitWait?: (look: number) => Promise<void>;
 }
 
 /**
@@ -225,12 +226,18 @@ async function hold(
 }
 
 /** How many times a removal in a caller's transaction is looked for. */
-const COMMIT_LOOKS = 60;
+const COMMIT_LOOKS = 70;
 
-/** A second, not keeping the process alive. */
-function aSecond(): Promise<void> {
+/**
+ * The wait before a look: short at first, since the caller usually commits
+ * right after the hook returns and a store keeping few versions may prune the
+ * one before the removal at its next save, then a second at most, for about
+ * a minute in all. Never keeps the process alive.
+ */
+function soon(look: number): Promise<void> {
+  const ms = Math.min(1000, 25 * 2 ** look);
   return new Promise(resolve => {
-    const timer = setTimeout(resolve, 1000);
+    const timer = setTimeout(resolve, ms);
     if (typeof timer === "object" && "unref" in timer) timer.unref();
   });
 }
@@ -249,16 +256,21 @@ async function holdOnceCommitted(
   retired: RetiredExposures,
   lifecycle: boolean
 ): Promise<void> {
-  const wait = args.commitWait ?? aSecond;
+  const wait = args.commitWait ?? soon;
   // What history showed before the transaction committed: the removal is
-  // newer, and an earlier removal of the same id must not end the wait.
+  // newer, and an earlier removal of the same id must not end the wait. Read
+  // now, while the transaction is open; read later it would already show the
+  // removal. Without it, only a removal by the newest published version
+  // counts: before the commit that version still exposes the ids.
   const visible = await lookOrNull(args, componentId, retired, () =>
     pins.newestVersion(componentId)
   );
+  const since =
+    visible === null ? ({ newestOnly: true } as const) : { newerThan: visible };
   for (let look = 0; look < COMMIT_LOOKS; look += 1) {
-    await wait();
+    await wait(look);
     const held = await lookOrNull(args, componentId, retired, () =>
-      pins.hold(componentId, retired, lifecycle, visible ?? 0)
+      pins.hold(componentId, retired, lifecycle, since)
     );
     if (held === true) {
       await repair(args, { live: true, lifecycle }, componentId);
