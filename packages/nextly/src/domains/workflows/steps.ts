@@ -12,9 +12,11 @@
  * resolution reads on the pool, and a read beside an open transaction would run on another
  * connection. Nothing it reads is review state, so reading it first changes no answer.
  *
- * The compare-and-set is on each part's review-state `revision`, as the caller saw it (`seen`).
- * The content version a step is judged against joins it through the same `seen` entry, as a field
- * beside `revision`, once documents carry a version of their own.
+ * The compare-and-set is on what the caller saw of each part (`seen`): its content version, the
+ * `_rev` every read publishes, and its review-state `revision`. A step is refused as stale when
+ * either moved. A step into a stage that allows publishing approves the part's newest recorded
+ * version, the one the reviewer was shown, with a digest of that version's content
+ * (`approvalDigest`), and each step's event names the version concerned.
  *
  * Refusals, and what each carries in `publicData`:
  * - an unknown step, a document with no workflow, a missing or too long comment:
@@ -57,9 +59,16 @@ import {
 } from "../content-events/kinds";
 import { recordContentEvent } from "../content-events/record";
 import { configuredLocales } from "../i18n/configured-locales";
+import type { VersionRow } from "../versions/versions-repository";
 
+import { approvalDigest } from "./approval-digest";
 import { allowsSelfApproval, primaryStep } from "./define-workflow";
 import { holderAnswer, readPerson, type HolderAnswer } from "./holders";
+import {
+  documentTableOf,
+  partVersionOn,
+  shownVersionOn,
+} from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
 import {
   createReviewState,
@@ -92,7 +101,7 @@ export type WorkflowCaller =
 
 /**
  * What the caller was shown of one part: its review-state `revision`, 0 for a part with no review
- * state yet (which reads as the workflow's first stage).
+ * state yet (which reads as the workflow's first stage), and the content version it read.
  *
  * @experimental
  */
@@ -100,6 +109,11 @@ export interface SeenPart {
   /** A language, or null for the shared part. */
   part: string | null;
   revision: number;
+  /**
+   * The document's version (`_rev`) as the caller read it for this part: read in the part's
+   * language, or for the shared part as a plain read answers it (the default language).
+   */
+  version: string;
 }
 
 /** @experimental */
@@ -162,6 +176,8 @@ export const WORKFLOW_STEP_ERROR_CODES = {
   unknownStep: "WORKFLOW_UNKNOWN_STEP",
   commentRequired: "WORKFLOW_COMMENT_REQUIRED",
   commentTooLong: "WORKFLOW_COMMENT_TOO_LONG",
+  nothingToApprove: "WORKFLOW_NOTHING_TO_APPROVE",
+  singlesNotSupported: "WORKFLOW_SINGLES_NOT_SUPPORTED",
 } as const;
 
 /** The longest comment a step keeps: the record of content events' note limit. */
@@ -621,6 +637,7 @@ export async function takeWorkflowStep(
   const caller = await resolveCaller(adapter, input.caller);
   const reviewer = await defaultReviewer(adapter, registered, step, slug);
   const dialect = adapter.getCapabilities().dialect;
+  const table = await documentTableOf(input.document);
   ensureWorkflowContentEventKinds();
 
   return adapter.transaction(async tx => {
@@ -693,12 +710,52 @@ export async function takeWorkflowStep(
     // 5. The comment.
     checkComment(step, comment);
 
-    // 6. The move, over the revision each part was seen at. Every part is tried, so a refusal
-    // names all that moved; any refusal rolls back the parts already written.
+    // 6. Each part's newest recorded version: what a reviewer is shown of it, and what a step
+    // into a stage that allows publishing approves. A part with none has nothing to approve.
+    const recorded = new Map<string | null, VersionRow | undefined>();
+    for (const entry of movable) {
+      recorded.set(
+        entry.part,
+        await shownVersionOn(tx, input.document, entry.part)
+      );
+    }
+    const approves = allowsPublish(workflow, step.to);
+    const unrecorded = movable.filter(entry => !recorded.get(entry.part));
+    if (approves && unrecorded.length > 0) {
+      throw NextlyError.validation({
+        errors: unrecorded.map(entry => ({
+          path: "parts",
+          code: WORKFLOW_STEP_ERROR_CODES.nothingToApprove,
+          message: `${entry.part === null ? "The shared part" : `"${entry.part}"`} has no saved version to approve.`,
+        })),
+      });
+    }
+
+    // 7. The move, over what each part was seen at: its content version and its review-state
+    // revision. Every part is tried, so a refusal names all that moved; any refusal rolls back
+    // the parts already written.
     const now = new Date();
     const stale: (string | null)[] = [];
     const moved: MovedPart[] = [];
     for (const entry of movable) {
+      const seen = input.seen.find(candidate => candidate.part === entry.part);
+      const version = await partVersionOn(
+        tx,
+        dialect,
+        table,
+        input.document.entryId,
+        entry.part
+      );
+      // The content changed since the caller was shown it, or the caller never saw this part.
+      if (
+        seen === undefined ||
+        version === undefined ||
+        version !== seen.version
+      ) {
+        stale.push(entry.part);
+        continue;
+      }
+      const shown = recorded.get(entry.part);
       const change: ReviewStateChange = {
         stage: step.to,
         enteredAt: now,
@@ -709,6 +766,17 @@ export async function takeWorkflowStep(
           : {}),
         // Leaving a stage that allows publishing withdraws the approval it held.
         ...(allowsPublish(workflow, entry.stage) ? { approval: null } : {}),
+        // Entering one approves the version shown, by a person (approvals come from no one else).
+        ...(approves && shown?.versionNo != null && caller.accountable !== null
+          ? {
+              approval: {
+                versionNo: shown.versionNo,
+                digest: approvalDigest(shown.snapshot, "collection"),
+                by: caller.accountable,
+                at: now,
+              },
+            }
+          : {}),
         ...(reviewer.reviewer ? { assignee: reviewer.reviewer } : {}),
       };
       const revision = await writeOverSeen(
@@ -716,7 +784,7 @@ export async function takeWorkflowStep(
         dialect,
         partOf(input.document, entry.part),
         entry.state,
-        seenRevision(input.seen, entry.part),
+        seen.revision,
         { stage: step.to, enteredAt: now, definitionHash },
         change
       );
@@ -731,10 +799,15 @@ export async function takeWorkflowStep(
     }
     if (stale.length > 0) throw staleRefusal(stale);
 
-    // 7. One event per stage the parts left, on the same transaction.
+    // 8. One event per stage the parts left, on the same transaction, naming the newest version
+    // of the parts it moved.
     const skipped = reviewer.skippedReviewer;
     for (const from of [...new Set(moved.map(entry => entry.from))]) {
       const group = moved.filter(entry => entry.from === from);
+      const versionNos = group.flatMap(entry => {
+        const no = recorded.get(entry.part)?.versionNo;
+        return typeof no === "number" ? [no] : [];
+      });
       await recordContentEvent(tx, {
         subject: {
           kind: input.document.scopeKind,
@@ -752,6 +825,7 @@ export async function takeWorkflowStep(
         fromState: from,
         toState: step.to,
         note: comment !== null && comment.trim() !== "" ? comment : null,
+        versionNo: versionNos.length > 0 ? Math.max(...versionNos) : null,
         payload: {
           step: step.name,
           ...(caller.ownerId !== null ? { ownerId: caller.ownerId } : {}),

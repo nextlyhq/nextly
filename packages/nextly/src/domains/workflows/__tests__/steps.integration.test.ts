@@ -16,6 +16,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { approvalDigest } from "../approval-digest";
 import { workflowDefinitionHash } from "../hash";
 import { reviewWorkflow } from "../preset";
 import { updateReviewState } from "../review-state-repository";
@@ -30,8 +31,12 @@ import {
   person,
   seedState,
   stateDb,
+  saveIn,
+  shownVersion,
   stateOf,
   SYSTEM,
+  snapshotOf,
+  versionOf,
   workflowEvents,
 } from "./helpers/step-harness";
 import { editorial, handover } from "./helpers/step-workflows";
@@ -51,31 +56,50 @@ const app = (): TestNextly => {
   return t;
 };
 
-/** Takes `step` on one part of a Posts document, seen at `revision`. */
-function step(
+/**
+ * Takes `step` on one part of a Posts document, seen at `revision`, and at the content version
+ * `version`: by default the version the part holds now, as a caller that just read it would.
+ */
+async function step(
   entryId: string,
   name: string,
   caller: WorkflowCaller,
   options: {
     part?: string | null;
     revision?: number;
+    version?: string;
     comment?: string;
     slug?: string;
   } = {}
 ) {
   const part = options.part === undefined ? "en" : options.part;
+  const slug = options.slug ?? "posts";
+  const version =
+    options.version ?? (await versionOf(app(), slug, entryId, part));
   return takeWorkflowStep(app().adapter, {
-    document: {
-      scopeKind: "collection",
-      scopeSlug: options.slug ?? "posts",
-      entryId,
-    },
+    document: { scopeKind: "collection", scopeSlug: slug, entryId },
     step: name,
     parts: [part],
-    seen: [{ part, revision: options.revision ?? 0 }],
+    seen: [{ part, revision: options.revision ?? 0, version }],
     comment: options.comment,
     caller,
   });
+}
+
+/** What a caller who just read each part saw of it, at the review-state revision given. */
+async function seenNow(
+  entryId: string,
+  parts: Array<[part: string | null, revision: number]>
+) {
+  const seen = [];
+  for (const [part, revision] of parts) {
+    seen.push({
+      part,
+      revision,
+      version: await versionOf(app(), "posts", entryId, part),
+    });
+  }
+  return seen;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -146,6 +170,8 @@ describe.each(getConfiguredTestDialects())(
         // The fast track out of On hold names no action but moves into Cleared, which allows
         // publishing: editing is not enough for it.
         const es = partOf("posts", post, "es");
+        // Spanish is written, so it has a version to approve.
+        await saveIn(t, "posts", post, "es", { title: "Hola" });
         await seedState(t, es, "hold", {
           enteredBy: "alice",
           definitionHash: HASH,
@@ -637,10 +663,10 @@ describe.each(getConfiguredTestDialects())(
           },
           step: "send",
           parts: "all",
-          seen: [
-            { part: "es", revision: 0 },
-            { part: null, revision: 0 },
-          ],
+          seen: await seenNow(post, [
+            ["es", 0],
+            [null, 0],
+          ]),
           caller: dave,
         });
 
@@ -730,6 +756,7 @@ describe.each(getConfiguredTestDialects())(
         const post = await entry(t, "posts");
         const en = partOf("posts", post, "en");
         const es = partOf("posts", post, "es");
+        await saveIn(t, "posts", post, "es", { title: "Hola" });
         for (const part of [en, es]) {
           await seedState(t, part, "legal", { definitionHash: HASH });
         }
@@ -747,10 +774,10 @@ describe.each(getConfiguredTestDialects())(
             },
             step: "clear",
             parts: "all",
-            seen: [
-              { part: "en", revision: 1 },
-              { part: "es", revision: 1 },
-            ],
+            seen: await seenNow(post, [
+              ["en", 1],
+              ["es", 1],
+            ]),
             caller: bob,
           })
         ).rejects.toMatchObject({
@@ -766,6 +793,167 @@ describe.each(getConfiguredTestDialects())(
           stage: "legal",
           revision: 2,
         });
+        expect(await workflowEvents(t, "posts", post)).toEqual([]);
+      });
+    });
+
+    describe("the content version", () => {
+      it("refuses a step when the part's content changed since it was seen, keeping nothing", async () => {
+        t = await bootSteps(dialect);
+        const bob = await person(t, "bob", [["sign-off", "posts"]]);
+        const post = await entry(t, "posts");
+        const en = partOf("posts", post, "en");
+        await seedState(t, en, "legal", {
+          enteredBy: "alice",
+          definitionHash: HASH,
+        });
+        const shown = await versionOf(t, "posts", post, "en");
+        // English is edited while bob reads it; the review state does not move.
+        await saveIn(t, "posts", post, "en", { title: "Edited" });
+
+        await expect(
+          step(post, "clear", bob, { revision: 1, version: shown })
+        ).rejects.toMatchObject({
+          code: "CONFLICT",
+          publicData: { reason: "stale", parts: ["en"] },
+        });
+        expect(await stateOf(t, en)).toMatchObject({
+          stage: "legal",
+          approval: null,
+          revision: 1,
+        });
+        expect(await workflowEvents(t, "posts", post)).toEqual([]);
+      });
+
+      it("judges a language by its own content and the shared fields, not by another language's", async () => {
+        t = await bootSteps(dialect);
+        const dave = await person(t, "dave", [["update", "posts"]]);
+        const post = await entry(t, "posts");
+        const spanish = await versionOf(t, "posts", post, "es");
+        const arabic = await versionOf(t, "posts", post, "ar");
+
+        // A translated field changed in English only: Spanish is as it was shown.
+        await saveIn(t, "posts", post, "en", { title: "Edited" });
+        await step(post, "send", dave, { part: "es", version: spanish });
+        expect((await stateOf(t, partOf("posts", post, "es")))?.stage).toBe(
+          "legal"
+        );
+
+        // A shared field changed: every language shows it, so Arabic is not as it was shown.
+        await saveIn(t, "posts", post, "en", { code: "X-1" });
+        await expect(
+          step(post, "send", dave, { part: "ar", version: arabic })
+        ).rejects.toMatchObject({
+          code: "CONFLICT",
+          publicData: { reason: "stale", parts: ["ar"] },
+        });
+        expect(await stateOf(t, partOf("posts", post, "ar"))).toBeNull();
+      });
+
+      it("records the approval against the version the reviewer was shown, with a digest of that version's content", async () => {
+        t = await bootSteps(dialect);
+        const bob = await person(t, "bob", [["sign-off", "posts"]]);
+        // A document as made, and one edited since it was made.
+        const made = await entry(t, "posts");
+        const edited = await entry(t, "posts");
+        await saveIn(t, "posts", edited, "en", { title: "Different" });
+        for (const post of [made, edited]) {
+          await seedState(t, partOf("posts", post, "en"), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+          await step(post, "clear", bob, { revision: 1 });
+        }
+
+        const approvals = [];
+        for (const post of [made, edited]) {
+          const approval = (await stateOf(t, partOf("posts", post, "en")))
+            ?.approval;
+          expect(approval).toMatchObject({
+            versionNo: await shownVersion(t, "posts", post, "en"),
+            by: "bob",
+            digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          });
+          expect(approval?.at).toBeInstanceOf(Date);
+          // The digest is of that version's content, as the history recorded it.
+          expect(approval?.digest).toBe(
+            approvalDigest(
+              await snapshotOf(t, "posts", post, approval?.versionNo ?? 0),
+              "collection"
+            )
+          );
+          approvals.push(approval);
+          // The event names the version approved.
+          const [event] = await workflowEvents(t, "posts", post);
+          expect(event).toMatchObject({
+            kind: "workflow-approve",
+            versionNo: approval?.versionNo,
+          });
+        }
+        // The edited document's approval is of its later version, and other content.
+        expect(approvals[1]?.versionNo).toBeGreaterThan(
+          approvals[0]?.versionNo ?? Number.POSITIVE_INFINITY
+        );
+        expect(approvals[1]?.digest).not.toBe(approvals[0]?.digest);
+      });
+
+      it("names the part's version on a step's event", async () => {
+        t = await bootSteps(dialect);
+        const dave = await person(t, "dave", [["update", "posts"]]);
+        const post = await entry(t, "posts");
+        await saveIn(t, "posts", post, "en", { title: "Second" });
+
+        await step(post, "send", dave);
+
+        const [event] = await workflowEvents(t, "posts", post);
+        expect(event?.versionNo).toBe(
+          await shownVersion(t, "posts", post, "en")
+        );
+      });
+
+      it("refuses approving all languages when English changed while the reviewer looked, approving none", async () => {
+        t = await bootSteps(dialect);
+        const bob = await person(t, "bob", [["sign-off", "posts"]]);
+        const post = await entry(t, "posts");
+        await saveIn(t, "posts", post, "es", { title: "Hola" });
+        const en = partOf("posts", post, "en");
+        const es = partOf("posts", post, "es");
+        for (const part of [en, es]) {
+          await seedState(t, part, "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+        }
+        const seen = await seenNow(post, [
+          ["en", 1],
+          ["es", 1],
+        ]);
+        await saveIn(t, "posts", post, "en", { title: "Changed" });
+
+        await expect(
+          takeWorkflowStep(t.adapter, {
+            document: {
+              scopeKind: "collection",
+              scopeSlug: "posts",
+              entryId: post,
+            },
+            step: "clear",
+            parts: "all",
+            seen,
+            caller: bob,
+          })
+        ).rejects.toMatchObject({
+          code: "CONFLICT",
+          publicData: { reason: "stale", parts: ["en"] },
+        });
+        // Spanish, as shown, is not approved on its own.
+        for (const part of [en, es]) {
+          expect(await stateOf(t, part)).toMatchObject({
+            stage: "legal",
+            approval: null,
+            revision: 1,
+          });
+        }
         expect(await workflowEvents(t, "posts", post)).toEqual([]);
       });
     });

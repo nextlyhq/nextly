@@ -26,6 +26,8 @@ import {
   ContentEventsRepository,
   type ContentEventRecord,
 } from "../../../content-events/repository";
+import type { VersionsDbApi } from "../../../versions/db-api";
+import { VersionsRepository } from "../../../versions/versions-repository";
 import { reviewWorkflow } from "../../preset";
 import {
   createReviewState,
@@ -56,8 +58,9 @@ export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
         workflow: editorial,
         fields: [
           text({ name: "title", localized: true }),
-          // A field every language shares, so the document has a shared part.
-          text({ name: "code" }),
+          // A field every language shares, so the document has a shared part. Text is
+          // translated by default in a localized collection, so it says it is not.
+          text({ name: "code", localized: false }),
         ],
       }),
       defineCollection({
@@ -96,6 +99,90 @@ export async function entry(t: TestNextly, slug: string): Promise<string> {
   const id = (created.data as { id?: string } | undefined)?.id;
   if (typeof id !== "string") throw new Error(`no id from create on ${slug}`);
   return id;
+}
+
+/**
+ * The content version (`_rev`) a reader of one part holds now: read in that part's language, or,
+ * for the shared part, as a plain read answers it.
+ */
+export async function versionOf(
+  t: TestNextly,
+  slug: string,
+  entryId: string,
+  part: string | null
+): Promise<string> {
+  const doc = (await t.nextly.findByID({
+    collection: slug as never,
+    id: entryId,
+    overrideAccess: true,
+    status: "all",
+    ...(part !== null ? { locale: part } : {}),
+  } as never)) as Record<string, unknown> | null;
+  const rev = doc?._rev;
+  if (typeof rev !== "string") throw new Error(`no _rev on ${slug} ${entryId}`);
+  return rev;
+}
+
+/** Saves `data` to a document in `locale`, trusted, as an editor's ordinary save. */
+export async function saveIn(
+  t: TestNextly,
+  slug: string,
+  entryId: string,
+  locale: string,
+  data: Record<string, unknown>
+): Promise<void> {
+  const handler = t.getService("collectionsHandler") as CollectionsHandler;
+  await handler.updateEntry(
+    { collectionName: slug, entryId, overrideAccess: true, locale },
+    data
+  );
+}
+
+/**
+ * The newest recorded version of one part, read from the history as a reviewer's comparison
+ * shows it: in that language, or for the shared part, in any.
+ */
+export async function shownVersion(
+  t: TestNextly,
+  slug: string,
+  entryId: string,
+  part: string | null
+): Promise<number> {
+  const ref = { scopeKind: "collection" as const, scopeSlug: slug, entryId };
+  // The newest of any language is a locking read, which only a transaction can make.
+  const versionNo =
+    part === null
+      ? (
+          await t.adapter.transaction(tx =>
+            new VersionsRepository(tx).findNewest(ref)
+          )
+        )?.versionNo
+      : (
+          await new VersionsRepository(
+            t.adapter as unknown as VersionsDbApi
+          ).newestVersionNoByLocale(ref, [part])
+        ).get(part);
+  if (typeof versionNo !== "number") {
+    throw new Error(`no recorded version of ${slug} ${entryId} ${part}`);
+  }
+  return versionNo;
+}
+
+/** The snapshot of one recorded version, as the history keeps it. */
+export async function snapshotOf(
+  t: TestNextly,
+  slug: string,
+  entryId: string,
+  versionNo: number
+): Promise<unknown> {
+  const row = await new VersionsRepository(
+    t.adapter as unknown as VersionsDbApi
+  ).findByVersionNo(
+    { scopeKind: "collection", scopeSlug: slug, entryId },
+    versionNo
+  );
+  if (!row) throw new Error(`no version ${versionNo} of ${slug} ${entryId}`);
+  return row.snapshot;
 }
 
 /** One part of a collection's document. */

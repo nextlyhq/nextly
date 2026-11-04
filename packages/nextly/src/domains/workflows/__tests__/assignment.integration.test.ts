@@ -36,6 +36,7 @@ import {
   stateDb,
   stateOf,
   superAdminRole,
+  versionOf,
   workflowEvents,
 } from "./helpers/step-harness";
 import { editorial } from "./helpers/step-workflows";
@@ -379,7 +380,13 @@ describe.each(getConfiguredTestDialects())(
         },
         step: "send",
         parts: ["en"],
-        seen: [{ part: "en", revision: 0 }],
+        seen: [
+          {
+            part: "en",
+            revision: 0,
+            version: await versionOf(t, "posts", post, "en"),
+          },
+        ],
         caller: dave,
       });
 
