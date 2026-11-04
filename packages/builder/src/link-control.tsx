@@ -1015,7 +1015,12 @@ export function LinkGroupField({
 }: LinkGroupFieldProps): React.JSX.Element {
   const id = React.useId();
   const tabId = React.useId();
-  const values = Object.fromEntries(props.map(prop => [prop.name, prop.value]));
+  // Each prop as it applies: what is stored, else the block's default, so a
+  // block that declares a default link reads as linked, and its target and
+  // rel show what applies, as every other control shows a default.
+  const values = Object.fromEntries(
+    props.map(prop => [prop.name, prop.value ?? prop.defaultValue])
+  );
   const linkProp = props.find(prop => prop.name === group.link);
   const label =
     linkProp === undefined ? "Link" : propLabel(linkProp.name, linkProp.schema);
@@ -1074,12 +1079,7 @@ export function LinkGroupField({
             <Switch
               id={tabId}
               disabled={!writable(group.target)}
-              // The block's default while none is stored, as a choice shows it.
-              checked={
-                (values[group.target] ??
-                  props.find(prop => prop.name === group.target)
-                    ?.defaultValue) === "_blank"
-              }
+              checked={values[group.target] === "_blank"}
               // Off clears the target rather than storing `_self`: the same
               // tab is what a link does with none.
               onCheckedChange={on => {

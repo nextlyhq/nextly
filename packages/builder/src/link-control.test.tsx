@@ -631,6 +631,19 @@ describe("what the group reads of the block", () => {
           render: () => null,
         },
         {
+          name: "acme/default-link-heading",
+          version: 1,
+          description: "A heading that links to pricing unless told otherwise.",
+          example: { props: {} },
+          editor: { label: "Default-link heading" },
+          props: {
+            href: { label: "Link", role: "content", type: "url" },
+            target: TARGET,
+          },
+          defaultProps: { href: "/pricing" },
+          render: () => null,
+        },
+        {
           name: "acme/new-tab-heading",
           version: 1,
           description:
@@ -675,6 +688,14 @@ describe("what the group reads of the block", () => {
     ).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
     expect(written(editor)).toEqual({ kiosk: true, target: "_blank" });
+  });
+
+  it("reads the block's default link while none is stored", () => {
+    mountExtra("acme/default-link-heading", {});
+    expect(trigger().getAttribute("aria-label")).toBe("Link: /pricing. Change");
+    expect(
+      screen.getByRole("switch", { name: "Open in new tab" })
+    ).toBeDefined();
   });
 
   it("shows the block's default target while none is stored", () => {
