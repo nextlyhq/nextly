@@ -784,3 +784,38 @@ describe("a folded field in the panel", () => {
     expect(names.some(text => text?.startsWith("Over"))).toBe(false);
   });
 });
+
+describe("the source caption after the value changes elsewhere", () => {
+  it("is held back when an undo or another edit changes the value", () => {
+    register({ typography: true });
+    const at = (fontSize: string): BlockDocument =>
+      ({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "a",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            styles: {
+              base: { [BASE_BREAKPOINT]: { fontSize } },
+            } as NodeStyles,
+          },
+        ] as BlockNode[],
+      }) as BlockDocument;
+    const { rerender } = render(
+      <StyleInspectorPanel editor={editorFor(at("20px"))} tokens={TOKENS} />
+    );
+    const row = () =>
+      document.querySelector(
+        '[data-property="fontSize"] .nx-inspector__field'
+      ) as HTMLElement;
+    expect(row().hasAttribute("data-provenance-quiet")).toBe(false);
+    // The document moves without a commit in this field, as an undo does.
+    rerender(
+      <StyleInspectorPanel editor={editorFor(at("24px"))} tokens={TOKENS} />
+    );
+    expect(row().hasAttribute("data-provenance-quiet")).toBe(true);
+  });
+});

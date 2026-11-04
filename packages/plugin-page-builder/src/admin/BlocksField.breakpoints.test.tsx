@@ -54,6 +54,12 @@ let clientConfig: Record<string, unknown> | undefined;
 /** The device the shell restores on load, as an author left it. */
 let storedDevice: string | null = null;
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
    * The real module SPREAD, with only the surfaces this file drives replaced —

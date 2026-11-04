@@ -100,11 +100,12 @@ describe("a side of a box", () => {
 });
 
 describe("a field's source, after a value is committed", () => {
-  it("is held back while the field is quiet, though the field has focus", () => {
+  it("is held back by the row's own value for the caption's display", () => {
+    // One rule: the row sets `--nx-provenance-caption: none` while quiet.
     expect(
       declares(
-        ".nx-inspector__field[data-provenance-quiet]:focus-within .nx-style-inspector__provenance-text",
-        "display: none"
+        ".nx-inspector__field:focus-within .nx-style-inspector__provenance-text",
+        "display: var(--nx-provenance-caption, block)"
       )
     ).toBe(true);
   });
