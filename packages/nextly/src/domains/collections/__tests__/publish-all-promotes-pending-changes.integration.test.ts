@@ -785,80 +785,96 @@ describe.each(getConfiguredTestDialects())(
 
     // A publish of every language that puts a pending change live runs the
     // update hooks a publish of that language alone runs, with the durable
-    // document. The plausible broken implementation writes the promoted
-    // content directly and emits only status events, so a hook that ignores
-    // the working-draft save never sees the content that went live.
-    it("runs the update hooks a publish of one language runs, with the promoted document", async () => {
-      const seen: { title: unknown; draft: unknown }[] = [];
-      const fieldValues: unknown[] = [];
-      const entries = await bootWith(
-        dialect,
-        defineCollection({
-          slug: HOOKED,
-          localized: true,
-          status: true,
-          versions: { drafts: true },
-          hooks: {
-            // Config `afterChange` is the runtime `afterUpdate` phase.
-            afterChange: [
-              ctx => {
-                const data = (ctx.data ?? {}) as Record<string, unknown>;
-                seen.push({ title: data.title, draft: data._isWorkingDraft });
-              },
+    // document. The plausible broken implementations write the promoted
+    // content directly and emit only status events, so a hook that ignores
+    // the working-draft save never sees the content that went live; or pair
+    // each promotion with a named language's document, which an unlocalized
+    // collection, whose pending change belongs to no language, never has.
+    it.each([
+      { kind: "localized", localized: true },
+      { kind: "unlocalized", localized: false },
+    ])(
+      "runs the update hooks a publish of one language runs, with the promoted document ($kind)",
+      async ({ localized }) => {
+        // An unlocalized collection's writes name no language.
+        const locale = localized ? "en" : undefined;
+        const seen: { title: unknown; draft: unknown }[] = [];
+        const fieldValues: unknown[] = [];
+        const entries = await bootWith(
+          dialect,
+          defineCollection({
+            slug: HOOKED,
+            localized,
+            status: true,
+            versions: { drafts: true },
+            hooks: {
+              // Config `afterChange` is the runtime `afterUpdate` phase.
+              afterChange: [
+                ctx => {
+                  const data = (ctx.data ?? {}) as Record<string, unknown>;
+                  seen.push({ title: data.title, draft: data._isWorkingDraft });
+                },
+              ],
+            },
+            fields: [
+              text({
+                name: "title",
+                localized,
+                hooks: {
+                  afterChange: [
+                    ({ value }: { value: unknown }) => {
+                      fieldValues.push(value);
+                      return value;
+                    },
+                  ],
+                },
+              }),
             ],
-          },
-          fields: [
-            text({
-              name: "title",
-              localized: true,
-              hooks: {
-                afterChange: [
-                  ({ value }: { value: unknown }) => {
-                    fieldValues.push(value);
-                    return value;
-                  },
-                ],
-              },
-            }),
-          ],
-        })
-      );
-      const heldIn = async (): Promise<string> => {
-        const created = await entries.createEntry(
-          { collectionName: HOOKED, overrideAccess: true, locale: "en" },
-          { title: "Hello", status: "published" }
+          })
         );
-        const id = (created.data as { id: string }).id;
-        const held = await entries.updateEntry(at(id, "en", HOOKED), {
-          title: "Hello again",
+        const heldIn = async (): Promise<string> => {
+          const created = await entries.createEntry(
+            { collectionName: HOOKED, overrideAccess: true, locale },
+            { title: "Hello", status: "published" }
+          );
+          const id = (created.data as { id: string }).id;
+          const held = await entries.updateEntry(
+            { ...at(id, "en", HOOKED), locale },
+            {
+              title: "Hello again",
+            }
+          );
+          expect(held.success, JSON.stringify(held)).toBe(true);
+          return id;
+        };
+        const alone = await heldIn();
+        const every = await heldIn();
+        const durable = () =>
+          seen.filter(call => call.draft !== true).map(call => call.title);
+
+        seen.length = 0;
+        fieldValues.length = 0;
+        const one = await entries.updateEntry(
+          { ...at(alone, "en", HOOKED), locale },
+          {
+            status: "published",
+          }
+        );
+        expect(one.success, JSON.stringify(one)).toBe(true);
+        const byOne = { hook: durable(), field: [...fieldValues] };
+        expect(byOne.hook).toContain("Hello again");
+
+        seen.length = 0;
+        fieldValues.length = 0;
+        const all = await entries.publishAllLocales({
+          collectionName: HOOKED,
+          entryId: every,
+          overrideAccess: true,
         });
-        expect(held.success, JSON.stringify(held)).toBe(true);
-        return id;
-      };
-      const alone = await heldIn();
-      const every = await heldIn();
-      const durable = () =>
-        seen.filter(call => call.draft !== true).map(call => call.title);
-
-      seen.length = 0;
-      fieldValues.length = 0;
-      const one = await entries.updateEntry(at(alone, "en", HOOKED), {
-        status: "published",
-      });
-      expect(one.success, JSON.stringify(one)).toBe(true);
-      const byOne = { hook: durable(), field: [...fieldValues] };
-      expect(byOne.hook).toContain("Hello again");
-
-      seen.length = 0;
-      fieldValues.length = 0;
-      const all = await entries.publishAllLocales({
-        collectionName: HOOKED,
-        entryId: every,
-        overrideAccess: true,
-      });
-      expect(all.success, JSON.stringify(all)).toBe(true);
-      expect({ hook: durable(), field: [...fieldValues] }).toEqual(byOne);
-    });
+        expect(all.success, JSON.stringify(all)).toBe(true);
+        expect({ hook: durable(), field: [...fieldValues] }).toEqual(byOne);
+      }
+    );
 
     it("consumes pending changes the schema no longer lets it promote, putting none of them live", async () => {
       const entries = await bootWith(
