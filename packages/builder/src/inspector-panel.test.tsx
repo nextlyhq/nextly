@@ -151,6 +151,18 @@ describe("what InspectorPanel forwards to the style tab", () => {
     ).toBeDefined();
   });
 
+  it("names Content and Style for the inspector's own tab rules", () => {
+    // Named for the stylesheet's compact underlined tab rules, which apply
+    // to the inspector's tabs only.
+    register();
+    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+    const style = screen.getByRole("tab", { name: "Style" });
+    expect(style.className).toContain("nx-inspector__tab");
+    expect(style.closest('[role="tablist"]')?.className).toContain(
+      "nx-inspector__tablist"
+    );
+  });
+
   it("shows no class surface when the host passed nothing", () => {
     // The control: the assertion above must be about forwarding, not about the
     // selector rendering unconditionally.
@@ -395,6 +407,22 @@ describe("InspectorPanel block card", () => {
     );
     expect(within(card).getByText("A heading.")).toBeDefined();
     expect(card.querySelector(".nx-block-icon")).not.toBeNull();
+  });
+
+  it("sets the icon in a tile, and the description on one line beside the name, whole in its title", () => {
+    // The design's card: a tile, then the name over a one-line description.
+    // Cut to one line on screen, so the whole sentence is kept in the
+    // element (read in full by a screen reader) and offered on hover.
+    mount({ name: "Hero title" });
+
+    const card = document.querySelector("[data-block-card]") as HTMLElement;
+    const tile = card.querySelector(".nx-block-card__icon");
+    expect(tile?.querySelector(".nx-block-icon")).toBeTruthy();
+    const text = card.querySelector(".nx-block-card__text");
+    expect(text?.querySelector("h2")).toBeTruthy();
+    const description = text?.querySelector(".nx-block-card__description");
+    expect(description?.textContent).toBe("A heading.");
+    expect(description?.getAttribute("title")).toBe("A heading.");
   });
 
   it("leaves the editor around the card's menu in the accessibility tree", () => {

@@ -22,6 +22,8 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { canvasFrame } from "./support/canvas-frame";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
@@ -93,11 +95,7 @@ async function storedNodes(
   request: APIRequestContext,
   id: string
 ): Promise<Record<string, unknown>[]> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: Record<string, unknown>[] } }[];
-  };
-  return body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  return await storedPageNodes(request, ENTRIES, id);
 }
 
 async function openBuilder(page: Page, id: string): Promise<void> {
@@ -150,7 +148,9 @@ test.describe("the Add panel", () => {
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
-    await page.locator(`.nx-canvas [data-nx-node="${HEADING}"]`).click();
+    await canvasFrame(page)
+      .locator(`.nx-canvas [data-nx-node="${HEADING}"]`)
+      .click();
     await openAdd(page);
 
     await expect(placementLine(page)).toHaveText("Adding after Heading");
@@ -201,7 +201,9 @@ test.describe("the Add panel", () => {
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
-    await page.locator(`.nx-canvas [data-nx-node="${HEADING}"]`).click();
+    await canvasFrame(page)
+      .locator(`.nx-canvas [data-nx-node="${HEADING}"]`)
+      .click();
     await openAdd(page);
 
     // An accordion item belongs inside an accordion, and nothing a click may

@@ -93,6 +93,14 @@ export interface PagesCollectionOptions {
    * on.
    */
   breakpoints?: PreviewViewportsDeclaration;
+
+  /**
+   * The `layout` field's own check, run on every write that sends a value for
+   * it, hooks or not: the floor that refuses a page put on a Layout being
+   * removed (`layout-removal/page-reference-guard`). Absent, the field checks
+   * nothing beyond its relationship.
+   */
+  validateLayout?: (value: unknown) => Promise<string | true>;
 }
 
 /*
@@ -114,7 +122,7 @@ export interface PagesCollectionOptions {
 export function pagesCollection(
   options: PagesCollectionOptions = {}
 ): CollectionConfig {
-  const { previewPath, breakpoints } = options;
+  const { previewPath, breakpoints, validateLayout } = options;
 
   return defineCollection({
     slug: PAGES_SLUG,
@@ -143,6 +151,11 @@ export function pagesCollection(
           description: "Leave empty to use the site's default Layout.",
           hidden: true,
         },
+        // A function, so it is no part of the stored schema: adding it changes
+        // no column and needs no migration.
+        ...(validateLayout === undefined
+          ? {}
+          : { validate: (value: unknown) => validateLayout(value) }),
       }),
       // Draw this page with no header or footer at all. It wins over any
       // Layout the page also names, whoever wrote either field: a landing page

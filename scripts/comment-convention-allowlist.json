@@ -225,11 +225,10 @@
     ]
   },
   "packages/nextly/src/cli/commands/migrate-create.ts": {
-    "count": 7,
+    "count": 6,
     "digests": [
       "18f2238cc394bca5",
       "3225700ed3a040a4",
-      "57013c2b13f997f7",
       "73fba5789fd7e691",
       "8b4c17691b8fc012",
       "9ba1974417946f2c",
@@ -375,13 +374,8 @@
     ]
   },
   "packages/nextly/src/domains/auth/services/permission-seed-service.ts": {
-    "count": 4,
-    "digests": [
-      "378b13e85babb214",
-      "9a21faca767951a1",
-      "9a21faca767951a1",
-      "b486b6c5af6f71d7"
-    ]
+    "count": 3,
+    "digests": ["378b13e85babb214", "9a21faca767951a1", "b486b6c5af6f71d7"]
   },
   "packages/nextly/src/domains/auth/services/permission-service.ts": {
     "count": 1,
@@ -429,34 +423,6 @@
       "cb715ac79bb0afd0",
       "d6e13c0d15edf168",
       "e08787490dbf8ff1"
-    ]
-  },
-  "packages/nextly/src/domains/collections/services/collection-query-service.ts": {
-    "count": 23,
-    "digests": [
-      "13831d4dec7eab02",
-      "28f392c8dea7766d",
-      "374fbd2500c1f21d",
-      "401670576a557b49",
-      "542449bc209a7f75",
-      "6ab3ed7302fb99c6",
-      "7e979ca7f5d94b0b",
-      "8623ab6ac27f4a80",
-      "b233f10203ab0427",
-      "bc34f887455ae217",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "d24956f183fae02f",
-      "d268ba7d4939e20e",
-      "d2bf74438e37e4a6",
-      "d6d984c369b0071a",
-      "e0fa793c61a3a767",
-      "e472fc3e4568c53a",
-      "fb53c28b1b38a335"
     ]
   },
   "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
@@ -582,8 +548,8 @@
     ]
   },
   "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
-    "count": 2,
-    "digests": ["5274a93d8eead25f", "f119f5f1b50b086c"]
+    "count": 1,
+    "digests": ["f119f5f1b50b086c"]
   },
   "packages/nextly/src/domains/schema/migrate-create/snapshot-io.ts": {
     "count": 4,

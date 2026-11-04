@@ -61,6 +61,7 @@
 import {
   allBlocks,
   asPermittedList,
+  COMPONENT_INSTANCE_TYPE,
   findNode,
   permittedLabel,
   placementSiteIn,
@@ -370,27 +371,31 @@ const NO_OFFERS: ReadonlyMap<string, EntryOffer> = new Map();
  * author can reach from here — and a tier that could not be RE-read gets a
  * third, since beside the tiles it left standing the second would be false.
  */
-function LibraryNotices({
+export function LibraryNotices({
   library,
-  tab,
+  tier,
 }: {
   library: InsertPanelProps["library"];
-  tab: PanelTab;
+  /** The tier the surface offers: patterns as sections, or components. */
+  tier: LibraryTier;
 }): React.JSX.Element {
   return (
     <>
-      <CutNotice tiers={tiersIn(library, "cut", tab)} />
+      <CutNotice tiers={tiersIn(library, "cut", tier)} />
       <StaleNotice
-        tiers={tiersIn(library, "stale", tab)}
+        tiers={tiersIn(library, "stale", tier)}
         retry={library?.retry}
       />
       <UnavailableNotice
-        tiers={tiersIn(library, "unavailable", tab)}
+        tiers={tiersIn(library, "unavailable", tier)}
         retry={library?.retry}
       />
     </>
   );
 }
+
+/** A tier of the host's library, as a notice names it. */
+export type LibraryTier = "patterns" | "components";
 
 /** The tiers a ceiling cut, and what a cut component means for the page. */
 function CutNotice({
@@ -470,18 +475,23 @@ function RetryButton({
 }
 
 /**
- * The tab's own tier when it is in one state, as the word a sentence names it
- * with — or nothing. Each tab reports only the tier it offers: components
- * among the blocks, patterns as sections, so a tab never reports content
- * that could not appear in it.
+ * The surface's own tier when it is in one state, as the word a sentence
+ * names it with — or nothing. Each surface reports only the tier it offers,
+ * so it never reports content that could not appear in it.
  */
 function tiersIn(
   library: InsertPanelProps["library"],
   state: LibraryTierState,
-  tab: PanelTab
-): "patterns" | "components" | undefined {
-  const tier = tab === "sections" ? "patterns" : "components";
+  tier: LibraryTier
+): LibraryTier | undefined {
   return library?.[tier] === state ? tier : undefined;
+}
+
+/**
+ * The tier a tab offers: components among the blocks, patterns as sections.
+ */
+function tierOf(tab: PanelTab): LibraryTier {
+  return tab === "sections" ? "patterns" : "components";
 }
 
 /**
@@ -692,14 +702,14 @@ function TilePopover({
 }
 
 /**
- * How a tile is added. Only a block can be dragged: a pattern is a forest
- * placed as a group and a component an instance built at the click, so
- * neither has the one node a drag carries.
+ * How a tile is added. A pattern cannot be dragged: it is a forest placed as
+ * a group, with no one node a drag carries. A block and a component are each
+ * one node, a component's an instance pointing at its definition.
  */
 function howToAdd(entry: InsertEntry): string {
-  return entry.kind === "block"
-    ? "Click to add · drag to place"
-    : "Click to add";
+  return entry.kind === "pattern"
+    ? "Click to add"
+    : "Click to add · drag to place";
 }
 
 /**
@@ -788,17 +798,24 @@ export function placementWords(
 }
 
 /**
- * Start a tile's drag, when the host has a canvas to drop onto.
+ * Start an entry's drag, when the host has a canvas to drop onto.
  *
- * Blocks only. A drag carries ONE node to a drop target, and a pattern is a
- * forest placed as a group — so there is no node to hand the drag, and
- * offering the gesture would start something that cannot finish.
+ * A block or a component. A drag carries ONE node to a drop target, and a
+ * pattern is a forest placed as a group — so there is no node to hand the
+ * drag, and offering the gesture would start something that cannot finish.
  *
- * A block the click places refuse is still dragged. Its tile says where it
+ * A component lands as the instance node a click writes. The canvas judges
+ * a drop by the node the drag builds, resolving an instance through the
+ * lookup it draws with, so the drop and the tile judge the same roots.
+ *
+ * An entry the click places refuse is still dragged. Its tile says where it
  * belongs ("drag this into one"), and where a drop may land is the canvas's
  * question, judged at the destination, not the panel's.
+ *
+ * Shared by every panel that inserts, so a row is dragged the same way
+ * wherever it is offered.
  */
-function dragTile(
+export function beginEntryDrag(
   event: Parameters<NonNullable<InsertPanelProps["beginInsertDrag"]>>[0],
   entry: InsertEntry,
   drag: {
@@ -808,6 +825,14 @@ function dragTile(
     onInserted: InsertPanelProps["onInsert"];
   }
 ): void {
+  if (entry.kind === "component") {
+    drag.begin?.(event, {
+      blockName: COMPONENT_INSTANCE_TYPE,
+      makeNode: () => nodeForComponentEntry(entry),
+      onInserted: drag.onInserted,
+    });
+    return;
+  }
   if (entry.kind !== "block") return;
   drag.begin?.(event, {
     blockName: entry.blockName,
@@ -822,7 +847,7 @@ function dragTile(
  * What a tile says before what it is: why it cannot go here, or where it goes
  * when that is past the place the placement line names.
  */
-function tileAside(
+export function tileAside(
   offer: EntryOffer | undefined,
   document: BlockDocument
 ): string | undefined {
@@ -1243,7 +1268,7 @@ export function InsertPanel({
         tokens={tokens}
         offers={offers}
       />
-      <LibraryNotices library={library} tab={tab} />
+      <LibraryNotices library={library} tier={tierOf(tab)} />
       <CommandList
         className="nx-insert-panel__list"
         // A pointer that leaves the tiles returns the panel to rest; a
@@ -1331,7 +1356,7 @@ export function InsertPanel({
                     event.currentTarget.dispatchEvent(
                       new PointerEvent("pointermove", { bubbles: true })
                     );
-                    dragTile(event, entry, {
+                    beginEntryDrag(event, entry, {
                       begin: beginInsertDrag,
                       definitions: blockSource,
                       nesting,

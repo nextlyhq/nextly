@@ -119,7 +119,9 @@ async function confirm(): Promise<void> {
     target: { value: "Hero" },
   });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Turn into component" })
+    );
   });
 }
 
@@ -228,7 +230,9 @@ describe("converting from the editor", () => {
       target: { value: "Hero" },
     });
     expect(
-      screen.getByRole("button", { name: "Convert" }).hasAttribute("disabled")
+      screen
+        .getByRole("button", { name: "Turn into component" })
+        .hasAttribute("disabled")
     ).toBe(true);
   });
 });
@@ -256,5 +260,75 @@ describe("saving from the editor", () => {
 
     expect(applyAll).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("one form for both ways", () => {
+  const keep = () =>
+    screen.getByRole("checkbox", {
+      name: "Keep the original blocks on this page",
+    });
+
+  it("is titled for the one menu item, replacing the blocks unless asked to keep them", async () => {
+    stubWriter();
+    mount();
+    expect(
+      screen.getByRole("heading", { name: "Turn into component" })
+    ).toBeTruthy();
+    expect(keep().getAttribute("aria-checked")).toBe("false");
+    await waitFor(() =>
+      expect(screen.queryByText("Checking what this will change…")).toBeNull()
+    );
+  });
+
+  it("keeps the originals and saves a copy when the author ticks it", async () => {
+    stubWriter({
+      create: vi.fn(() =>
+        Promise.resolve(result({ action: "save-as", pageOps: [] }))
+      ),
+    });
+    const { applyAll, onClose } = mount();
+    await waitFor(() =>
+      expect(screen.queryByText("Checking what this will change…")).toBeNull()
+    );
+    fireEvent.click(keep());
+    // The dry run is asked again, for what the form will now do.
+    await waitFor(() =>
+      expect(writer.current.preview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ action: "save-as" })
+      )
+    );
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Hero" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save component" }));
+    });
+    expect(writer.current.create).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "save-as" })
+    );
+    expect(applyAll).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("holds the choice where only one way is open, and says why", async () => {
+    stubWriter();
+    mount({
+      request: {
+        action: "save-as",
+        document: PAGE,
+        choice: {
+          replaceRefused: "A locked block can’t be taken off the page.",
+        },
+      },
+    });
+    expect(keep().getAttribute("aria-checked")).toBe("true");
+    expect(keep().hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByText("A locked block can’t be taken off the page.")
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByText("Checking what this will change…")).toBeNull()
+    );
   });
 });

@@ -218,13 +218,15 @@ describe("the rows", () => {
     expect(rows.map(row => [row.type, row.supported])).toEqual([
       ["text", true],
       ["select", true],
-      ["image", false],
+      // Chosen from the media library, as the Content tab's image is.
+      ["image", true],
     ]);
     expect([...EDITABLE_EXPOSED_TYPES]).toEqual([
       "text",
       "select",
       "link",
       "visibility",
+      "image",
     ]);
   });
 

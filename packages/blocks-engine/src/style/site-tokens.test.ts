@@ -814,6 +814,71 @@ describe("font faces", () => {
   it("refuses a face with no file at all", () => {
     expect(validateFontFace({ family: "B", src: [] }, "f")).toHaveLength(1);
   });
+
+  describe("where a face came from", () => {
+    const google = {
+      kind: "google" as const,
+      id: "inter",
+      licence: "OFL-1.1",
+      category: "sans-serif",
+    };
+
+    it("accepts a face saying it came from Google Fonts or an upload", () => {
+      expect(
+        validateFontFace({ family: "Inter", src: [local], source: google }, "f")
+      ).toEqual([]);
+      expect(
+        validateFontFace(
+          { family: "Brand", src: [local], source: { kind: "upload" } },
+          "f"
+        )
+      ).toEqual([]);
+    });
+
+    it("emits the same rule with or without it, since a page has no use for it", () => {
+      const bare = emitFontFaces([{ family: "Inter", src: [local] }]).css;
+      const sourced = emitFontFaces([
+        { family: "Inter", src: [local], source: google },
+      ]).css;
+      expect(sourced).toBe(bare);
+      expect(sourced).not.toContain("inter");
+    });
+
+    it("refuses a source of a kind it does not know", () => {
+      const issues = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "elsewhere" as "google" },
+        },
+        "fonts[0]"
+      );
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.message).toContain("where it came from");
+    });
+
+    it("refuses a source whose words are longer than any real one", () => {
+      const issues = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "google", licence: "x".repeat(200) },
+        },
+        "fonts[0]"
+      );
+      expect(issues).toHaveLength(1);
+      // The script name is held to the same bound as the other words.
+      const script = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "google", subset: "x".repeat(200) },
+        },
+        "fonts[0]"
+      );
+      expect(script).toHaveLength(1);
+    });
+  });
 });
 
 describe("stored data reaching the stylesheet", () => {
@@ -1446,5 +1511,70 @@ describe("a variable's plain label", () => {
       ":root"
     );
     expect(css).toBe(":root{--site-color-brand:#123456}");
+  });
+});
+
+describe("the default spacing", () => {
+  /**
+   * A length as a browser would resolve it at one viewport width, for the
+   * `rem`/`vw`/`clamp()` forms the spacing defaults are written in.
+   */
+  function pixelsAt(value: string, viewport: number): number {
+    const length = (text: string): number =>
+      text
+        .split("+")
+        .map(term => term.trim())
+        .reduce((sum, term) => {
+          const amount = Number.parseFloat(term);
+          if (term.endsWith("rem")) return sum + amount * 16;
+          if (term.endsWith("vw")) return sum + (amount * viewport) / 100;
+          if (term.endsWith("px")) return sum + amount;
+          throw new Error(`unreadable term ${term}`);
+        }, 0);
+    const clamp = /^clamp\((.+), (.+), (.+)\)$/.exec(value);
+    if (clamp === null) return length(value);
+    const [min, preferred, max] = clamp.slice(1).map(length);
+    return Math.min(Math.max(preferred, min), max);
+  }
+
+  function valueOf(name: string): string {
+    const token = defaultSiteTokens().find(entry => entry.name === name);
+    if (token === undefined) throw new Error(`no default token ${name}`);
+    return token.values.light ?? "";
+  }
+
+  const widths = [375, 768, 1280] as const;
+
+  it.each([
+    ["space.stack", [16, 18, 20]],
+    ["space.section-y", [48, 63, 80]],
+    ["space.gutter", [16, 31, 32]],
+    ["space.columns", [16, 23, 32]],
+    ["space.card", [16, 20, 24]],
+  ] as const)("resolves %s to %j px at 375, 768 and 1280", (name, px) => {
+    expect(
+      widths.map(width => Math.round(pixelsAt(valueOf(name), width)))
+    ).toEqual(px);
+  });
+
+  it("pads a button 12 by 20 at every width", () => {
+    expect(pixelsAt(valueOf("button.padding-y"), 375)).toBe(12);
+    expect(pixelsAt(valueOf("button.padding-x"), 1280)).toBe(20);
+  });
+
+  it("spaces paragraphs by their own size", () => {
+    expect(valueOf("space.paragraph")).toBe("1em");
+  });
+
+  it("emits every spacing token as a custom property the blocks can read", () => {
+    const { css, issues } = emitTokenBlocks(
+      { tokens: defaultSiteTokens() },
+      ":root"
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain(
+      "--site-space-section-y:clamp(3rem, 2rem + 4vw, 5rem)"
+    );
+    expect(css).toContain("--site-button-padding-x:1.25rem");
   });
 });

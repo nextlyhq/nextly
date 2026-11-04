@@ -42,7 +42,6 @@ import type {
   NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
-import { CircleAlert } from "lucide-react";
 import * as React from "react";
 
 import { autoscrollStep } from "./autoscroll";
@@ -69,6 +68,7 @@ import {
 } from "./layers-drop";
 import { isLayersLockFacts } from "./lock-refusal";
 import { refusalAnnouncement, unmovedAnnouncement } from "./move-refusal";
+import { RefusalNotice } from "./refusal-notice";
 
 /** How long the pointer rests on a collapsed row before it opens. */
 export const LAYERS_OPEN_DELAY_MS = 500;
@@ -146,6 +146,12 @@ export interface LayersDrag {
   readonly drawn: LayersDrawn | null;
   /** The live region's text: why the drop under the pointer is refused. */
   readonly announcement: string;
+  /**
+   * Abandon the gesture, held or in flight, drawing nothing: for another
+   * gesture that claims the same press, such as a touch's long press opening
+   * the row menu.
+   */
+  readonly cancel: () => void;
 }
 
 /** What one gesture remembers, none of which renders. */
@@ -783,6 +789,7 @@ export function useLayersDrag({
     draggingId,
     drawn,
     announcement,
+    cancel: reset,
   };
 }
 
@@ -812,7 +819,7 @@ export function LayersDropOverlay({
         aria-hidden="true"
       />
       {wording === null ? null : (
-        <RefusalNotice
+        <PlacedRefusal
           headline={wording.headline}
           remedy={wording.remedy}
           at={drawn.notice}
@@ -831,10 +838,9 @@ export function LayersDropOverlay({
  * the panel, so it keeps the editor's tokens and theme. Kept on screen by
  * moving it back inside the window by its own measured size.
  *
- * The panel's notice surface with a red edge and a warning mark, not a red
- * fill: the reason is read beside ordinary content.
+ * The one refusal notice the canvas draws too (`RefusalNotice`), placed here.
  */
-function RefusalNotice({
+function PlacedRefusal({
   headline,
   remedy,
   at,
@@ -857,23 +863,12 @@ function RefusalNotice({
     );
   }, [at.left, at.top, headline, remedy]);
   return (
-    <div
+    <RefusalNotice
       ref={element}
       className="nx-layers-drop-refusal"
       style={{ position: "fixed", top: placed.top, left: placed.left }}
-      aria-hidden="true"
-    >
-      <CircleAlert
-        className="nx-layers-drop-refusal__mark"
-        size={14}
-        aria-hidden="true"
-      />
-      <span className="nx-layers-drop-refusal__text">
-        <span className="nx-layers-drop-refusal__why">{headline}</span>
-        {remedy === null ? null : (
-          <span className="nx-layers-drop-refusal__takes">{remedy}</span>
-        )}
-      </span>
-    </div>
+      headline={headline}
+      remedy={remedy}
+    />
   );
 }

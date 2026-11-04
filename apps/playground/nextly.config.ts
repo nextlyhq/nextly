@@ -203,6 +203,21 @@ export default defineConfig({
     pageBuilder({
       siteStyle: SITE_STYLE_DEFAULTS,
       pagePreviewPath: "/{slug}",
+      // The route that draws the editor's canvas inside this site's layout.
+      canvasPath: "/page-builder-canvas",
+      // The browser suite's stand-in Google Fonts catalogue, so adding a font
+      // there never reaches the real one. Unset everywhere else: the plugin's
+      // defaults (Fontsource and jsDelivr) apply.
+      ...(process.env.NEXTLY_E2E_FONT_CATALOGUE === undefined
+        ? {}
+        : {
+            fonts: {
+              catalogue: {
+                api: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+                files: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+              },
+            },
+          }),
     }),
     // `redirectRelationships` states where each collection's documents are
     // served, for the same reason `pagePreviewPath` above does and in the same

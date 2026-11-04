@@ -64,7 +64,7 @@ describe("nesting on the write path", () => {
     expect(issues.length).toBeGreaterThan(0);
     // Names where the block WILL go, by the label the editor shows.
     expect(issues.map(i => i.message).join(" ")).toContain(
-      "goes inside Columns"
+      "goes inside a Columns."
     );
   });
 

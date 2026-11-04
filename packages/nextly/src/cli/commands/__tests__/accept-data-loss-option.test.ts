@@ -1,7 +1,8 @@
 /**
  * Every command that can delete data takes the one consent: the
  * `--accept-data-loss` option, given alone or with targets, and the
- * `NEXTLY_ACCEPT_DATA_LOSS` variable. `prune` and `migrate:fresh` are
+ * `NEXTLY_ACCEPT_DATA_LOSS` variable. `prune`, `migrate:fresh`,
+ * `webhooks:prune`, `permissions:cleanup` and `i18n:restore --purge` are
  * exercised further in their own files; this one holds each command to the
  * option, and checks how `plugins uninstall`, `db:sync` and `migrate:down`
  * read it.
@@ -10,10 +11,13 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { exportDataLossConsent, registerDbSyncCommand } from "../db-sync";
+import { registerI18nRestoreCommand } from "../i18n-restore.command";
 import { downConsent, registerMigrateDownCommand } from "../migrate-down";
 import { registerMigrateFreshCommand } from "../migrate-fresh";
+import { createPermissionsCleanupCommand } from "../permissions-cleanup.command";
 import { registerPluginsCommand } from "../plugins";
 import { registerPruneCommand } from "../prune";
+import { registerWebhooksPruneCommand } from "../webhooks-prune.command";
 
 const uninstall = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -48,6 +52,9 @@ function program(): Command {
   registerMigrateFreshCommand(root);
   registerPruneCommand(root);
   registerPluginsCommand(root);
+  registerWebhooksPruneCommand(root);
+  registerI18nRestoreCommand(root);
+  root.addCommand(createPermissionsCleanupCommand());
   return root;
 }
 
@@ -79,6 +86,9 @@ describe("--accept-data-loss on every command that deletes data", () => {
     [["migrate:fresh"]],
     [["prune"]],
     [["plugins", "uninstall"]],
+    [["webhooks:prune"]],
+    [["permissions:cleanup"]],
+    [["i18n:restore"]],
   ])("%j takes it, alone or with targets", path => {
     const option = command(program(), path).options.find(
       o => o.long === "--accept-data-loss"

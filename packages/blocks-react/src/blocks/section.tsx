@@ -12,6 +12,7 @@ import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
 import {
+  CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
   containerContentModel,
   renderContainer,
@@ -42,7 +43,8 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: {
-        label: "HTML tag",
+        label: "Element type",
+        display: "menu",
         type: "select",
         options: ["section", "header", "footer", "main"],
       },
@@ -58,6 +60,22 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       // container rather than only the ones that thought to declare a default.
       children: {},
     },
+    // A band pads itself: room above and below its content and a gutter beside
+    // it, each a site token so a site retunes every section in one place. The
+    // values grow with the viewport (see `space.section-y` and `space.gutter`).
+    baseStyles: {
+      base: {
+        base: {
+          padding: {
+            blockStart: { $token: "space.section-y" },
+            blockEnd: { $token: "space.section-y" },
+            inlineStart: { $token: "space.gutter" },
+            inlineEnd: { $token: "space.gutter" },
+          },
+        },
+      },
+    },
+    childGap: CONTAINER_CHILD_GAP,
     supports: CONTAINER_SUPPORTS,
     // What it is as HTML follows the tag it renders.
     contentModel: containerContentModel,

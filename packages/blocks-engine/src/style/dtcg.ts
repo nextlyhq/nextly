@@ -556,13 +556,14 @@ function trimCssWhitespace(text: string): string {
 }
 
 /**
- * The CSS generic families, plus the `ui-*` system aliases.
+ * The CSS generic families, plus the `ui-*` system aliases. Exported so a
+ * picker offers exactly the keywords the engine accepts.
  *
  * Unquoted, these are KEYWORDS rather than names: `font-family: serif` asks for
  * the browser's serif default, and no `@font-face` can claim it — the engine
  * emits every face family quoted, so only a quoted value can name one.
  */
-const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
+export const GENERIC_FONT_FAMILIES: readonly string[] = [
   "serif",
   "sans-serif",
   "monospace",
@@ -576,7 +577,9 @@ const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
   "math",
   "emoji",
   "fangsong",
-]);
+];
+
+const GENERIC_FAMILIES: ReadonlySet<string> = new Set(GENERIC_FONT_FAMILIES);
 
 /**
  * How CSS reads ONE item of a family list.

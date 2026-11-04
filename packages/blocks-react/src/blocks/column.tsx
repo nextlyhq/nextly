@@ -26,6 +26,7 @@ import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
 import {
+  CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
   containerContentModel,
   renderContainer,
@@ -99,7 +100,12 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       // `article` inside a row is nearly always a mistake the author meant to
       // make one level up. Anything genuinely semantic belongs in the column
       // rather than as the column.
-      as: { label: "HTML tag", type: "select", options: ["div"] },
+      as: {
+        label: "Element type",
+        type: "select",
+        options: ["div"],
+        display: "menu",
+      },
       contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: COLUMN_DEFAULT_PROPS,
@@ -124,6 +130,7 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       children: {},
     },
     baseStyles: COLUMN_BASE_STYLES,
+    childGap: CONTAINER_CHILD_GAP,
     supports: CONTAINER_SUPPORTS,
     // What it is as HTML follows the tag it renders.
     contentModel: containerContentModel,

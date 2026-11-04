@@ -113,7 +113,7 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     href: { label: "Link", role: "content", type: "url" },
     target: {
       label: "Open link in",
-      optionLabels: { _self: "This tab", _blank: "A new tab" },
+      optionLabels: { _self: "This tab", _blank: "New tab" },
       type: "select",
       options: ["_self", "_blank"],
     },

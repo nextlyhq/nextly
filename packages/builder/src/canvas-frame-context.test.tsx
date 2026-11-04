@@ -405,3 +405,24 @@ describe("when the frame's keys start working", () => {
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("the answer as React's development build describes it", () => {
+  it("keeps the frame, its document and its window out of its own keys", () => {
+    /*
+     * A provider's value is described by walking its own enumerable keys, and
+     * a window's own keys include every frame inside it: a page with an Embed
+     * block holds one in an opaque origin, where the walk throws in the middle
+     * of React's commit.
+     */
+    const frame = frameOf();
+    const { result } = renderHook(() => useCanvasFrame(), {
+      wrapper: framed(frame),
+    });
+    const keys = Object.keys(result.current);
+    for (const hidden of ["frame", "document", "window"]) {
+      expect(keys, hidden).not.toContain(hidden);
+    }
+    // The control: the values are still there to be read.
+    expect(result.current.window).toBe(frame.contentWindow);
+  });
+});

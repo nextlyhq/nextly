@@ -18,6 +18,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage] });
@@ -25,6 +26,8 @@ test.describe.configure({ lock: [LOCK.homepage] });
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const BUILDER_URL = /\/admin\/singles\/homepage\/builder\?field=layout$/;
+/** The playground's canvas route, its `canvasPath`. */
+const CANVAS_ROUTE = "/page-builder-canvas";
 
 const NODES = [
   {
@@ -52,7 +55,9 @@ async function seed(page: Page): Promise<void> {
 
 /** The anchor a block draws on the canvas. */
 function linkOf(page: Page, id: string) {
-  return page
+  // In the canvas's frame, which is where the page is drawn and so where a
+  // followed link would navigate.
+  return canvasFrame(page)
     .locator(
       `.nx-canvas [data-nx-node="${id}"] a[href], .nx-canvas a[data-nx-node="${id}"][href]`
     )
@@ -69,11 +74,17 @@ async function openBuilder(page: Page): Promise<void> {
 
 /** The editor is still open, on the same address, with `id` selected. */
 async function stayedOn(page: Page, id: string): Promise<void> {
-  await expect(page.locator(".nx-canvas")).toHaveAttribute(
+  await expect(canvasFrame(page).locator(".nx-canvas")).toHaveAttribute(
     "data-nx-selected-id",
     id
   );
   await expect(page).toHaveURL(BUILDER_URL);
+  // Nor did the FRAME go anywhere: a link followed inside it navigates the
+  // frame alone, leaving the editor's own address where it was. The frame
+  // holds the site's canvas route, which the playground serves.
+  const frame = await page.locator(CANVAS_FRAME).elementHandle();
+  const at = (await frame?.contentFrame())?.url() ?? "";
+  expect(new URL(at).pathname).toBe(CANVAS_ROUTE);
 }
 
 test.describe("a link drawn on the canvas", () => {
@@ -105,7 +116,17 @@ test.describe("a link drawn on the canvas", () => {
     await page.keyboard.press("Enter");
 
     // A new tab or a navigation would have happened by the time a fresh click
-    // has been handled, so selecting the heading marks the end of both.
+    // has been handled, so selecting the heading marks the end of both. The
+    // selection is cleared first: the block toolbar floats over the block
+    // above the selected one, which here is the heading, and would take the
+    // click aimed at it.
+    const root = canvasFrame(page).locator(".nx-canvas");
+    await expect(async () => {
+      await page.keyboard.press("Escape");
+      await expect(root).not.toHaveAttribute("data-nx-selected-id", /.+/, {
+        timeout: 1_000,
+      });
+    }).toPass({ timeout: 10_000 });
     await linkOf(page, "title").click();
     await stayedOn(page, "title");
     expect(context.pages()).toHaveLength(before);

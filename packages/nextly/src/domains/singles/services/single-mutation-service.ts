@@ -69,6 +69,7 @@ import {
   convertTimestampsToCamelCase,
 } from "../../../shared/lib/case-conversion";
 import { refusalIssues } from "../../../shared/lib/denied-change";
+import { detachData } from "../../../shared/lib/detach";
 import {
   validateEntryData,
   type ValidationIssue,
@@ -3077,6 +3078,11 @@ export class SingleMutationService extends BaseService {
                     companion,
                     singleDraftLocale ?? null
                   );
+                  // Judged as the publish writes it: the stored change with
+                  // the request merged over it, as the gate above judges it.
+                  // A request that retypes the live value of a field the
+                  // change is behind on publishes nothing behind live, so it
+                  // goes through in one step.
                   const stale = await outOfDateSharedFields(tx, {
                     ref: {
                       scopeKind: "single",
@@ -3086,7 +3092,11 @@ export class SingleMutationService extends BaseService {
                     locale: singleDraftLocale ?? null,
                     shared,
                     live,
-                    pending: snapshotRecord(pendingDraft.snapshot),
+                    pending: {
+                      ...snapshotRecord(pendingDraft.snapshot),
+                      ...currentData,
+                      ...promotedComponents,
+                    },
                     views,
                   });
                   if (stale.length > 0) {
@@ -3654,7 +3664,11 @@ export class SingleMutationService extends BaseService {
                   },
                 }),
                 // As written: the field groups were lifted out of it before.
-                payload: { ...currentData, ...attemptComponentFields },
+                // A copy of its own, as the save prepares instances in place.
+                payload: detachData({
+                  ...currentData,
+                  ...attemptComponentFields,
+                }),
               },
             });
             if (

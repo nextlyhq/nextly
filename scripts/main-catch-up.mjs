@@ -54,6 +54,8 @@ export const WORKFLOWS = {
     "Unit tests (admin)",
     "Published admin build",
     "CLI entry guard (",
+    "Browser tests (PostgreSQL)",
+    "Browser tests (MySQL)",
     // Not in CI gate (it does not block a merge), but a commit whose browser
     // suite never reached a verdict is not tested.
     "Browser tests",
