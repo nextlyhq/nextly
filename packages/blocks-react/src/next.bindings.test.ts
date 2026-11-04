@@ -41,9 +41,22 @@ const runtime = vi.hoisted(() => ({
   shapes: new Map<string, unknown>(),
   tags: [] as string[][],
   pipelineRuns: 0,
+  // Each judgement of what the public may see (a source's hidden fields, its
+  // field shapes), and those made outside every cached read.
+  judged: [] as string[],
+  uncached: [] as string[],
+  /** Whether the caller runs inside a cached read. */
+  isCached: (): boolean => false,
 }));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const inCache = new AsyncLocalStorage<true>();
+  runtime.isCached = () => inCache.getStore() === true;
+  const judged = (what: string) => {
+    runtime.judged.push(what);
+    if (inCache.getStore() !== true) runtime.uncached.push(what);
+  };
   return {
     ...actual,
     createPublicReader: (
@@ -51,25 +64,32 @@ vi.mock("nextly/runtime", async importOriginal => {
     ) =>
       actual.createPublicReader(source, {
         ...binding,
-        declarations: { hiddenFields: () => [] },
+        declarations: {
+          hiddenFields: (hidden: { kind: string; slug: string }) => {
+            judged(`hidden ${hidden.kind}:${hidden.slug}`);
+            return [];
+          },
+        },
       }),
     cachedFind: (
       read: () => Promise<unknown>,
       options: Parameters<typeof actual.cachedFind>[1]
     ) => {
       runtime.tags.push([...options.tags]);
-      return actual.cachedFind(read, options);
+      return actual.cachedFind(() => inCache.run(true, read), options);
     },
     readPublicSiteSettings: async () => {
       if (runtime.site === null) throw new Error("no site settings");
       return runtime.site;
     },
-    bindingFieldShapes: async (ref: BindingSourceRef) =>
-      runtime.shapes.get(
+    bindingFieldShapes: async (ref: BindingSourceRef) => {
+      const key =
         "collection" in ref
           ? `collection:${ref.collection}`
-          : `single:${ref.single}`
-      ),
+          : `single:${ref.single}`;
+      judged(`shapes ${key}`);
+      return runtime.shapes.get(key);
+    },
   };
 });
 // The read pipeline's migration pass, counted: it runs once per prepared
@@ -246,6 +266,8 @@ beforeEach(() => {
   runtime.shapes = new Map();
   runtime.tags = [];
   runtime.pipelineRuns = 0;
+  runtime.judged = [];
+  runtime.uncached = [];
 });
 
 afterEach(() => {
@@ -611,6 +633,110 @@ describe("a routed page's bindings", () => {
         select: { id: true, name: true },
       }),
     ]);
+  });
+
+  it("judges what the public may see inside the cached reads, so a prerender can cache the page", async () => {
+    runtime.shapes.set("collection:pages", [
+      { name: "title", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+    ]);
+    runtime.shapes.set("collection:authors", [{ name: "name", type: "text" }]);
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "e",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Own", level: "h1" },
+            bindings: { text: { $bind: "author.name" } },
+          },
+          {
+            id: "s",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Own", level: "h2" },
+            bindings: {
+              text: { $bind: "tagline", source: "single", sourceKey: "home" },
+            },
+          },
+          {
+            id: "loop",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", limit: 1 },
+            slots: {
+              children: [
+                {
+                  id: "item",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Own", level: "h3" },
+                  bindings: { text: { $bind: "title", source: "item" } },
+                },
+              ],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const { html } = await renderedPage(
+      createPublicBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      instance(content)
+    );
+    expect(html).toContain("Ada");
+    expect(html).toContain("From the Single");
+    expect(html).toContain("Public");
+    // The control: every kind of judgement was made, for every source read.
+    expect(runtime.judged).toEqual(
+      expect.arrayContaining([
+        "hidden collection:pages",
+        "hidden collection:authors",
+        "hidden single:home",
+        "hidden collection:posts",
+        "shapes collection:pages",
+        "shapes collection:authors",
+        "shapes single:home",
+        "shapes collection:posts",
+      ])
+    );
+    expect(runtime.uncached).toEqual([]);
+  });
+
+  it("a public route reads its site styles inside the cached read, tagged with their Singles", async () => {
+    const seen: boolean[] = [];
+    const config = {
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      siteStyles: {
+        read: () => {
+          seen.push(runtime.isCached());
+          return undefined;
+        },
+        singles: ["site-style"],
+      },
+    };
+    await renderedPage(
+      createPublicBlocksPage,
+      config,
+      instance(boundPage({ $bind: "title" }))
+    );
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(Boolean)).toBe(true);
+    expect(runtime.tags).toContainEqual(nextlySingleTags("site-style"));
+    // An access-enforced route reads them per request, outside any cache.
+    seen.length = 0;
+    await renderedPage(
+      createBlocksPage,
+      config,
+      instance(boundPage({ $bind: "title" }))
+    );
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.some(Boolean)).toBe(false);
   });
 
   it("prepares each document once per render, and the renderer reuses that preparation", async () => {
