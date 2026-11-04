@@ -119,6 +119,7 @@ import {
 } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
+import { SectionHeld } from "./section-held";
 import {
   moveToSharedStyleClear,
   planMoveToSharedStyle,
@@ -5172,10 +5173,21 @@ function textNumber(text: string): number | undefined {
 }
 
 /**
- * Whether the section a field sits in is held read-only. Its fieldset holds
- * the form controls; a control that is not one (a slider's thumb) reads this.
+ * What describes a number field: its own description, and the words for its
+ * unit while it holds a number or nothing yet. A keyword such as `inherit`
+ * has no unit to be said in.
  */
-const SectionHeld = React.createContext(false);
+function describedWithUnit(
+  describedBy: string | undefined,
+  unitWords: string | undefined,
+  draft: string
+): string | undefined {
+  const keyword =
+    trimCssWhitespace(draft) !== "" && textNumber(draft) === undefined;
+  return unitWords === undefined || keyword
+    ? describedBy
+    : [describedBy, unitWords].filter(Boolean).join(" ");
+}
 
 /**
  * The id of words naming a field's unit for a screen reader, where the unit
@@ -5524,11 +5536,7 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         tokens={tokens}
-        describedBy={
-          unitWords === undefined
-            ? describedBy
-            : [describedBy, unitWords].filter(Boolean).join(" ")
-        }
+        describedBy={describedWithUnit(describedBy, unitWords, draft)}
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}

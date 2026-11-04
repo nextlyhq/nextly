@@ -20,6 +20,7 @@ import {
   checkDimensionValue,
   cssColor,
   isCssWideKeyword,
+  trimCssWhitespace,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -40,6 +41,7 @@ import * as React from "react";
 import { commitOnEnter } from "./commit-on-enter";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue } from "./inherited-value";
+import { SectionHeld } from "./section-held";
 import type { AlignmentGroup } from "./style-alignment-icons";
 import { keywordLabel } from "./style-keyword-labels";
 
@@ -193,6 +195,9 @@ export function DecorationField({
   );
   // A part changed keeps the others: a line changed keeps its style.
   const write = (next: Partial<DecorationParts>) => parts.write(next, onCommit);
+  // The popover is mounted outside the section's fieldset, so a section held
+  // while it is open reaches its controls through this instead.
+  const held = React.useContext(SectionHeld);
   return (
     <div className="nx-style-inspector__decoration">
       {/* The icons mark the inherited line, not the whole shorthand. */}
@@ -201,7 +206,9 @@ export function DecorationField({
           id={id}
           labelledBy={labelledBy}
           group={LINE_GROUP}
-          stored={own?.line}
+          // The line just chosen while its write is on its way, so pressing
+          // it again clears it; otherwise the line set here.
+          stored={parts.pending ? parts.current?.line : own?.line}
           actionName={actionName}
           describedBy={describedBy}
           onCommit={line =>
@@ -232,11 +239,13 @@ export function DecorationField({
             parts={parts.current}
             write={write}
             describedBy={describedBy}
+            held={held}
           >
             <DecorationCss
               stored={typeof stored === "string" ? stored : undefined}
               actionName={actionName}
               describedBy={describedBy}
+              held={held}
               onCommit={value => parts.writeCss(value, onCommit)}
             />
           </DecorationStyle>
@@ -259,6 +268,8 @@ function useQueuedParts(
   base: DecorationParts | undefined
 ): {
   current: DecorationParts | undefined;
+  /** Whether a written value has yet to come back as the stored one. */
+  pending: boolean;
   write: (
     next: Partial<DecorationParts>,
     onCommit: (value: StyleValue | null) => CommitOutcome
@@ -307,7 +318,7 @@ function useQueuedParts(
     onCommit: (value: StyleValue | null) => CommitOutcome
   ): CommitOutcome =>
     send(value, value === null ? undefined : parseDecoration(value), onCommit);
-  return { current, write, writeCss };
+  return { current, pending: queue.current.length > 0, write, writeCss };
 }
 
 /**
@@ -349,16 +360,19 @@ function DecorationStyle({
   parts,
   write,
   describedBy,
+  held,
   children,
 }: {
   parts: DecorationParts | undefined;
   write: (next: Partial<DecorationParts>) => CommitOutcome;
   describedBy: string | undefined;
+  /** Whether the section is held read-only. */
+  held: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   const [thickness, setThickness] = useDraft(parts?.thickness);
   const [color, setColor] = useDraft(parts?.color);
-  const disabled = parts === undefined || parts.line === "none";
+  const disabled = held || parts === undefined || parts.line === "none";
   const refusal = {
     "aria-describedby": describedBy,
     "aria-invalid": describedBy === undefined ? undefined : true,
@@ -438,18 +452,27 @@ function DecorationCss({
   stored,
   actionName,
   describedBy,
+  held,
   onCommit,
 }: {
   stored: string | undefined;
   actionName: string;
   describedBy: string | undefined;
+  held: boolean;
   onCommit: (value: string | null) => CommitOutcome;
 }): React.JSX.Element {
   const [text, setText] = useDraft(stored);
+  // Written as typed: CSS's own whitespace decides only whether the field is
+  // empty. Trimmed, a stored value with whitespace around it read as changed
+  // when nothing was, and a no-break space, which is no CSS whitespace,
+  // cleared the decoration rather than being judged as the value it is.
   const commit = () => {
-    const written = text.trim();
-    if (written === (stored ?? "")) return;
-    onCommit(written === "" ? null : written);
+    if (text === (stored ?? "")) return;
+    if (trimCssWhitespace(text) === "") {
+      if (stored !== undefined) onCommit(null);
+      return;
+    }
+    onCommit(text);
   };
   return (
     <label className="nx-style-inspector__decoration-part">
@@ -458,6 +481,7 @@ function DecorationCss({
         aria-label={`${actionName} as CSS`}
         aria-describedby={describedBy}
         aria-invalid={describedBy === undefined ? undefined : true}
+        disabled={held}
         placeholder="underline overline"
         value={text}
         onChange={event => setText(event.target.value)}
