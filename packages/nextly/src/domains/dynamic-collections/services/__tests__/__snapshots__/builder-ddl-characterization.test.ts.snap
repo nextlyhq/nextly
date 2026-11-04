@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS \`dc_pinned\` (
   \`_changed_by_kind\` varchar(16),
   \`_changed_by_id\` varchar(255),
   \`_changed_by_principal_kind\` varchar(64),
+  \`_changed_at\` timestamp,
 \`title\` text NOT NULL,
 \`slug_key\` text  UNIQUE,
 \`short_code\` varchar(120),
@@ -51,12 +52,10 @@ CREATE TABLE IF NOT EXISTS \`dc_pinned_dc_tags_tags\` (
   \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
   CONSTRAINT \`fk_dc_pinned_dc_tags_tags_pinned\` FOREIGN KEY (\`pinned_id\`) REFERENCES \`dc_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
   CONSTRAINT \`fk_dc_pinned_dc_tags_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
-  CONSTRAINT \`uq_dc_pinned_dc_tags_tags_pair\` UNIQUE (\`pinned_id\`, \`tags_id\`)
-);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_pinned_dc_tags_tags_pinned\` ON \`dc_pinned_dc_tags_tags\`(\`pinned_id\`);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_pinned_dc_tags_tags_tags\` ON \`dc_pinned_dc_tags_tags\`(\`tags_id\`);"
+  CONSTRAINT \`uq_dc_pinned_dc_tags_tags_pair\` UNIQUE (\`pinned_id\`, \`tags_id\`),
+  INDEX \`idx_dc_pinned_dc_tags_tags_pinned\` (\`pinned_id\`),
+  INDEX \`idx_dc_pinned_dc_tags_tags_tags\` (\`tags_id\`)
+);"
 `;
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a localized single 1`] = `
@@ -70,6 +69,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
   \`_changed_by_kind\` varchar(16),
   \`_changed_by_id\` varchar(255),
   \`_changed_by_principal_kind\` varchar(64),
+  \`_changed_at\` timestamp,
 \`views\` int,
 \`rating\` double,
 \`published\` tinyint(1),
@@ -99,12 +99,10 @@ CREATE TABLE IF NOT EXISTS \`dc_tags_single_pinned_tags\` (
   \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
   CONSTRAINT \`fk_dc_tags_single_pinned_tags_single_pinned\` FOREIGN KEY (\`single_pinned_id\`) REFERENCES \`single_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
   CONSTRAINT \`fk_dc_tags_single_pinned_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
-  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`)
-);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` ON \`dc_tags_single_pinned_tags\`(\`single_pinned_id\`);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_tags_single_pinned_tags_tags\` ON \`dc_tags_single_pinned_tags\`(\`tags_id\`);"
+  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`),
+  INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` (\`single_pinned_id\`),
+  INDEX \`idx_dc_tags_single_pinned_tags_tags\` (\`tags_id\`)
+);"
 `;
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a single 1`] = `
@@ -118,6 +116,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
   \`_changed_by_kind\` varchar(16),
   \`_changed_by_id\` varchar(255),
   \`_changed_by_principal_kind\` varchar(64),
+  \`_changed_at\` timestamp,
 \`title\` text NOT NULL,
 \`slug_key\` text  UNIQUE,
 \`short_code\` varchar(120),
@@ -155,12 +154,10 @@ CREATE TABLE IF NOT EXISTS \`dc_tags_single_pinned_tags\` (
   \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
   CONSTRAINT \`fk_dc_tags_single_pinned_tags_single_pinned\` FOREIGN KEY (\`single_pinned_id\`) REFERENCES \`single_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
   CONSTRAINT \`fk_dc_tags_single_pinned_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
-  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`)
-);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` ON \`dc_tags_single_pinned_tags\`(\`single_pinned_id\`);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_tags_single_pinned_tags_tags\` ON \`dc_tags_single_pinned_tags\`(\`tags_id\`);"
+  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`),
+  INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` (\`single_pinned_id\`),
+  INDEX \`idx_dc_tags_single_pinned_tags_tags\` (\`tags_id\`)
+);"
 `;
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a single with Draft/Published 1`] = `
@@ -176,6 +173,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
   \`_changed_by_kind\` varchar(16),
   \`_changed_by_id\` varchar(255),
   \`_changed_by_principal_kind\` varchar(64),
+  \`_changed_at\` timestamp,
 \`title\` text NOT NULL,
 \`slug_key\` text  UNIQUE,
 \`short_code\` varchar(120),
@@ -213,12 +211,10 @@ CREATE TABLE IF NOT EXISTS \`dc_tags_single_pinned_tags\` (
   \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
   CONSTRAINT \`fk_dc_tags_single_pinned_tags_single_pinned\` FOREIGN KEY (\`single_pinned_id\`) REFERENCES \`single_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
   CONSTRAINT \`fk_dc_tags_single_pinned_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
-  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`)
-);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` ON \`dc_tags_single_pinned_tags\`(\`single_pinned_id\`);
---> statement-breakpoint
-CREATE INDEX \`idx_dc_tags_single_pinned_tags_tags\` ON \`dc_tags_single_pinned_tags\`(\`tags_id\`);"
+  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`),
+  INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` (\`single_pinned_id\`),
+  INDEX \`idx_dc_tags_single_pinned_tags_tags\` (\`tags_id\`)
+);"
 `;
 
 exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a collection 1`] = `
@@ -233,6 +229,7 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
   "_changed_by_kind" varchar(16),
   "_changed_by_id" text,
   "_changed_by_principal_kind" varchar(64),
+  "_changed_at" timestamp,
 "title" text NOT NULL,
 "slug_key" text,
 "short_code" varchar(120),
@@ -293,6 +290,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "_changed_by_kind" varchar(16),
   "_changed_by_id" text,
   "_changed_by_principal_kind" varchar(64),
+  "_changed_at" timestamp,
 "views" int4,
 "rating" float8,
 "published" bool,
@@ -341,6 +339,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "_changed_by_kind" varchar(16),
   "_changed_by_id" text,
   "_changed_by_principal_kind" varchar(64),
+  "_changed_at" timestamp,
 "title" text NOT NULL,
 "slug_key" text,
 "short_code" varchar(120),
@@ -401,6 +400,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "_changed_by_kind" varchar(16),
   "_changed_by_id" text,
   "_changed_by_principal_kind" varchar(64),
+  "_changed_at" timestamp,
 "title" text NOT NULL,
 "slug_key" text,
 "short_code" varchar(120),
@@ -460,6 +460,7 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
   "_changed_by_kind" text,
   "_changed_by_id" text,
   "_changed_by_principal_kind" text,
+  "_changed_at" integer,
 "title" text NOT NULL,
 "slug_key" text,
 "short_code" text,
@@ -520,6 +521,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "_changed_by_kind" text,
   "_changed_by_id" text,
   "_changed_by_principal_kind" text,
+  "_changed_at" integer,
 "views" integer,
 "rating" real,
 "published" integer,
@@ -568,6 +570,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "_changed_by_kind" text,
   "_changed_by_id" text,
   "_changed_by_principal_kind" text,
+  "_changed_at" integer,
 "title" text NOT NULL,
 "slug_key" text,
 "short_code" text,
@@ -628,6 +631,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "_changed_by_kind" text,
   "_changed_by_id" text,
   "_changed_by_principal_kind" text,
+  "_changed_at" integer,
 "title" text NOT NULL,
 "slug_key" text,
 "short_code" text,

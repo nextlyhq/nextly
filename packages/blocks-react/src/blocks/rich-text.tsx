@@ -148,6 +148,10 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
         },
       },
     },
+    // The space between this block's own paragraphs, headings and lists:
+    // inside the block, from the second element on, so none of it reaches the
+    // block's outer edge. `1em` follows the size of the element it spaces.
+    childGap: { $token: "space.paragraph" },
     supports: {
       typography: true,
       color: true,

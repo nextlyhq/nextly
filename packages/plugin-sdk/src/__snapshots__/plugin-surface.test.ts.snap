@@ -192,6 +192,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useDocumentRestore (value)",
   "useDocumentStatus (value)",
   "useEntryFieldsPanel (value)",
+  "useMediaItem (value)",
+  "useMediaResolver (value)",
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
   "usePluginRoute (value)",

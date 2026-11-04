@@ -366,8 +366,9 @@ function Picker<T extends FieldValues>({
 }
 
 /**
- * An option's words: its label, and a short reason muted after it when it
- * has one (a Layout behind Remove Layout's fence).
+ * An option's words: its label, and a short note muted after it when it
+ * has one (the default Layout's name, or why a Layout behind Remove Layout's
+ * fence is not offered).
  */
 function OptionText({ option }: { option: PickerOption }): JSX.Element {
   if (option.note === undefined) return <>{option.label}</>;
@@ -549,7 +550,11 @@ function SearchingPicker({
           className="w-full justify-between font-normal"
         >
           <span className="min-w-0 truncate text-left">
-            {current?.label ?? "Choose a Layout"}
+            {current === undefined ? (
+              "Choose a Layout"
+            ) : (
+              <OptionText option={current} />
+            )}
           </span>
           <ChevronDown aria-hidden="true" className="h-4 w-4 opacity-50" />
         </Button>

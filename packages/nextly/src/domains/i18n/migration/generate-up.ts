@@ -84,13 +84,18 @@ function buildCompanionCreateStatement(
   // table. A DEFAULT here would be the one place the two could diverge.
   const updatedAtDef = `  ${companionUpdatedAtDdl(dialect)},\n`;
   // Each translation row's version counter and last changer, declared once with a main table's
-  // and rendered by the same function, so the two cannot differ.
-  const documentDefs = migrateStepColumnDescriptors(dialect)
-    .map(
-      column =>
-        `  ${renderSystemColumnSql(column, name => q(name, dialect))},\n`
-    )
-    .join("");
+  // and rendered by the same function, so the two cannot differ. A field group's translation
+  // table is no document's and never carries them, as its runtime model and the migrate step
+  // that adds them to existing tables both leave it out.
+  const documentDefs =
+    spec.kind === "fieldGroup"
+      ? ""
+      : migrateStepColumnDescriptors(dialect)
+          .map(
+            column =>
+              `  ${renderSystemColumnSql(column, name => q(name, dialect))},\n`
+          )
+          .join("");
   // 🔴 `IF NOT EXISTS` is OPT-IN, and only an emitted migration FILE may ask for it.
   //
   // A file reaches a database that very often already has the companion: `ensureCompanionTable`

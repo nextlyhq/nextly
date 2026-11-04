@@ -134,9 +134,11 @@ const QUOTE_BASE_STYLES = {
       // `<blockquote>` and a `<figure>` by about 40px of its own, so in a host
       // with no reset that margin ADDS to the padding below and the indent is
       // whatever the browser happened to choose plus whatever this states.
+      // The block sides are zeroed too: the quote is spaced from its
+      // neighbours by the gap of whatever holds it, like every other block.
       margin: {
-        blockStart: "1.5em",
-        blockEnd: "1.5em",
+        blockStart: "0",
+        blockEnd: "0",
         inlineStart: "0",
         inlineEnd: "0",
       },

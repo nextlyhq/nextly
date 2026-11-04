@@ -691,6 +691,21 @@ export type {
  * carry into anything that names a format.
  */
 export { useUploadMedia } from "@nextlyhq/admin";
+/**
+ * A media item by id, as a query a component renders from: a thumbnail, a
+ * preview. The admin's own read of one item, cached by id.
+ *
+ * @experimental
+ */
+export { useMediaItem } from "@nextlyhq/admin";
+/**
+ * Read a media item by id from code that draws a page, outside a component's
+ * render. The same query as `useMediaItem`, so the two share one cache and
+ * one read in flight.
+ *
+ * @experimental
+ */
+export { useMediaResolver } from "@nextlyhq/admin";
 
 /**
  * @experimental The media library as a dialog a plugin can open: browse,
@@ -779,6 +794,10 @@ export { usePluginRouteMutation } from "@nextlyhq/admin";
  * moment it awaits can. Same session handling and CSRF token as the hook; not
  * cached, and it invalidates nothing. Experimental while its first caller
  * settles; the intent is to keep its name and options stable.
+ *
+ * `keepalive: true` (optional, additive) sends the write so the browser
+ * finishes it after the page is hidden or closed, while its body fits the
+ * 64 KB browsers allow; a larger one goes as an ordinary request.
  */
 export { writePluginRoute } from "@nextlyhq/admin";
 /**

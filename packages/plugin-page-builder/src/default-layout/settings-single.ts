@@ -107,7 +107,7 @@ export function pageBuilderSettingsSingle(): SingleConfig {
       }),
       // The seed's identity. The repair finds the Layout it seeded by this id
       // and never by title or slug, so an authored Layout that happens to be
-      // called "Default (site)" is never adopted, renamed or republished.
+      // called "Site layout" is never adopted, renamed or republished.
       relationship({
         name: "seededLayout",
         label: "Seeded Layout",

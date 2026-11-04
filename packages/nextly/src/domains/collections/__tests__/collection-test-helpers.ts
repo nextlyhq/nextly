@@ -370,6 +370,19 @@ export function createMockComponentDataService(): MockRecord {
       .mockImplementation((params: { entries: unknown[] }) =>
         Promise.resolve(params.entries)
       ),
+    // The read of one entry's components in several languages, which every
+    // component read goes through: one copy of the entry per language asked.
+    populateComponentDataByLanguage: vi
+      .fn()
+      .mockImplementation(
+        async ({
+          entry,
+          languages,
+        }: {
+          entry: Record<string, unknown>;
+          languages: readonly unknown[];
+        }) => languages.map(() => ({ ...entry }))
+      ),
     populateComponentData: vi
       .fn()
       .mockImplementation((params: { entry: unknown }) =>

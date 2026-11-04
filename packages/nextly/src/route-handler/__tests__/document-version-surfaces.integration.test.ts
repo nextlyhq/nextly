@@ -27,9 +27,12 @@ import {
 import { createDynamicHandlers } from "../../routeHandler";
 
 const NOTES = "rev_notes";
+/** Draft/Published with held drafts, for a discard. */
+const DRAFTED = "rev_drafted";
 const SETTINGS = "rev_settings";
 
 let services: PluginRouteContext["services"]["collections"] | undefined;
+let versions: PluginRouteContext["services"]["versions"] | undefined;
 
 const probe = definePlugin({
   name: "document-version-probe",
@@ -37,6 +40,7 @@ const probe = definePlugin({
   nextly: ">=0.0.1",
   init: ctx => {
     services = ctx.services.collections;
+    versions = ctx.services.versions;
   },
 });
 
@@ -45,6 +49,7 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
   services = undefined;
+  versions = undefined;
 });
 
 const OPEN = {
@@ -61,6 +66,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: NOTES,
+        access: OPEN,
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: DRAFTED,
+        status: true,
+        versions: { drafts: true },
         access: OPEN,
         fields: [text({ name: "title" })],
       }),
@@ -266,5 +278,69 @@ describe.each(getConfiguredTestDialects())(
       };
       expect(listed.data.map(item => item._rev)).toEqual(["2"]);
     });
+
+    it("a trusted plugin's discard of a held draft changes the version a read gives", async () => {
+      // Through the document's own service, as every discard goes: never
+      // straight to the draft table, which would leave the version as it was.
+      const t = await boot(dialect);
+      const created = (await t.nextly.create({
+        collection: DRAFTED as never,
+        data: { title: "live", status: "published" },
+        overrideAccess: true,
+      } as never)) as unknown as { item?: Record<string, unknown> };
+      const id = String(created.item?.id);
+      await t.nextly.update({
+        collection: DRAFTED as never,
+        id,
+        data: { title: "held" },
+        overrideAccess: true,
+      } as never);
+      const read = async () =>
+        (
+          (await t.nextly.findByID({
+            collection: DRAFTED as never,
+            id,
+            overrideAccess: true,
+          } as never)) as Record<string, unknown>
+        )._rev;
+      const held = await read();
+
+      const removed = await versions!.deleteWorkingDraft(
+        { scopeKind: "collection", scopeSlug: DRAFTED, entryId: id },
+        null
+      );
+      expect(removed).toBe(1);
+      expect(await read()).not.toBe(held);
+    });
+
+    it("refuses a trusted plugin's discard inside its own transaction, rather than waiting on it", async () => {
+      // The discard takes the document's lock in a transaction of its own,
+      // which a row the plugin's transaction wrote would hold it from.
+      const t = await boot(dialect);
+      const created = (await t.nextly.create({
+        collection: DRAFTED as never,
+        data: { title: "live", status: "published" },
+        overrideAccess: true,
+      } as never)) as unknown as { item?: Record<string, unknown> };
+      const id = String(created.item?.id);
+      await t.nextly.update({
+        collection: DRAFTED as never,
+        id,
+        data: { title: "held" },
+        overrideAccess: true,
+      } as never);
+      const ref = { scopeKind: "collection", scopeSlug: DRAFTED, entryId: id };
+
+      await expect(
+        services!.withTransaction(async tx => {
+          await services!.updateEntryInTransaction(tx, DRAFTED, id, {
+            title: "written in the plugin's transaction",
+          });
+          return versions!.deleteWorkingDraft(ref as never, null);
+        })
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      // Nothing discarded: the draft is still there to discard afterwards.
+      expect(await versions!.deleteWorkingDraft(ref as never, null)).toBe(1);
+    }, 60_000);
   }
 );

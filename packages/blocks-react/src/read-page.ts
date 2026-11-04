@@ -211,7 +211,12 @@ export function preparePageForRead(
     compile.context,
     args.resolver,
     storedSheetCannotDescribe(document, stages, args.styles, args.resolver),
-    { fetchPolicyId: compile.fetchPolicyId }
+    {
+      fetchPolicyId: compile.fetchPolicyId,
+      ...(compile.mayFetchUrl === undefined
+        ? {}
+        : { mayFetchUrl: compile.mayFetchUrl }),
+    }
   );
 
   // Compiled against the PREPARED tree whatever the reading view decides. The

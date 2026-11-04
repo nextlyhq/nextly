@@ -103,6 +103,45 @@ export async function expectHeldBy(
     .toBe(label);
 }
 
+/**
+ * Waits until the lock route reports `document` free.
+ *
+ * Within `timeout`, well inside the lease, so a claim that is free only
+ * because its lease ran out does not count as one that was handed back.
+ */
+export async function expectFree(
+  api: APIRequestContext,
+  document: LockedDocument,
+  timeout = 10_000
+): Promise<void> {
+  // The holder itself, not its label: a holder with no label is still held.
+  await expect
+    .poll(async () => (await holderOf(api, document)) === null, {
+      message: "the lock route reports the document free",
+      timeout,
+    })
+    .toBe(true);
+}
+
+/**
+ * Claims `document` through the lock route as `api`'s user, and returns the
+ * claim's token: what a release has to present.
+ */
+export async function claimToken(
+  api: APIRequestContext,
+  document: LockedDocument
+): Promise<string> {
+  const claimed = await api.post("/admin/api/document-lock", {
+    data: { ...document, takeover: false, requestAccess: false },
+  });
+  expect(claimed.ok(), await claimed.text()).toBe(true);
+  const { item } = (await claimed.json()) as {
+    item: { status: string; claimToken?: string };
+  };
+  expect(item.status, "the claim").toBe("acquired");
+  return String(item.claimToken);
+}
+
 /** The holder the lock route reports for `document`, or null when it is free. */
 async function holderOf(
   api: APIRequestContext,

@@ -34,6 +34,11 @@ const DOCS = "docs";
 const LANGUAGES = `dc_${DOCS}_locales`;
 /** No languages: the plainest entry there is. */
 const NOTES = "notes";
+/** Draft and published, so a published entry holds an edit as a working draft. */
+const POSTS = "posts";
+/** Keeps history and runs an after-change hook, to see a refusal reach neither. */
+const HOOKED = "hooked";
+let afterChangeCalls = 0;
 /** A person whose saves are named in a refusal. */
 const ANA = {
   id: "user-ana",
@@ -65,6 +70,26 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineCollection({
         slug: NOTES,
         access: OPEN,
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: HOOKED,
+        versions: true,
+        access: OPEN,
+        hooks: {
+          afterChange: [
+            () => {
+              afterChangeCalls += 1;
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: POSTS,
+        status: true,
+        versions: { drafts: true },
+        access: { ...OPEN, publish: () => true, unpublish: () => true },
         fields: [text({ name: "title" })],
       }),
     ],
@@ -768,5 +793,197 @@ describe.each(getConfiguredTestDialects())(
         }
       );
     });
+
+    it("dates the change by when the counter moved, a held draft included, and gives no time for a row never saved since", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: POSTS, overrideAccess: true },
+        { title: "live", status: "published" }
+      );
+      const id = idOf(created);
+      // Past SQLite's whole second, so the held draft's moment is not the
+      // row's last update.
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      // A published entry holds this edit as a working draft: the counter and
+      // its time move, `updated_at` does not.
+      const held = await update(t, POSTS, id, { title: "held" }, { user: ANA });
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      const row = await stored(t, `dc_${POSTS}`, id);
+      expect(new Date(row._changed_at as Date).getTime()).toBeGreaterThan(
+        new Date(row.updated_at as Date).getTime()
+      );
+
+      const refused = await update(t, POSTS, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(refused.publicData).toMatchObject({
+        changedBy: { kind: "person", name: ANA.name },
+        changedAt: new Date(row._changed_at as Date).toISOString(),
+      });
+
+      // A row from before the column existed: who and when are unknown.
+      await t.adapter.executeQuery(
+        `UPDATE ${q(t, `dc_${POSTS}`)} SET ${q(t, "_changed_at")} = NULL, ${q(t, "_changed_by_kind")} = NULL, ${q(t, "_changed_by_id")} = NULL WHERE ${q(t, "id")} = ${t.adapter.dialect === "postgresql" ? "$1" : "?"}`,
+        [id]
+      );
+      const unknown = await update(t, POSTS, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(unknown).toMatchObject({ code: "STALE_VERSION" });
+      expect(unknown.publicData).not.toHaveProperty("changedBy");
+      expect(unknown.publicData).not.toHaveProperty("changedAt");
+    });
+
+    it("gives the newest recorded version to compare against where the entry keeps history, and none where it keeps none", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: POSTS, overrideAccess: true },
+        { title: "first", status: "draft" }
+      );
+      const id = idOf(created);
+      await update(t, POSTS, id, { title: "theirs" }, { user: ANA });
+      const refused = await update(t, POSTS, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+
+      const versions = t.getService("versionsService") as unknown as {
+        listPartVersions(
+          ref: object
+        ): Promise<{ versionNo: number; locale: string | null }[]>;
+        get(ref: object, versionNo: number): Promise<{ snapshot: unknown }>;
+      };
+      const ref = { scopeKind: "collection", scopeSlug: POSTS, entryId: id };
+      const newest = Math.max(
+        ...(await versions.listPartVersions(ref)).map(v => v.versionNo)
+      );
+      const history = refused.publicData?.historyVersion as {
+        version: number;
+        locale: string | null;
+      };
+      expect(history.version).toBe(newest);
+      // The version named is the save that came in between.
+      const snapshot = (await versions.get(ref, history.version)).snapshot;
+      expect(JSON.stringify(snapshot)).toContain("theirs");
+
+      const note = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "a" }
+      );
+      await update(t, NOTES, idOf(note), { title: "b" });
+      const unversioned = await update(t, NOTES, idOf(note), {
+        title: "c",
+        _rev: revOf(note),
+      });
+      expect(unversioned).toMatchObject({ code: "STALE_VERSION" });
+      expect(unversioned.publicData).not.toHaveProperty("historyVersion");
+    });
+
+    it("refuses with no after-change hook, no history event and no version recorded", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: HOOKED, overrideAccess: true },
+        { title: "first" }
+      );
+      const id = idOf(created);
+      const count = async (table: string) =>
+        (await t.adapter.select<Record<string, unknown>>(table, {})).length;
+      const measure = async () => ({
+        hooks: afterChangeCalls,
+        events: await count("nextly_content_events"),
+        versions: await count("nextly_versions"),
+      });
+      const delta = (
+        from: Awaited<ReturnType<typeof measure>>,
+        to: Awaited<ReturnType<typeof measure>>
+      ) => ({
+        hooks: to.hooks - from.hooks,
+        events: to.events - from.events,
+        versions: to.versions - from.versions,
+      });
+
+      // What one applied save leaves behind, so the refused one's share is known.
+      const start = await measure();
+      const applied = await update(t, HOOKED, id, { title: "second" });
+      const oneSave = delta(start, await measure());
+      expect(oneSave.hooks).toBeGreaterThan(0);
+      expect(oneSave.versions).toBeGreaterThan(0);
+
+      // Two saves from the same version at once: both pass the check before
+      // the hooks, so the refused one is refused under the row lock.
+      const before = await measure();
+      const results = await Promise.all(
+        ["one", "two"].map(title =>
+          update(t, HOOKED, id, { title, _rev: revOf(applied) })
+        )
+      );
+      const refused = results.filter(r => r.code === "STALE_VERSION");
+      expect(
+        results.filter(r => r.success).length,
+        JSON.stringify(results)
+      ).toBe(1);
+      expect(refused).toHaveLength(1);
+      const flags = refused[0] as {
+        eventRecorded?: boolean;
+        committed?: boolean;
+      };
+      expect(flags.eventRecorded ?? false).toBe(false);
+      expect(flags.committed ?? false).toBe(false);
+      // Exactly one save's worth of hooks, events and versions: the refused one left none.
+      expect(delta(before, await measure())).toEqual(oneSave);
+    });
+
+    // SQLite runs one write transaction at a time: the other connection's
+    // save would wait for the caller's transaction to end.
+    it.skipIf(dialect === "sqlite")(
+      "refuses, in a caller's transaction that read the entry first, a version another connection's save replaced",
+      async () => {
+        const t = await boot(dialect);
+        const created = await handlerOf(t).createEntry(
+          { collectionName: NOTES, overrideAccess: true },
+          { title: "first" }
+        );
+        const id = idOf(created);
+        // The other connection's save, started outside the caller's
+        // transaction so it runs as a separate caller would, and let go from
+        // inside it once the caller has read.
+        let go!: () => void;
+        const signalled = new Promise<void>(resolve => {
+          go = resolve;
+        });
+        const theirs = signalled.then(() =>
+          update(t, NOTES, id, { title: "theirs" })
+        );
+        await expect(
+          t.adapter.transaction(async tx => {
+            // The caller's own read first: on MySQL it fixes what every plain
+            // read in this transaction sees from here on.
+            const seen = await tx.selectOne<Record<string, unknown>>(
+              `dc_${NOTES}`,
+              {
+                where: { and: [{ column: "id", op: "=", value: id }] },
+              }
+            );
+            expect(seen?.title).toBe("first");
+            go();
+            const saved = await theirs;
+            expect(saved.success, JSON.stringify(saved)).toBe(true);
+            // Then the caller saves from the version it read before.
+            await serviceOf(t).updateEntryInTransaction(
+              tx,
+              NOTES,
+              id,
+              { title: "mine", _rev: revOf(created) },
+              { overrideAccess: true } as never
+            );
+          })
+        ).rejects.toMatchObject({ code: "STALE_VERSION" });
+        expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
+      }
+    );
   }
 );
