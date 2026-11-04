@@ -32,11 +32,13 @@ import {
   sqliteForeignKeysOffGuard,
   sqliteSwapStatements,
 } from "../../pipeline/sql-templates/sqlite-swap";
+import { sqliteAffinity } from "../../value-conversion/column-type";
 import type { ColumnState } from "../types";
 
 import {
   OWNER_CAN,
   PRIMARY_KEY_OWNER_CAN,
+  UNIQUE_KEY_OWNER_CAN,
   checkRefusals,
   expressionIndexRefusal,
   kindChanges,
@@ -353,56 +355,68 @@ function kindChangeRefusals(
 }
 
 /**
- * The stored generated columns whose expression reads the column. The rebuild computes each again
- * from the converted values, so a value that reads the column's type (`typeof(c)`) would change in
- * place: the same rule PostgreSQL keeps, where any type change under one is refused. A virtual
- * column stores nothing; it is computed on each read, as any query over the column is.
+ * The stored generated columns that read the column, directly or through other generated columns
+ * (`s AS (v) STORED` over `v AS (typeof(c)) VIRTUAL`). The rebuild computes each again from the
+ * converted values, so a value that reads the column's type would change in place: the same rule
+ * PostgreSQL keeps, where any type change under one is refused. A virtual column stores nothing;
+ * it is computed on each read, as any query over the column is.
  */
 function storedGeneratedRefusals(
   facts: SqliteTableFacts,
   request: ConversionRequest
 ): CannotCarry[] {
-  const stored = new Set(
+  const expressions = generatedExpressions(facts);
+  // Until no further generated column is found reading the column or one already found.
+  const reading = new Set<string>();
+  const readsAny = (tokens: readonly Token[]): boolean =>
+    namesColumn(tokens, request.column) ||
+    [...reading].some(name => namesColumn(tokens, name));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const expression of expressions) {
+      if (reading.has(expression.name) || !readsAny(expression.tokens))
+        continue;
+      reading.add(expression.name);
+      grew = true;
+    }
+  }
+  return expressions
+    .filter(expression => expression.stored && reading.has(expression.name))
+    .map(expression => ({
+      property: "generated column",
+      name: expression.name,
+      reason:
+        "the stored generated column is computed from this column, and the rebuild would compute it again from the converted values, changing what it stores",
+      ownerCan: OWNER_CAN["generated column"],
+    }));
+}
+
+/** Each generated column's expression, as tokens, from the table's stored statement. */
+function generatedExpressions(
+  facts: SqliteTableFacts
+): { name: string; stored: boolean; tokens: Token[] }[] {
+  const generated = new Map(
     facts.columns
-      .filter(column => column.storedGenerated === true)
-      .map(column => column.name.toLowerCase())
+      .filter(column => column.generated)
+      .map(column => [
+        column.name.toLowerCase(),
+        column.storedGenerated === true,
+      ])
   );
   const words = significant(tokenize(facts.createSql) ?? []);
   const open = columnListStart(words);
   const items = open === undefined ? undefined : columnListItems(words, open);
-  return (items ?? []).flatMap((item): CannotCarry[] => {
+  return (items ?? []).flatMap(item => {
     const name = item[0] === undefined ? "" : identifierOf(item[0]);
-    if (!stored.has(name.toLowerCase())) return [];
+    const stored = generated.get(name.toLowerCase());
     const as = item.findIndex(
       (token, k) => isWord(token, "AS") && isPunct(item[k + 1], "(")
     );
     const close = as < 0 ? undefined : closingParen(item, as + 1);
-    if (close === undefined) return [];
-    if (!namesColumn(item.slice(as + 2, close), request.column)) return [];
-    return [
-      {
-        property: "generated column",
-        name,
-        reason:
-          "the stored generated column is computed from this column, and the rebuild would compute it again from the converted values, changing what it stores",
-        ownerCan: OWNER_CAN["generated column"],
-      },
-    ];
+    return stored === undefined || close === undefined
+      ? []
+      : [{ name, stored, tokens: item.slice(as + 2, close) }];
   });
-}
-
-/**
- * SQLite's affinity for a declared type, by its documented rules, in their order: INT gives
- * INTEGER; CHAR, CLOB or TEXT gives TEXT; BLOB or no type gives BLOB; REAL, FLOA or DOUB gives
- * REAL; anything else NUMERIC.
- */
-function affinityOf(type: string): string {
-  const upper = type.toUpperCase();
-  if (upper.includes("INT")) return "INTEGER";
-  if (/CHAR|CLOB|TEXT/.test(upper)) return "TEXT";
-  if (upper.includes("BLOB") || upper.trim() === "") return "BLOB";
-  if (/REAL|FLOA|DOUB/.test(upper)) return "REAL";
-  return "NUMERIC";
 }
 
 /**
@@ -415,8 +429,9 @@ function affinityKeyRefusals(
   facts: SqliteTableFacts,
   request: ConversionRequest
 ): CannotCarry[] {
-  const from = affinityOf(request.from.type);
-  const to = affinityOf(request.to.type);
+  // Judged by the same affinity rule the row conversion uses.
+  const from = sqliteAffinity(request.from.type);
+  const to = sqliteAffinity(request.to.type);
   if (from === to) return [];
   const isColumn = (name: string): boolean =>
     name.toLowerCase() === request.column.toLowerCase();
@@ -429,7 +444,7 @@ function affinityKeyRefusals(
           property: "key",
           name: key.name,
           reason: `the unique key compares the column's stored values, and ${change} can store two values it holds apart as one (as INTEGER, '1' and '01' both become 1)`,
-          ownerCan: "drop the unique key, run the repair, then add it again",
+          ownerCan: UNIQUE_KEY_OWNER_CAN,
         })
       ),
     ...facts.foreignKeys

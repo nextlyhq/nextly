@@ -38,10 +38,12 @@ import {
   expressionIndexRefusal,
   foreignKeyRefusals,
   isIntegerType,
+  keepsEquality,
   kindChanges,
   refusedDefault,
   renderedType,
   typeChanges,
+  uniqueKeyRefusal,
   type Carry,
 } from "./carry";
 import type {
@@ -157,6 +159,7 @@ export function mysqlCarry(
     textOrBlob: isMysqlTextOrBlobType(to),
     kindChange: kindChanges(request),
     length: parseColumnType(request.to).length,
+    keepsValuesApart: keepsEquality(request),
   };
   return {
     cannotCarry: [
@@ -203,6 +206,8 @@ interface MysqlTarget {
   kindChange: boolean;
   /** A string type's length, the longest prefix it can be keyed by. */
   length: number | undefined;
+  /** Whether the change keeps two values that differ apart, which a unique key needs. */
+  keepsValuesApart: boolean;
 }
 
 /**
@@ -269,7 +274,13 @@ function mysqlIndexRefusals(
       continue;
     }
     const reason = mysqlIndexRefusal(index, to, target);
-    if (reason === null) continue;
+    if (reason === null) {
+      // A unique key the new type can index, but whose values the change can make equal.
+      if (index.unique && !target.keepsValuesApart) {
+        refused.set(index.name, uniqueKeyRefusal(index.name, to));
+      }
+      continue;
+    }
     refused.set(
       index.name,
       index.name === "PRIMARY"

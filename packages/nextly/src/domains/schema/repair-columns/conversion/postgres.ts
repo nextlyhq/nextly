@@ -26,11 +26,13 @@ import { parseColumnType } from "../../value-conversion/column-type";
 import {
   OWNER_CAN,
   isIntegerType,
+  keepsEquality,
   defaultLiteralRefusal,
   foreignKeyRefusals,
   refusedDefault,
   renderedType,
   typeChanges,
+  uniqueKeyRefusal,
   type Carry,
 } from "./carry";
 import type {
@@ -49,6 +51,8 @@ export interface PostgresIndexUse {
   name: string;
   /** The column is one of the index's keys as it is, not inside an expression. */
   keyed: boolean;
+  /** The index is unique: a primary key, a unique constraint's index or a unique index. */
+  unique?: boolean;
   /** The column is read by one of the index's expressions or by its predicate. */
   inExpression: boolean;
   /** The operator class the column's key names, where it names one rather than the default. */
@@ -189,7 +193,9 @@ export function postgresCarry(
       : []),
     ...readerRefusals(facts),
     ...postgresDefaultRefusals(request, facts.default),
-    ...facts.indexes.flatMap(index => postgresIndexRefusals(index, to, probe)),
+    ...facts.indexes.flatMap(index =>
+      postgresIndexRefusals(index, to, probe, keepsEquality(request))
+    ),
     ...facts.checks.flatMap(check => {
       const refusal = probeRefusal("check", check.name, to, probe);
       return refusal === null ? [] : [refusal];
@@ -298,13 +304,15 @@ function postgresDefaultRefusals(
 }
 
 /**
- * An index key the new type cannot be indexed by, or a key expression or predicate reading the
- * column that PostgreSQL refused against the new type.
+ * An index key the new type cannot be indexed by; a unique key over the column where the change
+ * can make two values equal (`keepsEquality`), which the rebuilt index would refuse; or a key
+ * expression or predicate reading the column that PostgreSQL refused against the new type.
  */
 function postgresIndexRefusals(
   index: PostgresIndexUse,
   to: string,
-  probe: PostgresExpressionProbe
+  probe: PostgresExpressionProbe,
+  keepsValuesApart: boolean
 ): CannotCarry[] {
   if (index.keyed && !index.keptByNewType) {
     return [
@@ -318,6 +326,9 @@ function postgresIndexRefusals(
         ownerCan: OWNER_CAN.index,
       },
     ];
+  }
+  if (index.keyed && index.unique === true && !keepsValuesApart) {
+    return [uniqueKeyRefusal(index.name, to)];
   }
   const refusal = index.inExpression
     ? probeRefusal("index", index.name, to, probe)
@@ -445,6 +456,7 @@ interface ColumnRow {
 
 interface IndexRow {
   name: string;
+  is_unique: boolean;
   method: string;
   /** Each key as PostgreSQL prints it alone: a column or an expression, no order or opclass. */
   key_definitions: string[];
@@ -529,7 +541,7 @@ async function readPostgresCarryFacts(
   const indexes = await querySqlRows<IndexRow>(
     db,
     "postgresql",
-    sql`SELECT ic.relname AS name, am.amname AS method,
+    sql`SELECT ic.relname AS name, am.amname AS method, x.indisunique AS is_unique,
           (SELECT array_agg(pg_get_indexdef(x.indexrelid, n, true) ORDER BY n)
              FROM generate_series(1, x.indnkeyatts) n) AS key_definitions,
           pg_get_expr(x.indpred, x.indrelid, true) AS predicate,
@@ -660,6 +672,7 @@ async function readPostgresCarryFacts(
     indexes: indexes.map(index => ({
       name: index.name,
       keyed: index.keyed,
+      unique: index.is_unique,
       inExpression: index.in_expression,
       explicitOpclass: index.explicit_opclass,
       keptByNewType: index.kept,

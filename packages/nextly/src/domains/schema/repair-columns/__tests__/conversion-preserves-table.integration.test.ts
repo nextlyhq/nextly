@@ -912,7 +912,12 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
         { type: "int4", nullable: false },
         { type: "text", nullable: false }
       );
-      expect(named).toEqual([["definition", "c"]]);
+      // The column is also the primary key, and integer to text is not among the changes that
+      // keep a unique key's values apart, so the key is named too.
+      expect(named).toEqual([
+        ["definition", "c"],
+        ["key", "conv_ident_pkey"],
+      ]);
       await expect(runPlan(connection, plan)).rejects.toThrow(/identity/);
       // Another integer keeps it.
       expect(
@@ -1009,7 +1014,11 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
         { type: "int", nullable: false },
         { type: "varchar(36)", nullable: false }
       );
-      expect(named).toEqual([["definition", "c"]]);
+      // The column is also the primary key, named as a unique key the change can merge.
+      expect(named).toEqual([
+        ["definition", "c"],
+        ["key", "PRIMARY"],
+      ]);
       await expect(runPlan(connection, plan)).rejects.toThrow(
         /Incorrect column specifier/
       );
@@ -1203,6 +1212,143 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
       );
       expect(named).toEqual([["check", "conv_ro_filled"]]);
       expect(plan.cannotCarry[0].reason).toContain("read-only transaction");
+    }
+  );
+
+  it.skipIf(!onSqlite)(
+    "a stored generated column that reads the column through a virtual one blocks a type change",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_gen2 (id integer PRIMARY KEY, c text, v text AS (typeof(c)) VIRTUAL, s text AS (v) STORED)"
+      );
+      const { named } = await blockedBy(
+        "conv_gen2",
+        "c",
+        { type: "text", nullable: true },
+        { type: "integer", nullable: true }
+      );
+      expect(named).toEqual([["generated column", "s"]]);
+    }
+  );
+
+  it.skipIf(!onPostgres)(
+    "an expression index whose other keys carry an operator class and an order is tried as it is, not refused for its syntax",
+    async () => {
+      // PostgreSQL prints a key alone without its operator class, collation or order, so the
+      // probe's copy of the index is valid syntax; the real index keeps all three.
+      await connection.exec(
+        "CREATE TABLE conv_dec (id integer PRIMARY KEY, c varchar(36))"
+      );
+      await connection.exec(
+        "CREATE INDEX conv_dec_i ON conv_dec (c text_pattern_ops, (length(c)) DESC, id DESC) WHERE c <> ''"
+      );
+      const { plan, named } = await blockedBy(
+        "conv_dec",
+        "c",
+        { type: "varchar", typeModifier: "36", nullable: true },
+        { type: "varchar", typeModifier: "255", nullable: true }
+      );
+      expect(named).toEqual([]);
+      await runPlan(connection, plan);
+      const [row] = await connection.query<{ definition: string }>(
+        "SELECT pg_get_indexdef('conv_dec_i'::regclass) AS definition"
+      );
+      expect(row.definition).toContain("text_pattern_ops");
+      expect(row.definition).toContain("DESC");
+    }
+  );
+
+  it.skipIf(!onPostgres)(
+    "a unique key blocks a change that can make two values equal, and keeps one that cannot",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_uq (id integer PRIMARY KEY, j text UNIQUE, u text UNIQUE, n numeric(10,2) UNIQUE, v varchar(36) UNIQUE, i integer UNIQUE)"
+      );
+      // Two spellings of one JSON value: distinct as text, one value as jsonb.
+      await connection.exec(
+        `INSERT INTO conv_uq (id, j) VALUES (1, '{"a":1}'), (2, '{ "a": 1 }')`
+      );
+      const TEXT = { type: "text", nullable: true };
+      const NUMERIC = { type: "numeric", typeModifier: "10,2", nullable: true };
+      const toJson = await blockedBy("conv_uq", "j", TEXT, {
+        type: "jsonb",
+        nullable: true,
+      });
+      expect(toJson.named).toEqual([["key", "conv_uq_j_key"]]);
+      // The block is what PostgreSQL does: rebuilding the unique index meets the two as one.
+      await expect(runPlan(connection, toJson.plan)).rejects.toThrow(
+        /could not create unique index/
+      );
+      for (const [column, from, to, key] of [
+        ["u", TEXT, { type: "uuid", nullable: true }, "conv_uq_u_key"],
+        [
+          "n",
+          NUMERIC,
+          { type: "numeric", typeModifier: "10,1", nullable: true },
+          "conv_uq_n_key",
+        ],
+      ] as const) {
+        expect((await blockedBy("conv_uq", column, from, to)).named).toEqual([
+          ["key", key],
+        ]);
+      }
+      for (const [column, from, to] of [
+        [
+          "v",
+          { type: "varchar", typeModifier: "36", nullable: true },
+          { type: "varchar", typeModifier: "255", nullable: true },
+        ],
+        [
+          "i",
+          { type: "int4", nullable: true },
+          { type: "int8", nullable: true },
+        ],
+        [
+          "n",
+          NUMERIC,
+          { type: "numeric", typeModifier: "12,2", nullable: true },
+        ],
+      ] as const) {
+        expect((await blockedBy("conv_uq", column, from, to)).named).toEqual(
+          []
+        );
+      }
+    }
+  );
+
+  it.skipIf(!onMysql)(
+    "a unique key blocks decimal becoming double, and keeps a wider decimal",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_uqm (id int PRIMARY KEY, d decimal(10,2), i int, CONSTRAINT conv_uqm_d UNIQUE (d), CONSTRAINT conv_uqm_i UNIQUE (i))"
+      );
+      const DECIMAL = { type: "decimal(10,2)", nullable: true };
+      expect(
+        (
+          await blockedBy("conv_uqm", "d", DECIMAL, {
+            type: "double",
+            nullable: true,
+          })
+        ).named
+      ).toEqual([["key", "conv_uqm_d"]]);
+      expect(
+        (
+          await blockedBy("conv_uqm", "d", DECIMAL, {
+            type: "decimal(14,2)",
+            nullable: true,
+          })
+        ).named
+      ).toEqual([]);
+      expect(
+        (
+          await blockedBy(
+            "conv_uqm",
+            "i",
+            { type: "int", nullable: true },
+            { type: "bigint", nullable: true }
+          )
+        ).named
+      ).toEqual([]);
     }
   );
 });

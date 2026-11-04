@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { keepsEquality } from "../carry";
 import type { CannotCarry, ConversionRequest } from "../types";
 import { mysqlCarry, mysqlCheckSource, type MysqlCarryFacts } from "../mysql";
 import { postgresCarry, type PostgresCarryFacts } from "../postgres";
@@ -705,5 +706,92 @@ describe("MySQL: what the new type cannot keep", () => {
       "characterSet",
       "collation",
     ]);
+  });
+});
+
+describe("a unique key under a change that can make two values equal", () => {
+  const change = (
+    dialect: ConversionRequest["dialect"],
+    from: ConversionRequest["from"],
+    to: ConversionRequest["to"]
+  ): ConversionRequest => ({ dialect, table: "t", column: "c", from, to });
+  const pg = (type: string, typeModifier?: string) => ({
+    type,
+    ...(typeModifier === undefined ? {} : { typeModifier }),
+    nullable: true,
+  });
+  const my = (type: string) => ({ type, nullable: true });
+
+  it("keeps equality only from a string to a string, to a wider integer, float4 to float8 and numeric to numeric of one scale", () => {
+    const kept = [
+      change("postgresql", pg("varchar", "36"), pg("varchar", "255")),
+      change("postgresql", pg("text"), pg("varchar", "255")),
+      change("postgresql", pg("int4"), pg("int8")),
+      change("postgresql", pg("float4"), pg("float8")),
+      change("postgresql", pg("numeric", "10,2"), pg("numeric", "12,2")),
+      change("mysql", my("int"), my("bigint unsigned")),
+      change("mysql", my("decimal(10,2)"), my("decimal(14,2)")),
+    ];
+    const merges = [
+      change("postgresql", pg("text"), pg("jsonb")),
+      change("postgresql", pg("text"), pg("uuid")),
+      change("postgresql", pg("numeric", "10,2"), pg("numeric", "10,1")),
+      change("postgresql", pg("numeric", "10,2"), pg("float8")),
+      change("postgresql", pg("int8"), pg("int4")),
+      change("mysql", my("decimal(10,2)"), my("double")),
+    ];
+    expect(kept.map(keepsEquality)).toEqual(kept.map(() => true));
+    expect(merges.map(keepsEquality)).toEqual(merges.map(() => false));
+  });
+
+  it("PostgreSQL: a unique key on the column is named where the change can merge values; a plain index is not", () => {
+    const facts = pgFacts({
+      indexes: [
+        {
+          name: "posts_body_key",
+          keyed: true,
+          unique: true,
+          inExpression: false,
+          explicitOpclass: null,
+          keptByNewType: true,
+        },
+        {
+          name: "idx_body",
+          keyed: true,
+          inExpression: false,
+          explicitOpclass: null,
+          keptByNewType: true,
+        },
+      ],
+    });
+    const plan = postgresCarry(pgRequest(TEXT, JSONB), facts);
+    expect(named(plan.cannotCarry, "key")).toEqual(["posts_body_key"]);
+    expect(named(plan.cannotCarry, "index")).toEqual([]);
+    expect(
+      postgresCarry(pgRequest(TEXT, VARCHAR_255), facts).cannotCarry
+    ).toEqual([]);
+  });
+
+  it("MySQL: a unique key on the column is named where the change can merge values, the primary key as PRIMARY", () => {
+    const facts = mysqlFacts({
+      indexes: [
+        { name: "PRIMARY", unique: true, prefix: null, expression: false },
+        { name: "uq_amount", unique: true, prefix: null, expression: false },
+        { name: "idx_amount", unique: false, prefix: null, expression: false },
+      ],
+    });
+    const DECIMAL = { type: "decimal(10,2)", nullable: false };
+    const plan = mysqlCarry(
+      mysqlRequest(DECIMAL, { type: "double", nullable: false }),
+      facts
+    );
+    expect(named(plan.cannotCarry, "key")).toEqual(["PRIMARY", "uq_amount"]);
+    expect(named(plan.cannotCarry, "index")).toEqual([]);
+    expect(
+      mysqlCarry(
+        mysqlRequest(DECIMAL, { type: "decimal(14,2)", nullable: false }),
+        facts
+      ).cannotCarry
+    ).toEqual([]);
   });
 });

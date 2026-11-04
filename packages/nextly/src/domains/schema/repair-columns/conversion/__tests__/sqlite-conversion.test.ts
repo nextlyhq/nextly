@@ -461,6 +461,22 @@ describe("planSqliteConversion: what a change of affinity cannot keep", () => {
     ).toEqual([]);
   });
 
+  it("a stored generated column that reads the column through a virtual one blocks a type change", () => {
+    const createSql = `CREATE TABLE "t" ("id" integer PRIMARY KEY, "c" text, "v" text AS (typeof(c)) VIRTUAL, "s" text AS (v) STORED, "w" text AS (upper(s)) STORED)`;
+    const columns: SqliteTableFacts["columns"] = [
+      { name: "id", generated: false, primaryKey: true },
+      { name: "c", generated: false, primaryKey: false },
+      { name: "v", generated: true, primaryKey: false },
+      { name: "s", generated: true, primaryKey: false, storedGenerated: true },
+      { name: "w", generated: true, primaryKey: false, storedGenerated: true },
+    ];
+    // `s` reads `c` through `v`, and `w` through `s`: both are computed again from the new values.
+    expect(named(convert(createSql, { columns }, INTEGER))).toEqual([
+      ["generated column", "s"],
+      ["generated column", "w"],
+    ]);
+  });
+
   it("a unique key or a foreign key on the column blocks a change of affinity, naming the key; the same affinity keeps both", () => {
     const createSql = `CREATE TABLE "t" ("id" integer PRIMARY KEY, "c" text UNIQUE REFERENCES "p" ("k"), "d" text)`;
     const keys: Partial<SqliteTableFacts> = {

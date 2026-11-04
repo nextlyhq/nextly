@@ -5,7 +5,7 @@
 //
 // @module domains/schema/repair-columns/conversion/carry
 
-import { typesDiffer } from "../../pipeline/diff/declared-size";
+import { declaredSize, typesDiffer } from "../../pipeline/diff/declared-size";
 import { normalizeType } from "../../pipeline/diff/normalize-type";
 import {
   parseColumnType,
@@ -196,8 +196,23 @@ export function foreignKeyRefusals(
   }));
 }
 
-/** The integer types, as `normalizeType` spells them, MySQL's one- and three-byte ones included. */
-const INTEGER_TYPES = new Set(["int2", "int4", "int8", "tinyint", "mediumint"]);
+/**
+ * The integer types, as `normalizeType` spells them, MySQL's one- and three-byte ones included,
+ * each by its width in bytes.
+ */
+const INTEGER_WIDTH: Record<string, number> = {
+  tinyint: 1,
+  int2: 2,
+  mediumint: 3,
+  int4: 4,
+  int8: 8,
+};
+
+/** An integer type's width in bytes, signed or not; undefined for any other type. */
+function integerWidth(state: ColumnState): number | undefined {
+  const bare = state.type.replace(/\s+(unsigned|zerofill)\b/gi, "");
+  return INTEGER_WIDTH[normalizeType(bare) ?? ""];
+}
 
 /**
  * Whether a column type is an integer, signed or not: the only types a MySQL `AUTO_INCREMENT`
@@ -205,8 +220,54 @@ const INTEGER_TYPES = new Set(["int2", "int4", "int8", "tinyint", "mediumint"]);
  * any other type.
  */
 export function isIntegerType(state: ColumnState): boolean {
-  const bare = state.type.replace(/\s+(unsigned|zerofill)\b/gi, "");
-  return INTEGER_TYPES.has(normalizeType(bare) ?? "");
+  return integerWidth(state) !== undefined;
+}
+
+/** A numeric type's scale as declared (`10,2` gives `2`, `10` gives `0`); undefined unbounded. */
+function scaleOf(state: ColumnState): string | undefined {
+  const size = declaredSize({ name: "", ...state });
+  return size === undefined ? undefined : (size.split(",")[1]?.trim() ?? "0");
+}
+
+const STRING_FAMILIES = new Set(["text", "varchar", "char"]);
+
+/**
+ * Whether the conversion keeps two values that differ apart, so a unique key over the column
+ * holds after it: a string becoming another string, an integer a wider one, float4 float8, and a
+ * numeric another numeric of the same scale. Any other change can make two values one: text as
+ * jsonb (`'{"a":1}'` and `'{ "a": 1 }'`) or uuid (letter case), a numeric rounded to a smaller
+ * scale or to a double. Judged from the types alone, reading no row.
+ */
+export function keepsEquality(request: ConversionRequest): boolean {
+  if (!typeChanges(request)) return true;
+  const from = parseColumnType(request.from).family;
+  const to = parseColumnType(request.to).family;
+  if (STRING_FAMILIES.has(from) && STRING_FAMILIES.has(to)) return true;
+  const fromWidth = integerWidth(request.from);
+  const toWidth = integerWidth(request.to);
+  if (fromWidth !== undefined && toWidth !== undefined) {
+    return toWidth > fromWidth;
+  }
+  if (from === "float4" && to === "float8") return true;
+  return (
+    from === "numeric" &&
+    to === "numeric" &&
+    scaleOf(request.from) === scaleOf(request.to)
+  );
+}
+
+/** What the owner can change where a unique key over the column cannot keep its values apart. */
+export const UNIQUE_KEY_OWNER_CAN =
+  "drop the unique key, run the repair, then add it again";
+
+/** The entry for a unique key a conversion that can merge values would break. */
+export function uniqueKeyRefusal(name: string, to: string): CannotCarry {
+  return {
+    property: "key",
+    name,
+    reason: `the unique key compares the column's values, and converting to ${to} can make two values it holds apart equal`,
+    ownerCan: UNIQUE_KEY_OWNER_CAN,
+  };
 }
 
 /** What the owner can change where the column is in its table's primary key. */
