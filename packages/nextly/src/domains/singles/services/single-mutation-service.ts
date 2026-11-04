@@ -108,6 +108,7 @@ import { willRecordSingleActivity } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
+  recordOverwriteEvent,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -201,9 +202,11 @@ import {
   type TakenLiveValues,
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
+import { overwriteRecordOf } from "../../versions/overwrite-record";
 import {
   givenOf,
   judgedLanguage,
+  type PartState,
   poolRevisionReader,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
@@ -2796,14 +2799,18 @@ export class SingleMutationService extends BaseService {
             await tx.lockRow(singleMeta.tableName, existingDoc.id);
             lockedDocumentId = existingDoc.id;
             // The main row's version, read under the lock as it is now: a save
-            // committed since the caller read leaves it out of date.
-            await refuseIfMainMoved(
+            // committed since the caller read leaves it out of date. Kept for an
+            // overwrite, whose history names whom it replaced from this read.
+            const mainBefore = await refuseIfMainMoved(
               tx,
               this.adapter.dialect,
               versionCheck,
               { table: singleMeta.tableName, id: existingDoc.id },
               staleWrite
             );
+            // The save's language row as it stood before this save wrote it,
+            // for an overwrite's history; set where the row is written below.
+            let languageBefore: PartState | undefined;
 
             // Read the pre-write main row on THIS transaction before the update
             // overwrites it, so the outbox `previous` reports the prior state
@@ -3839,7 +3846,7 @@ export class SingleMutationService extends BaseService {
             ) {
               // The language's version, judged by the save's first write of
               // its row: a refusal here rolls the whole save back.
-              const { claimed } = await refuseIfLanguageMoved(
+              const { claimed, before } = await refuseIfLanguageMoved(
                 tx,
                 this.adapter.dialect,
                 versionCheck,
@@ -3853,6 +3860,7 @@ export class SingleMutationService extends BaseService {
                 savedBy,
                 staleWrite
               );
+              if (before && judgedLocale === writeLocale) languageBefore = before;
               await writeCompanionValues({
                 tx,
                 dialect: this.adapter.dialect,
@@ -4877,6 +4885,25 @@ export class SingleMutationService extends BaseService {
                     to: dataLocaleStatus,
                   })),
                 ]
+              );
+            }
+
+            // An overwrite is recorded whatever the Single keeps, in this
+            // transaction, so a save that cannot record it is not kept either.
+            if (versionCheck.kind === "overwrite") {
+              await recordOverwriteEvent(
+                tx,
+                { adapter: this.adapter },
+                {
+                  subject: { kind: "single", slug, id: existingDoc.id },
+                  actor,
+                  personName: options.user?.name ?? null,
+                  locale: judgedLocale ?? null,
+                  ...overwriteRecordOf(versionCheck, {
+                    main: mainBefore?.main,
+                    language: languageBefore,
+                  }),
+                }
               );
             }
 
