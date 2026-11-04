@@ -15,6 +15,7 @@ import {
   prepareDocumentForRead,
   registeredBlocks,
 } from "@nextlyhq/blocks-react";
+import { blockNameOf } from "@nextlyhq/builder";
 import {
   BlockContextMenu,
   BlockKeyboardActions,
@@ -63,7 +64,10 @@ import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
-import { SiteStyleHistoryContext } from "../site-style-client";
+import {
+  SiteStyleHistoryContext,
+  SiteStylePreviewContext,
+} from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
 import {
@@ -649,6 +653,15 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     breakpoints: canvasRender.styleContext.breakpoints,
                     id: view.editedBreakpoint,
                   }}
+                  // A selected placement's frame is tagged with the name its
+                  // Layers row reads.
+                  nameOf={address =>
+                    blockNameOf(
+                      editor.document,
+                      address,
+                      componentLibrary.titleOf
+                    )
+                  }
                 />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
@@ -858,19 +871,22 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
   const style = useSiteStyleHistory();
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
-      <StyleRevisionContext.Provider value={style.replay}>
-        <ConnectStyleHistoryContext.Provider value={style.connect}>
-          {/*
+      {/* Held style edits, drawn before they are stored. */}
+      <SiteStylePreviewContext.Provider value={style.preview}>
+        <StyleRevisionContext.Provider value={style.replay}>
+          <ConnectStyleHistoryContext.Provider value={style.connect}>
+            {/*
             The canvas's frame, provided above the whole editor: the canvas
             registers it here, and the inspector, the toolbar, inline editing
             and the keys outside the canvas all ask it which document and
             window the page is drawn in.
           */}
-          <CanvasFrameProvider>
-            <EditorBody {...props} />
-          </CanvasFrameProvider>
-        </ConnectStyleHistoryContext.Provider>
-      </StyleRevisionContext.Provider>
+            <CanvasFrameProvider>
+              <EditorBody {...props} />
+            </CanvasFrameProvider>
+          </ConnectStyleHistoryContext.Provider>
+        </StyleRevisionContext.Provider>
+      </SiteStylePreviewContext.Provider>
     </SiteStyleHistoryContext.Provider>
   );
 }

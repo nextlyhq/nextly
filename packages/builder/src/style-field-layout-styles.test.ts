@@ -173,3 +173,31 @@ describe("the field stacks before a control runs out of room", () => {
     );
   });
 });
+
+describe("a segmented choice's selected state", () => {
+  it("is told by its words' weight and colour, not by its fill alone", () => {
+    // The accent fill alone measured about 1.7:1 against the unselected
+    // background in dark, under 3:1: "This tab" and "New tab" could not be
+    // told apart.
+    const button = ruleBody(CHROME, ".nx-style-inspector__toggle > button");
+    expect(button).toContain("font-weight: 500");
+    expect(button).toContain("color: var(--nx-muted-foreground)");
+    const chosen = ruleBody(
+      CHROME,
+      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"]'
+    );
+    expect(chosen).toContain("font-weight: 600");
+    expect(chosen).toContain("color: var(--nx-foreground)");
+  });
+
+  it("is a step lighter in dark, its fill told from the panel's black", () => {
+    expect(
+      ruleBody(
+        CHROME,
+        '.dark .nx-style-inspector__toggle > button[aria-pressed="true"],\n.dark .nx-style-inspector__toggle > button[aria-checked="true"]'
+      )
+    ).toContain(
+      "background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground))"
+    );
+  });
+});

@@ -13,53 +13,53 @@ import { seedSlug, seedTitle } from "./seed-names";
 
 describe("the seeded Layout's title", () => {
   it("is the base title when nothing holds it", () => {
-    expect(seedTitle(new Set())).toBe("Default (site)");
+    expect(seedTitle(new Set())).toBe("Site layout");
   });
 
   it("is not moved by an authored Layout titled Default", () => {
-    expect(seedTitle(new Set(["Default"]))).toBe("Default (site)");
+    expect(seedTitle(new Set(["Default"]))).toBe("Site layout");
   });
 
   it("takes the first free number when the base title is held", () => {
-    expect(seedTitle(new Set(["Default (site)"]))).toBe("Default (site) 2");
+    expect(seedTitle(new Set(["Site layout"]))).toBe("Site layout 2");
   });
 
   it("skips every numbered title already held, and fills a gap", () => {
     expect(
       seedTitle(
-        new Set(["Default (site)", "Default (site) 2", "Default (site) 3"])
+        new Set(["Site layout", "Site layout 2", "Site layout 3"])
       )
-    ).toBe("Default (site) 4");
-    expect(seedTitle(new Set(["Default (site)", "Default (site) 3"]))).toBe(
-      "Default (site) 2"
+    ).toBe("Site layout 4");
+    expect(seedTitle(new Set(["Site layout", "Site layout 3"]))).toBe(
+      "Site layout 2"
     );
   });
 });
 
 describe("the seeded Layout's slug", () => {
   it("is the base slug when nothing holds it", () => {
-    expect(seedSlug(new Set())).toBe("default-site");
+    expect(seedSlug(new Set())).toBe("site-layout");
   });
 
   it("is not moved by an authored Layout at the slug default", () => {
-    expect(seedSlug(new Set(["default"]))).toBe("default-site");
+    expect(seedSlug(new Set(["default"]))).toBe("site-layout");
   });
 
   it("takes the first free number when the base slug is held", () => {
-    expect(seedSlug(new Set(["default-site"]))).toBe("default-site-2");
+    expect(seedSlug(new Set(["site-layout"]))).toBe("site-layout-2");
   });
 
   it("skips every numbered slug already held, and fills a gap", () => {
     expect(
-      seedSlug(new Set(["default-site", "default-site-2", "default-site-3"]))
-    ).toBe("default-site-4");
-    expect(seedSlug(new Set(["default-site", "default-site-3"]))).toBe(
-      "default-site-2"
+      seedSlug(new Set(["site-layout", "site-layout-2", "site-layout-3"]))
+    ).toBe("site-layout-4");
+    expect(seedSlug(new Set(["site-layout", "site-layout-3"]))).toBe(
+      "site-layout-2"
     );
   });
 
   it("is picked apart from the title: a held title does not move the slug", () => {
-    expect(seedSlug(new Set(["Default (site)"]))).toBe("default-site");
-    expect(seedTitle(new Set(["default-site"]))).toBe("Default (site)");
+    expect(seedSlug(new Set(["Site layout"]))).toBe("site-layout");
+    expect(seedTitle(new Set(["site-layout"]))).toBe("Site layout");
   });
 });

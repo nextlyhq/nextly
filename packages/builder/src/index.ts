@@ -269,6 +269,7 @@ export {
  */
 export {
   ancestorIds,
+  blockNameOf,
   componentTitles,
   filterLayers,
   layerLabel,

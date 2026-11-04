@@ -54,6 +54,7 @@ vi.mock("../site-style-client", () => ({
         : spacing.reply(mode);
     },
   }),
+  useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
   useFontCatalogueClient: () => ({
     load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
     add: async () => undefined,

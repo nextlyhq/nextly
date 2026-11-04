@@ -64,6 +64,7 @@ import {
 import { useSharedStylesClient } from "../shared-styles-client";
 import {
   useFontCatalogueClient,
+  useHeldSiteStyle,
   useSaveSiteStyle,
   useSaveSpacingMode,
 } from "../site-style-client";
@@ -159,6 +160,11 @@ export function offerableTokens(
  * the author a page no visitor would see, with no other surface on which to
  * notice the difference.
  *
+ * Shown at once and stored once the author pauses: each edit is held for the
+ * pause, so a run of edits is one write and one step of undo, and it is
+ * written at once when a variable's editor closes, the Variables tab or this
+ * panel goes away, or the page is saved.
+ *
  * It is the Design panel's FRAME rather than its Variables tab, because the
  * panel's header belongs to every tab: the preview switch and the
  * import-and-export menu are drawn into it from here, and an import made from
@@ -187,6 +193,7 @@ export function TokensStudio({
   children: React.ReactNode;
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
+  const held = useReleasedOnLeave(useHeldSiteStyle());
   // The server refuses a change to the site style without this grant; the
   // panel shows the variables read-only rather than offering edits it would
   // refuse.
@@ -245,19 +252,11 @@ export function TokensStudio({
        * canvas compiles, so saving it whole would copy every config token into
        * the database on the first edit and mask the site's code from then on.
        */
-      tokenOverrideOf(baseline, next)
-    ).then(result => {
-      const outcome = tokenSaveOutcome(
-        result.saved,
-        result.issues,
-        next,
-        latest.current,
-        persisted.current
-      );
-      if (result.saved) persisted.current = next;
-      if (outcome.tokens !== undefined) show(outcome.tokens);
-      if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
-    });
+      tokenOverrideOf(baseline, next),
+      { hold: true }
+    ).then(result =>
+      settleTokenSave(result, next, { latest, persisted }, show, setIssue)
+    );
   };
 
   /*
@@ -276,9 +275,11 @@ export function TokensStudio({
     tokens: edits ?? editable,
     supplied: baseline,
     issue,
-    absence: pending ? "pending" : "failed",
+    absence: absenceOf(pending),
     readOnly: !mayChange,
     onChange: commit,
+    onActivity: held.extend,
+    onSettle: () => void held.release(),
     currentTokens,
     header,
     ...spacing,
@@ -305,7 +306,7 @@ export function TokensStudio({
 function useSpacingModeChoice(
   stored: SpacingMode | undefined,
   report: (issue: string | undefined) => void
-): Pick<TokensPanelProps, "spacingMode" | "onSpacingModeChange"> {
+): Pick<TokensPanelProps, "spacing"> {
   const { save } = useSaveSpacingMode();
   const [chosen, setChosen] = useState<SpacingMode | null>(null);
   // The latest choice, by number, and the saves in the order they were made.
@@ -316,27 +317,74 @@ function useSpacingModeChoice(
   const queue = useRef<Promise<void>>(Promise.resolve());
   if (stored === undefined) return {};
   return {
-    spacingMode: chosen ?? stored,
-    onSpacingModeChange: mode => {
-      latest.current += 1;
-      const submission = latest.current;
-      setChosen(mode);
-      report(undefined);
-      queue.current = queue.current.then(async () => {
-        if (submission !== latest.current) return;
-        const result = await save(mode);
-        if (submission !== latest.current) return;
-        if (result.saved && result.refreshed) {
-          setChosen(null);
-          return;
-        }
-        // Stored but not read back: the choice stays shown, since the store
-        // holds it, and the editor says it could not refresh.
-        if (!result.saved) setChosen(null);
-        report(result.issue);
-      });
+    spacing: {
+      mode: chosen ?? stored,
+      onChange: mode => {
+        latest.current += 1;
+        const submission = latest.current;
+        setChosen(mode);
+        report(undefined);
+        queue.current = queue.current.then(async () => {
+          if (submission !== latest.current) return;
+          const result = await save(mode);
+          if (submission !== latest.current) return;
+          if (result.saved && result.refreshed) {
+            setChosen(null);
+            return;
+          }
+          // Stored but not read back: the choice stays shown, since the store
+          // holds it, and the editor says it could not refresh.
+          if (!result.saved) setChosen(null);
+          report(result.issue);
+        });
+      },
     },
   };
+}
+
+/**
+ * What a token save's answer does to the studio: the set it shows, the line
+ * it says, and the last set known to be stored. `tokenSaveOutcome` decides;
+ * this applies.
+ */
+function settleTokenSave(
+  result: { saved: boolean; issues: Readonly<Record<string, string>> },
+  next: SiteTokenSet,
+  refs: {
+    readonly latest: { current: SiteTokenSet | null };
+    readonly persisted: { current: SiteTokenSet | null };
+  },
+  show: (tokens: SiteTokenSet | null) => void,
+  setIssue: (issue: string | undefined) => void
+): void {
+  const outcome = tokenSaveOutcome(
+    result.saved,
+    result.issues,
+    next,
+    refs.latest.current,
+    refs.persisted.current
+  );
+  if (result.saved) refs.persisted.current = next;
+  if (outcome.tokens !== undefined) show(outcome.tokens);
+  if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
+}
+
+/**
+ * The held site-style writes, written when the panel goes away: whatever an
+ * edit left waiting is stored, an import made from another tab included.
+ */
+function useReleasedOnLeave<H extends { release: () => Promise<void> }>(
+  held: H
+): H {
+  const release = useRef(held.release);
+  release.current = held.release;
+  useEffect(() => () => void release.current(), []);
+  return held;
+}
+
+/** Why the studio has no variables to show: a read in flight, or one that failed. */
+function absenceOf(pending: boolean): "pending" | "failed" {
+  return pending ? "pending" : "failed";
 }
 
 /** The tokens studio's state, for the Variables tab inside it. */

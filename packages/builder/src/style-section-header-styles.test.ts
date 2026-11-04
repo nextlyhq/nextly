@@ -608,10 +608,8 @@ describe("the inspector at the editor's density", () => {
     );
     expect(input).toContain("padding-block: 0");
     expect(input).toContain("line-height: var(--nx-builder-line-height)");
-    // Exact text: the selector also appears inside a narrow-rail query.
-    expect(FLAT).toContain(
-      ".nx-inspector__field--exposed > label, .nx-inspector__field--exposed > .nx-inspector__field-name { display: flex; align-items: center; min-height: var(--nx-control-height); }"
-    );
+    // A placement row's name cell takes the control height: pinned in
+    // instance-inspector-styles.test.ts with the row's grid.
     const segment = ruleBody(".nx-style-inspector__toggle > button");
     expect(segment).toContain("height: var(--nx-control-height)");
     expect(segment).toContain("padding: 0 0.5rem");
@@ -623,6 +621,20 @@ describe("the inspector at the editor's density", () => {
     );
     expect(ruleBody(".nx-inspector__fields")).toContain(
       "gap: var(--nx-builder-row-gap)"
+    );
+  });
+});
+
+describe("a rich-text field in the Content tab", () => {
+  it("is drawn as a field at least the control's height", () => {
+    // An unstyled element is as tall as its one 16px line, or nothing when
+    // empty: under the 24px a target needs, which axe refused.
+    const field = ruleBody(".nx-inspector__rich-text");
+    expect(field).toContain("min-height: var(--nx-control-height)");
+    expect(field).toContain("border: 1px solid var(--nx-input)");
+    expect(field).toContain("cursor: text");
+    expect(ruleBody(".nx-inspector__rich-text:focus-visible")).toContain(
+      "outline: 2px solid var(--nx-ring)"
     );
   });
 });

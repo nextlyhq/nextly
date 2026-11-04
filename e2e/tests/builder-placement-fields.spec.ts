@@ -271,20 +271,28 @@ test.describe("a placement's exposed fields", () => {
       "data-nx-exposed",
       ""
     );
-    // The heading is also the placement's selected root: it keeps the solid
-    // selection ring rather than trading it for the dashed one. The marks are
-    // drawn over the canvas frame, so the ring is a mark there and no dashed
-    // mark is drawn over the heading.
+    // The placement is ONE frame around its parts, tagged with its name, and
+    // the heading, a selected part as well as an exposed one, keeps its dash
+    // inside it. The marks are drawn over the canvas frame.
     await expect(await headline(page, "p1")).toHaveAttribute(
       "data-nx-selected",
       /.*/
     );
-    await expect(
-      page.locator('.nx-canvas-mark[data-mark="selected"]')
-    ).not.toHaveCount(0);
+    const frame = page.locator('.nx-canvas-mark[data-mark="selected"]');
+    await expect(frame).toHaveCount(1);
+    await expect(frame).toHaveAttribute("data-component", "");
+    await expect(frame).toHaveAttribute(
+      "data-placement-label",
+      `◇ ${COMPONENT_TITLE}`
+    );
+    // One dash for each exposed part, the selected heading's included.
+    const exposedParts = await (await canvasRoot(page))
+      .locator("[data-nx-exposed]")
+      .count();
+    expect(exposedParts).toBeGreaterThan(0);
     await expect(
       page.locator('.nx-canvas-mark[data-mark="exposed"]')
-    ).toHaveCount(0);
+    ).toHaveCount(exposedParts);
     await expect(
       (await canvasRoot(page))
         .locator('[data-nx-instance="p1"]')
@@ -309,7 +317,7 @@ test.describe("a placement's exposed fields", () => {
     await link.press("Enter");
     await expect(refusal).toHaveCount(0);
 
-    await page.getByRole("checkbox", { name: "Button shown" }).click();
+    await page.getByRole("switch", { name: "Button shown" }).click();
 
     await save(page, pageId);
     const stored = await storedPlacements(page, pageId);
@@ -332,7 +340,7 @@ test.describe("a placement's exposed fields", () => {
       page.getByRole("textbox", { name: "Button link" })
     ).toHaveValue("/pricing");
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).not.toBeChecked();
     await expect(row(page, "Heading level")).toContainText("H3");
   });
@@ -387,7 +395,7 @@ test.describe("a placement's exposed fields", () => {
       page.getByRole("textbox", { name: "Button link" })
     ).toBeDisabled();
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).toBeDisabled();
 
     const text = await headline(page, "p1");
