@@ -106,6 +106,14 @@ describe("builderChecklist", () => {
     expect(step(empty, "build-page")?.done).toBe(false);
   });
 
+  it("points at the empty page's own Add section button first", () => {
+    // The start card's button is on the canvas beside this step, so the step
+    // names it before the rail.
+    expect(step(documentOf([]), "add-block")?.hint).toBe(
+      "Click Add section, or open Add in the left rail."
+    );
+  });
+
   it("counts the first block as done once one is there", () => {
     expect(step(documentOf([heading("a")]), "add-block")?.done).toBe(true);
   });

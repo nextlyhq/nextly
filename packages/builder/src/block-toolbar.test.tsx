@@ -613,6 +613,37 @@ describe("BlockToolbar", () => {
     }
   });
 
+  it("keeps a larger clearance the scroller already had", () => {
+    // A site keeping focused blocks below its sticky header sets its own
+    // scroll-padding-top; the bar's 46px must not shrink it to the bar alone.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(200, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div
+          data-scroller=""
+          style={{ overflowY: "auto", scrollPaddingTop: "80px" }}
+        >
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      expect(scroller.style.scrollPaddingTop).toBe("80px");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
   it("keeps the roving stop where FOCUS is when the selection moves", () => {
     /*
      * Duplicate and Select parent both change the selection while the author's

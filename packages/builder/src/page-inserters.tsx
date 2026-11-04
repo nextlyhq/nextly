@@ -36,18 +36,27 @@ import { TooltipProvider } from "@nextlyhq/ui";
 import { Plus } from "lucide-react";
 import * as React from "react";
 
-import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import {
+  CANVAS_ROOT_CLASS,
+  CHROME_ATTRIBUTE,
+  isOutermostForAddress,
+  nodeAddressOf,
+} from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import { ChromeTooltip } from "./chrome-tooltip";
-import type { Point } from "./geometry";
+import type { Point, Rect } from "./geometry";
 import {
   canvasContentPoint,
   canvasContentRect,
+  layoutFragments,
   onScreenOf,
   overlaySpaceOf,
+  renderSkips,
 } from "./geometry-dom";
 import { blockNameOf } from "./layers";
+import { nodeElements } from "./rendered-nodes";
+import { unionRect } from "./toolbar-actions";
 
 /** @experimental */
 export interface PageInsertersProps {
@@ -122,11 +131,30 @@ function measureGaps(
   if (space === null) return [];
   const { root } = space;
   const page = space.place(canvasContentRect(root, root));
+  /*
+   * Each top-level node as the union of every element drawn for it, and only
+   * those that generate a box. A component placement draws one element per
+   * top-level node of its definition, so its first element alone would end
+   * the section early and put the next gap's "+" inside it; a node hidden on
+   * this device (`display: none`) generates no box, and a gap measured from
+   * its empty rectangle would add a "+" beside a section nobody can see.
+   * Outermost only, as the drag measures a node, so an element nested inside
+   * the same placement is not counted twice.
+   */
+  const top = new Set(document.nodes.map(node => node.id));
+  const parts = new Map<string, Rect[]>();
+  for (const element of nodeElements(root)) {
+    const id = nodeAddressOf(element);
+    if (id === null || !top.has(id)) continue;
+    if (!isOutermostForAddress(element, id, root)) continue;
+    if (layoutFragments(element) === 0 || renderSkips(element)) continue;
+    const rects = parts.get(id) ?? [];
+    rects.push(space.place(canvasContentRect(element, root)));
+    parts.set(id, rects);
+  }
   const drawn = document.nodes.flatMap(node => {
-    const element = nodeElement(root, node.id);
-    return element === null
-      ? []
-      : [{ id: node.id, rect: space.place(canvasContentRect(element, root)) }];
+    const rect = unionRect(parts.get(node.id) ?? []);
+    return rect === undefined ? [] : [{ id: node.id, rect }];
   });
   const gaps: Gap[] = [];
   for (let at = 1; at < drawn.length; at += 1) {

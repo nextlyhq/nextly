@@ -120,7 +120,8 @@ function fadedAside(
 /**
  * `scroll-padding-top` on the canvas's scroller, the bar's height and gap,
  * while the bar is drawn: a block scrolled or focused into view then stops
- * below the bar rather than under it (WCAG 2.4.11). In the root's coordinates,
+ * below the bar rather than under it (WCAG 2.4.11), or the scroller's own
+ * clearance where that is larger. In the root's coordinates,
  * the scroller's, the bar being drawn at its own size over a frame painted at
  * another. The scroller's own value comes back after.
  */
@@ -140,7 +141,15 @@ function useScrollClearance(
     if (!isHTMLElement(scroller)) return;
     const height = space.sizeOf(element).height / space.scale + TOOLBAR_GAP_PX;
     const before = scroller.style.scrollPaddingTop;
-    scroller.style.scrollPaddingTop = `${String(height)}px`;
+    // The larger of the bar's and what the scroller already keeps clear: a
+    // site keeping focused blocks below its sticky header sets its own, and
+    // the bar must not shrink that to the bar alone.
+    const own = Number.parseFloat(
+      scroller.ownerDocument.defaultView?.getComputedStyle(scroller)
+        .scrollPaddingTop ?? ""
+    );
+    const clearance = Number.isFinite(own) ? Math.max(own, height) : height;
+    scroller.style.scrollPaddingTop = `${String(clearance)}px`;
     return () => {
       scroller.style.scrollPaddingTop = before;
     };

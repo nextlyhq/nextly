@@ -22,6 +22,7 @@ import {
   afterAll,
   afterEach,
   beforeAll,
+  beforeEach,
   describe,
   expect,
   it,
@@ -39,6 +40,33 @@ import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { PageInserters } from "./page-inserters";
 
 afterEach(cleanup);
+
+/**
+ * The layout boxes an element generates, in the shape `getClientRects`
+ * returns them: an array carrying `item`, which satisfies `DOMRectList`.
+ */
+function rectsOf(rects: readonly DOMRect[]): DOMRectList {
+  const list = [...rects];
+  return Object.assign(list, {
+    item: (index: number): DOMRect | null => list[index] ?? null,
+  });
+}
+
+/** Nodes, by id, that generate no box, as one hidden on this device. */
+const boxless = new Set<string>();
+
+// jsdom lays nothing out, so every element generates one box unless a case
+// says it generates none.
+beforeEach(() => {
+  boxless.clear();
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (
+    this: Element
+  ) {
+    const id = this.getAttribute("data-nx-node");
+    return rectsOf(id !== null && boxless.has(id) ? [] : [new DOMRect()]);
+  });
+});
+afterEach(() => vi.restoreAllMocks());
 
 beforeAll(() => {
   clearBlocks();
@@ -204,6 +232,71 @@ describe("the + between sections", () => {
     ]);
     // Not on a page that has sections.
     expect(screen.queryByText("Start your page")).toBeNull();
+  });
+
+  it("leaves out a section hidden on this device, with no box to be beside", async () => {
+    boxless.add("team");
+    mount(THREE);
+    await act(async () => undefined);
+    expect(
+      gapButtons().map(button => button.getAttribute("aria-label"))
+    ).toEqual(["Add a section after Our story"]);
+  });
+
+  it("puts the gap after every part a component placement draws", async () => {
+    // A placement whose definition has two top-level nodes draws two
+    // elements, both carrying its address. The gap after it is below the
+    // second; measured from the first alone it would sit inside the placement.
+    const doc = page([
+      section("story", "Our story"),
+      {
+        id: "promo",
+        type: "acme/leaf",
+        version: 1,
+        props: {},
+        name: "Promo",
+      } as BlockNode,
+      section("contact", "Contact"),
+    ]);
+    const tops: Record<string, [number, number]> = {
+      story: [0, 24],
+      "promo-a": [24, 24],
+      "promo-b": [48, 24],
+      contact: [72, 24],
+    };
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        const id = this.getAttribute("data-nx-node");
+        const at = id === null ? undefined : tops[id];
+        return at === undefined
+          ? new DOMRect(0, 0, 1000, 96)
+          : new DOMRect(0, at[0], 1000, at[1]);
+      }
+    );
+    mount(doc);
+    await act(async () => undefined);
+    // The placement's two parts in place of the leaf's one element.
+    const leaf = document.querySelector('[data-nx-node="promo"]');
+    if (leaf === null) throw new Error("no placement element");
+    for (const part of ["promo-a", "promo-b"]) {
+      const element = document.createElement("div");
+      element.setAttribute("data-nx-node", part);
+      element.setAttribute("data-nx-instance", "promo");
+      leaf.before(element);
+    }
+    leaf.remove();
+    await act(async () => undefined);
+
+    const root = document.querySelector(".nx-canvas");
+    if (root === null) throw new Error("no canvas");
+    const near = () =>
+      gapButtons().map(button => button.closest("[data-near]") !== null);
+    // At the placement's bottom, 72: the gap after it.
+    fireEvent.pointerMove(root, { clientX: 500, clientY: 72 });
+    expect(near()).toEqual([false, true]);
+    // Inside it, between its parts at 60: no gap there.
+    fireEvent.pointerMove(root, { clientX: 500, clientY: 60 });
+    expect(near()).toEqual([false, false]);
   });
 
   it("reports the section above the gap when pressed", async () => {
