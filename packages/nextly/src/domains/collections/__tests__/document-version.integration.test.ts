@@ -9,7 +9,7 @@
  *
  * @module domains/collections/__tests__/document-version.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -587,6 +587,38 @@ describe.each(getConfiguredTestDialects())(
       expect(timeOf(after._changed_at)).toBeGreaterThan(
         timeOf(before._changed_at)
       );
+    });
+
+    it("stores when a translation row changed as its document's row stores it", async () => {
+      // A clock away from UTC, where a time stored with the process's offset
+      // rather than as the column stores it lands hours from the other.
+      vi.stubEnv("TZ", "Asia/Karachi");
+      try {
+        const t = await boot(dialect);
+        const id = idOf(
+          await handlerOf(t).createEntry(
+            { collectionName: DOCS, overrideAccess: true, locale: "en" },
+            { title: "live", note: "n", status: "published" }
+          )
+        );
+        const q = (name: string) =>
+          t.adapter.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+        const p = t.adapter.dialect === "postgresql" ? "$1" : "?";
+        // Both read raw, by one kind of statement, so each comes back exactly
+        // as its column stores it.
+        const [main] = await t.adapter.executeQuery<Record<string, unknown>>(
+          `SELECT ${q("_changed_at")} FROM ${q(`dc_${DOCS}`)} WHERE ${q("id")} = ${p}`,
+          [id]
+        );
+        const language = await languageRow(t, id, "en");
+        expect(typeof language._changed_at).toBe(typeof main?._changed_at);
+        // One create writes both, within the second SQLite keeps.
+        expect(
+          Math.abs(timeOf(language._changed_at) - timeOf(main?._changed_at))
+        ).toBeLessThanOrEqual(1_000);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it("a discard of the held draft changes the version a read gives", async () => {
