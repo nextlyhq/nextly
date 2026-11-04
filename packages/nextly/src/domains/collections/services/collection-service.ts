@@ -150,6 +150,13 @@ export interface CollectionEntry {
   [key: string]: unknown;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * The entry's version: changed by every save and by no read, and naming each
+   * language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental Nothing is judged against the version yet.
+   */
+  _rev?: string;
 }
 
 /**

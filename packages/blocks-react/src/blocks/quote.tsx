@@ -18,7 +18,7 @@ import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
-import { text, url } from "./props";
+import { boundText, text, url } from "./props";
 
 export interface QuoteProps {
   /** The quoted text. */
@@ -36,8 +36,11 @@ export function renderQuote({
   className,
   markProp,
   partClass,
+  bound,
 }: BlockRenderArgs<QuoteProps>): ReactElement {
-  const quoted = text(props.text);
+  const quoted = boundText(text(props.text), bound?.text);
+  // Kept as text for the emptiness tests below; the date markup, when there is
+  // one, is added where each is drawn.
   const attribution = text(props.attribution);
   const source = text(props.source);
   const citeUrl = url(props.citeUrl);
@@ -83,9 +86,11 @@ export function renderQuote({
     <figure className={className}>
       {blockquote}
       <figcaption className={partClass("attribution")}>
-        {attribution}
+        {boundText(attribution, bound?.attribution)}
         {attribution !== "" && source !== "" ? ", " : null}
-        {source === "" ? null : <cite {...markSource}>{source}</cite>}
+        {source === "" ? null : (
+          <cite {...markSource}>{boundText(source, bound?.source)}</cite>
+        )}
       </figcaption>
     </figure>
   );

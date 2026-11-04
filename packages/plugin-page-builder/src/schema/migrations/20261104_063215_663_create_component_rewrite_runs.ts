@@ -5,27 +5,39 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261103_170026_736_create_site_options",
+  name: "20261104_063215_663_create_component_rewrite_runs",
   schemaVersion: 3,
-  checksum: "4999c4657d85e22c9f89e58bd86fc024d0bb1f7625e2381f3db4e4a879411bad",
+  checksum: "55669705dcc7ca39c8975f10a6b51e5f4a566b419508a6cd6b00f9bec27b0337",
   dialects: {
     postgresql: {
       up: [
-        'CREATE TABLE "page_builder__site_options" (\n  "id" text PRIMARY KEY NOT NULL,\n  "name" text NOT NULL,\n  "value" text NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__site_options_name" ON "page_builder__site_options" ("name")',
+        'CREATE TABLE "page_builder__component_deletion_hosts" (\n  "id" text PRIMARY KEY NOT NULL,\n  "deletion_id" bpchar(36) NOT NULL,\n  "host_key" text NOT NULL,\n  "state" text NOT NULL,\n  "reason" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01" ON "page_builder__component_deletion_hosts" ("deletion_id", "host_key")',
+        'CREATE TABLE "page_builder__component_deletions" (\n  "id" text PRIMARY KEY NOT NULL,\n  "component_id" text NOT NULL,\n  "purpose" text NOT NULL,\n  "started_by" text NOT NULL,\n  "phase" text NOT NULL DEFAULT \'converting\',\n  "cursor" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletions_component_id_purpo_1mlwby6" ON "page_builder__component_deletions" ("component_id", "purpose")',
       ],
-      down: ['DROP TABLE "page_builder__site_options" CASCADE'],
+      down: [
+        'DROP TABLE "page_builder__component_deletions" CASCADE',
+        'DROP TABLE "page_builder__component_deletion_hosts" CASCADE',
+      ],
     },
     mysql: {
       up: [
-        "CREATE TABLE `page_builder__site_options` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `name` varchar(64) NOT NULL,\n  `value` varchar(255) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE UNIQUE INDEX `uq_page_builder__site_options_name` ON `page_builder__site_options` (`name`)",
+        "CREATE TABLE `page_builder__component_deletion_hosts` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `deletion_id` char(36) NOT NULL,\n  `host_key` varchar(512) NOT NULL,\n  `state` varchar(16) NOT NULL,\n  `reason` varchar(64)\n);\nCREATE UNIQUE INDEX `uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01` ON `page_builder__component_deletion_hosts` (`deletion_id`, `host_key`)",
+        "CREATE TABLE `page_builder__component_deletions` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `component_id` varchar(255) NOT NULL,\n  `purpose` varchar(32) NOT NULL,\n  `started_by` varchar(255) NOT NULL,\n  `phase` varchar(16) NOT NULL DEFAULT 'converting',\n  `cursor` varchar(1024)\n);\nCREATE UNIQUE INDEX `uq_page_builder__component_deletions_component_id_purpo_1mlwby6` ON `page_builder__component_deletions` (`component_id`, `purpose`)",
       ],
-      down: ["DROP TABLE `page_builder__site_options`"],
+      down: [
+        "DROP TABLE `page_builder__component_deletions`",
+        "DROP TABLE `page_builder__component_deletion_hosts`",
+      ],
     },
     sqlite: {
       up: [
-        'CREATE TABLE "page_builder__site_options" (\n  "id" text PRIMARY KEY NOT NULL,\n  "name" text NOT NULL,\n  "value" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__site_options_name" ON "page_builder__site_options" ("name")',
+        'CREATE TABLE "page_builder__component_deletion_hosts" (\n  "id" text PRIMARY KEY NOT NULL,\n  "deletion_id" text NOT NULL,\n  "host_key" text NOT NULL,\n  "state" text NOT NULL,\n  "reason" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01" ON "page_builder__component_deletion_hosts" ("deletion_id", "host_key")',
+        'CREATE TABLE "page_builder__component_deletions" (\n  "id" text PRIMARY KEY NOT NULL,\n  "component_id" text NOT NULL,\n  "purpose" text NOT NULL,\n  "started_by" text NOT NULL,\n  "phase" text NOT NULL DEFAULT \'converting\',\n  "cursor" text\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__component_deletions_component_id_purpo_1mlwby6" ON "page_builder__component_deletions" ("component_id", "purpose")',
       ],
-      down: ['DROP TABLE "page_builder__site_options"'],
+      down: [
+        'DROP TABLE "page_builder__component_deletions"',
+        'DROP TABLE "page_builder__component_deletion_hosts"',
+      ],
     },
   },
   snapshot: {
@@ -194,7 +206,7 @@ export default {
           checks: [],
         },
         {
-          name: "page_builder__site_options",
+          name: "page_builder__component_deletions",
           columns: [
             {
               name: "id",
@@ -203,32 +215,77 @@ export default {
               primaryKey: true,
             },
             {
-              name: "name",
+              name: "component_id",
               type: "text",
               nullable: false,
             },
             {
-              name: "value",
+              name: "purpose",
               type: "text",
               nullable: false,
             },
             {
-              name: "created_at",
-              type: "timestamp",
+              name: "started_by",
+              type: "text",
               nullable: false,
-              default: "now()",
             },
             {
-              name: "updated_at",
-              type: "timestamp",
+              name: "phase",
+              type: "text",
               nullable: false,
-              default: "now()",
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
           ],
           indexes: [
             {
-              name: "uq_page_builder__site_options_name",
-              columns: ["name"],
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
+        {
+          name: "page_builder__component_deletion_hosts",
+          columns: [
+            {
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "deletion_id",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
+            },
+            {
+              name: "host_key",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "state",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "reason",
+              type: "text",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
               unique: true,
             },
           ],
@@ -399,7 +456,7 @@ export default {
           checks: [],
         },
         {
-          name: "page_builder__site_options",
+          name: "page_builder__component_deletions",
           columns: [
             {
               name: "id",
@@ -408,32 +465,76 @@ export default {
               primaryKey: true,
             },
             {
-              name: "name",
-              type: "varchar(64)",
-              nullable: false,
-            },
-            {
-              name: "value",
+              name: "component_id",
               type: "varchar(255)",
               nullable: false,
             },
             {
-              name: "created_at",
-              type: "timestamp",
+              name: "purpose",
+              type: "varchar(32)",
               nullable: false,
-              default: "CURRENT_TIMESTAMP",
             },
             {
-              name: "updated_at",
-              type: "timestamp",
+              name: "started_by",
+              type: "varchar(255)",
               nullable: false,
-              default: "CURRENT_TIMESTAMP",
+            },
+            {
+              name: "phase",
+              type: "varchar(16)",
+              nullable: false,
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "varchar(1024)",
+              nullable: true,
             },
           ],
           indexes: [
             {
-              name: "uq_page_builder__site_options_name",
-              columns: ["name"],
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
+        {
+          name: "page_builder__component_deletion_hosts",
+          columns: [
+            {
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "deletion_id",
+              type: "char(36)",
+              nullable: false,
+            },
+            {
+              name: "host_key",
+              type: "varchar(512)",
+              nullable: false,
+            },
+            {
+              name: "state",
+              type: "varchar(16)",
+              nullable: false,
+            },
+            {
+              name: "reason",
+              type: "varchar(64)",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
               unique: true,
             },
           ],
@@ -604,7 +705,7 @@ export default {
           checks: [],
         },
         {
-          name: "page_builder__site_options",
+          name: "page_builder__component_deletions",
           columns: [
             {
               name: "id",
@@ -613,32 +714,76 @@ export default {
               primaryKey: true,
             },
             {
-              name: "name",
+              name: "component_id",
               type: "text",
               nullable: false,
             },
             {
-              name: "value",
+              name: "purpose",
               type: "text",
               nullable: false,
             },
             {
-              name: "created_at",
-              type: "integer",
+              name: "started_by",
+              type: "text",
               nullable: false,
-              default: "(strftime('%s', 'now'))",
             },
             {
-              name: "updated_at",
-              type: "integer",
+              name: "phase",
+              type: "text",
               nullable: false,
-              default: "(strftime('%s', 'now'))",
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
           ],
           indexes: [
             {
-              name: "uq_page_builder__site_options_name",
-              columns: ["name"],
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
+        {
+          name: "page_builder__component_deletion_hosts",
+          columns: [
+            {
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "deletion_id",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "host_key",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "state",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "reason",
+              type: "text",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
               unique: true,
             },
           ],

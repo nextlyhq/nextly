@@ -15,7 +15,7 @@ import type { BlockRenderArgs, PageContext } from "../context";
 
 import { INTERACTIVE } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
-import { oneOf, relFor, text, url } from "./props";
+import { boundText, oneOf, relFor, text, url } from "./props";
 
 /** The button's HTML behaviour when it is not a link. */
 export const BUTTON_TYPES = ["button", "submit", "reset"] as const;
@@ -43,8 +43,10 @@ export async function renderButton({
   props,
   className,
   ctx,
+  bound,
 }: BlockRenderArgs<ButtonProps>): Promise<ReactElement> {
-  const label = text(props.label);
+  // A bound date keeps its machine-readable value inside the button or link.
+  const label = boundText(text(props.label), bound?.label);
   const collection = text(props.entryCollection);
   const entryId = text(props.entryId);
 

@@ -1,6 +1,7 @@
 import {
   compilePageCss,
   declaresNoMarkup,
+  hasItemBindings,
   isFetchableUrl,
   nodeAtPointer,
   nodeClassNames,
@@ -688,7 +689,12 @@ export function readableGatedRules(
 export function drawlessTestFor(
   blocks: BlockResolver
 ): (node: BlockNode) => boolean {
-  return node => declaresNoMarkup(node, type => blocks.get(type));
+  // A node bound to its list item draws, as far as the page can tell: its
+  // props are filled only when the list draws each item, so before then the
+  // tree holds its own values and its declaration would be judged on those.
+  // Its rules ship, which is the safe direction for a node that may draw.
+  return node =>
+    !hasItemBindings(node) && declaresNoMarkup(node, type => blocks.get(type));
 }
 
 /**

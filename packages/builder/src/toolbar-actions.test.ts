@@ -816,6 +816,48 @@ describe("toolbarPlacement", () => {
     expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
   });
 
+  it("goes below a short block whose top is just above the screen, where that fits", () => {
+    // 20px of the block is on screen: too little to pin the bar over, and
+    // above it is off screen. Below it there is room.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 0, y: 580, width: 500, height: 40 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("below");
+    expect(at.y).toBe(580 + 40 + TOOLBAR_GAP_PX);
+  });
+
+  it("keeps to the screen's left and right edges in a canvas scrolled sideways", () => {
+    // The block starts 300px left of what is shown, and is still on screen.
+    const screen = { top: 0, bottom: 900, left: 300, right: 1100 };
+    const at = toolbarPlacement(
+      { x: 0, y: 200, width: 1000, height: 100 },
+      bar,
+      { width: 2000, height: 3000 },
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.x).toBe(300);
+  });
+
+  it("stays with a block scrolled wholly off the side, rather than at the screen's edge", () => {
+    // The block is left of what is shown: a bar clamped to the screen would
+    // sit at its edge, away from the block and over another one.
+    const screen = { top: 0, bottom: 900, left: 1100, right: 1900 };
+    const at = toolbarPlacement(
+      { x: 0, y: 200, width: 500, height: 100 },
+      bar,
+      { width: 2000, height: 3000 },
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.x).toBe(0);
+  });
+
   it("is left where it is for a block scrolled wholly out of view", () => {
     const screen = { top: 600, bottom: 1400 };
     expect(

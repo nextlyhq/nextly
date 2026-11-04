@@ -199,8 +199,9 @@ export async function renderCollectionLoop({
         >
           {/* Drawn again per entry, with this entry on the context, so anything
               inside the template reads its own values rather than the first
-              entry's. */}
-          {renderSlot("children", { ...ctx, item })}
+              entry's. The collection goes with it, so an item binding is
+              checked against that collection's fields. */}
+          {renderSlot("children", { ...ctx, item, itemSource: collection })}
         </div>
       ))}
     </div>

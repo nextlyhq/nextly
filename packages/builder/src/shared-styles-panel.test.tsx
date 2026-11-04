@@ -28,7 +28,7 @@ import type {
 import {
   SharedStylesPanel,
   USAGE_RECOUNT_MS,
-  USAGE_RECOUNT_UNKNOWN_MAX,
+  USAGE_RECOUNT_IDLE_MAX,
   type SharedStylesAccess,
   type SharedStylesPanelProps,
 } from "./shared-styles-panel";
@@ -374,12 +374,35 @@ describe("counts", () => {
     expect(card.getAttribute("aria-label")).toBe(
       "Card, .nx-c-card, On at least 4 pages"
     );
-    expect(card.textContent).toContain("4+");
+    expect(card.textContent).toContain("4+ pages");
     expect(
       screen.getByText(
-        "Some pages are still being counted, so these numbers are minimums."
+        "Some pages haven't been counted yet, so these numbers are minimums."
       )
     ).toBeTruthy();
+    // Who counts them, so a site whose counts never finish knows why: the
+    // site's background jobs, which nothing runs without a scheduler.
+    expect(
+      screen.getByText(/Pages are counted by the site's background jobs/)
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: "How background jobs run" })
+        .getAttribute("href")
+    ).toBe("https://nextlyhq.com/docs/jobs#running-the-queue");
+  });
+
+  it("says a zero not counted yet in words, muted, rather than 0+", async () => {
+    const { access } = accessOf({
+      whole: false,
+      styles: { "c-card": reach({}, false) },
+    });
+    await panel({ access });
+    const chip = row(/^Card, \.nx-c-card/).querySelector(".nx-vars__chip");
+    expect(chip?.textContent).toBe("Not counted yet");
+    expect(chip?.classList.contains("nx-shared-styles__count--uncounted")).toBe(
+      true
+    );
   });
 
   it("keeps the counts floors when an earlier batch was read before every page was counted", async () => {
@@ -412,7 +435,7 @@ describe("counts", () => {
     expect(reads).toBe(2);
     expect(
       screen.getByText(
-        "Some pages are still being counted, so these numbers are minimums."
+        "Some pages haven't been counted yet, so these numbers are minimums."
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Unused" })).toBeTruthy();
@@ -510,7 +533,7 @@ describe("counts", () => {
       });
       // Still asked again while it may be counting...
       expect(reads).toBe(first + 1);
-      for (let tick = 0; tick < USAGE_RECOUNT_UNKNOWN_MAX + 5; tick += 1) {
+      for (let tick = 0; tick < USAGE_RECOUNT_IDLE_MAX + 5; tick += 1) {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
         });
@@ -519,7 +542,161 @@ describe("counts", () => {
       vi.useRealTimers();
     }
     // ...but not for ever.
-    expect(reads).toBe(1 + USAGE_RECOUNT_UNKNOWN_MAX);
+    expect(reads).toBe(1 + USAGE_RECOUNT_IDLE_MAX);
+  });
+
+  it("stops asking a site that says it is counting once five minutes pass with no change", async () => {
+    // A site no scheduler runs jobs for: counting, and never moving. Asked
+    // for ever, every open tab would poll it for as long as it stays open.
+    const base = accessOf().access;
+    let reads = 0;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        return {
+          whole: false,
+          counting: true,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({ pages: 2 }, false)])),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      for (let tick = 0; tick < USAGE_RECOUNT_IDLE_MAX + 5; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(reads).toBe(1 + USAGE_RECOUNT_IDLE_MAX);
+  });
+
+  it("keeps asking a counting site while its counts still move", async () => {
+    const base = accessOf().access;
+    let reads = 0;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        // One more page counted on every read: the backfill is getting on.
+        return {
+          whole: false,
+          counting: true,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({ pages: reads }, false)])),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      for (let tick = 0; tick < USAGE_RECOUNT_IDLE_MAX + 5; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(reads).toBe(1 + USAGE_RECOUNT_IDLE_MAX + 5);
+  });
+
+  it("keeps asking while the kinds move, even when the total does not", async () => {
+    // A page use added while a component use goes: two documents throughout,
+    // but the row's words change ("on 2 pages" from "on 1 page and 1
+    // component"), so the counting is still getting somewhere.
+    const base = accessOf().access;
+    let reads = 0;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        const pages = reads % 2 === 0 ? 2 : 1;
+        return {
+          whole: false,
+          counting: true,
+          mayLock: false,
+          styles: new Map(
+            ids.map(id => [id, reach({ pages, components: 2 - pages }, false)])
+          ),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      for (let tick = 0; tick < USAGE_RECOUNT_IDLE_MAX + 5; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(reads).toBe(1 + USAGE_RECOUNT_IDLE_MAX + 5);
+  });
+
+  it("renews the unknown host's recounts when a style it has not read arrives", async () => {
+    const base = accessOf().access;
+    const asked: (readonly string[])[] = [];
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        asked.push(ids);
+        return {
+          whole: false,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({}, false)])),
+        };
+      }),
+    };
+    const tick = async () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+      });
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      const view = await panel({ library: [CARD], access });
+      // Spend the budget on Card.
+      for (let n = 0; n < USAGE_RECOUNT_IDLE_MAX + 2; n += 1) await tick();
+      const spent = asked.length;
+      // A style made since arrives, and is read not whole.
+      view.rerender(
+        <SharedStylesPanel
+          library={[CARD, HERO]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+          access={access}
+        />
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(asked.length).toBe(spent + 1);
+      await tick();
+      // Its floors are asked about again, on the timer, not only read once.
+      expect(asked.length).toBe(spent + 2);
+      expect(asked.at(-1)).toContain("c-hero");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("asks nothing more when the count cannot become whole", async () => {
@@ -545,7 +722,11 @@ describe("counts", () => {
         "Some pages can't be counted, so these numbers are minimums."
       )
     ).toBeTruthy();
-    expect(screen.queryByText(/still being counted/)).toBeNull();
+    expect(screen.queryByText(/haven't been counted/)).toBeNull();
+    // No job will finish them, so none is pointed at.
+    expect(
+      screen.queryByRole("link", { name: "How background jobs run" })
+    ).toBeNull();
   });
 
   it("says once, without a wait, why Unused holds rows back when the count cannot finish", async () => {
@@ -596,7 +777,7 @@ describe("counts", () => {
     );
     expect(
       screen.queryByText(
-        "Some pages are still being counted, so these numbers are minimums."
+        "Some pages haven't been counted yet, so these numbers are minimums."
       )
     ).toBeNull();
   });
@@ -709,15 +890,19 @@ describe("the filters", () => {
     expect(shownRows()).toEqual([]);
     // One note for the whole state, not one per thing it holds back.
     const notes = screen
-      .getAllByText(/^Some pages are still being counted/)
+      .getAllByText(/^Some pages haven't been counted/)
       .map(note => note.textContent);
     expect(notes).toEqual([
-      "Some pages are still being counted, so the numbers are minimums and no style can be called unused or removed yet.",
+      "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed.",
     ]);
     // Remove unused still says why it waits, by pointing at that note.
     const removeUnused = screen.getByRole("button", { name: "Remove unused…" });
     const describedBy = removeUnused.getAttribute("aria-describedby") ?? "";
     expect(document.getElementById(describedBy)?.textContent).toBe(notes[0]);
+    // Who counts them, once, beside that one note.
+    expect(
+      screen.getAllByRole("link", { name: "How background jobs run" })
+    ).toHaveLength(1);
     // A counted use is a use, counted in full or not.
     pick(/^Used/);
     expect(shownRows()).toEqual(["c-card"]);
@@ -736,9 +921,13 @@ describe("the filters", () => {
     await panel({ library: [CARD, HERO, OLD], access });
     pick(/^Unused/);
     expect(shownRows()).toEqual(["c-old"]);
-    // Hero is held back, but every page is counted: no note says otherwise
-    // over the proven row listed.
-    expect(screen.queryByText(/can be called unused/)).toBeNull();
+    // Hero is held back, and the list says some are, beside the proven row;
+    // every page is counted, so it promises no wait.
+    expect(
+      screen.getByText(
+        "Some uses could not all be counted, so some styles can't be called unused yet."
+      )
+    ).toBeTruthy();
     expect(screen.queryByText(/^Some pages/)).toBeNull();
   });
 
@@ -1211,7 +1400,7 @@ describe("Remove unused…", () => {
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText(
-        "Some pages are still being counted, so no shared style can be removed yet."
+        "Some pages haven't been counted yet, so no shared style can be removed."
       )
     ).toBeTruthy();
   });

@@ -3670,9 +3670,10 @@
 .nx-canvas-mark[data-mark="hovered"][data-hover-label]::before {
   content: attr(data-hover-label);
   position: absolute;
-  left: 0;
+  /* In from the left edge as far as the screen cuts the outline off there. */
+  left: var(--nx-tag-inset-side, 0px);
   bottom: 100%;
-  max-width: 100%;
+  max-width: calc(100% - var(--nx-tag-inset-side, 0px));
   overflow: hidden;
   padding: 1px 6px;
   border-radius: 4px 4px 0 0;
@@ -4944,6 +4945,12 @@
   white-space: nowrap;
 }
 
+/* A row's kind beside its name, said only when another row shares the name:
+   muted, so it reads as telling the two apart rather than as the name. */
+.nx-vars__name-kind {
+  color: var(--nx-muted-foreground);
+}
+
 .nx-vars__swatch {
   display: inline-block;
   width: 14px;
@@ -6025,8 +6032,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 /* An "Aa" not shown to read on its background: an outline painted under its
    fill, so it shows on any colour. The site's page colour overrides this
    inline where the tab has it. */
+/* The outline itself is the specimen's inline style, chosen against its own
+   background: a stroke, or two halos where the background can't be
+   measured. The class only paints a stroke under the fill. */
 .nx-shared-styles__lead--outlined {
-  -webkit-text-stroke: 2px var(--nx-background);
   paint-order: stroke fill;
 }
 
@@ -6086,6 +6095,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* A zero not counted yet is words, not a count: no box, the panel's own
+   type, and room for the whole phrase. */
+.nx-vars__chip.nx-shared-styles__count--uncounted {
+  max-width: none;
+  padding: 0;
+  border-color: transparent;
+  font-family: inherit;
 }
 
 .nx-shared-styles__meta,
