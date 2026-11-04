@@ -14,6 +14,7 @@ import type {
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
+  RuleCouldNotRunPublicData,
   SharedFieldsConflictPublicData,
   ValidationPublicData,
 } from "./public-data";
@@ -665,15 +666,18 @@ export class NextlyError extends Error {
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
+    // Typed as the published shape names it, so the payload and the type a
+    // client reads it by cannot drift apart.
+    const publicData: RuleCouldNotRunPublicData = {
+      subject: opts.subject,
+      ...(opts.field !== undefined ? { field: opts.field } : {}),
+      retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS,
+    };
     return new NextlyError({
       code: "RULE_COULD_NOT_RUN",
       statusCode: NEXTLY_ERROR_STATUS.RULE_COULD_NOT_RUN,
       publicMessage: genericPublicMessage("RULE_COULD_NOT_RUN"),
-      publicData: {
-        subject: opts.subject,
-        ...(opts.field !== undefined ? { field: opts.field } : {}),
-        retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS,
-      },
+      publicData,
       cause: opts.cause,
       logContext: opts.logContext,
     });

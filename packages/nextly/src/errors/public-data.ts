@@ -160,6 +160,7 @@ export type PublicData =
   | NotMigratedPublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
+  | RuleCouldNotRunPublicData
   | SingleAbsentPublicData
   | ReleaseProblemsPublicData
   | SharedFieldsConflictPublicData
