@@ -40,6 +40,7 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
@@ -239,6 +240,13 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
+  if (mark.kind === "hovered") {
+    // The hovered block's name tag moves in from the side the screen cuts.
+    return {
+      ...box,
+      "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+    } as React.CSSProperties;
+  }
   if (!mark.hidden) return box;
   return {
     ...box,
@@ -625,8 +633,17 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         locked: false,
         hidden: false,
         tag: "below",
-        tagEdge: "right",
-        tagInset: NO_INSET,
+        tagEdge: "left",
+        // In from the screen's left edge as far as the outline runs past it,
+        // so a block scrolled partly off the side keeps its name in view. Not
+        // for one wholly off it: there is nothing on screen to tag.
+        tagInset: {
+          bottom: 0,
+          side:
+            outline.rect.x + outline.rect.width > onScreen.x
+              ? Math.max(0, onScreen.x - outline.rect.x)
+              : 0,
+        },
         hoveredAddress: hovered,
         // From the top of what is on screen, as the placement's tag is.
         hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
@@ -686,6 +703,17 @@ export function CanvasMarks({
     () => watchCanvasFor(() => layer.current, measure),
     [measure, canvasFrame]
   );
+
+  // And the scrolls that move what of the canvas is on screen, which the tags
+  // keep to: the host's scroller around a zoomed frame among them, which no
+  // listener in the frame hears.
+  React.useEffect(() => {
+    const element = layer.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    return watchScreenBand(space.root, space.frame, measure);
+  }, [measure, canvasFrame]);
 
   return (
     // Hidden from assistive technology: the selection is announced by the

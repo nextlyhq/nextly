@@ -180,14 +180,24 @@ export function StateSwitcher({
        * The states with values the canvas is not showing, in words beside the
        * trigger rather than as a dot on it, where a dot would read as the
        * shown state having values. The trigger's name already says which.
+       * One state is named, so the words say where to look; several are
+       * counted, since naming each would outgrow the bar's line.
        */}
       {elsewhere.length > 0 ? (
         <span className="nx-state-menu__elsewhere" aria-hidden="true">
-          {`· ${elsewhere.length} more set`}
+          {elsewhereWords(elsewhere)}
         </span>
       ) : null}
     </>
   );
+}
+
+/** The words beside the trigger for the other states with values. */
+function elsewhereWords(elsewhere: readonly StyleState[]): string {
+  const [only] = elsewhere;
+  return elsewhere.length === 1 && only !== undefined
+    ? `· ${STATE_LABELS[only]} set`
+    : `· ${elsewhere.length} more set`;
 }
 
 /**

@@ -64,6 +64,11 @@ export interface AlignmentGroup {
   readonly cssProperty: string;
   readonly options: readonly AlignmentOption[];
   readonly rest: readonly string[];
+  /**
+   * What each value does, in a line under the icons, where an icon alone
+   * cannot say it: an image's fit. Absent where the icons are the whole story.
+   */
+  readonly help?: Readonly<Record<string, string>>;
 }
 
 type Edge = "left" | "right" | "top" | "bottom";
@@ -234,7 +239,8 @@ const GROUPS: Readonly<
 
 /**
  * Choices whose icons say what a value is rather than which way it points, so
- * they are drawn the same in every flow: Display and text case.
+ * they are drawn the same in every flow: Display, text case and an image's
+ * fit. `help` says what each value does, where its icon cannot.
  *
  * `more` is what the list beside the icons offers. A value the catalog accepts
  * and neither names, a table or ruby display mode or a two-keyword spelling, is
@@ -248,6 +254,7 @@ const FIXED_GROUPS: Readonly<
     {
       entries: readonly { value: string; icon: string }[];
       more: readonly string[];
+      help?: Readonly<Record<string, string>>;
     }
   >
 > = {
@@ -276,6 +283,23 @@ const FIXED_GROUPS: Readonly<
     ],
     more: ["math-auto", "full-width", "full-size-kana"],
   },
+  // Cover first: the fit most images want. Original size and Shrink to fit
+  // are rarer, and wait under More.
+  "object-fit": {
+    entries: [
+      { value: "cover", icon: "Crop" },
+      { value: "contain", icon: "Shrink" },
+      { value: "fill", icon: "StretchHorizontal" },
+    ],
+    more: ["none", "scale-down"],
+    help: {
+      cover: "Fills the box; edges may be cut.",
+      contain: "Shows all of it inside the box.",
+      fill: "Stretches it to the box's shape.",
+      none: "Shows it at its own size, cut to the box.",
+      "scale-down": "Shows all of it, never larger than it is.",
+    },
+  },
 };
 
 /** A fixed group's icons and list, kept to the values the property accepts. */
@@ -294,6 +318,7 @@ function fixedGroup(
         label: keywordLabel(cssProperty, entry.value),
       })),
     rest: group.more.filter(value => values.includes(value)),
+    ...(group.help === undefined ? {} : { help: group.help }),
   };
 }
 

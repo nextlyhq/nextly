@@ -179,6 +179,10 @@ function buildNextlyInstance(
     // Plugin-defined signed-in people. Forwarded for the reason stated above.
     principals: directAPI.principals,
 
+    // Plugin-contributed services, forwarded for the reason stated above: a
+    // render handed this instance reads a plugin's service through it.
+    plugins: directAPI.plugins,
+
     // Content releases. Forwarded for the reason stated above: a namespace that
     // stops at the class is absent from the documented `await getNextly()`
     // path, which is the one the REST handlers use.

@@ -862,7 +862,10 @@ async function refuseIndexNamesTaken(
   ]);
   const declared =
     desiredCollectionTable(collection, adapter.dialect).indexes ?? [];
-  const taken = declared.flatMap(index => {
+  // Typed once, so the branch that cannot read the index's columns (`live: null`) and the
+  // branch that can (`live: string[]`) yield one element type.
+  type Taken = { index: (typeof declared)[number]; live: string[] | null };
+  const taken = declared.flatMap((index): Taken[] => {
     if (index.columns.length === 0 || !uniqueness.has(index.name)) return [];
     // An index under the name that does not stand on whole columns (partial, on an expression,
     // a MySQL prefix, or invalid) is not described by its columns, but it still holds the name:

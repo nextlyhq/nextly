@@ -87,7 +87,8 @@ export { pagesCollection } from "./collections/pages";
  */
 export { resolveSiteStyle, siteBreakpoints, siteSheet } from "./site-style";
 export type { SiteStyleData } from "./site-style";
-export { SITE_STYLE_SLUG, loadSiteStyle } from "./site-style-storage";
+export { SITE_STYLE_SLUG } from "./site-style-storage";
+export { loadSiteStyle } from "./site-style-load";
 export {
   previewViewportsFromSiteStyle,
   siteStyleViewports,
