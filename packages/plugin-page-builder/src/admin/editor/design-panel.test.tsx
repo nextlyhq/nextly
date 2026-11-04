@@ -102,6 +102,63 @@ describe("a style change undone behind the open tab", () => {
     expect(screen.getByRole("button", { name: "stored" })).toBeTruthy();
   });
 
+  it("mounts the frame afresh too, while keeping it across a change of tab", () => {
+    // The frame holds the variables an author is editing, for every tab.
+    function Frame({ children }: { children: React.ReactNode }) {
+      const [draft, setDraft] = React.useState("stored");
+      return (
+        <>
+          <button type="button" onClick={() => setDraft("edited")}>
+            {draft}
+          </button>
+          {children}
+        </>
+      );
+    }
+    const panel = (revision: number, current: string) => (
+      <StyleRevisionContext.Provider value={{ revision, settling: false }}>
+        <DesignPanel
+          view={{ current, choose: vi.fn() }}
+          frame={tabs => <Frame>{tabs}</Frame>}
+          tabs={{
+            variables: () => <p>variables content</p>,
+            classes: () => null,
+            fonts: () => <p>fonts content</p>,
+          }}
+        />
+      </StyleRevisionContext.Provider>
+    );
+    const { rerender } = render(panel(0, "variables"));
+    fireEvent.click(screen.getByRole("button", { name: "stored" }));
+    rerender(panel(0, "fonts"));
+    expect(screen.getByText("fonts content")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "edited" })).toBeTruthy();
+
+    rerender(panel(1, "fonts"));
+    expect(screen.getByRole("button", { name: "stored" })).toBeTruthy();
+  });
+
+  it("holds the header's controls inert while a replay settles, as it holds the tab", () => {
+    const panel = (settling: boolean) => (
+      <StyleRevisionContext.Provider value={{ revision: 0, settling }}>
+        <DesignPanel
+          view={{ current: "fonts", choose: vi.fn() }}
+          tabs={{
+            variables: () => null,
+            classes: () => null,
+            fonts: () => null,
+          }}
+        />
+      </StyleRevisionContext.Provider>
+    );
+    const { container, rerender } = render(panel(true));
+    const actions = () =>
+      container.querySelector(".nx-pb-design__actions") as HTMLElement;
+    expect(actions().hasAttribute("inert")).toBe(true);
+    rerender(panel(false));
+    expect(actions().hasAttribute("inert")).toBe(false);
+  });
+
   it("holds the tab inert while a replay settles, so nothing is edited against the old value", () => {
     const panel = (settling: boolean) => (
       <StyleRevisionContext.Provider value={{ revision: 0, settling }}>

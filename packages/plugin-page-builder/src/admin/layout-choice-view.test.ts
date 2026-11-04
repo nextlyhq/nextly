@@ -70,7 +70,7 @@ const page = (layout: unknown = null, noHeaderFooter = false) => ({
 describe("the page's Layout picker", () => {
   it("offers the default by name, published Layouts, unpublished ones marked, then none", () => {
     expect(layoutPickerView(page(), ready()).options).toEqual([
-      { value: SITE_DEFAULT_VALUE, label: "Site default (Main)" },
+      { value: SITE_DEFAULT_VALUE, label: "Site default", note: "Main" },
       { value: layoutValue("main"), label: "Main" },
       { value: layoutValue("landing"), label: "Landing" },
       {
@@ -84,7 +84,9 @@ describe("the page's Layout picker", () => {
   it("names the default in effect for a page naming nothing", () => {
     const view = layoutPickerView(page(), ready());
     expect(view.value).toBe(SITE_DEFAULT_VALUE);
-    expect(view.why).toBe("Site default: Main");
+    expect(view.why).toBe(
+      "Follows the site default, Main, because this page doesn't choose its own Layout."
+    );
     expect(view.effective?.id).toBe("main");
   });
 
@@ -112,12 +114,25 @@ describe("the page's Layout picker", () => {
     expect(view.options.find(o => o.value === view.value)?.label).toBe(
       "A Layout you can't view, or one that was deleted"
     );
-    expect(view.options[0]?.label).toBe("Site default (Main)");
+    expect(view.options[0]).toMatchObject({
+      label: "Site default",
+      note: "Main",
+    });
     expect(view.why).toBe(
       "You can't see this Layout. It may have been deleted, or you may not have access to it. Choose another Layout to change it."
     );
     // Nothing of it is drawn.
     expect(view.effective).toBeNull();
+  });
+
+  it("says the default shows for an unpublished Layout, even when the default is one the author cannot read", () => {
+    const view = layoutPickerView(
+      page({ id: "unfinished" }),
+      ready({ defaultLayout: null, defaultUnreadable: true })
+    );
+    expect(view.why).toBe(
+      "Unfinished (not published, so the site default shows)"
+    );
   });
 
   it("says a default is set without naming one the author cannot read", () => {
@@ -129,7 +144,7 @@ describe("the page's Layout picker", () => {
       "Site default (a Layout you can't view, or one that was deleted)"
     );
     expect(view.why).toBe(
-      "Site default: a Layout you can't view, or one that was deleted"
+      "Follows the site default: a Layout you can't view, or one that was deleted."
     );
     expect(view.effective).toBeNull();
   });
@@ -230,5 +245,44 @@ describe("what the picker writes", () => {
       layout: "landing",
       noHeaderFooter: true,
     });
+  });
+});
+
+describe("a Layout behind Remove Layout's fence", () => {
+  const removing: LayoutChoice = { ...landing, removal: "removing" };
+  const takenDown: LayoutChoice = {
+    ...unfinished,
+    removal: "unpublished",
+  };
+
+  it("is offered no longer, by its name and a short reason, with the whole reason as its description", () => {
+    const view = layoutPickerView(
+      page(),
+      ready({}, [main, removing, takenDown])
+    );
+    expect(view.options).toContainEqual({
+      value: layoutValue("landing"),
+      label: "Landing",
+      note: "Being removed",
+      description:
+        "This Layout is being removed, so pages can't choose it. Choose another Layout.",
+      disabled: true,
+    });
+    expect(view.options).toContainEqual({
+      value: layoutValue("unfinished"),
+      label: "Unfinished",
+      note: "Unpublished. Publish it again to choose it.",
+      description:
+        "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.",
+      disabled: true,
+    });
+  });
+
+  it("stays the page's own choice when the page already names it", () => {
+    const view = layoutPickerView(page("landing"), ready({}, [main, removing]));
+    expect(
+      view.options.find(option => option.value === layoutValue("landing"))
+        ?.disabled
+    ).toBe(false);
   });
 });

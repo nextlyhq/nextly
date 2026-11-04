@@ -778,7 +778,7 @@ const MAX_IMAGE_EDGE = 20000;
  * images load while the standalone path above them does not.
  */
 /**
- * The margin a rich-media wrapper is owed, because the browser's is wrong.
+ * The inline margin a rich-media wrapper is owed, because the browser's is wrong.
  *
  * A `<figure>` carries `margin: 1em 40px` from the UA stylesheet, and 40px on
  * each side is an INDENT nobody asked for — it takes 80px out of the column and
@@ -786,11 +786,13 @@ const MAX_IMAGE_EDGE = 20000;
  * neutralise it, so the wrapper carries the reset itself, the same way the
  * gallery's list already resets the markers and padding a `<ul>` arrives with.
  *
- * Vertical-only, and the value is the editor's own `my-4`: the space between an
- * image and the prose around it is real, and the horizontal inset is the only
- * part that was never chosen.
+ * Horizontal only. The space between a figure and the prose around it belongs
+ * to the passage: the rich-text block spaces each element after the first by
+ * `space.paragraph`, and the element defaults zero a figure's block margins.
+ * An inline vertical margin here would outrank both, since nothing beats an
+ * inline style.
  */
-const MEDIA_FIGURE_STYLE: CSSProperties = { margin: "1rem 0" };
+const MEDIA_FIGURE_STYLE: CSSProperties = { marginInline: 0 };
 
 function ImageElement({
   src,

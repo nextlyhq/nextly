@@ -16,8 +16,10 @@ export interface CompanionMigrationPlan {
    *   restore the default locale onto main, archive the other languages, drop the companion
    *   Reversible (its DOWN re-enables).
    * - `none`: the companion already exists / nothing to relocate → emit nothing.
+   * - `adds`: the companion exists and gains the columns of translated fields added to the entity
+   *   (`field-added-to-translation.ts`). Not planned here, but carried in the same list.
    */
-  kind: "enable" | "create-only" | "disable" | "none";
+  kind: "enable" | "create-only" | "disable" | "none" | "adds";
   upSql: string;
   downSql: string;
   /**

@@ -36,9 +36,11 @@
  */
 
 import {
+  hiddenOnDevice,
   isComponentInstance,
   type BlockDocument,
   type BlockNode,
+  type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
 import { blockLabel, type SavedComponent } from "./inserter";
@@ -85,6 +87,12 @@ export interface LayerNode {
   /** The instance name if the author gave one, otherwise the block's name. */
   readonly label: string;
   /**
+   * The name the author gave, when they gave one: what a rename starts from.
+   * The label falls back to the type or the component's title, which is not
+   * a name the author wrote and must not be stored as one by a rename.
+   */
+  readonly name?: string;
+  /**
    * The block is a component placement, so its row is marked as one: its label
    * may be the component's title, which would otherwise read as a block's own
    * name.
@@ -115,7 +123,29 @@ export interface LayerNode {
    * have to pick one of those to be true about.
    */
   readonly breakpointHidden: boolean;
+  /**
+   * The block is hidden on the device being edited, which is the device the
+   * canvas shows: the row is drawn dimmed with a "Hidden" badge. Only known
+   * when the tree was asked for a device.
+   */
+  readonly hiddenHere?: boolean;
+  /**
+   * The name of the block hidden on the device being edited that this one
+   * sits inside, when it is not hidden itself: a visitor on that device sees
+   * none of what the block holds, so the row says it is hidden with it, and
+   * where it is shown again.
+   */
+  readonly hiddenWith?: string;
   readonly children: readonly LayerNode[];
+}
+
+/**
+ * The device the tree is read for: the site's breakpoints and the one being
+ * edited, which decides each row's {@link LayerNode.hiddenHere}.
+ */
+export interface LayersDevice {
+  readonly breakpoints: BreakpointSet | undefined;
+  readonly id: string;
 }
 
 /** Whether any breakpoint switches this node off. */
@@ -176,32 +206,89 @@ export function layerLabel(
 }
 
 /**
+ * Every block's name in a document, by address, as Layers reads them, kept
+ * per document and title lookup: the canvas asks for a placement's name each
+ * time it draws its frame, and a selection can hold many placements, so the
+ * page is read once rather than once per name. An edit makes a new document,
+ * which is read afresh.
+ */
+const BLOCK_NAMES = new WeakMap<
+  BlockDocument,
+  {
+    readonly titles: ComponentTitleOf | undefined;
+    readonly names: Map<string, string>;
+  }
+>();
+
+/**
+ * The name of the block at an address anywhere in the document, as its Layers
+ * row reads (see {@link layerLabel}), or `undefined` where the document holds
+ * no such block. The canvas tags a selected placement with it, so the page and
+ * the tree call one block by one name.
+ */
+export function blockNameOf(
+  document: BlockDocument,
+  id: string,
+  componentTitle?: ComponentTitleOf
+): string | undefined {
+  let kept = BLOCK_NAMES.get(document);
+  if (kept === undefined || kept.titles !== componentTitle) {
+    const names = new Map<string, string>();
+    const walk = (rows: readonly LayerNode[]): void => {
+      for (const row of rows) {
+        names.set(row.id, row.label);
+        walk(row.children);
+      }
+    };
+    walk(layersOf(document, componentTitle));
+    kept = { titles: componentTitle, names };
+    BLOCK_NAMES.set(document, kept);
+  }
+  return kept.names.get(id);
+}
+
+/**
  * The document as a tree of rows.
  *
  * `componentTitle` names component placements; see {@link layerLabel}.
  */
 export function layersOf(
   document: BlockDocument,
-  componentTitle?: ComponentTitleOf
+  componentTitle?: ComponentTitleOf,
+  device?: LayersDevice
 ): LayerNode[] {
-  // `heldBy` is the nearest locked block above, carried down the walk so the
-  // tree is read once rather than climbed per row.
+  // `heldBy` is the nearest locked block above and `hiddenBy` the nearest
+  // block hidden on the device, carried down the walk so the tree is read once
+  // rather than climbed per row.
   const walk = (
     nodes: readonly BlockNode[],
-    heldBy: string | undefined
+    heldBy: string | undefined,
+    hiddenBy: string | undefined
   ): LayerNode[] =>
     nodes.map(node => {
       const label = layerLabel(node, undefined, componentTitle);
       const locked = node.locked === true;
+      const name = authoredName(node);
+      // Asked of the engine's per-device reading, the cascade the published
+      // stylesheet is compiled from, so a row says hidden exactly where a
+      // visitor on that device sees nothing.
+      const hiddenHere =
+        device !== undefined &&
+        hiddenOnDevice(node.visibility, device.breakpoints, device.id);
       return {
         id: node.id,
         type: node.type,
         label,
+        ...(name === undefined ? {} : { name }),
         component: isComponentInstance(node),
         locked,
         ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),
         conditional: hasConditions(node),
         breakpointHidden: hiddenAtSomeBreakpoint(node),
+        ...(device === undefined ? {} : { hiddenHere }),
+        // Kept on a row hidden itself as well: showing it here shows nothing
+        // while the block around it is hidden, so the row offers no eye.
+        ...(hiddenBy === undefined ? {} : { hiddenWith: hiddenBy }),
         // Declaration order across every slot the node holds. `Object.values`
         // preserves insertion order for string keys, which is the order the
         // document was written in — so the tree matches the document rather
@@ -209,12 +296,13 @@ export function layersOf(
         // is this block's own when it has one.
         children: walk(
           Object.values(node.slots ?? {}).flat(),
-          locked ? label : heldBy
+          locked ? label : heldBy,
+          hiddenHere ? label : hiddenBy
         ),
       };
     });
 
-  return walk(document.nodes, undefined);
+  return walk(document.nodes, undefined, undefined);
 }
 
 /**

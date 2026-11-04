@@ -58,6 +58,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { INTERACTIVE } from "./categories";
+import { CONTAINER_CHILD_GAP } from "./container";
 
 /** This block's registered name, so the tests and its parent name it once. */
 export const ACCORDION_ITEM_BLOCK = "core/accordion-item";
@@ -159,6 +160,9 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
       // than none.
       children: {},
     },
+    // Every block after the `<summary>` is spaced from what precedes it, the
+    // first one from the title included.
+    childGap: CONTAINER_CHILD_GAP,
     supports: ACCORDION_ITEM_SUPPORTS,
     // A `<details>` is interactive content, so nothing that refuses
     // interactive content may hold one, and like any element but a plain box it

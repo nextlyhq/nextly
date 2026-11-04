@@ -34,6 +34,7 @@ import {
   setupInProgress,
   setupTokenSetByEnv,
   componentMapOutOfDate,
+  initAnswersRequired,
   widgetGenerateCancelled,
 } from "../../errors/areas/commands";
 
@@ -42,6 +43,7 @@ import { PROJECT, type ErrorCases } from "./types";
 export const COMMAND_CASES = {
   PROJECT_ALREADY_INITIALIZED: () =>
     projectAlreadyInitialized(`${PROJECT}/nextly.config.ts`),
+  INIT_ANSWERS_REQUIRED: () => initAnswersRequired(),
   PACKAGE_INSTALL_FAILED: () =>
     packageInstallFailed("pnpm", "@nextlyhq/plugin-seo", 1),
   BUILD_STRICT_WARNINGS: () =>
