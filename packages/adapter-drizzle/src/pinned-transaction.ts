@@ -43,9 +43,11 @@ export interface PinnedConnection {
   /**
    * Runs once the connection is back, whichever way the transaction ended,
    * before the caller hears of it: what was held until the transaction
-   * ended, run where it no longer holds a connection. Never rejects.
+   * ended, run where it no longer holds a connection. Handed whether the
+   * connection went back `dirty`, with no ROLLBACK confirmed on it. Never
+   * rejects.
    */
-  afterRelease?(): Promise<void>;
+  afterRelease?(dirty: boolean): Promise<void>;
 }
 
 /**
@@ -98,7 +100,7 @@ export function pinTransactions<D extends DrizzleTransactor>(
     } finally {
       connection.release(dirty);
     }
-    await connection.afterRelease?.();
+    await connection.afterRelease?.(dirty);
     if ("error" in outcome) throw outcome.error;
     return outcome.value;
   };

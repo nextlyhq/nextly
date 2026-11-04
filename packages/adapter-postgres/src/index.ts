@@ -769,7 +769,7 @@ export class PostgresAdapter extends DrizzleAdapter {
     // transaction, so it is destroyed rather than pooled: the next request
     // handed it would otherwise write into a transaction nobody commits.
     let discard: Error | true | undefined;
-    const settled = await this.runOutermost(
+    const settled = await this.settleOutermost(
       {
         context: this.createTransactionContext(client),
         join: this.joinSteps(client),
@@ -791,9 +791,12 @@ export class PostgresAdapter extends DrizzleAdapter {
             });
           }
         },
+        // A failure is recorded for the release and rethrown, so the base
+        // knows the ROLLBACK is unconfirmed.
         rollback: async () => {
           await client.query("ROLLBACK").catch((rollbackError: unknown) => {
             discard = rollbackError instanceof Error ? rollbackError : true;
+            throw rollbackError;
           });
         },
       },

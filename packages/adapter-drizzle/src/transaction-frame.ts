@@ -115,6 +115,12 @@ export type Settled<T> =
   | { committed: true; result: T; effects: HeldEffect[] }
   | { committed: false; error: unknown; effects: HeldEffect[] };
 
+/** What a committed outermost transaction hands back: its result and the effects to run. */
+export interface Committed<T> {
+  result: T;
+  effects: HeldEffect[];
+}
+
 /**
  * The statements one transaction, or one part joined to it, runs on its
  * connection. Each returns nothing when the driver is synchronous, so the
@@ -161,7 +167,18 @@ export interface JoinSteps {
 /** The steps of an outermost transaction, with how calls inside it join it. */
 export interface OutermostSteps<C = TransactionContext>
   extends TransactionSteps<C> {
-  join: JoinSteps;
+  /**
+   * How calls made inside the transaction join it. Without it, nothing
+   * joins the transaction: calls made inside open transactions of their own.
+   */
+  join?: JoinSteps;
+  /**
+   * The connection the transaction runs on.
+   *
+   * @deprecated Unused: how calls inside join the transaction (`join`) is
+   *   built over the connection instead.
+   */
+  connection?: unknown;
   /**
    * The stack that opened the transaction, captured by the dialect before it
    * awaited anything, while a test harness observes escapes.

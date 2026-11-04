@@ -625,7 +625,7 @@ export class SqliteAdapter extends DrizzleAdapter {
     try {
       // Since better-sqlite3's db.transaction() doesn't support async functions,
       // we manually manage the transaction with BEGIN/COMMIT/ROLLBACK
-      return await this.runOutermost(
+      return await this.settleOutermost(
         {
           context: this.createTransactionContext(db),
           // A call made inside the transaction joins it as a savepoint.
@@ -636,9 +636,14 @@ export class SqliteAdapter extends DrizzleAdapter {
           commit: () => {
             db.exec("COMMIT");
           },
-          // Errors are ignored: the transaction may already be aborted.
+          // SQLite may already have rolled the transaction back itself; the
+          // ROLLBACK is unconfirmed only when the connection is still in one.
           rollback: () => {
-            db.exec("ROLLBACK");
+            try {
+              db.exec("ROLLBACK");
+            } catch (error) {
+              if (db.inTransaction) throw error;
+            }
           },
         },
         work,

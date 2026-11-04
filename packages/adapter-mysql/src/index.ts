@@ -727,7 +727,7 @@ export class MySqlAdapter extends DrizzleAdapter {
     // transaction has ended. Filled in as each change lands, so a setup that
     // fails part way still puts back what it had already changed.
     const restore: NonNullable<SessionRestore> = {};
-    const settled = await this.runOutermost(
+    const settled = await this.settleOutermost(
       {
         context: this.createTransactionContext(connection),
         join: this.joinSteps(connection),
@@ -736,9 +736,12 @@ export class MySqlAdapter extends DrizzleAdapter {
         commit: async () => {
           await connection.query("COMMIT");
         },
+        // A failure is recorded for the return and rethrown, so the base
+        // knows the ROLLBACK is unconfirmed.
         rollback: async () => {
-          await connection.query("ROLLBACK").catch(() => {
+          await connection.query("ROLLBACK").catch((rollbackError: unknown) => {
             rollbackFailed = true;
+            throw rollbackError;
           });
         },
       },

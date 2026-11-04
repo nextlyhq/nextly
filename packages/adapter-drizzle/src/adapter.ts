@@ -42,6 +42,7 @@ import {
   outermost,
   settleNested,
   undone,
+  type Committed,
   type HeldEffect,
   type JoinableFrame,
   type JoinSteps,
@@ -674,21 +675,25 @@ export abstract class DrizzleAdapter {
    * them to run afterwards outside any transaction.
    *
    * Never rejects for the transaction's own failure: it settles with how the
-   * transaction ended ({@link Settled}). Committed, it hands back the work's
+   * transaction ended ({@link Settled}). {@link runOutermost} is the same,
+   * resolving once committed and rejecting otherwise. Committed, it hands back the work's
    * result and the `afterCommit` effects held for it, less those a
    * rolled-back part dropped. Rolled back, it hands back the error, as it was
    * thrown, and the `afterRollback` effects. The caller frees the connection
    * and then runs them ({@link runHeldEffects}), so an effect that opens a
    * transaction of its own does not wait behind this one; a caller about to
    * retry drops the rollback effects instead, since the attempt they belong
-   * to is not the last. Classifying the error is the dialect's.
+   * to is not the last. Rollback effects are handed back only once the
+   * ROLLBACK is confirmed: when it fails too, nobody can say whether the
+   * transaction committed, so they are dropped and that is logged
+   * ({@link logHeldEffectFailure}). Classifying the error is the dialect's.
    *
    * @param steps - The statements, the context, and how calls inside join
    * @param work - The transaction's work
    * @param options - The options the transaction was opened with
    * @returns How the transaction ended
    */
-  protected async runOutermost<T, C = TransactionContext>(
+  protected async settleOutermost<T, C = TransactionContext>(
     steps: OutermostSteps<C>,
     work: (tx: C) => Promise<T>,
     options?: TransactionOptions
@@ -697,6 +702,7 @@ export abstract class DrizzleAdapter {
       const begun = steps.begin();
       if (isPending(begun)) await begun;
     } catch (error) {
+      // No frame was opened, so no effect was held for it.
       await this.rollBackQuietly(steps);
       return { committed: false, error, effects: [] };
     }
@@ -731,23 +737,71 @@ export abstract class DrizzleAdapter {
       frame.rolledBack = true;
       frame.finished = true;
       frame.held.length = 0;
-      await this.rollBackQuietly(steps);
+      const confirmed = await this.rollBackQuietly(steps);
+      const rollbackEffects = frame.rollbackHeld.splice(0);
       return {
         committed: false,
         error,
-        effects: frame.rollbackHeld.splice(0),
+        effects: confirmed
+          ? rollbackEffects
+          : this.dropUnconfirmed(rollbackEffects),
       };
     }
   }
 
-  /** Run a transaction's ROLLBACK, ignoring its failure: the transaction may already have ended. */
-  private async rollBackQuietly<C>(steps: TransactionSteps<C>): Promise<void> {
+  /**
+   * Run `work` as an outermost transaction, as {@link settleOutermost} does,
+   * resolving once it has committed and rejecting with the error that ended
+   * it, as it was thrown, otherwise.
+   *
+   * @param steps - The statements, the context, and how calls inside join
+   * @param work - The transaction's work
+   * @param options - The options the transaction was opened with
+   * @returns The result, and the `afterCommit` effects to run once the
+   *   connection is free
+   */
+  protected async runOutermost<T, C = TransactionContext>(
+    steps: OutermostSteps<C>,
+    work: (tx: C) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<Committed<T>> {
+    const settled = await this.settleOutermost(steps, work, options);
+    if (!settled.committed) throw settled.error;
+    return { result: settled.result, effects: settled.effects };
+  }
+
+  /**
+   * Run a transaction's ROLLBACK, never throwing.
+   *
+   * @returns Whether the ROLLBACK is confirmed: false when it failed, so the
+   *   transaction's outcome is unknown
+   */
+  private async rollBackQuietly<C>(
+    steps: TransactionSteps<C>
+  ): Promise<boolean> {
     try {
       const rolledBack = steps.rollback();
       if (isPending(rolledBack)) await rolledBack;
+      return true;
     } catch {
-      // The transaction may already have been aborted.
+      return false;
     }
+  }
+
+  /**
+   * Drop the rollback effects of a transaction whose ROLLBACK could not be
+   * confirmed, and say so: it may have committed, and compensation run for a
+   * change that stands would be the wrong outcome.
+   */
+  private dropUnconfirmed(effects: HeldEffect[]): HeldEffect[] {
+    if (effects.length > 0) {
+      this.logHeldEffectFailure(
+        new Error(
+          `The transaction's outcome is unknown: its ROLLBACK could not be confirmed, so ${String(effects.length)} effect(s) held for a rollback did not run.`
+        )
+      );
+    }
+    return [];
   }
 
   /**
@@ -867,9 +921,17 @@ export abstract class DrizzleAdapter {
         return settled.result;
       }
       const { error } = settled;
-      const retried =
-        options?.retryWhen?.(error) === true ||
-        (!isApplicationError(error) && attempts.retryable(error));
+      let retried: boolean;
+      try {
+        retried =
+          options?.retryWhen?.(error) === true ||
+          (!isApplicationError(error) && attempts.retryable(error));
+      } catch (thrown) {
+        // The attempt did roll back, whatever the question about retrying
+        // it raised: its rollback effects still run before that propagates.
+        await this.runHeldEffects(settled.effects);
+        throw thrown;
+      }
       if (attempt < maxAttempts && retried) {
         const { label, detail } = attempts.describe(error);
         attempts.logger?.warn?.(
@@ -1230,9 +1292,11 @@ export abstract class DrizzleAdapter {
       this.notePoolAccess();
       const connection = await checkout();
       let effects: HeldEffect[] = [];
+      // Whether those are a rollback's, run only once its ROLLBACK is confirmed.
+      let rolledBack = false;
       const framed: DrizzleTransactor = {
         transaction: async (work, config) => {
-          const settled = await this.runOutermost(
+          const settled = await this.settleOutermost(
             {
               context: undefined,
               join: connection.join,
@@ -1255,6 +1319,7 @@ export abstract class DrizzleAdapter {
               }, config)
           );
           effects = settled.effects;
+          rolledBack = !settled.committed;
           if (settled.committed) return settled.result;
           throw settled.error;
         },
@@ -1263,7 +1328,11 @@ export abstract class DrizzleAdapter {
         drizzle: framed,
         rollback: () => connection.rollback(),
         release: dirty => connection.release(dirty),
-        afterRelease: () => this.runHeldEffects(effects),
+        // `dirty`: no ROLLBACK could be confirmed on the connection.
+        afterRelease: dirty =>
+          this.runHeldEffects(
+            dirty && rolledBack ? this.dropUnconfirmed(effects) : effects
+          ),
       };
     });
   }
