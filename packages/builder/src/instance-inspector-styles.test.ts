@@ -53,3 +53,38 @@ describe("the placement's header", () => {
     );
   });
 });
+
+describe("a placement's row on the inspector grid", () => {
+  it("draws label, control and reset on one row, as a Style row does", () => {
+    expect(
+      ruleBody(".nx-inspector__field.nx-inspector__field--exposed")
+    ).toContain(
+      // 8.5rem, wider than a Style row's label: the name column also
+      // holds "From the component" under the label, which wrapped at 7rem.
+      // Its control column may shrink: a placement row holds fields, selects
+      // and checkboxes, never an icon strip, and an input's own width at
+      // min-content squeezed the name column until its note wrapped.
+      "grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) 1.5rem"
+    );
+    const name = ruleBody(
+      ".nx-inspector__field--exposed > .nx-inspector__exposed-name"
+    );
+    expect(name).toContain("grid-column: 1");
+    expect(name).toContain("min-height: var(--nx-control-height)");
+    expect(
+      ruleBody(
+        ".nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot"
+      )
+    ).toContain("grid-column: 3");
+  });
+});
+
+describe("a placement's row in a narrow rail", () => {
+  it("draws no blank row for a reset slot with nothing in it", () => {
+    // Stacked, the empty slot kept its control height: a blank row and a gap
+    // under every field the page had not changed.
+    expect(FLAT).toContain(
+      ".nx-inspector__field.nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot:empty { display: none; }"
+    );
+  });
+});

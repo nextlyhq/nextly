@@ -4231,6 +4231,24 @@ describe("a per-side property is drawn as a box", () => {
     ).toBeDefined();
   });
 
+  it("names a side's whole value in its tooltip, for a value its cell cannot show", () => {
+    // A value wider than its cell was cut short with no way to read it.
+    register({ spacing: true });
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { padding: { inlineStart: "12.375rem" } } },
+    } as NodeStyles;
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        sideOrientation={{ writingMode: "horizontal-tb", direction: "ltr" }}
+      />
+    );
+    const side = document.querySelector(
+      '[data-property="padding"] [data-side="inlineStart"] input'
+    ) as HTMLInputElement;
+    expect(side.getAttribute("title")).toBe("12.375rem");
+  });
+
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*
      * The forwarding hop, and the only test here that measures rather than is
