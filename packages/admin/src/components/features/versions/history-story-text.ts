@@ -142,22 +142,28 @@ const REPLACED_KIND_WORDS: Readonly<Record<string, string>> = {
  */
 function overwriteSentence(event: DocumentEvent): string {
   const payload = event.payload ?? {};
-  if (payload.given !== "stale") {
-    return payload.given === "none"
-      ? "Saved as an overwrite (no version given)"
-      : "Saved as an overwrite";
+  if (payload.given === "stale") {
+    const by = replacedBy(payload);
+    return by
+      ? `Overwrote changes by ${by}`
+      : "Overwrote changes (previous editor unavailable)";
   }
+  return payload.given === "none"
+    ? "Saved as an overwrite (no version given)"
+    : "Saved as an overwrite";
+}
+
+/**
+ * Who made the changes a stale overwrite replaced, in words: a person by the
+ * name the server gave, anything else by its kind. Null when there is nobody
+ * to name.
+ */
+function replacedBy(payload: Record<string, unknown>): string | null {
   const replaced = payload.replaced as { kind?: unknown } | null | undefined;
   const kind = typeof replaced?.kind === "string" ? replaced.kind : null;
-  if (kind === "person") {
-    const name = payload.replacedName;
-    if (typeof name === "string" && name !== "") {
-      return `Overwrote changes by ${name}`;
-    }
-  } else if (kind !== null && REPLACED_KIND_WORDS[kind]) {
-    return `Overwrote changes by ${REPLACED_KIND_WORDS[kind]}`;
-  }
-  return "Overwrote changes (previous editor unavailable)";
+  if (kind !== "person") return (kind && REPLACED_KIND_WORDS[kind]) || null;
+  const name = payload.replacedName;
+  return typeof name === "string" && name !== "" ? name : null;
 }
 
 /** What an event that is a row of its own says happened. */

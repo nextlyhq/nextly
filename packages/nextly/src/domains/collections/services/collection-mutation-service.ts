@@ -309,12 +309,12 @@ import {
 import {
   certainlyStale,
   type DecodedVersion,
+  type DocumentRevisionState,
   givenOf,
   judgedLanguage,
   judgedLanguages,
   judgeLanguageRow,
   judgeMainRow,
-  type DocumentRevisionState,
   type PartState,
   poolRevisionReader,
   refuseIfAnyLanguageMoved,
@@ -1919,17 +1919,45 @@ export class CollectionMutationService extends BaseService {
     });
   }
 
-  /** An overwrite in this document's history; see `recordOverwriteEvent`. */
-  private recordOverwriteHistory(
+  /**
+   * Record an overwrite in this document's history, when the update said to
+   * overwrite: whatever the collection keeps, in the write's transaction, so
+   * a save that cannot record it is not kept either. Whom it replaced is read
+   * from `before`, the rows as the save found them before writing. See
+   * `recordOverwriteEvent`.
+   */
+  private async recordOverwriteIfAsked(
     tx: TransactionContext,
-    collection: string,
-    id: string,
-    overwrite: Omit<Parameters<typeof recordOverwriteEvent>[2], "subject">
+    check: VersionCheck,
+    target: {
+      collection: string;
+      id: string;
+      actor: RequestActor | null | undefined;
+      user: UserContext | undefined;
+    },
+    before: {
+      main: DocumentRevisionState | undefined;
+      language: PartState | undefined;
+      /** Every language's row, for a write over all of them at once. */
+      languages?: readonly PartState[];
+      locale: string | undefined;
+    }
   ): Promise<void> {
-    return recordOverwriteEvent(
+    if (check.kind !== "overwrite") return;
+    await recordOverwriteEvent(
       tx,
       { adapter: this.adapter },
-      { subject: { kind: "collection", slug: collection, id }, ...overwrite }
+      {
+        subject: { kind: "collection", slug: target.collection, id: target.id },
+        actor: actorForWrite(target.actor, target.user),
+        personName: target.user?.name ?? null,
+        locale: before.locale ?? null,
+        ...overwriteRecordOf(check, {
+          main: before.main?.main,
+          language: before.language,
+          languages: before.languages,
+        }),
+      }
     ).catch(err => {
       // See `recordHistoryEvent`: the transaction must not keep the write.
       throw markWriteIntegrityFailure(err);
@@ -8758,13 +8786,18 @@ export class CollectionMutationService extends BaseService {
           // transaction, so a move that cannot record it is not kept either.
           await this.recordOverwriteIfAsked(
             tx,
-            { collection: params.collectionName, id: params.entryId },
             versionCheck,
             {
-              actor: publishActor,
-              personName: params.user?.name ?? null,
+              collection: params.collectionName,
+              id: params.entryId,
+              actor: params.actor,
+              user: params.user,
+            },
+            {
               main: mainBefore,
+              language: undefined,
               languages: languagesBefore,
+              locale: undefined,
             }
           );
 
@@ -10359,34 +10392,6 @@ export class CollectionMutationService extends BaseService {
         locale: EVERY_LOCALE,
       })
     );
-  }
-
-  /**
-   * Record an overwrite in the entry's history, on the write's transaction,
-   * when the write said to overwrite: naming whom it replaced from the rows
-   * as they stood before it.
-   */
-  private async recordOverwriteIfAsked(
-    tx: TransactionContext,
-    document: { collection: string; id: string },
-    check: VersionCheck,
-    write: {
-      actor: RequestActor;
-      personName: string | null;
-      main: DocumentRevisionState | undefined;
-      languages: readonly PartState[] | undefined;
-    }
-  ): Promise<void> {
-    if (check.kind !== "overwrite") return;
-    await this.recordOverwriteHistory(tx, document.collection, document.id, {
-      actor: write.actor,
-      personName: write.personName,
-      locale: null,
-      ...overwriteRecordOf(check, {
-        main: write.main?.main,
-        languages: write.languages,
-      }),
-    });
   }
 
   /**
@@ -12416,9 +12421,8 @@ export class CollectionMutationService extends BaseService {
               actorForWrite(params.actor, params.user),
               staleWrite
             );
-            if (before && judgedLocale === localizedUpdate.writeLocale) {
-              languageBefore = before;
-            }
+            // Set only for an overwrite of the language this save judges.
+            languageBefore = before;
             await upsertCompanionRow(
               companionWriteVia(tx, this.dialect),
               localizedUpdate.companionTableName,
@@ -13212,25 +13216,22 @@ export class CollectionMutationService extends BaseService {
             params.user?.id ?? null
           );
 
-          // An overwrite is recorded whatever the document keeps, in this
-          // transaction, so a save that cannot record it is not kept either.
-          if (versionCheck.kind === "overwrite") {
-            await this.recordOverwriteHistory(
-              tx,
-              params.collectionName,
-              params.entryId,
-              {
-                actor: actorForWrite(params.actor, params.user),
-                personName: params.user?.name ?? null,
-                locale: judgedLocale ?? null,
-                ...overwriteRecordOf(versionCheck, {
-                  main: mainBefore?.main,
-                  language: languageBefore,
-                  languages: languagesBefore,
-                }),
-              }
-            );
-          }
+          await this.recordOverwriteIfAsked(
+            tx,
+            versionCheck,
+            {
+              collection: params.collectionName,
+              id: params.entryId,
+              actor: params.actor,
+              user: params.user,
+            },
+            {
+              main: mainBefore,
+              language: languageBefore,
+              languages: languagesBefore,
+              locale: judgedLocale,
+            }
+          );
 
           writtenVersion = await documentVersionOn(tx, {
             dialect: this.dialect,
@@ -17434,20 +17435,23 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
-      // An overwrite is recorded whatever the collection keeps, on the
-      // caller's transaction, from the rows as this item found them before
-      // writing: so a batch that cannot record it keeps nothing of it.
-      if (versionCheck.kind === "overwrite") {
-        await this.recordOverwriteHistory(tx, params.collectionName, entryId, {
-          actor: actorForWrite(params.actor, params.user),
-          personName: params.user?.name ?? null,
-          locale: localizedUpdate?.writeLocale ?? null,
-          ...overwriteRecordOf(versionCheck, {
-            main: mainJudged.before?.main,
-            language: languageJudged.before,
-          }),
-        });
-      }
+      // On the caller's transaction, so a batch that cannot record an
+      // overwrite keeps nothing of it.
+      await this.recordOverwriteIfAsked(
+        tx,
+        versionCheck,
+        {
+          collection: params.collectionName,
+          id: entryId,
+          actor: params.actor,
+          user: params.user,
+        },
+        {
+          main: mainJudged.before,
+          language: languageJudged.before,
+          locale: localizedUpdate?.writeLocale,
+        }
+      );
 
       // What this update wrote, as the single-entry update reports it: a held
       // edit leaves the live row unchanged, so the hooks, the field hooks and

@@ -380,7 +380,7 @@ describe.each(getConfiguredTestDialects())(
 
       const resaved = await singlesOf(t).update(
         PLAIN,
-        { ...read, notice: "a", _rev: "999", _revision: 999 },
+        { ...read, notice: "a", _revision: 999 },
         { overrideAccess: true }
       );
       expect(revOf(resaved)).toBe("2");
@@ -388,7 +388,7 @@ describe.each(getConfiguredTestDialects())(
 
       await t.nextly.updateSingle({
         slug: PLAIN,
-        data: { notice: "b", _rev: "999", _revision: 999 },
+        data: { notice: "b", _rev: "2", _revision: 999 },
         overrideAccess: true,
       } as never);
       expect(await mainCounter(t, PLAIN)).toBe(3);

@@ -172,31 +172,37 @@ async function rest(
   return { status: res.status, json: (await res.json()) as Doc };
 }
 
+type Answer = {
+  success?: boolean;
+  code?: string;
+  json?: {
+    error?: { code?: string };
+    items?: unknown[];
+    errors?: { code?: string }[];
+  };
+};
+
+/**
+ * The error code a REST answer refuses with, or undefined when it applied. A
+ * bulk route answers each document apart: refused only when no document was
+ * applied, so one that slipped through still reads as applied.
+ */
+function restRefusal(json: Answer["json"]): string | undefined {
+  if (json?.error?.code) return json.error.code;
+  if (!json?.errors?.length || json.items?.length) return undefined;
+  return json.errors[0]?.code ?? "FAILED";
+}
+
 /** The error code a refused call carries, whichever door refused it. */
 async function refusalOf(call: () => Promise<unknown>): Promise<string> {
+  let answer: Answer;
   try {
-    const answer = (await call()) as {
-      success?: boolean;
-      code?: string;
-      status?: number;
-      json?: {
-        error?: { code?: string };
-        items?: unknown[];
-        errors?: { code?: string }[];
-      };
-    };
-    if (answer?.json?.error?.code) return answer.json.error.code;
-    // A bulk route answers each document apart: refused only when no
-    // document was applied, so one that slipped through still reads as such.
-    const perItem = answer?.json?.errors;
-    if (perItem?.length && !answer.json?.items?.length) {
-      return perItem[0]?.code ?? "FAILED";
-    }
-    if (answer?.success === false && answer.code) return answer.code;
+    answer = (await call()) as Answer;
   } catch (error) {
     return String((error as { code?: unknown }).code);
   }
-  return "applied";
+  const fromService = answer?.success === false ? answer.code : undefined;
+  return restRefusal(answer?.json) ?? fromService ?? "applied";
 }
 
 /**
