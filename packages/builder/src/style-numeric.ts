@@ -403,8 +403,14 @@ export function scrubOrigin(
 export function scrubbedValue(
   leaf: StyleLeaf,
   value: StyleValue | undefined,
-  delta: number
+  dragged: number
 ): string | number | undefined {
+  // An integer moves by whole steps: a fine drag's tenths are dropped toward
+  // zero, so the value moves once they add up to a whole one.
+  const delta =
+    leaf.kind === "number" && leaf.integer === true
+      ? Math.trunc(dragged)
+      : dragged;
   const whole = steppedValue(leaf, value, delta);
   if (whole !== undefined || delta === 0) return whole;
   const current = measurementOf(value);
@@ -418,7 +424,11 @@ export function scrubbedValue(
   let high = Math.round(Math.abs(delta) / quantum);
   let found: string | number | undefined;
   while (high - low > 1) {
-    const middle = Math.floor((low + high) / 2);
+    const middle = low + Math.floor((high - low) / 2);
+    // Past the safe integers a midpoint can round back onto an end, and the
+    // search would never move again: what it has found is then as close to
+    // the bound as a double can say.
+    if (middle <= low || middle >= high) break;
     const next = steppedValue(
       leaf,
       value,
@@ -489,6 +499,9 @@ function steppedNumber(
   // A unit on a number leaf is not a number: `opacity: 5px` is stored text the
   // engine refuses, and stepping it would answer `6px`, which it also refuses.
   if (current === undefined || current.unit !== "") return undefined;
+  // A fine step on an integer has no value to land on: rounded back, it would
+  // be a key claimed and a write attempted for a value that did not move.
+  if (leaf.integer === true && !Number.isInteger(delta)) return undefined;
   const stepped =
     leaf.integer === true
       ? Math.round(current.number + delta)

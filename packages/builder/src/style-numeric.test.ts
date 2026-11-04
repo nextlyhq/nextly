@@ -429,6 +429,19 @@ describe("a drag past what the property takes", () => {
     expect(scrubbedValue(MARGIN, "4px", -20)).toBe("-16px");
   });
 
+  it("ends its search on a value written past a double's precision", () => {
+    // Fifteen decimals put the bound some 10^16 steps away, past the safe
+    // integers, where a midpoint can round back onto an end.
+    const rested = scrubbedValue(PADDING, "10.000000000000002px", -20);
+    expect(typeof rested).toBe("string");
+    expect(Number.parseFloat(String(rested))).toBeLessThan(0.001);
+  });
+
+  it("moves an integer leaf only by whole steps", () => {
+    expect(steppedValue(Z_INDEX, 3, 0.1)).toBeUndefined();
+    expect(scrubbedValue(Z_INDEX, 3, 1.3)).toBe(4);
+  });
+
   it("holds a number leaf to its bounds", () => {
     expect(scrubbedValue(OPACITY, 0.5, 30)).toBe(1);
   });
