@@ -379,6 +379,26 @@ export function prepareDocumentReadStages(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): DocumentReadStages | null {
+  const before = stagesBeforeBindings(document, args);
+  return before === null ? null : withBindings(before, args);
+}
+
+/** The stages up to and including address repair: none depends on bindings. */
+type StagesBeforeBindings = Omit<
+  DocumentReadStages,
+  "bound" | "boundValues" | "bindingIssues" | "prepared"
+>;
+
+/** The caps a run reads a document under, as the pipeline resolves them. */
+function limitsOf(args: PrepareDocumentArgs): DocumentLimits {
+  return args.limits ?? args.styleContext?.limits ?? DEFAULT_LIMITS;
+}
+
+/** Passes 1 to 6: the envelope guard, repair, composition, migration, gating and address repair. */
+function stagesBeforeBindings(
+  document: BlockDocument,
+  args: PrepareDocumentArgs
+): StagesBeforeBindings | null {
   if (
     typeof document !== "object" ||
     document === null ||
@@ -388,7 +408,7 @@ export function prepareDocumentReadStages(
   }
   if (document.formatVersion !== DOCUMENT_FORMAT_VERSION) return null;
 
-  const limits = args.limits ?? args.styleContext?.limits ?? DEFAULT_LIMITS;
+  const limits = limitsOf(args);
   const sanitized = sanitizeDocument(document, limits);
   const composed = resolveComponentInstances(
     sanitized,
@@ -413,6 +433,24 @@ export function prepareDocumentReadStages(
   const visible = dedupeNodeIds(gated, node =>
     rendersOwnMarkup(node, args.resolver)
   );
+  return {
+    sanitized,
+    resolved: composed.document,
+    referencedComponents: composed.referenced,
+    unresolvedInstances: composed.unresolved,
+    migrated: doc,
+    rewritten,
+    gated,
+    deduped: visible,
+  };
+}
+
+/** Passes 7 and 8: the page's bindings, then the known placeholders. */
+function withBindings(
+  before: StagesBeforeBindings,
+  args: PrepareDocumentArgs
+): DocumentReadStages {
+  const visible = before.deduped;
   const binding =
     args.bindings === undefined
       ? undefined
@@ -434,19 +472,105 @@ export function prepareDocumentReadStages(
   // page that is working exactly as configured. Only content that survived
   // gating and then turned out to be unrenderable is a placeholder-only page.
   return {
-    sanitized,
-    resolved: composed.document,
-    referencedComponents: composed.referenced,
-    unresolvedInstances: composed.unresolved,
-    migrated: doc,
-    rewritten,
-    gated,
-    deduped: visible,
+    ...before,
     bound,
     boundValues: binding?.bound ?? NO_BOUND_VALUES,
     bindingIssues: binding?.issues ?? [],
     prepared,
   };
+}
+
+/**
+ * A document prepared up to the point where its bindings are filled, for a
+ * route that has to read what the bindings need before it renders.
+ *
+ * Opaque on purpose. The stages it stands for are kept in a module-level
+ * `WeakMap` that nothing outside this module can write, so a value a caller
+ * built or copied is not one, and the renderer runs the whole pipeline for it
+ * instead. Each is also bound to the document object, the resolver, the
+ * component definitions and the caps it was prepared under, and is used only
+ * where all of them are the ones the renderer is given.
+ *
+ * @internal Shared by this package's route and renderer.
+ * @experimental
+ */
+export interface PreparedDocument {
+  /**
+   * The tree the page will present, before its bindings are filled: what a
+   * route reads for. Its known placeholders are already removed.
+   */
+  readonly presented: BlockDocument;
+}
+
+/** What a prepared document was made from, and the stages it stands for. */
+interface PreparedRecord {
+  readonly document: BlockDocument;
+  readonly resolver: BlockResolver;
+  readonly definitions: DefinitionsById | undefined;
+  readonly limits: DocumentLimits;
+  readonly stages: StagesBeforeBindings;
+}
+
+/** Every prepared document this module made, and nothing else. */
+const PREPARED = new WeakMap<PreparedDocument, PreparedRecord>();
+
+/** The definitions as the pipeline tells them apart: none, or some. */
+function definitionsKey(
+  definitions: DefinitionsById | undefined
+): DefinitionsById | undefined {
+  return definitions === undefined || definitions.size === 0
+    ? undefined
+    : definitions;
+}
+
+/**
+ * Prepare a document up to its bindings, once, for a route to read for and
+ * then hand to the renderer.
+ *
+ * @internal Shared by this package's route and renderer.
+ */
+export function prepareDocument(
+  document: BlockDocument,
+  args: Omit<PrepareDocumentArgs, "bindings">
+): PreparedDocument | null {
+  const stages = stagesBeforeBindings(document, args);
+  if (stages === null) return null;
+  const prepared: PreparedDocument = Object.freeze({
+    presented: pruneKnownPlaceholders(stages.deduped, args.resolver),
+  });
+  PREPARED.set(prepared, {
+    document,
+    resolver: args.resolver,
+    definitions: definitionsKey(args.definitions),
+    limits: limitsOf(args),
+    stages,
+  });
+  return prepared;
+}
+
+/**
+ * The read stages for a document: from a prepared document when it is one
+ * this module made for this very document under these very arguments, and by
+ * running the pipeline otherwise.
+ *
+ * @internal Shared by this package's route and renderer.
+ */
+export function readStagesFor(
+  document: BlockDocument,
+  args: PrepareDocumentArgs,
+  prepared: PreparedDocument | undefined
+): DocumentReadStages | null {
+  const record = prepared === undefined ? undefined : PREPARED.get(prepared);
+  const reusable =
+    record !== undefined &&
+    record.document === document &&
+    record.resolver === args.resolver &&
+    record.definitions === definitionsKey(args.definitions) &&
+    // The same caps object, as the route hands the renderer the one it
+    // prepared under: a different one may hold different caps.
+    record.limits === limitsOf(args);
+  if (reusable) return withBindings(record.stages, args);
+  return prepareDocumentReadStages(document, args);
 }
 
 /**

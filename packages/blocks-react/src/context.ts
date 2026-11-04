@@ -106,6 +106,16 @@ export interface BlocksPublicReader {
   count(
     query: Pick<BlocksQuery, "collection" | "filters" | "locale">
   ): Promise<number>;
+  /**
+   * One Single, published, with the fields the public may read, or `null`
+   * when there is nothing a visitor may see. Absent from a reader made over a
+   * source that cannot read Singles.
+   */
+  findSingle?(query: {
+    slug: string;
+    locale?: string;
+    select?: readonly string[];
+  }): Promise<Record<string, unknown> | null>;
 }
 
 /**

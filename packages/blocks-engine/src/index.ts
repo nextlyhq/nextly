@@ -1169,6 +1169,22 @@ export {
 // value, and the pass that fills bound props before blocks render. One set of
 // answers, shared by the renderer, the validator and the editor.
 export { BINDING_ISSUE_CODES } from "./binding-issues";
+export {
+  BINDABLE_KINDS,
+  bindablePropTypeOf,
+  bindingKindOf,
+  canBindFieldToProp,
+  FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+} from "./binding-vocabulary";
+export type {
+  BindablePropType,
+  BindingEndpoint,
+  BindingFieldType,
+  BindingValueKind,
+  FieldStoragePrimitive,
+  StorageFieldType,
+} from "./binding-vocabulary";
 export type { BindingIssue, BindingIssueCode } from "./binding-issues";
 export {
   bindablePropKind,
@@ -1222,4 +1238,5 @@ export type {
   BoundValue,
   BoundValues,
   NodeBindingResult,
+  SourceDemand,
 } from "./resolve-bindings";

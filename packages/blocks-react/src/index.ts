@@ -154,6 +154,7 @@ export type {
   FormatEnv,
   FormatResult,
   FormattedValue,
+  FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -233,7 +234,7 @@ export {
  * surface listing a page's parts beside a picture of it.
  */
 export { prepareDocumentAsDrawn } from "./prepare-document";
-export type { PrepareDocumentArgs } from "./prepare-document";
+export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";
 

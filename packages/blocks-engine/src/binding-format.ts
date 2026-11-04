@@ -23,6 +23,7 @@
  */
 import type { BindingIssueCode } from "./binding-issues";
 import type { BindablePropKind, BindingFieldShape } from "./binding-rules";
+import { bindingKindOf } from "./binding-vocabulary";
 import { BINDING_FORMAT_TYPES, type BindingFormatType } from "./document";
 import { isPlainRecord } from "./plain-record";
 import { ownEntry, ownKeys } from "./safe-record";
@@ -472,7 +473,7 @@ function checkDateFormat(
   format: Readonly<Record<string, unknown>>,
   field: BindingFieldShape | undefined
 ): FormatCheck {
-  if (field !== undefined && field.type !== "date") {
+  if (field !== undefined && bindingKindOf(field) !== "date") {
     return misfit(`A date format cannot format a ${field.type} field.`);
   }
   const read = readOptions(ownEntry(format, "options"), DATE_OPTIONS);
@@ -496,7 +497,7 @@ function checkNumberFormat(
   type: "number" | "currency",
   field: BindingFieldShape | undefined
 ): FormatCheck {
-  if (field !== undefined && field.type !== "number") {
+  if (field !== undefined && bindingKindOf(field) !== "number") {
     return misfit(`A ${type} format cannot format a ${field.type} field.`);
   }
   const read = readOptions(

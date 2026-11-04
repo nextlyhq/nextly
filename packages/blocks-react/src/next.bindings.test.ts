@@ -8,15 +8,94 @@
  * layer and what a visitor is served.
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  type BindingFieldShape,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import type {
+  BindingFieldShape as NextlyBindingFieldShape,
+  BindingSourceRef,
+  PublicSiteSettings,
+  PublicSourceReader,
+} from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+  vi,
+} from "vitest";
+
+// What the faked process answers for the public sources a page binds, and
+// what each cached read was tagged with. The real reader is used, told the
+// fake's declarations (it hides no field), since no Nextly services are
+// registered in this process for it to read a schema from.
+const runtime = vi.hoisted(() => ({
+  site: null as Record<string, string | null> | null,
+  shapes: new Map<string, unknown>(),
+  tags: [] as string[][],
+  pipelineRuns: 0,
+}));
+vi.mock("nextly/runtime", async importOriginal => {
+  const actual = await importOriginal<typeof import("nextly/runtime")>();
+  return {
+    ...actual,
+    createPublicReader: (
+      ...[source, binding]: Parameters<typeof actual.createPublicReader>
+    ) =>
+      actual.createPublicReader(source, {
+        ...binding,
+        declarations: { hiddenFields: () => [] },
+      }),
+    cachedFind: (
+      read: () => Promise<unknown>,
+      options: Parameters<typeof actual.cachedFind>[1]
+    ) => {
+      runtime.tags.push([...options.tags]);
+      return actual.cachedFind(read, options);
+    },
+    readPublicSiteSettings: async () => {
+      if (runtime.site === null) throw new Error("no site settings");
+      return runtime.site;
+    },
+    bindingFieldShapes: async (ref: BindingSourceRef) =>
+      runtime.shapes.get(
+        "collection" in ref
+          ? `collection:${ref.collection}`
+          : `single:${ref.single}`
+      ),
+  };
+});
+// The read pipeline's migration pass, counted: it runs once per prepared
+// document and nowhere else, so the count says how many times a page was
+// prepared.
+vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("@nextlyhq/blocks-engine")>();
+  return {
+    ...actual,
+    migrateDocument: (...args: Parameters<typeof actual.migrateDocument>) => {
+      runtime.pipelineRuns += 1;
+      return actual.migrateDocument(...args);
+    },
+  };
+});
+
+import { nextlySingleTags, nextlySiteSettingsTags } from "nextly/runtime";
 
 import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
+import type {
+  BlocksFieldShapeRef,
+  BlocksPublicReader,
+  BlocksSiteSettings,
+} from "./context";
 import { createBlocksPage, createPublicBlocksPage } from "./next";
 import type { PageRendererProps } from "./page-renderer";
 import { PageRenderer } from "./page-renderer";
@@ -66,31 +145,75 @@ function isPublicRead(args: Record<string, unknown>): boolean {
  * A Direct API whose route read and public read answer differently: the row
  * the route resolves says "Trusted", the public's says "Public".
  */
-function instance(content: BlockDocument) {
+/** Stored component definitions and Layout rows a test's site holds. */
+interface SiteExtras {
+  components?: Record<string, unknown>;
+  layouts?: Record<string, unknown>;
+}
+
+/** The rows of a by-id list read over one store. */
+function rowsById(
+  args: Record<string, unknown>,
+  store: Record<string, unknown>,
+  field: string
+): Record<string, unknown>[] {
+  const where = args.where as { id?: { in?: unknown } } | undefined;
+  const ids = Array.isArray(where?.id?.in) ? (where.id.in as string[]) : [];
+  return ids
+    .filter(id => Object.hasOwn(store, id))
+    .map(id => ({ id, [field]: store[id] }));
+}
+
+/** The rows a read of one collection answers with on this test's site. */
+function rowsFor(
+  args: Record<string, unknown>,
+  content: BlockDocument,
+  extras: SiteExtras
+): Record<string, unknown>[] {
+  switch (args.collection) {
+    case "components":
+      return rowsById(args, extras.components ?? {}, "content");
+    case "layouts":
+      return rowsById(args, extras.layouts ?? {}, "areas");
+    case "authors":
+      return [{ id: "a1", name: "Ada" }];
+    case "posts":
+      return [{ id: "post-1", title: "Public" }];
+    default:
+      // The page itself: what the public may read of it, or the row the route
+      // resolves with its own access.
+      return isPublicRead(args)
+        ? [
+            {
+              id: "p1",
+              title: "Public",
+              startsAt: "2026-03-29T18:30:00.000Z",
+              author: "a1",
+            },
+          ]
+        : [
+            {
+              id: "p1",
+              slug: "about",
+              title: "Trusted",
+              startsAt: "2026-03-29T18:30:00.000Z",
+              content,
+            },
+          ];
+  }
+}
+
+function instance(content: BlockDocument, extras: SiteExtras = {}) {
   const find = vi.fn(async (args: Record<string, unknown>) => ({
-    items: isPublicRead(args)
-      ? [
-          {
-            id: "p1",
-            title: "Public",
-            startsAt: "2026-03-29T18:30:00.000Z",
-          },
-        ]
-      : [
-          {
-            id: "p1",
-            slug: "about",
-            title: "Trusted",
-            startsAt: "2026-03-29T18:30:00.000Z",
-            content,
-          },
-        ],
+    items: rowsFor(args, content, extras),
     meta: { total: 1 },
   }));
   return {
     find,
     findByID: vi.fn(async () => null),
-    findSingle: vi.fn(async () => null),
+    findSingle: vi.fn(async (args: { slug: string }) =>
+      args.slug === "home" ? { id: "h1", tagline: "From the Single" } : null
+    ),
     media: { findByID: vi.fn(async () => null) },
   };
 }
@@ -117,6 +240,13 @@ function publicReads(nextly: Instance): Record<string, unknown>[] {
     .map(([args]) => args)
     .filter(args => isPublicRead(args));
 }
+
+beforeEach(() => {
+  runtime.site = null;
+  runtime.shapes = new Map();
+  runtime.tags = [];
+  runtime.pipelineRuns = 0;
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -372,5 +502,294 @@ describe("a routed page's bindings", () => {
     expect(publicReads(nextly)).toEqual([]);
     expect(element.props.bindings).toBeUndefined();
     expect(html).toContain("Own");
+  });
+  it("reads Singles and the site settings through the public reads, each at one claim and tagged", async () => {
+    runtime.site = {
+      applicationName: "Acme",
+      siteUrl: null,
+      logoUrl: null,
+      timezone: null,
+    };
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "s",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Own", level: "h1" },
+            bindings: {
+              text: { $bind: "tagline", source: "single", sourceKey: "home" },
+            },
+          },
+          {
+            id: "n",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Own", level: "h2" },
+            bindings: { text: { $bind: "applicationName", source: "site" } },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const nextly = instance(content);
+    const page = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      nextly
+    );
+    expect(page.html).toContain("From the Single");
+    expect(page.html).toContain("Acme");
+    expect(nextly.findSingle).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "home", overrideAccess: false })
+    );
+    const tags = runtime.tags.flat();
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        ...nextlySingleTags("home"),
+        ...nextlySiteSettingsTags(),
+      ])
+    );
+    // Each source is one claim: with none left, both fall back.
+    const starved = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks, maxQueries: 0 },
+      instance(content)
+    );
+    expect(starved.html).not.toContain("From the Single");
+    expect(starved.html).not.toContain("Acme");
+  });
+
+  it("shows date-times in the site's time zone when the route sets none, and the route's overrides it", async () => {
+    runtime.site = {
+      applicationName: null,
+      siteUrl: null,
+      logoUrl: null,
+      timezone: "Europe/Paris",
+    };
+    const document = boundPage({
+      $bind: "startsAt",
+      format: {
+        type: "date",
+        options: { hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
+      },
+    });
+    const base = { collections: ["pages"], field: "content", blocks };
+    const site = await renderedPage(createBlocksPage, base, instance(document));
+    expect(site.html).toContain("20:30");
+    const route = await renderedPage(
+      createBlocksPage,
+      { ...base, timeZone: "Asia/Tokyo" },
+      instance(document)
+    );
+    expect(route.html).toContain("03:30");
+  });
+
+  it("follows one to-one relation with a second public read by id", async () => {
+    runtime.shapes.set("collection:pages", [
+      { name: "title", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+    ]);
+    runtime.shapes.set("collection:authors", [{ name: "name", type: "text" }]);
+    const nextly = instance(boundPage({ $bind: "author.name" }));
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      nextly
+    );
+    expect(html).toContain("Ada");
+    expect(publicReads(nextly)).toEqual([
+      expect.objectContaining({
+        collection: "pages",
+        select: { id: true, author: true },
+      }),
+      expect.objectContaining({
+        collection: "authors",
+        where: { and: [{ id: { equals: "a1" } }] },
+        select: { id: true, name: true },
+      }),
+    ]);
+  });
+
+  it("prepares each document once per render, and the renderer reuses that preparation", async () => {
+    const element = await throughBoundary<PageRendererProps>(
+      createBlocksPage({
+        collections: ["pages"],
+        field: "content",
+        blocks,
+        nextly: instance(boundPage({ $bind: "title" })) as never,
+      }).ContentPage({ params: { slug: ["about"] } })
+    );
+    expect(runtime.pipelineRuns).toBe(1);
+    const html = await renderToHtml(createElement(PageRenderer, element.props));
+    expect(html).toContain("Public");
+    expect(runtime.pipelineRuns).toBe(1);
+  });
+
+  it("a binding on a node the page draws as a placeholder claims no read", async () => {
+    const entryBound = (id: string, extra: Record<string, unknown>) => ({
+      id,
+      type: "core/heading",
+      version: 1,
+      props: { text: "Own", level: "h1" },
+      bindings: { text: { $bind: "title" } },
+      ...extra,
+    });
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          entryBound("unknown", { type: "plugin/unregistered" }),
+          entryBound("failed", { migrationFailed: true }),
+          entryBound("ahead", { version: 99 }),
+          {
+            id: "loop",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", limit: 1 },
+            slots: {
+              children: [
+                {
+                  id: "item",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Own", level: "h2" },
+                  bindings: { text: { $bind: "title", source: "item" } },
+                },
+              ],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const nextly = instance(content);
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks, maxQueries: 1 },
+      nextly
+    );
+    expect(publicReads(nextly).map(args => args.collection)).toEqual(["posts"]);
+    expect(html).toContain("Public");
+  });
+
+  it("spends the budget in the same order for the page and its metadata, so a bound title cannot differ", async () => {
+    const header = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "hb",
+          type: "core/text",
+          version: 1,
+          props: { text: "Header" },
+        },
+      ],
+    };
+    const extras: SiteExtras = {
+      components: { hdr: header },
+      layouts: { main: [{ area: "header", component: "hdr" }] },
+    };
+    for (let maxQueries = 0; maxQueries <= 4; maxQueries += 1) {
+      let title: string | undefined;
+      const config = {
+        collections: ["pages"],
+        field: "content",
+        blocks,
+        maxQueries,
+        layouts: {
+          readDefault: async () => "main",
+          singles: ["page-builder-settings"],
+        },
+        metadata: (
+          _entry: unknown,
+          _context: unknown,
+          derived: { title?: string }
+        ) => {
+          title = derived.title;
+          return {};
+        },
+      };
+      const route = createBlocksPage({
+        ...config,
+        nextly: instance(boundPage({ $bind: "title" }), extras) as never,
+      } as Parameters<typeof createBlocksPage>[0]);
+      await route.generateMetadata({ params: { slug: ["about"] } });
+      const element = await throughBoundary<PageRendererProps>(
+        route.ContentPage({ params: { slug: ["about"] } })
+      );
+      const html = await renderToHtml(element);
+      const shown = /<h1[^>]*>(.*?)<\/h1>/.exec(html)?.[1];
+      expect(shown, `maxQueries ${String(maxQueries)}`).toBe(title);
+    }
+  });
+
+  it("reads for a binding a component places deeper than the page's own depth cap", async () => {
+    const box = (id: string, children: unknown[]) => ({
+      id,
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: { children },
+    });
+    const component = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        box("c1", [
+          box("c2", [
+            {
+              id: "deep",
+              type: "core/heading",
+              version: 1,
+              props: { text: "Own", level: "h1" },
+              bindings: { text: { $bind: "title" } },
+            },
+          ]),
+        ]),
+      ],
+    };
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          box("p1", [
+            box("p2", [
+              {
+                id: "i",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "cmp" },
+              },
+            ]),
+          ]),
+        ],
+      })
+    ) as BlockDocument;
+    const nextly = instance(content, { components: { cmp: component } });
+    const { html } = await renderedPage(
+      createBlocksPage,
+      {
+        collections: ["pages"],
+        field: "content",
+        blocks,
+        limits: { ...DEFAULT_LIMITS, maxDepth: 4 },
+      },
+      nextly
+    );
+    // The control: the component's heading is on the page, past depth 4.
+    expect(html).toMatch(/<h1[^>]*>/);
+    expect(html).toContain("Public");
+  });
+
+  it("writes out nextly's public source types in this package", () => {
+    expectTypeOf<PublicSourceReader>().toExtend<BlocksPublicReader>();
+    expectTypeOf<PublicSiteSettings>().toEqualTypeOf<BlocksSiteSettings>();
+    expectTypeOf<NextlyBindingFieldShape>().toExtend<BindingFieldShape>();
+    expectTypeOf<BindingSourceRef>().toExtend<BlocksFieldShapeRef>();
+    expectTypeOf<BlocksFieldShapeRef>().toExtend<BindingSourceRef>();
   });
 });

@@ -15,14 +15,19 @@
  */
 import {
   bindingDemand,
+  bindingKindOf,
   DEFAULT_LIMITS,
   deriveSeoFromDocument,
   isFetchableUrl,
   DOCUMENT_FORMAT_VERSION,
   regionDocument,
   safeTimeZone,
+  type BindingDemand,
+  type BindingFieldShape,
   type BindingIssue,
   type BlockDocument,
+  type BlockNode,
+  type SourceDemand,
   type BlockSeoContribution,
   type DefinitionsById,
   type DocumentLimits,
@@ -34,6 +39,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
 import {
+  bindingFieldShapes,
   cacheComponentsEnabled,
   cachedFind,
   createContentRoute,
@@ -46,6 +52,8 @@ import {
   nextlyTags,
   releaseBoundedRevalidate,
   nextlySingleTags,
+  nextlySiteSettingsTags,
+  readPublicSiteSettings,
   slugToStaticParam,
 } from "nextly/runtime";
 import type {
@@ -64,6 +72,7 @@ import type {
 import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
+import { collectionLoop } from "./blocks/collection-loop";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -79,7 +88,9 @@ import type {
   BlocksDataProvider,
   BlocksDataProviderFactory,
   BlocksFieldShapeRef,
+  BlocksFieldShapes,
   BlocksPublicReader,
+  BlocksSiteSettings,
   PageBindings,
   PageContext,
   QueryBudget,
@@ -97,8 +108,10 @@ import { layoutPartSheets, type PagePart } from "./page-parts";
 import { PageRenderer } from "./page-renderer";
 import {
   pageBindingRun,
-  prepareDocumentForRead,
-  prepareDocumentReadStages,
+  prepareDocument,
+  readingViewOf,
+  readStagesFor,
+  type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
@@ -500,6 +513,7 @@ function publicReaderFor(
   window: number | false | undefined
 ): BlocksPublicReader {
   const nextly = readerFor(config);
+  const singles = singleReaderOf(nextly);
   return createPublicReader(
     {
       find: async args =>
@@ -514,9 +528,21 @@ function publicReaderFor(
           // outlives the page around it.
           revalidate: await releaseBoundedRevalidate(window),
         }),
+      // The instance's own Single read, which the reader holds to the
+      // public's rules; it is cached where a page reads it (`readSingle`).
+      ...(singles === undefined
+        ? {}
+        : { findSingle: singles.findSingle.bind(singles) }),
     },
     locale === undefined ? {} : { locale }
   );
+}
+
+/** The instance's Single read, when the reader the route holds has one. */
+function singleReaderOf(reader: object): NextlySingleReader | undefined {
+  return "findSingle" in reader && typeof reader.findSingle === "function"
+    ? (reader as NextlySingleReader)
+    : undefined;
 }
 
 /** The route's data provider for one render: the caller's, or the default. */
@@ -638,7 +664,12 @@ async function derivePageSeo(
    * title the page claims.
    */
   bindings: PageBindings | undefined,
-  locale: string | undefined
+  locale: string | undefined,
+  /**
+   * The document as the caller already prepared it for its reads, so the
+   * pipeline runs once for this invocation.
+   */
+  preparation: PreparedDocument | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
@@ -652,20 +683,25 @@ async function derivePageSeo(
   // different page than the HTML: the copy drifted on the format guard, the
   // configured caps, duplicate-id repair and placeholder subtrees, each a
   // separate way to publish content the page withholds.
-  const prepared = prepareDocumentForRead(document, {
-    resolver,
-    limits,
-    styleContext,
-    // Spread conditionally, matching the renderer: an absent map says the
-    // caller never fetched, an empty one says it fetched and found none, and
-    // the pipeline reports those differently.
-    ...(definitions === undefined || definitions.size === 0
-      ? {}
-      : { definitions }),
-    ...(bindings === undefined
-      ? {}
-      : { bindings: pageBindingRun(bindings, locale, resolver) }),
-  });
+  const stages = readStagesFor(
+    document,
+    {
+      resolver,
+      limits,
+      styleContext,
+      // Spread conditionally, matching the renderer: an absent map says the
+      // caller never fetched, an empty one says it fetched and found none, and
+      // the pipeline reports those differently.
+      ...(definitions === undefined || definitions.size === 0
+        ? {}
+        : { definitions }),
+      ...(bindings === undefined
+        ? {}
+        : { bindings: pageBindingRun(bindings, locale, resolver) }),
+    },
+    preparation
+  );
+  const prepared = stages === null ? null : readingViewOf(stages);
   // Nothing readable means nothing to describe. The page renders a placeholder,
   // and metadata claiming a title it does not show would be worse than silence.
   if (prepared === null) return canonical;
@@ -1713,36 +1749,36 @@ async function layoutRegions(args: {
 /** Where the entry a page shows lives, which decides how the public reads it. */
 type EntrySource = "collection" | "single";
 
+/** What a source read needs: the reader, the page's budget, the shapes. */
+interface SourceReads {
+  readonly reader: BlocksPublicReader;
+  readonly budget: QueryBudget;
+  readonly shapes: BlocksFieldShapes;
+  /** How a read is cached: the route's scope, language and window. */
+  readonly cache: {
+    readonly scope: string;
+    readonly locale: string | undefined;
+    readonly window: number | false | undefined;
+  };
+}
+
+/** A record as the public reads it; `null` for none, `undefined` for unread. */
+type PublicRecord = Readonly<Record<string, unknown>> | null | undefined;
+
 /**
- * The entry as the public reads it, with the fields the page binds.
- *
- * Read AGAIN rather than taken from the route: a public route resolves its
- * entry with trusted access, and a draft preview resolves the draft, so the
- * row in hand may hold fields and versions no visitor may see. One read, one
- * claim on the page's budget; the related entry a path follows comes back as
- * its id and falls back, as an unread source does.
- *
- * `undefined` when the entry could not be read for this page (a refused
- * claim, a failed read, a Single, whose public read this route does not have),
- * so its bindings fall back and are reported. `null` when the public may see
- * no such entry.
+ * One entry of a collection, by id, as the public reads it, with only the
+ * named fields: one claim on the page's budget.
  */
-async function readPublicEntry(args: {
-  fields: readonly string[];
-  entry: ContentEntry;
-  context: RenderContext;
-  entrySource: EntrySource;
-  reader: BlocksPublicReader;
-  budget: QueryBudget;
-}): Promise<Readonly<Record<string, unknown>> | null | undefined> {
-  const { fields, entry, context, entrySource, reader, budget } = args;
-  if (entrySource === "single") return undefined;
-  const id: unknown = entry.id;
-  if (typeof id !== "string" && typeof id !== "number") return undefined;
-  if (!budget.take()) return undefined;
+async function readById(
+  reads: SourceReads,
+  collection: string,
+  id: string | number,
+  fields: readonly string[]
+): Promise<PublicRecord> {
+  if (!reads.budget.take()) return undefined;
   try {
-    const { items } = await reader.find({
-      collection: context.collection,
+    const { items } = await reads.reader.find({
+      collection,
       filters: [{ field: "id", op: "equals", value: id }],
       limit: 1,
       select: fields,
@@ -1753,12 +1789,249 @@ async function readPublicEntry(args: {
   }
 }
 
+/** One Single as the public reads it, with only the named fields: one claim. */
+async function readSingle(
+  reads: SourceReads,
+  slug: string,
+  fields: readonly string[]
+): Promise<PublicRecord> {
+  const findSingle = reads.reader.findSingle?.bind(reads.reader);
+  if (findSingle === undefined || !reads.budget.take()) {
+    return undefined;
+  }
+  try {
+    // Cached like the page around it and tagged with the Single, so a write
+    // to it refreshes the pages that bind it.
+    return await cachedFind(
+      async () => await findSingle({ slug, select: fields }),
+      {
+        tags: nextlySingleTags(slug),
+        keyParts: [
+          "nextly-public-single",
+          reads.cache.scope,
+          reads.cache.locale ?? "",
+          slug,
+          JSON.stringify(fields),
+        ],
+        revalidate: await releaseBoundedRevalidate(reads.cache.window),
+      }
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/** The collection a field leads to, when a path may follow it. */
+function relationTarget(
+  fields: readonly BindingFieldShape[] | undefined,
+  name: string
+): string | undefined {
+  const field = fields?.find(candidate => candidate.name === name);
+  if (field === undefined || field.hasMany === true) return undefined;
+  const kind = bindingKindOf(field);
+  return (kind === "reference" || kind === "media") &&
+    typeof field.relationTo === "string"
+    ? field.relationTo
+    : undefined;
+}
+
+/**
+ * A record with each relation its bindings follow read in place of its id,
+ * through the public reader by id: one claim per relation. The public reader
+ * returns a relation as its id, so this is the one hop a path may take. A
+ * relation the schema does not describe, or a read that is refused, is left
+ * as it was, and a binding through it shows its fallback.
+ */
+async function withRelations(
+  record: PublicRecord,
+  demand: SourceDemand,
+  ref: BlocksFieldShapeRef,
+  reads: SourceReads
+): Promise<PublicRecord> {
+  if (record === null || record === undefined) return record;
+  const fields = reads.shapes.fieldsOf(ref);
+  let followed: Readonly<Record<string, unknown>> = record;
+  for (const [name, inner] of demand.follows) {
+    const target = relationTarget(fields, name);
+    const id = record[name];
+    if (target === undefined) continue;
+    if (typeof id !== "string" && typeof id !== "number") continue;
+    const related = await readById(reads, target, id, inner);
+    if (related !== undefined) followed = { ...followed, [name]: related };
+  }
+  return followed;
+}
+
+/**
+ * The entry as the public reads it, with the fields the page binds.
+ *
+ * Read AGAIN rather than taken from the route: a public route resolves its
+ * entry with trusted access, and a draft preview resolves the draft, so the
+ * row in hand may hold fields and versions no visitor may see. A Single's page
+ * reads its Single; a collection's, its entry by id.
+ */
+async function readPublicEntry(args: {
+  demand: SourceDemand;
+  entry: ContentEntry;
+  context: RenderContext;
+  entrySource: EntrySource;
+  entryRef: BlocksFieldShapeRef;
+  reads: SourceReads;
+}): Promise<PublicRecord> {
+  const { demand, entry, context, reads } = args;
+  let record: PublicRecord;
+  if (args.entrySource === "single") {
+    record = await readSingle(reads, context.collection, demand.fields);
+  } else {
+    const id: unknown = entry.id;
+    if (typeof id !== "string" && typeof id !== "number") return undefined;
+    record = await readById(reads, context.collection, id, demand.fields);
+  }
+  return await withRelations(record, demand, args.entryRef, reads);
+}
+
+/** Each Single the page binds, as the public reads it; an unread one is left out. */
+async function readSingles(
+  demand: ReadonlyMap<string, SourceDemand>,
+  reads: SourceReads
+): Promise<Map<string, Readonly<Record<string, unknown>> | null>> {
+  const singles = new Map<string, Readonly<Record<string, unknown>> | null>();
+  for (const [slug, wanted] of demand) {
+    const record = await withRelations(
+      await readSingle(reads, slug, wanted.fields),
+      wanted,
+      { single: slug },
+      reads
+    );
+    if (record !== undefined) singles.set(slug, record);
+  }
+  return singles;
+}
+
+/**
+ * The site settings the public may read: one claim, cached under the
+ * settings' own tag, so changing the site's name or time zone refreshes the
+ * pages that show them.
+ */
+async function readSite(
+  config: BlocksPageConfig,
+  budget: QueryBudget,
+  window: number | false | undefined
+): Promise<BlocksSiteSettings | undefined> {
+  if (!budget.take()) return undefined;
+  try {
+    return await cachedFind(async () => await readPublicSiteSettings(), {
+      tags: nextlySiteSettingsTags(),
+      keyParts: ["nextly-public-site-settings", config.cacheScope ?? ""],
+      revalidate: await releaseBoundedRevalidate(window),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** The collections the page's lists draw, whose items its bindings read. */
+function listCollections(documents: readonly BlockDocument[]): Set<string> {
+  const found = new Set<string>();
+  const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    const collection: unknown = node.props.collection;
+    if (node.type === collectionLoop.name && typeof collection === "string") {
+      if (collection.trim() !== "") found.add(collection.trim());
+    }
+    for (const children of Object.values(node.slots ?? {})) {
+      stack.push(...children);
+    }
+  }
+  return found;
+}
+
+/** A shape ref as a map key. */
+function refKey(ref: BlocksFieldShapeRef): string {
+  return "collection" in ref
+    ? `collection:${ref.collection}`
+    : `single:${ref.single}`;
+}
+
+/**
+ * The field shapes every binding on the page is checked against: the entry's,
+ * each Single's, each collection a path follows into, and each list's items'.
+ * Read through `bindingFieldShapes` in the page's language, as the visitor
+ * sees them; a source it cannot answer for has none, and its bindings are
+ * judged by their values.
+ */
+async function readFieldShapes(
+  entryRef: BlocksFieldShapeRef,
+  demand: BindingDemand,
+  documents: readonly BlockDocument[],
+  locale: string | undefined
+): Promise<BlocksFieldShapes> {
+  const known = new Map<string, readonly BindingFieldShape[] | undefined>();
+  const fetch = async (ref: BlocksFieldShapeRef) => {
+    const key = refKey(ref);
+    if (known.has(key)) return known.get(key);
+    let shapes: readonly BindingFieldShape[] | undefined;
+    try {
+      shapes = await bindingFieldShapes(
+        ref,
+        locale === undefined ? {} : { locale }
+      );
+    } catch {
+      shapes = undefined;
+    }
+    known.set(key, shapes);
+    return shapes;
+  };
+  const sources: [BlocksFieldShapeRef, SourceDemand][] = [
+    ...(demand.entry === undefined
+      ? []
+      : [[entryRef, demand.entry] as [BlocksFieldShapeRef, SourceDemand]]),
+    ...[...demand.singles].map(
+      ([slug, wanted]) =>
+        [{ single: slug }, wanted] as [BlocksFieldShapeRef, SourceDemand]
+    ),
+  ];
+  for (const [ref, wanted] of sources) {
+    const fields = await fetch(ref);
+    for (const name of wanted.follows.keys()) {
+      const target = relationTarget(fields, name);
+      if (target !== undefined) await fetch({ collection: target });
+    }
+  }
+  for (const collection of listCollections(documents)) {
+    await fetch({ collection });
+  }
+  return { fieldsOf: ref => known.get(refKey(ref)) };
+}
+
+/**
+ * The time zone a page's date-times are shown in: the route's, else the
+ * site's, else UTC. A zone the runtime does not know is said once and UTC is
+ * used.
+ */
+function pageTimeZone(
+  config: BlocksPageConfig,
+  site: BlocksSiteSettings | undefined,
+  context: RenderContext
+): string | undefined {
+  const zone = config.timeZone ?? site?.timezone ?? undefined;
+  if (config.timeZone === undefined && zone !== undefined) {
+    if (!safeTimeZone(zone).valid) {
+      console.warn(
+        `[blocks] The site's time zone "${zone}" is not one this runtime knows, so bound date-times on "${context.collection}" page "${context.slug}" are shown in UTC.`
+      );
+    }
+  }
+  return zone;
+}
+
 /**
  * What a page's bindings read, read as the public reads it, or nothing when
  * the documents it draws hold no binding.
  *
- * Collected over every document the page draws, its components included, so
- * each source is read once with exactly the fields its bindings name.
+ * Asked of each document as the read pipeline prepared it: composed,
+ * migrated, gated, de-duplicated and with its known placeholders removed, so
+ * a node the page does not present claims no read.
  */
 async function readPageBindings(args: {
   config: BlocksPageConfig;
@@ -1768,71 +2041,212 @@ async function readPageBindings(args: {
   entrySource: EntrySource;
   reader: BlocksPublicReader;
   budget: QueryBudget;
+  window: number | false | undefined;
 }): Promise<PageBindings | undefined> {
-  // Held to the caps the read pipeline applies, since these documents are
-  // read before it repairs them.
-  const demand = bindingDemand(args.documents, effectiveLimits(args.config));
+  const { config, context } = args;
+  // Prepared trees are already within the pipeline's caps, and a composed
+  // tree may run deeper than a stored one, so no cap is applied again.
+  const demand = bindingDemand(args.documents);
   if (!demand.any) return undefined;
   const entryRef: BlocksFieldShapeRef =
     args.entrySource === "single"
-      ? { single: args.context.collection }
-      : { collection: args.context.collection };
+      ? { single: context.collection }
+      : { collection: context.collection };
+  const shapes = await readFieldShapes(
+    entryRef,
+    demand,
+    args.documents,
+    context.locale
+  );
+  const reads: SourceReads = {
+    reader: args.reader,
+    budget: args.budget,
+    shapes,
+    cache: {
+      scope: config.cacheScope ?? "",
+      locale: context.locale,
+      window: args.window,
+    },
+  };
   const entry =
     demand.entry === undefined
       ? undefined
-      : await readPublicEntry({ ...args, fields: demand.entry });
+      : await readPublicEntry({
+          ...args,
+          demand: demand.entry,
+          entryRef,
+          reads,
+        });
+  const singles = await readSingles(demand.singles, reads);
   return {
     ...(entry === undefined ? {} : { entry }),
     entryRef,
-    ...(args.config.timeZone === undefined
-      ? {}
-      : { timeZone: args.config.timeZone }),
+    singles,
+    ...(await siteAndZone(args, demand)),
+    fieldShapes: shapes,
   };
 }
 
 /**
- * One document as the read pipeline holds it just before it fills bindings:
- * composed, migrated, gated and with its addresses made unique, under the same
- * arguments the renderer passes. `undefined` for an envelope it cannot read.
+ * Said once, when a route is built, of a `timeZone` the runtime does not know:
+ * every page would otherwise show its date-times in UTC with nothing saying
+ * why.
  */
-function stageBeforeBindings(
-  config: BlocksPageConfig,
-  document: BlockDocument,
-  definitions: DefinitionsById
-): BlockDocument | undefined {
-  const stages = prepareDocumentReadStages(document, {
-    resolver: config.blocks ?? registeredBlocks(),
-    ...(config.limits === undefined ? {} : { limits: config.limits }),
-    ...(config.styleContext === undefined
-      ? {}
-      : { styleContext: config.styleContext }),
-    ...(definitions.size === 0 ? {} : { definitions }),
-  });
-  return stages?.deduped;
+function warnOfUnknownTimeZone(zone: string | undefined): void {
+  if (zone === undefined || safeTimeZone(zone).valid) return;
+  console.warn(
+    `[blocks] timeZone "${zone}" is not a time zone this runtime knows, so bound date-times are shown in UTC.`
+  );
 }
 
 /**
- * Every document a page draws, the page and each region of its Layout, as the
- * pipeline holds it before filling bindings, so a node it drops, gates or
- * de-duplicates claims no read.
+ * The site settings a page needs, when its bindings name one or a date-time
+ * needs the site's zone, and the zone its date-times are shown in.
  */
-function documentsDrawn(
+async function siteAndZone(
+  args: {
+    config: BlocksPageConfig;
+    context: RenderContext;
+    budget: QueryBudget;
+    window: number | false | undefined;
+  },
+  demand: BindingDemand
+): Promise<{ site?: BlocksSiteSettings; timeZone?: string }> {
+  const { config } = args;
+  const needsZone = demand.formatsDates && config.timeZone === undefined;
+  const site =
+    demand.site || needsZone
+      ? await readSite(config, args.budget, args.window)
+      : undefined;
+  const timeZone = pageTimeZone(config, site, args.context);
+  return {
+    ...(site === undefined ? {} : { site }),
+    ...(timeZone === undefined ? {} : { timeZone }),
+  };
+}
+
+/** One document a page draws, and the preparation its reads and render share. */
+interface DrawnDocument {
+  readonly document: BlockDocument;
+  readonly prepared: PreparedDocument | null;
+}
+
+/** One region of the page's Layout, as drawn. */
+interface DrawnRegion extends DrawnDocument {
+  readonly region: LayoutRegion;
+}
+
+/** Prepare one document once, under the arguments the renderer is given. */
+function drawn(
   config: BlocksPageConfig,
-  page: { document: BlockDocument; definitions: DefinitionsById },
-  regions: readonly LayoutRegion[] = [],
-  regionDefinitions: DefinitionsById = EMPTY_DEFINITIONS
-): BlockDocument[] {
-  const drawn = [
-    page,
-    ...regions.map(region => ({
-      document: regionDocument([region]),
-      definitions: regionDefinitions,
-    })),
-  ];
-  return drawn.flatMap(({ document, definitions }) => {
-    const stage = stageBeforeBindings(config, document, definitions);
-    return stage === undefined ? [] : [stage];
+  resolver: BlockResolver,
+  document: BlockDocument,
+  definitions: DefinitionsById
+): DrawnDocument {
+  return {
+    document,
+    prepared: prepareDocument(document, {
+      resolver,
+      ...(config.limits === undefined ? {} : { limits: config.limits }),
+      ...(config.styleContext === undefined
+        ? {}
+        : { styleContext: config.styleContext }),
+      ...(definitions.size === 0 ? {} : { definitions }),
+    }),
+  };
+}
+
+/** What a page render, and its metadata, work from. */
+interface PageInputs {
+  readonly definitions: DefinitionsById;
+  readonly page: DrawnDocument;
+  readonly regions: readonly DrawnRegion[];
+  readonly regionDefinitions: DefinitionsById;
+  readonly bindings: PageBindings | undefined;
+}
+
+/**
+ * Everything a page reads before it renders, in ONE order shared by the
+ * render and the metadata: the components the page inlines, its Layout's
+ * regions and their components, then what its bindings read. Both spend the
+ * budget alike, so under a tight one the page and its metadata cannot
+ * disagree about a bound value. Each document is prepared once, and that
+ * preparation is what the reads are taken from and what the renderer reuses.
+ *
+ * Metadata draws no region, so it reads the Layout only when the page holds
+ * a binding, whose read must come at the same point of the budget as the
+ * render's; a page with none reads nothing more for its metadata.
+ */
+async function readPageInputs(args: {
+  config: BlocksPageConfig;
+  /** The blocks the renderer is handed, the same object, so it reuses the preparation. */
+  resolver: BlockResolver;
+  document: BlockDocument;
+  entry: ContentEntry;
+  context: RenderContext;
+  entrySource: EntrySource;
+  layoutsProvider: BlocksLayoutsProvider | undefined;
+  window: number | false | undefined;
+  budget: QueryBudget;
+  /** For metadata, which reads the Layout only when the page binds anything. */
+  regionsOnlyWhenBound?: boolean;
+}): Promise<PageInputs> {
+  const { config, document, entry, context, budget } = args;
+  // Read BEFORE the element is created, because the renderer's pipeline is
+  // synchronous: composition is a pass of it, and a pass cannot await. The
+  // route is the layer that can, which is why the fetch lives here and not
+  // in the renderer.
+  const definitions = await definitionsFor(
+    document,
+    componentSource(config, readerFor(config), budget, context.locale),
+    // The SAME caps the pipeline will read this document under, resolved
+    // once. `prepareDocumentReadStages` falls back to the style context's
+    // when no limits are given directly, so passing the default here made
+    // a route that raised `maxNodes` through `styleContext` fetch for the
+    // first 5,000 nodes while the renderer kept — and tried to draw —
+    // every instance after them.
+    effectiveLimits(config)
+  );
+  const page = drawn(config, args.resolver, document, definitions);
+  const skipRegions =
+    args.regionsOnlyWhenBound === true &&
+    (page.prepared === null || !bindingDemand([page.prepared.presented]).any);
+  const { regions, regionDefinitions } = await layoutRegions({
+    config,
+    provider: skipRegions ? undefined : args.layoutsProvider,
+    entry,
+    locale: context.locale,
+    budget,
   });
+  const drawnRegions = regions.map(region => ({
+    region,
+    ...drawn(
+      config,
+      args.resolver,
+      regionDocument([region]),
+      regionDefinitions
+    ),
+  }));
+  const presented = [page, ...drawnRegions].flatMap(part =>
+    part.prepared === null ? [] : [part.prepared.presented]
+  );
+  const bindings = await readPageBindings({
+    config,
+    entry,
+    context,
+    documents: presented,
+    entrySource: args.entrySource,
+    reader: publicReaderFor(config, context.locale, args.window),
+    budget,
+    window: args.window,
+  });
+  return {
+    definitions,
+    page,
+    regions: drawnRegions,
+    regionDefinitions,
+    bindings,
+  };
 }
 
 /**
@@ -1896,13 +2310,11 @@ function blocksRouteConfig(
   // provider of the wrong shape would otherwise surface as stale regions on a
   // cached page, long after the deploy that introduced it.
   const layoutsProvider = checkedLayoutsProvider(config.layouts);
-  // Said once, when the route is built: every page would otherwise show its
-  // date-times in UTC with nothing saying why.
-  if (config.timeZone !== undefined && !safeTimeZone(config.timeZone).valid) {
-    console.warn(
-      `[blocks] timeZone "${config.timeZone}" is not a time zone this runtime knows, so bound date-times are shown in UTC.`
-    );
-  }
+  // One resolver object for the route, handed to both the preparation and the
+  // renderer: the renderer reuses a preparation only for the very resolver it
+  // was made with.
+  const resolver = blocks ?? registeredBlocks();
+  warnOfUnknownTimeZone(config.timeZone);
 
   return {
     ...routeConfig,
@@ -1939,41 +2351,36 @@ function blocksRouteConfig(
             const budget = createQueryBudget(
               config.maxQueries ?? DEFAULT_MAX_QUERIES
             );
-            // The same components the render will inline. Without them the
-            // preparation below replaces every instance with a placeholder, so
-            // a page whose heading or hero image comes from a component
-            // published a title and a preview picture that its own HTML
-            // contradicts — for exactly the pages components exist to build.
-            const definitions = await definitionsFor(
-              document,
-              componentSource(
-                config,
-                readerFor(config),
-                budget,
-                context.locale
-              ),
-              effectiveLimits(config)
-            );
-            const bindings = await readPageBindings({
+            // The same reads, in the same order, as the render: the
+            // components the page inlines (without them every instance would
+            // be a placeholder, and a page built from components would publish
+            // a title its HTML contradicts), the Layout's regions, then what
+            // the bindings read. The same order spends the budget alike, so a
+            // bound title cannot differ between the page and its metadata.
+            const inputs = await readPageInputs({
               config,
+              resolver,
+              document,
               entry,
               context,
-              documents: documentsDrawn(config, { document, definitions }),
               entrySource,
-              reader: publicReaderFor(config, context.locale, listWindow),
+              layoutsProvider,
+              window: listWindow,
               budget,
+              regionsOnlyWhenBound: true,
             });
             const derived = await derivePageSeo(
               document,
-              blocks,
+              resolver,
               mediaResolver(config, readerFor(config), budget),
               context.slug,
               limits,
               styleContext,
               config.hostPolicy?.remotePatterns,
-              definitions,
-              bindings,
-              context.locale
+              inputs.definitions,
+              inputs.bindings,
+              context.locale,
+              inputs.page.prepared ?? undefined
             );
             return metadata(entry, context, derived);
           },
@@ -2046,52 +2453,25 @@ function blocksRouteConfig(
           ? undefined
           : { ...configuredSiteStyles, breakpoints: siteBreakpoints };
 
-      // Read BEFORE the element is created, because the renderer's pipeline is
-      // synchronous: composition is a pass of it, and a pass cannot await. The
-      // route is the layer that can, which is why the fetch lives here and not
-      // in the renderer.
-      const definitions = await definitionsFor(
-        document,
-        componentSource(config, readerFor(config), budget, context.locale),
-        // The SAME caps the pipeline will read this document under, resolved
-        // once. `prepareDocumentReadStages` falls back to the style context's
-        // when no limits are given directly, so passing the default here made
-        // a route that raised `maxNodes` through `styleContext` fetch for the
-        // first 5,000 nodes while the renderer kept — and tried to draw —
-        // every instance after them.
-        effectiveLimits(config)
-      );
-
-      const { regions, regionDefinitions } = await layoutRegions({
-        config,
-        provider: layoutsProvider,
-        entry,
-        locale: context.locale,
-        budget,
-      });
-      // Read once every document the page draws is known, so a header's
-      // binding to the site's name is read with the page's own.
-      const bindings = await readPageBindings({
-        config,
-        entry,
-        context,
-        documents: documentsDrawn(
+      const { definitions, page, regions, regionDefinitions, bindings } =
+        await readPageInputs({
           config,
-          { document, definitions },
-          regions,
-          regionDefinitions
-        ),
-        entrySource,
-        reader: publicReaderFor(config, context.locale, listWindow),
-        budget,
-      });
+          resolver,
+          document,
+          entry,
+          context,
+          entrySource,
+          layoutsProvider,
+          window: listWindow,
+          budget,
+        });
 
       // What every document drawn on this page shares: the context (so the
       // regions spend the page's ONE budget and read in its locale), the
       // blocks, the caps, the host's posture and the page's bindings.
       const shared: SharedRendererProps = {
         context: pageContext,
-        blocks,
+        blocks: resolver,
         styleContext,
         blockFallback,
         limits,
@@ -2115,6 +2495,8 @@ function blocksRouteConfig(
         // which is the honest answer for a page that references none, and the
         // wrong one for a caller that never asked.
         ...(definitions.size === 0 ? {} : { definitions }),
+        // Prepared once above, for the reads; the renderer reuses it.
+        ...(page.prepared === null ? {} : { prepared: page.prepared }),
       };
 
       if (regions.length === 0) {
@@ -2181,17 +2563,17 @@ type PageRendererElementProps = Omit<
  * compiled during the render from the route's compile context.
  */
 function drawWithRegions(args: {
-  regions: readonly LayoutRegion[];
+  regions: readonly DrawnRegion[];
   page: PageRendererElementProps;
   shared: SharedRendererProps;
   siteStyles: SiteSheetInput | undefined;
   definitions: DefinitionsById;
 }): ReactElement[] {
   const { regions, page, shared, siteStyles, definitions } = args;
-  const header = regions.find(region => region.area === "header");
-  const footer = regions.find(region => region.area === "footer");
+  const header = regions.find(part => part.region.area === "header");
+  const footer = regions.find(part => part.region.area === "footer");
   // In the order they are drawn: header, page, footer.
-  const parts: (LayoutRegion | "page")[] = [
+  const parts: (DrawnRegion | "page")[] = [
     ...(header === undefined ? [] : [header]),
     "page" as const,
     ...(footer === undefined ? [] : [footer]),
@@ -2199,7 +2581,9 @@ function drawWithRegions(args: {
   // One answer for every surface drawing a page inside its Layout: which part
   // emits the site sheet, and the scope each part compiles under.
   const sheets = layoutPartSheets({
-    parts: parts.map((part): PagePart => (part === "page" ? part : part.area)),
+    parts: parts.map(
+      (part): PagePart => (part === "page" ? part : part.region.area)
+    ),
     styleContext: shared.styleContext,
     siteStyles,
     pageScope:
@@ -2210,14 +2594,18 @@ function drawWithRegions(args: {
     if (part === "page") {
       return createElement(PageRenderer, { ...page, ...sheet, key: "page" });
     }
+    const area = part.region.area;
     return createElement(
-      part.area,
-      { key: part.area, "data-nextly-region": part.area },
+      area,
+      { key: area, "data-nextly-region": area },
       createElement(PageRenderer, {
         ...shared,
         ...sheet,
-        document: regionDocument([part]),
+        // The document the region was prepared from, so the renderer reuses
+        // that preparation rather than running the pipeline again.
+        document: part.document,
         ...(definitions.size === 0 ? {} : { definitions }),
+        ...(part.prepared === null ? {} : { prepared: part.prepared }),
       })
     );
   });

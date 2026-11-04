@@ -25,8 +25,9 @@ import {
 import { BlockPlaceholder } from "./placeholder";
 import {
   pageBindingRun,
-  prepareDocumentReadStages,
+  readStagesFor,
   rendersOwnMarkup,
+  type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
@@ -168,6 +169,17 @@ export interface PageRendererProps {
    * @experimental
    */
   onBindingIssues?: BindingIssuesHandler;
+  /**
+   * The document as this package's route already prepared it, so a page is
+   * prepared once per render. Used only when it is one the package made, for
+   * this document object under these blocks, definitions and caps; anything
+   * else, a hand-built or copied value included, is ignored and the whole
+   * pipeline runs.
+   *
+   * @internal Set by this package's route.
+   * @experimental
+   */
+  prepared?: PreparedDocument;
 }
 
 /**
@@ -587,6 +599,7 @@ export function PageRenderer({
   hostPolicy,
   bindings,
   onBindingIssues,
+  prepared,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   // Passed through untouched. The policy travels beside the context rather than
@@ -648,13 +661,17 @@ export function PageRenderer({
     bindings === undefined
       ? undefined
       : pageBindingRun(bindings, pageContext.locale, resolver);
-  const stages = prepareDocumentReadStages(document, {
-    resolver,
-    limits,
-    styleContext,
-    definitions,
-    ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
-  });
+  const stages = readStagesFor(
+    document,
+    {
+      resolver,
+      limits,
+      styleContext,
+      definitions,
+      ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+    },
+    prepared
+  );
   // `null` here means only an unreadable ENVELOPE, which the two guards above
   // already answered. Kept because unreachability is a property of the current
   // call graph rather than of the code, and this guard costs a comparison over a

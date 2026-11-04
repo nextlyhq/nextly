@@ -167,10 +167,12 @@ and has no valid fallback, and which stays when the binding is removed.
 
 Before blocks render, one pass fills each bound prop with its source's value,
 so a block receives an ordinary prop and never sees the binding. Pass the
-sources to `PageRenderer` as `bindings`. A route made with `createBlocksPage`
-or `createPublicBlocksPage` reads the entry for you, and a collection loop
-hands each item to its children; a binding to a source nobody read renders its
-fallback.
+sources to `PageRenderer` as `bindings`. A route made with `createBlocksPage`,
+`createPublicBlocksPage` or a Single's page factory reads them for you: the
+entry, each Single and the site settings the page binds, each through the
+route's public reader at one claim on the page's query budget, and the field
+shapes each binding is checked against. A collection loop hands each item to
+its children. A binding to a source nobody read renders its fallback.
 
 - **Sources.** `entry` is the entry the page shows, `item` the entry a
   collection loop is drawing, `single` the Single named by `sourceKey`, and
@@ -181,9 +183,11 @@ fallback.
   the entry again for this, rather than using the row it resolved, so a field
   the public may not read renders the fallback, and a draft preview shows the
   published values. The renderer never takes a value from `context.entry`.
-- **One hop.** A path follows at most one to-one relation (`author.name`). A
-  path through a field that holds a list, or past a second relation, renders
-  the fallback.
+- **One hop.** A path follows at most one to-one relation (`author.name`). The
+  route reads the related entry by id through the public reader, at one more
+  claim. A path through a field that holds a list, or past a second relation,
+  renders the fallback. A relation on a list item's binding is not followed
+  yet: it renders the fallback.
 - **Empty values.** Absent, `null`, `""`, an empty list and rich text with
   nothing in it render the fallback, or the prop's own value when there is no
   fallback. `false` and `0` are values.
@@ -192,8 +196,10 @@ fallback.
   `currency`) format in the page's language, or English when the page has
   none; `options.locale` overrides it. A format turns a value into text, so it
   applies to text props only. A date picked as a day keeps its day in every
-  time zone. A date-time is shown in the route's `timeZone`, or UTC when none
-  is set. `relativeTime` and `list` are not applied yet: the value shows as it
+  time zone, and a month shows its month and year. A time of day picked
+  without a date shows only its time, in UTC, never its placeholder date. A
+  date-time is shown in the route's `timeZone`, else the site's time zone,
+  else UTC. `relativeTime` and `list` are not applied yet: the value shows as it
   is when it fits the prop, and the fallback otherwise.
 - **Dates keep their machine value.** A block receives a `bound` argument
   naming each bound prop. For a date, `bound.<prop>` is

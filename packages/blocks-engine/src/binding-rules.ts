@@ -27,6 +27,16 @@ import {
   type FormatCheck,
 } from "./binding-format";
 import type { BindingIssue, BindingIssueCode } from "./binding-issues";
+import {
+  bindablePropTypeOf,
+  bindingKindOf,
+  canBindFieldToProp,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+  type BindablePropType,
+  type BindingEndpoint,
+  type BindingValueKind,
+  type FieldStoragePrimitive,
+} from "./binding-vocabulary";
 import type { PropSchema } from "./block";
 import {
   DEFAULT_BINDING_SOURCE,
@@ -38,7 +48,6 @@ import {
 } from "./document";
 import { exposedValueFits } from "./placement-values";
 import { isPlainRecord } from "./plain-record";
-import { exposureTypeForProp } from "./prop-exposure";
 import { isRichTextNode, isRichTextValue } from "./rich-text";
 import { ownEntry } from "./safe-record";
 
@@ -58,11 +67,11 @@ export function isBindPath(value: unknown): value is string {
 }
 
 /**
- * What a prop is to a binding: the kind of value it can be filled with.
+ * The shape of value a bound prop holds, which its own value and its fallback
+ * are judged by.
  *
  * The first five are the kinds a component's exposed property is edited as,
- * read through the same mapping, so a prop an author can expose and a prop an
- * author can bind are judged alike.
+ * and are judged by the same check a placement's value is.
  *
  * @experimental Settles with the editor's binding controls.
  */
@@ -70,29 +79,92 @@ export type BindablePropKind =
   | Exclude<ExposedPropertyType, "visibility">
   | "number"
   | "boolean"
-  | "date";
+  | "date"
+  | "json"
+  | "list"
+  | "reference";
 
 /**
- * The kind of value a prop can be bound to, or nothing for a prop whose type
- * cannot be bound (a list, a colour).
+ * The value shape of each prop type the vocabulary can fill, keyed by the same
+ * types, so a prop type cannot be bindable without one. `null` for the types
+ * that are composed rather than bound.
+ */
+const PROP_VALUE_SHAPE: {
+  readonly [Type in BindablePropType]: BindablePropKind | null;
+} = {
+  text: "text",
+  textarea: "text",
+  email: "text",
+  code: "text",
+  richText: "richText",
+  number: "number",
+  date: "date",
+  select: "select",
+  radio: "select",
+  checkbox: "boolean",
+  json: "json",
+  chips: "list",
+  upload: "image",
+  media: "image",
+  url: "link",
+  link: "link",
+  relationship: "reference",
+  repeater: null,
+  group: null,
+};
+
+/** A prop schema as one end of a binding. */
+function propEndpoint(schema: PropSchema): BindingEndpoint {
+  const relationTo = relationTargets(schema.relationTo);
+  return {
+    type: schema.type,
+    ...(schema.hasMany === true ? { hasMany: true } : {}),
+    ...(isStoragePrimitive(schema.storage) ? { storage: schema.storage } : {}),
+    ...(relationTo === undefined ? {} : { relationTo }),
+  };
+}
+
+/** A field shape as one end of a binding. */
+function fieldEndpoint(field: BindingFieldShape): BindingEndpoint {
+  return {
+    type: field.type,
+    ...(field.hasMany === true ? { hasMany: true } : {}),
+    ...(field.storage === undefined ? {} : { storage: field.storage }),
+    ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
+  };
+}
+
+/** A prop's declared targets, when they are a collection or a list of them. */
+function relationTargets(
+  value: unknown
+): string | readonly string[] | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value.every(item => typeof item === "string")) {
+    return value;
+  }
+  return undefined;
+}
+
+const STORAGE_PRIMITIVES: ReadonlySet<string> = new Set(
+  Object.keys(STORAGE_PRIMITIVE_AS_FIELD_TYPE)
+);
+
+function isStoragePrimitive(value: unknown): value is FieldStoragePrimitive {
+  return typeof value === "string" && STORAGE_PRIMITIVES.has(value);
+}
+
+/**
+ * The shape of value a prop can be bound to, or nothing for a prop whose type
+ * no binding can fill (a list of items, a colour).
  *
  * @experimental Settles with the editor's binding controls.
  */
 export function bindablePropKind(
   schema: PropSchema | undefined
 ): BindablePropKind | undefined {
-  const exposed = exposureTypeForProp(schema);
-  if (exposed !== undefined) return exposed;
-  switch (schema?.type) {
-    case "number":
-      return "number";
-    case "checkbox":
-      return "boolean";
-    case "date":
-      return "date";
-    default:
-      return undefined;
-  }
+  if (schema === undefined) return undefined;
+  const type = bindablePropTypeOf(propEndpoint(schema));
+  return type === undefined ? undefined : (PROP_VALUE_SHAPE[type] ?? undefined);
 }
 
 /**
@@ -116,7 +188,9 @@ export interface BindingFieldShape {
   readonly monthOnly?: boolean;
   /** A time of day, stored on a placeholder date in UTC. */
   readonly timeOnly?: boolean;
-  /** A group's own fields. */
+  /** The storage primitive a plugin's field type persists as. */
+  readonly storage?: FieldStoragePrimitive;
+  /** A group's own fields, or those of the one component a field holds. */
   readonly fields?: readonly BindingFieldShape[];
 }
 
@@ -271,6 +345,20 @@ function choicesOfProp(schema: PropSchema): readonly string[] {
 }
 
 /**
+ * A stored reference: an entry id, or the `{ relationTo, value }` pair a
+ * reference to more than one collection stores.
+ */
+function isReferenceValue(value: unknown): boolean {
+  if (typeof value === "string") return value !== "";
+  if (typeof value === "number") return Number.isFinite(value);
+  return (
+    isPlainRecord(value) &&
+    typeof value.relationTo === "string" &&
+    (typeof value.value === "string" || typeof value.value === "number")
+  );
+}
+
+/**
  * Whether a value is one a prop of this kind can hold, judged as the prop's
  * own value would be.
  *
@@ -294,6 +382,15 @@ export function isValidPropValue(
       // Read as a bound date is read, so a fallback a date prop accepts is
       // one the formatter can also give a machine value.
       return typeof value === "string" && machineDate(value) !== undefined;
+    case "json":
+      return value !== undefined;
+    case "list":
+      return (
+        Array.isArray(value) &&
+        value.every((item: unknown) => typeof item === "string")
+      );
+    case "reference":
+      return isReferenceValue(value);
     default:
       // The sentinel that clears an override is not a value of any prop.
       if (isUnsetOverride(value)) return false;
@@ -343,39 +440,48 @@ export function isEmptyBoundValue(value: unknown): boolean {
   return isEmptyRichText(value);
 }
 
-/** Field types whose value is one piece of text. */
-const TEXT_FIELDS: ReadonlySet<string> = new Set([
-  "text",
-  "textarea",
-  "email",
-  "code",
-  "phone",
-  "url",
-  "select",
-  "radio",
-]);
+/**
+ * Whether a field's value fills a prop as it is, past the picker's question.
+ *
+ * A number or a date reaches a text prop only through a format. A choice
+ * prop is filled by a choice field only when every value the field allows is
+ * one the prop allows, and never by free text, since the prop's choices are
+ * what it can render.
+ */
+function fillsUnformatted(
+  kind: BindingValueKind | null,
+  shape: BindablePropKind,
+  field: BindingFieldShape,
+  schema: PropSchema
+): boolean {
+  if (shape === "text") return kind !== "number" && kind !== "date";
+  if (shape !== "select") return true;
+  if (kind !== "option") return false;
+  const allowed = choicesOfProp(schema);
+  return (
+    allowed.length === 0 ||
+    (field.options ?? []).every(option => allowed.includes(option))
+  );
+}
 
-/** Field types that point at entries in another collection. */
-const RELATION_FIELDS: ReadonlySet<string> = new Set([
-  "relationship",
-  "upload",
-  "file",
-]);
-
-/** Field types that always hold a list. */
-const LIST_FIELDS: ReadonlySet<string> = new Set(["repeater", "chips"]);
-
-/** Field types that hold one value with no fields of their own. */
-const SCALAR_FIELDS: ReadonlySet<string> = new Set([
-  ...TEXT_FIELDS,
-  "richText",
-  "number",
-  "checkbox",
-  "date",
-  "time",
-  "password",
-  "hidden",
-]);
+/**
+ * Whether a field's value fills a prop as it is: the picker's question
+ * ({@link canBindFieldToProp}), and then the value's.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function fieldFitsProp(
+  field: BindingFieldShape,
+  schema: PropSchema
+): boolean {
+  const shape = bindablePropKind(schema);
+  if (shape === undefined) return false;
+  const source = fieldEndpoint(field);
+  return (
+    canBindFieldToProp(source, propEndpoint(schema)) &&
+    fillsUnformatted(bindingKindOf(source), shape, field, schema)
+  );
+}
 
 /**
  * Fields every entry carries that a schema need not list. A binding to one
@@ -386,49 +492,6 @@ const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
   "createdAt",
   "updatedAt",
 ]);
-
-/**
- * Whether a field's value can fill a prop of this kind unformatted: the one
- * fit table every binding is judged by.
- *
- * A date or a number reaching a text prop needs a format, so neither fits
- * text here. An image fits a media field or a URL field (and no other text).
- * A choice field fits a choice prop only when every value it allows is one
- * the prop allows.
- *
- * @experimental Settles with the editor's binding controls.
- */
-export function fieldFitsProp(
-  field: BindingFieldShape,
-  kind: BindablePropKind,
-  schema: PropSchema
-): boolean {
-  if (field.hasMany === true || LIST_FIELDS.has(field.type)) return false;
-  switch (kind) {
-    case "text":
-      return TEXT_FIELDS.has(field.type);
-    case "richText":
-      return field.type === "richText";
-    case "link":
-      return field.type === "url";
-    case "image":
-      return field.type === "url" || field.type === "upload";
-    case "number":
-      return field.type === "number";
-    case "boolean":
-      return field.type === "checkbox";
-    case "date":
-      return field.type === "date";
-    case "select": {
-      if (field.type !== "select" && field.type !== "radio") return false;
-      const allowed = choicesOfProp(schema);
-      return (
-        allowed.length === 0 ||
-        (field.options ?? []).every(option => allowed.includes(option))
-      );
-    }
-  }
-}
 
 /** The most path segments a binding can need: one relation, then its field. */
 const MAX_SEGMENTS_WITHOUT_SCHEMA = 2;
@@ -520,29 +583,45 @@ function stepInto(
       readonly hops: number;
     }
   | Extract<PathWalk, { ok: false }> {
-  if (field.hasMany === true || LIST_FIELDS.has(field.type)) {
+  const kind = bindingKindOf(fieldEndpoint(field));
+  if (field.hasMany === true || field.type === "repeater" || kind === "list") {
     return {
       ok: false,
       code: "binding-path-to-many",
       message: `"${field.name}" holds a list, which a binding cannot follow; show it with a nested list.`,
     };
   }
-  if (field.type === "group") {
-    return { ok: true, fields: field.fields ?? [], hops };
+  // A group, or the one component a field holds: walked into, as no hop.
+  if (field.fields !== undefined) {
+    return { ok: true, fields: field.fields, hops };
   }
-  if (SCALAR_FIELDS.has(field.type)) {
+  if (kind === "reference" || kind === "media") {
+    return crossRelation(field, hops, schema);
+  }
+  if (kind !== null) {
     return {
       ok: false,
       code: "binding-field-missing",
       message: `"${field.name}" holds a single value with no fields of its own.`,
     };
   }
-  // A field whose inside the schema does not describe (a component, a JSON
-  // value): what lies past it is judged by the value read, as without a
-  // schema.
-  if (!RELATION_FIELDS.has(field.type)) {
-    return { ok: true, fields: undefined, hops };
-  }
+  // A field whose inside the schema does not describe: what lies past it is
+  // judged by the value read, as without a schema.
+  return { ok: true, fields: undefined, hops };
+}
+
+/** The one relation a path may follow, into its collection's fields. */
+function crossRelation(
+  field: BindingFieldShape,
+  hops: number,
+  schema: BindingSchemaSource
+):
+  | {
+      readonly ok: true;
+      readonly fields: readonly BindingFieldShape[] | undefined;
+      readonly hops: number;
+    }
+  | Extract<PathWalk, { ok: false }> {
   if (typeof field.relationTo !== "string") {
     return {
       ok: false,
@@ -617,14 +696,17 @@ function checkFit(
   kind: BindablePropKind | undefined,
   schema: PropSchema | undefined
 ): { readonly code: BindingIssueCode; readonly message: string } | undefined {
-  // A formatted value was checked with its format; one without a schema or
-  // without known props is judged by the value it reads.
-  if (format.format !== null) return undefined;
+  // Without a schema or known props, the value read is judged instead.
   if (field === undefined || kind === undefined || schema === undefined) {
     return undefined;
   }
-  if (fieldFitsProp(field, kind, schema)) return undefined;
-  return unfit(field, kind, format.unsupported);
+  // A formatted value still has to be one the picker would offer; its format
+  // was checked against the field already.
+  const fits =
+    format.format === null
+      ? fieldFitsProp(field, schema)
+      : canBindFieldToProp(fieldEndpoint(field), propEndpoint(schema));
+  return fits ? undefined : unfit(field, kind, format.unsupported);
 }
 
 /** Why a field that does not fit its prop unformatted falls back. */
@@ -639,7 +721,9 @@ function unfit(
       message: `The "${unsupported}" format is not applied in this release, and a ${field.type} field cannot fill this prop unformatted.`,
     };
   }
-  const needsFormat = field.type === "date" || field.type === "number";
+  const fieldKind = bindingKindOf(fieldEndpoint(field));
+  const needsFormat =
+    (fieldKind === "date" || fieldKind === "number") && kind === "text";
   return {
     code: "binding-type-misfit",
     message: needsFormat

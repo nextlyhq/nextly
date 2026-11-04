@@ -357,14 +357,17 @@ const SOURCE_MODULES: ReadonlyArray<{
     // to delete that second view, not to offer one: a consumer holding a
     // definitions map wants `prepareDocumentForRead`, which builds this itself.
     //
-    // `prepareDocumentReadStages` also crosses to the route, which asks which
-    // fields a page's bindings read of the stage just before they are filled,
-    // so the question is answered of the tree this pipeline will draw.
+    // `prepareDocument` and `readStagesFor` are the route preparing a page once
+    // and the renderer reusing that preparation. The prop that carries one is
+    // internal, and what it carries is sealed inside this module, so there is
+    // nothing here a consumer could build.
     internal: [
       "isUnresolvedInstance",
+      "prepareDocument",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
+      "readStagesFor",
       "repairingLookup",
     ],
   },

@@ -45,7 +45,7 @@ import {
   type BlockNode,
 } from "./document";
 import { walkForest } from "./forest-walk";
-import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
+import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 
@@ -585,12 +585,25 @@ export interface BindingDemand {
    * whose only bindings read list items still needs the binding pass.
    */
   readonly any: boolean;
-  /** The entry's fields, or `undefined` when nothing binds the entry. */
-  readonly entry?: readonly string[];
-  /** Each Single's fields, by slug. */
-  readonly singles: ReadonlyMap<string, readonly string[]>;
+  /** What the entry is read for, or `undefined` when nothing binds it. */
+  readonly entry?: SourceDemand;
+  /** What each Single is read for, by slug. */
+  readonly singles: ReadonlyMap<string, SourceDemand>;
   /** Whether anything binds the site settings. */
   readonly site: boolean;
+  /** Whether any binding formats a date, which needs the site's time zone. */
+  readonly formatsDates: boolean;
+}
+
+/**
+ * What one source is read for: its top-level fields, and for each field a
+ * path follows into a related entry, the fields read there.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface SourceDemand {
+  readonly fields: readonly string[];
+  readonly follows: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
@@ -599,82 +612,116 @@ export interface BindingDemand {
  * Only well-formed paths are listed, so a malformed binding cannot shape a
  * read; it falls back when the pass meets it.
  *
- * Asked of stored documents before the read pipeline has repaired them, so
- * the walk holds itself to the same caps the pipeline will: it is iterative,
- * it reads no deeper than `limits.maxDepth` and no more than `limits.maxNodes`
- * entries per document, and a node past either is one the pipeline drops, so
- * nothing past them is read for.
+ * The walk is iterative, so no depth exhausts the stack. Asked of a document
+ * the read pipeline has already prepared, which is already within its caps
+ * (a composed tree may legitimately run deeper than a stored one), it takes
+ * no `limits`. Asked of a stored document nothing has repaired, pass the
+ * caps the pipeline will apply: nothing deeper than `maxDepth` or past
+ * `maxNodes` entries is read for, as the pipeline drops it.
  *
  * @experimental Settles with the editor's binding controls.
  */
 export function bindingDemand(
   documents: Iterable<BlockDocument>,
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits?: Pick<DocumentLimits, "maxDepth" | "maxNodes">
 ): BindingDemand {
   const demand: DemandSoFar = {
     any: false,
     entry: undefined,
-    singles: new Map<string, Set<string>>(),
+    singles: new Map<string, SourceSoFar>(),
     site: false,
+    formatsDates: false,
   };
   for (const document of documents) {
     if (isPlainRecord(document)) visitForest(document.nodes, limits, demand);
   }
   return {
     any: demand.any,
-    ...(demand.entry === undefined ? {} : { entry: [...demand.entry] }),
+    ...(demand.entry === undefined ? {} : { entry: settled(demand.entry) }),
     singles: new Map(
-      [...demand.singles].map(([key, fields]) => [key, [...fields]] as const)
+      [...demand.singles].map(
+        ([key, source]) => [key, settled(source)] as const
+      )
     ),
     site: demand.site,
+    formatsDates: demand.formatsDates,
   };
+}
+
+/** One source's demand so far. */
+interface SourceSoFar {
+  readonly fields: Set<string>;
+  readonly follows: Map<string, Set<string>>;
 }
 
 /** What the documents walked so far bind. */
 interface DemandSoFar {
   any: boolean;
-  entry: Set<string> | undefined;
-  readonly singles: Map<string, Set<string>>;
+  entry: SourceSoFar | undefined;
+  readonly singles: Map<string, SourceSoFar>;
   site: boolean;
+  formatsDates: boolean;
 }
 
-/** The field a binding's source is read for, when its path is well formed. */
-function firstField(
+function settled(source: SourceSoFar): SourceDemand {
+  return {
+    fields: [...source.fields],
+    follows: new Map(
+      [...source.follows].map(([field, inner]) => [field, [...inner]] as const)
+    ),
+  };
+}
+
+/** A path's segments, when it is well formed and names no prototype key. */
+function pathSegments(
   binding: Readonly<Record<string, unknown>>
-): string | undefined {
+): readonly string[] | undefined {
   const path = ownEntry(binding, "$bind");
   if (!isBindPath(path)) return undefined;
-  const field = path.split(".")[0];
+  const segments = path.split(".");
   // Never a field of any source, and a read naming it is refused whole.
-  return field === "__proto__" ? undefined : field;
+  return segments.includes("__proto__") ? undefined : segments;
 }
 
-/** Add one binding's source and field to the demand. */
+/** Add a path to one source's demand: its field, and what it follows into. */
+function addPath(
+  source: SourceSoFar | undefined,
+  segments: readonly string[]
+): SourceSoFar {
+  const into = source ?? { fields: new Set<string>(), follows: new Map() };
+  const [field, next] = segments;
+  if (field === undefined) return into;
+  into.fields.add(field);
+  if (next !== undefined) {
+    into.follows.set(field, (into.follows.get(field) ?? new Set()).add(next));
+  }
+  return into;
+}
+
+/** Add one binding's source and path to the demand. */
 function visitBinding(binding: unknown, demand: DemandSoFar): void {
   if (!isPlainRecord(binding)) return;
-  const field = firstField(binding);
-  if (field === undefined) return;
+  const segments = pathSegments(binding);
+  if (segments === undefined) return;
+  const format = ownEntry(binding, "format");
+  if (isPlainRecord(format) && ownEntry(format, "type") === "date") {
+    demand.formatsDates = true;
+  }
   const source = ownEntry(binding, "source") ?? DEFAULT_BINDING_SOURCE;
-  if (source === "entry") {
-    demand.entry = (demand.entry ?? new Set<string>()).add(field);
-    return;
-  }
-  if (source === "site") {
-    demand.site = true;
-    return;
-  }
-  if (source === "single") addSingleField(binding, field, demand);
+  if (source === "entry") demand.entry = addPath(demand.entry, segments);
+  else if (source === "site") demand.site = true;
+  else if (source === "single") addSingle(binding, segments, demand);
 }
 
-/** A Single's field, under the slug the binding names. */
-function addSingleField(
+/** A Single's path, under the slug the binding names. */
+function addSingle(
   binding: Readonly<Record<string, unknown>>,
-  field: string,
+  segments: readonly string[],
   demand: DemandSoFar
 ): void {
   const key = ownEntry(binding, "sourceKey");
   if (typeof key !== "string" || key === "") return;
-  demand.singles.set(key, (demand.singles.get(key) ?? new Set()).add(field));
+  demand.singles.set(key, addPath(demand.singles.get(key), segments));
 }
 
 /** Add every binding one node holds. */
@@ -696,15 +743,17 @@ function visitNode(
  */
 function visitForest(
   nodes: unknown,
-  limits: DocumentLimits,
+  limits: Pick<DocumentLimits, "maxDepth" | "maxNodes"> | undefined,
   demand: DemandSoFar
 ): void {
   if (!Array.isArray(nodes)) return;
+  const maxNodes = limits?.maxNodes ?? Number.POSITIVE_INFINITY;
+  const maxDepth = limits?.maxDepth ?? Number.POSITIVE_INFINITY;
   let seen = 0;
   walkForest(nodes, entry => {
     seen += 1;
-    if (seen > limits.maxNodes) return "stop";
-    if (entry.depth > limits.maxDepth || !isPlainRecord(entry.node)) {
+    if (seen > maxNodes) return "stop";
+    if (entry.depth > maxDepth || !isPlainRecord(entry.node)) {
       return "skip";
     }
     visitNode(entry.node, demand);
