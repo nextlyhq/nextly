@@ -5068,6 +5068,13 @@
   cursor: pointer;
 }
 
+/* While its work is under way ("Counting…"): muted, and no press. */
+.nx-vars__link:disabled {
+  color: var(--nx-muted-foreground);
+  text-decoration: none;
+  cursor: progress;
+}
+
 .nx-vars__report {
   display: flex;
   flex-direction: column;
@@ -6287,6 +6294,35 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* The note that counts are minimums, under the list's head, and the row
+   that counts them now. */
+.nx-shared-styles__counting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-block: 0.25rem 0.5rem;
+}
+
+.nx-shared-styles__count-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+/* The design system's small button, at the panel's scale: the panel's
+   other controls are 24px rows in its extra-small type. */
+.nx-shared-styles__count-row .nx-shared-styles__count-now {
+  height: 1.5rem;
+  padding-inline: 0.5rem;
+  font-size: var(--text-xs);
+}
+
+/* Empty until a count says something: takes no room in the row. */
+.nx-shared-styles__count-row [role="status"]:empty {
+  display: none;
 }
 
 /* A zero not counted yet is words, not a count: no box, the panel's own

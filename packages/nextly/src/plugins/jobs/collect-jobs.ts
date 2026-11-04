@@ -33,6 +33,13 @@ export interface CollectedJob {
   definition: JobDefinition<never>;
   /** Declaring owner — `"app"` or the plugin name, for logs and collisions. */
   owner: string;
+  /**
+   * The plugin that declared it, or `undefined` for one the app declares.
+   * Kept apart from `owner`, which reads "app" for the app's own and so
+   * cannot tell it from a plugin of that name: this is what a plugin may act
+   * on as its own.
+   */
+  plugin: string | undefined;
 }
 
 /**
@@ -75,7 +82,11 @@ export function collectJobs(
   const seen = new Map<string, string>();
   const out: CollectedJob[] = [];
 
-  const consider = (definition: JobDefinition<never>, owner: string): void => {
+  const consider = (
+    definition: JobDefinition<never>,
+    owner: string,
+    plugin: string | undefined
+  ): void => {
     // Normalised on the way in. `JobDefinition` is a public structural type, so
     // a definition can reach here without passing through `defineJob`, carrying
     // `" acme:export "` — which the registry would key verbatim while an enqueue
@@ -115,18 +126,19 @@ export function collectJobs(
       definition:
         slug === definition.slug ? definition : { ...definition, slug },
       owner,
+      plugin,
     });
   };
 
   for (const definition of config.jobs ?? []) {
-    consider(definition, "app");
+    consider(definition, "app", undefined);
   }
   for (const plugin of plugins) {
     // `enabled` is optional and absent means enabled, so this tests for an
     // explicit `false` rather than for a truthy value.
     if (plugin.enabled === false) continue;
     for (const definition of plugin.contributes?.jobs ?? []) {
-      consider(definition, plugin.name);
+      consider(definition, plugin.name, plugin.name);
     }
   }
 
