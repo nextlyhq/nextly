@@ -265,6 +265,7 @@ import {
   bumpDocumentRevision,
   changerColumns,
   documentVersionOn,
+  encodeDocumentVersion,
   mainRowBump,
   revisionBumpColumns,
   setDocumentVersion,
@@ -272,6 +273,17 @@ import {
   withDocumentVersion,
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
+import {
+  callerMayReadDocument,
+  type DecodedVersion,
+  judgedLanguage,
+  readDocumentRevision,
+  releaseRunExemptFor,
+  staleParts,
+  staleVersionRefusal,
+  type VersionCheck,
+  versionCheckFor,
+} from "../../versions/stale-version";
 import {
   draftComponentValues,
   mergeComponentPatches,
@@ -10137,6 +10149,84 @@ export class CollectionMutationService extends BaseService {
     return { workingDraftDocument, priorWorkingDraftDocument };
   }
 
+  /** The pool, as `readDocumentRevision` reads it outside a transaction. */
+  private poolRevisionReader(): Parameters<typeof readDocumentRevision>[0] {
+    return {
+      select: (table, options) => this.adapter.select(table, options),
+      execute: (statement, params) =>
+        this.adapter.executeQuery(statement, params),
+    } as Parameters<typeof readDocumentRevision>[0];
+  }
+
+  /**
+   * The refusal of an update made from an out-of-date version, read from the
+   * entry as it is now, on the pool. Who changed it last and when are told
+   * only to a caller who may read the entry, as a read of it would decide.
+   */
+  private async staleVersionAnswer(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+      request?: Request;
+      context?: Record<string, unknown>;
+    },
+    given: DecodedVersion,
+    where: { table: string; languages?: { table: string; locale: string } }
+  ): Promise<CollectionServiceResult> {
+    const locale = where.languages?.locale;
+    const state = await readDocumentRevision(this.poolRevisionReader(), {
+      dialect: this.dialect,
+      table: where.table,
+      id: params.entryId,
+      ...(where.languages && locale
+        ? { languages: { table: where.languages.table, locales: [locale] } }
+        : {}),
+    });
+    if (!state) {
+      return errorToServiceResult(
+        NextlyError.notFound({
+          logContext: { reason: "stale-version-entry-gone", ...params },
+        }),
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
+    const language = locale ? state.languages[locale] : undefined;
+    const refusal = await staleVersionRefusal({
+      state,
+      given,
+      currentVersion: encodeDocumentVersion(
+        state.main.counter,
+        locale && language ? { [locale]: language.counter } : undefined
+      ),
+      parts: language ? [state.main, language] : [state.main],
+      mayRead: () =>
+        callerMayReadDocument({
+          scopeKind: "collection",
+          slug: params.collectionName,
+          entryId: params.entryId,
+          user: params.user,
+          trusted: params.overrideAccess === true && !params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+          hookInputs: { request: params.request, context: params.context },
+        }),
+      logContext: {
+        reason: "stale-version",
+        collection: params.collectionName,
+        entryId: params.entryId,
+      },
+    });
+    return errorToServiceResult(
+      refusal,
+      { defaultMessage: "Failed to update entry" },
+      this.dialect
+    );
+  }
+
   async updateEntry(
     // Named `rawParams` because the body must not read it: the wildcard locale
     // is resolved away into `params` at the top of the method. See there.
@@ -10211,6 +10301,25 @@ export class CollectionMutationService extends BaseService {
     // Read once, as plain data: a caller's object may compute a key on each
     // read, and the gate a write asks and the write itself must read the same
     // body.
+    // Judged against the version the caller read, when it sent one: decided
+    // here, before the version is dropped below. A release run's own write is
+    // exempt, and nothing a caller sends can make a write one.
+    let versionCheck: VersionCheck;
+    try {
+      versionCheck = versionCheckFor(body, {
+        exempt: releaseRunExemptFor({
+          scopeKind: "collection",
+          scopeSlug: rawParams.collectionName,
+          entryId: rawParams.entryId,
+        }),
+      });
+    } catch (error) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
@@ -10307,6 +10416,11 @@ export class CollectionMutationService extends BaseService {
     // hold once locked; read after the transaction, as the adapter wraps
     // what is thrown out of it.
     const lockedPromotion: { refusal?: NextlyError } = {};
+    // Set when the version the caller gave is found out of date inside the
+    // transaction: where to read the current one once it has rolled back.
+    let staleWrite:
+      | { table: string; languages?: { table: string; locale: string } }
+      | undefined;
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
     // the event step so each real transition is reported once.
@@ -10510,6 +10624,22 @@ export class CollectionMutationService extends BaseService {
       }
 
       const tableName = collectionTableName(collection, params.collectionName);
+
+      // A version below the one the entry already held when it was read is
+      // certainly out of date, since a counter only goes up: refused here,
+      // before any hook runs. Any other is judged under the row lock.
+      if (versionCheck.kind === "judge") {
+        const inHand = await readDocumentRevision(this.poolRevisionReader(), {
+          dialect: this.dialect,
+          table: tableName,
+          id: params.entryId,
+        });
+        if (inHand && inHand.main.counter > versionCheck.given.main) {
+          return this.staleVersionAnswer(params, versionCheck.given, {
+            table: tableName,
+          });
+        }
+      }
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
@@ -10828,6 +10958,13 @@ export class CollectionMutationService extends BaseService {
         params.locale,
         false
       );
+      // A translated save is judged on its own language too, so the version
+      // must name it; one from a read of another language is refused here,
+      // before anything is written.
+      const judgedLocale =
+        versionCheck.kind === "judge" && localizedUpdate
+          ? judgedLanguage(versionCheck.given, localizedUpdate.writeLocale)
+          : undefined;
 
       // Whether this write targets a non-default locale's companion `_status`
       // (which the in-transaction check below reads under the lock) rather than
@@ -11190,6 +11327,25 @@ export class CollectionMutationService extends BaseService {
           // The adapter owns the dialect specifics and no-ops where row locking
           // does not exist.
           await tx.lockRow(tableName, params.entryId);
+          // The main row's version, read under the lock as it is now: a save
+          // committed since the caller read leaves it out of date.
+          if (versionCheck.kind === "judge") {
+            const locked = await readDocumentRevision(tx, {
+              dialect: this.dialect,
+              table: tableName,
+              id: params.entryId,
+              forUpdate: true,
+            });
+            if (
+              locked &&
+              staleParts(versionCheck.given, { main: locked.main }).length > 0
+            ) {
+              staleWrite = { table: tableName };
+              throw NextlyError.staleVersion({
+                data: { currentVersion: String(locked.main.counter) },
+              });
+            }
+          }
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -11982,6 +12138,48 @@ export class CollectionMutationService extends BaseService {
               undefined,
               { savedBy: actorForWrite(params.actor, params.user) }
             );
+            // The language's version, judged once this save has written its
+            // row: the row then exists and this transaction holds it, so its
+            // counter is the given one plus this save's own. A read of it
+            // before the write would lock a row that may not exist yet, which
+            // on MySQL locks a range of the table's key and deadlocks two
+            // documents' first translations saved at once.
+            if (
+              versionCheck.kind === "judge" &&
+              judgedLocale === localizedUpdate.writeLocale
+            ) {
+              const written = await readDocumentRevision(tx, {
+                dialect: this.dialect,
+                table: tableName,
+                id: params.entryId,
+                languages: {
+                  table: localizedUpdate.companionTableName,
+                  locales: [judgedLocale],
+                },
+              });
+              const state = written?.languages[judgedLocale];
+              if (
+                state &&
+                staleParts(versionCheck.given, {
+                  languageAfterWrite: {
+                    locale: judgedLocale,
+                    state,
+                    bumped: true,
+                  },
+                }).length > 0
+              ) {
+                staleWrite = {
+                  table: tableName,
+                  languages: {
+                    table: localizedUpdate.companionTableName,
+                    locale: judgedLocale,
+                  },
+                };
+                throw NextlyError.staleVersion({
+                  data: { currentVersion: String(state.counter) },
+                });
+              }
+            }
           }
 
           // {@link EVERY_LOCALE}: carry the lifecycle to the languages the write
@@ -13115,6 +13313,11 @@ export class CollectionMutationService extends BaseService {
       // wraps the thrown sentinel in a DatabaseError before it reaches here.
       if (transitionDeniedResult) {
         return transitionDeniedResult;
+      }
+      // Answered after the rollback, from the document as it now is, so the
+      // refusal names the save that came in between rather than this one.
+      if (staleWrite && versionCheck.kind === "judge") {
+        return this.staleVersionAnswer(params, versionCheck.given, staleWrite);
       }
       if (lockedPromotion.refusal) {
         return errorToServiceResult(
