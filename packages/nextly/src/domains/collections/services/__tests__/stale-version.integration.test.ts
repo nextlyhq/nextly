@@ -936,5 +936,54 @@ describe.each(getConfiguredTestDialects())(
       // Exactly one save's worth of hooks, events and versions: the refused one left none.
       expect(delta(before, await measure())).toEqual(oneSave);
     });
+
+    // SQLite runs one write transaction at a time: the other connection's
+    // save would wait for the caller's transaction to end.
+    it.skipIf(dialect === "sqlite")(
+      "refuses, in a caller's transaction that read the entry first, a version another connection's save replaced",
+      async () => {
+        const t = await boot(dialect);
+        const created = await handlerOf(t).createEntry(
+          { collectionName: NOTES, overrideAccess: true },
+          { title: "first" }
+        );
+        const id = idOf(created);
+        // The other connection's save, started outside the caller's
+        // transaction so it runs as a separate caller would, and let go from
+        // inside it once the caller has read.
+        let go!: () => void;
+        const signalled = new Promise<void>(resolve => {
+          go = resolve;
+        });
+        const theirs = signalled.then(() =>
+          update(t, NOTES, id, { title: "theirs" })
+        );
+        await expect(
+          t.adapter.transaction(async tx => {
+            // The caller's own read first: on MySQL it fixes what every plain
+            // read in this transaction sees from here on.
+            const seen = await tx.selectOne<Record<string, unknown>>(
+              `dc_${NOTES}`,
+              {
+                where: { and: [{ column: "id", op: "=", value: id }] },
+              }
+            );
+            expect(seen?.title).toBe("first");
+            go();
+            const saved = await theirs;
+            expect(saved.success, JSON.stringify(saved)).toBe(true);
+            // Then the caller saves from the version it read before.
+            await serviceOf(t).updateEntryInTransaction(
+              tx,
+              NOTES,
+              id,
+              { title: "mine", _rev: revOf(created) },
+              { overrideAccess: true } as never
+            );
+          })
+        ).rejects.toMatchObject({ code: "STALE_VERSION" });
+        expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
+      }
+    );
   }
 );
