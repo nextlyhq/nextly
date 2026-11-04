@@ -149,6 +149,8 @@ export interface DerivedRetired {
    * ids are then the ones found, never more.
    */
   readonly complete: boolean;
+  /** The newest version number read: what the answer is true as of. */
+  readonly through: number;
 }
 
 const NONE: RetiredExposures = { properties: [], slots: [] };
@@ -178,7 +180,7 @@ export async function deriveRetired(
   // derivation cannot say which.
   const complete = walk.reached && !walk.served.includes("unreadable");
   if (complete && folded.through > 0) args.memo?.set(key, folded);
-  return { retired: folded.retired, complete };
+  return { retired: folded.retired, complete, through: folded.through };
 }
 
 /** A walk down one component's history, newest first. */
@@ -400,7 +402,13 @@ export async function repairRetired(
     slots: derived.retired.slots.filter(id => !held.slots.includes(id)),
   };
   const recorded = await recordMissing(args, componentId, missing);
-  if (recorded && derived.complete) await releasePins(args, componentId);
+  // Only a component that has retired something can hold versions for a lost
+  // removal: what a pin holds is read here like the rest of history.
+  const retiredAny =
+    derived.retired.properties.length > 0 || derived.retired.slots.length > 0;
+  if (recorded && derived.complete && retiredAny) {
+    await releasePins(args, componentId, derived.through);
+  }
   return {
     retired: {
       properties: [...held.properties, ...missing.properties],
@@ -442,10 +450,11 @@ async function recordMissing(
  */
 async function releasePins(
   args: ReconcileArgs,
-  componentId: string
+  componentId: string,
+  through: number
 ): Promise<void> {
   try {
-    await args.pins?.release(componentId);
+    await args.pins?.release(componentId, through);
   } catch (error) {
     args.logger.warn(
       `[page-builder] the versions held for component "${componentId}"'s ` +

@@ -13,8 +13,9 @@
  * recorded the retirement. One slot for each side of each lost removal, named
  * by the version that dropped the ids: pinning the same removal again moves
  * nothing, and the slots a component holds are only ever those of removals
- * whose records failed. A repair that records the ids releases every slot the
- * component holds.
+ * whose records failed. A repair that records the ids releases the slots of
+ * the removals it read, and only those: a removal published after its read,
+ * whose record failed too, keeps its slots until a repair reads it.
  *
  * Pins take the component's write lock in a transaction of the plugin's own,
  * so they are made only after the publish has committed: inside a caller's
@@ -41,7 +42,11 @@ export interface RetiredPinHolder<Tx> {
     args: { slot: string; versionNo: number },
     opts: { tx: Tx }
   ): Promise<void>;
-  releaseAll(ref: ComponentHistoryRef, opts: { tx: Tx }): Promise<void>;
+  release(
+    ref: ComponentHistoryRef,
+    args: { slot: string },
+    opts: { tx: Tx }
+  ): Promise<void>;
   list(
     ref: ComponentHistoryRef,
     opts: { tx: Tx }
@@ -60,8 +65,11 @@ export interface RetiredPins {
     dropped: RetiredExposures,
     lifecycle: boolean
   ): Promise<boolean>;
-  /** Free every slot the component holds, once its retirements are recorded. */
-  release(componentId: string): Promise<void>;
+  /**
+   * Free the slots of the removals a repair has read and recorded: those made
+   * by a version no newer than `through`.
+   */
+  release(componentId: string, through: number): Promise<void>;
 }
 
 /**
@@ -72,9 +80,6 @@ const MAX_SEARCHED = 10;
 
 /** How many listed versions one page returns. */
 const VERSIONS_PER_PAGE = 50;
-
-/** How many components are remembered as holding no slots. */
-const KNOWN_FREE = 256;
 
 /** The pins over the plugin's own holder and transactions. */
 export function retiredPins<Tx>(args: {
@@ -88,10 +93,6 @@ export function retiredPins<Tx>(args: {
   /** The field on a component row holding its document. */
   readonly componentField: string;
 }): RetiredPins {
-  // Components seen holding no slots, so a repair, which runs on every editor
-  // open, does not open a transaction to look each time. Per process, and
-  // forgotten for a component as soon as it is pinned here.
-  const free = new Set<string>();
   const refOf = (componentId: string): ComponentHistoryRef => ({
     scopeKind: "collection",
     scopeSlug: args.componentCollection,
@@ -122,24 +123,28 @@ export function retiredPins<Tx>(args: {
           { tx }
         );
       });
-      free.delete(componentId);
       return true;
     },
-    release: async componentId => {
+    release: async (componentId, through) => {
       const holder = args.holder();
-      if (holder === undefined || free.has(componentId)) return;
+      if (holder === undefined) return;
       const ref = refOf(componentId);
       await args.transaction(async tx => {
-        const held = await holder.list(ref, { tx });
-        if (held.length > 0) await holder.releaseAll(ref, { tx });
+        for (const { slot } of await holder.list(ref, { tx })) {
+          const removal = removalNumberOf(slot);
+          if (removal !== undefined && removal <= through) {
+            await holder.release(ref, { slot }, { tx });
+          }
+        }
       });
-      free.add(componentId);
-      if (free.size > KNOWN_FREE) {
-        const oldest = free.values().next().value;
-        if (oldest !== undefined) free.delete(oldest);
-      }
     },
   };
+}
+
+/** The version that made the removal a slot is held for, from its name. */
+function removalNumberOf(slot: string): number | undefined {
+  const match = /^removal-(\d+)(?:-before)?$/.exec(slot);
+  return match === null ? undefined : Number(match[1]);
 }
 
 /**

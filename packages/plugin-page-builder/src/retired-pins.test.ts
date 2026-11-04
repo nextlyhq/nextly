@@ -5,7 +5,7 @@
  * slots end up pointing at which versions. The properties a plausible version
  * gets wrong: pinning the wrong pair when drafts sit between the two
  * publishes, pinning when the newest definition exposes the ids again, and
- * opening a transaction on every repair of a component that holds nothing.
+ * releasing a removal the repair never read.
  */
 import { describe, expect, it } from "vitest";
 
@@ -56,9 +56,9 @@ function memoryHolder() {
       expect(tx).toBe("tx");
       slots.set(slot, versionNo);
     },
-    releaseAll: async (_ref, { tx }) => {
+    release: async (_ref, { slot }, { tx }) => {
       expect(tx).toBe("tx");
-      slots.clear();
+      slots.delete(slot);
     },
     list: async (_ref, { tx }) => {
       expect(tx).toBe("tx");
@@ -176,7 +176,7 @@ describe("holding a lost removal", () => {
 });
 
 describe("releasing", () => {
-  it("frees every slot the component holds", async () => {
+  it("frees the slots of the removals the repair read", async () => {
     const memory = memoryHolder();
     const pins = pinsOver(
       memoryHistory([
@@ -187,35 +187,38 @@ describe("releasing", () => {
     );
     await pins.hold("hero", TITLE, true);
 
-    await pins.release("hero");
+    await pins.release("hero", 2);
 
     expect(memory.slots.size).toBe(0);
   });
 
-  it("opens no transaction again for a component known to hold none", async () => {
+  it("keeps the slots of a removal made after the repair's read", async () => {
+    const versions = [
+      { status: "published", fields: ["title", "body"] },
+      { status: "published", fields: ["body"] },
+    ];
     const memory = memoryHolder();
+    const pins = pinsOver(memoryHistory(versions), memory);
+    await pins.hold("hero", TITLE, true);
+    versions.push({ status: "published", fields: [] });
+    await pins.hold("hero", { properties: ["body"], slots: [] }, true);
+
+    // A repair that read up to version 2 recorded the first removal only.
+    await pins.release("hero", 2);
+
+    expect(Object.fromEntries(memory.slots)).toEqual({
+      "removal-3-before": 2,
+      "removal-3": 3,
+    });
+  });
+
+  it("leaves slots it did not make alone", async () => {
+    const memory = memoryHolder();
+    memory.slots.set("other", 1);
     const pins = pinsOver(memoryHistory([]), memory);
 
-    await pins.release("hero");
-    await pins.release("hero");
+    await pins.release("hero", 10);
 
-    expect(memory.transactions).toHaveLength(1);
-  });
-
-  it("looks again once the component is held anew", async () => {
-    const memory = memoryHolder();
-    const pins = pinsOver(
-      memoryHistory([
-        { status: "published", fields: ["title"] },
-        { status: "published", fields: [] },
-      ]),
-      memory
-    );
-    await pins.release("hero");
-    await pins.hold("hero", TITLE, true);
-
-    await pins.release("hero");
-
-    expect(memory.slots.size).toBe(0);
+    expect(Object.fromEntries(memory.slots)).toEqual({ other: 1 });
   });
 });
