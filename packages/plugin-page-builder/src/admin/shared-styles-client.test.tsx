@@ -212,7 +212,7 @@ describe("locking and removing", () => {
   it("answers a refusal in the route's own words, and reads nothing again", async () => {
     writeBehaviour = async () => {
       throw new Error(
-        "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet."
+        "Nothing was removed. Some pages haven't been counted yet, so no shared style can be removed."
       );
     };
     const { result } = renderHook(() => useSharedStylesClient());
@@ -222,7 +222,7 @@ describe("locking and removing", () => {
     });
 
     expect(refusal).toBe(
-      "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet."
+      "Nothing was removed. Some pages haven't been counted yet, so no shared style can be removed."
     );
     expect(refetches).toBe(0);
   });

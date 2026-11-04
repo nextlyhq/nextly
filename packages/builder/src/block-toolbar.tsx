@@ -71,6 +71,7 @@ import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
+import { watchScreenBand } from "./canvas-geometry-watch";
 import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
@@ -79,7 +80,6 @@ import {
   canvasScroller,
   onScreenOf,
   overlaySpaceOf,
-  scrollEventTarget,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import {
@@ -101,7 +101,12 @@ import {
 
 /** A rectangle on screen as the top and bottom a toolbar keeps to. */
 function screenBand(rect: Rect): ToolbarScreen {
-  return { top: rect.y, bottom: rect.y + rect.height };
+  return {
+    top: rect.y,
+    bottom: rect.y + rect.height,
+    left: rect.x,
+    right: rect.x + rect.width,
+  };
 }
 
 /**
@@ -353,7 +358,10 @@ export function BlockToolbar({
         TOOLBAR_GAP_PX,
         // Kept to what is on screen: room above is room above on screen, and
         // a tall block scrolled past its top keeps its bar in view.
-        screenBand(onScreenOf(space))
+        screenBand(onScreenOf(space)),
+        // Each selected block, so the bar is kept to the screen sideways only
+        // where one of them is on it.
+        rects
       )
     );
   }, [selectedId, selectedIds]);
@@ -415,9 +423,10 @@ export function BlockToolbar({
    * block does not move in the canvas's own coordinates, but what of it is on
    * screen does, and the bar keeps to that: a tall block scrolled past its top
    * takes its bar to the screen's top, and a window made too short for the
-   * bar under a block moves it there too. The scroller is the one the screen
-   * band is read from, so what is heard and what is measured cannot be two
-   * different elements.
+   * bar under a block moves it there too. The scrolls heard are the ones the
+   * screen band is read from (`watchScreenBand`), the host's scroller
+   * around a zoomed frame among them, so what is heard and what is measured
+   * cannot be two different sets.
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
@@ -425,23 +434,7 @@ export function BlockToolbar({
     const space =
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     if (space === null) return;
-    const scroller = canvasScroller(space.root, space.frame !== null);
-    if (scroller === null) return;
-    const source = scrollEventTarget(scroller);
-    source.addEventListener("scroll", measure, { passive: true });
-    // The window resizing the viewport, and a panel resizing the scroller,
-    // which the observer only reports where the runtime has one.
-    const view = scroller.ownerDocument.defaultView;
-    view?.addEventListener("resize", measure);
-    const Sizes = view?.ResizeObserver;
-    const sizes =
-      typeof Sizes === "function" ? new Sizes(() => measure()) : null;
-    sizes?.observe(scroller);
-    return () => {
-      source.removeEventListener("scroll", measure);
-      view?.removeEventListener("resize", measure);
-      sizes?.disconnect();
-    };
+    return watchScreenBand(space.root, space.frame, measure);
   }, [measure, hidden, selectedId, canvasFrame]);
 
   const hovered = useHoveredBlock();

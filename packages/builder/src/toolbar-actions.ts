@@ -917,10 +917,15 @@ export interface ToolbarPlacement {
   readonly side: "above" | "below" | "pinned";
 }
 
-/** The part of the canvas on screen, top and bottom, in its coordinates. */
+/**
+ * The part of the canvas on screen, in its coordinates: top and bottom, and
+ * the left and right edges where the canvas scrolls sideways too.
+ */
 export interface ToolbarScreen {
   readonly top: number;
   readonly bottom: number;
+  readonly left?: number;
+  readonly right?: number;
 }
 
 /** No screen to keep to: the whole page, from its top down. */
@@ -961,18 +966,32 @@ export function toolbarPlacement(
   toolbar: ToolbarSize,
   canvas: ToolbarSize,
   gap: number = TOOLBAR_GAP_PX,
-  screen: ToolbarScreen = WHOLE_PAGE
+  screen: ToolbarScreen = WHOLE_PAGE,
+  parts: readonly Rect[] = [block]
 ): ToolbarPlacement {
   const above = block.y - toolbar.height - gap;
   const below = block.y + block.height + gap;
   const side = toolbarSide(block, toolbar, gap, screen, above, below);
 
-  // The clamp is skipped when the bar is wider than the canvas, because there
-  // is no position that satisfies both edges and clamping would silently choose
-  // the right one — leaving the first buttons, which are the ones an author
-  // reaches for, off-screen.
-  const maxX = canvas.width - toolbar.width;
-  const x = maxX <= 0 ? 0 : Math.min(Math.max(block.x, 0), maxX);
+  // Kept to the canvas, and to the part of it on screen where that is given
+  // and the block crosses it: a block wholly off the side keeps its bar with
+  // it, rather than one at the screen's edge over another block. The clamp is
+  // skipped when the bar is wider than that, because there is no position that
+  // satisfies both edges and clamping would silently choose the right one —
+  // leaving the first buttons, which are the ones an author reaches for,
+  // off-screen.
+  const left = screen.left ?? Number.NEGATIVE_INFINITY;
+  const right = screen.right ?? Number.POSITIVE_INFINITY;
+  // Judged by each selected block, not by their union: two blocks off
+  // opposite sides have a union that crosses the screen through the gap.
+  const crosses = parts.some(
+    part => part.x < right && part.x + part.width > left
+  );
+  const minX = Math.max(0, crosses ? left : 0);
+  const maxX =
+    Math.min(canvas.width, crosses ? right : Number.POSITIVE_INFINITY) -
+    toolbar.width;
+  const x = maxX <= minX ? minX : Math.min(Math.max(block.x, minX), maxX);
 
   const y =
     side === "above" ? above : side === "below" ? below : screen.top + gap;
@@ -981,7 +1000,8 @@ export function toolbarPlacement(
 
 /**
  * Which side the bar takes. Below only when above would leave the screen, the
- * block's top is on it and the bar fits on screen under the block; a block
+ * block is on it (its top, or a short end of it too little to pin over) and
+ * the bar fits on screen under the block; a block
  * near the BOTTOM keeps the bar above it, where it is still visible, since
  * flipping there would push it under the fold for no gain. Pinned to the
  * screen's top over a block that fills the screen below the bar: one whose top
@@ -999,11 +1019,15 @@ function toolbarSide(
   if (above >= screen.top) return "above";
   const stillShown =
     block.y + block.height >= screen.top + toolbar.height + gap;
+  const fitsBelow = below + toolbar.height <= screen.bottom;
   if (block.y >= screen.top) {
-    const fitsBelow = below + toolbar.height <= screen.bottom;
     return fitsBelow || !stillShown ? "below" : "pinned";
   }
-  return stillShown ? "pinned" : "above";
+  if (stillShown) return "pinned";
+  // A short block whose top is just off the screen, with a little of it
+  // still on: too little to pin the bar over, so below it where that fits.
+  const partlyShown = block.y + block.height > screen.top;
+  return partlyShown && fitsBelow ? "below" : "above";
 }
 
 /** A plan's ops, or undefined for no plan or a refusal. */
