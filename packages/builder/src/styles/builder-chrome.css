@@ -4394,6 +4394,13 @@
 .nx-block-toolbar {
   position: absolute;
   z-index: 3;
+  /*
+   * Only the buttons take the pointer: the bar sits over the block above the
+   * selection, and a press in a gap between two buttons, or on the bar's
+   * edge, reaches that block instead of landing on nothing.
+   */
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
   display: flex;
   align-items: center;
   gap: 0.125rem;
@@ -4418,6 +4425,25 @@
   color: var(--nx-builder-ink-text);
   box-shadow: 0 1px 3px
     color-mix(in srgb, var(--nx-builder-ink) 40%, transparent);
+}
+
+.nx-block-toolbar button {
+  pointer-events: auto;
+}
+
+/*
+ * Faded while the pointer is over another block, so the block it points at is
+ * not covered; still there to press, and back once the pointer is on it or the
+ * keyboard is in it.
+ */
+.nx-block-toolbar[data-faded]:not(:focus-within) {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-block-toolbar {
+    transition: none;
+  }
 }
 
 /*
