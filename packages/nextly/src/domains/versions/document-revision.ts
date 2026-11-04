@@ -91,7 +91,7 @@ export function withoutDocumentVersionKeys<T extends Record<string, unknown>>(
  * A row read without its counter is a read that selected too little, never a
  * version: guessing one would publish a version no save produced.
  */
-function revisionOf(value: unknown): number {
+export function revisionOf(value: unknown): number {
   const n = typeof value === "string" ? Number(value) : value;
   if (typeof n === "number" && Number.isInteger(n)) return n;
   throw NextlyError.internal({

@@ -29,11 +29,10 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { StaleVersionPublicData } from "../../errors/public-data";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
 import { COMPANION_UPDATED_AT_COLUMN } from "../i18n/companion-columns";
-
 import type { UserContext } from "../singles/types";
 
 import { peopleById } from "./author-hydration";
-import { DOCUMENT_REVISION_COLUMN } from "./document-revision";
+import { DOCUMENT_REVISION_COLUMN, revisionOf } from "./document-revision";
 
 /** A version as its parts: the main counter, and each language's it names. */
 export interface DecodedVersion {
@@ -43,7 +42,8 @@ export interface DecodedVersion {
 
 // `7`, `7.es:3`, `7.en:2,es:3`: what `encodeDocumentVersion` spells. A
 // language code holds letters, digits and `-` (`pt-BR`), never `.`, `:` or `,`.
-const VERSION_PATTERN = /^(\d+)(?:\.([A-Za-z0-9-]+:\d+(?:,[A-Za-z0-9-]+:\d+)*))?$/;
+const VERSION_PATTERN =
+  /^(\d+)(?:\.([A-Za-z0-9-]+:\d+(?:,[A-Za-z0-9-]+:\d+)*))?$/;
 
 /** The refusal of a version that can't be judged: a client's mistake, not someone's change. */
 function unjudgeable(message: string): NextlyError {
@@ -58,7 +58,7 @@ function unjudgeable(message: string): NextlyError {
  * @throws NextlyError.validation when it is not one, so a typo is never
  *   judged as someone else's change.
  */
-export function decodeDocumentVersion(raw: unknown): DecodedVersion {
+function decodeDocumentVersion(raw: unknown): DecodedVersion {
   const match = typeof raw === "string" ? VERSION_PATTERN.exec(raw) : null;
   if (!match) {
     throw unjudgeable(
@@ -67,14 +67,18 @@ export function decodeDocumentVersion(raw: unknown): DecodedVersion {
   }
   const main = Number(match[1]);
   if (!Number.isSafeInteger(main) || main < 1) {
-    throw unjudgeable(`${DOCUMENT_VERSION_KEY} names a version no document has.`);
+    throw unjudgeable(
+      `${DOCUMENT_VERSION_KEY} names a version no document has.`
+    );
   }
   const languages: Record<string, number> = {};
   for (const part of match[2]?.split(",") ?? []) {
     const [code, counter] = part.split(":");
     const n = Number(counter);
     if (code in languages || !Number.isSafeInteger(n)) {
-      throw unjudgeable(`${DOCUMENT_VERSION_KEY} names a version no document has.`);
+      throw unjudgeable(
+        `${DOCUMENT_VERSION_KEY} names a version no document has.`
+      );
     }
     languages[code] = n;
   }
@@ -105,7 +109,10 @@ export function versionCheckFor(
   body: Readonly<Record<string, unknown>>,
   options: { exempt: boolean }
 ): VersionCheck {
-  if (!(DOCUMENT_VERSION_KEY in body) || body[DOCUMENT_VERSION_KEY] === undefined) {
+  if (
+    !(DOCUMENT_VERSION_KEY in body) ||
+    body[DOCUMENT_VERSION_KEY] === undefined
+  ) {
     return { kind: "unjudged" };
   }
   const raw = body[DOCUMENT_VERSION_KEY];
@@ -114,23 +121,6 @@ export function versionCheckFor(
   const given = decodeDocumentVersion(raw);
   if (options.exempt) return { kind: "unjudged" };
   return { kind: "judge", given, raw: raw as string };
-}
-
-/**
- * A version given in an update of many documents at once, which names one
- * document's version and cannot be judged against the others'.
- *
- * @throws NextlyError.validation when `body` carries `_rev`.
- */
-export function refuseVersionInSharedData(
-  body: Readonly<Record<string, unknown>>
-): void {
-  if (!(DOCUMENT_VERSION_KEY in body) || body[DOCUMENT_VERSION_KEY] === undefined) {
-    return;
-  }
-  throw unjudgeable(
-    `${DOCUMENT_VERSION_KEY} names one document's version, so an update of several documents with the same values can't carry it. Update each document with its own version.`
-  );
 }
 
 /** The document a release run's mark is for. */
@@ -196,14 +186,6 @@ const CHANGER_COLUMNS = [
   "_changed_by_principal_kind",
 ] as const;
 
-function counterOf(value: unknown): number {
-  const n = typeof value === "string" ? Number(value) : value;
-  if (typeof n === "number" && Number.isInteger(n)) return n;
-  throw NextlyError.internal({
-    logContext: { reason: "document-revision-unreadable", value: String(value) },
-  });
-}
-
 function textOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -213,17 +195,24 @@ function textOrNull(value: unknown): string | null {
  * one source of "when", so no two callers can disagree about which change
  * came last. The row's own update time.
  */
-export function changedAtOf(row: Record<string, unknown>, column: string): Date | null {
+function changedAtOf(
+  row: Record<string, unknown>,
+  column: string
+): Date | null {
   const value = row[column];
   if (value === null || value === undefined) return null;
   const at = value instanceof Date ? value : new Date(value as string | number);
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
-function stateOf(part: string, row: Record<string, unknown>, atColumn: string): PartState {
+function stateOf(
+  part: string,
+  row: Record<string, unknown>,
+  atColumn: string
+): PartState {
   return {
     part,
-    counter: counterOf(row[DOCUMENT_REVISION_COLUMN]),
+    counter: revisionOf(row[DOCUMENT_REVISION_COLUMN]),
     changer: {
       kind: textOrNull(row._changed_by_kind),
       id: textOrNull(row._changed_by_id),
@@ -235,7 +224,12 @@ function stateOf(part: string, row: Record<string, unknown>, atColumn: string): 
 
 /** A language with no translation row: counter 0, changed by nobody. */
 function absentPart(part: string): PartState {
-  return { part, counter: 0, changer: { kind: null, id: null, principalKind: null }, at: null };
+  return {
+    part,
+    counter: 0,
+    changer: { kind: null, id: null, principalKind: null },
+    at: null,
+  };
 }
 
 /**
@@ -279,9 +273,15 @@ export async function readDocumentRevision(
   // Named in the statement: a translation table's runtime model does not
   // declare the per-document columns, since the same model serves field-group
   // translation tables, which are no documents.
-  const q = (name: string) => (args.dialect === "mysql" ? `\`${name}\`` : `"${name}"`);
+  const q = (name: string) =>
+    args.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
   const p = (n: number) => (args.dialect === "postgresql" ? `$${n}` : "?");
-  const columns = ["_locale", DOCUMENT_REVISION_COLUMN, ...CHANGER_COLUMNS, COMPANION_UPDATED_AT_COLUMN];
+  const columns = [
+    "_locale",
+    DOCUMENT_REVISION_COLUMN,
+    ...CHANGER_COLUMNS,
+    COMPANION_UPDATED_AT_COLUMN,
+  ];
   const rows = (await db.execute(
     `SELECT ${columns.map(q).join(", ")} FROM ${q(args.languages.table)} WHERE ${q("_parent")} = ${p(1)} AND ${q("_locale")} IN (${locales.map((_, i) => p(i + 2)).join(", ")})`,
     [args.id, ...locales]
@@ -336,7 +336,8 @@ export function staleParts(
   if (args.main && args.main.counter !== given.main) stale.push("main");
   const language = args.languageAfterWrite;
   if (language) {
-    const expected = (given.languages[language.locale] ?? 0) + (language.bumped ? 1 : 0);
+    const expected =
+      (given.languages[language.locale] ?? 0) + (language.bumped ? 1 : 0);
     if (language.state.counter !== expected) stale.push(language.locale);
   }
   return stale;
@@ -403,6 +404,35 @@ const CHANGER_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * A last changer as a refusal shows it: a person by the name their account
+ * gives now, never their email, and no name once the account is gone; a
+ * plugin-defined person by their kind alone; anything else by its kind.
+ * Undefined for a kind this version of Nextly does not know.
+ */
+async function shownChanger(
+  changer: LastChanger
+): Promise<StaleVersionPublicData["changedBy"]> {
+  if (!CHANGER_KINDS.has(changer.kind)) return undefined;
+  const kind = changer.kind as NonNullable<
+    StaleVersionPublicData["changedBy"]
+  >["kind"];
+  if (kind === "principal") {
+    return {
+      kind,
+      name: null,
+      ...(changer.principalKind
+        ? { principalKind: changer.principalKind }
+        : {}),
+    };
+  }
+  const person =
+    kind === "person" && changer.id
+      ? (await peopleById([changer.id])).get(changer.id)
+      : undefined;
+  return { kind, name: person?.name || null };
+}
+
+/**
  * The refusal of an update made from an out-of-date version.
  *
  * The current version always. Who or what changed it last, and when, only
@@ -426,24 +456,17 @@ export async function staleVersionRefusal(args: {
   const data: StaleVersionPublicData = { currentVersion: args.currentVersion };
   if (await args.mayRead()) {
     const changer = lastChangerOf(args.parts, args.given);
-    if (changer && CHANGER_KINDS.has(changer.kind)) {
-      const name =
-        changer.kind === "person" && changer.id
-          ? ((await peopleById([changer.id])).get(changer.id)?.name ?? null) || null
-          : null;
-      data.changedBy = {
-        kind: changer.kind as NonNullable<StaleVersionPublicData["changedBy"]>["kind"],
-        name,
-        ...(changer.kind === "principal" && changer.principalKind
-          ? { principalKind: changer.principalKind }
-          : {}),
-      };
-    }
+    const changedBy = changer ? await shownChanger(changer) : undefined;
+    if (changedBy) data.changedBy = changedBy;
     if (changer?.at) data.changedAt = changer.at.toISOString();
   }
   return NextlyError.staleVersion({
     data,
-    logContext: { ...args.logContext, given: args.given, current: args.currentVersion },
+    logContext: {
+      ...args.logContext,
+      given: args.given,
+      current: args.currentVersion,
+    },
   });
 }
 

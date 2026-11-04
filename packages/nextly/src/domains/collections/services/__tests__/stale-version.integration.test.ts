@@ -30,7 +30,12 @@ const LANGUAGES = `dc_${DOCS}_locales`;
 /** No languages: the plainest entry there is. */
 const NOTES = "notes";
 /** A person whose saves are named in a refusal. */
-const ANA = { id: "user-ana", name: "Ana Ruiz", email: "ana@x.test", role: "admin" };
+const ANA = {
+  id: "user-ana",
+  name: "Ana Ruiz",
+  email: "ana@x.test",
+  role: "admin",
+};
 
 const OPEN = {
   read: () => true,
@@ -80,12 +85,14 @@ type Result = {
   statusCode?: number;
   code?: string;
   data?: Record<string, unknown> | null;
+  publicData?: Record<string, unknown>;
 };
 
 /** The `_rev` a service result carries. */
 function revOf(result: unknown): string {
   const rev = (result as Result).data?._rev;
-  if (typeof rev !== "string") throw new Error(`no _rev on ${JSON.stringify(result)}`);
+  if (typeof rev !== "string")
+    throw new Error(`no _rev on ${JSON.stringify(result)}`);
   return rev;
 }
 
@@ -115,7 +122,8 @@ const handlerOf = (t: TestNextly): CollectionsHandler =>
 
 function idOf(result: unknown): string {
   const id = (result as { data?: { id?: unknown } }).data?.id;
-  if (typeof id !== "string") throw new Error(`no id on ${JSON.stringify(result)}`);
+  if (typeof id !== "string")
+    throw new Error(`no id on ${JSON.stringify(result)}`);
   return id;
 }
 
@@ -133,7 +141,10 @@ async function languageCounters(
     [...ids]
   );
   return Object.fromEntries(
-    rows.map(row => [`${String(row._parent)}.${String(row._locale)}`, Number(row._revision)])
+    rows.map(row => [
+      `${String(row._parent)}.${String(row._locale)}`,
+      Number(row._revision),
+    ])
   );
 }
 
@@ -151,38 +162,54 @@ function holdInsertsInto(
   table: string,
   parties: number
 ): { arrived: () => number; release: () => void } {
-  const pattern = new RegExp(`^\\s*insert\\s+into\\s+[\`"]?${table}[\`"]?\\s`, "i");
+  const pattern = new RegExp(
+    `^\\s*insert\\s+into\\s+[\`"]?${table}[\`"]?\\s`,
+    "i"
+  );
   let waiting = 0;
   let open!: () => void;
   const allHere = new Promise<void>(resolve => {
     open = resolve;
   });
   const adapter = t.adapter as unknown as {
-    transaction: (callback: (tx: unknown) => Promise<unknown>, ...rest: unknown[]) => Promise<unknown>;
+    transaction: (
+      callback: (tx: unknown) => Promise<unknown>,
+      ...rest: unknown[]
+    ) => Promise<unknown>;
   };
   const original = adapter.transaction.bind(adapter);
   adapter.transaction = (callback, ...rest) =>
-    original(tx => {
-      const ctx = tx as { execute: (sql: string, params?: unknown[]) => Promise<unknown> };
-      const execute = ctx.execute.bind(ctx);
-      ctx.execute = async (sql, params) => {
-        if (pattern.test(sql)) {
-          waiting += 1;
-          if (waiting === parties) open();
-          await Promise.race([
-            allHere,
-            new Promise((_, reject) =>
-              setTimeout(
-                () => reject(new Error(`only ${waiting} of ${parties} saves reached the insert into ${table}`)),
-                10_000
-              )
-            ),
-          ]);
-        }
-        return execute(sql, params);
-      };
-      return callback(ctx);
-    }, ...rest);
+    original(
+      tx => {
+        const ctx = tx as {
+          execute: (sql: string, params?: unknown[]) => Promise<unknown>;
+        };
+        const execute = ctx.execute.bind(ctx);
+        ctx.execute = async (sql, params) => {
+          if (pattern.test(sql)) {
+            waiting += 1;
+            if (waiting === parties) open();
+            await Promise.race([
+              allHere,
+              new Promise((_, reject) =>
+                setTimeout(
+                  () =>
+                    reject(
+                      new Error(
+                        `only ${waiting} of ${parties} saves reached the insert into ${table}`
+                      )
+                    ),
+                  10_000
+                )
+              ),
+            ]);
+          }
+          return execute(sql, params);
+        };
+        return callback(ctx);
+      },
+      ...rest
+    );
   return {
     arrived: () => waiting,
     release: () => {
@@ -191,216 +218,302 @@ function holdInsertsInto(
   };
 }
 
-describe.each(getConfiguredTestDialects())("stale versions of a collection entry (%s)", dialect => {
-  // SQLite runs one write transaction at a time, so two saves can never both
-  // be inside theirs: the second waits for the first to commit.
-  it.skipIf(dialect === "sqlite")(
-    "applies two entries' first translations, saved at the same moment, when no translation row is near",
-    async () => {
-      const t = await boot(dialect);
-      // Entries with no translation row at all, as entries saved before
-      // translation was turned on are: each entry's first Spanish row then
-      // falls in the same empty stretch of the translation table's key. On
-      // MySQL a locking read of a row that isn't there locks that stretch,
-      // and two saves that each lock it and then insert into it deadlock.
-      const ids = [];
-      for (const note of ["a", "b"]) {
-        ids.push(
-          idOf(
-            await handlerOf(t).createEntry(
-              { collectionName: DOCS, overrideAccess: true, locale: "en" },
-              { note }
+describe.each(getConfiguredTestDialects())(
+  "stale versions of a collection entry (%s)",
+  dialect => {
+    // SQLite runs one write transaction at a time, so two saves can never both
+    // be inside theirs: the second waits for the first to commit.
+    it.skipIf(dialect === "sqlite")(
+      "applies two entries' first translations, saved at the same moment, when no translation row is near",
+      async () => {
+        const t = await boot(dialect);
+        // Entries with no translation row at all, as entries saved before
+        // translation was turned on are: each entry's first Spanish row then
+        // falls in the same empty stretch of the translation table's key. On
+        // MySQL a locking read of a row that isn't there locks that stretch,
+        // and two saves that each lock it and then insert into it deadlock.
+        const ids = [];
+        for (const note of ["a", "b"]) {
+          ids.push(
+            idOf(
+              await handlerOf(t).createEntry(
+                { collectionName: DOCS, overrideAccess: true, locale: "en" },
+                { note }
+              )
             )
-          )
-        );
-      }
-      // A create writes its own language's row, so the rows are removed to
-      // stand for entries that predate translation.
-      await t.adapter.executeQuery(`DELETE FROM ${q(t, LANGUAGES)}`, []);
-      expect(await languageCounters(t, ids)).toEqual({});
-
-      const gate = holdInsertsInto(t, LANGUAGES, 2);
-      try {
-        const saved = await Promise.all(
-          ids.map(id =>
-            handlerOf(t).updateEntry(
-              { collectionName: DOCS, entryId: id, overrideAccess: true, locale: "es" },
-              { title: `hola ${id}` }
-            )
-          )
-        );
-        expect(gate.arrived()).toBe(2);
-        // The whole result on failure, so a refused save says why.
-        for (const result of saved) {
-          expect((result as { success?: unknown }).success, JSON.stringify(result)).toBe(true);
+          );
         }
-      } finally {
-        gate.release();
-      }
-      expect(await languageCounters(t, ids)).toEqual({
-        [`${ids[0]}.es`]: 1,
-        [`${ids[1]}.es`]: 1,
-      });
-    }
-  );
+        // A create writes its own language's row, so the rows are removed to
+        // stand for entries that predate translation.
+        await t.adapter.executeQuery(`DELETE FROM ${q(t, LANGUAGES)}`, []);
+        expect(await languageCounters(t, ids)).toEqual({});
 
-  it.skipIf(dialect === "sqlite")(
-    "applies two entries' first Spanish saves at the same moment when each already has an English row",
-    async () => {
-      const t = await boot(dialect);
-      const ids = [];
-      for (const title of ["a", "b"]) {
-        ids.push(
-          idOf(
-            await handlerOf(t).createEntry(
-              { collectionName: DOCS, overrideAccess: true, locale: "en" },
-              { title, note: title }
+        const gate = holdInsertsInto(t, LANGUAGES, 2);
+        try {
+          const saved = await Promise.all(
+            ids.map(id =>
+              handlerOf(t).updateEntry(
+                {
+                  collectionName: DOCS,
+                  entryId: id,
+                  overrideAccess: true,
+                  locale: "es",
+                },
+                { title: `hola ${id}` }
+              )
             )
-          )
-        );
+          );
+          expect(gate.arrived()).toBe(2);
+          // The whole result on failure, so a refused save says why.
+          for (const result of saved) {
+            expect(
+              (result as { success?: unknown }).success,
+              JSON.stringify(result)
+            ).toBe(true);
+          }
+        } finally {
+          gate.release();
+        }
+        expect(await languageCounters(t, ids)).toEqual({
+          [`${ids[0]}.es`]: 1,
+          [`${ids[1]}.es`]: 1,
+        });
       }
-      expect(Object.keys(await languageCounters(t, ids)).sort()).toEqual(
-        ids.map(id => `${id}.en`).sort()
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "applies two entries' first Spanish saves at the same moment when each already has an English row",
+      async () => {
+        const t = await boot(dialect);
+        const ids = [];
+        for (const title of ["a", "b"]) {
+          ids.push(
+            idOf(
+              await handlerOf(t).createEntry(
+                { collectionName: DOCS, overrideAccess: true, locale: "en" },
+                { title, note: title }
+              )
+            )
+          );
+        }
+        expect(Object.keys(await languageCounters(t, ids)).sort()).toEqual(
+          ids.map(id => `${id}.en`).sort()
+        );
+
+        const gate = holdInsertsInto(t, LANGUAGES, 2);
+        try {
+          const saved = await Promise.all(
+            ids.map(id =>
+              handlerOf(t).updateEntry(
+                {
+                  collectionName: DOCS,
+                  entryId: id,
+                  overrideAccess: true,
+                  locale: "es",
+                },
+                { title: `hola ${id}` }
+              )
+            )
+          );
+          expect(gate.arrived()).toBe(2);
+          // The whole result on failure, so a refused save says why.
+          for (const result of saved) {
+            expect(
+              (result as { success?: unknown }).success,
+              JSON.stringify(result)
+            ).toBe(true);
+          }
+        } finally {
+          gate.release();
+        }
+        const counters = await languageCounters(t, ids);
+        expect(counters[`${ids[0]}.es`]).toBe(1);
+        expect(counters[`${ids[1]}.es`]).toBe(1);
+      }
+    );
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "judging an update by the version it gives (%s)",
+  dialect => {
+    it("refuses a save from a version someone else's save replaced, and leaves the entry as it was", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "first" }
       );
+      const id = idOf(created);
+      const read = revOf(created);
+      const theirs = await update(
+        t,
+        NOTES,
+        id,
+        { title: "theirs", _rev: read },
+        { user: ANA }
+      );
+      expect(theirs.success, JSON.stringify(theirs)).toBe(true);
 
-      const gate = holdInsertsInto(t, LANGUAGES, 2);
-      try {
-        const saved = await Promise.all(
-          ids.map(id =>
-            handlerOf(t).updateEntry(
-              { collectionName: DOCS, entryId: id, overrideAccess: true, locale: "es" },
-              { title: `hola ${id}` }
-            )
-          )
-        );
-        expect(gate.arrived()).toBe(2);
-        // The whole result on failure, so a refused save says why.
-        for (const result of saved) {
-          expect((result as { success?: unknown }).success, JSON.stringify(result)).toBe(true);
-        }
-      } finally {
-        gate.release();
+      const mine = await update(t, NOTES, id, { title: "mine", _rev: read });
+      expect(mine).toMatchObject({
+        success: false,
+        statusCode: 409,
+        code: "STALE_VERSION",
+      });
+      expect(mine.publicData).toMatchObject({ currentVersion: revOf(theirs) });
+      // The entry keeps the save that came in between.
+      expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
+    });
+
+    it("applies a save from the current version, and one that gives none", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "first" }
+      );
+      const id = idOf(created);
+      const second = await update(t, NOTES, id, {
+        title: "second",
+        _rev: revOf(created),
+      });
+      expect(second.success, JSON.stringify(second)).toBe(true);
+      const third = await update(t, NOTES, id, {
+        title: "third",
+        _rev: revOf(second),
+      });
+      expect(third.success, JSON.stringify(third)).toBe(true);
+      const unjudged = await update(t, NOTES, id, { title: "fourth" });
+      expect(unjudged.success, JSON.stringify(unjudged)).toBe(true);
+      expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("fourth");
+    });
+
+    it("refuses with 400 a version that is not one, and one from a read of another language", async () => {
+      const t = await boot(dialect);
+      const note = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: NOTES, overrideAccess: true },
+          { title: "a" }
+        )
+      );
+      for (const rev of ["", "seven", "0", "7.", "7.es", 7]) {
+        const result = await update(t, NOTES, note, { title: "b", _rev: rev });
+        expect(result, JSON.stringify(rev)).toMatchObject({
+          success: false,
+          statusCode: 400,
+        });
       }
-      const counters = await languageCounters(t, ids);
-      expect(counters[`${ids[0]}.es`]).toBe(1);
-      expect(counters[`${ids[1]}.es`]).toBe(1);
-    }
-  );
-});
+      const doc = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello" }
+      );
+      const result = await update(
+        t,
+        DOCS,
+        idOf(doc),
+        { title: "hola", _rev: revOf(doc) },
+        { locale: "es" }
+      );
+      expect(result).toMatchObject({ success: false, statusCode: 400 });
+      expect((await stored(t, `dc_${NOTES}`, note)).title).toBe("a");
+    });
 
-describe.each(getConfiguredTestDialects())("judging an update by the version it gives (%s)", dialect => {
-  it("refuses a save from a version someone else's save replaced, and leaves the entry as it was", async () => {
-    const t = await boot(dialect);
-    const created = await handlerOf(t).createEntry(
-      { collectionName: NOTES, overrideAccess: true },
-      { title: "first" }
-    );
-    const id = idOf(created);
-    const read = revOf(created);
-    const theirs = await update(t, NOTES, id, { title: "theirs", _rev: read }, { user: ANA });
-    expect(theirs.success, JSON.stringify(theirs)).toBe(true);
+    it("judges a translated save on its own language and the shared fields, not on other languages", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      const es = await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      const readEs = revOf(es);
 
-    const mine = await update(t, NOTES, id, { title: "mine", _rev: read });
-    expect(mine).toMatchObject({ success: false, statusCode: 409, code: "STALE_VERSION" });
-    expect(mine.data).toMatchObject({ currentVersion: revOf(theirs) });
-    // The entry keeps the save that came in between.
-    expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
-  });
+      // English changes: a Spanish save from before it is still current.
+      await update(t, DOCS, id, { title: "hello again" }, { locale: "en" });
+      const fine = await update(
+        t,
+        DOCS,
+        id,
+        { title: "hola de nuevo", _rev: readEs },
+        { locale: "es" }
+      );
+      expect(fine.success, JSON.stringify(fine)).toBe(true);
 
-  it("applies a save from the current version, and one that gives none", async () => {
-    const t = await boot(dialect);
-    const created = await handlerOf(t).createEntry(
-      { collectionName: NOTES, overrideAccess: true },
-      { title: "first" }
-    );
-    const id = idOf(created);
-    const second = await update(t, NOTES, id, { title: "second", _rev: revOf(created) });
-    expect(second.success, JSON.stringify(second)).toBe(true);
-    const third = await update(t, NOTES, id, { title: "third", _rev: revOf(second) });
-    expect(third.success, JSON.stringify(third)).toBe(true);
-    const unjudged = await update(t, NOTES, id, { title: "fourth" });
-    expect(unjudged.success, JSON.stringify(unjudged)).toBe(true);
-    expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("fourth");
-  });
+      // Spanish changes: a Spanish save from before it is out of date.
+      const stale = await update(
+        t,
+        DOCS,
+        id,
+        { title: "adios", _rev: readEs },
+        { locale: "es" }
+      );
+      expect(stale).toMatchObject({
+        success: false,
+        statusCode: 409,
+        code: "STALE_VERSION",
+      });
+      expect(stale.publicData).toMatchObject({ currentVersion: revOf(fine) });
 
-  it("refuses with 400 a version that is not one, and one from a read of another language", async () => {
-    const t = await boot(dialect);
-    const note = idOf(
-      await handlerOf(t).createEntry({ collectionName: NOTES, overrideAccess: true }, { title: "a" })
-    );
-    for (const rev of ["", "seven", "0", "7.", "7.es", 7]) {
-      const result = await update(t, NOTES, note, { title: "b", _rev: rev });
-      expect(result, JSON.stringify(rev)).toMatchObject({ success: false, statusCode: 400 });
-    }
-    const doc = await handlerOf(t).createEntry(
-      { collectionName: DOCS, overrideAccess: true, locale: "en" },
-      { title: "hello" }
-    );
-    const result = await update(t, DOCS, idOf(doc), { title: "hola", _rev: revOf(doc) }, { locale: "es" });
-    expect(result).toMatchObject({ success: false, statusCode: 400 });
-    expect((await stored(t, `dc_${NOTES}`, note)).title).toBe("a");
-  });
+      // A shared field changes: every language's save from before it is out of date.
+      const current = revOf(fine);
+      await update(t, DOCS, id, { note: "shared" }, { locale: "en" });
+      const afterShared = await update(
+        t,
+        DOCS,
+        id,
+        { title: "otra", _rev: current },
+        { locale: "es" }
+      );
+      expect(afterShared).toMatchObject({
+        success: false,
+        statusCode: 409,
+        code: "STALE_VERSION",
+      });
+      const counters = await languageCounters(t, [id]);
+      expect(counters[`${id}.es`]).toBe(2);
+    });
 
-  it("judges a translated save on its own language and the shared fields, not on other languages", async () => {
-    const t = await boot(dialect);
-    const created = await handlerOf(t).createEntry(
-      { collectionName: DOCS, overrideAccess: true, locale: "en" },
-      { title: "hello", note: "n" }
-    );
-    const id = idOf(created);
-    const es = await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
-    const readEs = revOf(es);
+    it("names who changed it last and when, to a caller who may read it, and never a value", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "first" }
+      );
+      const id = idOf(created);
+      const before = Date.now();
+      await update(t, NOTES, id, { title: "secret words" }, { user: ANA });
+      const refused = await update(t, NOTES, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(refused.publicData).toMatchObject({
+        changedBy: { kind: "person", name: ANA.name },
+      });
+      const at = Date.parse(String(refused.publicData?.changedAt));
+      expect(at).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+      expect(JSON.stringify(refused)).not.toContain("secret words");
+      expect(JSON.stringify(refused)).not.toContain(ANA.email);
+      expect(JSON.stringify(refused)).not.toContain(ANA.id);
+    });
 
-    // English changes: a Spanish save from before it is still current.
-    await update(t, DOCS, id, { title: "hello again" }, { locale: "en" });
-    const fine = await update(t, DOCS, id, { title: "hola de nuevo", _rev: readEs }, { locale: "es" });
-    expect(fine.success, JSON.stringify(fine)).toBe(true);
-
-    // Spanish changes: a Spanish save from before it is out of date.
-    const stale = await update(t, DOCS, id, { title: "adios", _rev: readEs }, { locale: "es" });
-    expect(stale).toMatchObject({ success: false, statusCode: 409, code: "STALE_VERSION" });
-    expect(stale.data).toMatchObject({ currentVersion: revOf(fine) });
-
-    // A shared field changes: every language's save from before it is out of date.
-    const current = revOf(fine);
-    await update(t, DOCS, id, { note: "shared" }, { locale: "en" });
-    const afterShared = await update(t, DOCS, id, { title: "otra", _rev: current }, { locale: "es" });
-    expect(afterShared).toMatchObject({ success: false, statusCode: 409, code: "STALE_VERSION" });
-    const counters = await languageCounters(t, [id]);
-    expect(counters[`${id}.es`]).toBe(2);
-  });
-
-  it("names who changed it last and when, to a caller who may read it, and never a value", async () => {
-    const t = await boot(dialect);
-    const created = await handlerOf(t).createEntry(
-      { collectionName: NOTES, overrideAccess: true },
-      { title: "first" }
-    );
-    const id = idOf(created);
-    const before = Date.now();
-    await update(t, NOTES, id, { title: "secret words" }, { user: ANA });
-    const refused = await update(t, NOTES, id, { title: "mine", _rev: revOf(created) });
-    expect(refused).toMatchObject({ code: "STALE_VERSION" });
-    expect(refused.data).toMatchObject({ changedBy: { kind: "person", name: ANA.name } });
-    const at = Date.parse(String(refused.data?.changedAt));
-    expect(at).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
-    expect(JSON.stringify(refused)).not.toContain("secret words");
-    expect(JSON.stringify(refused)).not.toContain(ANA.email);
-    expect(JSON.stringify(refused)).not.toContain(ANA.id);
-  });
-
-  it("applies exactly one of two saves made from the same version at once", async () => {
-    const t = await boot(dialect);
-    const created = await handlerOf(t).createEntry(
-      { collectionName: NOTES, overrideAccess: true },
-      { title: "first" }
-    );
-    const id = idOf(created);
-    const results = await Promise.all(
-      ["one", "two"].map(title => update(t, NOTES, id, { title, _rev: revOf(created) }))
-    );
-    expect(results.filter(r => r.success).length, JSON.stringify(results)).toBe(1);
-    expect(results.filter(r => r.code === "STALE_VERSION").length).toBe(1);
-    expect(Number((await stored(t, `dc_${NOTES}`, id))._revision)).toBe(2);
-  });
-});
+    it("applies exactly one of two saves made from the same version at once", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "first" }
+      );
+      const id = idOf(created);
+      const results = await Promise.all(
+        ["one", "two"].map(title =>
+          update(t, NOTES, id, { title, _rev: revOf(created) })
+        )
+      );
+      expect(
+        results.filter(r => r.success).length,
+        JSON.stringify(results)
+      ).toBe(1);
+      expect(results.filter(r => r.code === "STALE_VERSION").length).toBe(1);
+      expect(Number((await stored(t, `dc_${NOTES}`, id))._revision)).toBe(2);
+    });
+  }
+);

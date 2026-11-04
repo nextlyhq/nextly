@@ -274,17 +274,6 @@ import {
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
 import {
-  callerMayReadDocument,
-  type DecodedVersion,
-  judgedLanguage,
-  readDocumentRevision,
-  releaseRunExemptFor,
-  staleParts,
-  staleVersionRefusal,
-  type VersionCheck,
-  versionCheckFor,
-} from "../../versions/stale-version";
-import {
   draftComponentValues,
   mergeComponentPatches,
 } from "../../versions/draft-components";
@@ -315,6 +304,17 @@ import {
   takeLiveSharedValuesInto,
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
+import {
+  callerMayReadDocument,
+  type DecodedVersion,
+  judgedLanguage,
+  readDocumentRevision,
+  releaseRunExemptFor,
+  staleParts,
+  staleVersionRefusal,
+  type VersionCheck,
+  versionCheckFor,
+} from "../../versions/stale-version";
 import {
   containedComponentResolver,
   rehydrateSnapshotDates,
@@ -444,6 +444,15 @@ function asMissingItem<T>(
     return refused;
   }
   return { ...refused, message: missingEntryMessage(entryId, identify) };
+}
+
+/**
+ * Where a save found out of date inside its transaction is answered from,
+ * once the transaction has rolled back: its table, and the translation table
+ * and language when it was its language that moved.
+ */
+interface StaleWriteHolder {
+  at?: { table: string; languages?: { table: string; locale: string } };
 }
 
 /**
@@ -10149,13 +10158,133 @@ export class CollectionMutationService extends BaseService {
     return { workingDraftDocument, priorWorkingDraftDocument };
   }
 
+  /**
+   * Refuse, inside the write's transaction, a save whose main row moved since
+   * the version it gives. Read under the row lock (`forUpdate`): on MySQL a
+   * plain read returns what the transaction saw when it began, which a save
+   * in a caller's longer transaction could have read long before.
+   */
+  private async refuseIfMainMoved(
+    tx: TransactionContext,
+    check: VersionCheck,
+    row: { table: string; id: string },
+    holder: StaleWriteHolder
+  ): Promise<void> {
+    if (check.kind !== "judge") return;
+    const locked = await readDocumentRevision(tx, {
+      dialect: this.dialect,
+      table: row.table,
+      id: row.id,
+      forUpdate: true,
+    });
+    if (!locked || staleParts(check.given, { main: locked.main }).length === 0)
+      return;
+    holder.at = { table: row.table };
+    throw NextlyError.staleVersion({
+      data: { currentVersion: String(locked.main.counter) },
+    });
+  }
+
+  /**
+   * Refuse a save whose language moved since the version it gives, judged
+   * once the save has written that language's row: the row then exists and
+   * this transaction holds it, so its counter is the given one plus this
+   * save's own. A read of it before the write would lock a row that may not
+   * exist yet, which on MySQL locks a range of the table's key and deadlocks
+   * two documents' first translations saved at once.
+   */
+  private async refuseIfLanguageMoved(
+    tx: TransactionContext,
+    check: VersionCheck,
+    row: {
+      table: string;
+      id: string;
+      languagesTable: string;
+      /** The language the save is judged on, if any. */
+      judged: string | undefined;
+      /** The language whose row this save just wrote. */
+      written: string;
+    },
+    holder: StaleWriteHolder
+  ): Promise<void> {
+    if (check.kind !== "judge" || row.judged !== row.written) return;
+    const written = await readDocumentRevision(tx, {
+      dialect: this.dialect,
+      table: row.table,
+      id: row.id,
+      languages: { table: row.languagesTable, locales: [row.written] },
+    });
+    const state = written?.languages[row.written];
+    if (
+      !state ||
+      staleParts(check.given, {
+        languageAfterWrite: { locale: row.written, state, bumped: true },
+      }).length === 0
+    )
+      return;
+    holder.at = {
+      table: row.table,
+      languages: { table: row.languagesTable, locale: row.written },
+    };
+    throw NextlyError.staleVersion({
+      data: { currentVersion: String(state.counter) },
+    });
+  }
+
+  /**
+   * How an update is judged, decided from its body before the version in it
+   * is dropped: a release run's own write is exempt, and nothing a caller
+   * sends can make a write one. A version that is not one is answered as the
+   * validation error it is.
+   */
+  private versionCheckOf(
+    target: { collectionName: string; entryId: string },
+    body: Record<string, unknown>
+  ): VersionCheck | CollectionServiceResult {
+    try {
+      return versionCheckFor(body, {
+        exempt: releaseRunExemptFor({
+          scopeKind: "collection",
+          scopeSlug: target.collectionName,
+          entryId: target.entryId,
+        }),
+      });
+    } catch (error) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
+  }
+
+  /**
+   * The refusal of a save whose version is below the one the entry already
+   * holds, before any hook runs: a counter only goes up, so such a version is
+   * certainly out of date. Null otherwise, for the row lock to decide.
+   */
+  private async certainlyStaleAnswer(
+    params: Parameters<CollectionMutationService["staleVersionAnswer"]>[0],
+    check: VersionCheck,
+    table: string
+  ): Promise<CollectionServiceResult | null> {
+    if (check.kind !== "judge") return null;
+    const inHand = await readDocumentRevision(this.poolRevisionReader(), {
+      dialect: this.dialect,
+      table,
+      id: params.entryId,
+    });
+    if (!inHand || inHand.main.counter <= check.given.main) return null;
+    return this.staleVersionAnswer(params, check.given, { table });
+  }
+
   /** The pool, as `readDocumentRevision` reads it outside a transaction. */
   private poolRevisionReader(): Parameters<typeof readDocumentRevision>[0] {
     return {
       select: (table, options) => this.adapter.select(table, options),
       execute: (statement, params) =>
         this.adapter.executeQuery(statement, params),
-    } as Parameters<typeof readDocumentRevision>[0];
+    };
   }
 
   /**
@@ -10304,22 +10433,8 @@ export class CollectionMutationService extends BaseService {
     // Judged against the version the caller read, when it sent one: decided
     // here, before the version is dropped below. A release run's own write is
     // exempt, and nothing a caller sends can make a write one.
-    let versionCheck: VersionCheck;
-    try {
-      versionCheck = versionCheckFor(body, {
-        exempt: releaseRunExemptFor({
-          scopeKind: "collection",
-          scopeSlug: rawParams.collectionName,
-          entryId: rawParams.entryId,
-        }),
-      });
-    } catch (error) {
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to update entry" },
-        this.dialect
-      );
-    }
+    const versionCheck = this.versionCheckOf(rawParams, body);
+    if ("success" in versionCheck) return versionCheck;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
@@ -10418,9 +10533,7 @@ export class CollectionMutationService extends BaseService {
     const lockedPromotion: { refusal?: NextlyError } = {};
     // Set when the version the caller gave is found out of date inside the
     // transaction: where to read the current one once it has rolled back.
-    let staleWrite:
-      | { table: string; languages?: { table: string; locale: string } }
-      | undefined;
+    const staleWrite: StaleWriteHolder = {};
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
     // the event step so each real transition is reported once.
@@ -10628,18 +10741,12 @@ export class CollectionMutationService extends BaseService {
       // A version below the one the entry already held when it was read is
       // certainly out of date, since a counter only goes up: refused here,
       // before any hook runs. Any other is judged under the row lock.
-      if (versionCheck.kind === "judge") {
-        const inHand = await readDocumentRevision(this.poolRevisionReader(), {
-          dialect: this.dialect,
-          table: tableName,
-          id: params.entryId,
-        });
-        if (inHand && inHand.main.counter > versionCheck.given.main) {
-          return this.staleVersionAnswer(params, versionCheck.given, {
-            table: tableName,
-          });
-        }
-      }
+      const certainlyStale = await this.certainlyStaleAnswer(
+        params,
+        versionCheck,
+        tableName
+      );
+      if (certainlyStale) return certainlyStale;
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
@@ -11329,23 +11436,12 @@ export class CollectionMutationService extends BaseService {
           await tx.lockRow(tableName, params.entryId);
           // The main row's version, read under the lock as it is now: a save
           // committed since the caller read leaves it out of date.
-          if (versionCheck.kind === "judge") {
-            const locked = await readDocumentRevision(tx, {
-              dialect: this.dialect,
-              table: tableName,
-              id: params.entryId,
-              forUpdate: true,
-            });
-            if (
-              locked &&
-              staleParts(versionCheck.given, { main: locked.main }).length > 0
-            ) {
-              staleWrite = { table: tableName };
-              throw NextlyError.staleVersion({
-                data: { currentVersion: String(locked.main.counter) },
-              });
-            }
-          }
+          await this.refuseIfMainMoved(
+            tx,
+            versionCheck,
+            { table: tableName, id: params.entryId },
+            staleWrite
+          );
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -12139,47 +12235,19 @@ export class CollectionMutationService extends BaseService {
               { savedBy: actorForWrite(params.actor, params.user) }
             );
             // The language's version, judged once this save has written its
-            // row: the row then exists and this transaction holds it, so its
-            // counter is the given one plus this save's own. A read of it
-            // before the write would lock a row that may not exist yet, which
-            // on MySQL locks a range of the table's key and deadlocks two
-            // documents' first translations saved at once.
-            if (
-              versionCheck.kind === "judge" &&
-              judgedLocale === localizedUpdate.writeLocale
-            ) {
-              const written = await readDocumentRevision(tx, {
-                dialect: this.dialect,
+            // row (see `refuseIfLanguageMoved`).
+            await this.refuseIfLanguageMoved(
+              tx,
+              versionCheck,
+              {
                 table: tableName,
                 id: params.entryId,
-                languages: {
-                  table: localizedUpdate.companionTableName,
-                  locales: [judgedLocale],
-                },
-              });
-              const state = written?.languages[judgedLocale];
-              if (
-                state &&
-                staleParts(versionCheck.given, {
-                  languageAfterWrite: {
-                    locale: judgedLocale,
-                    state,
-                    bumped: true,
-                  },
-                }).length > 0
-              ) {
-                staleWrite = {
-                  table: tableName,
-                  languages: {
-                    table: localizedUpdate.companionTableName,
-                    locale: judgedLocale,
-                  },
-                };
-                throw NextlyError.staleVersion({
-                  data: { currentVersion: String(state.counter) },
-                });
-              }
-            }
+                languagesTable: localizedUpdate.companionTableName,
+                judged: judgedLocale,
+                written: localizedUpdate.writeLocale,
+              },
+              staleWrite
+            );
           }
 
           // {@link EVERY_LOCALE}: carry the lifecycle to the languages the write
@@ -13316,8 +13384,12 @@ export class CollectionMutationService extends BaseService {
       }
       // Answered after the rollback, from the document as it now is, so the
       // refusal names the save that came in between rather than this one.
-      if (staleWrite && versionCheck.kind === "judge") {
-        return this.staleVersionAnswer(params, versionCheck.given, staleWrite);
+      if (staleWrite.at && versionCheck.kind === "judge") {
+        return this.staleVersionAnswer(
+          params,
+          versionCheck.given,
+          staleWrite.at
+        );
       }
       if (lockedPromotion.refusal) {
         return errorToServiceResult(
