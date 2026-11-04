@@ -113,8 +113,9 @@ function optionLabel(item: LayoutChoice, site: LayoutSite): string {
  * The picker's view of `stored`, given where the choices read stands.
  *
  * Every state, in the words the editor uses:
- * - the default: "Site default (Main)", or "Site default (none set)" when the
- *   site has no published default;
+ * - the default: "Site default", with the default Layout's name as its note
+ *   ("Main"), or "Site default (none set)" when the site has no published
+ *   default;
  * - a published Layout by its title; an unpublished one marked as such;
  * - a Layout the answer does not hold, hidden from the author or deleted:
  *   "A Layout you can't view, or one that was deleted";
@@ -266,7 +267,7 @@ function choiceOptions(
       : fencedOption(item.removal, item.id === selected)),
   });
   return [
-    { value: SITE_DEFAULT_VALUE, label: defaultLabel(meta, items) },
+    { value: SITE_DEFAULT_VALUE, ...defaultWords(meta, items) },
     ...items.filter(item => item.published).map(toOption),
     ...items.filter(item => !item.published).map(toOption),
     NONE_OPTION,
@@ -304,18 +305,25 @@ function unknownLayoutView(
   };
 }
 
-/** The default option's words: which Layout it is, or why it is not one. */
-function defaultLabel(
+/**
+ * The default option's words: which Layout it is, or why it is not one. The
+ * Layout's name is the option's note, muted beside "Site default", rather than
+ * part of its label: a default named "Default (site)" would otherwise read
+ * "Site default (Default (site))".
+ */
+function defaultWords(
   meta: LayoutChoicesResponse["meta"],
   items: readonly LayoutChoice[]
-): string {
+): Pick<PickerOption, "label" | "note"> {
   if (meta.defaultUnreadable) {
-    return "Site default (a Layout you can't view, or one that was deleted)";
+    return {
+      label: "Site default (a Layout you can't view, or one that was deleted)",
+    };
   }
   const usable = items.find(item => item.id === meta.defaultLayout);
   return usable?.published === true
-    ? `Site default (${usable.title})`
-    : "Site default (none set)";
+    ? { label: "Site default", note: usable.title }
+    : { label: "Site default (none set)" };
 }
 
 /** The Layout the page is drawn inside, from its listed row. */
@@ -353,15 +361,19 @@ function whyLine(
   named: string | null
 ): string {
   if (resolution.kind === "none") return whyNothingShows(resolution, byId);
-  const title =
-    resolution.id === UNREADABLE_DEFAULT
-      ? "a Layout you can't view, or one that was deleted"
-      : (byId.get(resolution.id)?.title ?? resolution.id);
-  if (resolution.source === "page") return title;
+  if (resolution.source === "page") {
+    return byId.get(resolution.id)?.title ?? resolution.id;
+  }
   const fellFrom = named === null ? undefined : byId.get(named);
-  return fellFrom === undefined
-    ? `Site default: ${title}`
-    : `${fellFrom.title} (not published, so the site default shows)`;
+  if (fellFrom !== undefined) {
+    return `${fellFrom.title} (not published, so the site default shows)`;
+  }
+  // Says why this Layout applies, not only which one it is.
+  if (resolution.id === UNREADABLE_DEFAULT) {
+    return "Follows the site default: a Layout you can't view, or one that was deleted.";
+  }
+  const title = byId.get(resolution.id)?.title ?? resolution.id;
+  return `Follows the site default, ${title}, because this page doesn't choose its own Layout.`;
 }
 
 /**

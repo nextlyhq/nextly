@@ -176,8 +176,10 @@ describe("the page's Layout picker", () => {
     const why = document.getElementById(
       trigger.getAttribute("aria-describedby") ?? ""
     );
-    expect(why?.textContent).toBe("Site default: Main");
-    expect(trigger.textContent).toContain("Site default (Main)");
+    expect(why?.textContent).toBe(
+      "Follows the site default, Main, because this page doesn't choose its own Layout."
+    );
+    expect(trigger.textContent).toContain("Site default · Main");
   });
 
   it("writes the Layout and clears the switch when a Layout is chosen", async () => {
@@ -389,7 +391,7 @@ describe("the page's Layout picker", () => {
     // The trigger still says what is chosen.
     expect(
       screen.getByRole("combobox", { name: "Layout" }).textContent
-    ).toContain("Site default (Layout 0)");
+    ).toContain("Site default · Layout 0");
   });
 
   it("keeps the rows the server matched, however their titles compare here", async () => {

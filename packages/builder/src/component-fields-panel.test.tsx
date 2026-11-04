@@ -264,6 +264,53 @@ describe("a prop row in a component's view", () => {
   });
 });
 
+describe("a prop the inspector leaves out, in a component's view", () => {
+  it("can still be exposed, since a page may clear what hides it", () => {
+    // A linked button offers no "Acts as", but a placement can clear the link
+    // and make it a button, so the component may still expose it.
+    registerBlocks(
+      [
+        {
+          name: "acme/link-button",
+          version: 1,
+          description: "A button.",
+          example: { props: {} },
+          render: () => null,
+          props: {
+            href: { type: "url" },
+            kind: {
+              label: "Acts as",
+              type: "select",
+              options: ["button", "submit"],
+              onlyWithout: ["href"],
+            },
+          },
+        },
+      ] as never,
+      { source: "component-fields-panel-test-link" }
+    );
+    mount(
+      component({
+        nodes: [
+          {
+            id: "l1",
+            type: "acme/link-button",
+            version: 1,
+            props: { href: "/pricing" },
+          },
+        ],
+      }),
+      "l1"
+    );
+    const row = exposeRow("kind");
+    // Named as the block names it, not by its prop name.
+    expect(row.parentElement?.textContent).toContain("Acts as");
+    expect(row.parentElement?.textContent).not.toContain("Kind");
+    // Its control is still left out: only the expose icon is offered.
+    expect(screen.queryByRole("combobox", { name: /Kind/ })).toBeNull();
+  });
+});
+
 describe("the icon's words, in plain terms", () => {
   it("names a property's icon for pages, and says in one line what turning it on does", () => {
     mount(component(), "c1");

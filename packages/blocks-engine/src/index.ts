@@ -638,7 +638,14 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock, ITEM_SCHEMA_MAX_DEPTH } from "./block";
+export {
+  BLOCK_ICONS,
+  defineBlock,
+  ITEM_SCHEMA_MAX_DEPTH,
+  // What a select's option is called. Public because the builder names a
+  // choice with it as the engine's exposure planner does.
+  optionLabel,
+} from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
@@ -747,6 +754,7 @@ export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";
 export {
   validateStyleValues,
+  leafAcceptsValue,
   newStyleIssueBudget,
   MAX_STYLE_ISSUES,
   MAX_STYLE_ISSUE_PATH_BYTES,
@@ -921,6 +929,10 @@ export {
   // one and a literal in the other would be one contract with two spellings,
   // and the half that drifted would simply stop matching rather than fail.
   CONTENT_WIDTH_CLASS,
+  // The marker a container spacing its children wears: the compiler keys the
+  // gap's rules on it, a block repeating its slot puts it on each wrapper, and
+  // an editor takes it off to ask whether a margin is the gap.
+  CHILD_GAP_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,

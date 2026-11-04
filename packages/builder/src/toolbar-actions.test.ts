@@ -771,6 +771,64 @@ describe("toolbarPlacement", () => {
     expect(at.y).toBe(10 + 100 + TOOLBAR_GAP_PX);
   });
 
+  it("flips below at the top of what is on screen, not only of the page", () => {
+    // Scrolled 600px down: a block 10px below the screen's top has no room
+    // above it on screen, though the page has plenty.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 0, y: 610, width: 500, height: 100 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("below");
+    expect(at.y).toBe(610 + 100 + TOOLBAR_GAP_PX);
+  });
+
+  it("stays at the top of the screen for a tall block whose top is scrolled away", () => {
+    // The bar a tall block's author reaches for while its middle is on screen,
+    // rather than one scrolled away with its top edge.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 40, y: 200, width: 500, height: 1500 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("pinned");
+    expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
+  });
+
+  it("stays at the top of the screen for a tall block just under it, with no room below on screen", () => {
+    // Below a block taller than the rest of the screen is off it: the bar goes
+    // to the screen's top, over the block, rather than out of reach.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 0, y: 610, width: 500, height: 1000 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("pinned");
+    expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
+  });
+
+  it("is left where it is for a block scrolled wholly out of view", () => {
+    const screen = { top: 600, bottom: 1400 };
+    expect(
+      toolbarPlacement(
+        { x: 0, y: 100, width: 500, height: 100 },
+        bar,
+        canvas,
+        TOOLBAR_GAP_PX,
+        screen
+      ).side
+    ).toBe("above");
+  });
+
   it("stays above for a block at the BOTTOM of a tall canvas", () => {
     // The control for the flip: a rule that flipped on any overflow would move
     // the bar for a block that had plenty of room above it.
@@ -929,5 +987,110 @@ describe("toolbarActions for MORE than one block", () => {
     expect(toolbarActions(document, "a", ["a"])).toEqual(
       toolbarActions(document, "a")
     );
+  });
+});
+
+describe("Save as shared style…", () => {
+  const styled = { styles: { base: { base: { color: "#123456" } } } };
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 0,
+    styles: {},
+  };
+  const save = (
+    document: BlockDocument,
+    ids: string[],
+    offer?: { library: (typeof card)[] | undefined; mayChange: boolean }
+  ) =>
+    toolbarActions(
+      document,
+      ids[0] ?? null,
+      ids,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      false,
+      offer
+    ).find(action => action.id === "save-as-shared-style");
+
+  it("is not offered by a host with no shared styles", () => {
+    expect(
+      save(documentOf([node("a", undefined, styled)]), ["a"])
+    ).toBeUndefined();
+  });
+
+  it("is offered, in the menu, for one block with styles of its own", () => {
+    expect(
+      save(documentOf([node("a", undefined, styled)]), ["a"], {
+        library: [card],
+        mayChange: true,
+      })
+    ).toEqual({
+      id: "save-as-shared-style",
+      label: "Save as shared style…",
+      enabled: true,
+      inMenu: true,
+    });
+  });
+
+  it("is dimmed inside an area locked to its content, judged by the editor's lock view", () => {
+    // The area's lock comes from the definitions the editor composes with,
+    // not the global registry, so only the lock view knows it.
+    const view = {
+      definitions: {
+        get: (type: string) =>
+          type === "acme/area"
+            ? {
+                version: 1,
+                slots: { children: { lock: "contentOnly" as const } },
+              }
+            : undefined,
+      },
+    };
+    const document = documentOf([
+      node("area", "acme/area", {
+        slots: { children: [node("a", undefined, styled)] },
+      }),
+    ]);
+    const action = save(document, ["a"], {
+      library: [card],
+      mayChange: true,
+      view,
+    } as never);
+    expect(action?.enabled).toBe(false);
+    expect(action?.reason).toMatch(/content/i);
+  });
+
+  it("is dimmed with the save rule's own reason", () => {
+    const offer = { library: [card], mayChange: true };
+    expect(save(documentOf([node("a")]), ["a"], offer)?.reason).toBe(
+      "This block has no styles of its own yet."
+    );
+    expect(
+      save(
+        documentOf([node("a", undefined, { ...styled, classes: ["c-card"] })]),
+        ["a"],
+        offer
+      )?.reason
+    ).toBe("This block already uses Card.");
+    expect(
+      save(documentOf([node("a", undefined, styled)]), ["a"], {
+        ...offer,
+        mayChange: false,
+      })?.reason
+    ).toBe("You can't change this site's design.");
+    expect(
+      save(
+        documentOf([
+          node("a", undefined, styled),
+          node("b", undefined, styled),
+        ]),
+        ["a", "b"],
+        offer
+      )?.reason
+    ).toBe("Only one block at a time. 2 are selected.");
   });
 });

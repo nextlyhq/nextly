@@ -71,6 +71,19 @@ export interface UsageIndexHealth {
    * still type-checks; `readUsageIndexHealth` always sets it.
    */
   dirty?: boolean;
+  /**
+   * Whether the backfill still has work that will move this answer: a scope
+   * that exists now not yet walked under the current derivation, or a run
+   * owed since a maintenance write failed.
+   *
+   * Told apart from the rest of "not whole" because only this resolves on its
+   * own. Content the index cannot reach (a blocks-backed Single) or a
+   * document past its walk bound keeps the index a floor however long a
+   * screen waits, and a screen that re-read on a timer would read forever.
+   *
+   * Optional for the reason `dirty` is; absent reads as nothing pending.
+   */
+  backfillPending?: boolean;
 }
 
 /** Whether the index can answer for the whole population it claims to cover. */
@@ -80,6 +93,15 @@ export function indexIsWhole(health: UsageIndexHealth): boolean {
     !health.anyUndetermined &&
     health.dirty !== true
   );
+}
+
+/**
+ * Whether a non-whole index may still become whole without anything else
+ * changing, so a screen showing floors has a reason to ask again. False for a
+ * whole index, and for one only content out of reach keeps from whole.
+ */
+export function indexStillCounting(health: UsageIndexHealth): boolean {
+  return !indexIsWhole(health) && health.backfillPending === true;
 }
 
 /** The backfill's bookkeeping as health reads it, from one snapshot. */
@@ -160,6 +182,7 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
     // them than the cap — which does not change the answer.
     anyUndetermined: markers.buckets.length > 0,
     dirty: progress.dirty,
+    backfillPending: progress.pending,
   };
 }
 
@@ -180,9 +203,12 @@ async function backfillFinished(
         unreachable: () => Promise<boolean>;
       }
     | undefined
-): Promise<{ covers: boolean; dirty: boolean }> {
-  // Nothing to ask: not covered, and no mark known. Not whole either way.
-  if (backfill === undefined) return { covers: false, dirty: false };
+): Promise<{ covers: boolean; dirty: boolean; pending: boolean }> {
+  // Nothing to ask: not covered, and no mark known. Not whole either way, and
+  // no run this can see will change that.
+  if (backfill === undefined) {
+    return { covers: false, dirty: false, pending: false };
+  }
   const [scopes, progress, unreachable] = await Promise.all([
     backfill.scopes(),
     backfill.progress(),
@@ -191,11 +217,13 @@ async function backfillFinished(
   // All three, and none implies another. Every scope walked under the current
   // derivation says the work this index CAN do is done; unreachable content
   // says there is content it cannot do at all; a site can be in any mix.
+  const walked =
+    progress.current && backfillComplete(scopes, progress.completed);
   return {
-    covers:
-      progress.current &&
-      backfillComplete(scopes, progress.completed) &&
-      !unreachable,
+    covers: walked && !unreachable,
     dirty: progress.dirty,
+    // Work the backfill will still do: scopes to walk, or a run owed since a
+    // failed write. Unreachable content is not among it.
+    pending: !walked || progress.dirty,
   };
 }

@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 
 import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
@@ -34,6 +34,20 @@ import {
   transactionDrizzleHandles,
   type TransactionCrudForwarders,
 } from "./transaction-forwarders";
+import {
+  closeFrame,
+  enqueueIn,
+  joinable,
+  openFrame,
+  outermost,
+  settleNested,
+  undone,
+  type Committed,
+  type HeldEffect,
+  type OutermostSteps,
+  type TransactionFrame,
+  type TransactionSteps,
+} from "./transaction-frame";
 import type {
   SupportedDialect,
   SqlParam,
@@ -125,28 +139,34 @@ function deepStack(): string {
   }
 }
 
+/** The stack that opens a transaction, while a test harness observes escapes. */
+function openingStack(): string | undefined {
+  return escapeObserver() === undefined ? undefined : deepStack();
+}
+
 /**
- * A transaction an async flow runs inside, as that flow sees it: its own, or
- * one it was started from inside.
+ * The first outermost transaction around `frame` that `test` accepts: the one
+ * `frame` belongs to, then each one the flow that opened it was inside.
  */
-interface FlowTransaction {
-  /** False once the transaction's work has settled. */
-  open: boolean;
-  /**
-   * True once the transaction holds a connection of its own. From then on
-   * anything the flow takes from the pool runs outside the transaction
-   * ({@link notePoolAccess}); before it, the checkout is the transaction's own.
-   */
-  connected: boolean;
-  /** The transaction the flow that opened this one was itself inside. */
-  enclosing: FlowTransaction | undefined;
-  /**
-   * The stack that opened the transaction, kept only while a test harness
-   * observes escapes. A statement that escapes is often reached through a
-   * query builder awaited as a thenable, and V8 links no caller across that,
-   * so where its transaction was opened is the code it can still be traced to.
-   */
-  openedAt?: string;
+function transactionAround(
+  frame: TransactionFrame | undefined,
+  test: (transaction: TransactionFrame) => boolean
+): TransactionFrame | undefined {
+  for (let at = frame; at !== undefined; ) {
+    const transaction = outermost(at);
+    if (test(transaction)) return transaction;
+    at = transaction.enclosing;
+  }
+  return undefined;
+}
+
+/**
+ * Whether a transaction step returned a promise. A synchronous driver's step
+ * returns nothing and is not awaited, so the code after it runs in the same
+ * tick, as it did when the dialect ran the statement itself.
+ */
+function isPending(outcome: unknown): outcome is Promise<unknown> {
+  return outcome instanceof Promise;
 }
 
 /**
@@ -553,11 +573,11 @@ export abstract class DrizzleAdapter {
   }
 
   /**
-   * The transaction each async flow is inside, kept per flow rather than per
-   * connection: on SQLite every request shares the one connection, and
-   * another request's open transaction says nothing about this one.
+   * The transaction frame each async flow is inside, kept per flow rather
+   * than per connection: on SQLite every request shares the one connection,
+   * and another request's open transaction says nothing about this one.
    */
-  private readonly flowTransactions = new AsyncLocalStorage<FlowTransaction>();
+  private readonly scope = new AsyncLocalStorage<TransactionFrame>();
 
   /** Each pool's reporting views, by method list (`observedPool`). Gone with the pool. */
   private readonly observedPools = new WeakMap<object, Map<string, object>>();
@@ -578,28 +598,286 @@ export abstract class DrizzleAdapter {
    *
    * Covers transactions opened through {@link transaction} and through the
    * Drizzle handle's own `transaction` on the dialects whose handle takes
-   * async work. A dialect that keeps scopes of its own judges from those
-   * instead; an adapter that does neither answers false.
+   * async work. A flow started inside a transaction, even inside a savepoint
+   * that has since released, stays inside it until its outermost transaction
+   * has committed or rolled back. An adapter that records no frames answers
+   * false.
    *
    * @experimental
    * @returns True while a transaction the calling flow is inside is open
    */
   transactionOpenInFlow(): boolean {
-    for (
-      let at = this.flowTransactions.getStore();
-      at !== undefined;
-      at = at.enclosing
-    ) {
-      if (at.open) return true;
+    return (
+      transactionAround(this.scope.getStore(), at => !at.finished) !== undefined
+    );
+  }
+
+  /**
+   * The frame a `transaction()` call made from the current async context
+   * would join, or none when it would open a transaction of its own. Asks
+   * only: {@link beginTransactionCall} is what a call makes on entry.
+   *
+   * @returns The frame the call would join
+   */
+  protected joinableFrame(): TransactionFrame | undefined {
+    return joinable(this.scope.getStore());
+  }
+
+  /**
+   * What a dialect's `transaction()` calls on entry, before it waits for
+   * anything: the frame the call joins (see {@link joinableFrame}), or none
+   * when it opens an outermost transaction of its own.
+   *
+   * A call made from a frame that has closed runs somewhere else, so what it
+   * writes is no longer that frame's to undo. The call is counted on that
+   * frame now, at the call, so an effect its context registers from here on
+   * is not dropped for that frame's rollback ({@link holdEffect}).
+   *
+   * @returns The frame the call joins
+   */
+  protected beginTransactionCall(): TransactionFrame | undefined {
+    const own = this.scope.getStore();
+    const frame = joinable(own);
+    if (own && frame !== own) own.writesAfterClosing += 1;
+    return frame;
+  }
+
+  /**
+   * Run `work` as an outermost transaction: `steps.begin`, the work inside a
+   * new frame, then `steps.commit`, or `steps.rollback` when either throws.
+   *
+   * Work the transaction started and did not wait for is part of it: joined
+   * calls still queued finish before the COMMIT or the ROLLBACK
+   * (`settleNested`), so a rollback discards their writes rather than leaving
+   * them to run afterwards outside any transaction.
+   *
+   * Resolves once the transaction has committed, with the work's result and
+   * the effects held for it, less those a rolled-back part dropped. The caller
+   * frees the connection and then runs them ({@link runHeldEffects}), so an
+   * effect that opens a transaction of its own does not wait behind this one.
+   * On a rollback, or a COMMIT that failed, every held effect is dropped and
+   * the error is rethrown as it was thrown: classifying it is the dialect's.
+   *
+   * @param steps - The statements, the context and the connection
+   * @param work - The transaction's work
+   * @param options - The options the transaction was opened with
+   * @returns The result, and the effects to run once the connection is free
+   */
+  protected async runOutermost<T>(
+    steps: OutermostSteps,
+    work: (tx: TransactionContext) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<Committed<T>> {
+    const begun = steps.begin();
+    if (isPending(begun)) await begun;
+    // Opened only once BEGIN has run, so a failed BEGIN leaves no frame
+    // behind for a later call to join.
+    const frame = openFrame({
+      enclosing: this.scope.getStore(),
+      connection: steps.connection,
+      options,
+      openedAt: openingStack(),
+    });
+    try {
+      const result = await this.scope.run(frame, () => work(steps.context));
+      await settleNested(frame);
+      const committed = steps.commit();
+      if (isPending(committed)) await committed;
+      frame.finished = true;
+      return {
+        result,
+        effects: frame.held.filter(
+          held => !undone(held.frame, held.writesBefore)
+        ),
+      };
+    } catch (error) {
+      await settleNested(frame);
+      // Rolled back, or a COMMIT that failed: the effects held for this
+      // transaction describe a change that did not happen.
+      frame.rolledBack = true;
+      frame.finished = true;
+      frame.held.length = 0;
+      try {
+        const rolledBack = steps.rollback();
+        if (isPending(rolledBack)) await rolledBack;
+      } catch {
+        // The transaction may already have been aborted.
+      }
+      throw error;
     }
-    return false;
+  }
+
+  /**
+   * Run `work` as a part joined to `frame`: `begin` (a SAVEPOINT), the work
+   * inside a new frame one deeper, then `commit` (its RELEASE), or `rollback`
+   * when either throws.
+   *
+   * Joined calls of one frame run one at a time, in the order they were made:
+   * two interleaved savepoints would release or roll back each other. Their
+   * steps are built only once the call's turn comes (`stepsAt`, handed the
+   * part's depth). A rolled-back part is marked so, which drops every effect
+   * registered from it, before or after this point; the error is rethrown as
+   * it was thrown.
+   *
+   * @param frame - The frame the call joins, from {@link beginTransactionCall}
+   * @param stepsAt - Builds the part's steps for its depth
+   * @param work - The part's work
+   * @param options - The options the part was opened with
+   * @returns What `work` resolves to
+   */
+  protected runJoined<T>(
+    frame: TransactionFrame,
+    stepsAt: (depth: number) => TransactionSteps,
+    work: (tx: TransactionContext) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<T> {
+    return enqueueIn(frame, async () => {
+      const steps = stepsAt(frame.depth + 1);
+      const begun = steps.begin();
+      if (isPending(begun)) await begun;
+      // Opened only once the savepoint exists, so a failed SAVEPOINT leaves
+      // no frame behind for a later call to join.
+      const part = openFrame({
+        parent: frame,
+        connection: frame.connection,
+        options,
+      });
+      try {
+        const result = await this.scope.run(part, () => work(steps.context));
+        await settleNested(part);
+        const released = steps.commit();
+        if (isPending(released)) await released;
+        return result;
+      } catch (error) {
+        // Joined work this part started and did not wait for is part of it:
+        // let it finish first, so the rollback discards its writes rather
+        // than leaving it to run afterwards on the enclosing transaction.
+        await settleNested(part);
+        // Its change is undone, so nothing registered from it, before or
+        // after this point, may announce it.
+        part.rolledBack = true;
+        try {
+          const rolledBack = steps.rollback();
+          if (isPending(rolledBack)) await rolledBack;
+        } catch {
+          // The enclosing transaction may already have ended.
+        }
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Hold `effect` until the transaction enclosing this async context
+   * commits, or run it now when none does.
+   *
+   * The effect belongs to the frame this async context runs in, even one
+   * that has already released or rolled back: a service whose own
+   * transaction joined as a savepoint registers from its caller's frame once
+   * that savepoint has released, and the change is undoable for as long as
+   * any frame around it is. The outermost transaction hands the effect back
+   * once its COMMIT succeeds ({@link runOutermost}), unless a frame between
+   * the effect's frame and the outermost transaction rolled back, and drops
+   * every effect on ROLLBACK or a failed COMMIT. A context whose outermost
+   * transaction has already finished is outside any transaction, so its
+   * effect runs now, unless what it announces was undone and it has run no
+   * transaction since.
+   *
+   * @param effect - What to run once the change is durable
+   * @param onDeferredFailure - Receives the error of a held effect that fails
+   * @returns Settles once `effect` has run, or once it has been held
+   */
+  protected async holdEffect(
+    effect: () => unknown,
+    onDeferredFailure?: (error: unknown) => void
+  ): Promise<void> {
+    const frame = this.scope.getStore();
+    if (!frame) {
+      await effect();
+      return;
+    }
+    const root = outermost(frame);
+    if (!root.finished) {
+      root.held.push({
+        effect: this.inRegisteringContext(effect),
+        onDeferredFailure,
+        frame,
+        writesBefore: frame.writesAfterClosing,
+      });
+      return;
+    }
+    if (!undone(frame, frame.writesAfterClosing)) await effect();
+  }
+
+  /**
+   * `effect`, bound to the async context it is registered from.
+   *
+   * A held effect runs after the outermost COMMIT, from the code that ran the
+   * outermost transaction, so without this it sees that code's context rather
+   * than its own: whatever its caller pinned around the write is gone. That
+   * includes who is calling. A scope pinned for a scoped API key lost there
+   * leaves a hook's nested call judged by the key's owner instead of the key,
+   * and a person's frame lost there leaves the hook told of nobody.
+   *
+   * The adapter's own transaction frame is the one store it leaves: the
+   * effect runs once that transaction has finished, outside it, as an effect
+   * held to the outermost commit always has.
+   */
+  private inRegisteringContext(effect: () => unknown): () => unknown {
+    return AsyncResource.bind(() => this.scope.exit(effect));
+  }
+
+  /**
+   * Run the effects a committed transaction held, in order. A failure is
+   * reported, never thrown: the change is durable, and reporting the
+   * transaction as failed would invite a retry of something already done.
+   *
+   * @param effects - What {@link runOutermost} handed back
+   * @returns Settles once every effect has run
+   */
+  protected async runHeldEffects(effects: HeldEffect[]): Promise<void> {
+    for (const { effect, onDeferredFailure } of effects) {
+      try {
+        await effect();
+      } catch (error) {
+        this.reportHeldEffectFailure(error, onDeferredFailure);
+      }
+    }
+  }
+
+  /** Hand a held effect's failure to its reporter, or to the adapter's log. */
+  private reportHeldEffectFailure(
+    error: unknown,
+    onDeferredFailure: ((error: unknown) => void) | undefined
+  ): void {
+    try {
+      if (onDeferredFailure) {
+        onDeferredFailure(error);
+        return;
+      }
+    } catch {
+      // A reporter that throws is reported on below, like no reporter at all.
+    }
+    this.logHeldEffectFailure(
+      error instanceof Error ? error : new Error(String(error))
+    );
+  }
+
+  /**
+   * Log a held effect's failure that no reporter took. A dialect with a
+   * logger of its own overrides this.
+   *
+   * @param failure - The effect's error
+   */
+  protected logHeldEffectFailure(failure: Error): void {
+    console.error("An effect held until commit failed:", failure);
   }
 
   /**
    * Run a whole transaction, from its BEGIN until its COMMIT or ROLLBACK has
    * run, as the calling flow's open transaction, for
    * {@link transactionOpenInFlow}. A dialect's `transaction` runs through
-   * this unless it judges the flow from scopes of its own.
+   * this unless it opens its frames with {@link runOutermost}.
    *
    * The transaction counts as open for its work and for anything the work
    * starts, awaited or not, until it has finished. Something the work starts
@@ -609,17 +887,16 @@ export abstract class DrizzleAdapter {
    * @returns What `run` resolves to
    */
   protected runInFlowTransaction<T>(run: () => Promise<T>): Promise<T> {
-    const scope: FlowTransaction = {
-      open: true,
-      connected: false,
-      enclosing: this.flowTransactions.getStore(),
-      openedAt: escapeObserver() === undefined ? undefined : deepStack(),
-    };
-    return this.flowTransactions.run(scope, async () => {
+    const frame = openFrame({
+      enclosing: this.scope.getStore(),
+      openedAt: openingStack(),
+    });
+    return this.scope.run(frame, async () => {
       try {
         return await run();
       } finally {
-        scope.open = false;
+        frame.finished = true;
+        closeFrame(frame);
       }
     });
   }
@@ -632,8 +909,8 @@ export abstract class DrizzleAdapter {
    * which belongs to the transaction, from any later one, which escapes it.
    */
   protected markFlowTransactionConnected(): void {
-    const scope = this.flowTransactions.getStore();
-    if (scope !== undefined) scope.connected = true;
+    const frame = this.scope.getStore();
+    if (frame !== undefined) outermost(frame).connected = true;
   }
 
   /**
@@ -674,21 +951,17 @@ export abstract class DrizzleAdapter {
   protected notePoolAccess(statement?: unknown): void {
     const observe = escapeObserver();
     if (observe === undefined) return;
-    for (
-      let at = this.flowTransactions.getStore();
-      at !== undefined;
-      at = at.enclosing
-    ) {
-      if (at.open && at.connected) {
-        observe({
-          dialect: this.dialect,
-          stack: deepStack(),
-          openedAt: at.openedAt,
-          statement: statementOf(statement),
-        });
-        return;
-      }
-    }
+    const escaped = transactionAround(
+      this.scope.getStore(),
+      at => !at.finished && at.connected
+    );
+    if (escaped === undefined) return;
+    observe({
+      dialect: this.dialect,
+      stack: deepStack(),
+      openedAt: escaped.openedAt,
+      statement: statementOf(statement),
+    });
   }
 
   /**
@@ -791,7 +1064,8 @@ export abstract class DrizzleAdapter {
    * A caller invokes this after its own transaction has resolved. Where that
    * transaction was nested in an enclosing one, as a savepoint, the change is
    * not durable yet, and an adapter that nests (see {@link inTransaction})
-   * holds `effect` until the outermost transaction commits, and drops it when
+   * holds `effect` ({@link holdEffect}) until the outermost transaction
+   * commits, and drops it when
    * that transaction, or the savepoint it was registered in, rolls back. A
    * held effect runs after the commit, before the outermost `transaction()`
    * call resolves, in registration order; one that then throws or rejects is

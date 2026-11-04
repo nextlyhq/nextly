@@ -113,11 +113,12 @@ function listed(titles: readonly string[], unreadable: number): string {
 export function pagesUseItRefusal(found: PagesInTheWay): string {
   const total = found.titles.length + found.unreadable;
   if (!found.complete) {
-    const lead =
-      total === 0
-        ? "This site has more pages than one removal can check"
-        : `At least ${pages(total)} use this Layout`;
-    return `${lead}, so it can't be removed yet. Choose another Layout for the pages that use it first.`;
+    // Unfinished: the site has more pages than one removal checks, or a page
+    // that is still there could not be read.
+    if (total === 0) {
+      return "Not every page could be checked, so this Layout can't be removed yet. Choose another Layout for any page that uses it, or try again in a moment.";
+    }
+    return `At least ${pages(total)} use this Layout, so it can't be removed yet. Choose another Layout for the pages that use it first.`;
   }
   const verb = total === 1 ? "uses" : "use";
   return `${pages(total)} ${verb} this Layout: ${listed(found.titles, found.unreadable)}. Choose another Layout for ${total === 1 ? "it" : "them"} first.`;

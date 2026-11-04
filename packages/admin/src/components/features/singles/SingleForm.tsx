@@ -1248,6 +1248,9 @@ export function SingleForm({
       // read-only form dirty with work it cannot save.
       scope: readOnlyForReader ? null : autosaveScope,
       form,
+      // The language the form shows: a point recorded in another is never
+      // taken for the document.
+      locale: locale ?? null,
       savedCount,
     }),
     recovering

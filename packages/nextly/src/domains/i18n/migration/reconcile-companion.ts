@@ -389,6 +389,25 @@ function companionColumnDrops(
 }
 
 /**
+ * `drops` with the translations table locked against writes first, on PostgreSQL, for the rest of
+ * the transaction they run in. Without it a value written to a leaving column after its final copy
+ * and before its drop would be lost; held, such a write waits and then fails on the dropped column.
+ * Reads go on. MySQL commits each schema statement, so no transaction can hold the lock across the
+ * drop there, and SQLite's one connection runs nothing beside the drops.
+ */
+function lockedAgainstWrites(
+  dialect: SupportedDialect,
+  companionTable: string,
+  drops: string[]
+): string[] {
+  if (dialect !== "postgresql" || drops.length === 0) return drops;
+  return [
+    `LOCK TABLE ${q(companionTable, dialect)} IN SHARE ROW EXCLUSIVE MODE`,
+    ...drops,
+  ];
+}
+
+/**
  * The drops a plan with `holdLeavingDrops` left out: for each field leaving translation, its other
  * languages archived and its default language's value copied again, right before its column goes,
  * so a value written since the first copy is kept too. Both are safe to repeat.
@@ -978,11 +997,11 @@ export function buildCompanionTransitionStatements(
         ...(held?.creates ?? []),
       ],
       ...(held && {
-        leavingDrops: [
+        leavingDrops: lockedAgainstWrites(dialect, `${tableName}_locales`, [
           // Before the columns, which SQLite and MySQL refuse to drop under an index.
           ...held.drops,
           ...heldLeavingColumnDrops(reconcile, `${tableName}_locales`),
-        ],
+        ]),
       }),
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,
