@@ -79,6 +79,68 @@ describe("RealPreCleanupExecutor", () => {
     ).rejects.toThrow(/INVALID_DEFAULT_FOR_TYPE/);
   });
 
+  /** A Required column added over rows that have none, named as the table names it. */
+  const addedOver = (columnName: string): ClassifierEvent => ({
+    ...notNullEvent,
+    id: `add_not_null_with_nulls:dc_users.${columnName}`,
+    columnName,
+  });
+
+  /** Run one provide_default for `columnName` against these fields on this dialect. */
+  const provide = (
+    columnName: string,
+    field: { name: string; type: string },
+    value: unknown,
+    dialect: "postgresql" | "mysql" | "sqlite"
+  ) =>
+    new RealPreCleanupExecutor().execute({
+      // `execute` where the dialect's driver runs statements so, `run` on SQLite.
+      tx: {
+        execute: vi.fn().mockResolvedValue({ rowCount: 3 }),
+        run: vi.fn().mockResolvedValue({ changes: 3 }),
+      },
+      desiredSnapshot: baseSnapshot,
+      resolutions: [
+        {
+          kind: "provide_default",
+          eventId: addedOver(columnName).id,
+          value,
+        },
+      ],
+      events: [addedOver(columnName)],
+      fields: [field],
+      dialect,
+    });
+
+  it("provide_default: judges a camelCase field's value by its type, found by its column", async () => {
+    const itemCount = { name: "itemCount", type: "number" };
+    await expect(
+      provide("item_count", itemCount, 0, "postgresql")
+    ).resolves.toBeDefined();
+    // Found as a number, not passed as text: a string is refused.
+    await expect(
+      provide("item_count", itemCount, "abc", "postgresql")
+    ).rejects.toThrow(/INVALID_DEFAULT_FOR_TYPE: item_count \(number\)/);
+  });
+
+  it("provide_default: takes on SQLite the 0/1 and epoch seconds its boolean and date columns store", async () => {
+    const featured = { name: "isFeatured", type: "checkbox" };
+    const published = { name: "publishedOn", type: "date" };
+    await expect(
+      provide("is_featured", featured, 0, "sqlite")
+    ).resolves.toBeDefined();
+    await expect(
+      provide("published_on", published, 1_700_000_000, "sqlite")
+    ).resolves.toBeDefined();
+    // Elsewhere a boolean column takes a boolean, as a value typed in the schema dialog is.
+    await expect(
+      provide("is_featured", featured, 0, "postgresql")
+    ).rejects.toThrow(/INVALID_DEFAULT_FOR_TYPE/);
+    await expect(provide("is_featured", featured, 2, "sqlite")).rejects.toThrow(
+      /INVALID_DEFAULT_FOR_TYPE/
+    );
+  });
+
   it("delete_nonconforming: runs DELETE", async () => {
     const execute = vi.fn().mockResolvedValue({ rowCount: 3 });
     const exec = new RealPreCleanupExecutor();
@@ -358,6 +420,7 @@ describe("RealPreCleanupExecutor", () => {
           resolutions,
           events: [addedEvent],
           fields: [{ name: "nickname", type: "text" }],
+          dialect: "postgresql",
         })
       ).toThrow();
     });

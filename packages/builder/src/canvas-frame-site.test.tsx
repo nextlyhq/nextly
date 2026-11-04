@@ -11,6 +11,7 @@
  *
  * @module canvas-frame-site.test
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +22,9 @@ import {
   type CanvasFrameFallback,
   type SiteFrameSource,
 } from "./canvas-frame";
+import { Canvas } from "./canvas";
 import { SITE_CHROME_ATTRIBUTE } from "./canvas-frame-sheet";
+import { CHROME_BLEED, framePaintedScale } from "./geometry-dom";
 
 afterEach(() => {
   cleanup();
@@ -243,7 +246,11 @@ describe("the canvas frame on a page the site serves", () => {
     act(() => {
       for (const watch of page) watch.changed();
     });
-    expect(Number.parseFloat(cue?.style.top ?? "0")).toBeGreaterThan(0);
+    // Over the footer, in the layer, which starts CHROME_BLEED up and left
+    // of the frame's viewport: placed past it by as much.
+    const scale = framePaintedScale(frame);
+    expect(cue?.style.top).toBe(`${String(500 * scale + CHROME_BLEED)}px`);
+    expect(cue?.style.left).toBe(`${String(CHROME_BLEED)}px`);
   });
 
   it("moves the editor's chrome with the canvas when the site's layout above it grows", async () => {
@@ -284,7 +291,10 @@ describe("the canvas frame on a page the site serves", () => {
     act(() => {
       for (const watch of page) watch.changed();
     });
-    expect(content.style.transform).toContain("300px");
+    // Moved with the canvas, past the layer's bleed (`CHROME_BLEED`).
+    expect(content.style.transform).toBe(
+      `translate(${String(CHROME_BLEED)}px, ${String(300 + CHROME_BLEED)}px)`
+    );
   });
 
   it("takes a cue away with the part the site's layout removes", async () => {
@@ -304,6 +314,83 @@ describe("the canvas frame on a page the site serves", () => {
       await Promise.resolve();
     });
     expect(cues()).toHaveLength(3);
+  });
+
+  it("gives a part the site's layout removes back the state it had", async () => {
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    const doc = frameDocument(frame);
+    const header = doc.getElementById("site-header");
+    const alreadyInert = doc.getElementById("already-inert");
+    expect(header?.hasAttribute("inert")).toBe(true);
+
+    // The site's own client code takes both out, to reuse them elsewhere.
+    await act(async () => {
+      header?.remove();
+      alreadyInert?.remove();
+      await Promise.resolve();
+    });
+    expect(header?.hasAttribute("inert")).toBe(false);
+    expect(header?.hasAttribute(SITE_CHROME_ATTRIBUTE)).toBe(false);
+    expect(alreadyInert?.hasAttribute(SITE_CHROME_ATTRIBUTE)).toBe(false);
+    // What the site made inert itself stays so.
+    expect(alreadyInert?.hasAttribute("inert")).toBe(true);
+  });
+
+  it("keeps the language and direction the site's own page states, unless the editor names them", async () => {
+    document.documentElement.lang = "en";
+    document.documentElement.dir = "ltr";
+    const source = siteSource();
+    const { container, rerender } = render(
+      <CanvasFrame width={1280} title="Home" source={source}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    act(() => {
+      const doc = frameDocument(frame);
+      doc.replaceChildren(doc.createElement("html"));
+      // A German, right-to-left site, administered in English.
+      doc.documentElement.setAttribute("lang", "de");
+      doc.documentElement.setAttribute("dir", "rtl");
+      doc.documentElement.innerHTML = `<head></head><body>${SITE_PAGE}</body>`;
+      frame.dispatchEvent(new Event("load"));
+    });
+    await hydrate(frame);
+    const root = frameDocument(frame).documentElement;
+    expect(root.getAttribute("lang")).toBe("de");
+    expect(root.getAttribute("dir")).toBe("rtl");
+
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={source}
+        lang="fr"
+        dir="ltr"
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    expect(root.getAttribute("lang")).toBe("fr");
+    expect(root.getAttribute("dir")).toBe("ltr");
+
+    // Named no longer: the site's own values come back.
+    rerender(
+      <CanvasFrame width={1280} title="Home" source={source}>
+        <Page />
+      </CanvasFrame>
+    );
+    expect(root.getAttribute("lang")).toBe("de");
+    expect(root.getAttribute("dir")).toBe("rtl");
+    document.documentElement.removeAttribute("lang");
+    document.documentElement.removeAttribute("dir");
   });
 
   it("falls back to the blank page, and says why, when the page loaded is not the route", () => {
@@ -616,6 +703,59 @@ describe("the canvas frame on a page the site serves", () => {
       await Promise.resolve();
     });
     expect(mount?.querySelector(".nx-canvas")).toBeNull();
+  });
+});
+
+describe("a click on the site's page around the canvas", () => {
+  const EMPTY: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+
+  it("clears the selection, as a click on the canvas's own ground does", async () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Canvas
+          document={EMPTY}
+          siteStyles={false}
+          selectedId="a"
+          onSelect={onSelect}
+        />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    const doc = frameDocument(frame);
+    expect(doc.querySelector(".nx-canvas")).not.toBeNull();
+
+    // Below a short page, on the site's own ground.
+    act(() => {
+      doc.body.click();
+    });
+    expect(onSelect).toHaveBeenCalledWith(null, expect.anything());
+
+    // A click on the canvas is the canvas's own, answered once.
+    onSelect.mockClear();
+    act(() => {
+      doc.querySelector<HTMLElement>(".nx-canvas")?.click();
+    });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not listened for when the canvas shares the editor's document", () => {
+    const onSelect = vi.fn();
+    render(
+      <Canvas
+        document={{ formatVersion: 1, kind: "page", nodes: [] }}
+        siteStyles={false}
+        selectedId="a"
+        onSelect={onSelect}
+      />
+    );
+    // Outside the canvas there, a click is on the editor's own panels.
+    act(() => {
+      document.body.click();
+    });
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 

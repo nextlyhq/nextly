@@ -281,7 +281,10 @@ export function useZoomShortcuts(
           },
           {
             keys: "!",
-            description: "Fit the page to the canvas",
+            // No description: it is Shift+1 as a US layout reports it, the
+            // same keystroke, so Help lists Shift+1 alone rather than a
+            // second key cap that reads as a different key.
+            description: "",
             when,
             whenTyping: false,
             run: fit,

@@ -709,6 +709,13 @@ export function useUpdateSingleDocument(
      * serialize against and would only pay the wait.
      */
     scopeId?: string;
+    /**
+     * Asked as each update is sent: `true` sends it with `keepalive`, so the
+     * browser finishes it after the page is hidden or closed. A function
+     * rather than a flag, because whether the page is going away is known
+     * only at that moment. A body over 64 KB is sent as an ordinary request.
+     */
+    keepalive?: () => boolean;
   }
 ): UseMutationResult<SingleDocument, Error, Record<string, unknown>, unknown> {
   const queryClient = useQueryClient();
@@ -730,7 +737,10 @@ export function useUpdateSingleDocument(
     // i18n: route the save to the editor's active language so translatable values land on that
     // locale's companion row (shared columns still update). Omitted for non-localized singles.
     mutationFn: async (data: Record<string, unknown>) => {
-      return await singleApi.updateDocument(slug, data, { locale });
+      return await singleApi.updateDocument(slug, data, {
+        locale,
+        keepalive: options?.keepalive?.() === true,
+      });
     },
     onSuccess: () => {
       // Invalidate the document cache

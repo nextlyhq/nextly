@@ -1131,6 +1131,7 @@ export class PushSchemaPipeline {
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
             fields: aggregatedFields,
+            dialect,
           });
         } catch (err) {
           throw preCleanupFailure(err);

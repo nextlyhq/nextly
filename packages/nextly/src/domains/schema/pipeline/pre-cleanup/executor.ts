@@ -21,6 +21,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { toSnakeCase } from "../../services/field-column-descriptor";
 import { runStatement } from "../_internal/run-statement";
 import type {
   AddColumnOp,
@@ -69,6 +70,8 @@ export function assertPreCleanupAccepted(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
   fields: Array<{ name: string; type: string }>;
+  /** Which encodings a value may arrive in: SQLite's columns store booleans and dates as numbers. */
+  dialect: SupportedDialect;
 }): void {
   // Abort short-circuits before any side effect.
   for (const r of args.resolutions) {
@@ -99,7 +102,8 @@ export function assertPreCleanupAccepted(args: {
       const fieldType = fieldTypeOf(args.fields, event.columnName);
       const validation = validateDefaultValue(
         { name: event.columnName, type: fieldType },
-        resolution.value
+        resolution.value,
+        args.dialect
       );
       if (!validation.success) {
         throw new Error(
@@ -119,12 +123,15 @@ export function assertPreCleanupAccepted(args: {
   }
 }
 
-/** A field's declared type, or text when the event names no declared field. */
+/**
+ * A field's declared type, or text when the event names no declared field. Found by its column,
+ * which the event names: a camelCase field's column is its snake_case name.
+ */
 function fieldTypeOf(
   fields: Array<{ name: string; type: string }>,
   columnName: string
 ): string {
-  return fields.find(f => f.name === columnName)?.type ?? "text";
+  return fields.find(f => toSnakeCase(f.name) === columnName)?.type ?? "text";
 }
 
 /**

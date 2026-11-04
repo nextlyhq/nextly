@@ -206,6 +206,48 @@ export function layerLabel(
 }
 
 /**
+ * Every block's name in a document, by address, as Layers reads them, kept
+ * per document and title lookup: the canvas asks for a placement's name each
+ * time it draws its frame, and a selection can hold many placements, so the
+ * page is read once rather than once per name. An edit makes a new document,
+ * which is read afresh.
+ */
+const BLOCK_NAMES = new WeakMap<
+  BlockDocument,
+  {
+    readonly titles: ComponentTitleOf | undefined;
+    readonly names: Map<string, string>;
+  }
+>();
+
+/**
+ * The name of the block at an address anywhere in the document, as its Layers
+ * row reads (see {@link layerLabel}), or `undefined` where the document holds
+ * no such block. The canvas tags a selected placement with it, so the page and
+ * the tree call one block by one name.
+ */
+export function blockNameOf(
+  document: BlockDocument,
+  id: string,
+  componentTitle?: ComponentTitleOf
+): string | undefined {
+  let kept = BLOCK_NAMES.get(document);
+  if (kept === undefined || kept.titles !== componentTitle) {
+    const names = new Map<string, string>();
+    const walk = (rows: readonly LayerNode[]): void => {
+      for (const row of rows) {
+        names.set(row.id, row.label);
+        walk(row.children);
+      }
+    };
+    walk(layersOf(document, componentTitle));
+    kept = { titles: componentTitle, names };
+    BLOCK_NAMES.set(document, kept);
+  }
+  return kept.names.get(id);
+}
+
+/**
  * The document as a tree of rows.
  *
  * `componentTitle` names component placements; see {@link layerLabel}.

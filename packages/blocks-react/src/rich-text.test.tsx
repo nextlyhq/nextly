@@ -1807,15 +1807,16 @@ describe("rich-text media wrappers carry what no stylesheet will", () => {
       },
     ] as unknown as RichTextValue["root"]["children"]);
 
-  it("resets the indent a figure arrives with", () => {
+  it("resets the indent a figure arrives with, and leaves its vertical space to the passage", () => {
     // The UA stylesheet gives `figure` a `margin: 1em 40px`. Nothing in this
-    // package neutralises it, so an image published into a narrow column loses
-    // 80px and sits visibly inset from the prose around it. The vertical space
-    // is kept at the editor's own `my-4`; only the horizontal inset goes.
+    // package neutralises the 40px inset, so the figure resets it inline. The
+    // space above and below is NOT set inline: an inline value outranks every
+    // rule, and the passage's own gap (`space.paragraph`, written by the
+    // compiler on the rich-text block) is what spaces a figure from the prose.
     for (const value of [image(), gallery()]) {
-      expect(renderToStaticMarkup(<RichText value={value} />)).toContain(
-        "margin:1rem 0"
-      );
+      const markup = renderToStaticMarkup(<RichText value={value} />);
+      // The figure's own style attribute, and nothing else in it.
+      expect(markup).toMatch(/<figure [^>]*style="margin-inline:0"/);
     }
   });
 

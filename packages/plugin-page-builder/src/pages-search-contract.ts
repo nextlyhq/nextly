@@ -60,7 +60,16 @@ export const PAGES_SEARCH_PARAMS = {
   limit: "limit",
   exclude: "exclude",
   before: "before",
+  order: "order",
 } as const;
+
+/**
+ * How a search's pages are ordered. `title`, the default, is the best matches
+ * first across every collection, for a search that shows a few; `collection`
+ * is each collection's pages together, the plugin's own Pages first and the
+ * others by name, each in title order, for a list grouped by collection.
+ */
+export type PagesSearchOrder = "title" | "collection";
 
 /**
  * The longest cursor the route accepts, in characters. A cursor names a
@@ -161,9 +170,11 @@ export interface PagesSearchQuery {
   readonly exclude?: PageReference;
   /**
    * Where to continue from: the previous answer's `meta.nextBefore`, sent with
-   * the same `q`, `limit` and `exclude`.
+   * the same `q`, `limit`, `exclude` and `order`.
    */
   readonly before?: string;
+  /** How the pages are ordered; by title when absent. */
+  readonly order?: PagesSearchOrder;
 }
 
 /**
@@ -188,6 +199,10 @@ export function pagesSearchPath(query: PagesSearchQuery = {}): string {
   }
   if (query.before !== undefined && query.before !== "") {
     params.set(PAGES_SEARCH_PARAMS.before, query.before);
+  }
+  // The default is left out, as an absent value is.
+  if (query.order === "collection") {
+    params.set(PAGES_SEARCH_PARAMS.order, query.order);
   }
   const search = params.toString();
   return search === ""

@@ -59,6 +59,8 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
+import { useCanvasPageContext } from "./canvas-page-context";
+import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
   useBreakpointWriter,
@@ -308,9 +310,12 @@ function useCanvasRender({
    * edited, and a surface showing the page as published must not have one.
    */
 
+  // The canvas's own page context, one object for the editor's life: see
+  // `canvas-page-context.ts`.
+  const canvasContext = useCanvasPageContext();
   const canvasRender = useMemo(
-    () =>
-      pageRenderInputs({
+    () => ({
+      ...pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         // None: the canvas is a frame at the previewed device's size, so the
@@ -323,11 +328,14 @@ function useCanvasRender({
         // keystroke.
         definitions: componentLibrary.definitions,
       }),
+      context: canvasContext,
+    }),
     [
       canvasSiteStyle,
       clientConfig,
       documentLimits,
       componentLibrary.definitions,
+      canvasContext,
     ]
   );
 
@@ -781,6 +789,13 @@ export function useCanvasInputs(
     ...styleState,
   });
   const site = useSiteCanvas(mount.clientConfig);
+  // Shared styles on the selected block, read off the same class surface and
+  // page counts the inspector and the Shared styles tab read.
+  const sharedStyle = useSharedStyleVerb({
+    editor: mount.editor,
+    classes: style.classes,
+    pageClassBlocks: readings.pageClassBlocks,
+  });
   return {
     ...render,
     ...viewport,
@@ -788,6 +803,7 @@ export function useCanvasInputs(
     ...wiring,
     ...readings,
     ...site,
+    sharedStyle,
   };
 }
 
@@ -801,4 +817,7 @@ export type CanvasInputs = CanvasRender &
   ShownStyleState &
   CanvasWiring &
   StyleReadings &
-  SiteCanvas;
+  SiteCanvas & {
+    /** The Style tab's shared-style host, the save verb and its dialog. */
+    sharedStyle: SharedStyleVerb;
+  };

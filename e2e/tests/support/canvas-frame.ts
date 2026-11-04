@@ -34,3 +34,27 @@ export function canvasBlock(page: Page, id: string): Locator {
 export function canvasLayer(page: Page): Locator {
   return page.locator("[data-nx-canvas-layer]");
 }
+
+/**
+ * The canvas frame's painted height beside the height of the room it is laid
+ * into: the content box of the nearest ancestor that lays the stage out, as
+ * the editor measures it (padding and a scrollbar excluded). Without a stated
+ * height the frame fills that room, so the two match at any zoom.
+ */
+export function frameAndRoom(
+  page: Page
+): Promise<{ painted: number; room: number }> {
+  return page.locator("[data-nx-canvas-frame-box]").evaluate(box => {
+    let region = box.parentElement?.parentElement ?? null;
+    while (region !== null && getComputedStyle(region).display === "contents") {
+      region = region.parentElement;
+    }
+    if (region === null) throw new Error("[e2e] the frame has no region");
+    const style = getComputedStyle(region);
+    const room =
+      region.clientHeight -
+      parseFloat(style.paddingTop) -
+      parseFloat(style.paddingBottom);
+    return { painted: box.getBoundingClientRect().height, room };
+  });
+}
