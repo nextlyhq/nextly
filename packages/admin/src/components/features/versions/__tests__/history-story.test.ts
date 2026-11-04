@@ -265,6 +265,20 @@ describe("versions and events in one second", () => {
     );
     expect(rows).toEqual(["e:taken-over", "v2", "v1"]);
   });
+
+  it("orders by time where the events' id order and time disagree", () => {
+    // A clock stepped back gives an older event the higher id, so the server
+    // sends it first; the list still shows each row at its own time.
+    const rows = served(
+      [version(2, 4), version(1, 0)],
+      [
+        event("draft-discarded", 3, { id: eventId(7, 0) }),
+        event("unpublished", 5, { id: eventId(6, 0), parts: ["en"] }),
+        event("created", 0, { id: eventId(0, 0), versionNo: 1 }),
+      ]
+    );
+    expect(rows).toEqual(["e:unpublished", "v2", "e:draft-discarded", "v1"]);
+  });
 });
 
 describe("filters", () => {

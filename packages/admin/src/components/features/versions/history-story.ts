@@ -473,7 +473,9 @@ function asParts(input: StoryInput): {
 /**
  * The id of the event that recorded each version, by its number: the first
  * by id, as the server names a version's author. Event ids are time-ordered,
- * so this says when within its second a version was written.
+ * so this says when within its second a version was written. The kinds are
+ * {@link VERSION_EVENTS}, the same as the server's producing kinds: a kind
+ * missing here leaves its versions where they stood before ids were compared.
  */
 function recordingIds(events: readonly DocumentEvent[]): Map<number, string> {
   const ids = new Map<number, string>();
@@ -506,17 +508,24 @@ function versionFirst(
   return id === undefined || id > event.event.id;
 }
 
+/** Newest first by time alone; a stable sort keeps ties in their order. */
+function byTimeNewestFirst(a: StoryEntry, b: StoryEntry): number {
+  return a.at < b.at ? 1 : a.at > b.at ? -1 : 0;
+}
+
 /**
- * The version rows and the event rows as one list, newest first. Each list
- * arrives newest first in the server's order, which also orders a second's
- * versions by number and its events by id, so the two are merged rather than
- * sorted, and neither list's own order changes.
+ * The version rows and the event rows as one list, newest first. The server
+ * orders a second's versions by number and its events by id, which a sort by
+ * time keeps, so each list is put in time order on its own and the two are
+ * then merged, which compares only a version with an event.
  */
 function merged(
-  versions: readonly StoryVersion[],
-  events: readonly (StoryEvent | StoryRemoval)[],
+  versionRows: readonly StoryVersion[],
+  eventRows: readonly (StoryEvent | StoryRemoval)[],
   recorded: ReadonlyMap<number, string>
 ): StoryEntry[] {
+  const versions = [...versionRows].sort(byTimeNewestFirst);
+  const events = [...eventRows].sort(byTimeNewestFirst);
   const rows: StoryEntry[] = [];
   let v = 0;
   let e = 0;
