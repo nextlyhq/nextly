@@ -151,13 +151,18 @@ export function partialBuilderFileLine(file: PartialBuilderFile): string {
   return `${file.file} has the name of an earlier Schema Builder's file but is checked as a migration: it ${lacks}.`;
 }
 
-/** Whether a path exists; any failure to reach it reads as absent. */
+/**
+ * Whether a path exists. Only "not found" reads as absent: any other failure
+ * (a permission, an I/O error) travels, since a snapshot read as missing
+ * when it is there would set its file aside as an old Builder file.
+ */
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return false;
+    throw error;
   }
 }
 

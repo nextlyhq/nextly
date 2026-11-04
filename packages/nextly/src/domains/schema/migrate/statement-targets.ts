@@ -212,16 +212,22 @@ export function registryRowWrittenBy(
 function insertedRow(cursor: StatementCursor): RegistryRowWrite | undefined {
   const table = cursor.name();
   if (table === undefined || !cursor.accept("(")) return undefined;
+  const slug = insertedSlug(cursor);
+  if (slug === undefined || !upsertKeepsSlug(cursor)) return undefined;
+  return { table, slug };
+}
+
+/**
+ * The `slug` value of an INSERT's one row, read from its column list to the
+ * end of its VALUES, or undefined when the row is not one read here.
+ */
+function insertedSlug(cursor: StatementCursor): string | undefined {
   const columns = nameList(cursor);
   if (columns === undefined || !cursor.accept(")")) return undefined;
   if (!cursor.accept("VALUES", "(")) return undefined;
   const values = parenthesised(cursor);
-  if (values === undefined || values.length !== columns.length) {
-    return undefined;
-  }
-  const slug = stringText(values[columns.indexOf("slug")] ?? []);
-  if (slug === undefined || !upsertKeepsSlug(cursor)) return undefined;
-  return { table, slug };
+  if (values?.length !== columns.length) return undefined;
+  return stringText(values[columns.indexOf("slug")] ?? []);
 }
 
 /**

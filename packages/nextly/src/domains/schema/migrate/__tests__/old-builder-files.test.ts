@@ -292,6 +292,28 @@ describe.each<Dialect>(["postgresql", "mysql"])("drop files on %s", dialect => {
     });
   });
 
+  // A collection's slug can spell another kind's drop name: slug `user_ext`
+  // gives `_drop_user_ext`, slug `comp_news` gives `_drop_comp_news`. Each
+  // reading the name allows is tried, and the file is old when it fits one.
+  it.each([
+    ["user_ext", "1730000000009_drop_user_ext.sql", "dc_user_ext"],
+    ["comp_news", "1730000000010_drop_comp_news.sql", "dc_comp_news"],
+  ])(
+    "recognises the drop of a collection whose slug is %s",
+    (slug, name, table) => {
+      expect(old(name, drop(table))).toEqual({
+        kind: "old-builder",
+        entity: slug,
+      });
+    }
+  );
+
+  it("is partial when a drop mixes two readings of its name", () => {
+    expect(
+      old("1730000000009_drop_user_ext.sql", drop("user_ext", "dc_user_ext"))
+    ).toEqual({ kind: "partial", lacks: ["scope"] });
+  });
+
   it.each([
     ["a collection's", "1730000000004_drop_posts.sql", "dc_posts"],
     ["a field group's", "1730000000005_drop_comp_hero.sql", "comp_hero"],

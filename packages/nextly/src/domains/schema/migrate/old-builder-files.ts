@@ -81,30 +81,48 @@ interface NamedEntity {
   registry?: string;
 }
 
-function entityOf(verb: string, rest: string): NamedEntity {
-  if (verb === "drop") {
-    // A bulk delete names no one collection: every table it drops must be
-    // some Builder collection's, and only collections' tables carry `dc_`.
-    if (BULK_DROP_NAME.test(rest)) {
-      return { slug: rest, owns: table => table.startsWith("dc_") };
-    }
-    if (rest === USER_EXT_TABLE) {
-      return { slug: rest, owns: table => table === USER_EXT_TABLE };
-    }
-    // Only a field group's drop carries its prefix; every other name is a collection's.
-    if (rest.startsWith(STORAGE_FORMAT.tablePrefix)) {
-      const own = rest;
-      return {
+/**
+ * Every entity a Builder file name can give. A drop's name can be read more
+ * than one way: a collection whose slug is `user_ext` or starts with `comp_`
+ * gives the same name as the user-field table's or a field group's drop. Each
+ * reading is tried, and the file is the entity's whose tables it keeps to
+ * (`classifyMigrationFile`); the special reading comes first.
+ */
+function entitiesOf(verb: string, rest: string): NamedEntity[] {
+  const collection = collectionEntity(rest);
+  if (verb !== "drop") return [collection];
+  // A bulk delete names no one collection: every table it drops must be
+  // some Builder collection's, and only collections' tables carry `dc_`.
+  if (BULK_DROP_NAME.test(rest)) {
+    return [{ slug: rest, owns: table => table.startsWith("dc_") }];
+  }
+  if (rest === USER_EXT_TABLE) {
+    return [
+      { slug: rest, owns: table => table === USER_EXT_TABLE },
+      collection,
+    ];
+  }
+  if (rest.startsWith(STORAGE_FORMAT.tablePrefix)) {
+    const own = rest;
+    return [
+      {
         slug: rest.slice(STORAGE_FORMAT.tablePrefix.length),
         owns: table => isOwnTable(own, table),
-      };
-    }
+      },
+      collection,
+    ];
   }
-  // Every other file is a collection's, and a create file may also upsert
-  // the collection's own registry row.
-  const own = getTableName(rest);
+  return [collection];
+}
+
+/**
+ * The collection a name gives, whose create file may also upsert the
+ * collection's own registry row.
+ */
+function collectionEntity(slug: string): NamedEntity {
+  const own = getTableName(slug);
   return {
-    slug: rest,
+    slug,
     owns: table => isOwnTable(own, table),
     registry: COLLECTION_REGISTRY,
   };
@@ -154,19 +172,31 @@ function isOwnIndex(entity: NamedEntity, index: string): boolean {
   if (index.length >= MAX_INDEX_NAME_LENGTH || !/^[\x20-\x7e]*$/.test(index)) {
     return false;
   }
-  let owned = false;
+  const tables = tablesNamedBy(index);
+  return (
+    tables.some(table => entity.owns(table)) &&
+    !tables.some(table => !entity.owns(table) && isEntityTableName(table))
+  );
+}
+
+/**
+ * Every table `index` is exactly the one-column index name of, plain or
+ * unique, for some column: each split of its name past the prefix into a
+ * table and a column that the naming gives back as `index`.
+ */
+function tablesNamedBy(index: string): string[] {
+  const tables: string[] = [];
   for (const { prefix, name } of COLUMN_INDEX_NAMES) {
     if (!index.startsWith(prefix)) continue;
     const rest = index.slice(prefix.length);
     for (let at = rest.indexOf("_"); at > 0; at = rest.indexOf("_", at + 1)) {
-      const table = rest.slice(0, at);
       const column = rest.slice(at + 1);
-      if (column === "" || name(table, column) !== index) continue;
-      if (entity.owns(table)) owned = true;
-      else if (isEntityTableName(table)) return false;
+      if (column !== "" && name(rest.slice(0, at), column) === index) {
+        tables.push(rest.slice(0, at));
+      }
     }
   }
-  return owned;
+  return tables;
 }
 
 /** (c): whether the content carries any line `migrate:create` writes. */
@@ -249,14 +279,17 @@ export function classifyMigrationFile(
   const named = BUILDER_FILE_NAME.exec(file.name);
   if (!named) return { kind: "ordinary" };
   const [, verb, rest] = named;
-  const entity = entityOf(verb, rest);
+  // The one reading of the name whose tables every statement keeps to.
+  const entity = entitiesOf(verb, rest).find(candidate =>
+    staysInEntity(candidate, verb === "drop", file)
+  );
 
   const lacks: OldBuilderSignaturePart[] = [];
   if (file.hasSnapshot) lacks.push("snapshot");
   if (hasCreateHeader(file.content)) lacks.push("header");
-  if (!staysInEntity(entity, verb === "drop", file)) lacks.push("scope");
+  if (entity === undefined) lacks.push("scope");
 
-  return lacks.length === 0
+  return entity !== undefined && lacks.length === 0
     ? { kind: "old-builder", entity: entity.slug }
     : { kind: "partial", lacks };
 }

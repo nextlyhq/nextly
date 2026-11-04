@@ -247,6 +247,15 @@ describe("registryRowWrittenBy on postgresql only", () => {
   });
 });
 
+describe("a statement cut off inside a quoted name", () => {
+  it("is unreadable, not a statement on the name it starts", () => {
+    expect(
+      tablesChangedIn(`ALTER TABLE "dc_posts`, "postgresql")
+    ).toBeUndefined();
+    expect(tablesDroppedBy("DROP TABLE `dc_posts", "mysql")).toBeUndefined();
+  });
+});
+
 describe("indexesDroppedBy", () => {
   it.each([
     [`DROP INDEX "idx_a"`, ["idx_a"]],

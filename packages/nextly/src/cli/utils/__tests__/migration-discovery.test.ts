@@ -233,6 +233,24 @@ describe("migration-discovery", () => {
       expect(folder.partialBuilderFiles.map(f => f.file)).toContain(OLD);
     });
 
+    // A snapshot that cannot be checked is not a missing one: reading it as
+    // absent would set the file aside as an old Builder file.
+    it.skipIf(process.getuid?.() === 0)(
+      "refuses when whether a snapshot exists cannot be told",
+      async () => {
+        const meta = path.join(testDir, "meta");
+        await fs.mkdir(meta);
+        await fs.chmod(meta, 0o000);
+        try {
+          await expect(
+            readMigrationFolder(testDir, "postgresql")
+          ).rejects.toMatchObject({ code: "EACCES" });
+        } finally {
+          await fs.chmod(meta, 0o755);
+        }
+      }
+    );
+
     it("discoverMigrationGroups reads the same migrations", async () => {
       const groups = await discoverMigrationGroups(testDir, "postgresql");
       expect(groups.has("1730000000000_create_posts")).toBe(false);

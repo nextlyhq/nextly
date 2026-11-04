@@ -225,9 +225,13 @@ function* serverTokens(
         }
         break;
       case "quoted-name":
+        // A name cut off before its closing quote names nothing the server
+        // reads, so it is no name at all and every reader fails closed on it.
         yield {
           kind: "name",
-          name: segment.content.toUpperCase(),
+          name: segment.unterminated
+            ? undefined
+            : segment.content.toUpperCase(),
           ...(segment.unicodeEscaped ? { escaped: true } : {}),
         };
         break;

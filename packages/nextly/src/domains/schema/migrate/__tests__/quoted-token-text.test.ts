@@ -22,6 +22,16 @@ describe("a quoted token names its kind", () => {
     ]);
   });
 
+  it.each<SupportedDialect>(["postgresql", "mysql", "sqlite"])(
+    "%s: reads no name from an unterminated quoted name",
+    dialect => {
+      const q = dialect === "mysql" ? "`" : '"';
+      expect(quoted(`ALTER TABLE ${q}dc_posts`, dialect)).toEqual([
+        { kind: "name", name: undefined },
+      ]);
+    }
+  );
+
   it("reads MySQL's backtick as a name", () => {
     expect(quoted("SELECT `b`", "mysql")).toEqual([
       { kind: "name", name: "B" },
