@@ -15,7 +15,7 @@ import * as React from "react";
 import { describe, expect, it } from "vitest";
 
 import { PAGE_BUILDER_DOCS } from "./docs-links";
-import { HelpDialog } from "./help-dialog";
+import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 
 /** Each binding's description as it runs, for asking which one a key ran. */
 let ran: string[] = [];
@@ -51,7 +51,13 @@ function Page({ children }: { children?: React.ReactNode }) {
 }
 
 /** The editor nested in it, as the shell installs its own provider. */
-function Editor({ children }: { children?: React.ReactNode }) {
+function Editor({
+  children,
+  panelKeys,
+}: {
+  children?: React.ReactNode;
+  panelKeys?: PanelKeysSetting;
+}) {
   return (
     <ShortcutProvider isApple={false}>
       <Bind
@@ -65,7 +71,7 @@ function Editor({ children }: { children?: React.ReactNode }) {
         description="Clear the block selection"
       />
       {children}
-      <Help />
+      <Help panelKeys={panelKeys} />
     </ShortcutProvider>
   );
 }
@@ -73,15 +79,71 @@ function Editor({ children }: { children?: React.ReactNode }) {
 let setHelpOpen: (open: boolean) => void = () => {};
 
 /** Help, open unless a test closes it. */
-function Help() {
+function Help({ panelKeys }: { panelKeys?: PanelKeysSetting }) {
   const [open, setOpen] = React.useState(true);
   setHelpOpen = setOpen;
-  return <HelpDialog open={open} onOpenChange={setOpen} />;
+  return (
+    <HelpDialog
+      open={open}
+      onOpenChange={setOpen}
+      {...(panelKeys === undefined ? {} : { panelKeys })}
+    />
+  );
 }
 
 function list() {
   return screen.getByRole("region", { name: "Keyboard shortcuts" });
 }
+
+describe("HelpDialog with the editor's panel keys", () => {
+  const LAYER = "Editor panels";
+  const layers = {
+    keys: "l",
+    description: "Open or close Layers",
+    layer: LAYER,
+  };
+  const setting = (on: boolean, shortcuts = [layers]) => ({
+    on,
+    onChange: () => {},
+    shortcuts,
+    layer: LAYER,
+  });
+
+  it("keeps a panel key's row over a page binding below it on the same key", () => {
+    // The panel key takes "l"; a row placed after the page's would lose it.
+    render(
+      <Page>
+        <Bind name="page-l" keys="l" description="Page's own L" />
+        <Editor panelKeys={setting(true)}>
+          <Bind name={LAYER} keys="l" description="Open or close Layers" />
+        </Editor>
+      </Page>
+    );
+    expect(list().textContent).toContain("Open or close Layers");
+    expect(list().textContent).not.toContain("Page's own L");
+  });
+
+  it("names in the switch's hint only the keys this editor offers", () => {
+    render(
+      <Page>
+        <Editor
+          panelKeys={setting(true, [
+            { keys: "a", description: "Open or close Add", layer: LAYER },
+            layers,
+          ])}
+        />
+      </Page>
+    );
+    const hint = screen.getByRole("switch", {
+      name: "Single-letter shortcuts",
+    });
+    expect(hint.getAttribute("aria-describedby")).not.toBeNull();
+    const text =
+      document.getElementById(hint.getAttribute("aria-describedby") ?? "")
+        ?.textContent ?? "";
+    expect(text).toMatch(/^A and L open panels\./);
+  });
+});
 
 describe("HelpDialog", () => {
   it("lists the editor's shortcuts and the page's around it", () => {

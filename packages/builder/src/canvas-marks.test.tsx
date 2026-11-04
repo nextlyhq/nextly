@@ -11,7 +11,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { createElement } from "react";
+import { createElement, useEffect } from "react";
 
 import {
   clearBlocks,
@@ -23,6 +23,7 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { Canvas } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
+import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 
 /**
  * The selection ring and its halo are drawn for EVERY selected rendering, by
@@ -351,5 +352,88 @@ describe("selection marks", () => {
     // The visible block's mark is drawn, so the canvas has measured.
     await waitFor(() => expect(halosIn(container).length).toBeGreaterThan(0));
     expect(halosIn(container)).toHaveLength(1);
+  });
+});
+
+describe("the hovered block's mark", () => {
+  /** Points at a block, as a Layers row does under the pointer. */
+  function PointAt({ id }: { id: string | null }): null {
+    const point = useHoveredBlockSetter();
+    useEffect(() => {
+      point(id);
+    }, [point, id]);
+    return null;
+  }
+
+  const hoveredIn = (container: HTMLElement) =>
+    Array.from(
+      container.querySelectorAll('.nx-canvas-mark[data-mark="hovered"]')
+    );
+
+  it("is drawn over the block a row points at, and goes when it stops", async () => {
+    const drawn = (id: string | null) => (
+      <HoveredBlockProvider>
+        <PointAt id={id} />
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={<CanvasMarks />}
+        />
+      </HoveredBlockProvider>
+    );
+    const { container, rerender } = render(drawn("b"));
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    rerender(drawn(null));
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(0));
+  });
+
+  it("is left to the ring on a block already selected", async () => {
+    const { container } = render(
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="b"
+          overlay={<CanvasMarks />}
+        />
+      </HoveredBlockProvider>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    expect(hoveredIn(container)).toHaveLength(0);
+  });
+});
+
+describe("a selected block shown although the page hides it", () => {
+  it("is hatched and tagged with the device it is hidden on", async () => {
+    const { container } = render(
+      <Canvas
+        document={leaves}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="a"
+        selectedIds={["a", "b"]}
+        overlay={
+          <CanvasMarks
+            revealed={["a"]}
+            device={{
+              breakpoints: {
+                viewport: [{ id: "mobile", label: "Mobile", maxWidth: 640 }],
+                container: [],
+              },
+              id: "mobile",
+            }}
+          />
+        }
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    const hidden = halosIn(container).filter(mark =>
+      mark.hasAttribute("data-hidden")
+    );
+    expect(hidden).toHaveLength(1);
+    expect(hidden[0]?.getAttribute("data-label")).toBe("Hidden on Mobile");
   });
 });

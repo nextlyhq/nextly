@@ -121,13 +121,15 @@ describe("the bounds the library is handed", () => {
   it("declares a canvas floor that per-panel bounds cannot express", () => {
     // This is the number that decided the design, kept as an assertion so the
     // reasoning cannot quietly stop being true. Both panels at their individual
-    // maximums on the minimum supported viewport leave the canvas at 196px —
-    // narrower than either panel — with no per-panel bound violated.
+    // maximums on the minimum supported viewport leave the canvas at 232px —
+    // narrower than either panel — with no per-panel bound violated. Pinned,
+    // so the figure stated here moves with the widths it is made of.
     const canvasIfPanelsMaxed =
       MIN_SHELL_WIDTH -
       RAIL_WIDTH -
       PANEL_BOUNDS.left.max -
       PANEL_BOUNDS.inspector.max;
+    expect(canvasIfPanelsMaxed).toBe(232);
     expect(canvasIfPanelsMaxed).toBeLessThan(MIN_CANVAS_WIDTH);
 
     // So the floor is declared on the canvas itself, and the supported viewport
@@ -183,6 +185,8 @@ describe("preferences round-trip", () => {
     zoom: { kind: "fixed", scale: 1.5 },
     // Non-default as well: null, the base breakpoint, is the default.
     editingBreakpoint: "tablet",
+    // Off, the non-default: a read that dropped it would answer on.
+    panelKeys: false,
   };
 
   it("restores what was written", () => {
@@ -264,6 +268,9 @@ describe("preferences round-trip", () => {
       showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
       zoom: DEFAULT_PREFERENCES.zoom,
       editingBreakpoint: DEFAULT_PREFERENCES.editingBreakpoint,
+      // Absent as well, as in every record written before the keys could be
+      // turned off: on.
+      panelKeys: true,
     });
   });
 
@@ -369,6 +376,7 @@ describe("preferences saved before panels had parts", () => {
         "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
       },
       showEmptyElements: true,
+      panelKeys: true,
     });
   });
 });

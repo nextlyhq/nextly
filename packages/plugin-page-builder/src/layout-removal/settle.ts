@@ -1,0 +1,371 @@
+/**
+ * A removal's check after its write, and the sweep that finishes or clears
+ * the removals a request left part-way.
+ *
+ * ## The check after the write
+ *
+ * The removal read the default twice before it wrote, but a promotion can
+ * commit between that last read and the delete or unpublish. So once the
+ * write has committed, the default is read again:
+ *
+ * - it names this Layout, and it was deleted: the Layout is restored from the
+ *   copy under a new id and the default points at it (`restore.ts`);
+ * - it names this Layout, and it was unpublished: left to the default repair,
+ *   which the default guard queues after the write, since undoing the
+ *   unpublish would publish the Layout's working draft along with it;
+ * - otherwise the removal is settled: the copy is dropped, and the row stays
+ *   as the record that the Layout was removed.
+ *
+ * First, every page a write in flight left on the Layout (its unpublished row
+ * or its working draft) has the Layout cleared, so no page is left naming a
+ * Layout that is gone.
+ *
+ * ## The sweep
+ *
+ * Runs with the default repair on every jobs pass. A removal is one request,
+ * so a row older than the lease belongs to a request that stopped:
+ *
+ * - at `marked` or `checked` nothing was changed yet, so the row is removed;
+ * - at `final`, the Layout as it is says whether the write landed: still there
+ *   (or still published, for an unpublish) and the row is removed; gone and it
+ *   is settled as the request would have, an unpublish first looking for pages
+ *   published onto it meanwhile ({@link undoUnpublishIfPagesNameIt});
+ * - at `removed`, the check after the write is run;
+ * - at `restoring`, a restore whose row records the Layout it created is
+ *   finished on that Layout; one that stopped before recording it cannot tell
+ *   whether its Layout was created, so it is settled and logged rather than
+ *   run twice.
+ *
+ * A row is removed only while it is exactly as the sweep read it: the same
+ * token, step and `updatedAt`. A removal that moved on after the read, or
+ * renewed its lease during a long scan, is left to the request that holds it.
+ *
+ * It also drops an unpublish tombstone whose Layout is published again by a
+ * write that ran no collection hooks (core's all-languages publish).
+ *
+ * @module layout-removal/settle
+ */
+import {
+  layoutExists,
+  publishedLayoutIds,
+  readLayoutSettings,
+  type DefaultLayoutDirectApi,
+} from "../default-layout/store";
+
+import {
+  idChunks,
+  scanLayoutReferences,
+  type PageReference,
+  type ReferenceScan,
+} from "./layout-references";
+import { LAYOUT_REMOVAL_CONTEXT_KEY } from "./layout-removal-guard";
+import { clearPageReference, IN_FLIGHT_CLEARED } from "./page-reference-guard";
+import {
+  republishFromCopy,
+  restoreFromCopy,
+  resumeRestore,
+  type RestoreDeps,
+} from "./restore";
+import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
+
+/** What the check after the write did. */
+export type SettleOutcome =
+  /** Nothing raced it: the removal is settled. */
+  | "settled"
+  /** A promotion raced a delete: the Layout was restored under a new id. */
+  | "restored"
+  /** A promotion raced an unpublish: the default repair puts the default right. */
+  | "left-to-repair"
+  /** Another run restored it, or the default moved on meanwhile. */
+  | "moved-on";
+
+/** What the check after the write needs beyond a restore. */
+export type SettleDeps = RestoreDeps & {
+  readonly nextly: RestoreDeps["nextly"] &
+    Pick<DefaultLayoutDirectApi, "find" | "findByID">;
+  /** The RESOLVED pages slug. */
+  readonly pagesSlug: string;
+};
+
+/**
+ * An unpublish's look after its write, the same from the request and from the
+ * sweep finishing a request that stopped: scan pages again, live rows
+ * included. A page published while the unpublish ran, naming the Layout, would
+ * show the site default in its place with nobody having confirmed it; so the
+ * Layout is published again from its copy, with the removal's token, and the
+ * fence comes down. Answers the scan that found the pages, or `null` when
+ * nothing names the Layout and the unpublish stands.
+ */
+export async function undoUnpublishIfPagesNameIt(
+  deps: Pick<
+    SettleDeps,
+    "nextly" | "slugs" | "pagesSlug" | "store" | "warn"
+  > & {
+    readonly budget?: number;
+  },
+  layoutId: string,
+  token: string
+): Promise<ReferenceScan | null> {
+  const scan = await scanLayoutReferences({
+    nextly: deps.nextly,
+    pages: deps.pagesSlug,
+    layoutId,
+    ...(deps.budget === undefined ? {} : { budget: deps.budget }),
+  });
+  if (scan.complete && scan.references.length === 0) return null;
+  const removal = await deps.store.removalOf(layoutId);
+  await republishFromCopy(deps, layoutId, removal?.copy ?? null, {
+    [LAYOUT_REMOVAL_CONTEXT_KEY]: token,
+  });
+  await deps.store.stop(layoutId, token);
+  deps.warn(
+    "[page-builder] a page was published onto a Layout while it was being unpublished; the Layout was published again",
+    { layoutId }
+  );
+  return scan;
+}
+
+/**
+ * Clear the Layout from every page a write in flight left on it: the scan
+ * once more, after the removal's own write, clearing each unpublished page and
+ * each working draft that names it (`clearPageReference`). A live row is left,
+ * since no write changes it without publishing its draft. Never throws: a page
+ * that cannot be cleared is logged, and the page's own after-write look, or the
+ * site default it draws, covers it.
+ */
+async function clearPagesLeftOnIt(
+  deps: SettleDeps,
+  removal: LayoutRemoval
+): Promise<PageReference[]> {
+  const live: PageReference[] = [];
+  try {
+    const scan = await scanLayoutReferences({
+      nextly: deps.nextly,
+      pages: deps.pagesSlug,
+      layoutId: removal.layoutId,
+    });
+    for (const reference of scan.references) {
+      if (reference.place === "live") {
+        live.push(reference);
+        continue;
+      }
+      if (
+        await clearPageReference(
+          deps.nextly,
+          deps.pagesSlug,
+          reference.id,
+          removal.layoutId
+        )
+      ) {
+        deps.warn(
+          "[page-builder] a page write in flight was cleared to the site default because its Layout is being removed",
+          {
+            pageId: reference.id,
+            layoutId: removal.layoutId,
+            phase: "after-removal",
+            reason: IN_FLIGHT_CLEARED,
+          }
+        );
+      }
+    }
+  } catch (error) {
+    deps.warn(
+      "[page-builder] the pages a Layout removal left could not all be checked",
+      {
+        layoutId: removal.layoutId,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
+  return live;
+}
+
+/**
+ * What the check after the write did, and the pages whose LIVE row still
+ * names the Layout: a page published while the removal ran, which no write
+ * can change without publishing its draft.
+ */
+export interface SettledRemoval {
+  readonly outcome: SettleOutcome;
+  readonly live: readonly PageReference[];
+}
+
+/** Run the check after the write for a removal whose write has committed. */
+export async function settleRemoval(
+  deps: SettleDeps,
+  removal: LayoutRemoval
+): Promise<SettledRemoval> {
+  const live = await clearPagesLeftOnIt(deps, removal);
+  return { outcome: await settleDefault(deps, removal), live };
+}
+
+/** The default half of the check after the write. */
+async function settleDefault(
+  deps: SettleDeps,
+  removal: LayoutRemoval
+): Promise<SettleOutcome> {
+  const { defaultLayout } = await readLayoutSettings(deps.nextly, deps.slugs);
+  if (defaultLayout === removal.layoutId) {
+    if (removal.action === "delete") {
+      return (await restoreFromCopy(deps, removal)) === null
+        ? "moved-on"
+        : "restored";
+    }
+    deps.warn(
+      "[page-builder] a Layout was made the default while it was being unpublished; the default repair will point the default at a published Layout",
+      { layoutId: removal.layoutId }
+    );
+    await deps.store.settle(removal.layoutId, removal.token);
+    return "left-to-repair";
+  }
+  await deps.store.settle(removal.layoutId, removal.token);
+  return "settled";
+}
+
+/** What the sweep needs beyond the check after the write. */
+export type SweepDeps = SettleDeps & {
+  readonly now?: () => Date;
+};
+
+/** Whether a row was last moved longer ago than the lease. */
+function isStale(removal: LayoutRemoval, now: Date): boolean {
+  return now.getTime() - removal.updatedAt.getTime() > REMOVAL_LEASE_MS;
+}
+
+/** Whether a removal's write landed: the Layout is gone, or unpublished. */
+export async function writeLanded(
+  deps: Pick<SweepDeps, "nextly" | "slugs">,
+  removal: Pick<LayoutRemoval, "action" | "layoutId">
+): Promise<boolean> {
+  if (removal.action === "delete") {
+    return !(await layoutExists(deps.nextly, deps.slugs, removal.layoutId));
+  }
+  const published = await publishedLayoutIds(deps.nextly, deps.slugs, [
+    removal.layoutId,
+  ]);
+  return !published.has(removal.layoutId);
+}
+
+/** Finish one row a stopped request left at `final`. */
+async function finishFinal(
+  deps: SweepDeps,
+  removal: LayoutRemoval
+): Promise<void> {
+  if (!(await writeLanded(deps, removal))) {
+    await deps.store.stopStale(removal);
+    return;
+  }
+  if (
+    removal.action === "unpublish" &&
+    (await undoUnpublishIfPagesNameIt(
+      deps,
+      removal.layoutId,
+      removal.token
+    )) !== null
+  ) {
+    return;
+  }
+  const moved = await deps.store.advance({
+    layoutId: removal.layoutId,
+    token: removal.token,
+    from: "final",
+    to: "removed",
+  });
+  if (moved) await settleRemoval(deps, { ...removal, step: "removed" });
+}
+
+/** Finish or clear one row a stopped request left behind. */
+async function sweepOne(
+  deps: SweepDeps,
+  removal: LayoutRemoval
+): Promise<void> {
+  switch (removal.step) {
+    case "marked":
+    case "checked":
+      await deps.store.stopStale(removal);
+      return;
+    case "final":
+      await finishFinal(deps, removal);
+      return;
+    case "removed":
+      await settleRemoval(deps, removal);
+      return;
+    case "restoring":
+      if (await resumeRestore(deps, removal)) return;
+      deps.warn(
+        "[page-builder] a Layout's restore stopped part-way; check the Layouts list for a restored copy",
+        { layoutId: removal.layoutId }
+      );
+      await deps.store.settle(removal.layoutId, removal.token, "restoring");
+      return;
+  }
+}
+
+/**
+ * Finish or clear every removal a stopped request left, by the rules in the
+ * module docblock. Each row is handled on its own, so one that fails is
+ * logged and the rest still run.
+ */
+export async function settleLayoutRemovals(deps: SweepDeps): Promise<void> {
+  await finishStoppedRemovals(deps);
+  await releasePublishedTombstones(deps);
+}
+
+/**
+ * Drop each unpublish tombstone whose Layout is published again. A publish
+ * normally drops it from the Layout's own after-write hook, but core's
+ * all-languages publish runs no collection hooks, and would otherwise leave a
+ * published Layout that make-default refuses as being removed.
+ *
+ * Asked in chunks ({@link idChunks}), each released on its own, so however many
+ * tombstones build up, no lookup passes the database's bound parameters and
+ * one chunk that fails leaves the rest released. Never throws.
+ */
+async function releasePublishedTombstones(deps: SweepDeps): Promise<void> {
+  let tombstones: LayoutRemoval[];
+  try {
+    tombstones = await deps.store.tombstones();
+  } catch (error) {
+    warnTombstones(deps, error);
+    return;
+  }
+  for (const chunk of idChunks(tombstones.map(removal => removal.layoutId))) {
+    try {
+      const published = await publishedLayoutIds(
+        deps.nextly,
+        deps.slugs,
+        chunk
+      );
+      for (const id of published) await deps.store.releaseTombstone(id);
+    } catch (error) {
+      warnTombstones(deps, error);
+    }
+  }
+}
+
+/** Log a tombstone check that failed; the next sweep tries again. */
+function warnTombstones(deps: SweepDeps, error: unknown): void {
+  deps.warn(
+    "[page-builder] the unpublish records of Layouts published again could not be checked; the next sweep will try again",
+    { error: error instanceof Error ? error.message : String(error) }
+  );
+}
+
+/** The rows stopped requests left, each finished or cleared. */
+async function finishStoppedRemovals(deps: SweepDeps): Promise<void> {
+  const now = (deps.now ?? (() => new Date()))();
+  for (const removal of await deps.store.unsettled()) {
+    if (!isStale(removal, now)) continue;
+    try {
+      await sweepOne(deps, removal);
+    } catch (error) {
+      deps.warn(
+        "[page-builder] a Layout removal left part-way could not be finished; the next sweep will try again",
+        {
+          layoutId: removal.layoutId,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+  }
+}

@@ -18,6 +18,8 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
+import type { LayoutRemovalStore } from "../layout-removal/store";
+
 import { ensureDefaultLayout } from "./ensure-default";
 import type { DefaultLayoutDirectApi } from "./store";
 
@@ -73,6 +75,8 @@ function site(options: SiteOptions = {}) {
   };
 
   const nextly = {
+    // No working drafts on this site: the read falls back to the live row.
+    findByID: async () => null,
     findSingle: async () => {
       const answer = { ...settings };
       settingsReads += 1;
@@ -145,8 +149,28 @@ function site(options: SiteOptions = {}) {
   return { nextly, rows, deleted, finds, settings: () => settings };
 }
 
+/**
+ * A Layout removal fence that holds nothing and lets every step through: no
+ * case here is about a removal, and the seed's cleanup delete only needs its
+ * steps to answer.
+ */
+const openFence = {
+  removalOf: async () => null,
+  mark: async () => ({ kind: "marked" }),
+  advance: async () => true,
+  settle: async () => true,
+  stop: async () => true,
+  releaseTombstone: async () => {},
+  unsettled: async () => [],
+} as unknown as LayoutRemovalStore;
+
 function depsFor(s: ReturnType<typeof site>) {
-  return { nextly: s.nextly, slugs: SLUGS, warn: () => {} };
+  return {
+    nextly: s.nextly,
+    slugs: SLUGS,
+    removals: openFence,
+    warn: () => {},
+  };
 }
 
 describe("a seed whose settings write fails", () => {

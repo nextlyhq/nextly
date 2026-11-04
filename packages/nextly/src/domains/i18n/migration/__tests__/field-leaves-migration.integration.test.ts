@@ -56,7 +56,10 @@ import {
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
 import { withMigrateLock } from "../../../schema/pipeline/locks";
-import { companionColumnNames } from "../../runtime/companion-io";
+import {
+  companionColumnNames,
+  reconcileCompanionColumns,
+} from "../../runtime/companion-io";
 import { stepFileOf } from "../step-windows";
 import {
   createScratchDatabase,
@@ -300,6 +303,49 @@ for (const entry of DIALECTS) {
         expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
         expect(await columnsOf(companion)).not.toContain("body");
       }
+
+      // The column is the migration's: a reconcile afterwards has nothing left to add.
+      it("records a translated field added to a translated collection, and takes it back on the way down", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        const withSummary: MinimalConfigEntity = {
+          ...translated,
+          fields: [
+            ...translated.fields,
+            { name: "summary", type: "text", localized: true },
+          ],
+        };
+        await migrateCreate(withSummary);
+
+        await migrate();
+
+        expect(await columnsOf(companion)).toContain("summary");
+        const issued = vi.spyOn(adapter, "executeQuery");
+        const reconciled = await reconcileCompanionColumns(
+          adapter as unknown as Parameters<typeof reconcileCompanionColumns>[0],
+          {
+            builtBy: "codeFirst",
+            slug,
+            tableName: table,
+            fields: withSummary.fields,
+            dialect,
+          }
+        );
+        expect(reconciled).toBe(true);
+        expect(
+          issued.mock.calls
+            .map(([statement]) => String(statement))
+            .filter(statement => /^\s*ALTER TABLE/i.test(statement))
+        ).toEqual([]);
+        issued.mockRestore();
+
+        expect(await migrateDown(1)).toHaveLength(1);
+        expect(await columnsOf(companion)).not.toContain("summary");
+        expect(await columnsOf(companion)).toContain("body");
+
+        await migrate();
+        expect(await columnsOf(companion)).toContain("summary");
+      });
 
       it("makes the companion of a collection that becomes translated with only a new translated field", async () => {
         await migrateCreate({
