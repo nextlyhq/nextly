@@ -58,7 +58,10 @@ export interface InlineEditUnchanged {
  * has left the page, so there is nothing to keep the words in: the block was
  * deleted, or the canvas re-rendered without it. Their typing is gone, and a
  * host that can say so should: nothing else will mention it. While the element
- * is still on the page the edit is {@link InlineEditRefused} instead.
+ * is still on the page the edit is {@link InlineEditRefused} instead, except
+ * where the host itself finished a line of text: a host finishing an edit is
+ * closing or opening something else, so the line cannot stay open, and its
+ * unwritten words are reported here.
  *
  * Distinct from {@link InlineEditRefused} in the one way that matters to a
  * host: there is nothing left to protect, so this must not stop it closing.

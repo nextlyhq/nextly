@@ -50,9 +50,10 @@ import {
   exposedTextOp,
   type ExposedTextTarget,
 } from "./exposed-inline";
-import type {
-  InlineEditOutcome,
-  InlineEditRefusal,
+import {
+  INLINE_EDIT_DISCARDED,
+  type InlineEditOutcome,
+  type InlineEditRefusal,
 } from "./inline-edit-outcome";
 import { namedTarget } from "./inline-target";
 import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
@@ -108,6 +109,13 @@ function liveValueOf(
     ? now.value
     : undefined;
 }
+
+/** How an edit would finish: a write, a refusal, or nothing to write. */
+type Finish =
+  | { readonly op?: BuilderOp }
+  | { readonly refused: InlineEditRefusal };
+
+const NOTHING_TO_WRITE: Finish = {};
 
 /** A composed node's exposed text, when that is what this value is. */
 function exposedTarget(
@@ -309,56 +317,71 @@ export function useInlineText(
     []
   );
 
-  const commit = useCallback(() => {
+  /**
+   * What finishing the edit would do, decided ONCE for every way out — a key,
+   * a click away, or the host — so no exit writes what another refuses:
+   *
+   * - nothing to write: nothing typed, or the element has left the page with
+   *   nothing to hold the words in;
+   * - refused, because the value moved on while it was typed (writing would
+   *   replace newer words with older ones) or stopped being editable (a lock
+   *   arrived, so there is nowhere to write it);
+   * - otherwise the write.
+   */
+  const decide = useCallback((): Finish => {
     const element = elementRef.current;
     const current = editingRef.current;
+    if (element === null || current === null) return NOTHING_TO_WRITE;
     // `textContent` rather than `innerText` or `innerHTML`: the first is what
     // the value IS regardless of what the element ended up containing, and the
     // last would store markup this value cannot hold.
-    const next = element?.textContent ?? null;
-    release();
-    if (current === null || next === null) return null;
-    const op = commitOp(current, next);
-    return op === null ? null : editorRef.current.apply(op);
-  }, [commitOp, release]);
-
-  /**
-   * The keyboard's way out: the write is made first and the edit ends only
-   * once the page has taken it. The refusal's reason when it was refused and
-   * the line stays open with the words in it, because they are the author's
-   * only copy:
-   *
-   * - the value moved on while it was typed, so writing would replace newer
-   *   words with older ones;
-   * - it stopped being editable (a lock arrived), so there is nowhere to
-   *   write it;
-   * - the page refused the write (a size cap).
-   *
-   * Nothing is held when nothing was typed, or when the element has left the
-   * page and there is nothing to hold it in. Leaving the line by blur cannot
-   * keep it open, so that exit stays with {@link commit}.
-   */
-  const commitOrHold = useCallback((): InlineEditRefusal | null => {
-    const element = elementRef.current;
-    const current = editingRef.current;
-    if (element === null || current === null) {
-      release();
-      return null;
-    }
     const next = element.textContent ?? "";
     const opened = session.current.opened;
-    if (next === opened || !element.isConnected) {
-      release();
+    if (next === opened || !element.isConnected) return NOTHING_TO_WRITE;
+    const live = liveValueOf(editorRef.current, current);
+    if (live === undefined) return { refused: "no-longer-editable" };
+    if (opened !== null && live !== opened) return { refused: "moved-on" };
+    const op = commitOp(current, next);
+    return op === null ? NOTHING_TO_WRITE : { op };
+  }, [commitOp]);
+
+  /**
+   * The host's way out. It cannot leave the line open, because it is closing
+   * or opening something else, so a refused or rejected write gives the line
+   * back unwritten and says the words were lost.
+   */
+  const commit = useCallback(() => {
+    const finish = decide();
+    release();
+    if ("refused" in finish) {
+      session.current.finished?.(INLINE_EDIT_DISCARDED);
       return null;
     }
-    const live = liveValueOf(editorRef.current, current);
-    if (live === undefined) return "no-longer-editable";
-    if (opened !== null && live !== opened) return "moved-on";
-    const op = commitOp(current, next);
-    if (op !== null && editorRef.current.apply(op) === null) return "rejected";
+    if (finish.op === undefined) return null;
+    const written = editorRef.current.apply(finish.op);
+    if (written === null) session.current.finished?.(INLINE_EDIT_DISCARDED);
+    return written;
+  }, [decide, release]);
+
+  /**
+   * The author's way out, by a key or a click away: the write is made first
+   * and the edit ends only once the page has taken it. The refusal's reason
+   * when the line stays open with the words in it, because they are the
+   * author's only copy: {@link decide}'s refusals, and the page refusing the
+   * write (a size cap).
+   */
+  const commitOrHold = useCallback((): InlineEditRefusal | null => {
+    const finish = decide();
+    if ("refused" in finish) return finish.refused;
+    if (
+      finish.op !== undefined &&
+      editorRef.current.apply(finish.op) === null
+    ) {
+      return "rejected";
+    }
     release();
     return null;
-  }, [commitOp, release]);
+  }, [decide, release]);
 
   const cancel = useCallback(() => {
     const element = elementRef.current;
@@ -509,13 +532,13 @@ export function useInlineText(
     const swallow = (event: Event) => event.stopPropagation();
 
     element.addEventListener("keydown", onKeyDown);
-    element.addEventListener("blur", commit);
+    element.addEventListener("blur", tryToLeave);
     element.addEventListener("pointerdown", swallow);
     element.addEventListener("click", swallow);
     element.addEventListener("dblclick", swallow);
     return () => {
       element.removeEventListener("keydown", onKeyDown);
-      element.removeEventListener("blur", commit);
+      element.removeEventListener("blur", tryToLeave);
       element.removeEventListener("pointerdown", swallow);
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);

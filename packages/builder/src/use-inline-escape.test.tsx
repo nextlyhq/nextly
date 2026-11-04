@@ -271,6 +271,61 @@ describe("Escape while typing", () => {
     });
   });
 
+  it("never writes over a moved-on line when it is left by a click away", () => {
+    // Blur is a way out like Escape, and takes the same decision: the line
+    // stays with the words in it, and the newer value is not written over.
+    registerArticle();
+    page();
+    const editor = editorState();
+    const finished = vi.fn();
+    const { result } = renderHook(() => useInlineText(editor, finished));
+    act(() => {
+      result.current.begin("a", "caption");
+    });
+    const caption = document.querySelector('[data-nx-prop="caption"]');
+    if (caption === null) throw new Error("no caption");
+    caption.textContent = "Mine";
+    Object.assign(editor, {
+      document: documentWith(editor, { caption: "Theirs" }),
+    });
+
+    act(() => {
+      caption.dispatchEvent(new FocusEvent("blur"));
+    });
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(result.current.editing).not.toBeNull();
+    expect(finished).toHaveBeenCalledWith({
+      status: "refused",
+      reason: "moved-on",
+    });
+  });
+
+  it("never writes over a moved-on line when the host finishes it, and says it was lost", () => {
+    // The host's commit cannot leave the line open, since it is closing or
+    // opening something else; it gives the line back without the write.
+    registerArticle();
+    page();
+    const editor = editorState();
+    const finished = vi.fn();
+    const { result } = renderHook(() => useInlineText(editor, finished));
+    act(() => {
+      result.current.begin("a", "caption");
+    });
+    const caption = document.querySelector('[data-nx-prop="caption"]');
+    if (caption === null) throw new Error("no caption");
+    caption.textContent = "Mine";
+    Object.assign(editor, {
+      document: documentWith(editor, { caption: "Theirs" }),
+    });
+
+    act(() => {
+      result.current.commit();
+    });
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(result.current.editing).toBeNull();
+    expect(finished).toHaveBeenCalledWith({ status: "discarded" });
+  });
+
   it("tries a revised passage again after a refusal, rather than discarding it", async () => {
     registerArticle();
     page();
