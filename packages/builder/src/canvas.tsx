@@ -85,6 +85,7 @@ import {
   scrollEventTarget,
   visibleBandOf,
 } from "./geometry-dom";
+import { useHoveredBlockSetter } from "./hovered-block";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { useNearestThemeMarker } from "./nearest-theme";
@@ -1797,6 +1798,59 @@ function useSelectionPointer({
 }
 
 /**
+ * Point the editor's hovered block at the deepest block under the pointer, so
+ * the canvas outlines it as a Layers row does, and at nothing when the
+ * pointer leaves the canvas or is over its background.
+ *
+ * Nothing while a block is dragged: the drag's own marks say where it will
+ * land, and an outline under the moving pointer would compete with them. The
+ * drag's own move handler runs first, so the gesture behaves exactly as it
+ * did; a move over the editor's chrome points at nothing new.
+ */
+function useCanvasHover(
+  dragMove: React.PointerEventHandler<HTMLElement> | undefined,
+  dragging: boolean
+): {
+  onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerLeave: () => void;
+} {
+  const setHovered = useHoveredBlockSetter();
+  // In the layout phase, so the frame that first draws the drag never also
+  // draws the hovered outline its marks replace: a passive effect runs after
+  // that paint.
+  useIsomorphicLayoutEffect(() => {
+    if (dragging) setHovered(null);
+  }, [dragging, setHovered]);
+  // Nothing stays pointed at once the canvas goes.
+  useEffect(() => () => setHovered(null), [setHovered]);
+  const onPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragMove?.(event);
+      if (dragging) return;
+      const { target } = event;
+      // Chrome over a block is inside the canvas, so moving onto it fires no
+      // `pointerleave`: the block is let go here instead.
+      if (isChrome(target)) {
+        setHovered(null);
+        return;
+      }
+      // A canvas a block renders is another document, with its own addresses:
+      // its moves bubble here and are left to it.
+      if (
+        !isElement(target) ||
+        target.closest(`.${CANVAS_ROOT_CLASS}`) !== event.currentTarget
+      ) {
+        return;
+      }
+      setHovered(nodeIdFromEvent(target));
+    },
+    [dragMove, dragging, setHovered]
+  );
+  const onPointerLeave = useCallback(() => setHovered(null), [setHovered]);
+  return { onPointerMove, onPointerLeave };
+}
+
+/**
  * A click on the page around the canvas, inside its frame, answered as a
  * click on the canvas's own ground: the selection is cleared.
  *
@@ -1918,6 +1972,10 @@ export function Canvas({
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
   useFrameGroundClick(root, onSelect);
+  const hover = useCanvasHover(
+    dragHandlers?.onPointerMove,
+    drag?.draggingBlockName != null
+  );
 
   const { marked, pointer, pointerDown } = useSelectionPointer({
     selectedIds,
@@ -2026,6 +2084,8 @@ export function Canvas({
       // over the top, drag first so its behaviour is exactly what it was.
       {...dragHandlers}
       onPointerDown={pointerDown}
+      onPointerMove={hover.onPointerMove}
+      onPointerLeave={hover.onPointerLeave}
     >
       <RegionsAround drawn={drawn} rendered={render} environment={environment}>
         {page}

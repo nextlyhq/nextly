@@ -19,3 +19,10 @@
  * needs no marker only because it takes no pointer events at all.
  */
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
+
+/**
+ * The block toolbar's class, drawn by `BlockToolbar`: how the chrome around
+ * it, and a test laying it out, find the bar. Here beside the chrome marker
+ * rather than in the toolbar's module, which imports a great deal.
+ */
+export const BLOCK_TOOLBAR_CLASS = "nx-block-toolbar";

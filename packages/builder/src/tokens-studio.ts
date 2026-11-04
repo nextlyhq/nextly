@@ -672,38 +672,88 @@ const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
   other: "Other",
 };
 
+/**
+ * Every group with its heading, in the order the Design panel lists them, for
+ * a list elsewhere that groups variables the same way.
+ */
+export function variableGroupHeadings(): readonly {
+  group: VariableGroup;
+  heading: string;
+}[] {
+  return VARIABLE_GROUPS.map(group => ({
+    group,
+    heading: VARIABLE_GROUP_LABELS[group],
+  }));
+}
+
 /** The code-name prefixes of a type size and of its line height. */
 const SIZE_PREFIX = "font-size.";
 const LINE_HEIGHT_PREFIX = "line-height.";
 
-/** Code-name prefixes that put a length in the spacing group. */
-const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "radius."];
+/** Code-name prefixes of a spacing step, and of a radius. */
+const SPACING_PREFIXES = ["space.", "spacing.", "gap."];
+const RADIUS_PREFIX = "radius.";
+
+/** The families a length variable belongs to, each made for its own fields. */
+export type LengthFamily = "font-size" | "line-height" | "spacing" | "radius";
+
+/**
+ * The family a length variable belongs to, read from its code name as the
+ * Design panel groups it, or `undefined` for a length that names none (a
+ * content width) and for anything that is not a length.
+ *
+ * The inspector offers each field its own family, so a padding lists the
+ * spacing steps and a radius the radii; asked here so the Design panel's
+ * groups and the inspector's lists cannot disagree about what a variable is.
+ */
+export function lengthFamilyOf(token: {
+  name: string;
+  kind: TokenKind;
+}): LengthFamily | undefined {
+  const type = typeScaleProperty(token);
+  if (type !== undefined) return type;
+  if (token.kind !== "dimension") return undefined;
+  if (token.name.startsWith(RADIUS_PREFIX)) return "radius";
+  return SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
+    ? "spacing"
+    : undefined;
+}
+
+/**
+ * The CSS property a type-scale variable is made for: `font-size` for a type
+ * size, `line-height` for its paired line height, or `undefined` for any other
+ * variable.
+ *
+ * Read from the code name, as the Design panel groups by it, and asked here
+ * once so the panel's "Type scale" group and the inspector's offer of a type
+ * size only where text is sized cannot disagree about what a type size is.
+ */
+export function typeScaleProperty(token: {
+  name: string;
+  kind: TokenKind;
+}): "font-size" | "line-height" | undefined {
+  if (token.kind !== "dimension" && token.kind !== "number") return undefined;
+  if (token.name.startsWith(SIZE_PREFIX)) return "font-size";
+  if (token.name.startsWith(LINE_HEIGHT_PREFIX)) return "line-height";
+  return undefined;
+}
 
 /**
  * Which group a variable belongs in: by kind for colours and shadows, and by
  * its code name for the lengths, since a size, a gap and a radius are all
  * dimensions.
+ *
+ * Exported so the inspector's variable list groups exactly as Design does.
  */
-function variableGroupOf(token: {
+export function variableGroupOf(token: {
   name: string;
   kind: TokenKind;
 }): VariableGroup {
   if (token.kind === "color") return "colours";
   if (token.kind === "shadow") return "spacing";
-  const lengthish = token.kind === "dimension" || token.kind === "number";
-  if (
-    lengthish &&
-    (token.name.startsWith(SIZE_PREFIX) ||
-      token.name.startsWith(LINE_HEIGHT_PREFIX))
-  ) {
-    return "type";
-  }
-  if (
-    token.kind === "dimension" &&
-    SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
-  ) {
-    return "spacing";
-  }
+  const family = lengthFamilyOf(token);
+  if (family === "font-size" || family === "line-height") return "type";
+  if (family === "spacing" || family === "radius") return "spacing";
   return "other";
 }
 
@@ -760,41 +810,11 @@ export function variableGroups(
       ...(lineHeight === undefined ? {} : { lineHeight }),
     });
   }
-  return VARIABLE_GROUPS.map(group => ({
+  return variableGroupHeadings().map(({ group, heading }) => ({
     group,
-    heading: VARIABLE_GROUP_LABELS[group],
+    heading,
     entries: (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
   }));
-}
-
-/** One size of the site's type scale, as a font size field offers it. */
-export interface TypeScalePreset {
-  /** The variable's identity, which a chosen preset stores a reference to. */
-  readonly token: string;
-  /** Its name, as the Design panel shows it. */
-  readonly label: string;
-  /** Its value, as the Design panel shows it. */
-  readonly value: string;
-}
-
-/**
- * The type scale's sizes, in the Design panel's order: the font sizes of its
- * "Type scale" group, without the line heights paired with them.
- *
- * Read from {@link variableGroups} rather than by testing names again, so a
- * size the Design panel lists is the size a font size field offers.
- */
-export function typeScalePresets(
-  tokens: SiteTokenSet | undefined
-): readonly TypeScalePreset[] {
-  const type = variableGroups(tokens).find(group => group.group === "type");
-  return (type?.entries ?? [])
-    .filter(entry => entry.row.name.startsWith(SIZE_PREFIX))
-    .map(entry => ({
-      token: entry.row.identity,
-      label: entry.label,
-      value: entry.row.value,
-    }));
 }
 
 /* ------------------------------------------------------------------ labels */

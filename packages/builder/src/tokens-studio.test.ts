@@ -37,7 +37,6 @@ import {
   writeTokenValue,
   LINE_HEIGHT_MIXED,
   DARK_FOLLOWS_LIGHT,
-  typeScalePresets,
 } from "./tokens-studio";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
@@ -738,38 +737,5 @@ describe("a line height's two modes", () => {
     expect("tokens" in written && written.tokens.tokens[0]?.kind).toBe(
       "dimension"
     );
-  });
-});
-
-describe("the type scale as font size presets", () => {
-  it("offers each type size, by its name and value, and nothing else", () => {
-    const tokens: SiteTokenSet = {
-      tokens: [
-        {
-          name: "font-size.body",
-          label: "Body",
-          kind: "dimension",
-          values: { light: "16px" },
-        },
-        { name: "line-height.body", kind: "number", values: { light: "1.5" } },
-        {
-          name: "font-size.h2",
-          label: "H2",
-          kind: "dimension",
-          values: { light: "32px" },
-        },
-        { name: "space.md", kind: "dimension", values: { light: "16px" } },
-      ],
-    };
-    // A size and its line height are one row of the type scale, so the body
-    // size is offered once; a spacing length is not a size.
-    expect(typeScalePresets(tokens)).toEqual([
-      { token: "font-size.body", label: "Body", value: "16px" },
-      { token: "font-size.h2", label: "H2", value: "32px" },
-    ]);
-  });
-
-  it("offers none for a site without a type scale", () => {
-    expect(typeScalePresets(undefined)).toEqual([]);
   });
 });
