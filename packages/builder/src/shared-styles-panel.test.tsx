@@ -910,6 +910,52 @@ describe("counting the pages now", () => {
     expect(screen.queryByText("The pages left can't be counted.")).toBeNull();
   });
 
+  it("offers a count again on the first later read, when the count's own read never answered", async () => {
+    // The read the count sets off fails, so it says nothing; the next read
+    // that answers is the first word after the count, and says counting.
+    const base = accessOf().access;
+    let failNext = false;
+    const count = vi.fn(async (): Promise<SharedStylesCount> => {
+      failNext = true;
+      return { kind: "counted", whole: false, counting: false };
+    });
+    const usage = vi.fn(async (ids: readonly string[]) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("offline");
+      }
+      return {
+        whole: false,
+        counting: true,
+        mayLock: false,
+        mayCount: true,
+        styles: new Map(ids.map(id => [id, reach({ pages: 1 }, false)])),
+      };
+    });
+    const access: SharedStylesAccess = { ...base, count, usage };
+    const view = await panel({ library: [CARD], access });
+    await act(async () => {
+      fireEvent.click(countNow() as HTMLElement);
+    });
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(2));
+    expect(countNow()).toBeNull();
+    // A style comes on screen, and its read is the first to answer.
+    await act(async () => {
+      view.rerender(
+        <SharedStylesPanel
+          library={[CARD, HERO]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+          access={access}
+        />
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(countNow()).not.toBeNull());
+  });
+
   it("offers no further count when the answer says counting cannot get further", async () => {
     // Whole no, counting no: what is left cannot be counted, so another
     // press would do nothing, and none is offered.
