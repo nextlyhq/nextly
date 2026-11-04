@@ -16,7 +16,12 @@
  * @module decoration-field
  */
 
-import { cssColor, type StyleValue } from "@nextlyhq/blocks-engine";
+import {
+  checkDimensionValue,
+  cssColor,
+  isCssWideKeyword,
+  type StyleValue,
+} from "@nextlyhq/blocks-engine";
 import {
   Input,
   Popover,
@@ -51,15 +56,29 @@ export interface DecorationParts {
 const LINES = ["none", "underline", "line-through", "overline"] as const;
 const STYLES = ["solid", "double", "dotted", "dashed", "wavy"] as const;
 
-/** A thickness as CSS writes one: a keyword, or a length or percentage. */
-const THICKNESS =
-  /^(?:auto|from-font|\+?(?:\d+(?:\.\d+)?|\.\d+)(?:px|em|rem|ex|ch|pt|%)?)$/i;
+/** A variable may stand for any part of the shorthand, or several. */
+const VARIABLE = /^(?:var|env)\(/i;
 
-/** A length CSS computes; no colour is written as one of these. */
-const COMPUTED_LENGTH = /^(?:calc|min|max|clamp)\(/i;
-
+/**
+ * Whether a word is a thickness: `auto`, `from-font`, or a length or
+ * percentage as the engine's own length grammar reads one, a computed one
+ * included. A CSS-wide keyword stands only alone, so it is none of a
+ * shorthand's parts.
+ */
 function isThickness(token: string): boolean {
-  return THICKNESS.test(token) || COMPUTED_LENGTH.test(token);
+  return (
+    !VARIABLE.test(token) &&
+    !isCssWideKeyword(token) &&
+    checkDimensionValue(token, {
+      keywords: ["auto", "from-font"],
+      allowPercentage: true,
+    }) === null
+  );
+}
+
+/** Whether a word is a colour the shorthand can hold. */
+function isLineColor(token: string): boolean {
+  return !isCssWideKeyword(token) && cssColor(token) !== undefined;
 }
 
 /** The shorthand's parts, split on whitespace outside parentheses. */
@@ -86,10 +105,10 @@ function partOf(token: string): keyof DecorationParts | "unreadable" {
   const word = token.toLowerCase();
   if ((LINES as readonly string[]).includes(word)) return "line";
   if ((STYLES as readonly string[]).includes(word)) return "style";
-  if (isThickness(word)) return "thickness";
-  // The colour is one the page's own check reads as a colour. A variable may
-  // stand for any part, or several, and that check refuses it too.
-  return cssColor(token) === undefined ? "unreadable" : "color";
+  if (isThickness(token)) return "thickness";
+  // The colour is one the page's own check reads as a colour. A variable,
+  // which may stand for any part, that check refuses too.
+  return isLineColor(token) ? "color" : "unreadable";
 }
 
 /**
@@ -168,12 +187,12 @@ export function DecorationField({
       : undefined;
   // What a change starts from: the value set here, or else the one inherited,
   // so a line changed here keeps the style, thickness and colour it showed.
-  const parts = own ?? inheritedParts;
+  const parts = useQueuedParts(
+    typeof stored === "string" ? stored : undefined,
+    own ?? inheritedParts
+  );
   // A part changed keeps the others: a line changed keeps its style.
-  const write = (next: Partial<DecorationParts>) =>
-    onCommit(
-      composeDecoration({ line: parts?.line ?? "underline", ...parts, ...next })
-    );
+  const write = (next: Partial<DecorationParts>) => parts.write(next, onCommit);
   return (
     <div className="nx-style-inspector__decoration">
       {/* The icons mark the inherited line, not the whole shorthand. */}
@@ -210,7 +229,7 @@ export function DecorationField({
             density. */}
         <PopoverContent className="nx-builder-tokens nx-style-inspector__decoration-popover">
           <DecorationStyle
-            parts={parts}
+            parts={parts.current}
             write={write}
             describedBy={describedBy}
           >
@@ -225,6 +244,49 @@ export function DecorationField({
       </Popover>
     </div>
   );
+}
+
+/**
+ * The parts a change starts from, with the changes written but not yet back
+ * in the stored value. A shared style's write lands later than the commit
+ * that sent it, so a second part changed meanwhile would otherwise start from
+ * the old value and undo the first. The queue follows the stored value: each
+ * written value arriving is dropped from it, and any other change (an undo,
+ * another author) or a refused write empties it.
+ */
+function useQueuedParts(
+  stored: string | undefined,
+  base: DecorationParts | undefined
+): {
+  current: DecorationParts | undefined;
+  write: (
+    next: Partial<DecorationParts>,
+    onCommit: (value: StyleValue | null) => CommitOutcome
+  ) => CommitOutcome;
+} {
+  const queue = React.useRef<{ value: string; parts: DecorationParts }[]>([]);
+  const [, rendered] = React.useReducer((count: number) => count + 1, 0);
+  const seen = React.useRef(stored);
+  if (seen.current !== stored) {
+    seen.current = stored;
+    const arrived = queue.current.findIndex(entry => entry.value === stored);
+    queue.current = arrived === -1 ? [] : queue.current.slice(arrived + 1);
+  }
+  const current = queue.current.at(-1)?.parts ?? base;
+  const write = (
+    next: Partial<DecorationParts>,
+    onCommit: (value: StyleValue | null) => CommitOutcome
+  ): CommitOutcome => {
+    const parts = { line: current?.line ?? "underline", ...current, ...next };
+    const value = composeDecoration(parts);
+    const outcome = onCommit(value);
+    queue.current =
+      outcome === "applied" ? [...queue.current, { value, parts }] : [];
+    // Drawn again, so the controls show the part just written.
+    rendered();
+    return outcome;
+  };
+  return { current, write };
 }
 
 /** A line style's words, each as the keyword it writes. */
@@ -284,7 +346,7 @@ function DecorationStyle({
   const commitColor = () => {
     const text = color.trim();
     if (text === (parts?.color ?? "")) return;
-    if (text !== "" && cssColor(text) === undefined) return;
+    if (text !== "" && !isLineColor(text)) return;
     write({ color: text === "" ? undefined : text });
   };
   return (

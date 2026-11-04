@@ -95,6 +95,13 @@ describe("parseDecoration", () => {
       thickness: "max(1px, 0.1em)",
       color: "red",
     });
+    // Any length CSS reads, not only a short list of units.
+    for (const thickness of ["1vw", "0.2lh", "1cm"]) {
+      expect(parseDecoration(`underline ${thickness}`)).toEqual({
+        line: "underline",
+        thickness,
+      });
+    }
   });
 
   it("leaves to the text field a value the icons cannot draw", () => {
@@ -107,6 +114,11 @@ describe("parseDecoration", () => {
     // A word that is no colour is not read as one.
     expect(parseDecoration("underline banana")).toBeUndefined();
     expect(parseDecoration("underline attr(data-x)")).toBeUndefined();
+    // A bare number is no length, and a CSS-wide keyword voids a shorthand
+    // it stands in.
+    expect(parseDecoration("underline 2")).toBeUndefined();
+    expect(parseDecoration("underline inherit")).toBeUndefined();
+    expect(parseDecoration("underline unset")).toBeUndefined();
     expect(parseDecoration("")).toBeUndefined();
   });
 });
@@ -219,6 +231,61 @@ describe("DecorationField", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
+  it("writes any thickness CSS reads, and no colour a shorthand cannot hold", () => {
+    const onCommit = mount("underline");
+    openStyle();
+    const thickness = screen.getByRole("textbox", { name: "Thickness" });
+    fireEvent.change(thickness, { target: { value: "2" } });
+    fireEvent.blur(thickness);
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.change(thickness, { target: { value: "1vw" } });
+    fireEvent.blur(thickness);
+    expect(onCommit).toHaveBeenLastCalledWith("underline 1vw");
+
+    onCommit.mockClear();
+    const colour = screen.getByRole("textbox", { name: "Line colour" });
+    fireEvent.change(colour, { target: { value: "inherit" } });
+    fireEvent.blur(colour);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("keeps a part changed before the stored value catches up", () => {
+    // A shared style's write lands later: the stored value is still the old
+    // one when the next part changes.
+    const onCommit = mount("underline");
+    openStyle();
+    fireEvent.click(screen.getByRole("combobox", { name: "Line style" }));
+    fireEvent.click(screen.getByRole("option", { name: "Wavy" }));
+    expect(onCommit).toHaveBeenLastCalledWith("underline wavy");
+    const thickness = screen.getByRole("textbox", { name: "Thickness" });
+    fireEvent.change(thickness, { target: { value: "2px" } });
+    fireEvent.blur(thickness);
+    expect(onCommit).toHaveBeenLastCalledWith("underline wavy 2px");
+
+    // The write arriving, and then a change from elsewhere (an undo): the
+    // next part starts from what is stored, not from the queue.
+    onCommit.rerender("underline wavy");
+    onCommit.rerender("overline");
+    const colour = screen.getByRole("textbox", { name: "Line colour" });
+    fireEvent.change(colour, { target: { value: "red" } });
+    fireEvent.blur(colour);
+    expect(onCommit).toHaveBeenLastCalledWith("overline red");
+  });
+
+  it("starts the next part from the stored value after a refused write", () => {
+    const onCommit = vi.fn(
+      (): "applied" | "refused" => "refused"
+    ) as unknown as () => "applied";
+    render(field("underline", onCommit));
+    openStyle();
+    fireEvent.click(screen.getByRole("combobox", { name: "Line style" }));
+    fireEvent.click(screen.getByRole("option", { name: "Wavy" }));
+    const thickness = screen.getByRole("textbox", { name: "Thickness" });
+    fireEvent.change(thickness, { target: { value: "2px" } });
+    fireEvent.blur(thickness);
+    expect(onCommit).toHaveBeenLastCalledWith("underline 2px");
+  });
+
   it("points the popover's controls at a refusal", () => {
     mount("underline", "decoration-error");
     openStyle();
@@ -243,12 +310,12 @@ describe("DecorationField", () => {
     const thickness = screen.getByRole("textbox", { name: "Thickness" });
     fireEvent.change(thickness, { target: { value: "2px" } });
     fireEvent.blur(thickness);
-    expect(onCommit).toHaveBeenLastCalledWith("underline 2px");
+    expect(onCommit).toHaveBeenLastCalledWith("underline wavy 2px");
 
     const colour = screen.getByRole("textbox", { name: "Line colour" });
     fireEvent.change(colour, { target: { value: "red" } });
     fireEvent.blur(colour);
-    expect(onCommit).toHaveBeenLastCalledWith("underline red");
+    expect(onCommit).toHaveBeenLastCalledWith("underline wavy 2px red");
   });
 
   it("commits a thickness on Enter without submitting the entry it is mounted inside", () => {
