@@ -316,7 +316,7 @@ function offered(
         ? without
         : [];
   const setHere = (name: unknown): boolean =>
-    typeof name === "string" && isSet(declared[name], values[name]);
+    typeof name === "string" && propIsSet(declared[name], values[name]);
   const hidden = entries.some(entry =>
     Array.isArray(entry)
       ? entry.length > 0 && entry.every(setHere)
@@ -324,16 +324,20 @@ function offered(
   );
   if (hidden) return false;
   if (schema.type !== "select" || options.length >= 2) return true;
-  return isSet(undefined, value) && !options.includes(String(value));
+  return propIsSet(undefined, value) && !options.includes(String(value));
 }
 
 /**
  * Whether a stored prop value is there: anything but absent or empty text,
  * and for a URL, only one a page can follow. The engine's rule, the one the
  * renderer reads, so a refused `javascript:` link that renders no link
- * leaves the block offering what it does without one.
+ * leaves the block offering what it does without one. Exported so the
+ * link group asks the same question of whether a link is set.
  */
-function isSet(schema: PropSchema | undefined, value: unknown): boolean {
+export function propIsSet(
+  schema: PropSchema | undefined,
+  value: unknown
+): boolean {
   if (schema?.type === "url") return isLinkableUrl(value);
   return value !== undefined && value !== null && value !== "";
 }

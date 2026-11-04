@@ -246,3 +246,44 @@ describe("an inspector switch", () => {
     ).toContain("block-size: 1.25rem");
   });
 });
+
+describe("opacity's slider and field", () => {
+  it("lays the slider across the row, the number and its percent sign after it", () => {
+    const row = ruleBody(CHROME, ".nx-style-inspector__opacity");
+    expect(row).toContain("display: flex");
+    expect(row).toContain("align-items: center");
+    // The number holds three digits and no more of the row.
+    expect(
+      ruleBody(
+        CHROME,
+        ".nx-style-inspector__opacity > .nx-style-inspector__numeric"
+      )
+    ).toContain("flex: 0 0 3.5rem");
+    expect(ruleBody(CHROME, ".nx-style-inspector__percent")).toContain(
+      "color: var(--nx-builder-text-muted)"
+    );
+  });
+});
+
+describe("a custom aspect ratio", () => {
+  it("puts its width and height on one line under the menu", () => {
+    const ratio = ruleBody(CHROME, ".nx-style-inspector__ratio");
+    expect(ratio).toContain("display: grid");
+    expect(ratio).toContain("row-gap: 0.375rem");
+    const custom = ruleBody(CHROME, ".nx-style-inspector__ratio-custom");
+    expect(custom).toContain("display: grid");
+    expect(custom).toContain(
+      "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)"
+    );
+  });
+});
+
+describe("an icon choice's help line", () => {
+  it("takes a line of its own under the icons, rather than a column beside them", () => {
+    // Beside the strip it had what was left of the row, one word a line.
+    expect(ruleBody(CHROME, ".nx-icon-choice")).toContain("flex-wrap: wrap");
+    expect(ruleBody(CHROME, ".nx-icon-choice__help")).toContain(
+      "flex-basis: 100%"
+    );
+  });
+});

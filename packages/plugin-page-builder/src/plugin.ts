@@ -11,6 +11,7 @@ import {
   resolvedCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
+  type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
@@ -147,6 +148,7 @@ import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
+import { retiredPins, type RetiredPins } from "./retired-pins";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
@@ -1207,6 +1209,10 @@ export const pageBuilder = (
   // What deriving retired ids from component history has read so far, shared
   // by the repair after a failed record and the editor's facts read.
   const retiredHistory = retiredHistoryMemo();
+  // The versions a lost removal is derived from, held until a repair records
+  // it. Set by `init`, which holds the context pins are made through; read by
+  // the facts route's repair, which releases them.
+  let heldRemovals: RetiredPins | undefined;
   // The ids a published removal retired: those the write hooks recorded, and
   // those the component's published history implies, recorded here when the
   // table lacks them. Where the hooks are not registered (the host renders
@@ -1233,6 +1239,7 @@ export const pageBuilder = (
             componentField: componentStoreOf(opts).field,
             lifecycle,
             memo: retiredHistory,
+            ...(heldRemovals === undefined ? {} : { pins: heldRemovals }),
             store: retiredStore({
               nextly: () => requireInstalled().nextly(),
               collection:
@@ -1530,6 +1537,20 @@ export const pageBuilder = (
           COMPONENT_RETIRED_SLUG,
       });
       if (opts.componentReadiness !== false) {
+        // Registered on first use rather than here: a context without
+        // version history (a test's, a host's stand-in) still installs.
+        let holder: PluginVersionPinHolder | undefined;
+        heldRemovals = retiredPins({
+          holder: () =>
+            (holder ??= ctx.services.versions.pins.registerHolder({
+              name: "retired-fields",
+              label: "Page Builder removed fields",
+            })),
+          transaction: work => ctx.db.transaction(work),
+          history: () => ctx.services.versions,
+          componentCollection: composition.store.collection,
+          componentField: composition.store.field,
+        });
         registerRetiredExposures({
           ctx,
           componentCollection: composition.store.collection,
@@ -1543,6 +1564,7 @@ export const pageBuilder = (
           }),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           memo: retiredHistory,
+          pins: heldRemovals,
         });
       }
       // A write that keeps a reference to a component being deleted, committed
@@ -1871,7 +1893,7 @@ export const pageBuilder = (
         // The editor's page search: the site's pages (entries of collections
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
-        pagesSearchRoute(componentStoreOf(opts)),
+        pagesSearchRoute(componentStoreOf(opts), opts.pagePreviewPath),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.

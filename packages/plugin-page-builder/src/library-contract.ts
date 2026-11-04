@@ -832,6 +832,12 @@ export interface SharedStylesUsageResponse {
   readonly counting: boolean;
   /** Whether this caller may lock and unlock shared styles. */
   readonly mayLock: boolean;
+  /**
+   * Whether this caller may ask for the pages to be counted now, through
+   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: whoever may change Design, the
+   * people a whole count lets remove a style.
+   */
+  readonly mayCount: boolean;
   /** Each style asked about, by id. */
   readonly styles: Readonly<Record<string, SharedStyleUsage>>;
 }
@@ -894,6 +900,26 @@ export interface SharedStyleUseItem {
  * @experimental Settles when the Shared styles tab ships.
  */
 export const SHARED_STYLE_REMOVE_ROUTE_PATH = "/shared-styles/remove";
+
+/**
+ * Where the Design panel asks for the site's pages to be counted now, rather
+ * than waiting for a scheduler to run the usage backfill: it runs that job
+ * for a bounded time and answers how far the counting got.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_COUNT_ROUTE_PATH = "/shared-styles/count";
+
+/**
+ * What the count route answers, as its mutation's `item`: whether it ran the
+ * counting (false when something else was already running it), and the
+ * index's health read after, in the usage read's terms.
+ */
+export interface SharedStylesCountResponse {
+  readonly ran: boolean;
+  readonly whole: boolean;
+  readonly counting: boolean;
+}
 
 /** What the remove route is sent: the shared styles to remove, by id. */
 export interface SharedStyleRemoveRequest {

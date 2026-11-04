@@ -181,13 +181,10 @@ describe("a block inside a contentOnly area", () => {
     expect(screen.getAllByText(/locked to its content/).length).toBeGreaterThan(
       0
     );
-    // Style: read-only with the reason.
+    // Style: read-only, its reason said once, by the card's line above, not
+    // again under the tab's bar.
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    expect(
-      screen.getByText(/locked to its content/, {
-        selector: "[data-read-only]",
-      })
-    ).toBeDefined();
+    expect(document.querySelector('[data-read-only="style"]')).toBeNull();
     const padding = document.querySelector(
       '[data-property="padding"]'
     ) as HTMLElement;

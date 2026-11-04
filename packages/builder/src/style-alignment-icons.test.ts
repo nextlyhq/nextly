@@ -273,6 +273,34 @@ describe("choices drawn as icons whatever the flow", () => {
     expect(group?.rest).toEqual(["math-auto", "full-width", "full-size-kana"]);
   });
 
+  it("draws object fit as Cover, Fit inside and Stretch to fill, the rest under More", () => {
+    const values = keywordsOf("objectFit");
+    const group = alignmentGroupFor("object-fit", values, ROW);
+    expect(icons("object-fit", values, ROW)).toEqual([
+      "cover:Crop",
+      "contain:Shrink",
+      "fill:StretchHorizontal",
+    ]);
+    expect(group?.options.map(option => option.label)).toEqual([
+      "Cover",
+      "Fit inside",
+      "Stretch to fill",
+    ]);
+    expect(group?.rest).toEqual(["none", "scale-down"]);
+  });
+
+  it("says what each fit does, in a line for the value that applies", () => {
+    const group = alignmentGroupFor("object-fit", keywordsOf("objectFit"), ROW);
+    expect(group?.help?.["cover"]).toBe("Fills the box; edges may be cut.");
+    for (const value of ["cover", "contain", "fill", "none", "scale-down"]) {
+      expect(group?.help?.[value]).toMatch(/\.$/);
+    }
+    // Only where a choice's icon cannot say it: Display needs no line.
+    expect(
+      alignmentGroupFor("display", keywordsOf("display"), ROW)?.help
+    ).toBeUndefined();
+  });
+
   it("neither turns nor mirrors them in a column, a right-to-left element or vertical text", () => {
     const values = keywordsOf("display");
     const drawn = icons("display", values, ROW);
