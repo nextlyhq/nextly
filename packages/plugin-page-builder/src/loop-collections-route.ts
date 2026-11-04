@@ -112,26 +112,53 @@ function isStoragePrimitive(value: unknown): value is FieldStoragePrimitive {
   );
 }
 
+/** A declared field with a name and a type, holding one value. */
+type NamedSingleField = DeclaredField & { name: string; type: string };
+
+/** Whether a declared field has a name and a type and holds one value. */
+function isNamedSingleField(value: unknown): value is NamedSingleField {
+  if (typeof value !== "object" || value === null) return false;
+  const { name, type, hasMany } = value as DeclaredField;
+  // A field holding many values orders by nothing one row shows.
+  return (
+    typeof name === "string" &&
+    name !== "" &&
+    typeof type === "string" &&
+    hasMany !== true
+  );
+}
+
+/**
+ * The kind of value a field holds, when it is one a list can be ordered by.
+ * A plugin's own field type is judged by the storage primitive it declares,
+ * read against the engine's table of them rather than a list kept here.
+ */
+function sortKindOf(
+  type: string,
+  storage: unknown
+): BindingValueKind | undefined {
+  const kind = bindingKindOf({
+    type,
+    ...(isStoragePrimitive(storage) ? { storage } : {}),
+  });
+  return kind !== null && SORTABLE_KINDS.has(kind) ? kind : undefined;
+}
+
+/** What an author calls a field: its label, or its name in words. */
+function fieldWordsOf(name: string, label: unknown): string {
+  return typeof label === "string" && label.trim() !== ""
+    ? label
+    : humanizeFieldName(name);
+}
+
 /** A field a loop can sort by, or `undefined` for one it cannot. */
 function sortFieldOf(value: unknown): LoopSortFieldItem | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const field = value as DeclaredField;
-  if (typeof field.name !== "string" || field.name === "") return undefined;
-  if (typeof field.type !== "string") return undefined;
-  if (field.hasMany === true) return undefined;
-  // A plugin's own field type is judged by the storage primitive it declares,
-  // read against the engine's table of them rather than a list kept here.
-  const kind = bindingKindOf({
-    type: field.type,
-    ...(isStoragePrimitive(field.storage) ? { storage: field.storage } : {}),
-  });
-  if (kind === null || !SORTABLE_KINDS.has(kind)) return undefined;
+  if (!isNamedSingleField(value)) return undefined;
+  const kind = sortKindOf(value.type, value.storage);
+  if (kind === undefined) return undefined;
   return {
-    name: field.name,
-    label:
-      typeof field.label === "string" && field.label.trim() !== ""
-        ? field.label
-        : humanizeFieldName(field.name),
+    name: value.name,
+    label: fieldWordsOf(value.name, value.label),
     date: kind === "date",
   };
 }
@@ -180,6 +207,16 @@ export interface LoopCollectionsReads {
   sortedRead(slug: string, keys: readonly string[]): Promise<void>;
 }
 
+/** The key one problem of a refusal names, when it is a sort key refused. */
+function refusedSortKey(problem: unknown): string | undefined {
+  const { code, path } = (problem ?? {}) as { code?: unknown; path?: unknown };
+  return code === "FIELD_NOT_SORTABLE" &&
+    typeof path === "string" &&
+    path.startsWith("sort.")
+    ? path.slice("sort.".length)
+    : undefined;
+}
+
 /**
  * The fields core refused to sort by, when `error` is that refusal and
  * nothing else: every problem it names is a sort key. `undefined` for any
@@ -190,22 +227,8 @@ function refusedSortKeys(error: unknown): ReadonlySet<string> | undefined {
   const problems = (error.publicData as { errors?: unknown } | undefined)
     ?.errors;
   if (!Array.isArray(problems) || problems.length === 0) return undefined;
-  const keys = new Set<string>();
-  for (const problem of problems) {
-    const { code, path } = (problem ?? {}) as {
-      code?: unknown;
-      path?: unknown;
-    };
-    if (
-      code !== "FIELD_NOT_SORTABLE" ||
-      typeof path !== "string" ||
-      !path.startsWith("sort.")
-    ) {
-      return undefined;
-    }
-    keys.add(path.slice("sort.".length));
-  }
-  return keys;
+  const keys = problems.map(refusedSortKey);
+  return keys.every(key => key !== undefined) ? new Set(keys) : undefined;
 }
 
 /**

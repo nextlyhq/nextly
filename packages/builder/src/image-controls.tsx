@@ -249,9 +249,19 @@ export function ImageSourceField({
   // The side shown, starting from what is stored. Choosing a side changes
   // only what is shown; the props change when a file is picked or an
   // address typed, so looking at the other side never loses a value.
-  const [mode, setMode] = React.useState<SourceMode>(() =>
-    sourceModeOf(group, values)
-  );
+  const stored = sourceModeOf(group, values);
+  const [view, setView] = React.useState<{
+    readonly mode: SourceMode;
+    readonly from: SourceMode;
+  }>({ mode: stored, from: stored });
+  // Followed again whenever the stored props come to read as another side:
+  // an undo, a redo or a document replaced from outside changes them under
+  // a field that stays mounted. A side chosen while they stay as they are
+  // is kept. Set during render, as React sets state derived from props, so
+  // the wrong side is never drawn first.
+  if (view.from !== stored) setView({ mode: stored, from: stored });
+  const mode = view.from === stored ? view.mode : stored;
+  const setMode = (next: SourceMode) => setView({ mode: next, from: stored });
   const side: SourceSideProps = {
     group,
     props,

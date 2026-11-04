@@ -141,6 +141,17 @@ describe("what a screen reader is given", () => {
     });
   });
 
+  it("names no mark for a stored false, which the block reads as not decorative", () => {
+    // Inside a content-only area the mark may not change while the alt may,
+    // so naming it would refuse a choice that changes nothing it means.
+    expect(
+      altModeChanges(alt, "library", { alt: "Words", decorative: false }, "Lib")
+    ).toStrictEqual({ alt: undefined });
+    expect(
+      altModeChanges(alt, "custom", { decorative: false }, "Lib")
+    ).toStrictEqual({ alt: "Lib" });
+  });
+
   it("writes Custom from the library's words, so a reader hears the same", () => {
     expect(altModeChanges(alt, "custom", {}, "A tabby cat")).toStrictEqual({
       alt: "A tabby cat",

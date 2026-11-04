@@ -261,6 +261,19 @@ describe("the collection a loop repeats over", () => {
     expect(list).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps no answer once it has arrived, so the next drawing asks the host again", async () => {
+    // An answer is one signed-in author's: kept, it could be handed to the
+    // next person to sign in on this tab without the route judging them.
+    const list = vi.fn(async () => COLLECTIONS);
+    mount({ collection: "posts" }, { listLoopCollections: list });
+    await screen.findByRole("button", { name: "Collection Blog posts" });
+    cleanup();
+    clearBlocks();
+    mount({ collection: "posts" }, { listLoopCollections: list });
+    await screen.findByRole("button", { name: "Collection Blog posts" });
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
   it("is held by a lock", async () => {
     mount({ collection: "posts" }, undefined, { locked: true });
     const button = await screen.findByRole("button", {

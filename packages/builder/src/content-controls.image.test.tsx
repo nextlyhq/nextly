@@ -134,8 +134,24 @@ function mount(
     undoDepth: 0,
     composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
-  render(<InspectorPanel editor={editor} contentServices={services} />);
-  return editor;
+  const view = render(
+    <InspectorPanel editor={editor} contentServices={services} />
+  );
+  // The panel drawn again over `next` as the stored props, as an undo or a
+  // document replaced from outside draws it: the same node, new values.
+  const storeNow = (next: Record<string, unknown>) => {
+    const changed = {
+      ...document,
+      nodes: [{ ...document.nodes[0], props: next } as BlockNode],
+    } as BlockDocument;
+    view.rerender(
+      <InspectorPanel
+        editor={{ ...editor, document: changed } as EditorState}
+        contentServices={services}
+      />
+    );
+  };
+  return Object.assign(editor, { storeNow });
 }
 
 /** The props the one write stored: one edit, so one step to undo. */
@@ -198,6 +214,26 @@ describe("where an image's picture comes from", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose Image" }));
     await waitFor(() => expect(editor.apply).toHaveBeenCalled());
     expect(written(editor)).toEqual({ loading: "lazy", mediaId: "m-2" });
+  });
+
+  it("follows the stored props again when they change under it, as an undo does", () => {
+    const editor = mount({ mediaId: "m-1" });
+    fireEvent.click(radio("URL"));
+    // The address typed over the file is stored...
+    editor.storeNow({ src: "/typed.jpg" });
+    expect(radio("URL").getAttribute("aria-checked")).toBe("true");
+    // ...and undone: the file is back, so the library side shows it.
+    editor.storeNow({ mediaId: "m-1" });
+    expect(radio("Library").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("button", { name: "Choose Image" })).toBeDefined();
+    expect(screen.queryByLabelText("Image address")).toBeNull();
+  });
+
+  it("keeps the side an author switched to while the stored props stay as they are", () => {
+    const editor = mount({ mediaId: "m-1" });
+    fireEvent.click(radio("URL"));
+    editor.storeNow({ mediaId: "m-1", alt: "Words" });
+    expect(radio("URL").getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows a file and an address stored together as they are, and writes nothing", () => {

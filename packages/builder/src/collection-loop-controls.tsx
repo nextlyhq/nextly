@@ -52,32 +52,29 @@ type LoopCollections =
   | { readonly kind: "failed" };
 
 /**
- * How long one read of the collections is shared. Long enough that the
- * collection and sort controls, drawn together, and a reselected loop make
- * one read; short enough that a collection added in another tab appears on
- * the next selection.
+ * The read in flight, per host function. Shared only while it is in flight,
+ * so the collection and sort controls drawn together make one read, and
+ * dropped the moment it settles. An answer is one signed-in author's, read
+ * with their access: kept past that, it could be handed to whoever signs in
+ * next on the same tab without the route judging them.
  */
-const SHARED_FOR_MS = 30_000;
-
-/** The read in flight or just answered, per host function. */
-const shared = new WeakMap<
+const inFlight = new WeakMap<
   ListLoopCollections,
-  { readonly at: number; readonly answer: Promise<readonly LoopCollection[]> }
+  Promise<readonly LoopCollection[]>
 >();
 
-/** The host's collections, read once for every control asking within the window. */
+/** The host's collections, read once for every control asking while it runs. */
 function readShared(
   list: ListLoopCollections
 ): Promise<readonly LoopCollection[]> {
-  const now = Date.now();
-  const held = shared.get(list);
-  if (held !== undefined && now - held.at < SHARED_FOR_MS) return held.answer;
+  const held = inFlight.get(list);
+  if (held !== undefined) return held;
   const answer = list();
-  shared.set(list, { at: now, answer });
-  // A failure is not kept: the next control to ask reads again.
-  answer.catch(() => {
-    if (shared.get(list)?.answer === answer) shared.delete(list);
-  });
+  inFlight.set(list, answer);
+  const settle = () => {
+    if (inFlight.get(list) === answer) inFlight.delete(list);
+  };
+  answer.then(settle, settle);
   return answer;
 }
 

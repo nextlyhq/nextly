@@ -186,6 +186,32 @@ describe("the fields a loop may sort by", () => {
     ]);
   });
 
+  it("leaves out a field it cannot name or order, and names one with a blank label in words", async () => {
+    const answer = await readLoopCollections(
+      readsOf([
+        {
+          slug: "notes",
+          timestamps: false,
+          fields: [
+            null,
+            "title",
+            { type: "text" },
+            { name: "", type: "text" },
+            { name: "untyped" },
+            { name: "codes", type: "text", hasMany: true },
+            { name: "score", type: "acme-score", storage: "unknown" },
+            { name: "weight", type: "acme-weight", storage: "number" },
+            { name: "shortName", type: "text", label: "  " },
+          ],
+        },
+      ])
+    );
+    expect(answer.items[0]?.sortFields).toStrictEqual([
+      { name: "weight", label: "Weight", date: false },
+      { name: "shortName", label: "Short Name", date: false },
+    ]);
+  });
+
   it("offers no timestamps where the collection turned them off", async () => {
     const answer = await readLoopCollections(
       readsOf([{ ...POSTS, timestamps: false }])
@@ -241,6 +267,23 @@ describe("asking core which keys this caller may sort by", () => {
       }),
     };
     expect([...(await sortableKeys("posts", ["a"], reads))]).toEqual([]);
+  });
+
+  it("reads a refusal naming anything but sort keys as a failure, offering nothing", async () => {
+    // A validation error that also names a filter is not core saying which
+    // keys it will not sort by, so no key is taken from it.
+    const reads = {
+      sortedRead: vi.fn(async () => {
+        throw NextlyError.validation({
+          errors: [
+            { path: "sort.a", code: "FIELD_NOT_SORTABLE", message: "No." },
+            { path: "where.b", code: "FIELD_NOT_FILTERABLE", message: "No." },
+          ],
+        });
+      }),
+    };
+    expect([...(await sortableKeys("posts", ["a", "c"], reads))]).toEqual([]);
+    expect(reads.sortedRead).toHaveBeenCalledTimes(1);
   });
 
   it("stops at a refusal naming no key it asked, rather than asking forever", async () => {

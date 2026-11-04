@@ -206,7 +206,10 @@ export function altModeChanges(
   values: Readonly<Record<string, unknown>>,
   libraryAlt: string | undefined
 ): ImageChanges {
-  const marked = values[group.decorative] !== undefined;
+  // Only `true` marks an image decorative, as the block reads it; a stored
+  // `false` already means "not decorative", and naming it would refuse the
+  // choice wherever the mark may not change.
+  const marked = values[group.decorative] === true;
   const unmark = marked ? { [group.decorative]: undefined } : {};
   if (mode === "decorative") return { [group.decorative]: true };
   if (mode === "library") {
