@@ -58,6 +58,7 @@ import {
   renderLinkableContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { HTML_TAG_LABELS } from "./html-tags";
 
 /** This block's registered name, so the tests name it once. */
 export const CARD_BLOCK = "core/card";
@@ -139,7 +140,9 @@ export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     // announced as a landmark, which is noise on a card that merely groups a
     // heading and a sentence. The author knows which one theirs is.
     as: {
-      label: "Element type",
+      label: "HTML tag",
+      optionLabels: HTML_TAG_LABELS,
+      showOptionValue: true,
       display: "menu",
       type: "select",
       options: ["div", "article", "section", "aside"],

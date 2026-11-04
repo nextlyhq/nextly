@@ -62,6 +62,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { HTML_TAG_LABELS } from "./html-tags";
 
 /** This block's registered name, so its tests name it once. */
 export const GALLERY_BLOCK = "core/gallery";
@@ -116,7 +117,9 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: {
-        label: "Element type",
+        label: "HTML tag",
+        optionLabels: HTML_TAG_LABELS,
+        showOptionValue: true,
         display: "menu",
         type: "select",
         options: ["div", "section", "article"],

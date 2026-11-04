@@ -61,6 +61,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { HTML_TAG_LABELS } from "./html-tags";
 
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 
@@ -123,7 +124,9 @@ export const columns: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: {
-        label: "Element type",
+        label: "HTML tag",
+        optionLabels: HTML_TAG_LABELS,
+        showOptionValue: true,
         display: "menu",
         type: "select",
         options: ["div", "section", "article"],

@@ -795,3 +795,86 @@ describe("a key as an author reads it", () => {
     expect(fieldLabel("colorful")).toBe("Colorful");
   });
 });
+
+describe("which choices a block's inspector offers", () => {
+  /** A button-like block inside an optional form-like container. */
+  function withButton(props: Record<string, unknown>, insideForm: boolean) {
+    // Registered afresh for each document a case builds.
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/button",
+          editor: { label: "Button" },
+          props: {
+            href: { type: "url" },
+            type: {
+              type: "select",
+              options: ["button", "submit", "reset"],
+              onlyWithout: "href",
+              firstInside: { block: "acme/form", option: "submit" },
+            },
+            as: { type: "select", options: ["div"] },
+          },
+        },
+        {
+          ...base,
+          name: "acme/form",
+          editor: { label: "Form" },
+          slots: { children: {} },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    const button = {
+      id: "b",
+      type: "acme/button",
+      version: 1,
+      props,
+    } as BlockNode;
+    return documentOf(
+      insideForm
+        ? [
+            {
+              id: "f",
+              type: "acme/form",
+              version: 1,
+              props: {},
+              slots: { children: [button] },
+            } as BlockNode,
+          ]
+        : [button]
+    );
+  }
+  const names = (document: BlockDocument) =>
+    inspectSelection(document, "b")?.props.map(prop => prop.name);
+
+  it("leaves out a prop that only applies without another, once that one is set", () => {
+    // "Acts as" means nothing on a button that is a link.
+    expect(names(withButton({}, false))).toContain("type");
+    expect(names(withButton({ href: "/pricing" }, false))).not.toContain(
+      "type"
+    );
+  });
+
+  it("leaves out a choice with only one option, which offers nothing to pick", () => {
+    expect(names(withButton({}, false))).not.toContain("as");
+  });
+
+  it("puts the option a container makes most likely first, inside that container", () => {
+    const optionsOf = (document: BlockDocument) =>
+      inspectSelection(document, "b")?.props.find(prop => prop.name === "type")
+        ?.options;
+    expect(optionsOf(withButton({}, false))).toEqual([
+      "button",
+      "submit",
+      "reset",
+    ]);
+    expect(optionsOf(withButton({}, true))).toEqual([
+      "submit",
+      "button",
+      "reset",
+    ]);
+  });
+});

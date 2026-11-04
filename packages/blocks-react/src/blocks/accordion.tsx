@@ -60,6 +60,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { HTML_TAG_LABELS } from "./html-tags";
 
 export { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
 
@@ -104,7 +105,9 @@ export const accordion: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: {
-        label: "Element type",
+        label: "HTML tag",
+        optionLabels: HTML_TAG_LABELS,
+        showOptionValue: true,
         display: "menu",
         type: "select",
         options: ["div", "section", "article"],

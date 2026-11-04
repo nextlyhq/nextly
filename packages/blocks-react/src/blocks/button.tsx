@@ -209,11 +209,15 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
       options: ["_self", "_blank"],
     },
     rel: { label: "Link relationship", type: "text" },
+    // What the button does when it is not a link: offered only without a
+    // link (a link is what it then does), Submit first inside a form.
     type: {
-      label: "Button type",
+      label: "Acts as",
       optionLabels: { button: "Button", submit: "Submit", reset: "Reset" },
       type: "select",
       options: [...BUTTON_TYPES],
+      onlyWithout: "href",
+      firstInside: { block: "core/form", option: "submit" },
     },
     ariaLabel: { label: "Accessible label", role: "content", type: "text" },
   },

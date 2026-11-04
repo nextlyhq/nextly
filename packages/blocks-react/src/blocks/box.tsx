@@ -23,6 +23,7 @@ import {
   renderLinkableContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { HTML_TAG_LABELS } from "./html-tags";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -47,7 +48,9 @@ export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
   },
   props: {
     as: {
-      label: "Element type",
+      label: "HTML tag",
+      optionLabels: HTML_TAG_LABELS,
+      showOptionValue: true,
       display: "menu",
       type: "select",
       options: ["div", "article", "aside"],

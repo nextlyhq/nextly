@@ -357,6 +357,12 @@ function SelectControl({
           {prop.options.map((option, index) => (
             <SelectItem key={option} value={option}>
               {labels[index]}
+              {/* The value itself, muted, where the block asks for it: an
+                  HTML tag reads as words, with the tag still there. */}
+              {prop.schema.showOptionValue === true &&
+              labels[index] !== option ? (
+                <span className="nx-inspector__option-value">{option}</span>
+              ) : null}
             </SelectItem>
           ))}
         </SelectContent>
