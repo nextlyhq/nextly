@@ -295,6 +295,7 @@ import {
   type Container,
   type RestoredRegistrations,
 } from "./container";
+import { readLayoutScanEntities } from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -5060,8 +5061,7 @@ function handleUnresolvedExtends(
 /**
  * Refuses the boot of a site keeping every translatable field per language over a database whose
  * main tables still hold the translatable columns of an entity: one its configuration declares, or
- * one the Schema Builder made, read from the registries. A registry that cannot be read yet, as on
- * a fresh database, holds nothing laid out before the setting.
+ * one the Schema Builder made, read from the registries (`readLayoutScanEntities`).
  */
 async function refuseMixedStorageInConfig(
   adapter: DrizzleAdapter,
@@ -5118,37 +5118,12 @@ async function refuseMixedStorageInConfig(
   ];
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
-  const declared = new Set(entities.map(entity => entity.tableName));
-  const registries: Array<
-    [Entity["kind"], Parameters<typeof loadDynamicTables>[1]]
-  > = [
-    ["collection", "dynamic_collections"],
-    ["single", "dynamic_singles"],
-  ];
-  const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter).catch(
-    () => undefined
+  entities.push(
+    ...(await readLayoutScanEntities(
+      adapter,
+      new Set(entities.map(entity => entity.tableName)),
+      perLanguage
+    ))
   );
-  if (fieldGroupRegistry) registries.push(["component", fieldGroupRegistry]);
-  for (const [kind, registry] of registries) {
-    try {
-      await loadDynamicTables(
-        adapter,
-        registry,
-        (tableName, fields, _status, localized) => {
-          if (declared.has(tableName)) return Promise.resolve();
-          entities.push({
-            kind,
-            slug: tableName,
-            tableName,
-            fields: fields as Entity["fields"],
-            localized,
-          });
-          return Promise.resolve();
-        }
-      );
-    } catch {
-      // Not readable yet: nothing in it was laid out before the setting.
-    }
-  }
   await refuseMixedStorage(adapter, entities, perLanguage);
 }
