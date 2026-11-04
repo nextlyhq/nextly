@@ -78,6 +78,10 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import {
+  saveAsSharedStyleRefusal,
+  type SharedStyleOffer,
+} from "./shared-style-target";
 
 /** The editor's own lock question, asked of the ops a verb would apply. */
 type LockQuestion = (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
@@ -114,6 +118,7 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
+  | "save-as-shared-style"
   | "edit-component"
   | "turn-into-component"
   | "detach-component"
@@ -598,6 +603,34 @@ function saveAction(
 }
 
 /**
+ * "Save as shared style…" for one block, where the host offers shared
+ * styles: dimmed with the reason the save rule gives (one style per block in
+ * the first release, a block with no styles of its own, the author's right,
+ * the block's lock), asked of that rule rather than restated.
+ */
+function sharedStyleActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  offer: SharedStyleOffer | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const action: ToolbarAction = {
+    id: "save-as-shared-style",
+    label: "Save as shared style…",
+    enabled: true,
+    inMenu: true,
+  };
+  const only = ids.length === 1 ? ids[0] : undefined;
+  if (only === undefined) {
+    return [{ ...action, enabled: false, reason: oneAtATime(ids.length) }];
+  }
+  const reason = saveAsSharedStyleRefusal(document, only, offer);
+  return [
+    reason === undefined ? action : { ...action, enabled: false, reason },
+  ];
+}
+
+/**
  * The bar for a selection holding more than one block.
  *
  * **Duplicate, delete and move keep their meaning; select-parent loses it.**
@@ -623,7 +656,8 @@ function manyBlockActions(
   nesting: NestingSource,
   mayCreate: boolean,
   ask?: LockQuestion,
-  components?: ComponentVerbsOffer
+  components?: ComponentVerbsOffer,
+  sharedStyles?: SharedStyleOffer
 ): ToolbarAction[] {
   const many = oneAtATime(ids.length);
   const deleteLock = ids
@@ -647,6 +681,7 @@ function manyBlockActions(
       opsOf(selectionDuplication(document, ids))
     ),
     saveAction(document, ids, nesting, mayCreate),
+    ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask),
     deleteLock?.locked === undefined
       ? heldByLock(
@@ -725,7 +760,13 @@ export function toolbarActions(
    * for one selected placement, and only by a host that answers it; the host
    * also withholds it from an author who may not update components.
    */
-  offersEditComponent: boolean = false
+  offersEditComponent: boolean = false,
+  /**
+   * What the host knows about the site's shared styles and the author's
+   * right to change them, or nothing where it has none: then "Save as shared
+   * style…" is not offered.
+   */
+  sharedStyles?: SharedStyleOffer
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -741,7 +782,8 @@ export function toolbarActions(
       rules,
       mayCreatePattern,
       lockRefusalFor,
-      components
+      components,
+      sharedStyles
     );
 
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -786,6 +828,7 @@ export function toolbarActions(
       duplication?.ops
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),
     ...compositionActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined

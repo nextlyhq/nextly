@@ -155,6 +155,9 @@
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
+  /* The "what you're editing" target: this block (pink), a shared style (green). */
+  --nx-builder-local: var(--nx-builder-local-on-light);
+  --nx-builder-shared: var(--nx-success);
   --nx-builder-component-text: var(--nx-builder-component-text-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
@@ -208,6 +211,9 @@
   --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
   --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
   --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
+  /* This block's pink: 5.9:1 on the light ground, 9.4:1 on the dark (AA). */
+  --nx-builder-local-on-light: #c2185b; /* design-lint-ok: this-block pink; no admin token */
+  --nx-builder-local-on-dark: #f48fb1; /* design-lint-ok: this-block pink; no admin token */
   --nx-builder-component-text-on-light: #ffffff; /* design-lint-ok: text on the deep purple */
   --nx-builder-component-text-on-dark: #15171c; /* design-lint-ok: text on the light purple */
   --nx-builder-halo: #ffffff; /* design-lint-ok: mode-invariant halo on site content */
@@ -229,6 +235,7 @@
   --nx-builder-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-local: var(--nx-builder-local-on-dark);
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
 }
@@ -1190,9 +1197,10 @@
 }
 
 /*
- * The "what you're editing" bar: the target, the device and the state in
- * words, with the state's control beneath. Kept at the top of the Style tab
- * while its sections scroll.
+ * The "what you're editing" bar: line one the target chips, line two the
+ * device and the state, from the canvas. A box set apart from the panel, so it
+ * reads as the frame the controls below sit in. Kept at the top of the Style tab while its
+ * sections scroll.
  */
 .nx-editing-bar {
   position: sticky;
@@ -1200,36 +1208,226 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  margin: 0 -0.75rem 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-block-end: 1px solid var(--nx-builder-border);
-  background: var(--nx-builder-surface, var(--nx-background));
+  gap: 0.375rem;
+  margin: 0 0 0.75rem;
+  padding: 0.4375rem 0.5625rem;
+  /*
+   * A card on the inspector's surface: the panel is drawn in --nx-muted, so
+   * the box takes --nx-card (white on the light grey, darker than the dark
+   * grey) with a hairline, which differs from the panel in both schemes.
+   */
+  border: 1px solid var(--nx-border);
+  border-radius: 0.4375rem;
+  background: var(--nx-card);
+  font-size: var(--text-xs);
 }
 
-.nx-editing-bar__facts {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  margin: 0;
-}
-
-.nx-editing-bar__fact {
+.nx-editing-bar__line,
+.nx-editing-bar__context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
   min-inline-size: 0;
 }
 
-.nx-editing-bar__fact dt {
+.nx-editing-bar__label,
+.nx-editing-bar__context {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-editing-bar__targets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+/*
+ * A chip is text and a 1px border in its own colour, never a fill. The
+ * target's border is doubled and the others' is faint; the colour of the text
+ * stays whole either way, so it keeps its contrast, and `aria-pressed` says
+ * which is the target.
+ */
+.nx-editing-bar__chip,
+.nx-editing-bar__chip-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-inline-size: 11rem;
+  padding: 1px 0.4375rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  border-radius: 0.3125rem;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-editing-bar__chip[data-tone="local"] {
+  color: var(--nx-builder-local);
+}
+
+.nx-editing-bar__chip[data-tone="shared"],
+.nx-editing-bar__chip-menu {
+  color: var(--nx-builder-shared);
+}
+
+.nx-editing-bar__chip[aria-pressed="true"] {
+  border-color: currentColor;
+  box-shadow: inset 0 0 0 1px currentColor;
+  cursor: default;
+}
+
+.nx-editing-bar__chip-wrap {
+  display: inline-flex;
+  min-inline-size: 0;
+}
+
+.nx-editing-bar__chip-wrap .nx-editing-bar__chip {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.nx-editing-bar__chip-menu {
+  padding-inline: 0.1875rem;
+  border-inline-start: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+/* A ring that follows the chip's rounded corners, as an outline may not. */
+.nx-editing-bar__chip:focus-visible,
+.nx-editing-bar__chip-menu:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--nx-ring);
+}
+
+.nx-editing-bar__chip[aria-pressed="true"]:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px currentColor,
+    0 0 0 2px var(--nx-ring);
+}
+
+.nx-editing-bar__leave:focus-visible,
+.nx-editing-bar__action:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-editing-bar__chip:disabled {
+  cursor: default;
+}
+
+/* A quiet text action after the chips: apply or save a shared style. */
+.nx-editing-bar__action,
+.nx-editing-bar__leave {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.nx-editing-bar__action:disabled {
+  color: var(--nx-muted-foreground);
+  text-decoration: none;
+  cursor: default;
+}
+
+.nx-editing-bar__banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--nx-foreground);
+}
+
+.nx-editing-bar__banner p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.nx-editing-bar__banner code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.nx-editing-bar__note {
+  color: var(--nx-muted-foreground);
+}
+
+/* The class a shared style gives the page, beside its name in the picker and
+   under the name in the save dialog: mono, muted, and no smaller than the
+   12px the editor reads. */
+.nx-classes__option-class,
+.nx-vars-editor__code.nx-shared-style-save__class {
+  font-family: var(--font-mono, ui-monospace, monospace);
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
 }
 
-.nx-editing-bar__fact dd {
-  margin: 0;
-  overflow: hidden;
-  font-size: var(--text-xs);
+.nx-editing-bar__state-label::after {
+  content: ":";
+}
+
+/* The State menu's trigger: the state in words and a chevron, quiet text. */
+.nx-state-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.25rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-state-menu:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* The chosen state's tick, in a slot every item keeps so the words align. */
+.nx-state-menu__tick {
+  display: inline-flex;
+  width: 0.875rem;
+  margin-inline-end: 0.375rem;
+}
+
+/* How many other states hold values, in words beside the trigger. */
+.nx-state-menu__elsewhere {
+  color: var(--nx-muted-foreground);
+}
+
+/* The save dialog's hint, the size and tone of the Design editors' hints. */
+.nx-shared-style-save__hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* A state with values: a dot in the colour of the words beside it. */
+.nx-state-menu__dot {
+  display: inline-block;
+  width: 0.375rem;
+  height: 0.375rem;
+  margin-inline-start: 0.25rem;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+.nx-editing-bar__state {
+  color: var(--nx-foreground);
+  font-weight: 600;
 }
 
 /* Content's last section: the CSS id and the custom attributes. */
@@ -4974,7 +5172,9 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-inspector__field:focus-within .nx-style-inspector__provenance-text {
-  display: block;
+  /* Held back (none) by a row that has just committed a value, until the
+     field is focused again; see `--nx-provenance-caption` on the row. */
+  display: var(--nx-provenance-caption, block);
   position: absolute;
   z-index: 2;
   inset-block-end: 100%;
@@ -5043,6 +5243,21 @@ fieldset.nx-inspector__fields {
 .nx-style-inspector .nx-inspector__field > [data-action="jump"],
 .nx-style-inspector .nx-inspector__field > .nx-inspector__error {
   grid-column: 2 / -1;
+}
+
+/*
+ * Where a value stands between the block and its shared style: the words on
+ * one line and the action (Reset, Move to) on its own line under them, so no
+ * separator is left ending a line.
+ */
+.nx-style-inspector__shared-line {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
 }
 
 /*
@@ -5275,10 +5490,23 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * child would take rows into it.
  */
 .nx-classes__option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
   padding: 0.25rem 0.5rem;
   font-size: var(--text-xs);
-  font-family: var(--font-mono, monospace);
   cursor: pointer;
+}
+
+/* The name keeps its own width while the row has room; the class name gives
+   way first, then the name. */
+.nx-classes__option-name {
+  flex: 0 1 auto;
+}
+
+.nx-classes__option-class {
+  flex: 1 1 0;
 }
 
 /*
@@ -6729,7 +6957,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   text-align: start;
 }
 
-.nx-inspector__relation-title {
+/*
+ * Text cut short on one line with an ellipsis rather than wrapped or broken
+ * mid-word, the whole of it in a tooltip: a relation's title, and a shared
+ * style's name and class name in the picker.
+ */
+.nx-inspector__relation-title,
+.nx-classes__option-name,
+.nx-classes__option-class {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7045,11 +7280,16 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   white-space: nowrap;
 }
 
-/* A checkbox beside the words it names, kept apart from them. */
-.nx-inspector__check {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+/*
+ * An on/off row's switch at the start of the control column, its own size,
+ * rather than stretched across it.
+ */
+.nx-inspector__field[data-content-control="checkbox"] > [role="switch"] {
+  justify-self: start;
+}
+
+.nx-inspector__exposed [role="switch"] {
+  align-self: flex-start;
 }
 
 /*

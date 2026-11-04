@@ -58,6 +58,7 @@ import {
   Ellipsis,
   LayoutTemplate,
   Lock,
+  Palette,
   RefreshCw,
   SquarePen,
   Trash2,
@@ -93,6 +94,8 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
+  // A palette: what is saved is a look, which other blocks can wear.
+  "save-as-shared-style": Palette,
   // A pen on a square, the editing glyph: the component opens to be edited.
   "edit-component": SquarePen,
   // The component mark: the selection becomes one.

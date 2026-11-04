@@ -254,10 +254,9 @@ describeEachDialect(
     const PATHS = [
       {
         path: "a collection's builder saves the field alone",
-        // Saved through the schema service's own ALTER, which on SQLite renders no column
-        // modification (`generateAlterTableMigration`), so the NOT NULL of a Required setting on an
-        // existing column is not applied there.
-        sqliteSkipsColumnModification: true,
+        // Saved through the schema pipeline's push, as the dialog applies it, which rebuilds a
+        // SQLite table to apply the NOT NULL of a Required setting on an existing column.
+        sqliteSkipsColumnModification: false,
         entity: "collection",
         table: "dc_posts",
         seed: seedCollection,
