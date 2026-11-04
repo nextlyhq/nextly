@@ -5466,6 +5466,13 @@ export class CollectionMutationService extends BaseService {
      * authorization stays the caller's concern.
      */
     updateUnderLock?: { authenticatedScope?: AuthenticatedScope };
+    /**
+     * Told, once the discard has committed, the version it left the document
+     * at, read on its transaction and spelled for `locale`: for a caller that
+     * answers with the document, so the version it hands back is the one
+     * this discard produced. Not called when there was no draft to discard.
+     */
+    onVersion?: (version: string | undefined) => void;
   }): Promise<number> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -5474,6 +5481,7 @@ export class CollectionMutationService extends BaseService {
       params.collectionName
     );
     const tableName = collectionTableName(collection, params.collectionName);
+    let discardedVersion: string | undefined;
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter
       .transaction(async tx => {
@@ -5526,6 +5534,20 @@ export class CollectionMutationService extends BaseService {
             { id: params.entryId },
             actorForWrite(params.actor, params.user)
           );
+          if (params.onVersion) {
+            discardedVersion = await documentVersionOn(tx, {
+              dialect: this.dialect,
+              table: tableName,
+              id: params.entryId,
+              languagesTable: await this.translationTableOnTx(
+                tx,
+                collection,
+                tableName
+              ),
+              localization: this.localization,
+              locale: params.locale ?? undefined,
+            });
+          }
           await this.recordHistoryEvent(
             tx,
             params.collectionName,
@@ -5538,6 +5560,10 @@ export class CollectionMutationService extends BaseService {
             }
           );
         }
+        return removed;
+      })
+      .then(removed => {
+        if (removed > 0) params.onVersion?.(discardedVersion);
         return removed;
       })
       .catch(async (error: unknown) => {
@@ -9211,12 +9237,14 @@ export class CollectionMutationService extends BaseService {
             );
           }
           // A move of every language is a save of the document, whether or
-          // not its main row keeps a status of its own.
+          // not its main row keeps a status of its own: changed at the moment
+          // the status move above wrote to `updated_at`.
           await bumpDocumentRevision(
             tx,
             tableName,
             { id: params.entryId },
-            actorForWrite(params.actor, params.user)
+            actorForWrite(params.actor, params.user),
+            publishNow
           );
           if (companion && companionPublishable) {
             await this.writeCompanionStatus(tx, {

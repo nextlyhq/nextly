@@ -195,14 +195,18 @@ export function translationRevisionBumpColumns(
  * to that row: a held working draft, a status moved only on translation rows,
  * a change to components or relations alone. `updated_at` is left as it is,
  * since the row's own content did not change.
+ *
+ * `at` is when it changed: the moment the same save wrote to `updated_at`,
+ * when it wrote one in another statement, so the two compare equal.
  */
 export async function bumpDocumentRevision(
   tx: Pick<TransactionContext, "update">,
   table: string,
   where: Record<string, string>,
-  actor: RequestActor
+  actor: RequestActor,
+  at: Date = new Date()
 ): Promise<void> {
-  await tx.update(table, revisionBumpColumns(actor), {
+  await tx.update(table, revisionBumpColumns(actor, at), {
     and: Object.entries(where).map(([column, value]) => ({
       column,
       op: "=" as const,

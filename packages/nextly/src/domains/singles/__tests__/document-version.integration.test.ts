@@ -18,6 +18,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { discardWorkingDraft } from "../../versions/discard-working-draft";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 /** The statement that reads translation counters on their own. */
@@ -281,6 +282,35 @@ describe.each(getConfiguredTestDialects())(
       expect(Number((await mainRow(t, PREFS))._revision)).toBe(
         Number(after._revision) + 1
       );
+    });
+
+    it("answers a discard with the version it produced, the one a read then gives", async () => {
+      const t = await boot(dialect);
+      await singlesOf(t).update(
+        PREFS,
+        { siteName: "Live", contact: "c", status: "published" },
+        { locale: "en", overrideAccess: true }
+      );
+      const held = revOf(
+        await singlesOf(t).update(
+          PREFS,
+          { contact: "held edit" },
+          { locale: "en", overrideAccess: true }
+        )
+      );
+      // As the discard route makes it: the live document read first, then
+      // the draft removed under the Single's lock.
+      const { document, removed } = await discardWorkingDraft({
+        scopeKind: "single",
+        slug: PREFS,
+        entryId: String((await mainRow(t, PREFS)).id),
+        locale: "en",
+        user: { id: "system-check", roles: ["super-admin"] } as never,
+      });
+      expect(removed).toBe(1);
+      const answered = (document as Record<string, unknown>)._rev;
+      expect(answered).not.toBe(held);
+      expect(answered).toBe(await readRev(t, PREFS, "en"));
     });
 
     it("gives a translated Single with no translation table a version that names no language", async () => {

@@ -167,6 +167,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   bumpDocumentRevision,
@@ -843,6 +844,13 @@ export class SingleMutationService extends BaseService {
      * is refused rather than removing that document's draft.
      */
     entryId?: string;
+    /**
+     * Told, once the discard has committed, the version it left the document
+     * at, read on its transaction and spelled for `locale`: for a caller that
+     * answers with the document, so the version it hands back is the one
+     * this discard produced. Not called when there was no draft to discard.
+     */
+    onVersion?: (version: string | undefined) => void;
   }): Promise<number> {
     // Refused first when the Single is removed from code, before any hook or
     // read of its document, so a refused write changes nothing.
@@ -864,6 +872,7 @@ export class SingleMutationService extends BaseService {
       });
     }
 
+    let discardedVersion: string | undefined;
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter
       .transaction(async tx => {
@@ -904,6 +913,28 @@ export class SingleMutationService extends BaseService {
             { id: entryId },
             actorForWrite(params.actor ?? null, params.user)
           );
+          if (params.onVersion) {
+            // Asked of the catalog on this transaction, which a missing table
+            // cannot abort, rather than taken from the write, which wrote no
+            // translation row.
+            const languagesTable = `${singleMeta.tableName}_locales`;
+            const translated =
+              singleMeta.localized === true &&
+              this.localization !== undefined &&
+              (
+                await liveColumnNames(tx.getDrizzle(), this.adapter.dialect, [
+                  languagesTable,
+                ])
+              ).has(languagesTable.toLowerCase());
+            discardedVersion = await documentVersionOn(tx, {
+              dialect: this.adapter.dialect,
+              table: singleMeta.tableName,
+              id: entryId,
+              languagesTable: translated ? languagesTable : null,
+              localization: this.localization,
+              locale: params.locale ?? undefined,
+            });
+          }
           await recordWriteEvent(
             tx,
             { adapter: this.adapter },
@@ -916,6 +947,10 @@ export class SingleMutationService extends BaseService {
             }
           );
         }
+        return removed;
+      })
+      .then(removed => {
+        if (removed > 0) params.onVersion?.(discardedVersion);
         return removed;
       })
       .catch(async (error: unknown) => {

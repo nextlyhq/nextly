@@ -25,6 +25,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { discardWorkingDraft } from "../../versions/discard-working-draft";
 import type { CollectionService } from "../services/collection-service";
 
 /** The statement that reads translation counters on their own. */
@@ -647,6 +648,39 @@ describe.each(getConfiguredTestDialects())(
       expect(await readRev(t, DOCS, id, "en")).not.toBe(held);
     });
 
+    it("a discard answers with the version it produced, the one a read then gives", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "live", note: "n", status: "published" }
+        )
+      );
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { note: "held edit" }
+      );
+      const held = await readRev(t, DOCS, id, "en");
+      // As the discard route makes it: the live document read first, then
+      // the draft removed under the document's lock.
+      const { document, removed } = await discardWorkingDraft({
+        scopeKind: "collection",
+        slug: DOCS,
+        entryId: id,
+        locale: "en",
+        user: { id: "system-check", roles: ["super-admin"] } as never,
+      });
+      expect(removed).toBe(1);
+      const answered = (document as Record<string, unknown>)._rev;
+      expect(answered).not.toBe(held);
+      expect(answered).toBe(await readRev(t, DOCS, id, "en"));
+    });
+
     it("a wildcard save answers with every language's version", async () => {
       const t = await boot(dialect);
       const id = idOf(
@@ -735,6 +769,11 @@ describe.each(getConfiguredTestDialects())(
       expect(afterPublish).not.toBe("1.en:1,es:1");
       // The response's version is the one after the bumps, not before them.
       expect(revOf(published)).toBe(afterPublish);
+      // Changed at the moment the publish wrote to updated_at.
+      const publishedRow = await rowOf(t, `dc_${DOCS}`, { id });
+      expect(timeOf(publishedRow._changed_at)).toBe(
+        timeOf(publishedRow.updated_at)
+      );
 
       const unpublished = await handlerOf(t).unpublishAllLocales({
         collectionName: DOCS,
