@@ -1130,4 +1130,79 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
       }
     }
   );
+
+  it.skipIf(!onPostgres)(
+    "a check and an expression index PostgreSQL refuses against the new type block it, though the kind of value stays",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_num (id integer PRIMARY KEY, c numeric(10,2) CONSTRAINT conv_c_even CHECK (c % 2 = 0) CONSTRAINT conv_c_positive CHECK (c >= 0))"
+      );
+      await connection.exec("CREATE INDEX conv_c_mod ON conv_num ((c % 2))");
+      const tablesBefore = await connection.query(
+        "SELECT relname FROM pg_class WHERE relpersistence = 't' ORDER BY relname"
+      );
+      const { plan, named } = await blockedBy(
+        "conv_num",
+        "c",
+        { type: "numeric", typeModifier: "10,2", nullable: true },
+        { type: "float8", nullable: true }
+      );
+      expect(named).toEqual([
+        ["index", "conv_c_mod"],
+        ["check", "conv_c_even"],
+      ]);
+      expect(plan.cannotCarry[0].reason).toContain("operator does not exist");
+      // The copy was made and rolled back: no temporary table is left.
+      expect(
+        await connection.query(
+          "SELECT relname FROM pg_class WHERE relpersistence = 't' ORDER BY relname"
+        )
+      ).toEqual(tablesBefore);
+      // What the probe says is what PostgreSQL does to the real table.
+      await expect(runPlan(connection, plan)).rejects.toThrow(
+        /operator does not exist/
+      );
+    }
+  );
+
+  it.skipIf(!onPostgres)(
+    "a check PostgreSQL accepts against the new type keeps the conversion, and it runs",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_len (id integer PRIMARY KEY, c varchar(36) CONSTRAINT conv_c_filled CHECK (length(c) > 0))"
+      );
+      await connection.exec("INSERT INTO conv_len VALUES (1, 'a')");
+      const { plan, named } = await blockedBy(
+        "conv_len",
+        "c",
+        { type: "varchar", typeModifier: "36", nullable: true },
+        { type: "varchar", typeModifier: "255", nullable: true }
+      );
+      expect(named).toEqual([]);
+      await runPlan(connection, plan);
+      const [row] = await connection.query<{ type: string }>(
+        "SELECT format_type(atttypid, atttypmod) AS type FROM pg_attribute WHERE attrelid = 'conv_len'::regclass AND attname = 'c'"
+      );
+      expect(row.type).toBe("character varying(255)");
+    }
+  );
+
+  it.skipIf(!onPostgres)(
+    "where the copy cannot be made, a check on the column blocks every type change, saying why",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_ro (id integer PRIMARY KEY, c varchar(36) CONSTRAINT conv_ro_filled CHECK (length(c) > 0))"
+      );
+      // A read-only session, as on a replica: PostgreSQL refuses CREATE TEMP TABLE there.
+      await connection.exec("SET default_transaction_read_only = on");
+      const { named, plan } = await blockedBy(
+        "conv_ro",
+        "c",
+        { type: "varchar", typeModifier: "36", nullable: true },
+        { type: "varchar", typeModifier: "255", nullable: true }
+      );
+      expect(named).toEqual([["check", "conv_ro_filled"]]);
+      expect(plan.cannotCarry[0].reason).toContain("read-only transaction");
+    }
+  );
 });

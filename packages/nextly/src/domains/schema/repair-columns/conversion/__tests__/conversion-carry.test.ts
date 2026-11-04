@@ -52,6 +52,7 @@ const pgFacts = (facts: Partial<PostgresCarryFacts>): PostgresCarryFacts => ({
   identity: false,
   hasDescendants: false,
   inheritedColumn: false,
+  expressions: { tried: true, typeRefusal: null, refused: [] },
   ...facts,
 });
 
@@ -139,13 +140,10 @@ describe("PostgreSQL: what the new type cannot keep", () => {
         ],
       })
     );
-    expect(named(plan.cannotCarry, "index")).toEqual([
-      "idx_pattern",
-      "idx_lower",
-    ]);
-    // Within one family the expression is read as before (`lower(varchar)` reads the text cast).
-    const sameFamily = postgresCarry(
-      pgRequest(TEXT, VARCHAR_255),
+    // The expression index is named only where PostgreSQL refused it against the new type.
+    expect(named(plan.cannotCarry, "index")).toEqual(["idx_pattern"]);
+    const refused = postgresCarry(
+      pgRequest(TEXT, JSONB),
       pgFacts({
         indexes: [
           {
@@ -156,9 +154,23 @@ describe("PostgreSQL: what the new type cannot keep", () => {
             keptByNewType: true,
           },
         ],
+        expressions: {
+          tried: true,
+          typeRefusal: null,
+          refused: [
+            {
+              property: "index",
+              name: "idx_lower",
+              error: "function lower(jsonb) does not exist",
+            },
+          ],
+        },
       })
     );
-    expect(sameFamily.cannotCarry).toEqual([]);
+    expect(named(refused.cannotCarry, "index")).toEqual(["idx_lower"]);
+    expect(refused.cannotCarry[0].reason).toContain(
+      "function lower(jsonb) does not exist"
+    );
   });
 
   it("key: a foreign key into or out of the column is named when its type changes, not for a nullability change", () => {
@@ -181,16 +193,87 @@ describe("PostgreSQL: what the new type cannot keep", () => {
     expect(nullability.cannotCarry).toEqual([]);
   });
 
-  it("check: one on the column is named when the type family changes, not within one family", () => {
-    const checks = [{ name: "chk_body" }];
+  it("check: one PostgreSQL refused against the new type is named, whatever the kind of value; one it accepted is not", () => {
+    const checks = [{ name: "chk_even" }, { name: "chk_positive" }];
+    // numeric to float8 stays a number, yet float8 has no `%`.
+    const plan = postgresCarry(
+      pgRequest(NUMERIC, FLOAT8),
+      pgFacts({
+        checks,
+        expressions: {
+          tried: true,
+          typeRefusal: null,
+          refused: [
+            {
+              property: "check",
+              name: "chk_even",
+              error: "operator does not exist: double precision % integer",
+            },
+          ],
+        },
+      })
+    );
+    expect(named(plan.cannotCarry, "check")).toEqual(["chk_even"]);
+    expect(plan.cannotCarry[0].reason).toContain("operator does not exist");
+    // A check PostgreSQL accepted on the copy is kept, across kinds too.
     expect(
-      named(
-        postgresCarry(pgRequest(TEXT, JSONB), pgFacts({ checks })).cannotCarry,
-        "check"
-      )
-    ).toEqual(["chk_body"]);
+      postgresCarry(pgRequest(TEXT, JSONB), pgFacts({ checks })).cannotCarry
+    ).toEqual([]);
+  });
+
+  it("a type change PostgreSQL refuses on the empty copy is named as the column's definition", () => {
+    const plan = postgresCarry(
+      pgRequest(TEXT, JSONB),
+      pgFacts({
+        checks: [{ name: "chk_body" }],
+        expressions: {
+          tried: true,
+          typeRefusal:
+            'column "body" cannot be cast automatically to type jsonb',
+          refused: [],
+        },
+      })
+    );
+    expect(named(plan.cannotCarry, "definition")).toEqual(["body"]);
+    expect(plan.cannotCarry[0].reason).toContain("cannot be cast");
+  });
+
+  it("where the copy could not be made, every check and expression index on the column blocks a type change, saying why", () => {
+    const facts = pgFacts({
+      checks: [{ name: "chk_body" }],
+      indexes: [
+        {
+          name: "idx_lower",
+          keyed: false,
+          inExpression: true,
+          explicitOpclass: null,
+          keptByNewType: true,
+        },
+        {
+          name: "idx_plain",
+          keyed: true,
+          inExpression: false,
+          explicitOpclass: null,
+          keptByNewType: true,
+        },
+      ],
+      expressions: {
+        tried: false,
+        why: "cannot execute CREATE TABLE in a read-only transaction",
+      },
+    });
+    // Even a change PostgreSQL would usually accept, as the expressions could not be tried.
+    const plan = postgresCarry(pgRequest(TEXT, VARCHAR_255), facts);
+    expect(plan.cannotCarry.map(item => [item.property, item.name])).toEqual([
+      ["index", "idx_lower"],
+      ["check", "chk_body"],
+    ]);
+    for (const item of plan.cannotCarry) {
+      expect(item.reason).toContain("read-only transaction");
+    }
+    // A nullability change re-reads no expression.
     expect(
-      postgresCarry(pgRequest(TEXT, VARCHAR_255), pgFacts({ checks }))
+      postgresCarry(pgRequest({ ...TEXT, nullable: false }, TEXT), facts)
         .cannotCarry
     ).toEqual([]);
   });

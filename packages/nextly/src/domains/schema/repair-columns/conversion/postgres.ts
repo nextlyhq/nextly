@@ -13,7 +13,7 @@
 //
 // @module domains/schema/repair-columns/conversion/postgres
 
-import { sql, type SQL } from "drizzle-orm";
+import { sql, TransactionRollbackError, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
@@ -25,12 +25,9 @@ import { parseColumnType } from "../../value-conversion/column-type";
 
 import {
   OWNER_CAN,
-  checkRefusals,
   isIntegerType,
   defaultLiteralRefusal,
-  expressionIndexRefusal,
   foreignKeyRefusals,
-  kindChanges,
   refusedDefault,
   renderedType,
   typeChanges,
@@ -64,6 +61,21 @@ export interface PostgresIndexUse {
   keptByNewType: boolean;
 }
 
+/**
+ * What PostgreSQL said when the type change, then each check and expression index that reads the
+ * column, was tried on an empty copy of the table: the refusals it gave, each with its message.
+ * `tried: false` where the copy could not be made (a read-only replica, no TEMP privilege), with
+ * why.
+ */
+export type PostgresExpressionProbe =
+  | {
+      tried: true;
+      /** PostgreSQL's refusal of the type change itself, on the copy. */
+      typeRefusal: string | null;
+      refused: { property: "check" | "index"; name: string; error: string }[];
+    }
+  | { tried: false; why: string };
+
 /** What the live table holds that a type change of the column must keep. */
 export interface PostgresCarryFacts {
   /** The default, as PostgreSQL prints it, and whether it casts to the new type automatically. */
@@ -92,6 +104,8 @@ export interface PostgresCarryFacts {
   hasDescendants: boolean;
   /** Whether the column is inherited from a parent table, which alone can change it. */
   inheritedColumn: boolean;
+  /** What trying the column's checks and expression indexes against the new type found. */
+  expressions: PostgresExpressionProbe;
   /** The foreign keys from or to the column, and the table at their other end. */
   foreignKeys: {
     name: string;
@@ -121,16 +135,20 @@ function postgresDefaultLiteral(expression: string): string | null {
 /**
  * What the new type cannot keep, from facts about the live table. Pure: every fact is read before.
  *
- * Nothing here blocks a nullability change alone, which changes no type anything reads. A type
- * change is blocked by:
+ * Any change, its nullability included, is blocked on a table in an inheritance tree (children or
+ * partitions, or a column inherited from a parent). Otherwise nothing blocks a nullability change
+ * alone, which changes no type anything reads. A type change is blocked by:
+ * - the type change itself, where PostgreSQL refuses it on an empty copy of the table, or an
+ *   identity column becoming anything but an integer;
  * - a view, rule, generated column or row-level-security policy that reads the column: PostgreSQL
  *   refuses every type change under one;
  * - a default it cannot cast automatically (refused), or whose literal the new type would not hold
  *   (a `varchar(3)` accepts the default `'draft'` and refuses every row that takes it);
- * - an index key the new type cannot be indexed by, or an index expression or predicate that reads
- *   the column when the kind of value changes;
- * - a check that reads the column when the kind of value changes. PostgreSQL re-reads it against
- *   the new type, and `jsonb <> ''` has no operator; within one kind it reads as before;
+ * - an index key the new type cannot be indexed by;
+ * - a check, or an index expression or predicate, that reads the column and that PostgreSQL refused
+ *   against the new type on the empty copy (`facts.expressions`). PostgreSQL re-reads each one for
+ *   any type change, whatever the kind of value: float8 has no `%`, which numeric has. Where the
+ *   copy could not be made, every one is blocked, saying why;
  * - a trigger whose definition names the column (`UPDATE OF`, a `WHEN` reading it), which
  *   PostgreSQL refuses to keep across a type change; one that does not name it is kept;
  * - a foreign key into or out of the column: both ends must keep matching types.
@@ -146,9 +164,19 @@ export function postgresCarry(
   if (!typeChanges(request))
     return { cannotCarry: inheritance, notCarried: [] };
   const to = renderedType(request.to);
-  const kindChange = kindChanges(request);
+  const probe = facts.expressions;
   const cannotCarry: CannotCarry[] = [
     ...inheritance,
+    ...(probe.tried && probe.typeRefusal !== null
+      ? [
+          {
+            property: "definition" as const,
+            name: request.column,
+            reason: `PostgreSQL refuses the type change to ${to}: ${probe.typeRefusal}`,
+            ownerCan: OWNER_CAN.definition,
+          },
+        ]
+      : []),
     ...(facts.identity && !isIntegerType(request.to)
       ? [
           {
@@ -161,10 +189,11 @@ export function postgresCarry(
       : []),
     ...readerRefusals(facts),
     ...postgresDefaultRefusals(request, facts.default),
-    ...facts.indexes.flatMap(index =>
-      postgresIndexRefusals(index, to, kindChange)
-    ),
-    ...(kindChange ? checkRefusals(facts.checks, to) : []),
+    ...facts.indexes.flatMap(index => postgresIndexRefusals(index, to, probe)),
+    ...facts.checks.flatMap(check => {
+      const refusal = probeRefusal("check", check.name, to, probe);
+      return refusal === null ? [] : [refusal];
+    }),
     ...facts.triggers
       .filter(trigger => trigger.namesColumn)
       .map(trigger => ({
@@ -269,13 +298,13 @@ function postgresDefaultRefusals(
 }
 
 /**
- * An index key the new type cannot be indexed by, or a key expression or predicate that reads the
- * column when the kind of value changes.
+ * An index key the new type cannot be indexed by, or a key expression or predicate reading the
+ * column that PostgreSQL refused against the new type.
  */
 function postgresIndexRefusals(
   index: PostgresIndexUse,
   to: string,
-  kindChange: boolean
+  probe: PostgresExpressionProbe
 ): CannotCarry[] {
   if (index.keyed && !index.keptByNewType) {
     return [
@@ -290,9 +319,43 @@ function postgresIndexRefusals(
       },
     ];
   }
-  return index.inExpression && kindChange
-    ? [expressionIndexRefusal(index.name, to)]
-    : [];
+  const refusal = index.inExpression
+    ? probeRefusal("index", index.name, to, probe)
+    : null;
+  return refusal === null ? [] : [refusal];
+}
+
+/**
+ * A check or expression index reading the column, where PostgreSQL refused it against the new
+ * type on the empty copy, with its message. PostgreSQL reads each one again for any type change,
+ * whatever the kind of value (float8 has no `%`, which numeric has), so where the copy could not
+ * be made every one is refused, saying why.
+ */
+function probeRefusal(
+  property: "check" | "index",
+  name: string,
+  to: string,
+  probe: PostgresExpressionProbe
+): CannotCarry | null {
+  if (!probe.tried) {
+    return {
+      property,
+      name,
+      reason: `PostgreSQL reads the ${property} again against ${to}, and it could not be tried on an empty copy of the table here (${probe.why}), so it is blocked`,
+      ownerCan: OWNER_CAN[property],
+    };
+  }
+  const found = probe.refused.find(
+    item => item.property === property && item.name === name
+  );
+  return found === undefined
+    ? null
+    : {
+        property,
+        name,
+        reason: `PostgreSQL refuses the ${property} against ${to}: ${found.error}`,
+        ownerCan: OWNER_CAN[property],
+      };
 }
 
 /**
@@ -323,7 +386,7 @@ function postgresKeepsStorage(request: ConversionRequest): boolean {
  */
 function postgresStatements(
   request: ConversionRequest,
-  facts: PostgresCarryFacts
+  facts: Pick<PostgresCarryFacts, "collation" | "newTypeTakesCollation">
 ): string[] {
   const table = quoteIdent(request.table, "postgresql");
   const column = quoteIdent(request.column, "postgresql");
@@ -382,6 +445,10 @@ interface ColumnRow {
 
 interface IndexRow {
   name: string;
+  method: string;
+  /** Each key as PostgreSQL prints it alone: a column or an expression, no order or opclass. */
+  key_definitions: string[];
+  predicate: string | null;
   keyed: boolean;
   in_expression: boolean;
   explicit_opclass: string | null;
@@ -402,7 +469,10 @@ interface ForeignKeyRow {
 async function readPostgresCarryFacts(
   db: unknown,
   request: ConversionRequest
-): Promise<PostgresCarryFacts> {
+): Promise<{
+  facts: Omit<PostgresCarryFacts, "expressions">;
+  definitions: ExpressionDefinitions;
+}> {
   const relation = sql`to_regclass(quote_ident(${request.table}))`;
   const newType = sql`to_regtype(${renderedType(request.to)})`;
   // The collation is read here, through the same quoted relation as the rest, so a mixed-case
@@ -459,7 +529,10 @@ async function readPostgresCarryFacts(
   const indexes = await querySqlRows<IndexRow>(
     db,
     "postgresql",
-    sql`SELECT ic.relname AS name,
+    sql`SELECT ic.relname AS name, am.amname AS method,
+          (SELECT array_agg(pg_get_indexdef(x.indexrelid, n, true) ORDER BY n)
+             FROM generate_series(1, x.indnkeyatts) n) AS key_definitions,
+          pg_get_expr(x.indpred, x.indrelid, true) AS predicate,
           EXISTS (SELECT 1 FROM generate_subscripts(x.indkey, 1) k WHERE ${keyPosition}) AS keyed,
           ((x.indexprs IS NOT NULL OR x.indpred IS NOT NULL)
             AND EXISTS (SELECT 1 FROM pg_depend dep WHERE dep.classid = 'pg_class'::regclass
@@ -477,6 +550,7 @@ async function readPostgresCarryFacts(
              FROM generate_subscripts(x.indkey, 1) k WHERE ${keyPosition}), true) AS kept
         FROM pg_index x
         JOIN pg_class ic ON ic.oid = x.indexrelid
+        JOIN pg_am am ON am.oid = ic.relam
         WHERE x.indrelid = ${relation}
           AND (${attnum} = ANY (x.indkey::int2[])
                OR EXISTS (SELECT 1 FROM pg_depend dep WHERE dep.classid = 'pg_class'::regclass
@@ -485,10 +559,10 @@ async function readPostgresCarryFacts(
         ORDER BY ic.relname`
   );
 
-  const checks = await querySqlRows<{ name: string }>(
+  const checks = await querySqlRows<{ name: string; definition: string }>(
     db,
     "postgresql",
-    sql`SELECT conname AS name FROM pg_constraint
+    sql`SELECT conname AS name, pg_get_constraintdef(oid) AS definition FROM pg_constraint
         WHERE conrelid = ${relation} AND contype = 'c' AND ${attnum} = ANY (conkey)
         ORDER BY conname`
   );
@@ -573,7 +647,7 @@ async function readPostgresCarryFacts(
       ? null
       : { schema: column.collation_schema, name: column.collation_name };
 
-  return {
+  const facts: Omit<PostgresCarryFacts, "expressions"> = {
     default:
       column.default_expression === null
         ? null
@@ -603,6 +677,152 @@ async function readPostgresCarryFacts(
     hasDescendants: column.has_descendants,
     inheritedColumn: column.inherited,
   };
+  return {
+    facts: { ...facts, checks: checks.map(check => ({ name: check.name })) },
+    definitions: {
+      checks,
+      indexes: indexes
+        .filter(index => index.in_expression)
+        .map(index => ({
+          name: index.name,
+          method: index.method,
+          keys: index.key_definitions,
+          predicate: index.predicate,
+        })),
+    },
+  };
+}
+
+/** The checks and expression indexes reading the column, as PostgreSQL prints them. */
+interface ExpressionDefinitions {
+  checks: { name: string; definition: string }[];
+  indexes: {
+    name: string;
+    method: string;
+    keys: string[];
+    predicate: string | null;
+  }[];
+}
+
+/** The part of a Drizzle PostgreSQL transaction the probe uses. */
+interface RolledBackTransaction {
+  execute(query: SQL): Promise<unknown>;
+  /** Ends the transaction rolled back, throwing Drizzle's `TransactionRollbackError`. */
+  rollback(): never;
+}
+
+/** The empty copy the probe tries the change on, made in the session's temporary schema. */
+const PROBE_TABLE = "__nextly_conversion_probe";
+
+/** A database error's own message, not the failed-query wrapper Drizzle puts around it. */
+function messageOf(error: unknown): string {
+  const cause =
+    error instanceof Error && error.cause instanceof Error
+      ? error.cause
+      : error;
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * Tries the type change, then each check and expression index reading the column, on an empty
+ * copy of the table, and says what PostgreSQL refused.
+ *
+ * In one transaction, always rolled back: the copy (`CREATE TEMP TABLE .. (LIKE t)`, its columns
+ * alone) takes the plan's own statement, then each check and expression index is added to it
+ * under a savepoint of its own, so a refusal names the object it is about. The real table is only
+ * read, and no row is touched. Where the copy cannot be made (a read-only replica, no TEMP
+ * privilege), it says why, and every check and expression index on the column is blocked.
+ */
+async function probePostgresExpressions(
+  db: unknown,
+  request: ConversionRequest,
+  facts: Omit<PostgresCarryFacts, "expressions">,
+  definitions: ExpressionDefinitions
+): Promise<PostgresExpressionProbe> {
+  if (
+    !typeChanges(request) ||
+    (definitions.checks.length === 0 && definitions.indexes.length === 0)
+  ) {
+    return { tried: true, typeRefusal: null, refused: [] };
+  }
+  let probe: PostgresExpressionProbe = {
+    tried: false,
+    why: "the transaction for the copy did not start",
+  };
+  try {
+    await (
+      db as {
+        transaction(
+          work: (tx: RolledBackTransaction) => Promise<void>
+        ): Promise<void>;
+      }
+    ).transaction(async tx => {
+      probe = await probeInTransaction(tx, request, facts, definitions);
+      tx.rollback();
+    });
+  } catch (error) {
+    if (!(error instanceof TransactionRollbackError)) {
+      return { tried: false, why: messageOf(error) };
+    }
+  }
+  return probe;
+}
+
+async function probeInTransaction(
+  tx: RolledBackTransaction,
+  request: ConversionRequest,
+  facts: Omit<PostgresCarryFacts, "expressions">,
+  definitions: ExpressionDefinitions
+): Promise<PostgresExpressionProbe> {
+  const q = (name: string): string => quoteIdent(name, "postgresql");
+  const run = (statement: string): Promise<unknown> =>
+    tx.execute(sql.raw(statement));
+  try {
+    await run(`CREATE TEMP TABLE ${q(PROBE_TABLE)} (LIKE ${q(request.table)})`);
+  } catch (error) {
+    return { tried: false, why: messageOf(error) };
+  }
+  // A refusal rolls back to before the statement, so each attempt starts from the same copy.
+  const attempt = async (
+    statements: readonly string[]
+  ): Promise<string | null> => {
+    await run("SAVEPOINT nextly_conversion_probe");
+    try {
+      for (const statement of statements) await run(statement);
+      await run("RELEASE SAVEPOINT nextly_conversion_probe");
+      return null;
+    } catch (error) {
+      await run("ROLLBACK TO SAVEPOINT nextly_conversion_probe");
+      return messageOf(error);
+    }
+  };
+  const typeRefusal = await attempt(
+    postgresStatements({ ...request, table: PROBE_TABLE }, facts)
+  );
+  if (typeRefusal !== null) return { tried: true, typeRefusal, refused: [] };
+  const refused: {
+    property: "check" | "index";
+    name: string;
+    error: string;
+  }[] = [];
+  for (const check of definitions.checks) {
+    const error = await attempt([
+      `ALTER TABLE ${q(PROBE_TABLE)} ADD CONSTRAINT ${q(check.name)} ${check.definition}`,
+    ]);
+    if (error !== null)
+      refused.push({ property: "check", name: check.name, error });
+  }
+  for (const index of definitions.indexes) {
+    // Each key wrapped in its own parentheses is valid whether it is a column or an expression.
+    const keys = index.keys.map(key => `(${key})`).join(", ");
+    const where = index.predicate === null ? "" : ` WHERE ${index.predicate}`;
+    const error = await attempt([
+      `CREATE INDEX ON ${q(PROBE_TABLE)} USING ${q(index.method)} (${keys})${where}`,
+    ]);
+    if (error !== null)
+      refused.push({ property: "index", name: index.name, error });
+  }
+  return { tried: true, typeRefusal: null, refused };
 }
 
 /**
@@ -617,7 +837,14 @@ export async function buildPostgresConversion(
   db: unknown,
   request: ConversionRequest
 ): Promise<ColumnConversionPlan> {
-  const facts = await readPostgresCarryFacts(db, request);
+  const { facts: read, definitions } = await readPostgresCarryFacts(
+    db,
+    request
+  );
+  const facts: PostgresCarryFacts = {
+    ...read,
+    expressions: await probePostgresExpressions(db, request, read, definitions),
+  };
   const statements = postgresStatements(request, facts);
   return {
     steps: statements.length === 0 ? [] : [statements],
