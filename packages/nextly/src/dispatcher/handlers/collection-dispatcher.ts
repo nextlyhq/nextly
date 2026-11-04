@@ -1699,7 +1699,7 @@ const COLLECTIONS_METHODS: Record<
   bulkUpdateEntries: {
     execute: async (svc, p, body, request) => {
       const b = body as
-        | { ids?: string[]; data?: Record<string, unknown> }
+        | { ids?: string[]; data?: Record<string, unknown>; revs?: unknown }
         | undefined;
       if (!p.collectionName) {
         throw new Error("collectionName parameter is required");
@@ -1716,6 +1716,8 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
+        // Each id's own version, where given: judged per document.
+        revs: b.revs,
         actor: readAuthenticatedActor(),
         ...callerUser(),
         // Where the route admitted the caller on update, attest it so the
@@ -1748,6 +1750,7 @@ const COLLECTIONS_METHODS: Record<
             where?: Record<string, unknown>;
             data?: Record<string, unknown>;
             limit?: number;
+            revs?: unknown;
           }
         | undefined;
       if (!p.collectionName) {
@@ -1774,6 +1777,8 @@ const COLLECTIONS_METHODS: Record<
           // above, so the check always returns it.
           where: readClientWhere(b.where) ?? {},
           data: b.data,
+          // Passed so it is refused, not ignored: a query names no ids.
+          revs: b.revs,
           actor: readAuthenticatedActor(),
           ...callerUser(),
           // Where the route admitted the caller on update, attest it so the

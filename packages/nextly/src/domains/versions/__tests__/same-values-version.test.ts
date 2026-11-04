@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { NEXTLY_ERROR_STATUS } from "../../../errors";
 import { NextlyError } from "../../../errors/nextly-error";
-import { sameValuesVersionRequirement } from "../stale-version";
+import {
+  sameValuesVersionRequirement,
+  versionRequiredFor,
+} from "../stale-version";
 
 /** The code a call threw, or what it returned. */
 function verdict(call: () => unknown): unknown {
@@ -99,9 +102,9 @@ describe("sameValuesVersionRequirement", () => {
   });
 });
 
-describe("NextlyError.versionRequired", () => {
+describe("versionRequiredFor", () => {
   it("answers 428, naming how to give a version or overwrite, for an update by ids", () => {
-    const error = NextlyError.versionRequired({ bulk: "ids" });
+    const error = versionRequiredFor("ids");
     expect(error.code).toBe("VERSION_REQUIRED");
     expect(error.statusCode).toBe(NEXTLY_ERROR_STATUS.VERSION_REQUIRED);
     expect(NEXTLY_ERROR_STATUS.VERSION_REQUIRED).toBe(428);
@@ -116,7 +119,7 @@ describe("NextlyError.versionRequired", () => {
   });
 
   it("names no versions by id for an update by query, which has no ids to key them on", () => {
-    const error = NextlyError.versionRequired({ bulk: "query" });
+    const error = versionRequiredFor("query");
     expect(error.publicMessage).toBe(
       "An update that writes the same values to many documents must set `_overwrite: true`: it can't carry each document's version. Or update each document with its own `_rev`."
     );

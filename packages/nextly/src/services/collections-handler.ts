@@ -1206,6 +1206,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
     disableRevalidate?: boolean;
+    /** Each id's own version, judged per document; see the entry service. */
+    revs?: unknown;
   }) {
     return this.entryService.bulkUpdateEntries({
       ...this.resolveUserParam(params),
@@ -1258,6 +1260,8 @@ export class CollectionsHandler {
       authenticatedScope?: AuthenticatedScope;
       /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
       disableRevalidate?: boolean;
+      /** Refused: an update by query names no ids to give versions for. */
+      revs?: unknown;
     },
     options?: { limit?: number }
   ) {
