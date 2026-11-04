@@ -59,6 +59,7 @@ import {
   renderLinkableContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 /** This block's registered name, so the tests name it once. */
 export const CARD_BLOCK = "core/card";
@@ -141,12 +142,7 @@ export const card: BlockDefinition<ContainerProps, PageContext> =
         // card that is independently distributable — a post, a product — and it is
         // announced as a landmark, which is noise on a card that merely groups a
         // heading and a sentence. The author knows which one theirs is.
-        as: {
-          label: "Element type",
-          display: "menu",
-          type: "select",
-          options: ["div", "article", "section", "aside"],
-        },
+        as: htmlTagProp(["div", "article", "section", "aside"]),
         contained: { label: "Constrain content width", type: "checkbox" },
         // A whole-card link, as on `core/box`.
         link: { label: "Whole card links to", role: "content", type: "url" },

@@ -67,7 +67,11 @@ import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
-import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
+import {
+  componentFactsRoute,
+  componentStoreShape,
+  reconciledRetired,
+} from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
 import {
@@ -122,6 +126,7 @@ import { pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
+import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
@@ -1024,6 +1029,9 @@ export const pageBuilder = (
     reconcile?: CommittedWriteReconciler;
     origins?: OriginStore;
   } = {};
+  // What deriving retired ids from component history has read so far, shared
+  // by the repair after a failed record and the editor's facts read.
+  const retiredHistory = retiredHistoryMemo();
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -1310,6 +1318,7 @@ export const pageBuilder = (
               COMPONENT_RETIRED_SLUG,
           }),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          memo: retiredHistory,
         });
       }
       // A blocks field below the top level has no Page Builder to open, and the
@@ -1550,34 +1559,46 @@ export const pageBuilder = (
               })
             );
           },
-          // The ids a published removal retired, from the store the write
-          // hooks record them in. Where those hooks are not registered (the
-          // host renders components from a source of its own), nothing is
-          // recorded, so `null`, and the editor adds no field.
-          readRetired: ctx => async id => {
-            if (opts.componentReadiness === false) return null;
-            // A localized store records no retirements (see the write hooks),
-            // so none can be reported: `null`, and the editor adds no field.
-            if (
-              await storeIsLocalized(
-                ctx.services.collections,
-                componentStoreOf(opts).collection ??
-                  ctx.self.collections[COMPONENTS_SLUG] ??
-                  COMPONENTS_SLUG,
-                ctx.user
-              )
-            ) {
-              return null;
-            }
-            const store = retiredStore({
-              nextly: () => requireInstalled().nextly(),
-              collection:
-                ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-                COMPONENT_RETIRED_SLUG,
+          // The ids a published removal retired: those the write hooks
+          // recorded, and those the component's published history implies,
+          // recorded here when the table lacks them. Where the hooks are not
+          // registered (the host renders components from a source of its
+          // own), nothing is recorded, so `null`, and the editor adds no
+          // field. A localized store records no retirements (see the write
+          // hooks), so it answers `null` too.
+          readRetired: ctx => {
+            if (opts.componentReadiness === false)
+              return () => Promise.resolve(null);
+            const components =
+              componentStoreOf(opts).collection ??
+              ctx.self.collections[COMPONENTS_SLUG] ??
+              COMPONENTS_SLUG;
+            return reconciledRetired({
+              shape: () =>
+                componentStoreShape(
+                  ctx.services.collections,
+                  components,
+                  ctx.user
+                ),
+              reconcile: (id, lifecycle) =>
+                reconcileRetired(
+                  {
+                    history: ctx.services.versions,
+                    componentCollection: components,
+                    componentField: componentStoreOf(opts).field,
+                    lifecycle,
+                    memo: retiredHistory,
+                    store: retiredStore({
+                      nextly: () => requireInstalled().nextly(),
+                      collection:
+                        ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+                        COMPONENT_RETIRED_SLUG,
+                    }),
+                    logger: ctx.logger,
+                  },
+                  id
+                ),
             });
-            return (
-              (await store.of([id])).get(id) ?? { properties: [], slots: [] }
-            );
           },
         }),
         // How many placements chose one of a component's variants, for the

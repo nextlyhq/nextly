@@ -61,6 +61,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 export { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
 
@@ -105,12 +106,7 @@ export const accordion: BlockDefinition<ContainerProps, PageContext> =
         keywords: ["disclosure", "faq", "collapse", "toggle"],
       },
       props: {
-        as: {
-          label: "Element type",
-          display: "menu",
-          type: "select",
-          options: ["div", "section", "article"],
-        },
+        as: htmlTagProp(["div", "section", "article"]),
         contained: { label: "Constrain content width", type: "checkbox" },
       },
       defaultProps: { as: "div", contained: false },

@@ -64,6 +64,7 @@ import { ShowMore } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
 import { SpacingModeChoice } from "./spacing-mode-choice";
 import { colourHexOf, colourPairOf } from "./style-colour";
+import { lengthInPx } from "./style-variables";
 import {
   addVariable,
   labelNewVariable,
@@ -959,9 +960,10 @@ const KIND_ICONS: Readonly<
  * still reads larger than body text without growing the row.
  */
 function specimenSize(value: string): number {
-  const match = /^(\d*\.?\d+)(px|rem)$/.exec(value.trim());
-  const px =
-    match === null ? 16 : Number(match[1]) * (match[2] === "rem" ? 16 : 1);
+  // Read through the inspector's own reading of a length, so a type size is
+  // measured the same way in both places; a value it cannot measure is drawn
+  // at body size, as before.
+  const px = lengthInPx(value) ?? 16;
   return Math.min(18, Math.max(11, Math.round(10 + px * 0.2)));
 }
 

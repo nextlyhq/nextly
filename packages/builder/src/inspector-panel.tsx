@@ -85,6 +85,7 @@ import {
   lockStatusOf,
   lockViewOf,
   propIsWritable,
+  propLabel,
   propPatch,
   renameOp,
   selectedNode,
@@ -1278,7 +1279,12 @@ function ContentFields({
   /** The component's own view, when the document is a component. */
   fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
-  if (inspection.props.length === 0) {
+  // A prop the inspector leaves out draws no control, but in a component's
+  // view keeps its expose icon: a page may clear what hides it.
+  const drawn = inspection.props.filter(
+    prop => prop.offered || fields !== undefined
+  );
+  if (drawn.length === 0) {
     return (
       <p className="nx-inspector__note">
         This block has no editable properties.
@@ -1287,8 +1293,13 @@ function ContentFields({
   }
   return (
     <div className="nx-inspector__fields">
-      {inspection.props.map(prop => {
-        const field = (
+      {drawn.map(prop => {
+        // Named as the block names it, so its icon is not drawn bare.
+        const field = !prop.offered ? (
+          <p className="nx-inspector__note">
+            {propLabel(prop.name, prop.schema)}
+          </p>
+        ) : (
           <HeldByLock
             // Keyed by node AND prop: a bare prop name would let React reuse
             // one block's field for the next block's same-named prop, so the

@@ -717,6 +717,21 @@ export interface BlockSeoContribution {
 export type BlockSeoImage = string | { media: string } | { url: string };
 
 /**
+ * What an author calls one of a select's options: its `optionLabels` entry,
+ * or the option itself.
+ *
+ * One rule for every surface that names a choice, the block's inspector and a
+ * component field a placement edits, so the two never offer one choice in two
+ * spellings.
+ */
+export function optionLabel(schema: PropSchema, option: string): string {
+  const named = schema.optionLabels;
+  if (typeof named !== "object" || named === null) return option;
+  const given = (named as Record<string, unknown>)[option];
+  return typeof given === "string" && given.trim() !== "" ? given : option;
+}
+
+/**
  * Declare a block type. Returns the definition unchanged — its job is to bind
  * the prop type once so `props`, `example`, `defaultProps`, and `render` are
  * checked against each other at author time. Shape rules that need runtime
