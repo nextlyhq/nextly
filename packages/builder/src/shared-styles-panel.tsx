@@ -868,19 +868,16 @@ function recountDue(args: {
 }
 
 /**
- * The counts of `ids` as one value, so a recount that moved any of them is
- * told from one that changed nothing. JSON, for the reason {@link idsKey} is.
+ * The usage of `ids` as one value, so a recount that moved any of it is told
+ * from one that changed nothing. Each style's whole answer, not a summary of
+ * it: a page use added as a component use goes keeps the total and changes
+ * what the row says. JSON, for the reason {@link idsKey} is.
  */
 function progressKey(
   styles: ReadonlyMap<string, SharedStyleReach>,
   ids: readonly string[]
 ): string {
-  return JSON.stringify(
-    ids.map(id => {
-      const reach = styles.get(id);
-      return reach === undefined ? null : [reach.documents, reach.complete];
-    })
-  );
+  return JSON.stringify(ids.map(id => styles.get(id) ?? null));
 }
 
 /** What the reads kept: each style's usage, and the health it was read under. */

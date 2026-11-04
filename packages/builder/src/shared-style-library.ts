@@ -51,10 +51,11 @@ export interface SharedStylesUsage {
    * keeps them floors for good.
    *
    * Optional, so a host written before it existed still compiles. Absent
-   * means unknown: while the counts are not whole the tab asks again every
-   * 15 seconds, at most 20 times (`USAGE_RECOUNT_MS` and
-   * `USAGE_RECOUNT_UNKNOWN_MAX` in the panel), so it neither stops while the
-   * site may still be counting nor asks for ever where it cannot finish.
+   * means unknown, and the tab asks again as it does while counting: every
+   * 15 seconds while the counts are not whole, until 20 asks in a row change
+   * nothing (`USAGE_RECOUNT_MS` and `USAGE_RECOUNT_IDLE_MAX` in the panel), so
+   * it neither stops while the counts still move nor asks for ever where they
+   * cannot finish.
    */
   readonly counting?: boolean;
   /** Whether this author may lock and unlock shared styles. */

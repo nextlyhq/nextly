@@ -599,6 +599,44 @@ describe("counts", () => {
     expect(reads).toBe(1 + USAGE_RECOUNT_IDLE_MAX + 5);
   });
 
+  it("keeps asking while the kinds move, even when the total does not", async () => {
+    // A page use added while a component use goes: two documents throughout,
+    // but the row's words change ("on 2 pages" from "on 1 page and 1
+    // component"), so the counting is still getting somewhere.
+    const base = accessOf().access;
+    let reads = 0;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        const pages = reads % 2 === 0 ? 2 : 1;
+        return {
+          whole: false,
+          counting: true,
+          mayLock: false,
+          styles: new Map(
+            ids.map(id => [id, reach({ pages, components: 2 - pages }, false)])
+          ),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      for (let tick = 0; tick < USAGE_RECOUNT_IDLE_MAX + 5; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(reads).toBe(1 + USAGE_RECOUNT_IDLE_MAX + 5);
+  });
+
   it("renews the unknown host's recounts when a style it has not read arrives", async () => {
     const base = accessOf().access;
     const asked: (readonly string[])[] = [];
