@@ -69,6 +69,7 @@ import {
   convertTimestampsToCamelCase,
 } from "../../../shared/lib/case-conversion";
 import { refusalIssues } from "../../../shared/lib/denied-change";
+import { detachData } from "../../../shared/lib/detach";
 import {
   validateEntryData,
   type ValidationIssue,
@@ -1592,6 +1593,11 @@ export class SingleMutationService extends BaseService {
     enforceLocalizedRequired: boolean;
     /** The Single's stored document id, which a read rule is handed. */
     entryId: string;
+    /**
+     * The language the save is in, where the Single is kept per language;
+     * validators reading what it already stores read this language's value.
+     */
+    writeLocale: string | undefined;
     user: UpdateSingleOptions["user"];
     /** Who the refusal is told to, with the scope a key arrived with. */
     reader: IssueReader;
@@ -1619,6 +1625,9 @@ export class SingleMutationService extends BaseService {
         write: entryWriteContext({
           kind: "single",
           slug,
+          ...(args.writeLocale === undefined
+            ? {}
+            : { locale: args.writeLocale }),
           connection: {
             db: this.adapter,
             executor: undefined,
@@ -2093,6 +2102,9 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames,
         enforceLocalizedRequired,
         entryId: String(documentId),
+        // The language the save is in, also where only embedded field-group
+        // content is kept per language; the default comes back out as none.
+        writeLocale: snapshotLocale,
         user: options.user,
         reader: {
           user: options.user,
@@ -3066,6 +3078,11 @@ export class SingleMutationService extends BaseService {
                     companion,
                     singleDraftLocale ?? null
                   );
+                  // Judged as the publish writes it: the stored change with
+                  // the request merged over it, as the gate above judges it.
+                  // A request that retypes the live value of a field the
+                  // change is behind on publishes nothing behind live, so it
+                  // goes through in one step.
                   const stale = await outOfDateSharedFields(tx, {
                     ref: {
                       scopeKind: "single",
@@ -3075,7 +3092,11 @@ export class SingleMutationService extends BaseService {
                     locale: singleDraftLocale ?? null,
                     shared,
                     live,
-                    pending: snapshotRecord(pendingDraft.snapshot),
+                    pending: {
+                      ...snapshotRecord(pendingDraft.snapshot),
+                      ...currentData,
+                      ...promotedComponents,
+                    },
                     views,
                   });
                   if (stale.length > 0) {
@@ -3626,6 +3647,29 @@ export class SingleMutationService extends BaseService {
               // the caller and trust the Single's own fields are judged with,
               // a visitor by the same Public role as the Single's gate.
               access: fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
+              // The Single's write, on its transaction, so a field inside an
+              // instance that reads the library judges it as the Single's own.
+              // Its language and top-level payload go with it, so such a field
+              // reads the same language's stored values and sees the save's
+              // status as the Single's own fields do.
+              write: {
+                ...entryWriteContext({
+                  kind: "single",
+                  slug,
+                  ...(writeLocale === undefined ? {} : { locale: writeLocale }),
+                  connection: {
+                    db: tx,
+                    executor: tx.getDrizzle(),
+                    defaultLocale: this.localization?.defaultLocale ?? null,
+                  },
+                }),
+                // As written: the field groups were lifted out of it before.
+                // A copy of its own, as the save prepares instances in place.
+                payload: detachData({
+                  ...currentData,
+                  ...attemptComponentFields,
+                }),
+              },
             });
             if (
               !holdEdit &&

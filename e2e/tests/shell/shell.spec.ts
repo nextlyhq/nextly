@@ -192,6 +192,13 @@ test.describe("keyboard region cycling", () => {
 
     await page.keyboard.press("F6");
     expect(await shell.focusedRegion()).toBe("Inspector");
+
+    // The cycle wraps to the top bar, the first area, then back to the rail.
+    await page.keyboard.press("F6");
+    expect(await shell.focusedRegion()).toBe("Editor actions");
+
+    await page.keyboard.press("F6");
+    expect(await shell.focusedRegion()).toBe("Editor panels");
   });
 
   test("F6 skips the panel when nothing is open", async ({ page }) => {

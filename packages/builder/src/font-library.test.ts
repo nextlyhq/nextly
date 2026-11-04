@@ -12,11 +12,18 @@ import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
+  SPECIMEN,
+  specimenText,
+  specimenWeight,
+  cutName,
+  familyDescription,
+  familyStack,
+  siteFamilies,
+  withoutFamily,
   fontTokenRows,
   readStack,
   rowsNeedingAttention,
   tokenNotes,
-  tokenSummary,
 } from "./font-library";
 
 const face = (family: string): FontFaceDef => ({
@@ -266,73 +273,14 @@ describe("the rows a fonts panel draws", () => {
   });
 });
 
-describe("the sentence the panel draws", () => {
+describe("the note a font variable gets", () => {
   const rowsFor = (stacks: readonly string[], faces: FontFaceDef[] = []) =>
     fontTokenRows({ tokens: stacks.map((v, i) => token(`t${i}`, v)) }, faces);
-
-  it("says the check ran even when nothing needs attention", () => {
-    const rows = rowsFor(["serif"]);
-    expect(tokenSummary(rows, rowsNeedingAttention(rows))).toBe(
-      "1 typeface token, none asking first for a typeface this site provides no file for."
-    );
-  });
-
-  it("does not claim a dynamic or keyword row asks for a provided family", () => {
-    // The all-clear must report what was CHECKED, not more. A var() stack has
-    // an unknown first choice and a lone `inherit` names no family at all, so
-    // "each asking first for a family this site provides" would claim something
-    // about rows this code cannot resolve.
-    const rows = rowsFor(["var(--x), serif", "inherit"]);
-    const summary = tokenSummary(rows, rowsNeedingAttention(rows));
-    expect(summary).toContain(
-      "none asking first for a typeface this site provides no file for"
-    );
-    expect(summary).not.toContain(
-      "each asking first for a family this site provides"
-    );
-  });
-
-  it("counts a token failing DIFFERENTLY in each mode under both headings", () => {
-    // Invalid in light and unprovided in dark. Deriving one count as
-    // `attention.length - other` forced this row into one heading and out of
-    // the other, omitting a problem `tokenNotes` reports on the same row.
-    const rows = fontTokenRows(
-      {
-        tokens: [
-          {
-            name: "brand.body",
-            kind: "fontFamily",
-            values: { light: "10px, serif", dark: "Ghost, serif" },
-          },
-        ],
-      },
-      []
-    );
-    const summary = tokenSummary(rows, rowsNeedingAttention(rows));
-    expect(summary).toContain("1 ask first for a typeface");
-    expect(summary).toContain("1 hold a value no browser will read");
-  });
-
-  it("counts UNREADABLE and UNPROVIDED separately", () => {
-    // They have different remedies. One count covering both sends an author to
-    // fix the wrong thing: an unreadable value applies nothing at all, while an
-    // unprovided first family applies the next one.
-    const rows = rowsFor(["Brand, serif", "10px, serif", "serif"]);
-    const summary = tokenSummary(rows, rowsNeedingAttention(rows));
-    expect(summary).toContain(
-      "1 ask first for a typeface this site provides no file for"
-    );
-    expect(summary).toContain("1 hold a value no browser will read");
-  });
-
-  it("points at the Tokens panel when there is nothing to report on", () => {
-    expect(tokenSummary([], [])).toContain("Tokens panel");
-  });
 
   it("never calls a family missing or unavailable", () => {
     const rows = rowsFor(["Brand, serif"]);
     const text = tokenNotes(rows[0]!)[0]?.text ?? "";
-    expect(text).toContain("provides no font file for it");
+    expect(text).toContain("this site has no file for it");
     expect(text.toLowerCase()).not.toContain("missing");
     expect(text.toLowerCase()).not.toContain("unavailable");
   });
@@ -341,7 +289,7 @@ describe("the sentence the panel draws", () => {
     const unreadable = tokenNotes(rowsFor(["10px, serif"])[0]!)[0]?.text ?? "";
     const unprovided = tokenNotes(rowsFor(["Brand, serif"])[0]!)[0]?.text ?? "";
     expect(unreadable).toContain("applies nothing");
-    expect(unprovided).toContain("see the next family");
+    expect(unprovided).toContain("see the next font");
     expect(unreadable).not.toBe(unprovided);
   });
 
@@ -349,8 +297,8 @@ describe("the sentence the panel draws", () => {
     // `Brand` alone has no later entry, so telling the author readers see "the
     // next family in the list" names something that is not there.
     const single = tokenNotes(rowsFor(["Brand"])[0]!)[0]?.text ?? "";
-    expect(single).toContain("the browser's default typeface");
-    expect(single).not.toContain("next family in the list");
+    expect(single).toContain("the browser\u2019s default font");
+    expect(single).not.toContain("next font in the list");
   });
 
   it("says nothing about a row that is working as written", () => {
@@ -382,5 +330,179 @@ describe("the sentence the panel draws", () => {
     expect(notes.map(n => n.mode)).toEqual(["dark"]);
     expect(notes[0]?.text).toContain("Ghost");
     expect(rowsNeedingAttention(rows)).toHaveLength(1);
+  });
+});
+
+describe("the site's families", () => {
+  const file = (id: string) => [
+    { url: `/api/media/${id}/raw`, format: "woff2" },
+  ];
+  const google = {
+    kind: "google" as const,
+    id: "inter",
+    licence: "OFL-1.1",
+    category: "sans-serif",
+  };
+  const interRegular: FontFaceDef = {
+    family: "Inter",
+    src: file("a"),
+    weight: "400",
+    style: "normal",
+    source: google,
+  };
+  const interBold: FontFaceDef = {
+    ...interRegular,
+    src: file("b"),
+    weight: "700",
+  };
+  const interItalic: FontFaceDef = {
+    ...interRegular,
+    src: file("c"),
+    style: "italic",
+  };
+  const brand: FontFaceDef = {
+    family: "brand",
+    src: file("d"),
+    weight: "100 900",
+    source: { kind: "upload" },
+  };
+  const geist: FontFaceDef = {
+    family: "Geist",
+    src: [{ url: "/fonts/geist.woff2" }],
+  };
+
+  it("groups faces by family as CSS matches it, keeping the first spelling", () => {
+    const families = siteFamilies(
+      [interRegular, { ...interBold, family: "INTER" }, brand],
+      []
+    );
+    expect(families.map(f => [f.family, f.faces.length])).toEqual([
+      ["Inter", 2],
+      ["brand", 1],
+    ]);
+  });
+
+  it("summarises a family's styles for its row in a few characters", () => {
+    const brandItalic: FontFaceDef = {
+      ...brand,
+      src: file("e"),
+      style: "italic",
+    };
+    const [inter, uploaded] = siteFamilies(
+      [interRegular, interBold, interItalic, brand, brandItalic],
+      []
+    );
+    // A static family counts its cuts, as the catalogue does; a variable one
+    // gives its range. Either fits the row's chip whole, italics or not.
+    expect(inter?.styles).toBe("3 styles");
+    expect(uploaded?.styles).toBe("100–900");
+    const [single] = siteFamilies([interBold], []);
+    expect(single?.styles).toBe("1 style");
+  });
+
+  it("names a family's source, and only a stored family can be removed", () => {
+    const families = siteFamilies([interRegular, brand, geist], [geist]);
+    expect(families.map(f => [f.origin, f.removable])).toEqual([
+      ["google", true],
+      ["upload", true],
+      ["code", false],
+    ]);
+    expect(families[0]?.licence).toBe("SIL Open Font License");
+    // A cut stored beside the code's own can be removed; the code's stays.
+    const geistBold: FontFaceDef = {
+      family: "Geist",
+      src: file("g"),
+      weight: "700",
+      source: { kind: "upload" },
+    };
+    const [mixed] = siteFamilies([geist, geistBold], [geist]);
+    expect([mixed?.origin, mixed?.removable]).toEqual(["code", true]);
+  });
+
+  it("describes a family in words for its row's name", () => {
+    const [inter] = siteFamilies([interRegular, interBold, interItalic], []);
+    expect(inter === undefined ? "" : familyDescription(inter)).toBe(
+      "Inter, 3 styles: Regular 400, Bold 700, Italic 400, from Google Fonts"
+    );
+  });
+
+  it.each([
+    ["400", "normal", "Regular 400"],
+    ["700", "italic", "Bold Italic 700"],
+    ["100 900", undefined, "Variable 100–900"],
+    [undefined, undefined, "Regular"],
+  ])("names the cut %s %s as %s", (weight, style, name) => {
+    expect(cutName(weight, style)).toBe(name);
+  });
+
+  it("drops one family's stored faces and keeps the rest", () => {
+    expect(withoutFamily([interRegular, brand, interBold], "inter")).toEqual([
+      brand,
+    ]);
+  });
+
+  it.each([
+    ["sans-serif", '"Inter", sans-serif'],
+    ["serif", '"Inter", serif'],
+    ["monospace", '"Inter", monospace'],
+    ["handwriting", '"Inter", cursive'],
+    ["display", '"Inter", system-ui'],
+    [undefined, '"Inter", system-ui'],
+  ])("stores a %s family with its generic after it", (category, stack) => {
+    expect(familyStack("Inter", category)).toBe(stack);
+  });
+
+  it("escapes a family name that carries a quote", () => {
+    expect(familyStack('ACME "Pro"', "serif")).toBe('"ACME \\"Pro\\"", serif');
+  });
+});
+
+describe("a face's specimen", () => {
+  const ranged = (unicodeRange: string): FontFaceDef => ({
+    family: "Brand",
+    src: [{ url: "/fonts/brand.woff2", format: "woff2" }],
+    unicodeRange,
+  });
+
+  it("keeps the Latin sentence for a face declaring no range", () => {
+    expect(specimenText(face("Brand"))).toBe(SPECIMEN);
+  });
+
+  it("draws a subset face with glyphs that face can actually render", () => {
+    expect(specimenText(ranged("U+0370-03FF"))).toMatch(/Αλμοστ/);
+  });
+
+  it("expands a wildcard range rather than reading its leading digits", () => {
+    expect(specimenText(ranged("U+4??"))).toMatch(/Почти/);
+  });
+
+  it("refuses a sentence the range only partly covers", () => {
+    expect(specimenText(ranged("U+0400-0401"))).toBe("ЀЁ");
+  });
+
+  it("reads a comma-separated range as the union of its intervals", () => {
+    expect(specimenText(ranged("U+0410-042F, U+0430-044F"))).toMatch(/Почти/);
+  });
+
+  it("samples glyphs that draw, not the C1 controls", () => {
+    const text = specimenText(ranged("U+0080-00FF"));
+    expect(text).toMatch(/Æ/);
+    expect(text).toMatch(/Ð/);
+  });
+
+  it("draws nothing for a face subset entirely to control characters", () => {
+    expect(specimenText(ranged("U+0080-009F"))).toBe("");
+  });
+
+  it("refuses a range reaching past the end of Unicode", () => {
+    expect(specimenText(ranged("U+110000-110010"))).toBe(SPECIMEN);
+  });
+
+  it.each([
+    ["100 900", "400"],
+    ["600 900", "600"],
+    ["700", "700"],
+  ])("gives the specimen one weight for %s", (weight, drawn) => {
+    expect(specimenWeight(weight)).toBe(drawn);
   });
 });

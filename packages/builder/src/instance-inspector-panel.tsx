@@ -29,10 +29,13 @@
  */
 
 import {
+  exposedValueFits,
   findNode,
   isRichTextValue,
   isUnsetOverride,
+  neededFor,
   richTextToPlainText,
+  type ComponentDocument,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -46,10 +49,29 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import {
+  CircleSlash,
+  Layers,
+  Link2,
+  Lock,
+  PenLine,
+  RotateCcw,
+  SquarePen,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
+import { BlockCard, type CardVerbs } from "./block-card";
+import {
+  ChosenMedia,
+  ContentServicesContext,
+  MediaChoice,
+  type PickedMedia,
+} from "./content-controls";
 import type { EditorState } from "./editor-state";
-import { IdentityFields } from "./identity-fields";
+import { markExposedParts } from "./exposed-outline";
+import { HeldByLock } from "./held-by-lock";
+import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {
   resetOverrideOp,
   setOverrideOp,
@@ -57,7 +79,9 @@ import {
   type InstanceInspection,
   type OrphanedOverride,
 } from "./instance-inspector";
+import { refusalAnnouncement } from "./move-refusal";
 import { useStoredDraft } from "./stored-draft";
+import { VariantPicker } from "./variant-picker";
 
 /**
  * What the row's badge says for each source.
@@ -66,10 +90,43 @@ import { useStoredDraft } from "./stored-draft";
  * source the resolver adds later is a build failure here until it has words.
  */
 const SOURCE_LABEL: Readonly<Record<ExposedRow["source"], string>> = {
-  definition: "Inherited",
+  // In the editor's words for a component: where the value comes from, said
+  // as a quiet line rather than an internal term in capitals.
+  definition: "From the component",
   variant: "From variant",
-  instance: "Overridden",
+  instance: "Set on this page",
 };
+
+/**
+ * The badge's icon for each state, beside its words, so the four states differ
+ * by shape as well as by label and never by colour alone: "Cleared" (a value
+ * deliberately removed) and "Inherited" (nothing set here) are the pair an
+ * author most needs to tell apart, and the one a colour-blind author could
+ * not tell apart by tint.
+ */
+const SOURCE_ICON: Readonly<
+  Record<ExposedRow["source"] | "cleared", LucideIcon>
+> = {
+  definition: Link2,
+  variant: Layers,
+  instance: PenLine,
+  cleared: CircleSlash,
+};
+
+/**
+ * A cleared value, said by whoever cleared it: a variant's clearing is not
+ * this page's, and there is no page value to reset.
+ */
+const CLEARED_LABEL: Readonly<Record<ExposedRow["source"], string>> = {
+  definition: "Empty in the component",
+  variant: "Cleared by variant",
+  instance: "Cleared on this page",
+};
+
+/** The words a row's badge shows: its source, or who cleared it. */
+function sourceBadgeLabel(row: Pick<ExposedRow, "source" | "cleared">): string {
+  return (row.cleared ? CLEARED_LABEL : SOURCE_LABEL)[row.source];
+}
 
 /**
  * The control's spelling of a definition's option value, and back.
@@ -111,9 +168,22 @@ const TYPE_LABEL: Readonly<Record<ExposedRow["type"], string>> = {
 export function InstanceInspectorPanel({
   inspection,
   editor,
+  verbs,
+  definition,
+  canvasRoot,
 }: {
   inspection: InstanceInspection;
   editor: EditorState;
+  /** The shared block verbs for the card's menu, as a block's card gets. */
+  verbs?: CardVerbs | undefined;
+  /** The definition the placement resolves against, for its variant picker. */
+  definition?: ComponentDocument | undefined;
+  /**
+   * The canvas's root, where the placement's exposed parts are marked; the
+   * page's document when the host names none. Scoped so a canvas drawn in a
+   * frame is reached, and another editor's marks are left alone.
+   */
+  canvasRoot?: HTMLElement | null | undefined;
 }): React.JSX.Element {
   // Read the node at commit time rather than closing over one. A field
   // committing on blur can fire after another edit has already replaced the
@@ -139,35 +209,63 @@ export function InstanceInspectorPanel({
   );
 
   const headingId = React.useId();
+  // The selected placement's editable parts, outlined on the canvas while it
+  // is selected: after every render, since the canvas redraws with the
+  // document this panel reads, and cleared when the selection moves on.
+  const composed = editor.composed();
+  React.useEffect(() => {
+    const root: ParentNode = canvasRoot ?? globalThis.document;
+    markExposedParts(root, inspection.nodeId, composed);
+    return () => markExposedParts(root, null, undefined);
+  }, [inspection.nodeId, composed, canvasRoot]);
+  // The card's lock line, which every held row points to while the placement
+  // is locked in Layers. Its own lock control stays live above, so it can be
+  // unlocked.
+  const lockedReasonId = React.useId();
+  const locked = inspection.identity.locked;
 
   return (
     <div className="nx-inspector" data-instance="">
-      <h2 className="nx-inspector__title">
-        <span aria-hidden="true" className="nx-inspector__glyph">
-          ⧉
-        </span>{" "}
-        {inspection.label}
-      </h2>
       {/*
-        What this IS, said once under the title. "Component" for the author who
-        clicked into a header and is wondering why the tabs went; the usage
-        count beside it when the library could say, because an edit to this
-        component's definition reaches every one of those pages.
+        The same card every block gets. Its description says what this IS —
+        "Component", for the author who clicked into a header and is wondering
+        why the Style tab went — with the usage count beside it when the
+        library could say, because an edit to this component's definition
+        reaches every one of those pages.
       */}
-      <p className="nx-inspector__meta">
-        Component
-        {inspection.usedOn === undefined
-          ? null
-          : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`}
-      </p>
+      <BlockCard
+        // Keyed by node so a rename half-typed for one instance does not carry
+        // to the next, exactly as the block inspector's does.
+        key={`${inspection.nodeId}:card`}
+        // The editor's fallback mark: no block icon names a component.
+        icon={undefined}
+        type={inspection.label}
+        name={inspection.identity.name}
+        description={`Component${variantPhrase(inspection.variant)}${
+          inspection.usedOn === undefined
+            ? ""
+            : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`
+        }`}
+        lock={lockStatusOf(
+          editor.document,
+          inspection.nodeId,
+          lockViewOf(editor)
+        )}
+        onRename={name => editor.apply(renameOp(inspection.nodeId, name))}
+        onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
+        verbs={verbs}
+        // The lock is said once, by the card's own line, and the rows and the
+        // values no longer exposed point at it; a second sentence below said
+        // the same thing again.
+        reasonId={lockedReasonId}
+      />
+      <EditComponentButton verbs={verbs} />
 
-      <IdentityFields
-        // Keyed by node so the name input does not carry an uncommitted edit
-        // across a selection change, exactly as the block inspector's does.
-        key={`${inspection.nodeId}:identity`}
-        nodeId={inspection.nodeId}
-        identity={inspection.identity}
+      <VariantPicker
         editor={editor}
+        nodeId={inspection.nodeId}
+        definition={definition}
+        disabled={inspection.identity.locked}
       />
 
       {!inspection.definitionFound ? (
@@ -188,38 +286,51 @@ export function InstanceInspectorPanel({
          * that something is missing: the content lives on the definition, and
          * the definition has a screen.
          */
-        <p className="nx-inspector__note">
-          This component exposes nothing to edit here. Its content is edited on
-          the component itself, from the Components screen.
-        </p>
+        <NoFieldsNote verbs={verbs} />
       ) : (
         <section aria-labelledby={headingId}>
           <h3 id={headingId} className="nx-inspector__heading">
-            Exposed properties
+            Fields
           </h3>
-          <div className="nx-inspector__fields">
-            {inspection.rows.map(row => (
-              <ExposedField
-                // Keyed by node AND property, for the reason the block
-                // inspector keys its fields: a bare id would let React reuse
-                // one instance's field for the next instance's same-named
-                // property, and the input would keep the previous one's
-                // uncommitted text.
-                key={`${inspection.nodeId}:${row.id}`}
-                row={row}
-                onSet={set}
-                onReset={reset}
-              />
-            ))}
-          </div>
+          <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
+            <div className="nx-inspector__fields">
+              {inspection.rows.map(row => (
+                <ExposedField
+                  // Keyed by node AND property, for the reason the block
+                  // inspector keys its fields: a bare id would let React reuse
+                  // one instance's field for the next instance's same-named
+                  // property, and the input would keep the previous one's
+                  // uncommitted text.
+                  key={`${inspection.nodeId}:${row.id}`}
+                  row={row}
+                  onSet={set}
+                  onReset={reset}
+                />
+              ))}
+            </div>
+          </HeldByLock>
         </section>
       )}
 
       {inspection.orphaned.length > 0 ? (
-        <OrphanedOverrides orphaned={inspection.orphaned} onDiscard={reset} />
+        // Held by the same Layers lock as the rows: discarding a stored value
+        // is an edit of the placement too.
+        <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
+          <OrphanedOverrides orphaned={inspection.orphaned} onDiscard={reset} />
+        </HeldByLock>
       ) : null}
     </div>
   );
+}
+
+/**
+ * The variant this placement uses, as a phrase after "Component", or nothing.
+ * A variant the component no longer offers is said once, by the variant
+ * picker's notice beside its Clear, rather than here as well.
+ */
+function variantPhrase(variant: InstanceInspection["variant"]): string {
+  if (variant?.label === undefined) return "";
+  return ` · ${variant.label} variant`;
 }
 
 /**
@@ -247,43 +358,70 @@ function ExposedField({
   // A label points at a control, and two kinds of row draw none: the label
   // then names the row without claiming to label an input that is not there.
   const hasControl = row.shadowedBy === undefined && row.supported;
+  const state = row.cleared ? "cleared" : row.source;
+  const Icon = SOURCE_ICON[state];
+  const reasonId = `${id}-held`;
 
   return (
     <div
       className="nx-inspector__field nx-inspector__field--exposed"
-      data-source={row.cleared ? "cleared" : row.source}
+      data-source={state}
     >
-      <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
-      <div className="nx-inspector__exposed">
-        <ExposedControl id={id} row={row} onSet={onSet} />
-        <div className="nx-inspector__provenance">
-          {/*
-            The badge is VISIBLE, and it is a badge rather than the label's
-            styling: "Overridden" beside a value is what tells an author the
-            reset below undoes their own edit rather than the component's
-            design.
-          */}
-          <span
-            className="nx-inspector__source"
-            data-source={row.cleared ? "cleared" : row.source}
-          >
-            {row.cleared ? "Cleared" : SOURCE_LABEL[row.source]}
-          </span>
-          {overridden ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              // Named for the row, because six rows each offering "Reset"
-              // are six identical controls to a screen reader.
-              aria-label={`Reset ${row.label} to the component's value`}
-              onClick={() => onReset(row.id)}
-            >
-              Reset
-            </Button>
-          ) : null}
-        </div>
+      {/*
+        The row's name and where its value comes from, in the label column:
+        the source a quiet note under the label, as an inherited Style value
+        says where it comes from, so the row is one row beside the 28px
+        Style rows rather than a label, a field and a line under it.
+      */}
+      <div className="nx-inspector__exposed-name">
+        <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
+        {/*
+          The source is VISIBLE, and words rather than the label's styling:
+          "Set on this page" is what tells an author the reset beside the field
+          undoes their own edit rather than the component's design.
+        */}
+        <span className="nx-inspector__source" data-source={state}>
+          <Icon aria-hidden="true" className="nx-inspector__source-icon" />
+          {sourceBadgeLabel(row)}
+        </span>
       </div>
+      <div className="nx-inspector__exposed">
+        {/*
+          Only the value is held. Reset stays live: a value the page gave
+          before the component locked the block is one the save keeps and
+          lets the page drop, so the way back is never closed.
+        */}
+        <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
+          <ExposedControl id={id} row={row} onSet={onSet} />
+        </HeldByLock>
+        {/*
+          Why the row is held, UNDER the field as its helper text: the field
+          keeps its place beside its label, and the reason reads as a fact
+          about the value above it.
+        */}
+        {row.heldBy === undefined ? null : (
+          <p id={reasonId} className="nx-inspector__held-reason">
+            <Lock aria-hidden="true" className="nx-inspector__source-icon" />
+            <span>{refusalAnnouncement(row.heldBy)}</span>
+          </p>
+        )}
+      </div>
+      {/* Kept when empty, so every control ends at one edge, set or not. */}
+      <span className="nx-inspector__exposed-reset-slot">
+        {overridden ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="nx-inspector__exposed-reset"
+            aria-label={`Reset ${row.label}`}
+            title="Undo this page's change"
+            onClick={() => onReset(row.id)}
+          >
+            <RotateCcw size={14} aria-hidden="true" />
+          </Button>
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -332,6 +470,9 @@ function ExposedControl({
   }
   if (row.type === "visibility") {
     return <ExposedVisibilityField id={id} row={row} onSet={onSet} />;
+  }
+  if (row.type === "image") {
+    return <ExposedImageField id={id} row={row} onSet={onSet} />;
   }
   if (row.type === "select") {
     return (
@@ -426,7 +567,85 @@ function representable(row: ExposedRow): boolean {
   if (row.type === "visibility" || row.type === "select") return true;
   const { value } = row;
   if (value === undefined || value === null) return true;
+  // An image row shows a cleared override as nothing chosen.
+  // An image is a file's id, a string, or a cleared override; anything else
+  // stays shown as it is rather than offered to a picker that would replace
+  // it behind a blank-looking control.
+  if (row.type === "image") {
+    return typeof value === "string" || isUnsetOverride(value);
+  }
   return typeof value !== "object";
+}
+
+/**
+ * An image exposure, chosen from the host's media library as the Content
+ * tab's image is: Choose or Replace opens it, and Remove clears this
+ * placement's image, which reads as Cleared rather than falling back to the
+ * component's. Where the host offers no library, it says so rather than
+ * offering a button that does nothing.
+ */
+function ExposedImageField({
+  id,
+  row,
+  onSet,
+}: {
+  id: string;
+  row: ExposedRow;
+  onSet: (id: string, value: OverrideValue) => void;
+}): React.JSX.Element {
+  const services = React.useContext(ContentServicesContext);
+  const Picker = services?.MediaPicker;
+  // What the last pick was called, for this session; a stored id shows as set.
+  const [picked, setPicked] = React.useState<PickedMedia | null>(null);
+  const stored =
+    typeof row.value === "string" && row.value !== "" ? row.value : null;
+  const name = picked?.id === stored ? picked?.filename : undefined;
+  return (
+    <div
+      // The field's label names the Choose button, a labelable control; with
+      // no library there is no control, and the group carries the name.
+      {...(Picker === undefined ? { id } : {})}
+      className="nx-inspector__media"
+      role="group"
+      aria-label={row.label}
+    >
+      <ChosenMedia
+        mediaId={stored}
+        read={services?.readMedia}
+        pickedName={name}
+        fallback="An image from the media library."
+      />
+      {Picker === undefined ? (
+        <p className="nx-inspector__note">
+          The media library is not available here.
+        </p>
+      ) : (
+        <MediaChoice
+          id={id}
+          Picker={Picker}
+          label={row.label}
+          stored={stored}
+          accept="image/*"
+          disabled={false}
+          onChoose={first => {
+            setPicked(first);
+            onSet(row.id, first.id);
+          }}
+        />
+      )}
+      {stored === null ? null : (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label={`Remove ${row.label}`}
+          onClick={() => onSet(row.id, { $unset: true })}
+        >
+          Remove
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** A value as editable text, or empty when it is not representable. */
@@ -463,29 +682,59 @@ function ExposedTextField({
   // this, an untouched field writes nothing.
   const stored = storedText(row.value);
   const [draft, setDraft] = useStoredDraft(stored);
+  // A value the store would refuse is held here with the reason rather than
+  // written: a link the renderer would not draw is the case a text field can
+  // produce. The draft stays, so the author can correct it. The refusal is
+  // held against the stored value it was made over: once that changes (a
+  // reset, an undo, an edit on the canvas), the field shows the new value and
+  // the refusal no longer describes it.
+  const [refusal, setRefusal] = React.useState<{
+    readonly over: string;
+    readonly message: string;
+  } | null>(null);
+  const problem = refusal?.over === stored ? refusal.message : null;
+  const problemId = `${id}-problem`;
 
   const send = () => {
-    if (draft === stored) return;
-    onSet(row.id, draft === "" ? { $unset: true } : draft);
+    if (draft === stored) {
+      setRefusal(null);
+      return;
+    }
+    const next = draft === "" ? { $unset: true } : draft;
+    if (!exposedValueFits(row, next)) {
+      setRefusal({ over: stored, message: `${row.label} ${neededFor(row)}.` });
+      return;
+    }
+    setRefusal(null);
+    onSet(row.id, next);
   };
 
   return (
-    <Input
-      id={id}
-      value={draft}
-      // Keyed for an address when the exposure is one, as the block inspector
-      // keys a url prop: the value is the same string either way.
-      inputMode={row.type === "link" ? "url" : undefined}
-      onChange={event => setDraft(event.target.value)}
-      onBlur={send}
-      // Enter commits as well as blur, as every single-line field here does.
-      onKeyDown={event => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          send();
-        }
-      }}
-    />
+    <>
+      <Input
+        id={id}
+        value={draft}
+        aria-invalid={problem === null ? undefined : true}
+        aria-describedby={problem === null ? undefined : problemId}
+        // Keyed for an address when the exposure is one, as the block inspector
+        // keys a url prop: the value is the same string either way.
+        inputMode={row.type === "link" ? "url" : undefined}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={send}
+        // Enter commits as well as blur, as every single-line field here does.
+        onKeyDown={event => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            send();
+          }
+        }}
+      />
+      {problem === null ? null : (
+        <p id={problemId} className="nx-inspector__problem" role="alert">
+          {problem}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -511,7 +760,7 @@ function ExposedVisibilityField({
 }): React.JSX.Element {
   const shown = row.value !== false && !row.cleared;
   return (
-    <div className="nx-inspector__field--inline">
+    <div className="nx-inspector__check">
       <Checkbox
         id={id}
         checked={shown}
@@ -570,5 +819,60 @@ function OrphanedOverrides({
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * "Edit component", where the host offers it for this placement: the verb the
+ * toolbar and the palette run, drawn here as the panel's first action because
+ * an author looking at a placement's fields is the one most likely to want the
+ * component's own design next.
+ */
+/**
+ * What a component with no fields says. It points at Edit component only
+ * where that button is offered: an author who may not edit components is not
+ * sent to an action they lack.
+ */
+function NoFieldsNote({
+  verbs,
+}: {
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element {
+  return (
+    <p className="nx-inspector__note">
+      This component has no fields to change on this page.
+      {editComponentOffered(verbs)
+        ? " Use Edit component to change its content."
+        : null}
+    </p>
+  );
+}
+
+/** Whether the host offers Edit component, enabled, for this placement. */
+function editComponentOffered(verbs: CardVerbs | undefined): boolean {
+  return (
+    verbs?.actions.some(
+      action => action.id === "edit-component" && action.enabled
+    ) === true
+  );
+}
+
+function EditComponentButton({
+  verbs,
+}: {
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element | null {
+  if (verbs === undefined || !editComponentOffered(verbs)) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="nx-inspector__edit-component"
+      onClick={() => verbs.run("edit-component")}
+    >
+      <SquarePen size={14} aria-hidden="true" />
+      Edit component
+    </Button>
   );
 }

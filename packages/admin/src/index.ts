@@ -105,6 +105,7 @@ export {
 export {
   useMedia,
   useMediaItem,
+  useMediaResolver,
   useUploadMedia,
   useUpdateMedia,
   useDeleteMedia,
@@ -119,6 +120,8 @@ export { useRecentActivity } from "./hooks/queries/useRecentActivity";
 
 // Custom hooks
 export { useDebouncedValue } from "./hooks/useDebouncedValue";
+// The signed-in user's id, for a surface that keeps something per user.
+export { useCurrentUserId } from "./hooks/useCurrentUserId";
 // Permission gating (D36) — client-side UX checks for admin + plugin UI.
 export { useCan } from "./hooks/useCan";
 /**
@@ -160,6 +163,15 @@ export {
   useDocumentStatus,
   hasPendingWorkingDraft,
   type DocumentStatus,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * The surrounding document's full-page preview, for a field that shows the
+ * page and offers to open it as the editor's own Preview action does. Null
+ * wherever that action is absent.
+ */
+export {
+  useDocumentPreview,
+  type DocumentPreview,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
  * The fields an active takeover hid, for the surface that took the body over.
@@ -225,6 +237,23 @@ export type {
   DocumentAction,
 } from "./components/features/entries/EntryForm/document-actions";
 export type { SubmitRefusal } from "./components/features/entries/EntryForm/submit-outcome";
+/**
+ * The header's save state and leading action, drawn for a document view that
+ * replaces the header. Exported for the plugin surface, so the view shows the
+ * header's own controls rather than a copy of them.
+ */
+export {
+  DocumentSaveIndicator,
+  DocumentPrimaryAction,
+} from "./components/features/entries/EntryForm/DocumentSurfaceControls";
+/**
+ * How a document view restores its own field from a recovery point, as an edit
+ * it can undo. Exported for the plugin surface.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
+} from "./components/features/entries/EntryForm/DocumentRestoreContext";
 export {
   pillStateFromForm,
   PILL_LABEL,
@@ -324,7 +353,10 @@ export type {
 // to hand-roll auth and error parsing or to read something else instead.
 // Through `protectedApi` and TanStack Query, so the session, its refresh and
 // the typed error envelope are the ones the rest of the admin uses.
-export { usePluginRoute } from "@admin/hooks/queries/usePluginRoute";
+export {
+  readPluginRoute,
+  usePluginRoute,
+} from "@admin/hooks/queries/usePluginRoute";
 export type {
   PluginRouteRead,
   PluginRouteRequest,
@@ -332,7 +364,10 @@ export type {
 // The WRITE half of the same seam. A plugin could read its own route and not
 // write to it, so a feature that saves something had to hand-roll the session
 // and the error envelope after all.
-export { usePluginRouteMutation } from "@admin/hooks/queries/usePluginRouteMutation";
+export {
+  usePluginRouteMutation,
+  writePluginRoute,
+} from "@admin/hooks/queries/usePluginRouteMutation";
 export type {
   PluginRouteMethod,
   PluginRouteWrite,

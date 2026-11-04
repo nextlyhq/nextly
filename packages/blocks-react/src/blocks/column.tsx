@@ -25,7 +25,12 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_CHILD_GAP,
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
 
 /** The block name a `core/columns` slot accepts, in one place. */
@@ -76,8 +81,11 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
   {
     name: COLUMN_BLOCK,
     version: COLUMN_VERSION,
-    description:
-      "One column of a core/columns row. A container with an identity, so it can be selected, styled and dropped into.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: One column of a
+    // core/columns row. A container with an identity, so it can be selected,
+    // styled and dropped into.
+    description: "One column inside Columns.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -92,8 +100,13 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       // `article` inside a row is nearly always a mistake the author meant to
       // make one level up. Anything genuinely semantic belongs in the column
       // rather than as the column.
-      as: { type: "select", options: ["div"] },
-      contained: { type: "checkbox" },
+      as: {
+        label: "Element type",
+        type: "select",
+        options: ["div"],
+        display: "menu",
+      },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: COLUMN_DEFAULT_PROPS,
     example: { props: { as: "div" } },
@@ -117,7 +130,10 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       children: {},
     },
     baseStyles: COLUMN_BASE_STYLES,
+    childGap: CONTAINER_CHILD_GAP,
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   }
 );

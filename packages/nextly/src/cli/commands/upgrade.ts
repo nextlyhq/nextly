@@ -14,20 +14,21 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { createInterface } from "node:readline";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
 import { exitWithError, failWithError } from "../errors";
+import { coreDestructiveNeedsTerminal } from "../errors/areas/migrations";
 import { createContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
+import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import { maybeForceUnlock } from "./migrate";
 import type {
@@ -212,112 +213,82 @@ export interface UpgradeCommandOptions {
   forceUnlock?: boolean;
 }
 
-/** Minimal interactive yes/no prompt for the TTY backup confirmation. */
-function promptYesNo(question: string): Promise<boolean> {
-  return new Promise(resolve => {
-    const rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    rl.question(question, answer => {
-      rl.close();
-      resolve(/^y(es)?$/i.test(answer.trim()));
-    });
-  });
-}
+/** The action of `nextly upgrade`, loaded when it runs. */
+export async function upgradeAction(
+  cmdOptions: UpgradeCommandOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-export function registerUpgradeCommand(program: Command): void {
-  program
-    .command("upgrade")
-    .description(
-      "Bring an existing database up to date: move the migration records into nextly_schema_events, hash passwords stored before this release, and remove passwords kept in version history"
-    )
-    .option(
-      "--confirm-backed-up",
-      "Confirm a backup exists (required in CI/non-TTY)",
-      false
-    )
-    .option("-f, --force", "Skip the interactive backup prompt", false)
-    .option(
-      "--target-table-name <name>",
-      "Override the events table name on a collision"
-    )
-    .option(
-      "--reconcile-core",
-      "Reconcile drifted core schema (dev-loose, confirms each destructive op). Use only if `nextly migrate` reports core drift.",
-      false
-    )
-    // Both upgrade paths take the shared migrate lock, and the lock-busy
-    // error tells operators to re-run with this flag — so every lock-taking
-    // command must register it. Same escape hatch as `nextly migrate`.
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .action(async (cmdOptions: UpgradeCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+  const dbValidation = requireDatabaseEnv(context.logger);
 
-      const dbValidation = requireDatabaseEnv(context.logger);
+  let adapter: { disconnect?: () => Promise<void> } & UpgradeAdapter;
+  try {
+    adapter = (await createCliAdapter({
+      dialect: dbValidation.dialect,
+      databaseUrl: dbValidation.databaseUrl,
+      logger: globalOpts.verbose ? context.logger : undefined,
+    })) as unknown as { disconnect?: () => Promise<void> } & UpgradeAdapter;
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 
-      let adapter: { disconnect?: () => Promise<void> } & UpgradeAdapter;
-      try {
-        adapter = (await createCliAdapter({
-          dialect: dbValidation.dialect,
-          databaseUrl: dbValidation.databaseUrl,
-          logger: globalOpts.verbose ? context.logger : undefined,
-        })) as unknown as { disconnect?: () => Promise<void> } & UpgradeAdapter;
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
+  try {
+    // Clear a stale lock first when --force-unlock is passed (e.g. left
+    // by a crashed prior run): the lock-busy error tells operators to
+    // re-run with this flag, and both upgrade paths take the migrate lock.
+    await maybeForceUnlock(
+      cmdOptions,
+      adapter.getDrizzle(),
+      adapter.getCapabilities().dialect
+    );
 
-      try {
-        // Clear a stale lock first when --force-unlock is passed (e.g. left
-        // by a crashed prior run): the lock-busy error tells operators to
-        // re-run with this flag, and both upgrade paths take the migrate lock.
-        await maybeForceUnlock(
-          cmdOptions,
-          adapter.getDrizzle(),
-          adapter.getCapabilities().dialect
-        );
-
-        if (cmdOptions.reconcileCore) {
-          await runReconcileCore({
-            adapter,
-            logger: {
-              info: msg => context.logger.info(msg),
-              warn: msg => context.logger.warn(msg),
-            },
-            confirmDestructive: reasons =>
-              promptYesNo(
-                `Reconcile core schema with these destructive operations?\n  - ${reasons.join("\n  - ")}\nProceed? [y/N]: `
-              ),
-          });
-        } else {
-          await runUpgrade(
-            {
-              confirmBackedUp: cmdOptions.confirmBackedUp,
-              force: cmdOptions.force,
-              targetTableName: cmdOptions.targetTableName,
-            },
-            {
-              adapter,
-              logger: {
-                info: msg => context.logger.info(msg),
-                warn: msg => context.logger.warn(msg),
-              },
-              isTTY: Boolean(process.stdin.isTTY),
-              promptConfirm: () =>
-                promptYesNo("Have you backed up your database? [y/N]: "),
-            }
+    if (cmdOptions.reconcileCore) {
+      await runReconcileCore({
+        adapter,
+        logger: {
+          info: msg => context.logger.info(msg),
+          warn: msg => context.logger.warn(msg),
+        },
+        // Asked only where someone can answer. Otherwise the run ends here,
+        // before the reconcile changes anything, and says the confirmation
+        // needs a terminal rather than waiting on input nobody will give.
+        confirmDestructive: reasons => {
+          if (!canPrompt()) {
+            return Promise.reject(coreDestructiveNeedsTerminal(reasons));
+          }
+          return askYesInTerminal(
+            `Reconcile core schema with these destructive operations?\n  - ${reasons.join("\n  - ")}\nProceed? [y/N]: `
           );
+        },
+      });
+    } else {
+      await runUpgrade(
+        {
+          confirmBackedUp: cmdOptions.confirmBackedUp,
+          force: cmdOptions.force,
+          targetTableName: cmdOptions.targetTableName,
+        },
+        {
+          adapter,
+          logger: {
+            info: msg => context.logger.info(msg),
+            warn: msg => context.logger.warn(msg),
+          },
+          // The CLI's one answer to whether anyone can be asked.
+          isTTY: canPrompt(),
+          promptConfirm: () =>
+            askYesInTerminal("Have you backed up your database? [y/N]: "),
         }
-      } catch (error) {
-        // Set rather than exited, so the disconnect below still runs.
-        failWithError(context.logger, error);
-      } finally {
-        await adapter.disconnect?.();
-      }
-    });
+      );
+    }
+  } catch (error) {
+    // Set rather than exited, so the disconnect below still runs.
+    failWithError(context.logger, error);
+  } finally {
+    await adapter.disconnect?.();
+  }
 }
+
+export { registerUpgradeCommand } from "./upgrade.command";

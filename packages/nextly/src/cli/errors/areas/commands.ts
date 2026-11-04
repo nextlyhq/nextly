@@ -26,6 +26,10 @@ export const COMMAND_CODES = defineCodes({
     cause:
       "The folder already has a `nextly.config.ts`, so `nextly init` did not overwrite it.",
   },
+  INIT_ANSWERS_REQUIRED: {
+    cause:
+      "`nextly init` has questions to ask, and no terminal is attached to ask them, so it wrote nothing.",
+  },
   PACKAGE_INSTALL_FAILED: {
     cause:
       "The package manager could not install the package `nextly add` was given.",
@@ -157,6 +161,15 @@ export function projectAlreadyInitialized(configPath: string): CliError {
     what: "Nextly is already initialized in this directory.",
     why: `${configPath} already exists.`,
     next: "Use `--force` to overwrite the existing configuration.",
+  });
+}
+
+/** `nextly init` cannot ask its questions, and `--yes` was not given to skip them. */
+export function initAnswersRequired(): CliError {
+  return new CliError("INIT_ANSWERS_REQUIRED", {
+    what: "Nextly was not initialized, and nothing was written.",
+    why: "`nextly init` asks where collections go and whether to add an example, and no terminal is attached to ask (or `--non-interactive` was given, or `CI` is set).",
+    next: "Run `nextly init --yes` to use the defaults.",
   });
 }
 

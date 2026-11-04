@@ -13,32 +13,64 @@
 import {
   newId,
   resolveSiteTokens,
+  validateFontFace,
   type BreakpointSet,
   type FontFaceDef,
   type NamedClass,
   type SiteTokenSet,
+  type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
   authoredBreakpoints,
   FontsPanel,
+  SharedStylesPanel,
   TokensPanel,
+  withoutFamily,
   type ClassCreation,
   type ClassRenameOutcome,
+  type FontCatalogue,
   type FontFaceUpload,
   type FontsPanelProps,
+  type PageClassBlocks,
+  type SiteFamily,
+  type TokensPanelProps,
+  useVariablesHeader,
 } from "@nextlyhq/builder/shell";
-import { useUploadMedia } from "@nextlyhq/plugin-sdk/admin";
-import { WEB_FONT_FORMATS } from "nextly/config";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  usePluginClientConfig,
+  useUploadMedia,
+  WEB_FONT_FORMATS,
+} from "@nextlyhq/plugin-sdk/admin";
+import { useCan } from "@nextlyhq/plugin-sdk/client";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 
+import { catalogueFileUrl } from "../../site-fonts/contract";
 import {
   classOverrideOf,
   tokenOverrideOf,
   tokenSaveOutcome,
   type SiteStyleData,
 } from "../../site-style";
-import { useSaveSiteStyle } from "../site-style-client";
+import { useSharedStylesClient } from "../shared-styles-client";
+import {
+  useFontCatalogueClient,
+  useHeldSiteStyle,
+  useSaveSiteStyle,
+} from "../site-style-client";
 import { useShown } from "../use-shown";
+
+import { useDesignHeaderSlot } from "./design-panel";
+import { StyleRevisionContext } from "./site-style-history";
+import { PLUGIN_SOURCE } from "./stored-document";
 
 /**
  * The faces the site loads, or `undefined` while that is not yet known.
@@ -125,11 +157,23 @@ export function offerableTokens(
  * so the canvas behind this panel is the preview — an unsaved edit would show
  * the author a page no visitor would see, with no other surface on which to
  * notice the difference.
+ *
+ * Shown at once and stored once the author pauses: each edit is held for the
+ * pause, so a run of edits is one write and one step of undo, and it is
+ * written at once when a variable's editor closes, the Variables tab or this
+ * panel goes away, or the page is saved.
+ *
+ * It is the Design panel's FRAME rather than its Variables tab, because the
+ * panel's header belongs to every tab: the preview switch and the
+ * import-and-export menu are drawn into it from here, and an import made from
+ * the Fonts tab writes through the same edits the Variables tab shows. The tab
+ * reads the studio through {@link VariablesTab}.
  */
 export function TokensStudio({
   merged,
   supplied,
   pending,
+  children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
   merged: SiteTokenSet | undefined;
@@ -137,8 +181,21 @@ export function TokensStudio({
   supplied: SiteTokenSet | undefined;
   /** Whether the read is still in flight, as against having failed. */
   pending: boolean;
+  /** The Design panel's tabs. */
+  children: React.ReactNode;
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
+  const held = useHeldSiteStyle();
+  // Whatever an edit left waiting is written when the panel goes away, an
+  // import made from another tab included.
+  const release = useRef(held.release);
+  release.current = held.release;
+  useEffect(() => () => void release.current(), []);
+  // The server refuses a change to the site style without this grant; the
+  // panel shows the variables read-only rather than offering edits it would
+  // refuse.
+  const mayChange = useCan("update-site-style");
+  const headerSlot = useDesignHeaderSlot();
   /*
    * What the CANVAS resolves, which is what the studio has to show and edit.
    *
@@ -190,7 +247,8 @@ export function TokensStudio({
        * canvas compiles, so saving it whole would copy every config token into
        * the database on the first edit and mask the site's code from then on.
        */
-      tokenOverrideOf(baseline, next)
+      tokenOverrideOf(baseline, next),
+      { hold: true }
     ).then(result => {
       const outcome = tokenSaveOutcome(
         result.saved,
@@ -205,22 +263,49 @@ export function TokensStudio({
     });
   };
 
+  /*
+   * The set as it is at the moment an import needs it, rather than the one
+   * the panel last rendered with. `shown` is written before React is told
+   * anything, so it answers for an edit the panel has not been re-rendered
+   * with yet.
+   */
+  const currentTokens = (): SiteTokenSet | undefined => shownNow() ?? editable;
+  const header = useVariablesHeader({
+    onChange: commit,
+    currentTokens,
+    readOnly: !mayChange,
+  });
+  const studio: TokensPanelProps = {
+    tokens: edits ?? editable,
+    supplied: baseline,
+    issue,
+    absence: pending ? "pending" : "failed",
+    readOnly: !mayChange,
+    onChange: commit,
+    onActivity: held.extend,
+    onSettle: () => void held.release(),
+    currentTokens,
+    header,
+  };
+
   return (
-    <TokensPanel
-      tokens={edits ?? editable}
-      supplied={baseline}
-      issue={issue}
-      absence={pending ? "pending" : "failed"}
-      onChange={commit}
-      /*
-       * The set as it is at the moment an import needs it, rather than the one
-       * the panel last rendered with. `shown` is written before React is told
-       * anything, so it answers for an edit the panel has not been re-rendered
-       * with yet.
-       */
-      currentTokens={() => shownNow() ?? editable}
-    />
+    <VariablesStudio.Provider value={studio}>
+      {headerSlot === null ? null : createPortal(header.controls, headerSlot)}
+      {/* Above whichever tab is open, since an import or export can be
+          started from any of them. */}
+      <div className="nx-pb-design__reports">{header.overlays}</div>
+      {children}
+    </VariablesStudio.Provider>
   );
+}
+
+/** The tokens studio's state, for the Variables tab inside it. */
+const VariablesStudio = createContext<TokensPanelProps | null>(null);
+
+/** The Variables tab: the studio's variables, in the panel its frame holds. */
+export function VariablesTab(): React.JSX.Element | null {
+  const studio = useContext(VariablesStudio);
+  return studio === null ? null : <TokensPanel {...studio} />;
 }
 
 /**
@@ -360,12 +445,15 @@ export type ClassSurface = {
   absence: "pending" | "failed";
 
   create: (slug: string) => Promise<ClassCreation>;
-  /** Which classes are mid-rename, for the manager's no-op check. */
-  pendingSlugs: Record<string, string>;
+  /** The name each class is heading for while its rename is open. */
+  pendingNames: Record<string, string>;
 
   currentRenameAttempt: (classId: string) => number;
 
-  rename: (classId: string, slug: string) => Promise<ClassRenameOutcome>;
+  rename: (
+    classId: string,
+    name: { label: string; slug: string }
+  ) => Promise<ClassRenameOutcome>;
 };
 
 export function useClassSurface(
@@ -396,7 +484,7 @@ export function useClassSurface(
    * the rail does on every switch. State rather than a ref: the panel renders
    * from it, so a change has to reach the screen.
    */
-  const [pendingSlugs, setPendingSlugs] = useState<Record<string, string>>({});
+  const [pendingNames, setPendingNames] = useState<Record<string, string>>({});
   /*
    * Which rename attempt is the live one for each class.
    *
@@ -415,11 +503,11 @@ export function useClassSurface(
    * `__proto__` among them, name an inherited accessor instead of an entry.
    */
   const renameAttempts = useRef(new Map<string, number>());
-  const beginRename = useCallback((classId: string, slug: string): number => {
+  const beginRename = useCallback((classId: string, name: string): number => {
     const mine = (renameAttempts.current.get(classId) ?? 0) + 1;
     renameAttempts.current.set(classId, mine);
-    setPendingSlugs(current =>
-      current[classId] === slug ? current : { ...current, [classId]: slug }
+    setPendingNames(current =>
+      current[classId] === name ? current : { ...current, [classId]: name }
     );
     return mine;
   }, []);
@@ -433,7 +521,7 @@ export function useClassSurface(
      * name.
      */
     if (renameAttempts.current.get(classId) !== mine) return;
-    setPendingSlugs(current => {
+    setPendingNames(current => {
       // The record's OWN entry, for the reason the counters are a `Map`: `in`
       // also answers for inherited names, and removing one that is not there
       // would rebuild the record for nothing.
@@ -461,9 +549,9 @@ export function useClassSurface(
      * against it would compose a library missing everything stored — and the
      * save would then delete those classes rather than add one.
      */
-    create: useCreateClass(writes, configured),
+    create: useHeldWhileReplaying(useCreateClass(writes, configured)),
     /** Which classes are mid-rename, for the manager's no-op check. */
-    pendingSlugs,
+    pendingNames,
     /*
      * The identity BOTH supersession decisions derive from — this hook's own
      * cleanup, and the panel's judgement of whether an answer still describes
@@ -475,8 +563,37 @@ export function useClassSurface(
      * library missing everything stored would save that partial list, which
      * deletes the classes it could not see rather than renaming one.
      */
-    rename: useRenameClass(writes, configured, beginRename, endRename),
+    rename: useHeldWhileReplaying(
+      useRenameClass(writes, configured, beginRename, endRename)
+    ),
   };
+}
+
+/** What a class change made while a style replay settles is told. */
+const REPLAY_SETTLING = {
+  ok: false as const,
+  reason: "A style change is being undone or redone. Try again in a moment.",
+};
+
+/**
+ * A class write, refused while a style undo or redo settles.
+ *
+ * The inspector and the class manager compose a whole library from the one
+ * they hold, which still has what the replay took away until the read
+ * catches up; a write made then would put it back. So the write waits, said
+ * in words, until the replayed value has been read.
+ */
+function useHeldWhileReplaying<Args extends unknown[], Outcome>(
+  write: (...args: Args) => Promise<Outcome>
+): (...args: Args) => Promise<Outcome | typeof REPLAY_SETTLING> {
+  const { settling } = useContext(StyleRevisionContext);
+  const latest = useRef(settling);
+  latest.current = settling;
+  return useCallback(
+    (...args: Args) =>
+      latest.current ? Promise.resolve(REPLAY_SETTLING) : write(...args),
+    [write]
+  );
 }
 
 /**
@@ -587,14 +704,17 @@ function useRenameClass(
    * long enough to matter. Without it, an author who reverts a rename after
    * coming back has the revert read as a no-op while the first write lands.
    */
-  beginRename: (classId: string, slug: string) => number,
+  beginRename: (classId: string, name: string) => number,
   /** Release the pending name, but only if this attempt is still the live one. */
   endRename: (classId: string, attempt: number) => void
 ) {
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
-    async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
-      const mine = beginRename(classId, slug);
+    async (
+      classId: string,
+      name: { label: string; slug: string }
+    ): Promise<ClassRenameOutcome> => {
+      const mine = beginRename(classId, name.label);
       try {
         return await writes.run<ClassRenameOutcome>(async existing => {
           if (existing === undefined) {
@@ -602,12 +722,16 @@ function useRenameClass(
               result: {
                 ok: false as const,
                 reason:
-                  "This site's classes could not be read, so none can be renamed.",
+                  "This site's shared styles could not be read, so none can be renamed.",
               },
             };
           }
+          // The name and the class name derived from it, together; every
+          // other key the entry holds, its lock among them, is kept.
           const next = existing.map(entry =>
-            entry.id === classId ? { ...entry, slug } : entry
+            entry.id === classId
+              ? { ...entry, label: name.label, slug: name.slug }
+              : entry
           );
           const result = await saveSection(
             "classes",
@@ -621,7 +745,7 @@ function useRenameClass(
               reason:
                 reasons.length > 0
                   ? reasons.join(" ")
-                  : "This class could not be renamed.",
+                  : "This shared style could not be renamed.",
             },
           };
         });
@@ -685,7 +809,10 @@ function useFontFaceWriter(
   stored: readonly FontFaceDef[] | undefined,
   storedPending: boolean,
   unreadableFonts: readonly string[]
-): (request: FontFaceUpload) => Promise<string | undefined> {
+): {
+  add: (request: FontFaceUpload) => Promise<string | undefined>;
+  remove: (family: SiteFamily) => Promise<string | undefined>;
+} {
   const { save: saveSiteStyle } = useSaveSiteStyle();
   const { mutateAsync: uploadMedia } = useUploadMedia();
   /*
@@ -718,7 +845,7 @@ function useFontFaceWriter(
    */
   const uploaded = useRef<{ file: File; media: UploadedMedia } | null>(null);
 
-  return useCallback(
+  const add = useCallback(
     async (request: FontFaceUpload): Promise<string | undefined> => {
       /*
        * Refused rather than guessed at. `save` replaces the section outright,
@@ -753,6 +880,33 @@ function useFontFaceWriter(
         return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and adding one would replace it. Repair or remove that entry first.`;
       }
 
+      /*
+       * Refused from the file's own first bytes BEFORE the upload: the media
+       * pipeline takes far more than fonts, and a file stored here that no
+       * face points at would stay in the media library. The type check after
+       * the upload stays, for what the pipeline settles on.
+       */
+      const signed = await webFontFormatOf(request.file);
+      if (signed === undefined) {
+        return NOT_A_FONT;
+      }
+      // The face judged as the save will judge it, also BEFORE the upload: a
+      // family the site cannot store would otherwise leave a stored file no
+      // face points at.
+      const problems = validateFontFace(
+        {
+          family: request.family,
+          src: [{ url: "/api/media/pending/raw", format: signed }],
+          weight: request.weight,
+          style: request.style,
+          source: { kind: "upload" },
+        },
+        "fonts"
+      );
+      if (problems.length > 0) {
+        return problems.map(problem => problem.message).join(" ");
+      }
+
       const stored_ = await storeOnce(request.file, uploaded, uploadMedia);
       if (typeof stored_ === "string") return stored_;
       const media = stored_;
@@ -770,7 +924,7 @@ function useFontFaceWriter(
        */
       const format = fontFormatFor(media.mimeType);
       if (format === undefined) {
-        return `A font file has to be .woff2 or .woff — this one was stored as ${media.mimeType}.`;
+        return NOT_A_FONT;
       }
 
       const face: FontFaceDef = {
@@ -784,6 +938,8 @@ function useFontFaceWriter(
         src: [{ url: `/api/media/${media.id}/raw`, format }],
         weight: request.weight,
         style: request.style,
+        // So the Fonts tab can say it was uploaded rather than downloaded.
+        source: { kind: "upload" },
       };
 
       const next = [...appendBase(stored, written.current), face];
@@ -807,6 +963,39 @@ function useFontFaceWriter(
     },
     [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia]
   );
+
+  /*
+   * Remove a family's stored faces, through the same section write and so
+   * one step of the editor's undo history. The files stay in the media
+   * library: another page or face may still point at them.
+   */
+  const remove = useCallback(
+    async (family: SiteFamily): Promise<string | undefined> => {
+      if (storedPending) {
+        return "This site's fonts are still loading. Try again in a moment.";
+      }
+      if (unreadableFonts.length > 0) {
+        return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and removing one would replace it. Repair or remove that entry first.`;
+      }
+      const next = withoutFamily(
+        appendBase(stored, written.current),
+        family.key
+      );
+      const result = await saveSiteStyle("fonts", next);
+      if (result.saved) {
+        // Forgotten here too, or the next upload would put it back.
+        written.current = withoutFamily(written.current, family.key);
+        return undefined;
+      }
+      const reasons = Object.values(result.issues);
+      return reasons.length > 0
+        ? reasons.join(" ")
+        : `${family.family} could not be removed.`;
+    },
+    [saveSiteStyle, stored, storedPending, unreadableFonts]
+  );
+
+  return { add, remove };
 }
 
 /**
@@ -851,15 +1040,52 @@ function faceIdentity(face: FontFaceDef): string {
 }
 
 /**
- * The fonts panel, with the writer that adds a face.
+ * The Google Fonts catalogue as the Fonts tab reads it: through the server,
+ * with previews from the file host the server names. `undefined` when the
+ * host turned the catalogue off.
+ */
+function useFontCatalogue(): FontCatalogue | undefined {
+  const config = usePluginClientConfig(PLUGIN_SOURCE);
+  const client = useFontCatalogueClient();
+  // The file host the last read named, which previews are built under. Rows
+  // exist only once a read has answered, so it is set before it is asked.
+  const previewBase = useRef("");
+  const off = config?.fontCatalogue === false;
+  return useMemo(
+    () =>
+      off
+        ? undefined
+        : {
+            load: async (signal: AbortSignal) => {
+              const read = await client.load(signal);
+              previewBase.current = read.previewBase;
+              return read;
+            },
+            previewUrl: (family, weight, style) =>
+              catalogueFileUrl(previewBase.current, {
+                id: family.id,
+                version: "latest",
+                subset: family.defSubset,
+                weight,
+                style,
+              }),
+            add: client.add,
+          },
+    [off, client]
+  );
+}
+
+/**
+ * The Fonts tab, with the writers that add and remove a face and the
+ * catalogue.
  *
- * Its own component rather than another hook in the editor: the editor already
- * carries more state than one screen can hold, and a panel that needs a writer
- * is the thing that should own it. The upload also concerns nobody else on this
- * surface, so the editor gains one element and no new state.
+ * Its own component rather than more hooks in the editor: a panel that needs
+ * writers is the thing that should own them. Shown read-only to a role
+ * without `update-site-style`, which the server would refuse anyway.
  */
 export function FontsPanelWithUpload({
   faces,
+  codeFaces,
   tokens,
   absence,
   onOpenTokens,
@@ -871,19 +1097,62 @@ export function FontsPanelWithUpload({
   storedPending: boolean;
   unreadableFonts: readonly string[];
 }): React.JSX.Element {
-  const addFontFace = useFontFaceWriter(
-    storedFaces,
-    storedPending,
-    unreadableFonts
-  );
+  const mayChange = useCan("update-site-style");
+  const writer = useFontFaceWriter(storedFaces, storedPending, unreadableFonts);
+  const catalogue = useFontCatalogue();
   return (
     <FontsPanel
       absence={absence}
       acceptFiles={FONT_FILE_ACCEPT}
       faces={faces}
-      onAddFace={addFontFace}
+      codeFaces={codeFaces}
+      readOnly={!mayChange}
+      onAddFace={writer.add}
+      onRemoveFamily={writer.remove}
+      catalogue={catalogue}
       onOpenTokens={onOpenTokens}
       tokens={tokens}
+    />
+  );
+}
+
+/**
+ * The Shared styles tab, with the class surface's rename and the shared-style
+ * routes' reads, lock and removal.
+ *
+ * Shown read-only to a role without `update-site-style`, which the server
+ * would refuse anyway; locking is its own permission, which the usage read
+ * reports, so it is offered on the server's word alone.
+ */
+export function SharedStylesStudio({
+  classes,
+  pageBlocks,
+  styleContext,
+  suppliedClassIds,
+  tokens,
+}: {
+  classes: ClassSurface;
+  pageBlocks: PageClassBlocks;
+  styleContext: StyleCompileContext;
+  suppliedClassIds: readonly string[] | undefined;
+  /** The site's variables as the canvas draws them, for the rows' preview tile. */
+  tokens: SiteTokenSet | undefined;
+}): React.JSX.Element {
+  const mayChange = useCan("update-site-style");
+  const access = useSharedStylesClient();
+  return (
+    <SharedStylesPanel
+      library={classes.library}
+      absence={classes.absence}
+      suppliedClassIds={suppliedClassIds}
+      styleContext={styleContext}
+      tokens={tokens}
+      pageBlocks={pageBlocks}
+      readOnly={!mayChange}
+      access={access}
+      onRename={classes.rename}
+      currentRenameAttempt={classes.currentRenameAttempt}
+      pendingNames={classes.pendingNames}
     />
   );
 }
@@ -924,6 +1193,33 @@ async function storeOnce(
       ? reason.message
       : "That file could not be uploaded.";
   }
+}
+
+const NOT_A_FONT =
+  "This file isn\u2019t a .woff2 or .woff font, so it wasn\u2019t added.";
+
+/**
+ * The `format()` keyword of the web font a file begins as, by its signature,
+ * read from the same table the upload gate checks the bytes against; nothing
+ * when it begins as none.
+ */
+async function webFontFormatOf(file: File): Promise<string | undefined> {
+  // `FileReader` rather than `Blob.arrayBuffer()`, which not every DOM the
+  // admin runs in provides.
+  const head = await new Promise<Uint8Array>(resolve => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve(
+        reader.result instanceof ArrayBuffer
+          ? new Uint8Array(reader.result)
+          : new Uint8Array(0)
+      );
+    reader.onerror = () => resolve(new Uint8Array(0));
+    reader.readAsArrayBuffer(file.slice(0, 4));
+  });
+  const text = String.fromCharCode(...head);
+  return WEB_FONT_FORMATS.find(format => format.signature === text)
+    ?.formatKeyword;
 }
 
 /**

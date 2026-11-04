@@ -31,6 +31,7 @@
  * @module domains/schema/services/apply-migration-statements
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
@@ -112,15 +113,30 @@ export async function applyMigrationWhole(args: {
   /** What the migration changes, for the log: "collection" or "single". */
   entity: string;
   tolerateApplied?: boolean;
+  /**
+   * On SQLite, the columns of `tableName` to make NOT NULL (true) or nullable (false) once the
+   * statements have run, which SQLite does by rebuilding the table (`rebuildSqliteNullability`).
+   * The statements and the rebuild then run as one unit through `executeTransaction`.
+   */
+  sqliteNullability?: SqliteNullability;
 }): Promise<void> {
   // The one splitting rule: a separator is a line of its own, so its text inside a quoted value
   // stays part of the statement.
   const statements = splitStatements([args.migrationSQL]);
-  if (statements.length === 0) return;
+  const rebuild =
+    args.dialect === "sqlite" && args.sqliteNullability?.required.size
+      ? args.sqliteNullability
+      : undefined;
+  if (statements.length === 0 && rebuild === undefined) return;
   const progress = { ran: 0 };
   try {
-    await runStatements(args, statements, progress);
+    await (rebuild === undefined
+      ? runStatements(args, statements, progress)
+      : runRebuilding(rebuild, statements, progress));
   } catch (error: unknown) {
+    // A refusal of the rebuild's own (a table it can't reproduce, a reference left dangling) says
+    // why, as it is.
+    if (rebuild !== undefined && error instanceof NextlyError) throw error;
     throw migrationRefused(
       error,
       progress.ran,
@@ -129,6 +145,41 @@ export async function applyMigrationWhole(args: {
       args.entity
     );
   }
+}
+
+/** What a SQLite migration's rebuild changes: whether each column of the table may be empty. */
+export interface SqliteNullability {
+  adapter: DrizzleAdapter;
+  tableName: string;
+  /** Column → true for NOT NULL, false for nullable. */
+  required: ReadonlyMap<string, boolean>;
+}
+
+/**
+ * The statements, then the table rebuilt with its columns' new nullability, in one transaction
+ * with foreign keys off (`executeTransaction`), so the rebuild's drop of the table doesn't cascade
+ * into the rows that reference it, and is checked for dangling references before it commits.
+ */
+async function runRebuilding(
+  rebuild: SqliteNullability,
+  statements: readonly string[],
+  progress: { ran: number }
+): Promise<void> {
+  // Loaded here, not at the top: only a SQLite save that changes whether a column may be empty
+  // rebuilds a table, and every save and boot that loads this module would otherwise load the
+  // rebuild and the migration transaction too.
+  const [{ executeTransaction }, { rebuildSqliteNullability }] =
+    await Promise.all([
+      import("../migrate/migration-transaction"),
+      import("./sqlite-nullability-rebuild"),
+    ]);
+  await executeTransaction(rebuild.adapter, async tx => {
+    for (const statement of statements) {
+      await tx.execute(statement);
+      progress.ran += 1;
+    }
+    await rebuildSqliteNullability(tx, rebuild.tableName, rebuild.required);
+  });
 }
 
 /** The statements, in one transaction where the dialect has transactional schema changes. */

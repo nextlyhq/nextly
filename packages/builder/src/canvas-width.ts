@@ -56,6 +56,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { isUsableWidth } from "./breakpoints";
+import { usableScale, type CanvasZoom } from "./canvas-zoom";
 
 /**
  * The viewport tiers a canvas of this width is applying, widest first.
@@ -296,4 +297,162 @@ export function widthForBreakpoint(
    * applies at every width and the region is where it belongs.
    */
   return selectableTiers(set).find(tier => tier.id === id)?.maxWidth;
+}
+
+/**
+ * The narrowest the base breakpoint, Desktop, is previewed at.
+ *
+ * A fixed width rather than the region's: the region changes as panels open
+ * and close, and a preview that followed it would show a different layout for
+ * the same device. 1280 is the narrowest window the editor supports.
+ */
+export const DESKTOP_PREVIEW_WIDTH = 1280;
+
+/**
+ * The width the canvas lays a device out at, which the zoom then fits into
+ * the room the panels leave.
+ *
+ * A bounded breakpoint is shown at its own bound, the widest width at which
+ * it applies, rather than at some device's width: that is the width whose
+ * layout the author is styling. The base is shown at 1280, or one pixel past
+ * the widest bound on a site whose widest bound reaches 1280, so the base
+ * preview never sits inside a narrower breakpoint.
+ *
+ * `undefined` for an id the site does not define as a viewport breakpoint,
+ * and on a site with no viewport breakpoints at all, where there is nothing
+ * to simulate and the canvas fills its region.
+ */
+export function previewWidth(
+  set: BreakpointSet | undefined,
+  id: BreakpointId
+): number | undefined {
+  const tiers = offeredTiers(set);
+  if (tiers.length === 0) return undefined;
+  if (id === BASE_BREAKPOINT) {
+    return Math.max(DESKTOP_PREVIEW_WIDTH, (tiers[0]?.maxWidth ?? 0) + 1);
+  }
+  return tiers.find(tier => tier.id === id)?.maxWidth;
+}
+
+/**
+ * The breakpoint an edit goes to, from the device the author chose.
+ *
+ * The choice is stored as the author left it, so it can name a breakpoint the
+ * site has since removed, or a container breakpoint, which is not a device.
+ * Either way the edit goes to the base breakpoint: a value written under an
+ * id the site does not define as a device would never be drawn.
+ */
+export function editingBreakpointOf(
+  set: BreakpointSet | undefined,
+  chosen: string | null
+): BreakpointId {
+  if (chosen === null || chosen === BASE_BREAKPOINT) return BASE_BREAKPOINT;
+  return offeredTiers(set).some(tier => tier.id === chosen)
+    ? chosen
+    : BASE_BREAKPOINT;
+}
+
+/** A frame's preview height below 600px wide: a phone held upright. */
+const PHONE_PREVIEW_HEIGHT = 844;
+
+/** A frame's preview height from 600px up to below 1024px: a tablet. */
+const TABLET_PREVIEW_HEIGHT = 1024;
+
+/** A frame's preview height from 1024px up: a laptop screen. */
+const DESKTOP_PREVIEW_HEIGHT = 800;
+
+/**
+ * The height of the device a width previews, in three bands: a phone, a
+ * tablet, a laptop.
+ *
+ * The canvas's frame fills its region instead (see {@link frameFillingRegion})
+ * and takes this only until the region is measured; a host that wants a
+ * frame laid out at the device's own height states this as the frame's.
+ *
+ * Bands rather than one height per breakpoint, because a site can add its own
+ * breakpoints at any width and each still needs a height. The same three
+ * bands answer for those: a site-added 700px breakpoint is previewed at a
+ * tablet's height, like any other width in that band.
+ *
+ * @experimental
+ */
+export function previewHeight(width: number): number {
+  if (width < 600) return PHONE_PREVIEW_HEIGHT;
+  if (width < 1024) return TABLET_PREVIEW_HEIGHT;
+  return DESKTOP_PREVIEW_HEIGHT;
+}
+
+/** A width and a height, in CSS pixels. */
+export interface FrameSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The scale that fits a whole frame into the region around it.
+ *
+ * BOTH dimensions, because the frame has a height of its own: fitting only the
+ * width leaves a desktop frame taller than a short region, and the bottom of
+ * the previewed viewport is then off screen with nothing to say so. The
+ * smaller of the two ratios is the one at which the frame fits both ways.
+ *
+ * Never above 1, for the reason the width-only fit gives: a frame shown larger
+ * than life makes every measurement an author takes from the screen wrong in
+ * the flattering direction. `1` for a region not yet measured, or one of zero,
+ * because a ratio taken from either is infinite or `NaN` and would paint the
+ * frame nowhere.
+ *
+ * @experimental
+ */
+export function frameFitScale(
+  frame: FrameSize,
+  region: { readonly width?: number; readonly height?: number }
+): number {
+  const { width, height } = region;
+  if (width === undefined || height === undefined) return 1;
+  if (!(width > 0) || !(height > 0)) return 1;
+  if (!(frame.width > 0) || !(frame.height > 0)) return 1;
+  return Math.min(1, width / frame.width, height / frame.height);
+}
+
+/**
+ * The frame that fills its region: the scale it is painted at, and the height
+ * the page is laid out at so that, painted, the frame is exactly as tall as
+ * the region.
+ *
+ * The canvas is the author's window onto the page, as a browser window is a
+ * visitor's: it fills the room the editor gives it at any zoom, and a page
+ * taller than that scrolls inside it. So only the WIDTH is fitted, the
+ * device's; the height follows the room. `vh` on the page then answers for
+ * the window the author is looking through, as it does for a visitor.
+ *
+ * Never above 1 to fit, for the reason {@link frameFitScale} gives. Until the
+ * region is measured, the device's own height at actual size: a frame sized
+ * from nothing would be drawn nowhere.
+ *
+ * @experimental
+ */
+export function frameFillingRegion(
+  width: number,
+  region: { readonly width?: number; readonly height?: number } | undefined,
+  zoom: CanvasZoom
+): { readonly scale: number; readonly height: number } {
+  const chosen = zoom.kind === "fixed" ? usableScale(zoom.scale) : null;
+  const room = region?.height;
+  if (room === undefined || !(room > 0)) {
+    const height = previewHeight(width);
+    return {
+      scale: chosen ?? frameFitScale({ width, height }, region ?? {}),
+      height,
+    };
+  }
+  // Fitted by the one rule every fit uses, asked with the region's own height
+  // on both sides, so only the width decides.
+  const scale =
+    chosen ??
+    frameFitScale(
+      { width, height: room },
+      { width: region?.width, height: room }
+    );
+  return { scale, height: room / scale };
 }

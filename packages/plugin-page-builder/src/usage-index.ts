@@ -195,6 +195,22 @@ export interface UsageIndex<TRow extends UsageSubject> {
   whereReferencing(referenceId: string): Record<string, { equals: string }>;
 
   /**
+   * Which stored rows record a reference to ANY of `referenceIds`: the same
+   * question as {@link whereReferencing}, asked for a page of references at
+   * once, so a screen listing fifty pays one read rather than fifty.
+   */
+  whereReferencingAny(
+    referenceIds: readonly string[]
+  ): Record<string, { equals: string } | { in: string[] }>;
+
+  /**
+   * The reference a stored row's own columns record, as
+   * {@link whereReferencingAny} matched it: what a batch read files the row
+   * under.
+   */
+  referenceOf(own: Omit<TRow, keyof UsageSubject>): string;
+
+  /**
    * Which stored rows are the marker, whatever document wrote it.
    *
    * Takes no reference because a marker names none. The row records that a

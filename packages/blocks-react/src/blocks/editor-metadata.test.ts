@@ -75,6 +75,22 @@ describe("core block editor metadata", () => {
     }
   );
 
+  it("describes every block in one plain line an author reads", () => {
+    // Shown in the Add panel's popover and the block card: one sentence in an
+    // author's words. How a block works belongs in its code comments, not
+    // here, and an internal name ("core/column") never reaches an author.
+    const problems = coreBlocks.flatMap(block => {
+      const text = block.description;
+      const wrong: string[] = [];
+      if (text.length > 70) wrong.push("over 70 characters");
+      if (!text.endsWith(".")) wrong.push("does not end a sentence");
+      if (/\.\s+\S/.test(text)) wrong.push("more than one sentence");
+      if (/core\//.test(text)) wrong.push("names an internal block");
+      return wrong.map(reason => `${block.name}: ${reason}`);
+    });
+    expect(problems).toEqual([]);
+  });
+
   it("gives every block a distinct label", () => {
     // Two blocks reading the same in the palette is indistinguishable to an
     // author, and a per-block check cannot see it: each label is individually
@@ -90,6 +106,22 @@ describe("core block editor metadata", () => {
     const claimed = new Set(coreBlocks.map(block => block.editor?.category));
     for (const category of CORE_CATEGORIES) {
       expect(claimed).toContain(category);
+    }
+  });
+});
+
+describe("where a link opens, as its choices read", () => {
+  it("says This tab and New tab, short enough to share one line", () => {
+    // "A new tab" wrapped onto two lines in the inspector's segmented control.
+    for (const name of ["core/button", "core/heading"]) {
+      const block = coreBlocks.find(each => each.name === name);
+      const target = (
+        block?.props as Record<string, { optionLabels?: unknown }>
+      ).target;
+      expect(target?.optionLabels).toEqual({
+        _self: "This tab",
+        _blank: "New tab",
+      });
     }
   });
 });

@@ -1,0 +1,182 @@
+/**
+ * The page builder's own tables: the usage indexes' bookkeeping, and the
+ * fence a Layout's removal puts up.
+ *
+ * Kept in tables this plugin declares, reached only through its own `ctx.db`,
+ * rather than in collections. A collection has an admin screen, a REST route
+ * and a Direct API path, and a super-admin passes every access rule on all
+ * three, so a progress row written by hand there claimed a scope was walked
+ * and the documents in it were never indexed. A table declared here has none
+ * of those paths: core offers no route to it, and `ctx.db` lets only this
+ * plugin, and a plugin that declares a dependency on it, reach it.
+ *
+ * Created as `page_builder__<name>` on every dialect. The prefix is declared
+ * rather than left to default, because a table's name is permanent once a
+ * migration ships it.
+ *
+ * @module schema/tables
+ */
+import {
+  col,
+  type ColumnBuilder,
+  defineTable,
+  type TableDefinition,
+} from "@nextlyhq/plugin-sdk/schema";
+
+/** The prefix every table of this plugin is created under. */
+export const SCHEMA_PREFIX = "page_builder";
+
+/**
+ * The schema version the database must have applied before the plugin starts.
+ * It moves with every migration module.
+ */
+export const SCHEMA_VERSION = 2;
+
+/** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
+type UsageRunsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly generation: ColumnBuilder<string, false, false>;
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly dirty: ColumnBuilder<boolean, false, true>;
+};
+
+/**
+ * The run the usage indexes are being built under: one row, named `usage`.
+ *
+ * `generation` is the derivation the run walks under (the bounds, the index
+ * slugs and the derivation's revision), and `token` names the run itself. A
+ * new run, with a new token, starts when the generation changes or when a
+ * maintenance write fails. Every write a backfill pass makes checks, in its
+ * own transaction, that its token is still this row's, so a pass a newer run
+ * has replaced writes nothing.
+ *
+ * `dirty` says a maintenance write failed since the last run that walked every
+ * scope. It is set with the token it rotates, and cleared only by that newer
+ * run once it has walked the whole site, never by a later save.
+ */
+export const usageRuns: TableDefinition<"usage_runs", UsageRunsColumns> =
+  defineTable<"usage_runs", UsageRunsColumns>(
+    "usage_runs",
+    {
+      id: col.id(),
+      name: col.varchar(64),
+      generation: col.varchar(512),
+      token: col.char(36),
+      dirty: col.boolean({ default: false }),
+    },
+    // One row per name, so two instances starting the first run at once
+    // cannot both insert one.
+    { indexes: [{ columns: ["name"], unique: true }] }
+  );
+
+/** The columns of {@link usageProgress}, as `defineTable` checks and publishes them. */
+type UsageProgressColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly scopeKey: ColumnBuilder<string, false, false>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+  readonly done: ColumnBuilder<boolean, false, true>;
+};
+
+/**
+ * How far one run has walked one scope.
+ *
+ * `cursor` is the id of the last document the walk finished, so a scope larger
+ * than one job's budget resumes after it on the next tick instead of starting
+ * again. `done` says the whole scope was walked and its orphan rows swept.
+ * Rows of any token but the run's are left over from a replaced run, and are
+ * removed when the run is replaced.
+ */
+export const usageProgress: TableDefinition<
+  "usage_progress",
+  UsageProgressColumns
+> = defineTable<"usage_progress", UsageProgressColumns>(
+  "usage_progress",
+  {
+    id: col.id(),
+    token: col.char(36),
+    scopeKey: col.varchar(512),
+    cursor: col.varchar(255, { nullable: true }),
+    done: col.boolean({ default: false }),
+  },
+  // One row per scope of a run; a pass reads its run's rows by token.
+  { indexes: [{ columns: ["token", "scopeKey"], unique: true }] }
+);
+
+/** The columns of {@link layoutRemovals}, as `defineTable` checks and publishes them. */
+type LayoutRemovalsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly layoutId: ColumnBuilder<string, false, false>;
+  readonly action: ColumnBuilder<string, false, false>;
+  readonly step: ColumnBuilder<string, false, false>;
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, true, false>;
+  readonly pagesLeft: ColumnBuilder<number, true, false>;
+  readonly copy: ColumnBuilder<unknown, true, false>;
+  readonly copyVersion: ColumnBuilder<string, true, false>;
+  readonly settledAt: ColumnBuilder<Date, true, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per Layout being removed: inserting it is the fence.
+ *
+ * While a row exists, the Layout cannot be made the site default, and the
+ * Layout's own delete or unpublish is refused unless the write carries this
+ * row's `token` and the row is at its `final` step. A table rather than a
+ * collection, for the reason the module docblock gives: a super-admin can
+ * write any collection row, and a fence an author could forge or delete would
+ * let a plain delete through.
+ *
+ * - `step` moves `marked` → `checked` → `final` → `removed`, each move a
+ *   compare-and-set on `token` and the step it leaves, so a request another
+ *   one replaced changes nothing.
+ * - `copy` is the Layout as it stood at the final step, its live row and its
+ *   working draft, so a delete that a promotion raced can be restored. Cleared
+ *   once the check after the write passed (`settledAt`).
+ * - `copyVersion` is the two rows' `updatedAt`, and the delete or unpublish
+ *   goes ahead only while the Layout still has it.
+ * - `updatedAt` is the lease: a row left at an earlier step by a request that
+ *   stopped is taken over by a later one, and cleared by the sweep, once it is
+ *   older than the lease.
+ *
+ * A `removed` row stays. For an unpublish it keeps the fence until the Layout
+ * is published again; for a delete it records that the Layout was removed.
+ */
+export const layoutRemovals: TableDefinition<
+  "layout_removals",
+  LayoutRemovalsColumns
+> = defineTable<"layout_removals", LayoutRemovalsColumns>(
+  "layout_removals",
+  {
+    id: col.id(),
+    layoutId: col.varchar(255),
+    action: col.varchar(16),
+    step: col.varchar(16),
+    token: col.char(36),
+    startedBy: col.varchar(255, { nullable: true }),
+    pagesLeft: col.integer({ nullable: true }),
+    copy: col.json({ nullable: true }),
+    copyVersion: col.varchar(128, { nullable: true }),
+    settledAt: col.timestamp({ nullable: true }),
+    ...col.timestamps(),
+  },
+  // One row per Layout, so two removals of one Layout cannot both insert the
+  // fence: the second meets the unique index and is told the first is running.
+  { indexes: [{ columns: ["layoutId"], unique: true }] }
+);
+
+/** Every table this plugin declares, in creation order. */
+export const PAGE_BUILDER_TABLES: readonly [
+  typeof usageRuns,
+  typeof usageProgress,
+  typeof layoutRemovals,
+] = [usageRuns, usageProgress, layoutRemovals];

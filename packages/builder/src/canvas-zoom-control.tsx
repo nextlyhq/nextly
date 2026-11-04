@@ -35,10 +35,11 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  useShortcuts,
 } from "@nextlyhq/ui";
 import { Minus, Plus } from "lucide-react";
 import type * as React from "react";
-import { Fragment } from "react";
+import { Fragment, useRef } from "react";
 
 import {
   FIT_ZOOM,
@@ -134,6 +135,9 @@ export function CanvasZoomControl({
   const canZoomIn = !Object.is(writeZoom(zoomIn), writeZoom(zoom));
 
   return (
+    // Each step button and the menu at the editor's control height, with the
+    // scale's own values as fallbacks for a page that draws this control
+    // outside the editor, where the density tokens aren't declared.
     <div className="nx-zoom-stepper flex items-center gap-0.5">
       {/*
         A stepper AROUND the menu, not instead of it. The menu names the modes
@@ -150,11 +154,17 @@ export function CanvasZoomControl({
         disabled={!canZoomOut}
         aria-label="Zoom out"
         title="Zoom out"
-        className="focus-visible:ring-ring rounded p-1 disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
+        className="focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height,1.75rem)] items-center justify-center rounded disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
       >
         <Minus className="size-3.5" aria-hidden="true" />
       </button>
-      <DropdownMenu>
+      {/*
+        Not modal. A modal menu marks the whole editor around it aria-hidden
+        while its controls stay focusable (axe: aria-hidden-focus). This is a
+        choice beside the canvas, not a dialog: Escape, a click outside and
+        Tab still close it, and focus returns to the trigger.
+      */}
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger
           className="nx-zoom-control"
           /*
@@ -168,7 +178,9 @@ export function CanvasZoomControl({
               : `Canvas zoom: ${shown}`
           }
         >
-          <span aria-hidden="true">{shown}</span>
+          <span aria-hidden="true">
+            {zoom.kind === "fit" ? `Fit · ${shown}` : shown}
+          </span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           {/* A RADIO group, so the open menu says which mode is active.
@@ -211,10 +223,73 @@ export function CanvasZoomControl({
         disabled={!canZoomIn}
         aria-label="Zoom in"
         title="Zoom in"
-        className="focus-visible:ring-ring rounded p-1 disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
+        className="focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height,1.75rem)] items-center justify-center rounded disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
       >
         <Plus className="size-3.5" aria-hidden="true" />
       </button>
     </div>
+  );
+}
+
+/** The zoom an actual-size press asks for. */
+const ACTUAL_SIZE: CanvasZoom = { kind: "fixed", scale: 1 };
+
+/**
+ * The zoom keys: mod+0 for actual size, Shift+1 to fit.
+ *
+ * Shift+1 is bound twice because the key it reports depends on the layout: a
+ * US layout reports "!", and a layout where the digit itself needs Shift
+ * reports "1" with Shift held. Both carry the same description, so Help lists
+ * them as one line. Neither fires while the author is typing: on the second
+ * kind of layout Shift+1 is how a "1" is typed.
+ *
+ * Nothing is bound where the host wired no zoom, for the reason the control
+ * draws nothing there: a key that changes a number nothing applies is a dead
+ * control. `active` is read at press time, so a shell hidden behind its
+ * narrow-window notice lets the keys through to whatever else binds them,
+ * and so is `claims`: where two shells share the shortcut manager, only the
+ * one the author is in answers.
+ */
+export function useZoomShortcuts(
+  onChange: ((zoom: CanvasZoom) => void) | undefined,
+  active: boolean,
+  claims: () => boolean = () => true
+): void {
+  const latest = useRef({ onChange, active, claims });
+  latest.current = { onChange, active, claims };
+  const when = (): boolean =>
+    latest.current.active &&
+    latest.current.onChange !== undefined &&
+    latest.current.claims();
+  const fit = (): void => latest.current.onChange?.(FIT_ZOOM);
+  useShortcuts(
+    onChange === undefined
+      ? []
+      : [
+          {
+            keys: "mod+0",
+            description: "Show the page at actual size",
+            when,
+            run: () => latest.current.onChange?.(ACTUAL_SIZE),
+          },
+          {
+            keys: "shift+1",
+            description: "Fit the page to the canvas",
+            when,
+            whenTyping: false,
+            run: fit,
+          },
+          {
+            keys: "!",
+            // No description: it is Shift+1 as a US layout reports it, the
+            // same keystroke, so Help lists Shift+1 alone rather than a
+            // second key cap that reads as a different key.
+            description: "",
+            when,
+            whenTyping: false,
+            run: fit,
+          },
+        ],
+    { name: "Canvas zoom" }
   );
 }

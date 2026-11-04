@@ -126,7 +126,7 @@ export type { CollectionLoopProps } from "./collection-loop";
 // files in this directory spell their own category, which is a relative import
 // — publishing them too would widen the surface by four names no consumer needs
 // and which could then never be renamed.
-export { CORE_CATEGORIES } from "./categories";
+export { CORE_CATEGORIES, CORE_PALETTE_ORDER } from "./categories";
 export type { CoreCategory } from "./categories";
 
 /**

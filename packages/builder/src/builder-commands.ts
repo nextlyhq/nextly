@@ -50,6 +50,24 @@ export interface CommandVerbs {
    * phrase; when there is a second host it can be designed against that.
    */
   readonly saveAsPattern: () => void;
+  /**
+   * Open the selected placement's component in its own view. Silent when the
+   * selection is not one placement or the host does not offer it, so it may
+   * be pressed without asking first. Optional, so a host built before it
+   * keeps compiling; absent, the verb does nothing.
+   */
+  readonly editComponent?: () => void;
+  /**
+   * Begin turning the selection into a component, replacing it with a
+   * placement or keeping it and saving a copy; the host owns the form.
+   */
+  readonly turnIntoComponent?: () => void;
+  /** Begin detaching the selected placement from its component. */
+  readonly detachComponent?: () => void;
+  /** Begin duplicating the selected placement's component. */
+  readonly duplicateComponent?: () => void;
+  /** Begin replacing a pattern's content with the selection. */
+  readonly updatePattern?: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -110,6 +128,37 @@ const BLOCK_COMMAND_COPY: Record<
     // that before they can find it.
     keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
   },
+  "edit-component": {
+    label: "Edit component",
+    keywords: ["component", "edit", "open", "original", "definition"],
+  },
+  // One verb for both ways of making a component, so the palette finds it
+  // by the words of either.
+  "turn-into-component": {
+    label: "Turn into component…",
+    keywords: [
+      "turn into",
+      "convert",
+      "save",
+      "component",
+      "library",
+      "reuse",
+      "symbol",
+      "synced",
+    ],
+  },
+  "detach-component": {
+    label: "Detach from component",
+    keywords: ["detach", "unlink", "component", "plain", "break"],
+  },
+  "duplicate-component": {
+    label: "Duplicate component",
+    keywords: ["duplicate", "copy", "component", "fork", "variant"],
+  },
+  "update-pattern": {
+    label: "Update a pattern from the selection",
+    keywords: ["update", "pattern", "replace", "overwrite", "save over"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -145,6 +194,11 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
+    "edit-component": () => verbs.editComponent?.(),
+    "turn-into-component": () => verbs.turnIntoComponent?.(),
+    "detach-component": () => verbs.detachComponent?.(),
+    "duplicate-component": () => verbs.duplicateComponent?.(),
+    "update-pattern": () => verbs.updatePattern?.(),
     delete: verbs.delete,
   };
 }

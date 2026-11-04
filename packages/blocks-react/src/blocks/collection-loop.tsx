@@ -22,19 +22,28 @@
  *
  * @module blocks/library/collection-loop
  */
-import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
+import {
+  type BlockDefinition,
+  blockTypeClassName,
+  CHILD_GAP_CLASS,
+  defineBlock,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
+import { CONTAINER_CHILD_GAP } from "./container";
 
 export interface CollectionLoopProps {
   /** The collection queried. */
   collection?: string;
   /** How many entries at most. */
   limit?: number;
-  /** Sort expression handed to the data layer unchanged. */
+  /**
+   * Sort keys, comma-separated, `-field` descending. A key the reader refuses
+   * lists in id order instead.
+   */
   sort?: string;
 }
 
@@ -72,6 +81,48 @@ function safeLimit(limit: number | undefined): number {
   return Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.floor(limit)));
 }
 
+/**
+ * Whether a read failed because its sort was refused, and nothing else.
+ *
+ * Recognized by its shape, not its class, because this package does not
+ * import the CMS: a refusal lists its problems, and every one is a sort key
+ * the reader would not order by. That refusal comes before any read, so a
+ * retry in id order costs no second read; any other failure, a timeout
+ * included, may have reached the database and is not retried.
+ */
+function sortWasRefused(error: unknown): boolean {
+  const errors = (error as { publicData?: { errors?: unknown } } | null)
+    ?.publicData?.errors;
+  return (
+    Array.isArray(errors) &&
+    errors.length > 0 &&
+    errors.every(
+      problem =>
+        (problem as { code?: unknown } | null)?.code === "FIELD_NOT_SORTABLE"
+    )
+  );
+}
+
+/**
+ * This block's registered name, used for the definition and for the class each
+ * entry's wrapper wears.
+ */
+const COLLECTION_LOOP_BLOCK = "core/collection-loop";
+
+/**
+ * The classes an entry's wrapper wears: the block-type class and the gap
+ * marker, and only those.
+ *
+ * The loop spaces its children by its `childGap`, written as a rule on the
+ * block-type class and the gap marker together. On the loop itself that
+ * separates one entry from the next; worn by each entry's wrapper, the same
+ * rule spaces the blocks inside an entry exactly as it spaces the template
+ * when no collection is configured. The node class stays on the loop alone,
+ * so an author's styling of the loop (a flex row of entries, say) applies to
+ * the loop and not to every entry.
+ */
+const ENTRY_CLASS = `${blockTypeClassName(COLLECTION_LOOP_BLOCK)} ${CHILD_GAP_CLASS}`;
+
 export async function renderCollectionLoop({
   props,
   renderSlot,
@@ -101,13 +152,17 @@ export async function renderCollectionLoop({
   if (ctx.queries?.take() === false) {
     return <div className={className} />;
   }
-  try {
-    const result = await data.find({
+  const sort =
+    typeof props.sort === "string" && props.sort.trim() !== ""
+      ? props.sort.trim()
+      : undefined;
+  const read = (sortKeys: string | readonly string[]) =>
+    data.find({
       collection,
       limit: safeLimit(props.limit),
-      ...(typeof props.sort === "string" && props.sort !== ""
-        ? { sort: props.sort }
-        : {}),
+      // Always sent, so a loop with no sort lists in id order, the same on
+      // every read, rather than in whatever order a database returns.
+      sort: sortKeys,
       // The locale the page is being rendered in. Without it the provider reads
       // the default one, so a French page embeds English rows — the surrounding
       // blocks translate and the looped content silently does not. Taken from
@@ -115,7 +170,19 @@ export async function renderCollectionLoop({
       // route's decision, not a per-block one an editor could contradict.
       ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
     });
-    items = Array.isArray(result.items) ? result.items : [];
+  try {
+    let result;
+    try {
+      result = await read(sort ?? []);
+    } catch (error) {
+      // A stored sort the reader refuses (a field since removed, or one the
+      // public may not read) would otherwise empty a published list. Once
+      // more in id order: the refusal comes before any read, so the one
+      // claim above still covers it. Any other failure is contained below.
+      if (sort === undefined || !sortWasRefused(error)) throw error;
+      result = await read([]);
+    }
+    items = Array.isArray(result.items) ? [...result.items] : [];
   } catch {
     // A page that cannot reach its data renders empty rather than failing.
     items = [];
@@ -123,7 +190,7 @@ export async function renderCollectionLoop({
   return (
     <div className={className}>
       {items.map((item, index) => (
-        <div key={keyFor(item, index)}>
+        <div key={keyFor(item, index)} className={ENTRY_CLASS}>
           {/* Drawn again per entry, with this entry on the context, so anything
               inside the template reads its own values rather than the first
               entry's. */}
@@ -140,10 +207,14 @@ export async function renderCollectionLoop({
 // published types is typed the same as one compiled here. See `./index.ts`.
 export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
   defineBlock({
-    name: "core/collection-loop",
+    name: COLLECTION_LOOP_BLOCK,
     version: 1,
-    description:
-      "Repeats its children once per entry in a collection. Renders its template once while no collection is chosen, and renders empty when the data source cannot be reached.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: Repeats its children
+    // once per entry in a collection. Renders its template once while no
+    // collection is chosen, and renders empty when the data source cannot be
+    // reached.
+    description: "Repeats its contents for each entry in a collection.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -154,9 +225,9 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       keywords: ["repeat", "query", "entries", "dynamic"],
     },
     props: {
-      collection: { type: "text" },
-      limit: { type: "number", min: 1, max: 100 },
-      sort: { type: "text" },
+      collection: { label: "Collection", type: "text" },
+      limit: { label: "Number of items", type: "number", min: 1, max: 100 },
+      sort: { label: "Sort by", type: "text" },
     },
     defaultProps: { limit: 10 },
     example: { props: { collection: "posts", limit: 3 } },
@@ -174,6 +245,8 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       // from its own declaration.
       children: {},
     },
+    // Spaces one entry from the next, as any container spaces its blocks.
+    childGap: CONTAINER_CHILD_GAP,
     supports: {
       spacing: true,
       layout: true,

@@ -174,8 +174,12 @@ single scoped `<style>` per page via a real CSS parser (never string concatenati
 Colors may be raw values or design-token references (`{ token: "color.primary" }` →
 `var(--nx-color-primary)`). Breakpoints are desktop-first. Style a block separately for each
 breakpoint: the Style tab edits the breakpoint the canvas is sized to, and the canvas resizes
-to each breakpoint's width. The canvas is not an iframe, so it is a breakpoint selector rather
-than a device preview: `vw`/`vh` sizes and hand-written `@media` rules follow the admin window.
+to each breakpoint's width. The canvas is a frame of its own at that width, so `vw`/`vh` sizes
+and hand-written `@media` rules answer for the device, as they do when published. To draw the
+canvas inside your site's own layout, with your app's global stylesheet, fonts, header and
+footer, mount a route whose page is `PageBuilderCanvas` from
+`@nextlyhq/plugin-page-builder/canvas` and name its path as the `canvasPath` option. Without it,
+the canvas draws on a blank page, and your app's own CSS does not reach it.
 
 ## Extending — add your own block
 

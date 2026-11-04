@@ -28,21 +28,35 @@ export interface StorePage {
 
 /**
  * Request pages in order, handing each to `onPage`, until the store says there
- * are no more.
+ * are no more, or `onPage` answers `"stop"`.
  *
  * `describe` names the thing being walked, so a refusal says what it could not
  * finish rather than only that it could not finish.
+ *
+ * Resolves `true` when the walk reached the store's end and `false` when
+ * `onPage` stopped it. A stop is the caller's own decision, such as a budget
+ * spent, so it is answered rather than thrown, and the caller is the one that
+ * knows where to resume.
  */
 export async function walkPages(args: {
   fetchPage: (page: number) => Promise<StorePage>;
-  onPage: (items: readonly unknown[]) => Promise<void> | void;
+  /**
+   * Handed each page's items and whether the store holds another page after
+   * it, so a caller spending a budget can tell a walk that ends exactly on its
+   * budget from one the budget cut short.
+   */
+  onPage: (
+    items: readonly unknown[],
+    page: { hasNext: boolean }
+  ) => Promise<void | "stop"> | void | "stop";
   maxPages: number;
   describe: string;
-}): Promise<void> {
+}): Promise<boolean> {
   for (let page = 1; page <= args.maxPages; page++) {
     const result = await args.fetchPage(page);
-    await args.onPage(result.items);
-    if (!result.meta.hasNext) return;
+    const hasNext = result.meta.hasNext;
+    if ((await args.onPage(result.items, { hasNext })) === "stop") return false;
+    if (!result.meta.hasNext) return true;
   }
   throw new Error(
     `Paged walk over ${args.describe} stopped after ${args.maxPages} pages ` +
