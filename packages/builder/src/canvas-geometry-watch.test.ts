@@ -47,6 +47,26 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+describe("a block that moves without resizing", () => {
+  it("re-measures when a block's keyframe animation ends or is cancelled", () => {
+    // An entrance animation or a site's @keyframes moves a block by
+    // transform: nothing resizes, mutates or finishes a transition, so the
+    // marks stay at the starting geometry unless the animation's own end is
+    // heard. The events bubble, so a block's reaches the root.
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    block.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(1);
+    block.dispatchEvent(new Event("animationcancel", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(2);
+    stop?.();
+    // Released with the rest: nothing is heard after the watch stops.
+    block.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("a batch that changed nothing", () => {
   it("does not re-measure for a probe that put the attribute back", async () => {
     const { layer, block } = canvas();

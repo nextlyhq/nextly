@@ -140,6 +140,64 @@ describe("Enter on a selected block, on a canvas in a frame", () => {
     expect(attach.mock.calls[0]?.[0]).toBe(passage);
   });
 
+  it("carries a passage's typing into the frame's new page, unwritten, when the frame replaces its document", async () => {
+    // A frame reload replaces the page under an open passage. Committing on
+    // the way out would write an edit the author has not finished, and lose
+    // it outright when the write is refused; the passage goes on in the new
+    // page's element with the same words instead.
+    registerArticle();
+    const first = framedPage();
+    let frame = first.frame;
+    function Wrapper({ children }: { children?: React.ReactNode }) {
+      return (
+        <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>
+      );
+    }
+    const stored = { root: { type: "root", children: [] } };
+    const typed = {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [{ type: "text", text: "Typed" }] },
+        ],
+      },
+    };
+    let reads = 0;
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      status: "attached",
+      session: {
+        focus: () => {},
+        read: () => (reads++ === 0 ? stored : typed),
+        detach: () => {},
+        hold: () => {},
+      },
+    }));
+    const load = vi.fn(async () => ({ attach }));
+    const editor = editorState();
+    const { result, rerender } = renderHook(
+      () => useInlineRichText(editor, load as never),
+      { wrapper: Wrapper }
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    expect(attach).toHaveBeenCalledTimes(1);
+
+    const second = framedPage();
+    frame = second.frame;
+    await act(async () => {
+      rerender();
+    });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(result.current.editing).toEqual({ nodeId: "a", prop: "content" });
+    expect(attach).toHaveBeenCalledTimes(2);
+    expect(attach.mock.calls[1]?.[0]).toBe(
+      second.inside.querySelector('[data-nx-prop="content"]')
+    );
+    expect(attach.mock.calls[1]?.[1]).toEqual(typed);
+  });
+
   it("takes the caret into the frame's new page when the frame replaces its document mid-edit", () => {
     registerArticle();
     const first = framedPage();

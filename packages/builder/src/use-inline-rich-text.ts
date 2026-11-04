@@ -263,8 +263,7 @@ export function useInlineRichText(
   // Held in a ref for the same reason, and for one more: a host passing an
   // inline arrow would otherwise give `commit` a new identity every render, and
   // `commit` is what the handover effect depends on.
-  const finishedRef = useRef(onFinished);
-  finishedRef.current = onFinished;
+
   /*
    * The loader, read through a ref for a reason that costs an author their
    * words otherwise.
@@ -281,8 +280,25 @@ export function useInlineRichText(
    * the editor is fetched. A loader that changes mid-edit is not a reason to
    * re-open anything; the chunk in flight is already the right one.
    */
-  const loadRef = useRef(load);
-  loadRef.current = load;
+  /*
+   * The host's ear and the loader, held together, and the document the canvas
+   * draws in as of this render: the effect's cleanup compares it with the one
+   * it attached in, which is how a frame REPLACING its page is told from the
+   * passage closing.
+   */
+  const latest = useRef({ finished: onFinished, load, canvasDocument });
+  latest.current = { finished: onFinished, load, canvasDocument };
+  /*
+   * A passage carried across a frame's page replacement: its words as typed
+   * and the baselines it opened with, for the next attach to take up, so the
+   * replacement neither writes an unfinished edit nor loses a refused one.
+   */
+  const carried = useRef<{
+    editing: InlineRichTextEditing;
+    words: unknown;
+    opened: unknown;
+    baseline: unknown;
+  } | null>(null);
 
   /**
    * The element a pointer handed over, used in place of searching for one,
@@ -358,7 +374,7 @@ export function useInlineRichText(
    */
   const report = useCallback(
     (outcome: InlineEditOutcome): InlineEditOutcome => {
-      finishedRef.current?.(outcome);
+      latest.current.finished?.(outcome);
       return outcome;
     },
     []
@@ -533,21 +549,25 @@ export function useInlineRichText(
    */
   useEffect(() => {
     if (editing === null) return;
-    // Read once, here, rather than depended on — see `loadRef`. A host that
+    // Read once, here, rather than depended on — see `latest`. A host that
     // supplies no loader edits plain text and simply never opens a passage.
-    const fetch = loadRef.current;
+    const fetch = latest.current.load;
     if (fetch === undefined) return;
     // The element the gesture landed on, when there was one. Searching the
     // canvas's document is the fallback for a keyboard caller, which has no
     // element: the frame's when the canvas is in one.
     const { element: given, point } = handed.current;
     handed.current = NO_HANDOVER;
+    const carry = carried.current?.editing === editing ? carried.current : null;
+    carried.current = null;
     const element = given ?? passageIn(canvasDocument, editing);
     if (element === null) {
       // Nothing on screen carries this passage. The node may have been removed
       // between the request and this effect; dropping the edit is the honest
       // answer, and leaving `editing` set would show a caret nobody can see.
+      // Words carried from a replaced page have nowhere to go, which is said.
       setEditing(null);
+      if (carry !== null) report(INLINE_EDIT_DISCARDED);
       return;
     }
 
@@ -610,6 +630,7 @@ export function useInlineRichText(
         if (target === undefined) {
           // The passage stopped being editable while the chunk was loading.
           setEditing(null);
+          if (carry !== null) report(INLINE_EDIT_DISCARDED);
           return;
         }
         /*
@@ -625,7 +646,10 @@ export function useInlineRichText(
          */
         const caret =
           point === null ? undefined : caretOffsetAt(element, point);
-        const attachment = live.attach(element, target.value);
+        const attachment = live.attach(
+          element,
+          carry === null ? target.value : carry.words
+        );
         if (attachment.status === "refused") {
           /*
            * Dropping this edit is right either way: it leaves the passage as the
@@ -652,11 +676,12 @@ export function useInlineRichText(
           editing,
           // The RAW stored value, kept so the write can tell one unusable value
           // from another — the narrowed form collapses them all to `undefined`.
-          opened: target.stored,
+          opened: carry === null ? target.stored : carry.opened,
           // Taken AFTER the editor loaded the value, so it is the editor's own
           // reading of an untouched passage — which is what makes an unchanged
           // edit compare equal rather than differing by normalisation alone.
-          baseline: session.read(),
+          // A carried passage keeps the baselines it opened with.
+          baseline: carry === null ? session.read() : carry.baseline,
         };
       },
       () => {
@@ -736,7 +761,28 @@ export function useInlineRichText(
        * would drop the words AND leave the guard silent about it, so a
        * navigation nobody warned about takes the work with it.
        */
-      if (mounted.current !== null) {
+      const live = mounted.current;
+      if (
+        live !== null &&
+        latest.current.canvasDocument !== canvasDocument &&
+        editingRef.current === editing
+      ) {
+        /*
+         * The frame REPLACED its page under the open passage, and this effect
+         * runs again for the new one. Carried rather than committed: the
+         * author has not finished, and a refused write here would lose the
+         * words with the old page.
+         */
+        carried.current = {
+          editing,
+          words: live.session.read(),
+          opened: live.opened,
+          baseline: live.baseline,
+        };
+        mounted.current = null;
+        live.session.detach();
+        live.element.removeAttribute(EDITING_ATTRIBUTE);
+      } else if (live !== null) {
         commit();
         /*
          * A refusal keeps the session by design, because staying open is what
