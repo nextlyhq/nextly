@@ -35,6 +35,10 @@ An update that carries the `_rev` it read is now judged against it (experimental
 - In `updateMany` and the in-transaction updates, each entry is judged on its own: an out-of-date one is reported and writes nothing, and the others are applied.
 - An update of several documents with one set of values (by ids or by query) that carries `_rev` is refused with 400.
 - A `_rev` that isn't a version a read returned, or that comes from a read of another language, is refused with 400.
-- An update may send `_overwrite: true` (experimental) to be applied without being judged: it saves over whatever was saved since its version, as an update with no `_rev` does. It is never stored. Any value other than `true` or `false` is refused with 400.
+- An update of every language at once (`locale: "*"`) needs the version a read of every language returned: one that doesn't name each language is refused with 400.
 
 If your code reads a document once and then saves it several times with `{ ...doc }`, take `_rev` from each save's result, or the second save is refused.
+
+An update can now choose to overwrite. Send `_overwrite: true` with the values, beside the `_rev` you read, and the update is applied whatever the document's current version, on REST, the Direct API and the plugin service alike, single updates, batches and bulk updates by ids or by query included. It needs no permission beyond the update itself, and `_overwrite` is never stored. Any value other than `true` or `false` is refused as a validation error.
+
+Every overwrite is recorded in the document's history, whether or not it keeps versions. When the version sent was out of date, the history names whose changes it replaced ("Overwrote changes by Ben"); with no version, or the current one, it says only that the save was an overwrite. A save whose overwrite cannot be recorded is not kept. `_overwrite` is experimental.
