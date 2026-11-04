@@ -543,6 +543,19 @@ describe("InspectorPanel block card", () => {
     });
   });
 
+  it("says why a locked block is held once, in its card, in one wording", () => {
+    // The card's lock line already says it, and so does a held control's
+    // tooltip: a line under the Style tab's bar said it a third time, and
+    // in other words.
+    mount({ locked: true, props: { text: "Hi" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(document.querySelector('[data-lock="layers"]')?.textContent).toBe(
+      "Locked: it can't be moved, deleted or edited. Unlock it from the block's menu."
+    );
+    expect(document.querySelector('[data-read-only="style"]')).toBeNull();
+  });
+
   it("says a block inside a locked one is locked by it, withholds Rename, and offers Lock", () => {
     // The lock covers everything inside the block: the selected heading is
     // not locked itself, so the card names the block that holds the lock,

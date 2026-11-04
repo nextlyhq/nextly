@@ -29,6 +29,7 @@ import {
   DropIndicator,
   DropRefusal,
   EmptyContainerAppenders,
+  PageInserters,
   InspectorPanel,
   RepairNotice,
   OnboardingChecklist,
@@ -63,6 +64,7 @@ import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
+import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import { listLoopCollections } from "../loop-collections-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -356,8 +358,9 @@ let contentServices: ContentServices | undefined;
  * What the inspector's Content tab borrows from the admin: the media library,
  * to choose an image, the shared rich-text editor, and the page builder's
  * entries route, to find an entry a `relation` prop points at with the
- * author's own access, and the loop collections route, to offer a collection
- * loop the collections that author may read. Built on first use and
+ * author's own access, the pages search, to find a page a link points at
+ * the same way, and the loop collections route, to offer a collection loop
+ * the collections that author may read. Built on first use and
  * kept for the module's life, so the panel never sees a new object on a
  * render, and loading this module reads nothing from the admin's surface
  * until an editor is drawn.
@@ -367,6 +370,7 @@ function borrowedServices(): ContentServices {
     MediaPicker: MediaPickerDialog,
     loadRichTextEditor: loadInlineRichTextEditor,
     findEntries,
+    findLinkTargets,
     listLoopCollections,
   };
   return contentServices;
@@ -375,8 +379,8 @@ function borrowedServices(): ContentServices {
 /**
  * The borrowed services with this editor's open-passage registry and its
  * language, one object per registry and language so the panel sees the same
- * one on every render. A relation search reads titles in the language being
- * edited.
+ * one on every render. A relation search and a link's search read titles in
+ * the language being edited.
  */
 const servicesByPassages = new WeakMap<
   OpenPassages,
@@ -402,6 +406,9 @@ function servicesFor(
       readMedia,
       findEntries: query =>
         findEntries(locale === undefined ? query : { ...query, locale }),
+      // The same language for a link's search, so a page is found and named
+      // as the author reads it.
+      findLinkTargets: findLinkTargetsIn(locale),
     };
     byLocale.set(key, services);
   }
@@ -714,6 +721,24 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     // inside, so a click on a selected block adds after it.
                     editor.select(nodeId);
                     openInsertPanel(nodeId);
+                  }}
+                />
+                {/*
+                  The empty page's start card and the "+" between sections.
+                  The "+" selects the section above its gap and opens Add,
+                  which adds after the selected block and names the place;
+                  the start card opens Add on a page with nothing to select.
+                  Hidden mid-drag, when the drag's own line says where a block
+                  lands.
+                */}
+                <PageInserters
+                  document={editor.document}
+                  componentTitle={componentLibrary.titleOf}
+                  hidden={dragging}
+                  onStart={() => openInsertPanel()}
+                  onAddAfter={nodeId => {
+                    editor.select(nodeId);
+                    openInsertPanel();
                   }}
                 />
               </>

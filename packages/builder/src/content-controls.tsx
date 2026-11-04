@@ -106,6 +106,30 @@ export interface FoundEntry {
   readonly title: string;
 }
 
+/** What the link control asks the host for: what a link can point at. */
+export interface LinkTargetQuery {
+  /** Pages and entries whose title holds this, ignoring case; empty for the first few. */
+  readonly search: string;
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
+}
+
+/** One page or entry the link control offers. */
+export interface LinkTarget {
+  readonly id: string;
+  /** Its collection's slug, which a link to the entry stores. */
+  readonly collection: string;
+  /** The heading it is listed under: its collection's name ("Pages"). */
+  readonly group: string;
+  readonly title: string;
+  /**
+   * Where it is served on the site (`/pricing`), when the host knows. A
+   * heading or a box links by this address; without one, only a block that
+   * can hold an entry reference can link to it.
+   */
+  readonly path?: string;
+}
+
 /** One field a collection's entries can be ordered by. */
 export interface LoopSortField {
   /** The key a sort stores: the field's name. */
@@ -143,6 +167,14 @@ export interface ContentServices {
    * a prop that points at one of them.
    */
   readonly findEntries?: (query: EntryQuery) => Promise<readonly FoundEntry[]>;
+  /**
+   * The pages and entries a link can point at, read with the signed-in
+   * author's own access and listed by collection, the site's own pages first.
+   * Absent, a link control takes typed addresses only.
+   */
+  readonly findLinkTargets?: (
+    query: LinkTargetQuery
+  ) => Promise<readonly LinkTarget[]>;
   /**
    * The collections a collection loop can repeat over, each with the fields
    * it can be sorted by, read with the signed-in author's own access. Absent,
