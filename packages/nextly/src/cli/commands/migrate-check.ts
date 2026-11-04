@@ -618,30 +618,29 @@ function describeOp(op: Operation): string {
 export type { SupportedDialect };
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-export function registerMigrateCheckCommand(program: Command): void {
-  program
-    .command("migrate:check")
-    .description(
-      "Verify migration file integrity and config drift (CI-friendly; no DB connection)"
-    )
-    .action(async (_cmdOptions: MigrateCheckCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/**
+ * The action of `nextly migrate:check`, loaded when it runs.
+ */
+export async function migrateCheckAction(
+  _cmdOptions: MigrateCheckCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedMigrateCheckOptions = {
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
+  const resolvedOptions: ResolvedMigrateCheckOptions = {
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-      try {
-        await runMigrateCheck(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runMigrateCheck(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

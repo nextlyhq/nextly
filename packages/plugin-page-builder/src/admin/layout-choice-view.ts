@@ -20,6 +20,11 @@ import type {
   LayoutChoice,
   LayoutChoicesResponse,
 } from "../layout-choices-contract";
+import {
+  pageLayoutRefusal,
+  pickerRemovalNote,
+  type FencedLayoutState,
+} from "../layout-removal/words";
 
 /** What a Layout the author may not read is called, wherever it is named. */
 const UNREADABLE_LAYOUT = "A Layout you can't view";
@@ -52,6 +57,12 @@ export interface StoredLayoutChoice {
 export interface PickerOption {
   readonly value: string;
   readonly label: string;
+  /** A short reason, shown muted after the label. */
+  readonly note?: string;
+  /** The whole reason, as the option's tooltip and accessible description. */
+  readonly description?: string;
+  /** Shown but not offered: a Layout behind Remove Layout's fence. */
+  readonly disabled?: boolean;
 }
 
 /** The Layout a page is drawn inside, as the editor shows it. */
@@ -86,7 +97,9 @@ export interface LayoutPickerView {
  * default where one is usable, and otherwise no header or footer.
  */
 function optionLabel(item: LayoutChoice, site: LayoutSite): string {
-  if (item.published) return item.title;
+  // A Layout behind Remove Layout's fence goes by its name; its reason is the
+  // option's note (`fencedOption`).
+  if (item.removal !== undefined || item.published) return item.title;
   const meanwhile = resolvePageLayout(
     { layout: item.id, noHeaderFooter: false },
     site
@@ -100,8 +113,9 @@ function optionLabel(item: LayoutChoice, site: LayoutSite): string {
  * The picker's view of `stored`, given where the choices read stands.
  *
  * Every state, in the words the editor uses:
- * - the default: "Site default (Main)", or "Site default (none set)" when the
- *   site has no published default;
+ * - the default: "Site default", with the default Layout's name as its note
+ *   ("Main"), or "Site default (none set)" when the site has no published
+ *   default;
  * - a published Layout by its title; an unpublished one marked as such;
  * - a Layout the answer does not hold, hidden from the author or deleted:
  *   "A Layout you can't view, or one that was deleted";
@@ -206,7 +220,7 @@ function viewFromList(
     isPublished: id =>
       id === UNREADABLE_DEFAULT || byId.get(id)?.published === true,
   };
-  const options = choiceOptions(items, meta, site);
+  const options = choiceOptions(items, meta, site, named);
   const resolution = resolvePageLayout(
     { layout: named, noHeaderFooter: switchedOff },
     site
@@ -223,18 +237,37 @@ function viewFromList(
   };
 }
 
+/** What a Layout behind the fence adds to its option: why, and not offered. */
+function fencedOption(
+  state: FencedLayoutState,
+  ownChoice: boolean
+): Pick<PickerOption, "note" | "description" | "disabled"> {
+  return {
+    note: pickerRemovalNote(state),
+    description: pageLayoutRefusal(state),
+    disabled: !ownChoice,
+  };
+}
+
 /** The options: the default, published Layouts, unpublished ones, then none. */
 function choiceOptions(
   items: readonly LayoutChoice[],
   meta: LayoutChoicesResponse["meta"],
-  site: LayoutSite
+  site: LayoutSite,
+  selected: string | null = null
 ): PickerOption[] {
+  // A Layout behind Remove Layout's fence is shown, so the author sees why
+  // it is missing, and not offered: a save naming it is refused. The page's
+  // own choice stays selectable, since keeping it is allowed.
   const toOption = (item: LayoutChoice): PickerOption => ({
     value: layoutValue(item.id),
     label: optionLabel(item, site),
+    ...(item.removal === undefined
+      ? {}
+      : fencedOption(item.removal, item.id === selected)),
   });
   return [
-    { value: SITE_DEFAULT_VALUE, label: defaultLabel(meta, items) },
+    { value: SITE_DEFAULT_VALUE, ...defaultWords(meta, items) },
     ...items.filter(item => item.published).map(toOption),
     ...items.filter(item => !item.published).map(toOption),
     NONE_OPTION,
@@ -256,7 +289,7 @@ function unknownLayoutView(
     defaultLayout: meta.defaultLayout,
     isPublished: id => byId.get(id)?.published === true,
   };
-  const options = choiceOptions(items, meta, site);
+  const options = choiceOptions(items, meta, site, named);
   return {
     options: [
       ...options.slice(0, -1),
@@ -272,18 +305,25 @@ function unknownLayoutView(
   };
 }
 
-/** The default option's words: which Layout it is, or why it is not one. */
-function defaultLabel(
+/**
+ * The default option's words: which Layout it is, or why it is not one. The
+ * Layout's name is the option's note, muted beside "Site default", rather than
+ * part of its label: a default named "Default (site)" would otherwise read
+ * "Site default (Default (site))".
+ */
+function defaultWords(
   meta: LayoutChoicesResponse["meta"],
   items: readonly LayoutChoice[]
-): string {
+): Pick<PickerOption, "label" | "note"> {
   if (meta.defaultUnreadable) {
-    return "Site default (a Layout you can't view, or one that was deleted)";
+    return {
+      label: "Site default (a Layout you can't view, or one that was deleted)",
+    };
   }
   const usable = items.find(item => item.id === meta.defaultLayout);
   return usable?.published === true
-    ? `Site default (${usable.title})`
-    : "Site default (none set)";
+    ? { label: "Site default", note: usable.title }
+    : { label: "Site default (none set)" };
 }
 
 /** The Layout the page is drawn inside, from its listed row. */
@@ -321,15 +361,19 @@ function whyLine(
   named: string | null
 ): string {
   if (resolution.kind === "none") return whyNothingShows(resolution, byId);
-  const title =
-    resolution.id === UNREADABLE_DEFAULT
-      ? "a Layout you can't view, or one that was deleted"
-      : (byId.get(resolution.id)?.title ?? resolution.id);
-  if (resolution.source === "page") return title;
+  if (resolution.source === "page") {
+    return byId.get(resolution.id)?.title ?? resolution.id;
+  }
   const fellFrom = named === null ? undefined : byId.get(named);
-  return fellFrom === undefined
-    ? `Site default: ${title}`
-    : `${fellFrom.title} (not published, so the site default shows)`;
+  if (fellFrom !== undefined) {
+    return `${fellFrom.title} (not published, so the site default shows)`;
+  }
+  // Says why this Layout applies, not only which one it is.
+  if (resolution.id === UNREADABLE_DEFAULT) {
+    return "Follows the site default: a Layout you can't view, or one that was deleted.";
+  }
+  const title = byId.get(resolution.id)?.title ?? resolution.id;
+  return `Follows the site default, ${title}, because this page doesn't choose its own Layout.`;
 }
 
 /**

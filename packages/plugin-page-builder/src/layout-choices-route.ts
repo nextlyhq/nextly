@@ -54,6 +54,12 @@ import {
   type PageCollectionResponse,
   type RegionComponentFacts,
 } from "./layout-choices-contract";
+import { fencedStateOf } from "./layout-removal/page-reference-guard";
+import {
+  layoutRemovalStore,
+  type LayoutRemovalStore,
+} from "./layout-removal/store";
+import type { FencedLayoutState } from "./layout-removal/words";
 import {
   DEFAULT_COMPONENT_STORE,
   readingAsUser,
@@ -81,6 +87,15 @@ export type LayoutChoicesContext = Pick<PluginRouteContext, "caller" | "self">;
 export interface LayoutChoicesRequest {
   /** The Layout the page has selected, by id, or null for none. */
   readonly selected: string | null;
+  /**
+   * Where each listed Layout stands with Remove Layout's fence, asked once for
+   * the whole list. Absent, no Layout is marked.
+   */
+  readonly fence?: {
+    removalStates(
+      layoutIds: readonly string[]
+    ): Promise<ReadonlyMap<string, FencedLayoutState>>;
+  };
   /** Where component definitions are stored, as the plugin was told. */
   readonly store: ComponentStore;
   /**
@@ -127,9 +142,9 @@ function hasPendingDraft(row: unknown): boolean {
  * facts of those two and their region components, and the definitions in
  * batches. Draft facts need a read by id, since only that read overlays a
  * working draft, so they are asked only of the two Layouts a page can be drawn
- * inside, and only for an author who may update what is asked about: the
- * service shows a working draft to no one else, so the read would tell anyone
- * else nothing.
+ * inside and their components. Each is read as this author: the service shows
+ * a working draft only to a caller who may update or publish that row, so the
+ * read tells anyone else nothing.
  */
 export async function readLayoutChoices(
   ctx: LayoutChoicesContext,
@@ -195,14 +210,17 @@ export async function readLayoutChoices(
 
   const canUpdateLayouts = (await ctx.caller?.can("update", layouts)) === true;
   const focused = items.filter(item => focus.includes(item.id));
-  const drafts = canUpdateLayouts
-    ? await pendingDrafts(
-        nextly,
-        layouts,
-        focused.filter(item => item.published).map(item => item.id),
-        { ...asUser, ...inLocale }
-      )
-    : new Set<string>();
+  // Asked of each focused row as this author, whatever the collection-wide
+  // answer: a rule may let them update this Layout and not others, and only
+  // a read of the row can apply it. The service overlays a working draft only
+  // for a caller who may update or publish that row, the one rule for who sees
+  // a draft, so one who may do neither learns nothing.
+  const drafts = await pendingDrafts(
+    nextly,
+    layouts,
+    focused.filter(item => item.published).map(item => item.id),
+    { ...asUser, ...inLocale }
+  );
   const focusedComponents = [
     ...new Set(focused.flatMap(item => item.regions.map(r => r.componentId))),
   ];
@@ -223,28 +241,31 @@ export async function readLayoutChoices(
     regionDefinitions,
     request.limits
   );
-  const componentDrafts =
-    (await ctx.caller?.can("update", components)) === true
-      ? await pendingDrafts(
-          nextly,
-          components,
-          // Each region's own component first, so a deep header cannot
-          // crowd the footer's out of the bound.
-          [
-            ...new Set([
-              ...focusedComponents,
-              ...[...reachable.values()].flat(),
-            ]),
-          ].slice(0, MAX_NESTED_DRAFT_READS),
-          { ...asUser, ...inLocale }
-        )
-      : new Set<string>();
+  // Asked as this author of each component, for the reason the Layouts are.
+  const componentDrafts = await pendingDrafts(
+    nextly,
+    components,
+    // Each region's own component first, so a deep header cannot crowd the
+    // footer's out of the bound.
+    [
+      ...new Set([...focusedComponents, ...[...reachable.values()].flat()]),
+    ].slice(0, MAX_NESTED_DRAFT_READS),
+    { ...asUser, ...inLocale }
+  );
+
+  const fenced =
+    (await request.fence?.removalStates(items.map(item => item.id))) ??
+    new Map<string, FencedLayoutState>();
 
   return {
-    items: items.map(item => ({
-      ...item,
-      draftChangesNotLive: drafts.has(item.id),
-    })),
+    items: items.map(item => {
+      const removal = fenced.get(item.id);
+      return {
+        ...item,
+        draftChangesNotLive: drafts.has(item.id),
+        ...(removal === undefined ? {} : { removal }),
+      };
+    }),
     meta: {
       defaultLayout: defaultReadable ? defaultLayout : null,
       defaultUnreadable: defaultLayout !== null && !defaultReadable,
@@ -252,6 +273,13 @@ export async function readLayoutChoices(
       canUpdateLayouts,
       more:
         (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
+      // The rows the list read itself returned, which for a search are the
+      // ones its query matched by the database's own collation. The page's
+      // Layout and the default, added whatever the query, are not among them.
+      matched: listed.flatMap(row => {
+        const id = rowId(row);
+        return id === null ? [] : [id];
+      }),
       // A region has edits not live when ANY component it draws does: the
       // one it names, or one that component places, however deep.
       regionComponents: Object.fromEntries(
@@ -385,9 +413,14 @@ async function pendingDrafts(
           depth: 0,
         });
         return hasPendingDraft(row) ? id : null;
-      } catch {
-        // A row the caller cannot read by id says nothing about a draft.
-        return null;
+      } catch (error) {
+        // A row the caller may not read says nothing about a draft. Any
+        // other failure fails the request, so the editor offers to try again
+        // rather than silently dropping a warning the author needed.
+        if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
+          return null;
+        }
+        throw error;
       }
     })
   );
@@ -489,6 +522,21 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
   };
 }
 
+/** Where each of some Layouts stands with the fence, from one read of it. */
+function fenceStates(
+  store: Pick<LayoutRemovalStore, "removalsOf">
+): NonNullable<LayoutChoicesRequest["fence"]> {
+  return {
+    removalStates: async ids =>
+      new Map(
+        (await store.removalsOf(ids)).map(removal => [
+          removal.layoutId,
+          fencedStateOf(removal),
+        ])
+      ),
+  };
+}
+
 /**
  * The route declaration: `read` on the Layouts collection, as resolved, with
  * component definitions read from the store the plugin was told about, under
@@ -517,6 +565,7 @@ export function layoutChoicesRoute(
       return Response.json(
         await readLayoutChoices(ctx, await getCachedNextly(), {
           ...query,
+          fence: fenceStates(layoutRemovalStore(ctx.db, ctx.dialect)),
           store,
           // Asked per request, as the renderer asks, so both read one answer.
           limits: limits(),
@@ -526,11 +575,14 @@ export function layoutChoicesRoute(
   };
 }
 
-/** Which collection holds the plugin's pages, as this site resolved it. */
+/** Which collections hold the plugin's pages and Layouts, as this site resolved them. */
 export function readPageCollection(
   ctx: Pick<PluginRouteContext, "self">
 ): PageCollectionResponse {
-  return { pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG };
+  return {
+    pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+    layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+  };
 }
 
 /**

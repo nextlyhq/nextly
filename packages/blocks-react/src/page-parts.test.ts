@@ -35,6 +35,21 @@ describe("layoutPartSheets", () => {
     ]);
   });
 
+  it("scopes the part that emits the site sheet when the route states only site styles", () => {
+    // A route that serves a stored artifact names its breakpoints through
+    // `siteStyles` and states no compile context of its own.
+    const scopes = layoutPartSheets({
+      parts: ["header", "page", "footer"],
+      styleContext: undefined,
+      siteStyles: site,
+    }).map(sheet => sheet.styleContext?.scope);
+    expect(scopes).toEqual([
+      "nx-pb-part-header",
+      "nx-pb-part-page",
+      "nx-pb-part-footer",
+    ]);
+  });
+
   it("keeps the scope the page's stored sheet was compiled under", () => {
     const [, page] = layoutPartSheets({
       parts: ["header", "page"],

@@ -1,6 +1,7 @@
 /**
- * The page builder's own tables: the usage indexes' bookkeeping, and the runs
- * that turn every copy of a component into plain blocks before it is deleted.
+ * The page builder's own tables: the usage indexes' bookkeeping, the
+ * fence a Layout's removal puts up, and the runs that turn every copy of a
+ * component into plain blocks before it is deleted.
  *
  * Kept in tables this plugin declares, reached only through its own `ctx.db`,
  * rather than in collections. A collection has an admin screen, a REST route
@@ -30,7 +31,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -106,6 +107,72 @@ export const usageProgress: TableDefinition<
   },
   // One row per scope of a run; a pass reads its run's rows by token.
   { indexes: [{ columns: ["token", "scopeKey"], unique: true }] }
+);
+
+/** The columns of {@link layoutRemovals}, as `defineTable` checks and publishes them. */
+type LayoutRemovalsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly layoutId: ColumnBuilder<string, false, false>;
+  readonly action: ColumnBuilder<string, false, false>;
+  readonly step: ColumnBuilder<string, false, false>;
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, true, false>;
+  readonly pagesLeft: ColumnBuilder<number, true, false>;
+  readonly copy: ColumnBuilder<unknown, true, false>;
+  readonly copyVersion: ColumnBuilder<string, true, false>;
+  readonly settledAt: ColumnBuilder<Date, true, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per Layout being removed: inserting it is the fence.
+ *
+ * While a row exists, the Layout cannot be made the site default, and the
+ * Layout's own delete or unpublish is refused unless the write carries this
+ * row's `token` and the row is at its `final` step. A table rather than a
+ * collection, for the reason the module docblock gives: a super-admin can
+ * write any collection row, and a fence an author could forge or delete would
+ * let a plain delete through.
+ *
+ * - `step` moves `marked` → `checked` → `final` → `removed`, each move a
+ *   compare-and-set on `token` and the step it leaves, so a request another
+ *   one replaced changes nothing.
+ * - `copy` is the Layout as it stood at the final step, its live row and its
+ *   working draft, so a delete that a promotion raced can be restored. Cleared
+ *   once the check after the write passed (`settledAt`).
+ * - `copyVersion` is the two rows' `updatedAt`, and the delete or unpublish
+ *   goes ahead only while the Layout still has it.
+ * - `updatedAt` is the lease: a row left at an earlier step by a request that
+ *   stopped is taken over by a later one, and cleared by the sweep, once it is
+ *   older than the lease.
+ *
+ * A `removed` row stays. For an unpublish it keeps the fence until the Layout
+ * is published again; for a delete it records that the Layout was removed.
+ */
+export const layoutRemovals: TableDefinition<
+  "layout_removals",
+  LayoutRemovalsColumns
+> = defineTable<"layout_removals", LayoutRemovalsColumns>(
+  "layout_removals",
+  {
+    id: col.id(),
+    layoutId: col.varchar(255),
+    action: col.varchar(16),
+    step: col.varchar(16),
+    token: col.char(36),
+    startedBy: col.varchar(255, { nullable: true }),
+    pagesLeft: col.integer({ nullable: true }),
+    copy: col.json({ nullable: true }),
+    copyVersion: col.varchar(128, { nullable: true }),
+    settledAt: col.timestamp({ nullable: true }),
+    ...col.timestamps(),
+  },
+  // One row per Layout, so two removals of one Layout cannot both insert the
+  // fence: the second meets the unique index and is told the first is running.
+  { indexes: [{ columns: ["layoutId"], unique: true }] }
 );
 
 /** The columns of {@link componentDeletions}. */
@@ -196,6 +263,13 @@ export const componentDeletionHosts: TableDefinition<
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
   typeof usageProgress,
+  typeof layoutRemovals,
   typeof componentDeletions,
   typeof componentDeletionHosts,
-] = [usageRuns, usageProgress, componentDeletions, componentDeletionHosts];
+] = [
+  usageRuns,
+  usageProgress,
+  layoutRemovals,
+  componentDeletions,
+  componentDeletionHosts,
+];

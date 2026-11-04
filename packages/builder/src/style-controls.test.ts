@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  formNamesOf,
   styleControlsFor,
   SUPPORTED_LEAF_KINDS,
   type StyleControl,
@@ -163,8 +164,24 @@ describe("a union, which stores one value in more than one form", () => {
         active: 0,
         count: 2,
         kinds: ["dimension", "logicalCorners"],
+        // In plain words: a length beside per-corner values is the value for
+        // all of them.
+        names: ["All", "Corners"],
       },
     ]);
+  });
+
+  it("names the forms of a variant built without names, from their kinds", () => {
+    // `names` is optional, so a variant built to the earlier shape still has
+    // its forms named in plain words.
+    expect(
+      formNamesOf({
+        path: [],
+        active: 0,
+        count: 2,
+        kinds: ["dimension", "logicalCorners"],
+      })
+    ).toEqual(["All", "Corners"]);
   });
 
   it("shows the composite variant when a record is stored", () => {

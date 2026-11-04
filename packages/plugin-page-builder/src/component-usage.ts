@@ -122,6 +122,12 @@ export const componentUsageIndex: UsageIndex<ComponentUsageRow> = {
     kind: { equals: "reference" },
     componentId: { equals: referenceId },
   }),
+  // The same two columns as the single question, for the same reason.
+  whereReferencingAny: referenceIds => ({
+    kind: { equals: "reference" },
+    componentId: { in: [...referenceIds] },
+  }),
+  referenceOf: own => own.componentId,
   // Both columns, though `kind` alone identifies the row. `componentId` is the
   // indexed one and no reference stores the empty string, so leading with it
   // turns this into the same indexed lookup a reference question makes; `kind`

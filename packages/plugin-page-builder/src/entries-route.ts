@@ -221,6 +221,25 @@ export interface EntriesReads {
 }
 
 /**
+ * Whether core refused the read because the search filters on a field this
+ * caller may not read. Core answers that as a validation error whose errors
+ * name `FIELD_NOT_FILTERABLE`, not as an error with that code of its own.
+ */
+function refusesTheFilter(error: unknown): boolean {
+  if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return false;
+  const data = error.publicData as { errors?: unknown } | undefined;
+  return (
+    Array.isArray(data?.errors) &&
+    data.errors.some(
+      (entry: unknown) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        (entry as { code?: unknown }).code === "FIELD_NOT_FILTERABLE"
+    )
+  );
+}
+
+/**
  * Answer one read: refuse an undeclared collection, then read as the caller.
  *
  * The target check runs FIRST and reads nothing: it is a precondition, and a
@@ -279,10 +298,7 @@ export async function readEntries(
     // filter on it: core refuses the filter rather than reveal the field
     // through the rows. For this caller the search matches nothing, which is
     // the honest answer, rather than a failure the control can only retry.
-    if (
-      request.search !== undefined &&
-      NextlyError.isCode(error, "FIELD_NOT_FILTERABLE")
-    ) {
+    if (request.search !== undefined && refusesTheFilter(error)) {
       return { items: [], meta: emptyMeta(request.limit) };
     }
     throw error;
@@ -328,6 +344,8 @@ function refusal(collection: string): NextlyError {
 export interface TitleField {
   readonly name: string;
   readonly kind: TitleKind;
+  /** The field's declared type, where it declares one (`text`, `email`, …). */
+  readonly type?: string;
 }
 
 /**
@@ -372,7 +390,12 @@ export function titleFieldIn(record: object): TitleField | undefined {
     fieldNames(fields)
   );
   if (name === undefined) return undefined;
-  return { name, kind: titleKind(fieldType(fields, name)) };
+  const type = fieldType(fields, name);
+  return {
+    name,
+    kind: titleKind(type),
+    ...(type === undefined ? {} : { type }),
+  };
 }
 
 /** The field types whose stored value is text, which `contains` matches. */

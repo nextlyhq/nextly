@@ -35,7 +35,7 @@ import { readStoredForms } from "./lock-baselines";
  * only for one of those, so a blocks field inside a group or a repeater cannot
  * be judged, and the server log says so.
  */
-function isTopLevel(path: string): boolean {
+export function isTopLevel(path: string): boolean {
   return path !== "" && !/[.[\]]/.test(path);
 }
 

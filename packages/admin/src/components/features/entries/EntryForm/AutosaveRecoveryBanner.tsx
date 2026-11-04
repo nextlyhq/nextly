@@ -97,13 +97,26 @@ export function LiveDocumentRecoveryOffer({
   viewingVersion,
   className,
 }: LiveDocumentRecoveryOfferProps): JSX.Element | null {
-  if (viewingVersion !== null || recovery.offer === null) return null;
+  const offer = liveRecoveryOffer(recovery, viewingVersion);
+  if (offer === null) return null;
   return (
     <AutosaveRecoveryBanner
-      savedAt={recovery.offer.savedAt}
+      savedAt={offer.savedAt}
       onRestore={recovery.restore}
       onDismiss={recovery.dismiss}
       className={className}
     />
   );
+}
+
+/**
+ * The offer a surface may make: none while a past version is on screen, since
+ * restoring values nobody can see is deciding without seeing. The one rule the
+ * banner and the editor's save chip both follow.
+ */
+export function liveRecoveryOffer(
+  recovery: UseAutosaveRecoveryResult,
+  viewingVersion: ViewedVersion | null
+): UseAutosaveRecoveryResult["offer"] {
+  return viewingVersion === null ? recovery.offer : null;
 }

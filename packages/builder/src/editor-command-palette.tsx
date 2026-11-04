@@ -38,7 +38,12 @@ import {
 } from "./insert-panel";
 import { blockLabel, filterEntries } from "./inserter";
 import { useBlockActionsContext } from "./keyboard-actions";
-import { layersOf, type LayerNode } from "./layers";
+import {
+  layersOf,
+  UNNAMED_COMPONENT,
+  type ComponentTitleOf,
+  type LayerNode,
+} from "./layers";
 import { useSelectionActions } from "./selection-actions";
 
 /** The groups a search shows, in the order an author reads them. */
@@ -83,6 +88,11 @@ export interface EditorCommandPaletteProps {
   results?: EditorSearchResults;
   /** Told the search as the author types it, for the host's own results. */
   onSearchChange?: (query: string) => void;
+  /**
+   * A component's title by id, so a placed component is found and named by
+   * what the author placed, as Layers names it.
+   */
+  componentTitle?: ComponentTitleOf;
   /** Controls the palette, for a host that also opens it from a button. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -95,6 +105,7 @@ export function EditorCommandPalette({
   revealBlock,
   results,
   onSearchChange,
+  componentTitle,
   open,
   onOpenChange,
 }: EditorCommandPaletteProps): React.JSX.Element {
@@ -150,7 +161,13 @@ export function EditorCommandPalette({
   });
   const found = [
     ...(insert === undefined ? [] : addCommands(offers, editor, query)),
-    ...pageCommands(editor, query, revealBlock, iconsOf(offers.catalog)),
+    ...pageCommands(
+      editor,
+      query,
+      revealBlock,
+      iconsOf(offers.catalog),
+      componentTitle
+    ),
     ...(results?.commands ?? []),
     ...commands,
   ];
@@ -231,31 +248,41 @@ function pageCommands(
   editor: Pick<EditorState, "document" | "select">,
   query: string,
   revealBlock: ((id: string) => void) | undefined,
-  icons: ReadonlyMap<string, string | undefined>
+  icons: ReadonlyMap<string, string | undefined>,
+  componentTitle: ComponentTitleOf | undefined
 ): BuilderCommand[] {
   if (query === "") return [];
-  return blocksOnPage(editor.document).map(({ layer, parent }) => {
-    const kind = blockLabel(layer.type);
-    return {
-      id: `block:${layer.id}`,
-      label: layer.label,
-      // The same mark the Add panel draws for this kind of block.
-      icon: <BlockIconMark icon={icons.get(layer.type)} size={16} />,
-      // Found by what it is as well as by its name: "heading" finds them all.
-      keywords: [kind],
-      group: PAGE_GROUP,
-      // The kind only where the name doesn't already say it.
-      detail: [
-        ...(layer.label === kind ? [] : [kind]),
-        ...(parent === undefined ? [] : [`in ${parent.label}`]),
-      ].join(" · "),
-      verb: "Select",
-      run: () => {
-        editor.select(layer.id);
-        revealBlock?.(layer.id);
-      },
-    };
-  });
+  return blocksOnPage(editor.document, componentTitle).map(
+    ({ layer, parent }) => {
+      // A placement is a component, in the word and the mark Layers uses, rather
+      // than the engine's name for its node type.
+      const kind = layer.component ? UNNAMED_COMPONENT : blockLabel(layer.type);
+      return {
+        id: `block:${layer.id}`,
+        label: layer.label,
+        // The same mark the Add panel draws for this kind of block.
+        icon: (
+          <BlockIconMark
+            icon={layer.component ? "component" : icons.get(layer.type)}
+            size={16}
+          />
+        ),
+        // Found by what it is as well as by its name: "heading" finds them all.
+        keywords: [kind],
+        group: PAGE_GROUP,
+        // The kind only where the name doesn't already say it.
+        detail: [
+          ...(layer.label === kind ? [] : [kind]),
+          ...(parent === undefined ? [] : [`in ${parent.label}`]),
+        ].join(" · "),
+        verb: "Select",
+        run: () => {
+          editor.select(layer.id);
+          revealBlock?.(layer.id);
+        },
+      };
+    }
+  );
 }
 
 /**
@@ -294,7 +321,8 @@ function iconsOf(
 
 /** Every block on the page, in document order, with the block it sits in. */
 function blocksOnPage(
-  document: BlockDocument
+  document: BlockDocument,
+  componentTitle: ComponentTitleOf | undefined
 ): { layer: LayerNode; parent?: LayerNode }[] {
   const out: { layer: LayerNode; parent?: LayerNode }[] = [];
   // Bounded by the document's size: each node is visited once.
@@ -304,6 +332,6 @@ function blocksOnPage(
       walk(layer.children, layer);
     }
   };
-  walk(layersOf(document));
+  walk(layersOf(document, componentTitle));
   return out;
 }

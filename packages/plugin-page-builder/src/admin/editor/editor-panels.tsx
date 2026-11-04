@@ -12,13 +12,16 @@ import {
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
 import {
+  browserStore,
   DEFAULT_PREFERENCES,
   type LeftPanel,
+  type PreferenceStore,
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
-  ClassManagerPanel,
+  CHECKLIST_STORAGE_KEY,
+  ComponentsPanel,
   InsertPanel,
   LayersPanel,
   useBuilderChecklist,
@@ -54,26 +57,57 @@ import {
   withoutSelfPatterns,
   type ComponentGraph,
 } from "./offered-library";
+import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
 import {
   FontsPanelWithUpload,
   offerableFaces,
   offerableTokens,
   renderedTokens,
+  SharedStylesStudio,
   TokensStudio,
+  VariablesTab,
 } from "./site-style-studios";
+import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
+/** A key for the document the editor has open, from its identity. */
+function identityKey(
+  identity: ReturnType<typeof useDocumentIdentity>
+): string | undefined {
+  if (identity === null) return undefined;
+  return identity.kind === "collection"
+    ? `collection:${identity.slug}:${identity.documentId ?? "new"}`
+    : `${identity.kind}:${identity.slug}`;
+}
+
 /**
- * Every left panel the editor can fill today: Add, Layers, and Design with
- * the site's variables, classes and fonts. Pages and Components are not built.
+ * Where the getting-started card's dismissal is kept: under the author's own
+ * key, so dismissing it is one author's choice in a browser two people share.
+ * With no author known, the card's own browser-wide default.
+ */
+function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : browserStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
+}
+
+/**
+ * Every left panel the editor can fill today: Add, Layers, Pages, the site's
+ * Components, and Design with the site's variables, shared styles and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
  * would reserve space and shrink the canvas to show it, which is why this
  * grows one entry at a time rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["add", "layers", "design"] as const;
+const AVAILABLE_PANELS = [
+  "add",
+  "layers",
+  "pages",
+  "components",
+  "design",
+] as const;
 
 /**
  * The insert panel, with this site's saved patterns.
@@ -371,9 +405,19 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
+  const checklistStore = useMemo(
+    () => checklistStoreFor(mount.userId),
+    [mount.userId]
+  );
+  const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
-    enabled: clientConfig?.checklist !== false,
+    documentKey: identityKey(identity),
+    // Not until the author is known: their own dismissal is the one to read,
+    // and a card drawn before it arrives would flash for an author who
+    // dismissed it.
+    enabled: clientConfig?.checklist !== false && checklistStore !== undefined,
+    ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
   const library = useOfferedLibrary(mount);
@@ -381,9 +425,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
+  // The Pages panel, and the request its rows send to open Settings.
+  const pages = usePagesPanel(mount.initialDocument.kind === "page");
   return {
     entryFields,
     search: { open: searchOpen, setOpen: setSearchOpen },
+    pages,
     checklist,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
@@ -414,6 +461,7 @@ export type EditorPanels = OfferedLibrary &
     layersRegions: readonly LayersRegionRow[];
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
+    pages: PagesPanelMount;
   };
 
 /**
@@ -425,6 +473,9 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  componentLibrary,
+  componentVerbs,
+  componentView,
   layersRegions,
   drag,
   offered,
@@ -436,13 +487,29 @@ export function editorPanelRenderer({
   storedSiteStyle,
   unreadableStoredFonts,
   classes,
-  documentClasses,
+  pageClassBlocks,
   classSummaryContext,
   requestPanel,
   insertInside,
-}: Pick<EditorMount, "editor"> & {
+  pages,
+  canvasRender,
+  editedBreakpoint,
+  canvasElement,
+  layerVerbs,
+  documentDirty,
+}: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
+  documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
+  /**
+   * The block verbs the verbs provider shares, for the Layers row menu: drawn
+   * in the shell's panel region, outside the provider, so they are handed
+   * across as the inspector's card menu has them.
+   */
+  layerVerbs?: React.ComponentProps<typeof LayersPanel>["verbs"];
+  /** "Edit component", which the Components panel offers on each row. */
+  componentView: Pick<ComponentView, "onEditComponent">;
 } & Pick<
     SiteStyleInputs,
     | "canvasSiteStyle"
@@ -453,10 +520,18 @@ export function editorPanelRenderer({
     | "unreadableStoredFonts"
     | "classes"
   > &
-  Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
+  Pick<
+    CanvasInputs,
+    | "drag"
+    | "pageClassBlocks"
+    | "classSummaryContext"
+    | "canvasRender"
+    | "editedBreakpoint"
+    | "canvasElement"
+  > &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "insertInside"
+    "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -481,6 +556,38 @@ export function editorPanelRenderer({
         />
       ),
       /*
+              The site's components, from the SAME offered read Add's
+              "Your components" group and the editor's search are handed, so
+              a component this author may not read is offered nowhere, and
+              placed through Add's own path, so the two panels cannot place
+              differently. The rows the read holds and the panel does not
+              offer are the ones this document cannot contain: the
+              component being edited, and those that place it.
+            */
+      components: () => (
+        <ComponentsPanel
+          editor={editor}
+          components={offered.components}
+          componentDefinitions={offered.definitions}
+          loading={offered.state === "pending"}
+          library={{
+            components: tierStateOf(offered),
+            retry: offered.retry,
+          }}
+          withheld={
+            componentLibrary.components.length - offered.components.length
+          }
+          beginInsertDrag={drag.beginInsertDrag}
+          {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // From the panel there is no placement, so Back returns to the
+          // editor as the author left it.
+          {...(componentView.onEditComponent === undefined
+            ? {}
+            : { onEditComponent: componentView.onEditComponent })}
+          mayCreate={componentVerbs.mayCreate}
+        />
+      ),
+      /*
               The panel cannot work this out for itself. It is drawn here, in
               the shell's panel region, while `BlockKeyboardActions` below wraps
               the shell's CHILDREN — sibling subtrees, so nothing the panel can
@@ -496,49 +603,66 @@ export function editorPanelRenderer({
           moveHints
           definitions={offered.definitions}
           regions={layersRegions}
+          // Its titles come with the read, so a placement of a component
+          // the panel does not offer (the one being edited) is still named.
+          componentTitle={offered.titleOf}
+          // The device the eye hides on: the one being edited, against the
+          // breakpoints the canvas is compiled with. Withheld until the
+          // site's stored breakpoints have been read: until then the set in
+          // hand is the config's defaults, and a hide written against it
+          // could resolve differently against the site's own.
+          {...(siteStylePending || siteStyleError !== null
+            ? {}
+            : {
+                device: {
+                  breakpoints: canvasRender.styleContext.breakpoints,
+                  id: editedBreakpoint,
+                },
+              })}
+          // Inside the shell's shortcut provider, so the row keys register
+          // with it and Help lists them.
+          shortcuts
+          // A row chosen there scrolls its block into view here.
+          canvasRoot={canvasElement}
+          {...(layerVerbs === undefined ? {} : { verbs: layerVerbs })}
         />
       ),
+      // Read when the panel is drawn, as every other entry reads its inputs,
+      // so drawing another panel never needs the Pages panel's mount.
+      pages: () => pages.renderPagesPanel({ unsavedWork: documentDirty }),
       design: () => (
         <DesignPanel
           view={view}
+          // The studio surrounds every tab, so the header it draws stays the
+          // same whichever is open.
+          frame={designTabs => (
+            <TokensStudio
+              merged={offerableTokens(
+                canvasSiteStyle,
+                siteStylePending,
+                siteStyleError
+              )}
+              supplied={configSiteStyle?.tokens}
+              pending={siteStylePending}
+            >
+              {designTabs}
+            </TokensStudio>
+          )}
           tabs={{
-            variables: () => (
-              <TokensStudio
-                merged={offerableTokens(
+            variables: () => <VariablesTab />,
+            classes: () => (
+              <SharedStylesStudio
+                classes={classes}
+                pageBlocks={pageClassBlocks}
+                styleContext={classSummaryContext}
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+                // The same variables the Fonts tab reads, as the canvas draws.
+                tokens={renderedTokens(
                   canvasSiteStyle,
                   siteStylePending,
                   siteStyleError
-                )}
-                supplied={configSiteStyle?.tokens}
-                pending={siteStylePending}
-              />
-            ),
-            classes: () => (
-              <ClassManagerPanel
-                absence={classes.absence}
-                pendingSlugs={classes.pendingSlugs}
-                documentClassIds={documentClasses.ids}
-                /*
-                      Whether that walk reached the whole document. It stops at the
-                      node ceiling, and a class applied past it is missing from the
-                      list — which the panel must not read as "not on this page".
-                    */
-                documentScan={documentClasses.complete ? "complete" : "partial"}
-                library={classes.library}
-                styleContext={classSummaryContext}
-                onRename={classes.rename}
-                currentRenameAttempt={classes.currentRenameAttempt}
-                /*
-                      No `usage`, and no `onDelete`. The usage index is a
-                      collection and this surface has no read for one, so the panel
-                      reports that nothing was read rather than reporting an empty
-                      index — which would say every class is unused. Deleting needs
-                      that same reach plus a write stripping the class from every
-                      document holding it, so it is withheld entirely rather than
-                      offered as a control that cannot keep its promise.
-                    */
-                suppliedClassIds={configSiteStyle?.classes?.map(
-                  entry => entry.id
                 )}
               />
             ),
@@ -549,6 +673,7 @@ export function editorPanelRenderer({
                   siteStylePending,
                   siteStyleError
                 )}
+                codeFaces={configSiteStyle?.fonts}
                 tokens={renderedTokens(
                   canvasSiteStyle,
                   siteStylePending,

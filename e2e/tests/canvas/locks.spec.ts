@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
+import { CANVAS_FRAME, canvasLayer } from "../support/canvas-frame";
 import { includingHidden, test } from "../support/test";
 
 import {
@@ -47,6 +48,21 @@ async function undoDepth(page: Page): Promise<number> {
 
 async function open(page: Page, seed?: "broken"): Promise<void> {
   await page.goto(seed === undefined ? ROUTE : `${ROUTE}?seed=${seed}`);
+  // The canvas's frame first, one of it, and on screen: the route streams the harness, and until the
+  // stream is swapped in its first copy waits in a hidden container, so a
+  // frame counted then is not the one the page keeps.
+  await expect
+    .poll(
+      () =>
+        page
+          .locator(CANVAS_FRAME)
+          .evaluateAll(
+            frames =>
+              frames.length === 1 && (frames[0] as HTMLElement).offsetWidth > 0
+          ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
   // On screen before anything is aimed at it, as the editor suite waits.
   await expect(await block(page, "lk-free-text")).toBeVisible({
     timeout: 30_000,
@@ -114,10 +130,24 @@ test.describe("the editor inside locked areas", () => {
       steps: 20,
     });
 
-    // Refused while the pointer is still over it, in the lock's words.
-    await expect(page.locator(".nx-drop-refusal")).toContainText(
-      "This area of Fixed row is locked."
-    );
+    // Refused while the pointer is still over it, in the lock's words, drawn
+    // over the frame in the editor's document.
+    const notice = canvasLayer(page).locator(".nx-drop-refusal");
+    await expect(notice).toContainText("This area of Fixed row is locked.");
+    // The neutral notice Layers draws too: the editor's surface with a red
+    // edge and a warning mark, not a red fill.
+    const look = await notice.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        fill: style.backgroundColor,
+        edge: style.borderLeftColor,
+        edgeWidth: style.borderLeftWidth,
+        mark: element.querySelector("svg") !== null,
+      };
+    });
+    expect(look.edgeWidth).toBe("3px");
+    expect(look.mark).toBe(true);
+    expect(look.fill).not.toBe(look.edge);
     await page.mouse.up();
     expect(await tree(page)).toEqual(PLACED);
     expect(await undoDepth(page)).toBe(0);

@@ -362,6 +362,16 @@ function tiersFrom(
   );
 }
 
+/**
+ * Labels shorter than the property's name, where the name is cut short in
+ * the Style tab's 7rem label column: "Justify content" read "Justify cont…".
+ * Webflow's and Figma's words for the same two controls.
+ */
+const SHORT_LABELS: Readonly<Record<string, string>> = {
+  justifyContent: "Justify",
+  alignItems: "Align",
+};
+
 /** One property's controls and the value they are showing. */
 function inspectProperty(
   property: string,
@@ -393,10 +403,15 @@ function inspectProperty(
     // told only the path would answer for whichever asked first.
     variantAt: path => options.variantAt?.(property, path),
   });
+  const short = SHORT_LABELS[property];
   return {
     property,
-    label: fieldLabel(property),
-    summary: entry.summary,
+    label: short ?? fieldLabel(property),
+    // A shortened label keeps the property's CSS name in its tooltip.
+    summary:
+      short === undefined
+        ? entry.summary
+        : `${fieldLabel(property)}: ${entry.summary}`,
     controls: set.controls,
     variants: set.variants,
     value,

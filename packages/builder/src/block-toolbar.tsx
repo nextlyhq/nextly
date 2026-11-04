@@ -59,7 +59,7 @@ import {
   LayoutTemplate,
   Lock,
   RefreshCw,
-  Replace,
+  SquarePen,
   Trash2,
   Unlink,
   type LucideIcon,
@@ -68,10 +68,11 @@ import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
-import { canvasContentRect } from "./geometry-dom";
+import { canvasContentRect, overlaySpaceOf } from "./geometry-dom";
 import { useBlockActionsContext } from "./keyboard-actions";
 import { layerLabel } from "./layers";
 import { lockBlockingEdit } from "./locking";
@@ -92,8 +93,10 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
-  "save-as-component": Component,
-  "convert-to-component": Replace,
+  // A pen on a square, the editing glyph: the component opens to be edited.
+  "edit-component": SquarePen,
+  // The component mark: the selection becomes one.
+  "turn-into-component": Component,
   "detach-component": Unlink,
   "duplicate-component": CopyPlus,
   "update-pattern": RefreshCw,
@@ -191,13 +194,18 @@ export function BlockToolbar({
       setPlacement(null);
       return;
     }
-    const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
-    // By node kind, not `instanceof HTMLElement`: a root rendered into an
-    // iframe is built by that window, and the bar would never be placed.
-    if (!isHTMLElement(root)) {
+    /*
+     * The canvas the bar is drawn over, and the space it is drawn in: inside
+     * the root when the canvas shares the editor's document, or in the layer
+     * over the canvas's frame, where the root's coordinates are scaled to the
+     * frame's zoom and the bar keeps its own size.
+     */
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) {
       setPlacement(null);
       return;
     }
+    const { root } = space;
     /*
      * Anchored to the UNION of everything selected, not to the primary.
      *
@@ -208,7 +216,9 @@ export function BlockToolbar({
     const rects: Rect[] = [];
     for (const id of selectedIds) {
       const element = nodeElement(root, id);
-      if (element !== null) rects.push(canvasContentRect(element, root));
+      if (element !== null) {
+        rects.push(space.place(canvasContentRect(element, root)));
+      }
     }
     const block = unionRect(rects);
     if (block === undefined) {
@@ -220,24 +230,31 @@ export function BlockToolbar({
     // second way of reading a rectangle is exactly what `geometry-dom` exists
     // to prevent, and a bar measured one way against a block measured another
     // is a disagreement that only shows up at a scroll offset.
-    const size = canvasContentRect(element, root);
+    const size = space.sizeOf(element);
     setPlacement(
       toolbarPlacement(
         block,
-        { width: size.width, height: size.height },
+        size,
         // The root's own box rather than its scroll extent. `scrollWidth` and
         // `scrollHeight` are the CONTENT's size, so a long page would report a
         // height of several thousand and the clamp would let the bar sit far
         // outside what the author can see.
-        canvasContentRect(root, root)
+        space.place(canvasContentRect(root, root))
       )
     );
   }, [selectedId, selectedIds]);
 
+  /*
+   * The frame's reading as well — its scale, page and viewport: a zoom moves
+   * every block on screen while nothing inside the frame changes size, and a
+   * page that has just loaded into the frame is a root the bar has not
+   * measured against.
+   */
+  const canvasFrame = useCanvasFrame();
   React.useLayoutEffect(() => {
     if (hidden) return;
     measure();
-  }, [measure, hidden, document, actions]);
+  }, [measure, hidden, document, actions, canvasFrame]);
 
   /*
    * Re-measure when the block changes size for a reason no render reports — an
@@ -249,8 +266,11 @@ export function BlockToolbar({
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
     const element = bar.current;
-    const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!isHTMLElement(root)) return;
+    const root =
+      element === null
+        ? null
+        : (overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root ?? null);
+    if (root === null) return;
     // Absent in jsdom unless a test supplies one, and absent in older browsers.
     // A missing observer costs a re-measure, not correctness — every render
     // path above still measures. Built from the canvas root's window, the
@@ -274,7 +294,7 @@ export function BlockToolbar({
     }
     observer.observe(root);
     return () => observer.disconnect();
-  }, [measure, hidden, selectedId, selectedIds, document]);
+  }, [measure, hidden, selectedId, selectedIds, document, canvasFrame]);
 
   const focusAt = React.useCallback((index: number) => {
     setActiveIndex(index);
@@ -469,7 +489,9 @@ function MoreMenu({
   run: (action: ToolbarAction) => void;
 }): React.JSX.Element {
   return (
-    <DropdownMenu>
+    // Not modal, as the block's other menus: a modal menu marks the editor
+    // around it aria-hidden while its controls stay focusable.
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"

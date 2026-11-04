@@ -31,7 +31,9 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 /** The unknown-block placeholder's marker, from `@nextlyhq/blocks-react`. */
@@ -67,11 +69,7 @@ async function storedNodes(
   request: APIRequestContext,
   id: string
 ): Promise<Record<string, unknown>[]> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: Record<string, unknown>[] } }[];
-  };
-  return body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  return await storedPageNodes(request, ENTRIES, id);
 }
 
 /** Open the page builder on a page's `content` field. */
@@ -117,7 +115,7 @@ async function saveDraft(page: Page): Promise<void> {
 
 /** One drawn fixture block on the canvas. */
 function fixture(page: Page, kind: "plain" | "custom" | "teaser") {
-  return page.locator(`.nx-canvas [data-fixture="${kind}"]`);
+  return canvasFrame(page).locator(`.nx-canvas [data-fixture="${kind}"]`);
 }
 
 test.describe("blocks a plugin contributes", () => {
@@ -189,7 +187,7 @@ test.describe("blocks a plugin contributes", () => {
     // Colour sits in Typography, its first and only section here.
     const color = page
       .getByRole("region", { name: /^Typography/ })
-      .getByRole("textbox", { name: "Color", exact: true });
+      .getByRole("textbox", { name: "Colour", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");
 

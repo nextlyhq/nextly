@@ -10,6 +10,8 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { pressSave, selection } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { canvasBlock } from "./support/canvas-frame";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
@@ -61,12 +63,8 @@ async function storedTypes(
   request: APIRequestContext,
   id: string
 ): Promise<string[]> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: { type: string }[] } }[];
-  };
-  const nodes = body.items.find(item => item.id === id)?.content?.nodes ?? [];
-  return nodes.map(node => node.type);
+  const nodes = await storedPageNodes(request, ENTRIES, id);
+  return nodes.map(node => String(node.type));
 }
 
 async function openBuilder(page: Page, id: string): Promise<void> {
@@ -111,7 +109,7 @@ test.describe("the editor's search", () => {
   }) => {
     const id = await createPage(page.request, `Search add ${Date.now()}`);
     await openBuilder(page, id);
-    await page.locator(`.nx-canvas [data-nx-node="${HEADING}"]`).click();
+    await canvasBlock(page, HEADING).click();
 
     await search(page, "divider");
     const row = group(page, "Add").getByRole("option").first();
@@ -180,7 +178,7 @@ test.describe("the editor's search", () => {
   test("runs a command, and opens on the shortcut too", async ({ page }) => {
     const id = await createPage(page.request, `Search command ${Date.now()}`);
     await openBuilder(page, id);
-    await page.locator(`.nx-canvas [data-nx-node="${HEADING}"]`).click();
+    await canvasBlock(page, HEADING).click();
 
     // Control, not ControlOrMeta: the editor reads `mod` from the platform the
     // browser reports, and this suite's device reports Windows on every host.

@@ -156,6 +156,40 @@ function mount(
 }
 
 describe("BlockToolbar", () => {
+  it("leaves the editor around its menu in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register();
+    const editor = editorSpy(pair(), "a");
+    // A host offering the component verbs, which are what "More" holds.
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          components={{
+            mayCreate: true,
+            onTurnIntoComponent: () => {},
+          }}
+        >
+          <Canvas
+            document={editor.document}
+            siteStyles={{ css: "", classes: {} } as never}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+            overlay={<BlockToolbar editor={editor} />}
+          />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), {
+      key: "Enter",
+    });
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("draws nothing with no selection", () => {
     register();
     mount(editorSpy(pair(), null));

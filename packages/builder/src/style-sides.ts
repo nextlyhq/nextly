@@ -157,3 +157,69 @@ export function sideOf(
   const side = control.path[0];
   return side === undefined ? undefined : (side as LogicalSide);
 }
+
+/**
+ * A side's plain name, "top" or "left", for an element whose axes make it one.
+ *
+ * Only for a horizontal writing mode, where the block axis runs top to bottom
+ * and the inline axis follows the direction, so a right-to-left element's
+ * inline start is its right. In a vertical mode the physical edge depends on
+ * more than this pair reads, so there is no plain name, and the caller keeps
+ * the logical one.
+ *
+ * @param side - the logical side
+ * @param axes - the edited element's writing mode and direction
+ * @returns "top", "right", "bottom" or "left", or `undefined`
+ */
+export function physicalSideName(
+  side: LogicalSide,
+  axes: SideOrientation
+): "top" | "right" | "bottom" | "left" | undefined {
+  if (axes.writingMode !== "horizontal-tb") return undefined;
+  const rtl = axes.direction === "rtl";
+  switch (side) {
+    case "blockStart":
+      return "top";
+    case "blockEnd":
+      return "bottom";
+    case "inlineStart":
+      return rtl ? "right" : "left";
+    case "inlineEnd":
+      return rtl ? "left" : "right";
+    default:
+      return undefined;
+  }
+}
+
+/** Whether a key names one of the four logical sides. */
+export function isLogicalSide(key: string): key is LogicalSide {
+  return (LOGICAL_SIDES as readonly string[]).includes(key);
+}
+
+/**
+ * A corner's plain name, "top left" or "bottom right", for an element whose
+ * axes make it one: the block side, then the inline side, each named as
+ * {@link physicalSideName} names it.
+ *
+ * @param corner - the logical corner, block side first (`startEnd`)
+ * @param axes - the edited element's writing mode and direction
+ * @returns the corner in plain words, or `undefined` in a vertical mode
+ */
+export function physicalCornerName(
+  corner: string,
+  axes: SideOrientation
+): string | undefined {
+  const match = /^(start|end)(Start|End)$/.exec(corner);
+  if (match === null) return undefined;
+  const block = physicalSideName(
+    match[1] === "start" ? "blockStart" : "blockEnd",
+    axes
+  );
+  const inline = physicalSideName(
+    match[2] === "Start" ? "inlineStart" : "inlineEnd",
+    axes
+  );
+  return block === undefined || inline === undefined
+    ? undefined
+    : `${block} ${inline}`;
+}

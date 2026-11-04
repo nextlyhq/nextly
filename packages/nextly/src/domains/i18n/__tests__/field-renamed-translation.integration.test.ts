@@ -1163,10 +1163,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
   const RENAMED_SHARED_PATHS = [
     {
       path: "the builder saves the collection",
-      // Saved through the schema service's own ALTER, which on SQLite renders no column
-      // modification (`generateAlterTableMigration`), so the NOT NULL a Required setting adds
-      // once the values are shared is not applied there.
-      sqliteSkipsColumnModification: true,
+      // Saved through the schema pipeline's push, as the dialog applies it, which rebuilds a
+      // SQLite table to apply the NOT NULL a Required setting adds once the values are shared.
+      sqliteSkipsColumnModification: false,
       table: "dc_posts",
       seed: seedCollection,
       change: async (fields: unknown[]) => {
@@ -1999,5 +1998,59 @@ describeEachDialect("a translated field that is renamed", dialect => {
       en: "Hello",
       es: "Hola",
     });
+  });
+
+  it("keeps a shared field's values through its rename when the same save adds a translated field", async () => {
+    // The rename is the main table's: decided on the shared fields, as the
+    // migration file decides it, not on every field, where the added
+    // translated one makes it look like one removed and two added.
+    const id = await seedCollection();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "count", type: "number" },
+          { name: "subtitle", type: "text" },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await columnsOf("dc_posts")).not.toContain("views");
+    expect(Number(await mainValue("dc_posts", "count", id))).toBe(7);
+  });
+
+  it("turns translation off over entries with a Required translated field, keeping its value and its Required", async () => {
+    // The column reaches the main table from the companion, so it is added
+    // without NOT NULL, filled by the restore, and made Required after it.
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [{ name: "heading", type: "text", required: true }],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello" }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    const id = String((entry.data as { id: unknown }).id);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        localized: false,
+        fields: [{ name: "heading", type: "text", required: true }],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await mainValue("dc_posts", "heading", id)).toBe("Hello");
+    expect(await isNotNull("dc_posts", "heading")).toBe(true);
   });
 });

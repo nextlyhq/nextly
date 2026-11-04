@@ -218,6 +218,28 @@ export {
 export { DocumentSaveIndicator, DocumentPrimaryAction } from "@nextlyhq/admin";
 
 /**
+ * How a document view restores its own field from a recovery point
+ * (@experimental).
+ *
+ * Without it, the admin restores a recovery point by drawing the view afresh
+ * over the restored values, and the view's own history starts again, so the
+ * restore can't be undone. A view that registers `useDocumentRestore` is asked
+ * first: the admin resets every OTHER field to the recovery point and calls
+ * `restore` with this field's recovered value, unparsed, and the view applies
+ * it as one edit of its own, which the author can undo. Returning false
+ * declines (a value the view can't apply as an edit), and the admin restores
+ * the old way. One handler per view; it does nothing outside a document view.
+ *
+ * Experimental while the first view that uses it (the Page Builder) settles.
+ * Adding it changes no existing export; the intent is to keep the name and the
+ * handler's shape stable.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
+} from "@nextlyhq/admin";
+
+/**
  * The entry's remaining fields, drawn for a takeover surface (@experimental).
  *
  * A field whose type is registered as a TAKEOVER covers the whole form, so an
@@ -669,6 +691,21 @@ export type {
  * carry into anything that names a format.
  */
 export { useUploadMedia } from "@nextlyhq/admin";
+/**
+ * A media item by id, as a query a component renders from: a thumbnail, a
+ * preview. The admin's own read of one item, cached by id.
+ *
+ * @experimental
+ */
+export { useMediaItem } from "@nextlyhq/admin";
+/**
+ * Read a media item by id from code that draws a page, outside a component's
+ * render. The same query as `useMediaItem`, so the two share one cache and
+ * one read in flight.
+ *
+ * @experimental
+ */
+export { useMediaResolver } from "@nextlyhq/admin";
 
 /**
  * @experimental The media library as a dialog a plugin can open: browse,
@@ -757,6 +794,10 @@ export { usePluginRouteMutation } from "@nextlyhq/admin";
  * moment it awaits can. Same session handling and CSRF token as the hook; not
  * cached, and it invalidates nothing. Experimental while its first caller
  * settles; the intent is to keep its name and options stable.
+ *
+ * `keepalive: true` (optional, additive) sends the write so the browser
+ * finishes it after the page is hidden or closed, while its body fits the
+ * 64 KB browsers allow; a larger one goes as an ordinary request.
  */
 export { writePluginRoute } from "@nextlyhq/admin";
 /**
@@ -862,3 +903,13 @@ export type {
   PluginFieldTypeDocumentView,
   PluginMenuItem,
 } from "nextly";
+
+/**
+ * `WEB_FONT_FORMATS` — the web font formats the host accepts, serves and
+ * advertises: each one's type, file suffix, `format()` keyword and the four
+ * bytes it begins with. Published so a plugin that takes a font file reads
+ * the table the upload gate checks rather than restating it. Intended to be
+ * stable: the host's own table, which changes only with a release that says
+ * so.
+ */
+export { WEB_FONT_FORMATS } from "nextly/config";

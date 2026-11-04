@@ -39,6 +39,7 @@ import {
   relationship,
   text,
 } from "../../../config";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../plugins/test-nextly";
 import { createContext } from "../../program";
@@ -104,14 +105,18 @@ async function generate(
     errors.push(String(message));
   });
   let exited: string | undefined;
+  // As `--non-interactive` does: no rename is asked about.
+  setNonInteractive(true);
   try {
     await runMigrateCreate(
       name,
-      { name, config: configPath, cwd: dir, nonInteractive: true },
+      { name, config: configPath, cwd: dir },
       context
     );
   } catch (error) {
     exited = error instanceof Error ? error.message : String(error);
+  } finally {
+    setNonInteractive(false);
   }
   return { exited, errors };
 }

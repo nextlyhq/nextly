@@ -50,10 +50,18 @@ export interface CommandVerbs {
    * phrase; when there is a second host it can be designed against that.
    */
   readonly saveAsPattern: () => void;
-  /** Begin saving the selection as a component; the host owns the form. */
-  readonly saveAsComponent?: () => void;
-  /** Begin converting the selection into a component placement. */
-  readonly convertToComponent?: () => void;
+  /**
+   * Open the selected placement's component in its own view. Silent when the
+   * selection is not one placement or the host does not offer it, so it may
+   * be pressed without asking first. Optional, so a host built before it
+   * keeps compiling; absent, the verb does nothing.
+   */
+  readonly editComponent?: () => void;
+  /**
+   * Begin turning the selection into a component, replacing it with a
+   * placement or keeping it and saving a copy; the host owns the form.
+   */
+  readonly turnIntoComponent?: () => void;
   /** Begin detaching the selected placement from its component. */
   readonly detachComponent?: () => void;
   /** Begin duplicating the selected placement's component. */
@@ -120,13 +128,24 @@ const BLOCK_COMMAND_COPY: Record<
     // that before they can find it.
     keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
   },
-  "save-as-component": {
-    label: "Save as component",
-    keywords: ["save", "component", "library", "reuse", "symbol", "synced"],
+  "edit-component": {
+    label: "Edit component",
+    keywords: ["component", "edit", "open", "original", "definition"],
   },
-  "convert-to-component": {
-    label: "Convert to component",
-    keywords: ["convert", "component", "turn into", "symbol", "synced", "link"],
+  // One verb for both ways of making a component, so the palette finds it
+  // by the words of either.
+  "turn-into-component": {
+    label: "Turn into component…",
+    keywords: [
+      "turn into",
+      "convert",
+      "save",
+      "component",
+      "library",
+      "reuse",
+      "symbol",
+      "synced",
+    ],
   },
   "detach-component": {
     label: "Detach from component",
@@ -175,8 +194,8 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
-    "save-as-component": () => verbs.saveAsComponent?.(),
-    "convert-to-component": () => verbs.convertToComponent?.(),
+    "edit-component": () => verbs.editComponent?.(),
+    "turn-into-component": () => verbs.turnIntoComponent?.(),
     "detach-component": () => verbs.detachComponent?.(),
     "duplicate-component": () => verbs.duplicateComponent?.(),
     "update-pattern": () => verbs.updatePattern?.(),

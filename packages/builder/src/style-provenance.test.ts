@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   breakpointBadge,
+  breakpointSource,
+  inheritedProvenance,
   styleProvenance,
   type BreakpointBadge,
   type StyleProvenanceQuery,
@@ -42,6 +44,199 @@ function query(
     ...over,
   };
 }
+
+describe("the base tier's name", () => {
+  it("is Desktop, as the device switcher calls it, whatever the settings label it", () => {
+    // A value from it read "From Base" beside a switcher showing "Desktop",
+    // two names for one tier on one screen.
+    const set = {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+      ],
+      container: [],
+    } as unknown as BreakpointSet;
+    expect(breakpointSource("base", set)?.label).toBe("Desktop");
+    expect(breakpointSource("tablet", set)?.label).toBe("Tablet");
+  });
+});
+
+describe("a value an enclosing block passes down", () => {
+  /*
+   * CSS inheritance: an element with no colour of its own takes its parent's.
+   * The engine's ranking answers for rules that REACH an element, and a
+   * section's own colour reaches only the section, so the heading inside it
+   * read as unset while the canvas drew the section's colour on it.
+   */
+  function traceOf(
+    section: NodeStyles,
+    heading?: NodeStyles
+  ): readonly StyleTraceEntry[] {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "s1",
+          type: "core/section",
+          version: 1,
+          props: {},
+          styles: section,
+          slots: {
+            children: [
+              {
+                id: "h1",
+                type: "core/heading",
+                version: 1,
+                props: {},
+                ...(heading === undefined ? {} : { styles: heading }),
+              },
+            ],
+          },
+        },
+      ],
+    } as BlockDocument;
+    const compiled = compilePageCss(document, {
+      breakpoints: {
+        viewport: [{ id: "base", label: "Desktop" }],
+        container: [],
+      },
+      trace: true,
+    });
+    return compiled.trace ?? [];
+  }
+  const askHeading = (trace: readonly StyleTraceEntry[], cssProperty: string) =>
+    inheritedProvenance({
+      trace,
+      subject: {
+        nodeId: "h1",
+        blockType: "core/heading",
+        ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+      },
+      cssProperty,
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+
+  it("names the enclosing block an inheritable value comes from", () => {
+    const found = askHeading(
+      traceOf({ base: { base: { color: "#0000ff" } } }),
+      "color"
+    );
+    expect(found.kind).toBe("inherited");
+    if (found.kind !== "inherited") return;
+    expect(found.from).toEqual({ kind: "node", id: "s1" });
+    expect(found.entry.value).toBe("#0000ff");
+  });
+
+  it("passes down only what CSS passes down", () => {
+    // Padding is not inherited: a section's padding is not the heading's.
+    const found = askHeading(
+      traceOf({
+        base: {
+          base: {
+            padding: {
+              blockStart: "8px",
+              blockEnd: "8px",
+              inlineStart: "8px",
+              inlineEnd: "8px",
+            },
+          },
+        },
+      }),
+      "padding-block-start"
+    );
+    expect(found.kind).toBe("unset");
+  });
+
+  it("reads the enclosing block in the state the canvas forces on it too", () => {
+    // Hover and pressed are forced up the chain, so a hovered heading takes
+    // its section's hover colour; focus is not, so it takes the normal one.
+    const trace = traceOf({
+      base: { base: { color: "#0000ff" } },
+      hover: { base: { color: "#00ff00" } },
+      focus: { base: { color: "#ff00ff" } },
+    } as NodeStyles);
+    const inState = (state: "hover" | "focus") =>
+      inheritedProvenance({
+        trace,
+        subject: {
+          nodeId: "h1",
+          blockType: "core/heading",
+          ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+        },
+        cssProperty: "color",
+        state,
+        breakpoint: "base",
+        liveBreakpoints: ["base"],
+      });
+    const hovered = inState("hover");
+    const focused = inState("focus");
+    expect(hovered.kind === "inherited" && hovered.entry.value).toBe("#00ff00");
+    expect(focused.kind === "inherited" && focused.entry.value).toBe("#0000ff");
+  });
+
+  it("takes a page's value last, when no enclosing block sets one", () => {
+    // The page's colour reaches every block through inheritance, and a page
+    // declaration on the root lands on no block of its own.
+    const found = inheritedProvenance({
+      trace: [
+        {
+          origin: { kind: "page" },
+          property: "color",
+          value: "#123456",
+          state: "base",
+          breakpoint: "base",
+        } as StyleTraceEntry,
+      ],
+      subject: {
+        nodeId: "h1",
+        blockType: "core/heading",
+        ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+      },
+      cssProperty: "color",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(found.kind).toBe("inherited");
+    if (found.kind !== "inherited") return;
+    expect(found.from).toEqual({ kind: "page" });
+    expect(found.entry.value).toBe("#123456");
+  });
+
+  it("says a reset reveals a value passed down, not that it leaves the control unset", () => {
+    const query = {
+      trace: traceOf(
+        { base: { base: { color: "#0000ff" } } },
+        { base: { base: { color: "#ff0000" } } }
+      ),
+      subject: {
+        nodeId: "h1",
+        blockType: "core/heading",
+        ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+      },
+      cssProperty: "color",
+      state: "base" as const,
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    };
+    const badge = breakpointBadge(query, inheritedProvenance(query), undefined);
+    expect(badge).toEqual({ kind: "authored", passedDown: true });
+  });
+
+  it("keeps the element's own value over its parent's", () => {
+    const found = askHeading(
+      traceOf(
+        { base: { base: { color: "#0000ff" } } },
+        { base: { base: { color: "#ff0000" } } }
+      ),
+      "color"
+    );
+    expect(found.kind).toBe("authored");
+  });
+});
 
 describe("a property nothing wrote", () => {
   it("is unset, which is a real answer rather than a failure", () => {

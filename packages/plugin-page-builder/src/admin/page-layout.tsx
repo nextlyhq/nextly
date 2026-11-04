@@ -62,10 +62,12 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import {
   layoutPickerView,
+  layoutValue,
   storedFor,
   type EffectiveLayout,
   type LayoutChoicesState,
   type LayoutPickerView,
+  type PickerOption,
 } from "./layout-choice-view";
 
 /** The page's stored Layout reference, as the pages collection names it. */
@@ -280,7 +282,7 @@ function Picker<T extends FieldValues>({
   disabled: boolean;
 }): JSX.Element {
   // Registered only here, once the form is known to hold both fields.
-  const { field: layoutField } = useController({
+  const { field: layoutField, fieldState } = useController({
     control,
     name: LAYOUT_FIELD as Path<T>,
   });
@@ -292,6 +294,12 @@ function Picker<T extends FieldValues>({
   const view = layoutPickerView(stored, state);
   const id = useId();
   const whyId = `${id}-why`;
+  const errorId = `${id}-error`;
+  // A save the server refused for this field, such as a Layout being removed.
+  // The `layout` field is hidden from the form, so this picker is the only
+  // place the reason can be shown.
+  const refused = fieldState.error?.message;
+  const describedBy = describedByOf(whyId, errorId, refused);
 
   const choose = (value: string) => {
     const next = storedFor(value, stored);
@@ -309,7 +317,7 @@ function Picker<T extends FieldValues>({
       {capped ? (
         <SearchingPicker
           id={id}
-          whyId={whyId}
+          whyId={describedBy}
           view={view}
           stored={stored}
           disabled={disabled || view.readOnly}
@@ -327,7 +335,8 @@ function Picker<T extends FieldValues>({
             the value element takes no class of its own. */}
           <SelectTrigger
             id={id}
-            aria-describedby={whyId}
+            aria-describedby={describedBy}
+            aria-invalid={invalidOf(refused)}
             className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
           >
             <SelectValue
@@ -338,15 +347,76 @@ function Picker<T extends FieldValues>({
           </SelectTrigger>
           <SelectContent>
             {view.options.map(option => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
+              <SelectItem
+                key={option.value}
+                value={option.value}
+                disabled={option.disabled === true}
+                {...optionDescription(option)}
+              >
+                <OptionText option={option} />
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       )}
       <WhyLine id={whyId} view={view} state={state} retry={retry} />
+      <RefusedLine id={errorId} refused={refused} />
     </div>
+  );
+}
+
+/**
+ * An option's words: its label, and a short note muted after it when it
+ * has one (the default Layout's name, or why a Layout behind Remove Layout's
+ * fence is not offered).
+ */
+function OptionText({ option }: { option: PickerOption }): JSX.Element {
+  if (option.note === undefined) return <>{option.label}</>;
+  return (
+    <>
+      {option.label}
+      <span className="text-muted-foreground"> · {option.note}</span>
+    </>
+  );
+}
+
+/** An option's whole reason, as its tooltip and accessible description. */
+function optionDescription(option: PickerOption): {
+  title?: string;
+  "aria-description"?: string;
+} {
+  return option.description === undefined
+    ? {}
+    : { title: option.description, "aria-description": option.description };
+}
+
+/** The picker's description: why the Layout applies, and a refusal if any. */
+function describedByOf(
+  whyId: string,
+  errorId: string,
+  refused: string | undefined
+): string {
+  return refused === undefined ? whyId : `${whyId} ${errorId}`;
+}
+
+/** `aria-invalid` while a refusal stands. */
+function invalidOf(refused: string | undefined): true | undefined {
+  return refused === undefined ? undefined : true;
+}
+
+/** The server's reason a save was refused for this field, under the picker. */
+function RefusedLine({
+  id,
+  refused,
+}: {
+  id: string;
+  refused: string | undefined;
+}): JSX.Element | null {
+  if (refused === undefined) return null;
+  return (
+    <p id={id} role="alert" className="text-xs text-destructive">
+      {refused}
+    </p>
   );
 }
 
@@ -389,9 +459,30 @@ function useLayoutSearch(
   const options = !searching
     ? view.options
     : found.kind === "ready" && answered
-      ? layoutPickerView(stored, found).options
+      ? matchingOptions(stored, found)
       : [];
   return { typed, setTyped, searching, answered, failed, options, retry };
+}
+
+/**
+ * The options a search found: exactly the rows the server says matched.
+ *
+ * The answer also carries rows the route adds whatever the query (the page's
+ * own Layout and the default), and the view adds the default and "No header
+ * or footer" to every list; none of those matched, so none is a result, and
+ * "No Layouts match" can say so. Which rows matched is the server's answer
+ * alone: the database compares by its own collation ("cafe" finds "Café" on
+ * one dialect), which no comparison here could repeat. The current choice
+ * stays in the trigger.
+ */
+function matchingOptions(
+  stored: { layout: unknown; noHeaderFooter: boolean },
+  found: Extract<LayoutChoicesState, { kind: "ready" }>
+): PickerOption[] {
+  const matched = new Set(found.choices.meta.matched.map(layoutValue));
+  return layoutPickerView(stored, found).options.filter(option =>
+    matched.has(option.value)
+  );
 }
 
 /** What the list says when it shows no Layouts: why, and what to do. */
@@ -459,7 +550,11 @@ function SearchingPicker({
           className="w-full justify-between font-normal"
         >
           <span className="min-w-0 truncate text-left">
-            {current?.label ?? "Choose a Layout"}
+            {current === undefined ? (
+              "Choose a Layout"
+            ) : (
+              <OptionText option={current} />
+            )}
           </span>
           <ChevronDown aria-hidden="true" className="h-4 w-4 opacity-50" />
         </Button>
@@ -494,13 +589,15 @@ function SearchingPicker({
                 <CommandItem
                   key={option.value}
                   value={option.value}
+                  disabled={option.disabled === true}
+                  {...optionDescription(option)}
                   onSelect={() => {
                     onChoose(option.value);
                     setOpen(false);
                   }}
                 >
                   <span className="min-w-0 flex-1 truncate">
-                    {option.label}
+                    <OptionText option={option} />
                   </span>
                   {option.value === view.value ? (
                     <Check aria-hidden="true" className="h-4 w-4" />

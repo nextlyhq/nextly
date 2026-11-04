@@ -61,7 +61,21 @@ let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
 /** Every plugin route a render actually asked for, in order. */
 const fetched: string[] = [];
 
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({ ...siteStyleRead, refetch: refetchStoredStyle }),
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
   // Present because the mock REPLACES the module wholesale: an export the
   // subject imports and this omits is a missing-export error rather than an
   // unused stub.
@@ -121,7 +135,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
-  useSingleDocument: () => siteStyleRead,
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,

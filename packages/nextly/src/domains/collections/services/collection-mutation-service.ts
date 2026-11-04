@@ -1444,6 +1444,28 @@ function changesFieldFilterNames(
   return false;
 }
 
+/**
+ * A working draft as an after-hook compares against it: marked as the draft it
+ * is diffed with is, so a repeat draft save does not report the marker as
+ * changing. A copy, since the stored snapshot (the activity record's
+ * `previous`) carries no marker, as the new draft's does not.
+ */
+function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
+  return { ...draft, _isWorkingDraft: true };
+}
+
+/**
+ * The update's patch without the stamp the write adds to it: `updatedAt` is
+ * set by the write, never sent, so a validator is not shown it as sent.
+ */
+function sentFields(
+  updatePayload: Record<string, unknown>
+): Record<string, unknown> {
+  const sent = { ...updatePayload };
+  delete sent.updatedAt;
+  return sent;
+}
+
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -2490,6 +2512,39 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A write's top-level payload as its caller sent it, for the validators of
+   * a field inside a field-group instance, which `PluginFieldValidateArgs.data`
+   * promises the write: the processed data with what the write lifted out of
+   * it put back, its relations and field groups (`lifted`) and, for a
+   * translation, the language's values and status, which the language split
+   * moves to the companion row.
+   */
+  private writtenPayload(
+    finalData: Record<string, unknown>,
+    lifted: ReadonlyArray<Record<string, unknown>>,
+    localized:
+      | {
+          localizedFieldValues: Record<string, unknown>;
+          companionData: Record<string, unknown>;
+        }
+      | null
+      | undefined
+  ): Record<string, unknown> {
+    const status = localized?.companionData._status;
+    // A copy of its own: the field-group save prepares its instances in place
+    // (defaults, hashing), and a validator must see each as it was sent. Its
+    // containers are copied, so a value that cannot be cloned stays itself.
+    return detachData(
+      Object.assign(
+        { ...finalData },
+        localized?.localizedFieldValues,
+        typeof status === "string" ? { status } : {},
+        ...lifted
+      )
+    );
+  }
+
+  /**
    * The entry write a validation is for, reading on the connection this write
    * uses: `tx` inside a transaction, the pool before one opens.
    *
@@ -2502,10 +2557,13 @@ export class CollectionMutationService extends BaseService {
     slug: string,
     id: string | undefined,
     tx?: TransactionContext,
-    locale?: string
+    locale?: string,
+    // The write's top-level payload, for a field-group instance's validators,
+    // which are otherwise handed the instance; see `EntryWriteContext.payload`.
+    payload?: Record<string, unknown>
   ): EntryWriteContext {
     const defaultLocale = this.localization?.defaultLocale ?? null;
-    return entryWriteContext({
+    const write = entryWriteContext({
       kind: "collection",
       slug,
       ...(id === undefined ? {} : { id }),
@@ -2515,6 +2573,7 @@ export class CollectionMutationService extends BaseService {
           ? { db: this.adapter, executor: undefined, defaultLocale }
           : { db: tx, executor: tx.getDrizzle(), defaultLocale },
     });
+    return payload === undefined ? write : { ...write, payload };
   }
 
   /**
@@ -3299,6 +3358,11 @@ export class CollectionMutationService extends BaseService {
       user?: UserContext;
       /** Who the write is made as, for each instance's own field rules. */
       access: FieldGroupWriteAccess;
+      /**
+       * The host write's context, so a field inside an instance that reads the
+       * library (a blocks field's composition) judges it on this write.
+       */
+      write: EntryWriteContext;
     }
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
@@ -3314,6 +3378,7 @@ export class CollectionMutationService extends BaseService {
         req: args.user ? { user: args.user } : {},
         // Who the write is made as, for each instance's own field rules.
         access: args.access,
+        write: args.write,
       });
     } catch (error: unknown) {
       throw markWriteIntegrityFailure(error);
@@ -6902,6 +6967,20 @@ export class CollectionMutationService extends BaseService {
             // Who the write is made as, for each instance's own field rules: the
             // caller and trust the entry's own fields are judged with.
             access: this.fieldGroupAccess(params),
+            // The entry's write, so a field inside an instance that reads the
+            // library judges it on this transaction as the entry's own fields.
+            write: this.validationWrite(
+              params.collectionName,
+              entry.id as string,
+              tx,
+              params.locale,
+              // The payload as sent, with what the write lifted out of it put back.
+              this.writtenPayload(
+                finalData,
+                [manyToManyData, componentFieldData],
+                localizedWrite
+              )
+            ),
           });
         }
 
@@ -9695,6 +9774,24 @@ export class CollectionMutationService extends BaseService {
       // Who the write is made as, for each instance's own field rules: the
       // caller and trust the entry's own fields are judged with.
       access: this.fieldGroupAccess(params),
+      // The held write, on its transaction and in its language, so a field
+      // inside an instance that reads the library, as a blocks field does to
+      // judge its composition, judges it now. Without it that field judges
+      // nothing, and a held value past the composition rules is saved, to be
+      // refused only when someone publishes it. Its payload is the patch as
+      // sent, as an ordinary update hands it: a status it did not send stays
+      // absent, which a field judging by status reads as no publish.
+      write: this.validationWrite(
+        params.collectionName,
+        params.entryId,
+        tx,
+        draftLocale ?? undefined,
+        this.writtenPayload(
+          sentFields(ctx.updatePayload),
+          [ctx.manyToManyData, ctx.componentFieldData],
+          null
+        )
+      ),
     });
   }
 
@@ -11784,6 +11881,20 @@ export class CollectionMutationService extends BaseService {
                 // Who the write is made as, for each instance's own field rules: the
                 // caller and trust the entry's own fields are judged with.
                 access: this.fieldGroupAccess(params),
+                // The entry's write, so a field inside an instance that reads
+                // the library judges it on this transaction.
+                write: this.validationWrite(
+                  params.collectionName,
+                  params.entryId,
+                  tx,
+                  params.locale,
+                  // The payload as sent, with what the write lifted out of it put back.
+                  this.writtenPayload(
+                    finalData,
+                    [manyToManyData, attemptComponentData],
+                    localizedUpdate
+                  )
+                ),
               }
             );
           }
@@ -12582,7 +12693,9 @@ export class CollectionMutationService extends BaseService {
           // On a repeat status-less save `responseSource` is the accumulated draft,
           // so diff it against the prior draft rather than the unchanged published
           // row; otherwise a hook reports an earlier save's fields as changing again.
-          originalData: priorWorkingDraftDocument ?? existingEntry,
+          originalData: priorWorkingDraftDocument
+            ? markedDraft(priorWorkingDraftDocument)
+            : existingEntry,
           user: params.user,
           context: sharedContext, // Pass shared context from beforeUpdate
           req: requestFacts,
@@ -15213,6 +15326,18 @@ export class CollectionMutationService extends BaseService {
           data: componentFieldData,
           user: params.user,
           access: this.fieldGroupAccess(params),
+          write: this.validationWrite(
+            params.collectionName,
+            (entry as { id: string }).id,
+            tx,
+            localizedWrite?.writeLocale,
+            // The payload as sent, with what the write lifted out of it put back.
+            this.writtenPayload(
+              finalData,
+              [manyToManyData, componentFieldData],
+              localizedWrite
+            )
+          ),
         });
         return entry;
       });
@@ -16242,6 +16367,9 @@ export class CollectionMutationService extends BaseService {
       // Store the pending edit rather than the live row, through the same
       // method the other two paths use.
       let workingDraftDocument: Record<string, unknown> | undefined;
+      // The draft this save accumulated onto, if any: what the after-hooks
+      // compare against, as on the single-entry update.
+      let priorWorkingDraftDocument: Record<string, unknown> | undefined;
       if (storeAsWorkingDraft) {
         const draftWrite = await this.storeWorkingDraftInTx(tx, {
           collection,
@@ -16301,6 +16429,7 @@ export class CollectionMutationService extends BaseService {
           );
         }
         workingDraftDocument = draftWrite.workingDraftDocument;
+        priorWorkingDraftDocument = draftWrite.priorWorkingDraftDocument;
       }
 
       // Handle many-to-many relationships on the caller's transaction so the
@@ -16341,6 +16470,18 @@ export class CollectionMutationService extends BaseService {
           data: componentFieldData,
           user: params.user,
           access: this.fieldGroupAccess(params),
+          write: this.validationWrite(
+            params.collectionName,
+            entryId,
+            tx,
+            localizedUpdate?.writeLocale,
+            // The payload as sent, with what the write lifted out of it put back.
+            this.writtenPayload(
+              finalData,
+              [manyToManyData, componentFieldData],
+              localizedUpdate
+            )
+          ),
         });
         // Which media items the entry uses now, from what this update stored.
         // A held edit stored nothing, so it changes nothing here either.
@@ -16539,14 +16680,32 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // What this update wrote, as the single-entry update reports it: a held
+      // edit leaves the live row unchanged, so the hooks, the field hooks and
+      // the response get the pending draft, marked before the hooks run. A
+      // draft keeps `status` at the live parent's value, so without the marker
+      // a hook could not tell a draft save from a publish.
+      const written = (workingDraftDocument ?? updated) as Record<
+        string,
+        unknown
+      >;
+      if (workingDraftDocument) {
+        written._isWorkingDraft = true;
+      }
+
       // Execute afterUpdate hooks (unless skipped)
       if (options.runHooks) {
         // Execute afterUpdate hooks (code-registered)
         const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
           operation: "update" as const,
-          data: updated,
-          originalData: existingEntry,
+          data: written,
+          // A repeat draft save compares against the prior draft, not the
+          // unchanged live row, so an earlier save's edits are not reported
+          // as changing again.
+          originalData: priorWorkingDraftDocument
+            ? markedDraft(priorWorkingDraftDocument)
+            : existingEntry,
           user: params.user,
           context: sharedContext,
           // Bind an after-hook that reads via context.executor to the caller's
@@ -16567,7 +16726,7 @@ export class CollectionMutationService extends BaseService {
           this.hookService.buildPrebuiltHookContext({
             collection: params.collectionName,
             operation: "update",
-            data: updated,
+            data: written,
             queryDatabase: this.queryDatabaseFn,
             user: params.user,
             sharedContext,
@@ -16605,7 +16764,7 @@ export class CollectionMutationService extends BaseService {
           kind: "collection",
           slug: params.collectionName,
           phase: "afterChange",
-          data: updated as Record<string, unknown>,
+          data: written,
           operation: "update",
           user: params.user,
           only: touched,
@@ -16615,10 +16774,7 @@ export class CollectionMutationService extends BaseService {
       // A held edit answers with the pending document, not the live row, so
       // that is the document redacted: it carries the edited values, field
       // groups included, which the live row does not.
-      const response = (workingDraftDocument ?? updated) as Record<
-        string,
-        unknown
-      >;
+      const response = written;
       await this.redactResponseFields(
         response,
         fields,

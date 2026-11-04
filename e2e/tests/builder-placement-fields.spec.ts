@@ -265,6 +265,40 @@ test.describe("a placement's exposed fields", () => {
     const { pageId } = await seed(page, [placement("p1")]);
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
+    // The exposed parts of the selected placement wear their own outline; the
+    // component's own text does not.
+    await expect(await headline(page, "p1")).toHaveAttribute(
+      "data-nx-exposed",
+      ""
+    );
+    // The placement is ONE frame around its parts, tagged with its name, and
+    // the heading, a selected part as well as an exposed one, keeps its dash
+    // inside it. The marks are drawn over the canvas frame.
+    await expect(await headline(page, "p1")).toHaveAttribute(
+      "data-nx-selected",
+      /.*/
+    );
+    const frame = page.locator('.nx-canvas-mark[data-mark="selected"]');
+    await expect(frame).toHaveCount(1);
+    await expect(frame).toHaveAttribute("data-component", "");
+    await expect(frame).toHaveAttribute(
+      "data-placement-label",
+      `◇ ${COMPONENT_TITLE}`
+    );
+    // One dash for each exposed part, the selected heading's included.
+    const exposedParts = await (await canvasRoot(page))
+      .locator("[data-nx-exposed]")
+      .count();
+    expect(exposedParts).toBeGreaterThan(0);
+    await expect(
+      page.locator('.nx-canvas-mark[data-mark="exposed"]')
+    ).toHaveCount(exposedParts);
+    await expect(
+      (await canvasRoot(page))
+        .locator('[data-nx-instance="p1"]')
+        .filter({ hasText: "Made with care" })
+        .last()
+    ).not.toHaveAttribute("data-nx-exposed", /.*/);
 
     const headlineField = page.getByRole("textbox", { name: "Headline" });
     await headlineField.fill("From the panel");
@@ -283,7 +317,7 @@ test.describe("a placement's exposed fields", () => {
     await link.press("Enter");
     await expect(refusal).toHaveCount(0);
 
-    await page.getByRole("checkbox", { name: "Button shown" }).click();
+    await page.getByRole("switch", { name: "Button shown" }).click();
 
     await save(page, pageId);
     const stored = await storedPlacements(page, pageId);
@@ -306,7 +340,7 @@ test.describe("a placement's exposed fields", () => {
       page.getByRole("textbox", { name: "Button link" })
     ).toHaveValue("/pricing");
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).not.toBeChecked();
     await expect(row(page, "Heading level")).toContainText("H3");
   });
@@ -322,22 +356,20 @@ test.describe("a placement's exposed fields", () => {
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
     const badge = row(page, "Headline").locator(".nx-inspector__source");
-    await expect(badge).toHaveText("Overridden");
+    await expect(badge).toHaveText("Set on this page");
 
     const field = page.getByRole("textbox", { name: "Headline" });
     await field.fill("");
     await field.press("Enter");
-    await expect(badge).toHaveText("Cleared");
+    await expect(badge).toHaveText("Cleared on this page");
     // Cleared draws no headline at all: neither the old value nor the
     // component's own.
     const placed = (await canvasRoot(page)).locator('[data-nx-instance="p1"]');
     await expect(placed.filter({ hasText: "Site name" })).toHaveCount(0);
     await expect(placed.filter({ hasText: "Mine" })).toHaveCount(0);
 
-    await page
-      .getByRole("button", { name: "Reset Headline to inherited value" })
-      .click();
-    await expect(badge).toHaveText("Inherited");
+    await page.getByRole("button", { name: "Reset Headline" }).click();
+    await expect(badge).toHaveText("From the component");
     await expect(await headline(page, "p1")).toHaveText("Site name");
     await expect(field).toHaveValue("Site name");
 
@@ -353,15 +385,17 @@ test.describe("a placement's exposed fields", () => {
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
 
-    await expect(page.getByText(/This component is locked/)).toBeVisible();
+    // Said once, by the card's lock line, which the held fields point at.
+    const headlineField = page.getByRole("textbox", { name: "Headline" });
+    await expect(headlineField).toBeDisabled();
     await expect(
-      page.getByRole("textbox", { name: "Headline" })
-    ).toBeDisabled();
+      page.locator("fieldset[disabled]").first()
+    ).toHaveAccessibleDescription(/^Locked: it can.t be moved/);
     await expect(
       page.getByRole("textbox", { name: "Button link" })
     ).toBeDisabled();
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).toBeDisabled();
 
     const text = await headline(page, "p1");

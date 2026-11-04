@@ -27,6 +27,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
@@ -117,7 +118,35 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
  * separately; until it is closed, a name the component starts importing has to
  * be added here by hand.
  */
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+// A designer: the role that may change the site's fonts.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({ ...storedRead, refetch: refetchStoredStyle }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
@@ -146,6 +175,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveIndicator: () => null,
@@ -156,13 +187,17 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
    * a rejection into per-field messages. Answering none exercises the branch
    * that must still refuse when the transport could not describe why.
    */
   validationIssues: () => [],
-  useSingleDocument: () => storedRead,
+  // The catalogue's routes: never reached here, where no case opens it.
+  readPluginRoute: async () => undefined,
+  writePluginRoute: async () => undefined,
   useUpdateSingleDocument: () => ({
     mutateAsync: async (value: Record<string, unknown>) => {
       saved.push(value);
@@ -312,7 +347,9 @@ describe("the fonts panel reaching an author", () => {
     // `undefined`, and passing `[]` while pending is the plausible bug.
     storedRead = { data: undefined, isPending: true, error: null };
     openEditor();
-    expect(screen.getByTestId("panel").textContent).toContain("Loading fonts");
+    expect(screen.getByTestId("panel").textContent).toContain(
+      "Reading this site\u2019s fonts"
+    );
   });
 
   it("says a failed read failed", () => {
@@ -328,17 +365,42 @@ describe("the fonts panel reaching an author", () => {
   });
 });
 
+/** A file's first bytes as its format writes them: what the panel reads. */
+function signatureOf(name: string): Uint8Array {
+  if (name.endsWith(".woff2")) return new Uint8Array([0x77, 0x4f, 0x46, 0x32]);
+  if (name.endsWith(".woff")) return new Uint8Array([0x77, 0x4f, 0x46, 0x46]);
+  return new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+}
+
 describe("adding a font file through the panel", () => {
+  /** Open the upload editor from the group's add, once. */
+  async function openUpload(): Promise<void> {
+    if (screen.queryByLabelText("Font file") !== null) return;
+    fireEvent.keyDown(screen.getByRole("button", { name: "Add a font" }), {
+      key: "Enter",
+    });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Upload a font file" })
+    );
+    await screen.findByRole("dialog", { name: "Upload a font file" });
+  }
+
   /** Choose a file, as the picker hands one over. */
   async function pickFile(name = "Inter-Regular.woff2"): Promise<void> {
+    await openUpload();
     const input = screen.getByLabelText("Font file") as HTMLInputElement;
     Object.defineProperty(input, "files", {
-      value: [new File([new Uint8Array([0x77])], name, { type: "font/woff2" })],
+      value: [new File([signatureOf(name)], name, { type: "font/woff2" })],
       configurable: true,
     });
     await act(async () => {
       fireEvent.change(input);
     });
+    // The rights are confirmed for each file.
+    const rights = screen.getByRole("checkbox", {
+      name: "I have the right to use this font on the web",
+    });
+    if (rights.getAttribute("aria-checked") !== "true") fireEvent.click(rights);
   }
 
   /** Press Add. Separate from the pick, because a RETRY is a second press on
@@ -346,8 +408,15 @@ describe("adding a font file through the panel", () => {
    *  hand over a different `File`, which is a different case entirely. */
   async function submitAdd(): Promise<void> {
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Upload" }));
     });
+    // The file's first bytes are read before the upload, which takes tasks of
+    // its own: the add is over once the button no longer says it is running.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Uploading\u2026" })
+      ).toBeNull()
+    );
   }
 
   async function addFace(name = "Inter-Regular.woff2"): Promise<void> {
@@ -488,7 +557,9 @@ describe("adding a font file through the panel", () => {
      * have not arrived. The writer refuses as well, which no test can drive
      * through this UI precisely because of this.
      */
-    expect(screen.getByTestId("panel").textContent).toContain("Loading fonts");
+    expect(screen.getByTestId("panel").textContent).toContain(
+      "Reading this site\u2019s fonts"
+    );
     expect(screen.queryByLabelText("Font file")).toBeNull();
     expect(saved).toHaveLength(0);
   });
@@ -506,7 +577,30 @@ describe("adding a font file through the panel", () => {
     await addFace("not-a-font.png");
 
     expect(saved).toHaveLength(0);
+    // Refused from its own first bytes, before anything is stored: a stored
+    // file no face points at would stay in the media library.
+    expect(uploads).toHaveLength(0);
     expect(screen.getByRole("alert").textContent).toContain("woff");
+  });
+
+  it("REFUSES a face the site could not store, before anything is uploaded", async () => {
+    /*
+     * A family carrying a stylesheet's structural characters is refused by
+     * the save. Judged first, so no file is stored that no face points at.
+     */
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+    await pickFile("Brand-Regular.woff2");
+    fireEvent.change(screen.getByRole("textbox", { name: "Family" }), {
+      target: { value: "Brand}" },
+    });
+    await submitAdd();
+
+    expect(uploads).toHaveLength(0);
+    expect(saved).toHaveLength(0);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "is not a usable font family name"
+    );
   });
 
   it("does not upload the same file twice when the save is refused", async () => {

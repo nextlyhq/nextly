@@ -33,6 +33,7 @@ import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
+import { placedComponentId } from "./instance-inspector";
 import {
   keyboardMovePosition,
   type MoveDirection,
@@ -57,12 +58,14 @@ import {
   depthMoveActions,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
+  turnIntoChoice,
   type ComponentVerbsOffer,
   type DepthMoveAction,
   type MoveJudge,
   type MovePosition,
   type ToolbarAction,
   type ToolbarActionId,
+  type TurnIntoChoice,
 } from "./toolbar-actions";
 
 /**
@@ -196,12 +199,19 @@ export interface BlockActions {
    */
   readonly saveAsPattern: () => void;
   /**
-   * Begin saving the selection as a component, or converting it into one.
-   * Like `saveAsPattern`, these hand the gesture to the host, which owns the
-   * form and the write. Absent where the host offers no components.
+   * Open the selected placement's component in its own view, through the
+   * host. Like Save as pattern it runs no op: where the component opens, and
+   * whether this author may, are the host's. Silent for any other selection.
+   * Optional, so a host built before it keeps compiling.
    */
-  readonly saveAsComponent?: () => void;
-  readonly convertToComponent?: () => void;
+  readonly editComponent?: () => void;
+  /**
+   * Begin turning the selection into a component: replacing it with a
+   * placement, or keeping it and saving a copy. Like `saveAsPattern`, this
+   * hands the gesture to the host, which owns the form and the write. Absent
+   * where the host offers no components.
+   */
+  readonly turnIntoComponent?: () => void;
   /** Detach the selected placement, duplicate its component, update a pattern. */
   readonly detachComponent?: () => void;
   readonly duplicateComponent?: () => void;
@@ -395,6 +405,13 @@ export interface BlockKeyboardActionsOptions {
    */
   mayCreatePattern?: boolean;
   /**
+   * Open a placed component in its own view, given its id and the
+   * placement's node id. Supplied by the host, which knows where that view is
+   * and whether this author may update components; omitted, "Edit component"
+   * is not offered anywhere.
+   */
+  onEditComponent?: (componentId: string, nodeId: string) => void;
+  /**
    * Whether the bindings are live. Defaults to true.
    *
    * A host that mounts the canvas inside something modal turns them off rather
@@ -423,13 +440,17 @@ export interface BlockKeyboardActionsOptions {
 }
 
 /**
- * The host's side of "Save as component" and "Convert to component".
+ * The host's side of "Turn into component…".
  *
  * @experimental Settles when the composition API ships.
  */
 export interface ComponentVerbsHost extends ComponentVerbsOffer {
-  readonly onSaveAsComponent: () => void;
-  readonly onConvertToComponent: () => void;
+  /**
+   * Open the form, told which way is open: replacing the selection with a
+   * placement, keeping it and saving a copy, or both, with the reason for a
+   * way that is not.
+   */
+  readonly onTurnIntoComponent: (choice: TurnIntoChoice) => void;
   /** Detach the selected placement. Absent, with no definitions, Detach is not offered. */
   readonly onDetachComponent?: () => void;
   readonly onDuplicateComponent?: () => void;
@@ -439,8 +460,7 @@ export interface ComponentVerbsHost extends ComponentVerbsOffer {
 
 /** The verbs the host runs for the menu's component group. */
 type ComponentVerbId =
-  | "save-as-component"
-  | "convert-to-component"
+  | "turn-into-component"
   | "detach-component"
   | "duplicate-component"
   | "update-pattern";
@@ -448,11 +468,12 @@ type ComponentVerbId =
 /** The host's gesture for one component verb, if it offers it. */
 function componentVerbRunner(
   host: ComponentVerbsHost,
-  id: ComponentVerbId
+  id: ComponentVerbId,
+  /** Which way "Turn into component…" may go, asked when it was pressed. */
+  choice: () => TurnIntoChoice
 ): (() => void) | undefined {
   const runners: Record<ComponentVerbId, (() => void) | undefined> = {
-    "save-as-component": host.onSaveAsComponent,
-    "convert-to-component": host.onConvertToComponent,
+    "turn-into-component": () => host.onTurnIntoComponent(choice()),
     "detach-component": host.onDetachComponent,
     "duplicate-component": host.onDuplicateComponent,
     "update-pattern": host.onUpdatePattern,
@@ -514,6 +535,7 @@ export function useBlockKeyboardActions({
   nesting,
   definitions,
   onSaveAsPattern,
+  onEditComponent,
   components,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
@@ -1098,7 +1120,14 @@ export function useBlockKeyboardActions({
         if (offered.reason !== undefined) announce(offered.reason);
         return;
       }
-      componentVerbRunner(components, id)?.();
+      componentVerbRunner(components, id, () =>
+        turnIntoChoice(
+          editor.document,
+          editor.selection.ids,
+          nestingSource,
+          editor.lockRefusalFor
+        )
+      )?.();
     },
     [
       components,
@@ -1129,7 +1158,8 @@ export function useBlockKeyboardActions({
         nestingSource,
         mayCreatePattern,
         editor.lockRefusalFor,
-        componentOffer
+        componentOffer,
+        onEditComponent !== undefined
       ),
     [
       editor.document,
@@ -1138,9 +1168,11 @@ export function useBlockKeyboardActions({
       nestingSource,
       mayCreatePattern,
       editor.lockRefusalFor,
+      onEditComponent,
       componentOffer,
     ]
   );
+  const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
 
   const actions = React.useMemo<BlockActions>(
     () => ({
@@ -1149,8 +1181,8 @@ export function useBlockKeyboardActions({
       duplicate: duplicateSelected,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
-      saveAsComponent: () => runComponentVerb("save-as-component"),
-      convertToComponent: () => runComponentVerb("convert-to-component"),
+      editComponent: editSelectedComponent,
+      turnIntoComponent: () => runComponentVerb("turn-into-component"),
       detachComponent: () => runComponentVerb("detach-component"),
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),
@@ -1161,6 +1193,7 @@ export function useBlockKeyboardActions({
       duplicateSelected,
       selectParent,
       saveSelectionAsPattern,
+      editSelectedComponent,
       runComponentVerb,
     ]
   );
@@ -1195,6 +1228,25 @@ export function useBlockKeyboardActions({
 }
 
 /**
+ * The "Edit component" verb: hands the selected placement's component to the
+ * host, or does nothing for any other selection, or where no host answers.
+ */
+function useEditComponentVerb(
+  editor: EditorState,
+  onEditComponent: BlockKeyboardActionsOptions["onEditComponent"]
+): () => void {
+  return React.useCallback(() => {
+    if (onEditComponent === undefined) return;
+    const ids = editor.selection.ids;
+    if (ids.length !== 1) return;
+    const nodeId = ids[0];
+    if (nodeId === undefined) return;
+    const componentId = placedComponentId(editor.document, nodeId);
+    if (componentId !== undefined) onEditComponent(componentId, nodeId);
+  }, [editor.document, editor.selection.ids, onEditComponent]);
+}
+
+/**
  * The block holding `id`, read from the same trail the breadcrumb draws, or
  * nothing for a top-level block or a selection the document no longer holds.
  * "Select parent" and Escape both ask this, so they cannot name two parents.
@@ -1224,16 +1276,10 @@ function parentOf(
  * gets exactly what this rendered before.
  */
 export function BlockKeyboardActions({
-  editor,
-  enabled,
-  onEditText,
-  nesting,
-  definitions,
-  onSaveAsPattern,
-  mayCreatePattern,
-  components,
   onShareVerbs,
   children,
+  // Handed on whole, so an option the host left out stays out.
+  ...options
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
   /**
@@ -1248,16 +1294,7 @@ export function BlockKeyboardActions({
     nesting: rules,
     selectionActions: offered,
     depthMoves,
-  } = useBlockKeyboardActions({
-    editor,
-    enabled,
-    onSaveAsPattern,
-    ...(mayCreatePattern === undefined ? {} : { mayCreatePattern }),
-    ...(onEditText === undefined ? {} : { onEditText }),
-    ...(nesting === undefined ? {} : { nesting }),
-    ...(definitions === undefined ? {} : { definitions }),
-    ...(components === undefined ? {} : { components }),
-  });
+  } = useBlockKeyboardActions(options);
 
   /*
    * Shared from a layout effect, so a surface outside sees the verbs for the

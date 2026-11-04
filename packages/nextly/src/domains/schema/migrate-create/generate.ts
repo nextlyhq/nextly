@@ -19,8 +19,8 @@
 // Returns null when no operations remain (after rename collapsing) and no
 // entity's settings changed: a settings change alone is written as a
 // migration with no table statements, beside its snapshot.
-// CLI exits with code 2 in that case ("no changes detected" — distinct
-// from exit 1 for actual errors so CI scripts can tell apart).
+// The CLI then says "No schema changes detected" and exits 0, since nothing
+// to do is a finished run; a failure exits 1.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -39,6 +39,7 @@ import {
   companionSpecShell,
   deriveCompanionSpec,
 } from "../../i18n/migration/derive-companion-spec";
+import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
@@ -286,7 +287,7 @@ function operationTableName(op: Operation): string {
 
 /**
  * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot — exit code 2 in the CLI).
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
 export async function generateMigration(
   args: GenerateArgs
@@ -1190,45 +1191,17 @@ function planCompanionMigrations(
       status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
     });
 
-    // the DISABLE transition (localized `true → false`).
-    // Detection is gated on the previous snapshot's explicit `localized: true` marker rather
-    // than inferred from column shape: a shape-only heuristic cannot tell "this collection
-    // was localized" apart from "someone added fields to a non-localized collection", and
-    // false-positively archiving + dropping a table is far worse than not automating a rare
-    // disable. A pre-marker snapshot records no marker, so it reads as unknown and no
-    // transition is emitted — that self-heals as soon as one migrate:create runs while the
-    // entity is still localized.
+    // the DISABLE transition (localized `true → false`), planned by `disableEntryFor`.
     if (c.localized !== true) {
-      const prevMain = previousSnapshot.tables.find(
-        t => t.name === (spec?.mainTable ?? c.tableName)
-      );
-      if (prevMain?.localized !== true) continue;
-      // The snapshot's recorded column list is the AUTHORITATIVE description of what the
-      // companion actually holds; the current config is not, because the same edit that
-      // flipped the switch may also have added or unflagged fields. Restoring exactly the
-      // recorded columns keeps the transition correct in both directions:
-      //   - a field whose `localized: true` was removed alongside the switch is still brought
-      //     home (it is in the recorded list even though it no longer classifies);
-      //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
-      //     being restored from a companion that never had that column (which emitted SQL that
-      //     failed on apply).
-      const disableSpec = buildDisableSpec(
+      const disable = disableEntryFor(
         c,
         entityKind,
-        prevMain,
+        spec?.mainTable ?? c.tableName,
+        previousSnapshot,
         dialect,
         defaultLocale
       );
-      if (!disableSpec) continue;
-      const plan = planCompanionMigration({
-        spec: disableSpec,
-        prevMainColumnNames: [],
-        companionExisted: false,
-        localized: false,
-        previouslyLocalized: true,
-      });
-      if (plan.kind !== "none")
-        entries.push({ spec: disableSpec, plan, entity: entityKind });
+      if (disable) entries.push(disable);
       continue;
     }
 
@@ -1276,8 +1249,104 @@ function planCompanionMigrations(
       companionExisted,
     });
     if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
+    // A companion that was there and stays: the translated fields it gains.
+    const adds = companionExisted
+      ? addsEntryFor(c, entityKind, prevTable, joining, dialect, defaultLocale)
+      : undefined;
+    if (adds) entries.push(adds);
   }
   return entries;
+}
+
+/**
+ * The `disable` file of an entity whose translation is turned off (localized `true → false`).
+ *
+ * Detection is gated on the previous snapshot's explicit `localized: true` marker rather
+ * than inferred from column shape: a shape-only heuristic cannot tell "this collection
+ * was localized" apart from "someone added fields to a non-localized collection", and
+ * false-positively archiving + dropping a table is far worse than not automating a rare
+ * disable. A pre-marker snapshot records no marker, so it reads as unknown and no
+ * transition is emitted — that self-heals as soon as one migrate:create runs while the
+ * entity is still localized.
+ */
+function disableEntryFor(
+  c: MinimalConfigEntity,
+  entityKind: I18nTransitionKind,
+  mainTable: string,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry | undefined {
+  const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
+  if (prevMain?.localized !== true) return undefined;
+  // The snapshot's recorded column list is the AUTHORITATIVE description of what the
+  // companion actually holds; the current config is not, because the same edit that
+  // flipped the switch may also have added or unflagged fields. Restoring exactly the
+  // recorded columns keeps the transition correct in both directions:
+  //   - a field whose `localized: true` was removed alongside the switch is still brought
+  //     home (it is in the recorded list even though it no longer classifies);
+  //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
+  //     being restored from a companion that never had that column (which emitted SQL that
+  //     failed on apply).
+  const disableSpec = buildDisableSpec(
+    c,
+    entityKind,
+    prevMain,
+    dialect,
+    defaultLocale
+  );
+  if (!disableSpec) return undefined;
+  const plan = planCompanionMigration({
+    spec: disableSpec,
+    prevMainColumnNames: [],
+    companionExisted: false,
+    localized: false,
+    previouslyLocalized: true,
+  });
+  return plan.kind === "none"
+    ? undefined
+    : { spec: disableSpec, plan, entity: entityKind };
+}
+
+/**
+ * The `adds` file of a translated entity whose companion is there before this run: its translated
+ * fields with no column there yet, which the previous snapshot doesn't record in the companion
+ * (`localizedColumns`) and which don't join translation (`joining`, whose column is the `joins`
+ * file's). Undefined when there is none, or when the snapshot records no companion columns to
+ * compare with, as one from before the record doesn't.
+ */
+function addsEntryFor(
+  c: MinimalConfigEntity,
+  entityKind: I18nTransitionKind,
+  prevTable: TableSpec | undefined,
+  joining: ReadonlySet<string>,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry | undefined {
+  if (prevTable?.localizedColumns === undefined) return undefined;
+  const there = new Set([...prevTable.localizedColumns, ...joining]);
+  const translated = c.fields.filter(f => isFieldLocalized(f, true));
+  const isAdded = (f: (typeof translated)[number]) => {
+    const column = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
+    return column != null && !there.has(column.name);
+  };
+  const added = translated.filter(isAdded);
+  if (added.length === 0) return undefined;
+  const { spec, upSql, downSql } = planFieldAddedToTranslationMigration({
+    slug: c.slug,
+    kind: entityKind,
+    tableName: c.tableName,
+    dialect,
+    defaultLocale,
+    status: c.status === true,
+    recorded: translated.filter(f => !isAdded(f)),
+    added,
+  });
+  return {
+    spec,
+    plan: { kind: "adds", spec, upSql, downSql },
+    entity: entityKind,
+  };
 }
 
 /** One entity's fields that stop being translated, and the two files that move their values. */
