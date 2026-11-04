@@ -68,15 +68,13 @@ vi.mock("../migrate", async importOriginal => {
     },
   };
 });
-vi.mock(
-  "../../../domains/schema/migrate/data-loss-consent",
-  async importOriginal => ({
-    ...(await importOriginal<
-      typeof import("../../../domains/schema/migrate/data-loss-consent")
-    >()),
-    isInteractiveTerminal: () => seams.interactive,
-  })
-);
+// Whether a person can be asked: the one question the CLI's prompts consult.
+vi.mock("../../../domains/schema/migrate/can-prompt", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/migrate/can-prompt")
+  >()),
+  canPrompt: () => seams.interactive,
+}));
 vi.mock("../../utils/data-loss-consent", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/data-loss-consent")>()),
   askToDeleteInTerminal: (question: string) => seams.ask(question),

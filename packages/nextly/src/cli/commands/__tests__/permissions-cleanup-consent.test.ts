@@ -48,11 +48,25 @@ vi.mock("../../utils/adapter", () => ({
     databaseUrl: ":memory:",
     errors: [],
   }),
-  createCliAdapter: async () => ({ disconnect: async () => {} }),
+  // The lock asks the adapter its dialect before running the cleanup.
+  createCliAdapter: async () => ({
+    disconnect: async () => {},
+    getCapabilities: () => ({ dialect: "sqlite" }),
+  }),
 }));
 
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({ config: {} }),
+}));
+
+// The cleanup runs as it is: the adapter here is a fake with no database to lock, and what is
+// under test is the consent, which comes before the lock.
+vi.mock("../../../domains/schema/pipeline/locks", () => ({
+  withMigrateLock: async (
+    _adapter: unknown,
+    _dialect: unknown,
+    work: () => Promise<unknown>
+  ) => ({ ran: true, value: await work() }),
 }));
 
 vi.mock("../../../domains/auth/services/permission-seed-service", () => ({

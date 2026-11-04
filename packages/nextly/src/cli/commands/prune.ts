@@ -42,6 +42,7 @@ import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-chang
 import type { ExtensionSchemaRecord } from "../../domains/schema/ownership/dependent-elements";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
