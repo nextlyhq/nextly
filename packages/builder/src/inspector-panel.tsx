@@ -94,6 +94,8 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { commitLinkChanges, LinkGroupField } from "./link-control";
+import { linkGroupOf } from "./link-group";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -1090,6 +1092,9 @@ function ContentSurface({
           lockViewOf(editor)
         )
       }
+      onCommitMany={changes =>
+        commitLinkChanges(editor, inspection.nodeId, changes)
+      }
     />
   );
   const Custom =
@@ -1262,9 +1267,14 @@ function ContentFields({
   reasonId,
   fields,
   writable,
+  onCommitMany,
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  /** Several props written as one edit, for a block's link group. */
+  onCommitMany: (
+    changes: Readonly<Record<string, unknown>>
+  ) => BlockDocument | null | void;
   services: ContentServices | undefined;
   /** The id of the lock reason a held field points to. */
   reasonId: string;
@@ -1285,10 +1295,28 @@ function ContentFields({
       </p>
     );
   }
+  // A link and the props that qualify it are drawn as one group, where the
+  // link prop sits; the others it draws get no row of their own.
+  const link = linkGroupOf(inspection.props);
   return (
     <div className="nx-inspector__fields">
       {inspection.props.map(prop => {
-        const field = (
+        if (link?.drawn.has(prop.name) === true && prop.name !== link.link) {
+          return null;
+        }
+        const grouped =
+          link?.link === prop.name ? (
+            <LinkGroupField
+              key={`${inspection.nodeId}:${prop.name}`}
+              group={link}
+              props={inspection.props}
+              writable={writable}
+              reasonId={reasonId}
+              services={services}
+              onCommitMany={onCommitMany}
+            />
+          ) : undefined;
+        const field = grouped ?? (
           <HeldByLock
             // Keyed by node AND prop: a bare prop name would let React reuse
             // one block's field for the next block's same-named prop, so the

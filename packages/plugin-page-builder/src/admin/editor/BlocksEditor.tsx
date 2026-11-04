@@ -63,6 +63,7 @@ import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
+import { findLinkTargets } from "../link-targets-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
@@ -355,7 +356,8 @@ let contentServices: ContentServices | undefined;
  * What the inspector's Content tab borrows from the admin: the media library,
  * to choose an image, the shared rich-text editor, and the page builder's
  * entries route, to find an entry a `relation` prop points at with the
- * author's own access. Built on first use and
+ * author's own access, and the pages search, to find a page a link points
+ * at the same way. Built on first use and
  * kept for the module's life, so the panel never sees a new object on a
  * render, and loading this module reads nothing from the admin's surface
  * until an editor is drawn.
@@ -365,6 +367,7 @@ function borrowedServices(): ContentServices {
     MediaPicker: MediaPickerDialog,
     loadRichTextEditor: loadInlineRichTextEditor,
     findEntries,
+    findLinkTargets,
   };
   return contentServices;
 }
