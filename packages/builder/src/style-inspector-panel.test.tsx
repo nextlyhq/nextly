@@ -3202,6 +3202,72 @@ describe("where a control's value came from", () => {
     ).toContain("overrides\u00a0Card");
   });
 
+  it("keeps the canvas's viewport tier when weighing Reset at a container tier", () => {
+    // Editing the small-container tier while the canvas is at tablet width:
+    // Reset there shows the block's own tablet value, not Card's, so the
+    // line names no style.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: { tablet: { opacity: 0.3 }, "cq-sm": { opacity: 0.2 } },
+          },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+          } as never
+        }
+        breakpoint={"cq-sm" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.3",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.2", breakpoint: "cq-sm" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
+
   it("names no style when the block's own wider value is what Reset would show", () => {
     register({ effects: true });
     const editor = editorFor({
