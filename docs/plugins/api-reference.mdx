@@ -128,7 +128,7 @@ interface PluginContext {
   };
   db: PluginDatabase & { raw: PluginRawDatabase }; // typed, owner-checked; .raw = Drizzle builder + transaction, the live instance only with capabilities.db.rawSql AND db.rawSqlPlugins
   dialect: SupportedDialect; // "postgresql" | "mysql" | "sqlite"; read when accessed; @experimental
-  auth: PluginAuthApi; // always present; completeLogin needs capabilities.auth.login
+  auth: PluginAuthApi; // always present; completeLogin needs the boot's login grant: capabilities.auth.login or a determineUser hook, AND the auth.loginPlugins listing
   settings?: PluginSettingsApi; // with contributes.settings
   fetch?: typeof fetch; // with a non-empty capabilities.net.outbound
   audit?: PluginAuditApi; // with contributes.audit
@@ -669,8 +669,11 @@ goes in `actorPrincipal` or `targetPrincipal`, never in the user ids.
 
 ### `ctx.auth`
 
-Always present. `completeLogin` requires `capabilities.auth.login` and a
-strategy name beginning with the plugin's own slug.
+Always present. `completeLogin` requires the boot's login grant — the plugin
+declares `capabilities.auth.login` or contributes a `determineUser` hook, and
+the app lists it in `auth.loginPlugins` (an unlisted login-capable plugin
+refuses the boot naming the line to add) — and a strategy name beginning with
+the plugin's own slug.
 
 ```ts
 return ctx.auth.completeLogin(user.id, {

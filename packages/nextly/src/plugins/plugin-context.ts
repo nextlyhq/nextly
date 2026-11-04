@@ -113,7 +113,11 @@ import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
 import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
-import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
+import {
+  bootNameOf,
+  NO_PLUGIN_GRANTS,
+  type PluginGrants,
+} from "./plugin-consent";
 import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
@@ -1627,7 +1631,7 @@ function buildPluginDatabase(
   ) => Promise<T>;
 } {
   const owner: SchemaOwner = plugin
-    ? { kind: "plugin", id: plugin.name }
+    ? { kind: "plugin", id: bootNameOf(plugin) }
     : { kind: "app" };
 
   // The schema compiled for the dialect this process runs, asked for by name.
@@ -1947,6 +1951,11 @@ export interface PluginCapabilities {
    * `login: true` lets the plugin finish logins with
    * `ctx.auth.completeLogin`, which signs in whichever account it names.
    * Its strategy names must begin with `<plugin-slug>:`.
+   *
+   * Declaring it is not enough: the app must also list the plugin in
+   * `auth.loginPlugins`, or the boot refuses, naming the line to add. A
+   * `determineUser` auth hook counts as this capability too, since it decides
+   * who is signed in.
    */
   auth?: { login?: boolean };
 }
@@ -2231,7 +2240,10 @@ export function createPluginContext(
 ): PluginContext {
   // Subscriptions made through this context are tracked under the plugin's name
   // so the runtime can clear them before the plugin re-initializes on HMR (B2).
-  const pluginName = plugin?.name;
+  // The boot-time name, not the live one: `init` may rename its own
+  // definition, and the identity this context attributes — hooks, events,
+  // `ctx.self`, the auth grant — is the one the boot resolved.
+  const pluginName = plugin === undefined ? undefined : bootNameOf(plugin);
 
   // Everything registered through this context is attributed to the plugin, so
   // a config reload can rebuild the config's own handlers without deleting a
@@ -2505,7 +2517,7 @@ export function createPluginContext(
   // surface below exposes this handle as `raw`.
   const rawDb = restrictDatabase(
     getServiceFn("db"),
-    plugin !== undefined && grants.rawSql.includes(plugin.name),
+    plugin !== undefined && grants.rawSql.includes(bootNameOf(plugin)),
     // Both resolved when a transaction starts, not now: the context can be
     // built before the database is connected. A closure, so the adapter
     // keeps its receiver.
@@ -2603,8 +2615,10 @@ export function createPluginContext(
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
   const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
   // Whose secrets and webhook types this context reaches: the plugin's, or
-  // core's for a context built without one.
-  const owner = plugin?.name ?? "nextly";
+  // core's for a context built without one. The boot-time name, not the
+  // mutable one: a plugin renaming itself in `init` onto a listed name must
+  // not reach that name's secrets or webhook types.
+  const owner = plugin === undefined ? "nextly" : bootNameOf(plugin);
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -2800,9 +2814,10 @@ export function createPluginContext(
     // A plain property rather than a getter: `runPluginRoute` spreads the base
     // context on every request, which would evaluate a top-level getter each
     // time. The instance itself resolves its dependencies lazily instead.
-    // Bound to the plugin, so `completeLogin` answers to its manifest; a
-    // context built for no plugin is core's own and gets the shared one.
-    auth: plugin ? getPluginAuthApiFor(plugin) : getPluginAuthApi(),
+    // Bound to the plugin and to the boot's verdict, so `completeLogin`
+    // answers to the grant decided at resolution; a context built for no
+    // plugin is core's own and gets the shared one.
+    auth: plugin ? getPluginAuthApiFor(plugin, grants) : getPluginAuthApi(),
     // Built once here and kept as a plain property, like `auth`: it holds no
     // per-request state, so the copy every route spreads is the same helper.
     security: {
