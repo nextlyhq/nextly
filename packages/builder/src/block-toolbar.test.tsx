@@ -409,6 +409,18 @@ describe("BlockToolbar", () => {
     expect(document.activeElement).toBe(buttons.at(-1));
   });
 
+  it("takes focus from anywhere in the editor on Alt+F10, at its tab stop", () => {
+    // The editor convention for reaching a block's toolbar from the keyboard:
+    // from the canvas, or from text being edited inside the block.
+    mount(editorSpy(pair(), "a"));
+    fireEvent.keyDown(document.body, { key: "F10", code: "F10", altKey: true });
+    const stop = screen
+      .getByRole("toolbar", { name: "Block actions" })
+      .querySelector('[tabindex="0"]');
+    expect(stop).not.toBeNull();
+    expect(document.activeElement).toBe(stop);
+  });
+
   it("keeps the roving stop where FOCUS is when the selection moves", () => {
     /*
      * Duplicate and Select parent both change the selection while the author's

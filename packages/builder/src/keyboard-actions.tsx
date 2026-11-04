@@ -30,6 +30,7 @@ import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
+import { focusBlockToolbar } from "./canvas-chrome";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
@@ -884,6 +885,20 @@ export function useBlockKeyboardActions({
         when: () => latest.current.selectedId !== null,
         whenTyping: false,
         run: () => deleteSelected(),
+      },
+      {
+        /*
+         * `alt+F10`, the editor convention for reaching a block's toolbar
+         * from the keyboard: from the canvas, or from text being edited inside
+         * the block, which is why it also runs while typing.
+         */
+        keys: "alt+F10",
+        description: "Move focus to the selected block's toolbar",
+        when: () => latest.current.selectedId !== null,
+        whenTyping: true,
+        run: () => {
+          if (typeof document !== "undefined") focusBlockToolbar(document);
+        },
       },
       {
         keys: "mod+z",

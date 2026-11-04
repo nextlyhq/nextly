@@ -1142,8 +1142,10 @@ describe("where the handle sits on its band", () => {
       label: "20",
       negative: false,
     });
-    expect(height).toBe("9px");
-    expect(top).toBe("95.5px");
+    // A 24px hit area, the minimum target WCAG 2.2 asks of a pointer
+    // control, centred on the moving edge.
+    expect(height).toBe("24px");
+    expect(top).toBe("88px");
   });
 
   /*
@@ -1160,7 +1162,7 @@ describe("where the handle sits on its band", () => {
       label: "-20",
       negative: true,
     });
-    expect(top).toBe("115.5px");
+    expect(top).toBe("108px");
   });
 
   it("puts a padding's handle on its inward edge", () => {
@@ -1171,7 +1173,7 @@ describe("where the handle sits on its band", () => {
       label: "20",
       negative: false,
     });
-    expect(top).toBe("115.5px");
+    expect(top).toBe("108px");
   });
 });
 
@@ -1221,7 +1223,7 @@ describe("a gesture that outlives its own band", () => {
      */
     expect(kept?.getAttribute("aria-valuenow")).toBe("0");
     // The band spans y=0..10 and grows downward, so collapsed it sits at y=0.
-    expect(kept?.style.top).toBe("-4.5px");
+    expect(kept?.style.top).toBe("-12px");
 
     // And the gesture still finishes.
     act(() => {
@@ -1367,8 +1369,8 @@ describe("two handles that would land on the same pixels", () => {
         negative: false,
       },
     ]);
-    // The margin's own outer edge, untouched: 80 - 4.5.
-    expect(handle("top margin").style.top).toBe("75.5px");
+    // The margin's own outer edge, untouched: 80 - 12.
+    expect(handle("top margin").style.top).toBe("68px");
   });
 });
 
@@ -1710,12 +1712,12 @@ describe("a padding handle on a block that grows outward", () => {
         },
       })
     );
-    expect(handle("bottom padding").style.top).toBe("115.5px");
+    expect(handle("bottom padding").style.top).toBe("108px");
   });
 
   it("sits on the inner edge when the content edge is the one that moves", () => {
     mount([bottomPadding], subjectWith());
-    expect(handle("bottom padding").style.top).toBe("95.5px");
+    expect(handle("bottom padding").style.top).toBe("88px");
   });
 
   /*
@@ -1785,7 +1787,7 @@ describe("a negative margin, whose band is drawn mirrored", () => {
    */
   it("puts the handle on the mirrored rectangle's moving edge", () => {
     mount([negativeTop], borderEdgeResponds());
-    expect(handle("top margin").style.top).toBe("95.5px");
+    expect(handle("top margin").style.top).toBe("88px");
   });
 
   /*
@@ -1988,7 +1990,7 @@ describe("a drag keeps the direction it began with", () => {
      * one end of its own band to the other under the hand, while the arithmetic
      * — frozen at the press — went on counting the other way.
      */
-    expect(handle("top margin").style.top).toBe("95.5px");
+    expect(handle("top margin").style.top).toBe("88px");
     act(() => {
       fireEvent.pointerMove(control, {
         pointerId: 1,
@@ -2041,7 +2043,7 @@ describe("a drag that carries a margin through zero", () => {
     const control = handle("bottom margin");
     // The band spans 100..120; a positive one thickening away from the block
     // carries its handle on the far edge.
-    expect(control.style.top).toBe("115.5px");
+    expect(control.style.top).toBe("108px");
 
     act(() => {
       fireEvent.pointerDown(control, {
@@ -2071,7 +2073,7 @@ describe("a drag that carries a margin through zero", () => {
      * handle on the other end of the rectangle. Keeping the answer mirrored at
      * the press would leave it at 115.5 while the pointer went on.
      */
-    expect(handle("bottom margin").style.top).toBe("95.5px");
+    expect(handle("bottom margin").style.top).toBe("88px");
 
     act(() => {
       fireEvent.pointerUp(control, { pointerId: 1, clientX: 0, clientY: 10 });

@@ -68,22 +68,30 @@ import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
-import { canvasContentRect, overlaySpaceOf } from "./geometry-dom";
+import { canvasContentRect, onScreenOf, overlaySpaceOf } from "./geometry-dom";
 import { useBlockActionsContext } from "./keyboard-actions";
 import { layerLabel } from "./layers";
 import { lockBlockingEdit } from "./locking";
 import { useSelectionActions } from "./selection-actions";
 import {
-  toolbarPlacement,
-  unionRect,
+  TOOLBAR_GAP_PX,
   type ToolbarAction,
   type ToolbarActionId,
+  toolbarPlacement,
   type ToolbarPlacement,
+  type ToolbarScreen,
+  unionRect,
 } from "./toolbar-actions";
+
+/** A rectangle on screen as the top and bottom a toolbar keeps to. */
+function screenBand(rect: Rect): ToolbarScreen {
+  return { top: rect.y, bottom: rect.y + rect.height };
+}
 
 const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "select-parent": CornerLeftUp,
@@ -239,7 +247,11 @@ export function BlockToolbar({
         // `scrollHeight` are the CONTENT's size, so a long page would report a
         // height of several thousand and the clamp would let the bar sit far
         // outside what the author can see.
-        space.place(canvasContentRect(root, root))
+        space.place(canvasContentRect(root, root)),
+        TOOLBAR_GAP_PX,
+        // Kept to what is on screen: room above is room above on screen, and
+        // a tall block scrolled past its top keeps its bar in view.
+        screenBand(onScreenOf(space))
       )
     );
   }, [selectedId, selectedIds]);
@@ -381,7 +393,7 @@ export function BlockToolbar({
   return (
     <div
       ref={bar}
-      className="nx-block-toolbar"
+      className={BLOCK_TOOLBAR_CLASS}
       // Marked as chrome so a press here is not read as a click on the page
       // background, which would clear the very selection this bar acts on.
       {...{ [CHROME_ATTRIBUTE]: "" }}

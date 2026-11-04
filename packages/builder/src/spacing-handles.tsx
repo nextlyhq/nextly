@@ -176,8 +176,12 @@ export interface SpacingHandlesProps {
   readonly onGestureChange?: (held: boolean) => void;
 }
 
-/** How thick a handle's hit area is, in canvas pixels. */
-const HANDLE_SCREEN_PX = 9;
+/**
+ * How thick a handle's hit area is, in the author's pixels: 24, the minimum
+ * target WCAG 2.2 asks of a pointer control, centred on the edge it moves. The
+ * strip an author sees stays thin; only the area that takes a press is wider.
+ */
+const HANDLE_SCREEN_PX = 24;
 
 /** A gesture in flight. */
 interface Gesture {

@@ -46,18 +46,17 @@ import type { Rect } from "./geometry";
 import {
   canvasContentRect,
   CHROME_BLEED,
-  canvasScroller,
   clippedByAncestor,
+  onScreenOf,
   overlaySpaceOf,
   renderedScale,
   usedRadiiOf,
   visiblePartOf,
-  visibleBandOf,
   type OverlaySpace,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
-import { toolbarPlacement } from "./toolbar-actions";
+import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -455,6 +454,15 @@ function placementTag(
   return `◇ ${name === undefined || name === "" ? UNNAMED_COMPONENT : name}`;
 }
 
+/**
+ * Whether the block toolbar takes the place above a block: above it, or
+ * pinned over its top at the top of the screen, where a tag above would
+ * collide with it either way.
+ */
+function takesTheTop(side: "above" | "below" | "pinned"): boolean {
+  return side !== "below";
+}
+
 /** What the marks are drawn for besides what the canvas marks on the page. */
 interface MarkInputs {
   /** The block a Layers row points at, or `null`. */
@@ -473,15 +481,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
   if (space === null) return NO_MARKS;
   const { root } = space;
-  // What is on screen, in the chrome's coordinates: the part of the page the
-  // scroller shows, where the canvas cuts off anything drawn past it. The
-  // whole page where nothing scrolls it.
-  const scroller = canvasScroller(root, space.frame !== null);
-  const onScreen = space.place(
-    scroller === null
-      ? canvasContentRect(root, root)
-      : visibleBandOf(scroller, root)
-  );
+  const onScreen = onScreenOf(space);
   const screenBottom = onScreen.y + onScreen.height;
   const screenRight = onScreen.x + onScreen.width;
   // From the ring's right edge as far as the screen shows it.
@@ -495,7 +495,12 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const toolbarAbove = (rect: Rect): boolean =>
     toolbar !== null &&
     toolbar !== undefined &&
-    toolbarPlacement(rect, space.sizeOf(toolbar), pageBox).side === "above";
+    takesTheTop(
+      toolbarPlacement(rect, space.sizeOf(toolbar), pageBox, TOOLBAR_GAP_PX, {
+        top: onScreen.y,
+        bottom: onScreen.y + onScreen.height,
+      }).side
+    );
   // Below if it fits on screen, above if that does and the toolbar is not
   // there, and otherwise inside the ring, which is always on screen.
   const tagSide = (rect: Rect, primary: boolean): Mark["tag"] => {

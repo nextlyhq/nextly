@@ -771,6 +771,49 @@ describe("toolbarPlacement", () => {
     expect(at.y).toBe(10 + 100 + TOOLBAR_GAP_PX);
   });
 
+  it("flips below at the top of what is on screen, not only of the page", () => {
+    // Scrolled 600px down: a block 10px below the screen's top has no room
+    // above it on screen, though the page has plenty.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 0, y: 610, width: 500, height: 100 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("below");
+    expect(at.y).toBe(610 + 100 + TOOLBAR_GAP_PX);
+  });
+
+  it("stays at the top of the screen for a tall block whose top is scrolled away", () => {
+    // The bar a tall block's author reaches for while its middle is on screen,
+    // rather than one scrolled away with its top edge.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 40, y: 200, width: 500, height: 1500 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("pinned");
+    expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
+  });
+
+  it("is left where it is for a block scrolled wholly out of view", () => {
+    const screen = { top: 600, bottom: 1400 };
+    expect(
+      toolbarPlacement(
+        { x: 0, y: 100, width: 500, height: 100 },
+        bar,
+        canvas,
+        TOOLBAR_GAP_PX,
+        screen
+      ).side
+    ).toBe("above");
+  });
+
   it("stays above for a block at the BOTTOM of a tall canvas", () => {
     // The control for the flip: a rule that flipped on any overflow would move
     // the bar for a block that had plenty of room above it.

@@ -19,3 +19,23 @@
  * needs no marker only because it takes no pointer events at all.
  */
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
+
+/**
+ * The block toolbar's class: drawn by `BlockToolbar`, and what Alt+F10 looks
+ * for to move focus to it. Here beside the chrome marker, which both of them
+ * import, rather than in either.
+ */
+export const BLOCK_TOOLBAR_CLASS = "nx-block-toolbar";
+
+/**
+ * Move focus to the block toolbar, at its tab stop: the one button of its
+ * roving set that holds `tabindex="0"`. Answers whether there was one.
+ */
+export function focusBlockToolbar(doc: Document): boolean {
+  const stop = doc.querySelector<HTMLElement>(
+    `.${BLOCK_TOOLBAR_CLASS} [tabindex="0"]`
+  );
+  if (stop === null) return false;
+  stop.focus();
+  return true;
+}
