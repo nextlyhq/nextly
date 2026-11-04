@@ -14,8 +14,11 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 
+import { publishedSummary } from "@admin/components/features/entries/publishAllOutcomes";
 import { toast } from "@admin/components/ui";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { entryApi, entryKeys } from "@admin/services/entryApi";
+import type { PublishAllLanguageOutcome } from "@admin/services/publishAllPreview";
 
 import {
   refreshRemovedFromCodeSchema,
@@ -35,17 +38,21 @@ export function usePublishAllLocales({
   {
     id: string;
     status?: string;
+    languages?: PublishAllLanguageOutcome[];
   },
   Error,
   string,
   unknown
 > {
   const queryClient = useQueryClient();
+  const { locales } = useLocalization();
+  const labelOf = (code: string) =>
+    locales.find(locale => locale.code === code)?.label ?? code;
 
   return useMutation({
     mutationFn: (entryId: string) =>
       entryApi.publishAllLocales(collectionSlug, entryId),
-    onSuccess: (_data, entryId) => {
+    onSuccess: (data, entryId) => {
       // Refresh the entry detail (all locale-keyed variants) and the collection list.
       void queryClient.invalidateQueries({
         queryKey: entryKeys.detail(collectionSlug, entryId),
@@ -53,7 +60,8 @@ export function usePublishAllLocales({
       void queryClient.invalidateQueries({
         queryKey: entryKeys.lists(),
       });
-      if (!silent) toast.success("All languages published.");
+      // Each language's outcome, as the publish reports it.
+      if (!silent) toast.success(publishedSummary(data.languages, labelOf));
     },
     onError: error => {
       // A collection removed from code refuses in a sentence that says what to

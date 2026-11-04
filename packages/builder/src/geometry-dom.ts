@@ -652,14 +652,27 @@ function visibleClientRect(scroller: Element): Rect {
     };
   }
   const box = scroller.getBoundingClientRect();
-  // `clientLeft` and `clientTop` are the border, and a scrollbar on the left
-  // in a right-to-left scroller.
+  /*
+   * The client box is in layout pixels and the border box is painted, so a
+   * scroller drawn under a transform has the two in different units: the
+   * client box is scaled by the scroller's painted scale before the two are
+   * compared. `clientLeft` and `clientTop` are the border, and a scrollbar on
+   * the left in a right-to-left scroller.
+   */
+  const scaleX =
+    isHTMLElement(scroller) && scroller.offsetWidth > 0
+      ? box.width / scroller.offsetWidth
+      : 1;
+  const scaleY =
+    isHTMLElement(scroller) && scroller.offsetHeight > 0
+      ? (box.bottom - box.top) / scroller.offsetHeight
+      : 1;
   const laidOut = scroller.clientWidth > 0;
   return {
-    x: box.left + (laidOut ? scroller.clientLeft : 0),
-    y: box.top + (scroller.clientHeight > 0 ? scroller.clientTop : 0),
-    width: inner(box.width, scroller.clientWidth),
-    height: inner(box.bottom - box.top, scroller.clientHeight),
+    x: box.left + (laidOut ? scroller.clientLeft * scaleX : 0),
+    y: box.top + (scroller.clientHeight > 0 ? scroller.clientTop * scaleY : 0),
+    width: inner(box.width, scroller.clientWidth * scaleX),
+    height: inner(box.bottom - box.top, scroller.clientHeight * scaleY),
   };
 }
 
@@ -707,13 +720,72 @@ export function canvasScroller(
  * keep to it, so a tag or a bar is never drawn where the canvas cuts it off.
  */
 export function onScreenOf(space: OverlaySpace): Rect {
-  const { root } = space;
-  const scroller = canvasScroller(root, space.frame !== null);
-  return space.place(
+  const { root, frame } = space;
+  const scroller = canvasScroller(root, frame !== null);
+  const band =
     scroller === null
       ? canvasContentRect(root, root)
-      : visibleBandOf(scroller, root)
+      : visibleBandOf(scroller, root);
+  // A frame zoomed past the region around it is clipped and scrolled by the
+  // host's scroller as well, so what is on screen is the part both show.
+  const host = frame === null ? null : hostScrollerBandOf(frame, root);
+  return space.place(host === null ? band : intersectionOf(band, host));
+}
+
+/** The part two rectangles share; empty, at the first's corner, if none. */
+function intersectionOf(a: Rect, b: Rect): Rect {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  return right < x || bottom < y
+    ? { x: a.x, y: a.y, width: 0, height: 0 }
+    : { x, y, width: right - x, height: bottom - y };
+}
+
+/**
+ * The part of a frame the host's scroller shows, in the canvas's content
+ * coordinates, or `null` when no host scroller holds the frame.
+ *
+ * The shell scrolls a frame zoomed past the region it sits in, from the
+ * host's document, where nothing in the frame hears it: its visible box is
+ * read in the host, carried into the frame through the one mapping
+ * (`hostPointInFrame`), and into the canvas's coordinates from there.
+ */
+export function hostScrollerBandOf(
+  frame: HTMLIFrameElement,
+  root: HTMLElement
+): Rect | null {
+  const host = scrollableAncestor(frame);
+  if (host === null) return null;
+  const visible = visibleClientRect(host);
+  const start = hostPointInFrame(frame, { x: visible.x, y: visible.y });
+  const end = hostPointInFrame(frame, {
+    x: visible.x + visible.width,
+    y: visible.y + visible.height,
+  });
+  return clientRectInCanvas(
+    { x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y },
+    root
   );
+}
+
+/**
+ * Every scroller whose scroll or size moves what of the canvas is on screen:
+ * the canvas's own, and the host's around a frame. The same two
+ * {@link onScreenOf} reads, so the band chrome keeps to and what it listens to
+ * are one set.
+ */
+export function screenScrollers(
+  root: HTMLElement,
+  frame: HTMLIFrameElement | null
+): Element[] {
+  const scrollers: Element[] = [];
+  const own = canvasScroller(root, frame !== null);
+  if (own !== null) scrollers.push(own);
+  const host = frame === null ? null : scrollableAncestor(frame);
+  if (host !== null) scrollers.push(host);
+  return scrollers;
 }
 
 /**
@@ -757,6 +829,26 @@ export function scrollEventTarget(scroller: Element): EventTarget {
  */
 export function layoutFragments(element: Element): number {
   return element.getClientRects().length;
+}
+
+/**
+ * The elements that draw an element's boxes: itself when it generates one, its
+ * children's drawing when it is `display: contents` (which generates no box of
+ * its own and leaves its children on the page), nothing when it is hidden or
+ * skipped. What a rectangle for the element is read from.
+ *
+ * `display: contents` is asked FIRST. A browser's `checkVisibility()` answers
+ * false for an element with no box, and `contents` generates none, so asking
+ * {@link renderSkips} first would drop a section whose children are all on the
+ * page. A child under a skipped ancestor still answers for itself.
+ */
+export function drawnBoxes(element: Element): Element[] {
+  const view = element.ownerDocument.defaultView;
+  if (view?.getComputedStyle(element).display === "contents") {
+    return Array.from(element.children).flatMap(drawnBoxes);
+  }
+  if (renderSkips(element)) return [];
+  return layoutFragments(element) > 0 ? [element] : [];
 }
 
 /**

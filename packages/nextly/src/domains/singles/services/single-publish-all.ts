@@ -185,7 +185,8 @@ export interface PublishAllSingleResult {
   /**
    * Every language's version once the publish has committed.
    *
-   * @experimental Nothing is judged against the version yet.
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
    */
   _rev?: string;
   /**
@@ -487,8 +488,14 @@ export class SinglePublishAllService extends BaseService {
         options.authenticatedScope,
         this.fieldRuleVisitor
       );
+      // Whether the caller may read the Single, which decides what the
+      // gate's refusal may name, asked as the publish asks it.
+      const promoteReads =
+        options.overrideAccess === true
+          ? undefined
+          : await this.readsSingle(plan.slug, options);
       const preview = await this.adapter.transaction(tx =>
-        this.previewIn(tx, plan, { options, promoteGrants })
+        this.previewIn(tx, plan, { options, promoteGrants, promoteReads })
       );
       return {
         success: true,
@@ -1867,7 +1874,8 @@ export class SinglePublishAllService extends BaseService {
         mainRow,
         judged,
         caller.options,
-        caller.promoteGrants
+        caller.promoteGrants,
+        caller.promoteReads
       );
       return [];
     } catch (error) {
@@ -2406,6 +2414,11 @@ function publishableShape(plan: PublishPlan): PublishableShape {
 interface SharedFieldsCaller {
   options: PublishAllSingleLocalesOptions;
   promoteGrants?: () => Promise<CallerGrants>;
+  /**
+   * Whether the caller may read the Single; undefined for trusted code. The
+   * promotion gate names a refused field only to a caller who may.
+   */
+  promoteReads?: boolean;
 }
 
 /**

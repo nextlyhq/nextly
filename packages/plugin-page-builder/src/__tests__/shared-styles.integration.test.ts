@@ -405,7 +405,7 @@ describe.each(getConfiguredTestDialects())(
       const early = await remove(["c-spare"]);
       expect(early.status).toBe(409);
       expect(JSON.stringify(early.body)).toContain(
-        "Some pages are still being counted, so no shared style can be removed yet."
+        "Some pages haven't been counted yet, so no shared style can be removed."
       );
 
       await tick();
@@ -432,6 +432,43 @@ describe.each(getConfiguredTestDialects())(
         "c-card",
         "c-hero",
       ]);
+    });
+
+    it("counts the pages now for a Design manager, with no scheduler, and refuses a reader", async () => {
+      // No `tick`: nothing drains the queue in this run, as on a site with no
+      // scheduler, so only the count route can make the index whole.
+      const { t } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Gated", slug: "gated", content: gatedUse("c-hero") },
+        overrideAccess: true,
+      });
+      const designer = await holding(t, ...DESIGN);
+      const reader = await holding(t, "read-site-style");
+      const usage = (cookie: string) =>
+        call("GET", `${route("usage")}?id=c-hero`, cookie);
+
+      // CONTROL: not whole before, and the panel is told who may count.
+      expect((await usage(designer)).body).toMatchObject({
+        whole: false,
+        counting: true,
+        mayCount: true,
+      });
+      expect((await usage(reader)).body).toMatchObject({ mayCount: false });
+
+      const refused = await call("POST", route("count"), reader, {});
+      expect(refused.status).toBe(403);
+      expect((await usage(designer)).body).toMatchObject({ whole: false });
+
+      const counted = await call("POST", route("count"), designer, {});
+      expect(counted.status).toBe(200);
+      expect(counted.body).toMatchObject({
+        item: { ran: true, whole: true, counting: false },
+      });
+      expect((await usage(designer)).body).toMatchObject({
+        whole: true,
+        styles: { "c-hero": { documents: 1, complete: true } },
+      });
     });
 
     it("reads usage with the lock permission alone, and refuses a caller holding neither", async () => {

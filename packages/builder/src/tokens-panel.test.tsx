@@ -126,6 +126,133 @@ describe("the rows", () => {
     expect(screen.queryByText(/used by|uses/i)).toBeNull();
   });
 
+  it("shows a length that changes with the page as Fluid, its whole value on hover", () => {
+    // The whole clamp() crowded the name out of the row; the row says what
+    // kind of value it is, and the hover and the name say the value.
+    const fluid = "clamp(1rem, 0.5rem + 2vw, 2rem)";
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.section-y",
+              kind: "dimension",
+              values: { light: fluid },
+            },
+          ],
+        }}
+      />
+    );
+    const section = row(/^Section y/);
+    const chip = section.querySelector(".nx-vars__chip");
+    expect(chip?.textContent).toBe("Fluid");
+    expect(chip?.getAttribute("title")).toBe(fluid);
+    expect(section.getAttribute("aria-label")).toBe(`Section y, ${fluid}`);
+    // A fixed length still reads as itself, with no hover to add.
+    const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
+    expect(fixed?.textContent).toBe("1rem");
+    expect(fixed?.getAttribute("title")).toBeNull();
+  });
+
+  it("tells apart two rows shown under one name by their kind, and only those", () => {
+    // `space.card` and `radius.card` both read "Card": side by side, nothing
+    // said which was which.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "radius.card",
+              kind: "dimension",
+              values: { light: "12px" },
+            },
+          ],
+        }}
+      />
+    );
+    const spacing = row(/^Card · spacing/);
+    const radius = row(/^Card · radius/);
+    expect(spacing.getAttribute("aria-label")).toBe("Card · spacing, 24px");
+    expect(radius.getAttribute("aria-label")).toBe("Card · radius, 12px");
+    // The kind is muted beside the name, not part of it.
+    expect(radius.querySelector(".nx-vars__name")?.textContent).toBe(
+      "Card · radius"
+    );
+    expect(radius.querySelector(".nx-vars__name-kind")?.textContent).toBe(
+      " · radius"
+    );
+    // A name only one row has stays as it is.
+    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 1rem");
+    // Each draws its kind's icon, so the two differ at a glance too.
+    expect(
+      radius
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("radius");
+    expect(
+      spacing
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("spacing");
+  });
+
+  it("names the code name when two rows of one name are of one kind too", () => {
+    // `space.card` and `spacing.card` are both spacing steps called "Card":
+    // the kind cannot tell them apart, the code name can.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "spacing.card",
+              kind: "dimension",
+              values: { light: "32px" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Card · space\.card,/).getAttribute("aria-label")).toBe(
+      "Card · space.card, 24px"
+    );
+    expect(row(/^Card · spacing\.card,/).getAttribute("aria-label")).toBe(
+      "Card · spacing.card, 32px"
+    );
+  });
+
+  it("says no kind for one name shown in two groups, whose headings tell them apart", () => {
+    // The body font and the body type size both read "Body", each under its
+    // own heading.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "font.body",
+              kind: "fontFamily",
+              values: { light: "Inter" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Body, size/).querySelector(".nx-vars__name-kind")).toBeNull();
+  });
+
   it("never says token to the author", () => {
     render(<Hosted tokens={SITE} />);
     expect(document.body.textContent).not.toMatch(/token/i);
