@@ -444,9 +444,23 @@ describe("how widely a style is used, in words", () => {
     ).toBe("No uses counted yet");
   });
 
-  it("puts a plus on a count that is a floor", () => {
-    expect(sharedStyleReachChip(reachOf({ pages: 4 }))).toBe("4");
-    expect(sharedStyleReachChip(reachOf({ pages: 4 }, false))).toBe("4+");
+  it("says what a count counts, with a plus on one that is a floor", () => {
+    // A bare number read as uses: 17 blocks on 2 pages read "2". The chip
+    // names what it counts, so the number is not taken for blocks.
+    expect(sharedStyleReachChip(reachOf({ pages: 4 }))).toBe("4 pages");
+    expect(sharedStyleReachChip(reachOf({ pages: 1 }))).toBe("1 page");
+    expect(sharedStyleReachChip(reachOf({ pages: 4 }, false))).toBe("4+ pages");
+    expect(sharedStyleReachChip(reachOf({ components: 2 }))).toBe(
+      "2 components"
+    );
+    // Several kinds: one total, in a word that covers them; the row's name
+    // and hover say each kind.
+    expect(sharedStyleReachChip(reachOf({ pages: 4, layouts: 1 }))).toBe(
+      "5 places"
+    );
+    // Nothing counted: pages, the kind a style is most often looked for on.
+    expect(sharedStyleReachChip(reachOf({}))).toBe("0 pages");
+    expect(sharedStyleReachChip(reachOf({}, false))).toBe("0+ pages");
   });
 });
 

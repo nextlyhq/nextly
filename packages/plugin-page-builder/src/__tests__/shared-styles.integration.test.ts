@@ -405,7 +405,7 @@ describe.each(getConfiguredTestDialects())(
       const early = await remove(["c-spare"]);
       expect(early.status).toBe(409);
       expect(JSON.stringify(early.body)).toContain(
-        "Some pages are still being counted, so no shared style can be removed yet."
+        "Some pages haven't been counted yet, so no shared style can be removed."
       );
 
       await tick();

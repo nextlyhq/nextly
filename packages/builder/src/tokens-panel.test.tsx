@@ -126,6 +126,35 @@ describe("the rows", () => {
     expect(screen.queryByText(/used by|uses/i)).toBeNull();
   });
 
+  it("shows a length that changes with the page as Fluid, its whole value on hover", () => {
+    // The whole clamp() crowded the name out of the row; the row says what
+    // kind of value it is, and the hover and the name say the value.
+    const fluid = "clamp(1rem, 0.5rem + 2vw, 2rem)";
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.section-y",
+              kind: "dimension",
+              values: { light: fluid },
+            },
+          ],
+        }}
+      />
+    );
+    const section = row(/^Section y/);
+    const chip = section.querySelector(".nx-vars__chip");
+    expect(chip?.textContent).toBe("Fluid");
+    expect(chip?.getAttribute("title")).toBe(fluid);
+    expect(section.getAttribute("aria-label")).toBe(`Section y, ${fluid}`);
+    // A fixed length still reads as itself, with no hover to add.
+    const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
+    expect(fixed?.textContent).toBe("1rem");
+    expect(fixed?.getAttribute("title")).toBeNull();
+  });
+
   it("never says token to the author", () => {
     render(<Hosted tokens={SITE} />);
     expect(document.body.textContent).not.toMatch(/token/i);

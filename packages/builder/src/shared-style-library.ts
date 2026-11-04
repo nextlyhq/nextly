@@ -620,9 +620,23 @@ export function sharedStyleReachSentence(
   return exact ? "Not used anywhere" : "No uses counted yet";
 }
 
-/** A row's count: its documents, with "+" when that is a floor. */
+/**
+ * A row's count: its documents, with "+" when that is a floor, and what they
+ * are. A bare number was read as uses, 17 blocks on 2 pages reading "2", so
+ * the chip names the kind it counts: "4 pages", or "5 places" across several
+ * kinds, which the row's name says one by one.
+ */
 export function sharedStyleReachChip(reach: SharedStyleReach): string {
-  return `${reach.documents}${reach.complete ? "" : "+"}`;
+  const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[]).filter(
+    kind => reach.byKind[kind] > 0
+  );
+  const [only] = kinds;
+  // Nothing counted reads in pages, the kind a style is most often on.
+  const words: readonly [string, string] =
+    kinds.length > 1 ? ["place", "places"] : KIND_WORDS[only ?? "pages"];
+  const plus = reach.complete ? "" : "+";
+  const [one, many] = words;
+  return `${reach.documents}${plus} ${reach.documents === 1 && plus === "" ? one : many}`;
 }
 
 /**
@@ -734,7 +748,7 @@ export function sharedStyleFilterEmpty(
  * the tab says the same before it is asked.
  */
 export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
-  "Some pages are still being counted, so no shared style can be removed yet.";
+  "Some pages haven't been counted yet, so no shared style can be removed.";
 
 /**
  * Why Lock, Remove and Remove unused wait: a rename writes the whole list of
@@ -749,7 +763,7 @@ export const SHARED_STYLE_RENAME_PENDING =
  * it covers the minimums, the withheld rows and Remove unused waiting.
  */
 export const SHARED_STYLE_COUNTING_NOTE =
-  "Some pages are still being counted, so the numbers are minimums and no style can be called unused or removed yet.";
+  "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed.";
 
 /**
  * The note while counts are floors for good: content the index cannot reach
@@ -771,4 +785,4 @@ export const SHARED_STYLE_UNUSED_UNCERTAIN =
 
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =
-  "Some pages are still being counted, so these numbers are minimums.";
+  "Some pages haven't been counted yet, so these numbers are minimums.";

@@ -361,6 +361,46 @@ describe("which states report that they carry values", () => {
     expect(screen.getByRole("menuitemradio", { name: "Focus" })).toBeTruthy();
   });
 
+  it("names the one other state with values beside the trigger", () => {
+    // One state: its name, which says where to look. A count of one sends
+    // the author through the menu to learn what the words could have said.
+    const styles = { hover: { base: { color: "#000001" } } } as NodeStyles;
+
+    const { container } = render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
+
+    expect(
+      container.querySelector(".nx-state-menu__elsewhere")?.textContent
+    ).toBe("· Hover set");
+  });
+
+  it("counts several other states with values beside the trigger", () => {
+    // Several: a count, since naming each would outgrow the bar's line.
+    const styles = {
+      hover: { base: { color: "#000001" } },
+      focus: { base: { color: "#000002" } },
+    } as NodeStyles;
+
+    const { container } = render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
+
+    expect(
+      container.querySelector(".nx-state-menu__elsewhere")?.textContent
+    ).toBe("· 2 more set");
+  });
+
   it("drops the trigger's dot once the state with values is the one shown", () => {
     const styles = { hover: { base: { color: "#000001" } } } as NodeStyles;
 

@@ -62,7 +62,7 @@ import { createPortal } from "react-dom";
 import { ShowMore } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
 import { colourHexOf, colourPairOf } from "./style-colour";
-import { lengthInPx } from "./style-variables";
+import { lengthInPx, variableValueText } from "./style-variables";
 import {
   addVariable,
   labelNewVariable,
@@ -947,22 +947,38 @@ function RowTail({
   if (entry.row.kind === "color") {
     return <ColourPair {...colourPairOf(token)} />;
   }
+  const own = valueFor(token, mode);
+  const words = chipText(entry, own);
   return (
-    <span className="nx-vars__chip" aria-hidden="true">
-      {chipText(entry, token, mode)}
+    <span
+      className="nx-vars__chip"
+      aria-hidden="true"
+      // The whole value on hover when the chip says it in fewer words, as
+      // "Fluid" does; the row's name says it to a screen reader already.
+      title={words === chipText(entry, own, "raw") ? undefined : own}
+    >
+      {words}
     </span>
   );
 }
 
-/** "16 / 26" for a type size with its line height, or the value itself. */
+/**
+ * "16 / 26" for a type size with its line height, or the value itself, in
+ * the picker's words: "Fluid" for a length that changes with the page, whose
+ * whole `clamp()` crowded the name out of the row. `raw` keeps the value as
+ * written, to tell whether the words shortened it.
+ */
 function chipText(
   entry: VariableEntry,
-  token: SiteToken,
-  mode: TokenMode
+  own: string,
+  form: "words" | "raw" = "words"
 ): string {
-  const own = valueFor(token, mode);
-  if (entry.lineHeight === undefined) return own;
-  return `${bare(own)} / ${bare(entry.lineHeight.value)}`;
+  const text =
+    form === "raw"
+      ? own
+      : variableValueText({ kind: entry.row.kind, value: own });
+  if (entry.lineHeight === undefined) return text;
+  return `${bare(text)} / ${bare(entry.lineHeight.value)}`;
 }
 
 /** A px value without its unit, as designers write a type scale. */
