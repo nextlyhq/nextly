@@ -18,9 +18,7 @@
  *
  * @module link-group
  */
-import { isLinkableUrl } from "@nextlyhq/blocks-engine";
-
-import type { EditableProp } from "./inspector";
+import { propIsSet, type EditableProp } from "./inspector";
 
 /** The props of one block's link, by the names the block declares them under. */
 export interface LinkGroup {
@@ -98,12 +96,25 @@ export function linkGroupOf(
   };
 }
 
-/** A stored string, trimmed, or `undefined` for anything else or nothing. */
-function storedString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+/**
+ * A stored string the inspector counts as set, trimmed, or `undefined`.
+ *
+ * Asked through `propIsSet`, the one rule the inspector's `onlyWithout` and
+ * the renderer read: for the link prop that is the engine's URL policy, so a
+ * stored `javascript:` address the page would never follow reads as no link
+ * here too, rather than as a link the block does not render.
+ */
+function storedString(
+  schema: { readonly type: string } | undefined,
+  value: unknown
+): string | undefined {
+  if (typeof value !== "string" || !propIsSet(schema, value)) return undefined;
   const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
 }
+
+/** The link prop's type, which decides what counts as a link that is set. */
+const URL_PROP = { type: "url" } as const;
 
 /** What a block's link holds now. */
 export type LinkValue =
@@ -125,13 +136,13 @@ export function linkValueOf(
   values: Readonly<Record<string, unknown>>
 ): LinkValue {
   if (group.entry !== undefined) {
-    const collection = storedString(values[group.entry.collection]);
-    const id = storedString(values[group.entry.id]);
+    const collection = storedString(undefined, values[group.entry.collection]);
+    const id = storedString(undefined, values[group.entry.id]);
     if (collection !== undefined && id !== undefined) {
       return { kind: "entry", collection, id };
     }
   }
-  const href = storedString(values[group.link]);
+  const href = storedString(URL_PROP, values[group.link]);
   return href === undefined ? { kind: "none" } : { kind: "address", href };
 }
 
@@ -177,7 +188,7 @@ export function addressFor(typed: string): string | undefined {
     linkKindOf(trimmed) === undefined && BARE_HOST.test(trimmed)
       ? `https://${trimmed}`
       : trimmed;
-  return isLinkableUrl(address) ? address : undefined;
+  return propIsSet(URL_PROP, address) ? address : undefined;
 }
 
 /**

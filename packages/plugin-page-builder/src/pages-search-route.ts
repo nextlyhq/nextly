@@ -279,6 +279,12 @@ export interface PageCollection {
    */
   readonly pathTemplate?: string;
   /**
+   * The fields `pathTemplate` reads, each a top-level field the collection
+   * declares, so a row is read with every value its address is made from
+   * (`/{noHeaderFooter}/{slug}` needs both). Present with `pathTemplate`.
+   */
+  readonly pathFields?: readonly string[];
+  /**
    * Required top-level fields a new page would leave empty: not the title, the
    * slug, the Page Builder field or the status, and with no default. Where any
    * exist, a page cannot be made from a title alone.
@@ -428,6 +434,60 @@ function writeLimits(
       ? { uncopyable: true }
       : {}),
   };
+}
+
+/** The registry record whose slug is `slug`, or `undefined` for none. */
+function recordNamed(
+  records: readonly unknown[],
+  slug: string
+): Record<string, unknown> | undefined {
+  for (const value of records) {
+    if (typeof value !== "object" || value === null) continue;
+    const record = value as Record<string, unknown>;
+    if (slugOf(record) === slug) return record;
+  }
+  return undefined;
+}
+
+/**
+ * The fields a path template reads, among the top-level fields `record`
+ * declares.
+ *
+ * Read off core's own interpolation rather than a second reading of the
+ * template's syntax: the template is resolved once against a stand-in entry
+ * that answers every field and records which ones were asked for, so the
+ * fields selected are exactly the ones the path is later made from, whatever
+ * placeholder spelling core accepts. Only declared fields are kept, so a
+ * placeholder naming no field selects nothing (the page then has no path, as
+ * core's resolution says for an unfilled placeholder).
+ */
+function templateFields(
+  template: string,
+  record: Record<string, unknown> | undefined
+): readonly string[] {
+  const asked = new Set<string>();
+  const standIn = new Proxy<Record<string, unknown>>(
+    {},
+    {
+      get: (_target, key) => {
+        if (typeof key === "string") asked.add(key);
+        return "x";
+      },
+    }
+  );
+  previewUrlFromTemplate(template)(standIn);
+  const declared = new Set(
+    (Array.isArray(record?.fields) ? record.fields : []).flatMap(
+      (field: unknown) => {
+        const name =
+          typeof field === "object" && field !== null
+            ? (field as { name?: unknown }).name
+            : undefined;
+        return typeof name === "string" ? [name] : [];
+      }
+    )
+  );
+  return [...asked].filter(name => declared.has(name));
 }
 
 /** The field name a page's address is conventionally stored under. */
@@ -598,12 +658,17 @@ export async function readPagesSearch(
 ): Promise<PagesSearchResponse> {
   const primary = reads.pagesCollection();
   const template = reads.pagePath?.();
+  const records = await reads.collections();
   const sources = inListingOrder(
-    pageCollections(await reads.collections(), reads.stores()),
+    pageCollections(records, reads.stores()),
     primary
   ).map(source =>
     template !== undefined && source.slug === primary
-      ? { ...source, pathTemplate: template }
+      ? {
+          ...source,
+          pathTemplate: template,
+          pathFields: templateFields(template, recordNamed(records, primary)),
+        }
       : source
   );
   const hits = await inTurns(sources, READS_AT_ONCE, source =>
@@ -915,10 +980,10 @@ function unorderedRead(
       id: true,
       ...(titleName === undefined ? {} : { [titleName]: true }),
       ...(source.lifecycle ? { [STATUS_COLUMN]: true } : {}),
-      // The slug, where the item's path is resolved from it.
-      ...(source.pathTemplate !== undefined && source.slugField !== undefined
-        ? { [source.slugField.name]: true }
-        : {}),
+      // Every field the item's path is resolved from.
+      ...Object.fromEntries(
+        (source.pathFields ?? []).map(name => [name, true] as const)
+      ),
       // The Page Builder field itself (its top-level key, for a field inside
       // a group), so core's field-level read decides whether this caller may
       // open what the item links to: a field it withholds comes back absent.

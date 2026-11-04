@@ -1131,6 +1131,75 @@ describe("where a page is served", () => {
     expect(select("posts")).not.toHaveProperty("slug");
   });
 
+  it("reads every field the host's path names, and only declared ones", async () => {
+    const { reads, find } = readsOver(
+      [
+        record("pages", {
+          fields: [
+            { name: "title", type: "text" },
+            { name: "slug", type: "text" },
+            { name: "noHeaderFooter", type: "text" },
+            { name: "content", type: "blocks" },
+          ],
+        }),
+      ],
+      async () =>
+        rows([
+          {
+            id: "p1",
+            title: "Pricing",
+            slug: "pricing",
+            noHeaderFooter: "bare",
+          },
+        ])
+    );
+
+    const answer = await readPagesSearch(request({ limit: 10 }), {
+      ...reads,
+      pagePath: () => "/{noHeaderFooter}/{slug}/{ghost}",
+    });
+
+    const select = (find.mock.calls[0]?.[0] as PagesFindArgs).select;
+    expect(select).toHaveProperty("noHeaderFooter", true);
+    expect(select).toHaveProperty("slug", true);
+    // A placeholder naming no field is never asked of the database.
+    expect(select).not.toHaveProperty("ghost");
+    expect(answer.items[0]).not.toHaveProperty("path");
+  });
+
+  it("names the path a template of several fields resolves to", async () => {
+    const { reads } = readsOver(
+      [
+        record("pages", {
+          fields: [
+            { name: "title", type: "text" },
+            { name: "slug", type: "text" },
+            { name: "noHeaderFooter", type: "text" },
+            { name: "content", type: "blocks" },
+          ],
+        }),
+      ],
+      async args =>
+        rows([
+          Object.fromEntries(
+            Object.entries({
+              id: "p1",
+              title: "Pricing",
+              slug: "pricing",
+              noHeaderFooter: "bare",
+            }).filter(([name]) => name === "id" || args.select[name] === true)
+          ),
+        ])
+    );
+
+    const answer = await readPagesSearch(request({ limit: 10 }), {
+      ...reads,
+      pagePath: () => "/{noHeaderFooter}/{slug}",
+    });
+
+    expect(answer.items[0]?.path).toBe("/bare/pricing");
+  });
+
   it("gives no path where the host states none", async () => {
     const { reads } = readsOver([record("pages")], async () =>
       rows([{ id: "p1", title: "Pricing", slug: "pricing" }])

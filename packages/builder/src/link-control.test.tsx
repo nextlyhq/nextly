@@ -611,3 +611,78 @@ describe("a link inside a contentOnly area", () => {
     });
   });
 });
+
+describe("what the group reads of the block", () => {
+  function registerExtra(): void {
+    register();
+    registerBlocks(
+      [
+        {
+          name: "acme/kiosk-link",
+          version: 1,
+          description: "A link that never opens a tab in kiosk mode.",
+          example: { props: {} },
+          editor: { label: "Kiosk link" },
+          props: {
+            href: { label: "Link", role: "content", type: "url" },
+            kiosk: { label: "Kiosk", type: "checkbox" },
+            target: { ...TARGET, onlyWithout: "kiosk" },
+          },
+          render: () => null,
+        },
+        {
+          name: "acme/new-tab-heading",
+          version: 1,
+          description:
+            "A heading whose links open a new tab unless told not to.",
+          example: { props: {} },
+          editor: { label: "New-tab heading" },
+          props: {
+            href: { label: "Link", role: "content", type: "url" },
+            target: TARGET,
+          },
+          defaultProps: { target: "_blank" },
+          render: () => null,
+        },
+      ] as never,
+      { source: "link-control-extra-test" }
+    );
+  }
+
+  function mountExtra(type: string, props: Record<string, unknown>) {
+    registerExtra();
+    const editor = editorFor(type, props);
+    render(<InspectorPanel editor={editor} />);
+    return editor;
+  }
+
+  it("reads a stored address the page would never follow as no link", () => {
+    mount("acme/heading", { href: "javascript:alert(1)" }, undefined);
+    expect(trigger().textContent).toBe("Search or paste a URL");
+    expect(
+      screen.queryByRole("switch", { name: "Open in new tab" })
+    ).toBeNull();
+  });
+
+  it("leaves out a sibling its own onlyWithout hides: not drawn, not cleared", () => {
+    const editor = mountExtra("acme/kiosk-link", {
+      href: "/x",
+      kiosk: true,
+      target: "_blank",
+    });
+    expect(
+      screen.queryByRole("switch", { name: "Open in new tab" })
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+    expect(written(editor)).toEqual({ kiosk: true, target: "_blank" });
+  });
+
+  it("shows the block's default target while none is stored", () => {
+    mountExtra("acme/new-tab-heading", { href: "/x" });
+    expect(
+      screen
+        .getByRole("switch", { name: "Open in new tab" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+});

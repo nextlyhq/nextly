@@ -261,6 +261,11 @@ describe("linkValueOf", () => {
       kind: "address",
       href: "/x",
     });
+    // An address the page would never follow is no link, by the same rule
+    // the renderer and the inspector's `onlyWithout` read.
+    expect(linkValueOf(button, { href: "javascript:alert(1)" })).toEqual({
+      kind: "none",
+    });
     // Half a reference is no entry; a blank address is no link.
     expect(
       linkValueOf(button, { entryCollection: "landing", href: "  " })

@@ -1302,8 +1302,10 @@ function ContentFields({
     );
   }
   // A link and the props that qualify it are drawn as one group, where the
-  // link prop sits; the others it draws get no row of their own.
-  const link = linkGroupOf(inspection.props);
+  // link prop sits; the others it draws get no row of their own. Built from
+  // the props the block offers, so a sibling its own `onlyWithout` hides is
+  // neither drawn nor written by the group.
+  const link = linkGroupOf(inspection.props.filter(prop => prop.offered));
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {

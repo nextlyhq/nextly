@@ -1074,7 +1074,12 @@ export function LinkGroupField({
             <Switch
               id={tabId}
               disabled={!writable(group.target)}
-              checked={values[group.target] === "_blank"}
+              // The block's default while none is stored, as a choice shows it.
+              checked={
+                (values[group.target] ??
+                  props.find(prop => prop.name === group.target)
+                    ?.defaultValue) === "_blank"
+              }
               // Off clears the target rather than storing `_self`: the same
               // tab is what a link does with none.
               onCheckedChange={on => {
