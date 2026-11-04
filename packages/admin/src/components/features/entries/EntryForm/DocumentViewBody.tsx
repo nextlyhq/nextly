@@ -260,7 +260,14 @@ function useChipRecoveryOffer(
   const { restore, dismiss } = recovery;
   return useMemo(
     () =>
-      offer === null ? null : { savedAt: offer.savedAt, restore, dismiss },
+      offer === null
+        ? null
+        : {
+            savedAt: offer.savedAt,
+            olderVersion: offer.olderVersion,
+            restore,
+            dismiss,
+          },
     [offer, restore, dismiss]
   );
 }

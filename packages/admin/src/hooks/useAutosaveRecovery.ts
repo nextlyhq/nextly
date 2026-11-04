@@ -231,6 +231,12 @@ export interface AutosaveRecoveryOffer {
   savedAt: Date;
   /** The values to write back into the form if the author accepts. */
   snapshot: unknown;
+  /**
+   * Whether the point is from an older version of the document, which someone
+   * else (or no one in particular) has written since: restoring it replaces
+   * those changes, and the offer says so.
+   */
+  olderVersion: boolean;
 }
 
 export interface UseAutosaveRecoveryResult {
@@ -352,7 +358,16 @@ export function useAutosaveRecovery({
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
     if (holdsStored(data, stored, locale)) return null;
-    return { savedAt, snapshot: data.snapshot };
+    // From an older version this author wrote over themselves: their later
+    // save holds what they meant to keep, so the point is not offered (a1).
+    if (data.superseded === "by-you") return null;
+    return {
+      savedAt,
+      snapshot: data.snapshot,
+      // Anyone else's later write, or one the server cannot name: offered,
+      // and said to be from an older version (a2).
+      olderVersion: data.superseded !== undefined,
+    };
   }, [dismissed, data, stored, locale, isPutOff]);
 
   const restore = useCallback(() => {

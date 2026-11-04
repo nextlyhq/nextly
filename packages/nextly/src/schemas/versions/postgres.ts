@@ -78,6 +78,15 @@ export const nextlyVersionsPg = pgTable(
     //
     // Insert-only rows (durable versions are never rewritten) stay at 0.
     revision: integer("revision").default(0).notNull(),
+    // The document as it stood when this author's recovery point was first
+    // recorded: its newest durable version_no (0 for none) and its working
+    // draft's revision (-1 for none). Set on an autosave row's insert and kept
+    // through its rewrites, so a write to the document after it (a REST update,
+    // another author's save, a publish) shows the point is from an older
+    // version. NULL on every other row, and on autosave rows recorded before
+    // this existed, which read as "unknown".
+    baseVersionNo: integer("base_version_no"),
+    baseDraftRevision: integer("base_draft_revision"),
   },
   table => [
     // Durable versions get a unique, monotonic sequence per document.

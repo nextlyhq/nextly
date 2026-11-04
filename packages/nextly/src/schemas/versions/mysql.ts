@@ -67,6 +67,15 @@ export const nextlyVersionsMysql = mysqlTable(
     // resolves to milliseconds here, which is finer than SQLite but still a
     // resolution two rewrites can share; a counter cannot collide.
     revision: int("revision").default(0).notNull(),
+    // The document as it stood when this author's recovery point was first
+    // recorded: its newest durable version_no (0 for none) and its working
+    // draft's revision (-1 for none). Set on an autosave row's insert and kept
+    // through its rewrites, so a write to the document after it (a REST update,
+    // another author's save, a publish) shows the point is from an older
+    // version. NULL on every other row, and on autosave rows recorded before
+    // this existed, which read as "unknown".
+    baseVersionNo: int("base_version_no"),
+    baseDraftRevision: int("base_draft_revision"),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

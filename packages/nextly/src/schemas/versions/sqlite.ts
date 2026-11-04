@@ -65,6 +65,15 @@ export const nextlyVersionsSqlite = sqliteTable(
     // ordering that `updated_at` cannot here: `mode: "timestamp"` stores whole
     // epoch SECONDS, so two rewrites inside one second are stored identically.
     revision: integer("revision").default(0).notNull(),
+    // The document as it stood when this author's recovery point was first
+    // recorded: its newest durable version_no (0 for none) and its working
+    // draft's revision (-1 for none). Set on an autosave row's insert and kept
+    // through its rewrites, so a write to the document after it (a REST update,
+    // another author's save, a publish) shows the point is from an older
+    // version. NULL on every other row, and on autosave rows recorded before
+    // this existed, which read as "unknown".
+    baseVersionNo: integer("base_version_no"),
+    baseDraftRevision: integer("base_draft_revision"),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

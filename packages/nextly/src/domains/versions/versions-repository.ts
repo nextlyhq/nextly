@@ -249,7 +249,28 @@ export interface VersionRow {
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * On an autosave row, the document as it stood when the recovery point was
+   * first recorded: its newest durable version_no (0 for none) and its
+   * working draft's revision (-1 for none). Null or absent on every other row,
+   * and on recovery points recorded before the base existed.
+   */
+  baseVersionNo?: number | null;
+  baseDraftRevision?: number | null;
 }
+
+/**
+ * Whether a recovery point is from an older version of its document, and who
+ * made the newer one, so an editor never offers one back as if it were current
+ * when restoring it would revert later work.
+ *
+ * - `by-you`: every later write was this author's own durable save or publish.
+ * - `by-another`: someone else wrote, or a write that names no one (an API key,
+ *   the system, a working-draft change, whose row records who began the draft
+ *   rather than who last changed it).
+ * - `unknown`: the point predates the base, so nothing can say.
+ */
+export type AutosaveSupersession = "by-you" | "by-another" | "unknown";
 
 /** Metadata view of a version row (everything except the snapshot). */
 export type VersionMeta = Omit<VersionRow, "snapshot">;
@@ -1167,6 +1188,10 @@ export class VersionsRepository {
           // Stated rather than left to the column default, so the first value
           // the compare-and-set will read is fixed by this insert.
           revision: 0,
+          // Read here, on the insert only: the point's rewrites keep the base
+          // it began from, or a write after it would become its base and the
+          // older work would read as current.
+          ...(await this.documentBase(input.ref, input.locale ?? null)),
         },
         { returning: [] }
       );
@@ -1253,6 +1278,68 @@ export class VersionsRepository {
    * that describes their work. Ordering makes that harmless instead of a
    * coin toss.
    */
+  /**
+   * Where a document stands now: its newest durable version_no (0 for none)
+   * and its working draft's revision in `locale` (-1 for none). Both are
+   * counters this table keeps, so comparing two of them asks no clock.
+   */
+  private async documentBase(
+    ref: VersionRef,
+    locale: string | null
+  ): Promise<{ baseVersionNo: number; baseDraftRevision: number }> {
+    const draft = await this.db.select<{ revision: number }>(TABLE, {
+      columns: ["revision"],
+      where: this.workingDraftWhere(ref, locale),
+      limit: 1,
+    });
+    return {
+      baseVersionNo: await this.getMaxVersionNo(ref),
+      baseDraftRevision: draft[0]?.revision ?? -1,
+    };
+  }
+
+  /**
+   * Whether `point`, an autosave row, is from an older version of its
+   * document, and whose; `undefined` while the document is as it was when the
+   * point began. See {@link AutosaveSupersession}.
+   */
+  async autosaveSupersession(
+    point: VersionRow
+  ): Promise<AutosaveSupersession | undefined> {
+    if (point.baseVersionNo == null || point.baseDraftRevision == null) {
+      return "unknown";
+    }
+    const ref: VersionRef = {
+      scopeKind: point.scopeKind,
+      scopeSlug: point.scopeSlug,
+      entryId: point.entryId,
+    };
+    const now = await this.documentBase(ref, point.locale);
+    const versionsMoved = now.baseVersionNo !== point.baseVersionNo;
+    const draftMoved = now.baseDraftRevision !== point.baseDraftRevision;
+    if (!versionsMoved && !draftMoved) return undefined;
+    // A working-draft row records who began the draft, not who last changed
+    // it, so a change to it is no one's in particular.
+    if (draftMoved) return "by-another";
+    const later = await this.db.select<{ createdBy: string | null }>(TABLE, {
+      columns: ["createdBy"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          // Every version after the base; the query has no `>`.
+          { column: "versionNo", op: ">=", value: point.baseVersionNo + 1 },
+        ],
+      },
+    });
+    const author = point.createdBy;
+    return author !== null &&
+      later.length > 0 &&
+      later.every(row => row.createdBy === author)
+      ? "by-you"
+      : "by-another";
+  }
+
   async findAutosave(
     ref: VersionRef,
     createdBy: string | null
