@@ -849,6 +849,7 @@ for (const entry of DIALECTS) {
         {
           setting: "Required",
           flags: { required: true },
+          translatedFlags: { required: true },
           // A second entry whose English row has no body.
           english: "NULL",
           refusal:
@@ -857,6 +858,9 @@ for (const entry of DIALECTS) {
         {
           setting: "Unique",
           flags: { unique: true },
+          // Unique while translated, the translations table's per-language index would refuse the
+          // second entry's value; the field becomes unique as it becomes shared.
+          translatedFlags: {},
           // A second entry whose English body is the first one's.
           english: "'Hello'",
           refusal:
@@ -864,8 +868,8 @@ for (const entry of DIALECTS) {
         },
       ])(
         "refuses $setting at migrate before the move's first file runs, then runs it once the values can take it",
-        async ({ flags, english, refusal }) => {
-          await migrateCreate(constrained(translated, flags));
+        async ({ flags, translatedFlags, english, refusal }) => {
+          await migrateCreate(constrained(translated, translatedFlags));
           await migrate();
           await seed();
           await adapter.executeQuery(
