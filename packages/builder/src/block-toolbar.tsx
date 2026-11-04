@@ -70,18 +70,25 @@ import * as React from "react";
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
-import { useCanvasFrame } from "./canvas-frame-context";
+import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
 import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
-import { canvasContentRect, onScreenOf, overlaySpaceOf } from "./geometry-dom";
+import {
+  canvasContentRect,
+  canvasScroller,
+  onScreenOf,
+  overlaySpaceOf,
+} from "./geometry-dom";
+import { useHoveredBlock } from "./hovered-block";
 import {
   useBlockActionsContext,
   useToolbarFocusSlot,
 } from "./keyboard-actions";
 import { layerLabel } from "./layers";
 import { lockBlockingEdit } from "./locking";
+import { clearanceWith } from "./scroll-clearance";
 import { useSelectionActions } from "./selection-actions";
 import {
   TOOLBAR_GAP_PX,
@@ -101,6 +108,76 @@ function screenBand(rect: Rect): ToolbarScreen {
     left: rect.x,
     right: rect.x + rect.width,
   };
+}
+
+/**
+ * The bar's fade marker: present while the pointer is over a block that is
+ * not selected.
+ */
+function fadedAside(
+  hovered: string | null,
+  selectedIds: readonly string[]
+): { "data-faded"?: "" } {
+  return hovered !== null && !selectedIds.includes(hovered)
+    ? { "data-faded": "" }
+    : {};
+}
+
+/**
+ * `scroll-padding-top` on the canvas's scroller, the bar's height and gap,
+ * while the bar is drawn: a block scrolled or focused into view then stops
+ * below the bar rather than under it (WCAG 2.4.11), or the scroller's own
+ * clearance where that is larger. In the root's coordinates,
+ * the scroller's, the bar being drawn at its own size over a frame painted at
+ * another. The scroller's own value comes back after.
+ */
+function useScrollClearance(
+  bar: React.RefObject<HTMLDivElement | null>,
+  hidden: boolean,
+  placement: ToolbarPlacement | null,
+  canvasFrame: CanvasFrame
+): void {
+  const drawn = !hidden && placement !== null;
+  React.useEffect(() => {
+    const element = bar.current;
+    if (!drawn || element === null) return;
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    const scroller = canvasScroller(space.root, space.frame !== null);
+    if (!isHTMLElement(scroller)) return;
+    const height = space.sizeOf(element).height / space.scale + TOOLBAR_GAP_PX;
+    const before = scroller.style.scrollPaddingTop;
+    // The larger of the bar's and what the scroller already keeps clear: a
+    // site keeping focused blocks below its sticky header sets its own, and
+    // the bar must not shrink that to the bar alone.
+    scroller.style.scrollPaddingTop = clearanceWith(
+      scroller.ownerDocument.defaultView?.getComputedStyle(scroller)
+        .scrollPaddingTop ?? "",
+      height
+    );
+    return () => {
+      scroller.style.scrollPaddingTop = before;
+    };
+  }, [bar, drawn, canvasFrame]);
+}
+
+/**
+ * The selected block's Layers lock, its own or one around it, said on the bar
+ * itself: the canvas draws nothing else that tells a locked block from any
+ * other, and the dimmed buttons only say why one at a time. Nothing for a
+ * set of blocks, or a block no lock holds.
+ */
+function lockNoteOf(
+  document: EditorState["document"],
+  selectedId: string | null,
+  selectedIds: readonly string[]
+): string | undefined {
+  if (selectedId === null || selectedIds.length > 1) return undefined;
+  const holder = lockBlockingEdit(document, selectedId);
+  if (holder === undefined) return undefined;
+  return holder.id === selectedId
+    ? "Locked"
+    : `Locked by ${layerLabel(holder)}`;
 }
 
 const ICONS: Record<ToolbarActionId, LucideIcon> = {
@@ -360,6 +437,10 @@ export function BlockToolbar({
     return watchScreenBand(space.root, space.frame, measure);
   }, [measure, hidden, selectedId, canvasFrame]);
 
+  const hovered = useHoveredBlock();
+
+  useScrollClearance(bar, hidden, placement, canvasFrame);
+
   const focusAt = React.useCallback((index: number) => {
     setActiveIndex(index);
     const buttons = bar.current?.querySelectorAll("button");
@@ -428,19 +509,14 @@ export function BlockToolbar({
 
   if (hidden || actions.length === 0) return null;
 
-  // The selected block's Layers lock, its own or one around it, said on the
-  // bar itself: the canvas draws nothing else that tells a locked block from
-  // any other, and the dimmed buttons only say why one at a time.
-  const holder =
-    selectedId === null || selectedIds.length > 1
-      ? undefined
-      : lockBlockingEdit(document, selectedId);
-  const lockNote =
-    holder === undefined
-      ? undefined
-      : holder.id === selectedId
-        ? "Locked"
-        : `Locked by ${layerLabel(holder)}`;
+  // Faded while the pointer is over another block: the bar sits over the
+  // block above the selection, which would otherwise be covered while the
+  // author points at it. Faded, not removed, so a pointer heading for the bar
+  // still reaches its buttons, and reaching them is pointing at chrome, which
+  // lets the hovered block go.
+  const faded = fadedAside(hovered, selectedIds);
+
+  const lockNote = lockNoteOf(document, selectedId, selectedIds);
 
   return (
     <div
@@ -453,6 +529,7 @@ export function BlockToolbar({
       aria-orientation="horizontal"
       aria-label="Block actions"
       data-side={placement?.side}
+      {...faded}
       // Kept out of sight rather than unmounted until the first measurement.
       // The bar has to be in the DOM to be measured at all, and mounting it at
       // a default position would show it in the wrong place for one frame.

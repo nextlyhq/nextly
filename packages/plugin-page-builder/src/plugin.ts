@@ -9,6 +9,7 @@ import {
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginDefinition,
+  type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
@@ -141,8 +142,14 @@ import { originStore, type OriginStore } from "./origin-store";
 import { pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
+import {
+  publishDependenciesRoute,
+  publishReadinessRoute,
+  type PublishReadinessSetup,
+} from "./publish-readiness";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
+import { retiredPins, type RetiredPins } from "./retired-pins";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
@@ -327,12 +334,26 @@ function registerReadinessNotice(
     // document the page draws from rather than every blocks field the store
     // happens to have.
     componentField: componentStoreOf(opts).field,
+    // Layouts name their area components in a repeater; read through it, a
+    // Layout published with an unpublished header is reported as a page is.
+    layoutCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
     // The SAME bounds the renderer draws under, asked per call. A notice
     // derived under different ones names components inside a document the page
     // never renders.
     limits: () => opts.limits ?? DEFAULT_LIMITS,
     ...optionalScope(readiness),
   });
+}
+
+/** What the publish-readiness routes read, from the same options the notice does. */
+function publishReadinessSetup(
+  opts: PageBuilderOptions
+): PublishReadinessSetup {
+  return {
+    store: componentStoreOf(opts),
+    enabled: opts.componentReadiness !== false,
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+  };
 }
 
 /**
@@ -1203,6 +1224,10 @@ export const pageBuilder = (
   // What deriving retired ids from component history has read so far, shared
   // by the repair after a failed record and the editor's facts read.
   const retiredHistory = retiredHistoryMemo();
+  // The versions a lost removal is derived from, held until a repair records
+  // it. Set by `init`, which holds the context pins are made through; read by
+  // the facts route's repair, which releases them.
+  let heldRemovals: RetiredPins | undefined;
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -1488,6 +1513,20 @@ export const pageBuilder = (
           COMPONENT_RETIRED_SLUG,
       });
       if (opts.componentReadiness !== false) {
+        // Registered on first use rather than here: a context without
+        // version history (a test's, a host's stand-in) still installs.
+        let holder: PluginVersionPinHolder | undefined;
+        heldRemovals = retiredPins({
+          holder: () =>
+            (holder ??= ctx.services.versions.pins.registerHolder({
+              name: "retired-fields",
+              label: "Page Builder removed fields",
+            })),
+          transaction: work => ctx.db.transaction(work),
+          history: () => ctx.services.versions,
+          componentCollection: composition.store.collection,
+          componentField: composition.store.field,
+        });
         registerRetiredExposures({
           ctx,
           componentCollection: composition.store.collection,
@@ -1501,6 +1540,7 @@ export const pageBuilder = (
           }),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           memo: retiredHistory,
+          pins: heldRemovals,
         });
       }
       // A write that keeps a reference to a component being deleted, committed
@@ -1705,6 +1745,11 @@ export const pageBuilder = (
         // component or updating a pattern from a selection, and opening a
         // component in its own view from the store definitions live in.
         patternCapabilityRoute(componentStoreOf(opts)),
+        // What a publish would leave unpublished, asked by the editor before
+        // it, and the offer's write: each chosen component or Layout
+        // published as the author.
+        publishReadinessRoute(publishReadinessSetup(opts)),
+        publishDependenciesRoute(publishReadinessSetup(opts)),
         // What the component editor needs beside the component's own
         // document: the ids its live definition uses, and the count of
         // documents placing it, read from the usage index the installed host
@@ -1798,6 +1843,9 @@ export const pageBuilder = (
                     componentField: componentStoreOf(opts).field,
                     lifecycle,
                     memo: retiredHistory,
+                    ...(heldRemovals === undefined
+                      ? {}
+                      : { pins: heldRemovals }),
                     store: retiredStore({
                       nextly: () => requireInstalled().nextly(),
                       collection:
@@ -1856,7 +1904,7 @@ export const pageBuilder = (
         // The editor's page search: the site's pages (entries of collections
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
-        pagesSearchRoute(componentStoreOf(opts)),
+        pagesSearchRoute(componentStoreOf(opts), opts.pagePreviewPath),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.

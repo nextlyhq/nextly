@@ -22,6 +22,26 @@ The top bar runs across the editor in three parts.
 and **Unpublish**, each where the entry offers it. An action you can't use right now is
 greyed out and says why. Duplicating, discarding and deleting stay on the entry's page.
 
+### Publishing a page whose parts aren't published
+
+A page, the components it places and its Layout are published separately. When you
+publish a page that places a component that isn't published, or one placed inside
+another component, or names a Layout that isn't published, the editor tells you before
+it publishes. The dialog lists each part, and what visitors see meanwhile: nothing where
+an unpublished component sits, and the site's default Layout around the page until its
+own is published.
+
+- **Publish page only** publishes the page and leaves the parts as they are. It's the
+  first choice, because publishing a page before its parts is an ordinary order of work.
+- **Publish both** (or **Publish all**) publishes the ticked parts first, then the page.
+  It's offered only for parts you may publish yourself, and each is published as you.
+  A part you can't publish is listed with the reason, and stays unpublished.
+- **Cancel** or Escape publishes nothing.
+
+The same question is asked when you publish a page or a component from its own entry
+page. A component you publish from its own view is checked the same way, for the
+components it places.
+
 The save state reads **Saving…**, **Unsaved changes**, **Saved**, or **Not saved** with
 a **Retry** button. It covers the page and the site-wide styles you change in **Design**.
 

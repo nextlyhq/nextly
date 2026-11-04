@@ -832,6 +832,26 @@ export function layoutFragments(element: Element): number {
 }
 
 /**
+ * The elements that draw an element's boxes: itself when it generates one, its
+ * children's drawing when it is `display: contents` (which generates no box of
+ * its own and leaves its children on the page), nothing when it is hidden or
+ * skipped. What a rectangle for the element is read from.
+ *
+ * `display: contents` is asked FIRST. A browser's `checkVisibility()` answers
+ * false for an element with no box, and `contents` generates none, so asking
+ * {@link renderSkips} first would drop a section whose children are all on the
+ * page. A child under a skipped ancestor still answers for itself.
+ */
+export function drawnBoxes(element: Element): Element[] {
+  const view = element.ownerDocument.defaultView;
+  if (view?.getComputedStyle(element).display === "contents") {
+    return Array.from(element.children).flatMap(drawnBoxes);
+  }
+  if (renderSkips(element)) return [];
+  return layoutFragments(element) > 0 ? [element] : [];
+}
+
+/**
  * Whether the render SKIPS this element, so a rectangle read from it describes
  * nothing that is on the page.
  *

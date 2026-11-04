@@ -383,7 +383,7 @@ function OwnLockLine({
       <span id={reasonId}>
         <strong>Locked</strong>: it can&apos;t be moved, deleted or edited.
       </span>
-      {layersLockChangeable(lock) ? " Unlock it from the menu." : null}
+      {layersLockChangeable(lock) ? " Unlock it from the block's menu." : null}
     </li>
   );
 }
