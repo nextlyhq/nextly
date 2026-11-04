@@ -15,13 +15,6 @@ export const PUBLISH_READINESS_ROUTE_PATH = "/publish-readiness";
 export const PUBLISH_DEPENDENCIES_ROUTE_PATH = "/publish-dependencies";
 
 /**
- * How many block documents one readiness request may carry: one per blocks
- * field of the document being published, which is one in every shipped
- * collection. The cap bounds the work a request can ask for.
- */
-export const MAX_READINESS_DOCUMENTS = 8;
-
-/**
  * How many documents one publish request may name. A page that needs more than
  * this many components published is not one an author confirms in a dialog.
  */

@@ -445,6 +445,51 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("answers a form of nine blocks fields, naming what the last one needs", async () => {
+      // A form may hold any number of blocks fields, each one document of the
+      // request: the ninth is asked about as the first is.
+      const footnote = idOf(
+        await direct.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Footnote",
+            slug: "footnote",
+            content: componentDocument("footnote"),
+            status: "draft",
+          },
+          overrideAccess: true,
+        })
+      );
+      const res = await route(PUBLISH_READINESS_ROUTE_PATH, siteEditor, {
+        documents: [
+          ...Array.from({ length: 8 }, () => pageDocument([])),
+          pageDocument([footnote]),
+        ],
+        layout: null,
+      });
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect(
+        ((await res.json()) as PublishReadinessResponse).dependencies
+      ).toEqual([
+        {
+          kind: "component",
+          id: footnote,
+          title: "Footnote",
+          mayPublish: true,
+        },
+      ]);
+    });
+
+    it("refuses a request past the work one may ask for, however small each document", async () => {
+      // Each document counts as one node at least: eight documents of the
+      // largest size allowed, in empty ones, and one more.
+      const res = await route(PUBLISH_READINESS_ROUTE_PATH, siteEditor, {
+        documents: Array.from({ length: 8 * 5000 + 1 }, () => ({})),
+        layout: null,
+      });
+      expect(res.status).toBe(400);
+    });
+
     it("refuses a body it does not accept, naming nothing", async () => {
       const res = await route(PUBLISH_READINESS_ROUTE_PATH, siteEditor, {
         documents: "not a list",

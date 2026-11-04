@@ -18,7 +18,7 @@ import { useCallback, useRef, useState } from "react";
 import { toast } from "@admin/components/ui";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
-import { MOVED_MESSAGE } from "./submit-outcome";
+import { MOVED_MESSAGE, submitBusy } from "./submit-outcome";
 import type {
   BeforeDocumentAction,
   DocumentActionOutcome,
@@ -92,6 +92,17 @@ function reportedAfterMove(
   toast.error(outcome.message, { id: "store-after-move" });
   return { ...outcome, reported: true };
 }
+
+/**
+ * A storing action started while another readies or stores: it would run the
+ * handlers again over the first one's question, and store the work twice.
+ */
+const storeBusy: DocumentActionOutcome = {
+  ok: false,
+  reason: "busy",
+  message: submitBusy.ok ? "" : submitBusy.message,
+  beforeWrite: true,
+};
 
 /** What an action comes to when a before-action handler called it off. */
 const BEFORE_CANCELLED: DocumentActionOutcome = {
@@ -186,14 +197,22 @@ export function useStoringGate(scope: string): StoringGate {
    * tracked writes are settled after them. A handler that acts on the server
    * for the store (publishing what the document needs) waits for them itself,
    * through `writesSettled`, and does not act when one failed: the store is
-   * then refused, and what it did would stand without it.
+   * then refused, and what it did would stand without it. That refusal is the
+   * store's answer, though the writes have settled by the time it would ask
+   * again: a write retried meanwhile must not let the store go ahead without
+   * what the handler did not do.
    */
   const readyToStore = async (
     action: string
   ): Promise<DocumentActionOutcome | null> => {
+    let refused: DocumentActionOutcome | null = null;
     try {
       const store: StoreReadiness = {
-        writesSettled: async () => (await writesSettled()) === null,
+        writesSettled: async () => {
+          const outcome = await writesSettled();
+          refused ??= outcome;
+          return outcome === null;
+        },
       };
       for (const before of [...beforeActions.current]) {
         await before(action, store);
@@ -211,7 +230,7 @@ export function useStoringGate(scope: string): StoringGate {
         beforeWrite: true,
       };
     }
-    return writesSettled();
+    return refused ?? writesSettled();
   };
 
   /*
@@ -253,9 +272,15 @@ export function useStoringGate(scope: string): StoringGate {
    * Inside the performer, so the control and `run` cannot differ about what
    * a store waits for.
    */
+  // One storing action at a time. The control is withheld while one is in
+  // flight, but only once that renders, and `run` can be called twice before
+  // it does.
+  const storingNow = useRef(false);
   const storing =
     (action: string, perform: () => Promise<DocumentActionOutcome>) =>
     async (): Promise<DocumentActionOutcome> => {
+      if (storingNow.current) return storeBusy;
+      storingNow.current = true;
       const startedIn = currentVisit.current;
       setReadying(n => n + 1);
       try {
@@ -273,6 +298,7 @@ export function useStoringGate(scope: string): StoringGate {
           ? outcome
           : reportedAfterMove(outcome);
       } finally {
+        storingNow.current = false;
         setReadying(n => n - 1);
       }
     };

@@ -372,6 +372,66 @@ describe("before a storing action", () => {
     expect(onPublish).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the refusal it gave a handler, though the write lands before the store", async () => {
+    // Told no, the handler did not act; the store must not go ahead because
+    // the write was retried, and landed, before the store asked again.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    // Called only once rendered, so the handler reads `probe` assigned.
+    const probe: Probe = renderHost({ onPublish }, async (_action, store) => {
+      if (await store.writesSettled()) return;
+      const retried = Promise.resolve();
+      probe.track("Site colours", retried);
+      await retried;
+    });
+    const write = deferred();
+    act(() => {
+      probe.track("Site colours", write.promise);
+    });
+    await act(async () => {
+      write.reject(new Error("The server is unreachable."));
+      await write.promise.catch(() => {});
+    });
+
+    const outcome = await runAction(probe, "publish");
+
+    expect(onPublish).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "refused",
+      message:
+        "Site colours wasn't saved, so this page wasn't either: The server is unreachable.",
+      beforeWrite: true,
+    });
+  });
+
+  it("refuses a second store started while the first readies, and stores once", async () => {
+    // Run twice before the first renders its control busy: the second would
+    // ask the handlers again over the first's question, and store twice.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const asked = deferred();
+    const before = vi.fn(() => asked.promise);
+    const probe = renderHost({ onPublish }, before);
+
+    let first: Promise<unknown> = Promise.resolve();
+    let second: Promise<unknown> = Promise.resolve();
+    act(() => {
+      first = probe.run("publish");
+      second = probe.run("publish");
+    });
+    await act(async () => {
+      asked.resolve();
+      await Promise.all([first, second]);
+    });
+
+    await expect(second).resolves.toMatchObject({
+      ok: false,
+      reason: "busy",
+    });
+    await expect(first).resolves.toEqual(saved);
+    expect(before).toHaveBeenCalledTimes(1);
+    expect(onPublish).toHaveBeenCalledTimes(1);
+  });
+
   it("stores again once the same change is written successfully", async () => {
     const onSaveDraft = vi.fn(() => Promise.resolve(saved));
     const probe = renderHost({ onSaveDraft });

@@ -13,7 +13,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { planPublishReadiness, type ReadinessReads } from "./publish-readiness";
+import {
+  planPublishReadiness,
+  systemReads,
+  titlesAsCaller,
+  type ReadinessReads,
+} from "./publish-readiness";
 
 const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 2_097_152 };
 
@@ -245,5 +250,68 @@ describe("what a publish would leave unpublished", () => {
       reads({ components: { card: { live: false } } })
     );
     expect(plan.components).toEqual(["card"]);
+  });
+});
+
+describe("the reads behind the answer", () => {
+  const ids = Array.from({ length: 600 }, (_, i) => `c${String(i)}`);
+  const stores = {
+    components: "components",
+    componentField: "content",
+    layouts: "layouts",
+  };
+
+  /**
+   * A store of every id in `ids` that answers as core's collection query
+   * does: at most 500 rows a query, whatever the limit asked.
+   */
+  function clampedStore() {
+    const asked: Record<string, unknown>[] = [];
+    return {
+      asked,
+      find: async (args: Record<string, unknown>) => {
+        asked.push(args);
+        const where = args.where as { id: { in: string[] } };
+        const limit = Math.min(Number(args.limit), 500);
+        return {
+          items: where.id.in.slice(0, limit).map(id => ({
+            id,
+            title: `Title ${id}`,
+            content: component(),
+          })),
+        };
+      },
+    };
+  }
+
+  it("reads every stored component asked for, past one query's clamp", async () => {
+    const store = clampedStore();
+    const reads = systemReads(
+      store as unknown as Parameters<typeof systemReads>[0],
+      stores,
+      LIMITS
+    );
+    const stored = await reads.stored(ids);
+    expect([...stored.keys()]).toEqual(ids);
+  });
+
+  it("reads every title the caller may read, past one query's clamp, as the caller", async () => {
+    const store = clampedStore();
+    const user = { id: "author" };
+    const titles = await titlesAsCaller(
+      {
+        caller: {
+          identity: async () => ({ user }),
+        } as unknown as Parameters<typeof titlesAsCaller>[0]["caller"],
+      },
+      store as unknown as Parameters<typeof titlesAsCaller>[1],
+      "components",
+      ids
+    );
+    expect([...titles.keys()]).toEqual(ids);
+    expect(store.asked.length).toBeGreaterThan(1);
+    for (const read of store.asked) {
+      expect(read).toMatchObject({ overrideAccess: false, user });
+    }
   });
 });

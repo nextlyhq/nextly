@@ -36,6 +36,7 @@
  */
 import {
   componentIdsIn,
+  countNodes,
   type BlockDocument,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
@@ -62,11 +63,11 @@ import {
   type SystemReading,
 } from "./component-store-source";
 import { asCaller } from "./composition-route-kit";
+import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
-import type { ComponentStore } from "./library-route";
+import { readingAsUser, type ComponentStore } from "./library-route";
 import {
   MAX_PUBLISHED_DEPENDENCIES,
-  MAX_READINESS_DOCUMENTS,
   PUBLISH_DEPENDENCIES_ROUTE_PATH,
   PUBLISH_READINESS_ROUTE_PATH,
   type DependencyKind,
@@ -261,8 +262,30 @@ function storesOf(
   };
 }
 
-/** The system reads of one request. */
-function systemReads(
+/**
+ * The rows among `ids`, in batches under the query clamp (see `id-batches`):
+ * one query naming more answers for its first page only, and a row left off
+ * it would read as gone, or as one the caller may not read.
+ */
+async function findByIds(
+  nextly: Reader,
+  read: Record<string, unknown>,
+  ids: readonly string[]
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (const chunk of chunked(ids, ID_BATCH_SIZE)) {
+    const found = await nextly.find({
+      ...read,
+      where: { id: { in: [...chunk] } },
+      limit: chunk.length,
+    });
+    rows.push(...found.items);
+  }
+  return rows;
+}
+
+/** The system reads of one request. Exported for its tests. */
+export function systemReads(
   nextly: Reader,
   stores: Stores,
   limits: DocumentLimits
@@ -274,16 +297,18 @@ function systemReads(
       reading: AS_THE_SYSTEM,
     }),
     stored: async ids => {
-      const found = await nextly.find({
-        ...AS_THE_SYSTEM,
-        collection: stores.components,
-        where: { id: { in: [...ids] } },
-        limit: ids.length,
-        status: "all",
-        depth: 0,
-      });
+      const found = await findByIds(
+        nextly,
+        {
+          ...AS_THE_SYSTEM,
+          collection: stores.components,
+          status: "all",
+          depth: 0,
+        },
+        ids
+      );
       const byId = new Map<string, unknown>();
-      for (const item of found.items) {
+      for (const item of found) {
         const row = item as Record<string, unknown>;
         if (typeof row.id !== "string") continue;
         const stored = row[stores.componentField];
@@ -311,8 +336,11 @@ function systemReads(
   };
 }
 
-/** The titles of `ids` the caller may read; an id absent here is hidden. */
-async function titlesAsCaller(
+/**
+ * The titles of `ids` the caller may read; an id absent here is hidden.
+ * Exported for its tests.
+ */
+export async function titlesAsCaller(
   ctx: Pick<PluginRouteContext, "caller">,
   nextly: Reader,
   collection: string,
@@ -333,28 +361,23 @@ function titleOf(value: unknown): string {
   return title === "" ? "Untitled" : title;
 }
 
-/** The rows among `ids` the caller may read, through core's read access. */
+/**
+ * The rows among `ids` the caller may read, through core's read access, as
+ * every route in this package reads as the caller (`readingAsUser`).
+ */
 async function readableAsCaller(
   ctx: Pick<PluginRouteContext, "caller">,
   nextly: Reader,
   collection: string,
   ids: readonly string[]
 ): Promise<unknown[]> {
-  const identity = await ctx.caller?.identity();
+  const asUser = await readingAsUser(ctx);
   try {
-    const found = await nextly.find({
-      collection,
-      where: { id: { in: [...ids] } },
-      limit: ids.length,
-      status: "all",
-      depth: 0,
-      overrideAccess: false,
-      user: identity?.user,
-      ...(identity?.authenticatedScope === undefined
-        ? {}
-        : { actor: identity.authenticatedScope }),
-    });
-    return found.items;
+    return await findByIds(
+      nextly,
+      { ...asUser, collection, status: "all", depth: 0 },
+      ids
+    );
   } catch (error) {
     // A caller who may not read the collection at all reads none of it.
     if (NextlyError.isForbidden(error)) return [];
@@ -377,7 +400,8 @@ async function holds(
 
 const READINESS_BODY = z
   .object({
-    documents: z.array(z.unknown()).max(MAX_READINESS_DOCUMENTS),
+    // Bounded by the work they ask for, not by how many: see `documentsWithin`.
+    documents: z.array(z.unknown()),
     layout: z.string().trim().min(1).max(256).nullable().optional(),
   })
   .strict();
@@ -433,6 +457,51 @@ export interface PublishReadinessSetup {
 const NOTHING: PublishReadinessResponse = { dependencies: [], missing: 0 };
 
 /**
+ * The work one readiness request may ask for, in documents of the largest
+ * size the site allows.
+ */
+const READINESS_BUDGET_IN_DOCUMENTS = 8;
+
+/**
+ * The request's block documents, refused past the work one request may ask
+ * for: as many nodes as `READINESS_BUDGET_IN_DOCUMENTS` documents of the
+ * largest size the site allows. Bounded by nodes rather than by documents,
+ * because a form may hold any number of blocks fields, each one document, and
+ * every one of them is asked about; each counts as at least one node, so a
+ * flood of empty ones is bounded too.
+ */
+function documentsWithin(
+  values: readonly unknown[],
+  limits: DocumentLimits
+): BlockDocument[] {
+  const budget = READINESS_BUDGET_IN_DOCUMENTS * limits.maxNodes;
+  const documents: BlockDocument[] = [];
+  let spent = 0;
+  for (const value of values) {
+    const document = asDocument(value);
+    spent += Math.max(1, document === null ? 0 : nodesIn(document));
+    if (spent > budget) {
+      throw NextlyError.invalidInput({
+        message: "The request asks about more than one request may.",
+        logContext: { reason: "publish-readiness-over-budget" },
+      });
+    }
+    if (document !== null) documents.push(document);
+  }
+  return documents;
+}
+
+/** A document's nodes, or more than any budget when it is too large to walk. */
+function nodesIn(document: BlockDocument): number {
+  try {
+    return countNodes(document.nodes);
+  } catch {
+    // `countNodes` refuses only a forest too large to measure.
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
  * `POST /publish-readiness`.
  *
  * Authenticated, with no declared permission of its own: it is asked before
@@ -454,13 +523,13 @@ export function publishReadinessRoute(setup: PublishReadinessSetup): {
       if (!setup.enabled || ctx.caller === null) {
         return Response.json(NOTHING);
       }
+      const limits = setup.limits();
+      const documents = documentsWithin(body.documents, limits);
       const stores = storesOf(ctx, setup.store);
       const nextly = requireNextly() as unknown as Reader;
       const plan = await planPublishReadiness(
         {
-          documents: body.documents
-            .map(asDocument)
-            .filter((document): document is BlockDocument => document !== null),
+          documents,
           layout: body.layout ?? null,
           // A localized store publishes per language, and a published read
           // answers for none in particular: components are not judged there,
@@ -472,7 +541,7 @@ export function publishReadinessRoute(setup: PublishReadinessSetup): {
             ctx.user
           )),
         },
-        systemReads(nextly, stores, setup.limits())
+        systemReads(nextly, stores, limits)
       );
       return Response.json(await describePlan(ctx, nextly, stores, plan));
     },
@@ -550,8 +619,9 @@ function refusalReason(error: unknown): string {
  * document's own validation decide each one. That is the route's whole
  * authorization: it names no permission of its own, since a Layout's author
  * may publish a Layout without reading any component, and a permission on
- * one collection would refuse a write core allows on the other. One refusal does not stop the
- * rest: the author asked for each of them, and the page publishes regardless.
+ * one collection would refuse a write core allows on the other. One refusal
+ * does not stop the rest: the author asked for each of them, and the page
+ * publishes regardless.
  */
 export function publishDependenciesRoute(setup: PublishReadinessSetup): {
   method: "POST";
