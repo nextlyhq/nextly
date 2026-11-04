@@ -50,6 +50,10 @@ import {
   exposedTextOp,
   type ExposedTextTarget,
 } from "./exposed-inline";
+import type {
+  InlineEditOutcome,
+  InlineEditRefusal,
+} from "./inline-edit-outcome";
 import { namedTarget } from "./inline-target";
 import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
 import type { BuilderOp } from "./ops";
@@ -81,6 +85,28 @@ function exposedCommitOp(
   const now = exposedTarget(editor, started.nodeId, started.prop);
   if (now === undefined || now.exposureId !== started.exposureId) return null;
   return exposedTextOp(editor.document, started, next);
+}
+
+/**
+ * What the document holds for this edit now, or `undefined` when the value
+ * stopped being editable here: its block locked or removed, or the text no
+ * longer fed by the same exposure.
+ */
+function liveValueOf(
+  editor: EditorState,
+  current: InlineTextEditing
+): string | undefined {
+  if (current.exposure === undefined) {
+    return inlineTarget(editor.document, current.nodeId, current.prop)?.value;
+  }
+  const now = exposedTarget(
+    editor,
+    current.exposure.nodeId,
+    current.exposure.prop
+  );
+  return now?.exposureId === current.exposure.exposureId
+    ? now.value
+    : undefined;
 }
 
 /** A composed node's exposed text, when that is what this value is. */
@@ -212,9 +238,14 @@ function selectAll(element: HTMLElement): void {
 
 /**
  * @param editor - the editor state whose document is being edited
+ * @param onFinished - told when a key's way out of the line was refused and
+ *   the line stays open with the words in it, so a host can say why
  * @returns the current edit, the ways in and out, and the canvas handler
  */
-export function useInlineText(editor: EditorState): UseInlineTextResult {
+export function useInlineText(
+  editor: EditorState,
+  onFinished?: (outcome: InlineEditOutcome) => void
+): UseInlineTextResult {
   const [editing, setEditing] = useState<InlineTextEditing | null>(null);
   /*
    * The document the canvas is drawn in, which a keyboard caller's edit is
@@ -235,6 +266,19 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
   editorRef.current = editor;
   const editingRef = useRef(editing);
   editingRef.current = editing;
+  /*
+   * The host's ear, and the value as it was when the caret went in. The
+   * second tells a write that replaces it from one that would replace a NEWER
+   * value another surface, an undo or a remote change put there meanwhile. It
+   * is recorded once per edit (`openedFor`), so a frame replacing its
+   * document mid-edit keeps the same baseline.
+   */
+  const session = useRef<{
+    finished?: (outcome: InlineEditOutcome) => void;
+    opened: string | null;
+    openedFor: InlineTextEditing | null;
+  }>({ opened: null, openedFor: null });
+  session.current.finished = onFinished;
 
   /** Take the element back, whatever else happens. */
   const release = useCallback(() => {
@@ -280,22 +324,40 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
 
   /**
    * The keyboard's way out: the write is made first and the edit ends only
-   * once the page has taken it. A refused write (a size cap, a lock that
-   * arrived) leaves the line open with the words in it, because they are the
-   * author's only copy; `true` says so. Leaving the line by blur cannot keep
-   * it open, so that exit stays with {@link commit}.
+   * once the page has taken it. The refusal's reason when it was refused and
+   * the line stays open with the words in it, because they are the author's
+   * only copy:
+   *
+   * - the value moved on while it was typed, so writing would replace newer
+   *   words with older ones;
+   * - it stopped being editable (a lock arrived), so there is nowhere to
+   *   write it;
+   * - the page refused the write (a size cap).
+   *
+   * Nothing is held when nothing was typed, or when the element has left the
+   * page and there is nothing to hold it in. Leaving the line by blur cannot
+   * keep it open, so that exit stays with {@link commit}.
    */
-  const commitOrHold = useCallback((): boolean => {
+  const commitOrHold = useCallback((): InlineEditRefusal | null => {
     const element = elementRef.current;
     const current = editingRef.current;
     if (element === null || current === null) {
       release();
-      return false;
+      return null;
     }
-    const op = commitOp(current, element.textContent ?? "");
-    if (op !== null && editorRef.current.apply(op) === null) return true;
+    const next = element.textContent ?? "";
+    const opened = session.current.opened;
+    if (next === opened || !element.isConnected) {
+      release();
+      return null;
+    }
+    const live = liveValueOf(editorRef.current, current);
+    if (live === undefined) return "no-longer-editable";
+    if (opened !== null && live !== opened) return "moved-on";
+    const op = commitOp(current, next);
+    if (op !== null && editorRef.current.apply(op) === null) return "rejected";
     release();
-    return false;
+    return null;
   }, [commitOp, release]);
 
   const cancel = useCallback(() => {
@@ -305,10 +367,11 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     // abandoned text stays on screen until something else re-renders the
     // canvas, and the author sees an edit they explicitly discarded.
     if (element !== null && current !== null) {
-      const target =
-        current.exposure ??
-        inlineTarget(editorRef.current.document, current.nodeId, current.prop);
-      if (target !== null) element.textContent = target.value;
+      // The opened value where the document's is no longer editable here, so
+      // a line held after a lock arrived still shows what the page holds.
+      const restored =
+        liveValueOf(editorRef.current, current) ?? session.current.opened;
+      if (restored !== null) element.textContent = restored;
     }
     release();
   }, [release]);
@@ -379,6 +442,10 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
       element.textContent = held.textContent;
     }
     elementRef.current = element;
+    if (session.current.openedFor !== editing) {
+      session.current.openedFor = editing;
+      session.current.opened = liveValueOf(editorRef.current, editing) ?? null;
+    }
 
     element.setAttribute("contenteditable", "plaintext-only");
     element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
@@ -386,11 +453,28 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     selectAll(element);
 
     /*
-     * Set when a keyboard exit's write was refused and the line stayed open.
-     * The next deliberate Escape then lets the words go: the author's way out
-     * of a write the page will not take.
+     * The words a keyboard exit's write was refused with, while the line
+     * stays open. The next deliberate Escape over the SAME words lets them
+     * go: the author's way out of a write the page will not take. Words
+     * revised since are a new write, tried again.
      */
-    let refused = false;
+    let refusedWith: string | null = null;
+    const tryToLeave = () => {
+      const words = element.textContent ?? "";
+      const refusal = commitOrHold();
+      refusedWith = refusal === null ? null : words;
+      if (refusal !== null) {
+        session.current.finished?.({ status: "refused", reason: refusal });
+      }
+    };
+    const exitByKey = () => {
+      const words = element.textContent ?? "";
+      if (refusedWith !== null && words === refusedWith) {
+        cancel();
+        return;
+      }
+      tryToLeave();
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       // Escape keeps what was typed and ends the edit, as Enter does on a
       // line: the editor's design asks for it, and an author pressing Escape
@@ -401,11 +485,7 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat) return;
-        if (refused) {
-          cancel();
-          return;
-        }
-        refused = commitOrHold();
+        exitByKey();
         return;
       }
       if (event.key !== "Enter") return;
@@ -418,7 +498,7 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
       if (target?.multiline === true) return;
       event.preventDefault();
       if (event.repeat) return;
-      refused = commitOrHold();
+      tryToLeave();
     };
     /*
      * Stopped at the element rather than by teaching the canvas about editing.

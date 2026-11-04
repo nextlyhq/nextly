@@ -63,6 +63,53 @@ function editorState(): EditorState & { apply: ReturnType<typeof vi.fn> } {
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 
+/** The editor's document with the article's caption, or its lock, changed. */
+function documentWith(
+  editor: EditorState,
+  change: { caption?: string; locked?: boolean }
+): BlockDocument {
+  const [article] = editor.document.nodes;
+  if (article === undefined) throw new Error("no article");
+  return {
+    ...editor.document,
+    nodes: [
+      {
+        ...article,
+        ...(change.locked === undefined ? {} : { locked: change.locked }),
+        props: {
+          ...article.props,
+          ...(change.caption === undefined ? {} : { caption: change.caption }),
+        },
+      },
+    ],
+  };
+}
+
+/** A passage session whose reads answer, in turn, each of `reads`. */
+function passageLoader(reads: readonly unknown[]) {
+  let at = 0;
+  const attach = vi.fn(() => ({
+    status: "attached",
+    session: {
+      focus: () => {},
+      read: () => reads[Math.min(at++, reads.length - 1)],
+      detach: () => {},
+      hold: () => {},
+    },
+  }));
+  return vi.fn(async () => ({ attach }));
+}
+
+const STORED = { root: { type: "root", children: [] } };
+function typedPassage(text: string) {
+  return {
+    root: {
+      type: "root",
+      children: [{ type: "paragraph", children: [{ type: "text", text }] }],
+    },
+  };
+}
+
 /** The page, marked the way the renderer marks it. */
 function page(): void {
   document.body.innerHTML = `
@@ -134,6 +181,149 @@ describe("Escape while typing", () => {
     expect(editor.apply).toHaveBeenCalledTimes(1);
     expect(result.current.editing).toBeNull();
     expect(caption.textContent).toBe("A caption");
+  });
+
+  it("tries a revised line again after a refusal, rather than discarding it", () => {
+    // Refused at a cap, the author shortens the line: the next Escape is a
+    // new write, not the confirmation that lets the words go.
+    registerArticle();
+    page();
+    const editor = editorState();
+    const stored = editor.document;
+    editor.apply
+      .mockImplementationOnce(() => null)
+      .mockImplementation(() => stored);
+    const { result } = renderHook(() => useInlineText(editor));
+    act(() => {
+      result.current.begin("a", "caption");
+    });
+    const caption = document.querySelector('[data-nx-prop="caption"]');
+    if (caption === null) throw new Error("no caption");
+    caption.textContent = "A caption far too long";
+    act(() => escape(caption));
+    expect(result.current.editing).not.toBeNull();
+
+    caption.textContent = "A shorter caption";
+    act(() => escape(caption));
+    expect(editor.apply).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(editor.apply.mock.calls[1]?.[0])).toContain(
+      "A shorter caption"
+    );
+    expect(result.current.editing).toBeNull();
+    expect(caption.textContent).toBe("A shorter caption");
+  });
+
+  it("holds a line whose block was locked while it was typed", () => {
+    // The lock refuses the write before it is made; the words are still the
+    // author's only copy, and stay until a second Escape lets them go.
+    registerArticle();
+    page();
+    const editor = editorState();
+    const finished = vi.fn();
+    const { result } = renderHook(() => useInlineText(editor, finished));
+    act(() => {
+      result.current.begin("a", "caption");
+    });
+    const caption = document.querySelector('[data-nx-prop="caption"]');
+    if (caption === null) throw new Error("no caption");
+    caption.textContent = "A better caption";
+    Object.assign(editor, { document: documentWith(editor, { locked: true }) });
+
+    act(() => escape(caption));
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(result.current.editing).not.toBeNull();
+    expect(caption.textContent).toBe("A better caption");
+    // Said, so the line staying open is not read as a key that did nothing.
+    expect(finished).toHaveBeenCalledWith({
+      status: "refused",
+      reason: "no-longer-editable",
+    });
+
+    act(() => escape(caption));
+    expect(result.current.editing).toBeNull();
+  });
+
+  it("never writes over a line another surface changed while it was typed", () => {
+    // Opened as "A caption", typed as "Mine", changed elsewhere to "Theirs":
+    // writing "Mine" would silently replace the newer value.
+    registerArticle();
+    page();
+    const editor = editorState();
+    const finished = vi.fn();
+    const { result } = renderHook(() => useInlineText(editor, finished));
+    act(() => {
+      result.current.begin("a", "caption");
+    });
+    const caption = document.querySelector('[data-nx-prop="caption"]');
+    if (caption === null) throw new Error("no caption");
+    caption.textContent = "Mine";
+    Object.assign(editor, {
+      document: documentWith(editor, { caption: "Theirs" }),
+    });
+
+    act(() => escape(caption));
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(result.current.editing).not.toBeNull();
+    expect(caption.textContent).toBe("Mine");
+    expect(finished).toHaveBeenCalledWith({
+      status: "refused",
+      reason: "moved-on",
+    });
+  });
+
+  it("tries a revised passage again after a refusal, rather than discarding it", async () => {
+    registerArticle();
+    page();
+    const editor = editorState();
+    const stored = editor.document;
+    editor.apply
+      .mockImplementationOnce(() => null)
+      .mockImplementation(() => stored);
+    // The baseline, the refused write, the check on the second press, and the
+    // revised write.
+    const load = passageLoader([
+      STORED,
+      typedPassage("Too long"),
+      typedPassage("Short"),
+      typedPassage("Short"),
+    ]);
+    const { result } = renderHook(() =>
+      useInlineRichText(editor, load as never)
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    const passage = document.querySelector('[data-nx-prop="content"]');
+    if (passage === null) throw new Error("no passage");
+    await act(async () => escape(passage));
+    expect(result.current.editing).not.toBeNull();
+
+    await act(async () => escape(passage));
+    expect(editor.apply).toHaveBeenCalledTimes(2);
+    expect(result.current.editing).toBeNull();
+  });
+
+  it("holds a passage whose block was locked while it was typed", async () => {
+    registerArticle();
+    page();
+    const editor = editorState();
+    const load = passageLoader([STORED, typedPassage("Typed")]);
+    const { result } = renderHook(() =>
+      useInlineRichText(editor, load as never)
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    const passage = document.querySelector('[data-nx-prop="content"]');
+    if (passage === null) throw new Error("no passage");
+    Object.assign(editor, { document: documentWith(editor, { locked: true }) });
+
+    await act(async () => escape(passage));
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(result.current.editing).not.toBeNull();
+
+    await act(async () => escape(passage));
+    expect(result.current.editing).toBeNull();
   });
 
   it("keeps the typing in a passage, and ends the edit", async () => {

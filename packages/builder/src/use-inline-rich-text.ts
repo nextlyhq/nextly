@@ -321,6 +321,12 @@ export function useInlineRichText(
     opened: unknown;
     /** The editor's own reading of the passage when it opened. */
     baseline: unknown;
+    /**
+     * The passage as it was when its write was last refused, while it stays
+     * open. A second deliberate Escape over the SAME passage lets it go; one
+     * revised since is a new write, tried again. Gone with the session.
+     */
+    refusedWith?: unknown;
   } | null>(null);
 
   /**
@@ -409,6 +415,7 @@ export function useInlineRichText(
        * over the top of these words.
        */
       live.session.hold();
+      live.refusedWith = next;
       return report({ status: "refused", reason: "moved-on" });
     }
     // The passage this session was opened for, not whichever is current now.
@@ -422,16 +429,22 @@ export function useInlineRichText(
     );
     if (op === null) {
       /*
-       * Nothing to write, and nothing staying open would rescue.
+       * Nothing to write here.
        *
        * `richInlineTextOp` refuses an unchanged passage, one the editor did not
        * return as rich text, and one whose node was deleted or locked while the
-       * caret was in it. Only the first is harmless — but for the others the
-       * passage has nowhere left to be written to, so holding the editor open
-       * would trap the author in a value they cannot leave rather than save
-       * anything. Whether their typing was actually lost is worth saying, and
-       * the comparison that says it is the same one the op made.
+       * caret was in it. Where the author typed and the passage is still on the
+       * page, it stays open with their words: they can copy them, and a second
+       * Escape lets them go, so holding traps nobody. Where the element has left
+       * the page there is nothing to hold them in, and whether the typing was
+       * lost is worth saying; the comparison that says it is the one the op
+       * made.
        */
+      if (typed && live.element.isConnected) {
+        live.session.hold();
+        live.refusedWith = next;
+        return report({ status: "refused", reason: "no-longer-editable" });
+      }
       letGo();
       return report(typed ? INLINE_EDIT_DISCARDED : INLINE_EDIT_UNCHANGED);
     }
@@ -444,6 +457,7 @@ export function useInlineRichText(
        * stays open: an author who has hit a cap can shorten what they wrote.
        */
       live.session.hold();
+      live.refusedWith = next;
       return report({ status: "refused", reason: "rejected" });
     }
     letGo();
@@ -672,20 +686,24 @@ export function useInlineRichText(
      * does; the NEXT Escape selects the block's parent. Where the write is
      * refused the passage stays open with the words in it, and a second
      * Escape then lets them go: the author's deliberate way out of a write
-     * the page will not take. A held key's auto-repeat is not that second
-     * press: it would destroy the words before the author let go of the key.
+     * the page will not take. A passage revised since the refusal is a new
+     * write, tried again. A held key's auto-repeat is not a second press: it
+     * would destroy the words before the author let go of the key.
      */
-    let refused = false;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
-      if (refused) {
+      const live = mounted.current;
+      if (
+        live?.refusedWith !== undefined &&
+        !richTextChanged(live.refusedWith, live.session.read())
+      ) {
         cancel();
         return;
       }
-      refused = commit().status === "refused";
+      commit();
     };
 
     /*
