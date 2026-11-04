@@ -1384,5 +1384,32 @@ describe.each(getConfiguredTestDialects())(
       expect(future).toMatchObject({ code: "STALE_VERSION" });
       expect(docsBeforeChangeCalls).toBe(before);
     });
+
+    it("refuses with 400, before any hook, a sweep of every language whose version names only one", async () => {
+      const t = await boot(dialect);
+      const live = await handlerOf(t).createEntry(
+        { collectionName: LIVES, overrideAccess: true, locale: "en" },
+        { headline: "Hi", status: "published" }
+      );
+      const id = idOf(live);
+      await update(
+        t,
+        LIVES,
+        id,
+        { headline: "Hola", status: "published" },
+        { locale: "es" }
+      );
+      const before = livesBeforeChangeCalls;
+      // The version a read of English gave: it names no Spanish counter.
+      const swept = await update(
+        t,
+        LIVES,
+        id,
+        { status: "draft", _rev: revOf(live) },
+        { locale: "*" }
+      );
+      expect(swept).toMatchObject({ success: false, statusCode: 400 });
+      expect(livesBeforeChangeCalls).toBe(before);
+    });
   }
 );

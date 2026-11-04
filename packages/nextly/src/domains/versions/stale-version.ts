@@ -388,6 +388,26 @@ export function judgedLanguage(
 }
 
 /**
+ * Refuse a version that does not name every one of `locales`, for a write
+ * over every language at once (`locale: "*"`): only a read of every language
+ * gives one that does, and judging a missing language as 0 would refuse the
+ * write over a language its caller never read, rather than tell it so.
+ *
+ * @throws NextlyError.validation naming the languages it lacks.
+ */
+export function assertVersionNamesEvery(
+  given: DecodedVersion | undefined,
+  locales: readonly string[]
+): void {
+  if (given === undefined) return;
+  const missing = locales.filter(code => !Object.hasOwn(given.languages, code));
+  if (missing.length === 0) return;
+  throw unjudgeable(
+    `${DOCUMENT_VERSION_KEY} names no version of ${missing.join(", ")}. An update of every language at once needs the version a read of every language returned.`
+  );
+}
+
+/**
  * The parts of a document that moved since the version given: none when the
  * save may go ahead.
  *

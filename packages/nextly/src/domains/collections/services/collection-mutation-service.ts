@@ -328,6 +328,7 @@ import {
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
 import {
+  assertVersionNamesEvery,
   certainlyStale,
   type DecodedVersion,
   type DocumentRevisionState,
@@ -12424,11 +12425,13 @@ export class CollectionMutationService extends BaseService {
           ? this.localization.locales.map(l => l.code)
           : [resolveRequestedLocale(this.localization, params.locale)]
         : [];
-    // A version from a read of another language can't be judged: refused
-    // here, before any hook runs, as the validation error it is.
-    if (!sweep && locales.length === 1) {
+    // A version from a read of another language, or for a sweep one that
+    // does not name every language, can't be judged: refused here, before
+    // any hook runs, as the validation error it is.
+    if (locales.length > 0) {
       try {
-        judgedLanguage(check.given, locales[0]);
+        if (sweep) assertVersionNamesEvery(check.given, locales);
+        else judgedLanguage(check.given, locales[0]);
       } catch (error) {
         return errorToServiceResult(
           error,
