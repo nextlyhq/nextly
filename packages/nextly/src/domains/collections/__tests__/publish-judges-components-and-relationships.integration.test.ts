@@ -962,6 +962,23 @@ describe.each(getConfiguredTestDialects())(
           )
         ).success
       ).toBe(true);
+      // The same, for a publish of every language.
+      ids.growingAll = await created(t, "growing", {
+        title: "growing",
+        status: "published",
+      });
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "growing",
+              entryId: ids.growingAll,
+              overrideAccess: true,
+            },
+            { title: "grown" }
+          )
+        ).success
+      ).toBe(true);
       // Live in English, German not yet live, and an English change pending
       // from before `remark` existed.
       ids.sweeping = await created(
@@ -1043,6 +1060,15 @@ describe.each(getConfiguredTestDialects())(
         t.getService("fieldGroupDataService") as FieldGroupDataService
       ).saveComponentData({
         parentId: ids.growing,
+        parentTable: "dc_growing",
+        access: { overrideAccess: true },
+        fields: [fieldGroup({ name: "extra", component: "card" })] as never,
+        data: { extra: card("stored") },
+      });
+      await (
+        t.getService("fieldGroupDataService") as FieldGroupDataService
+      ).saveComponentData({
+        parentId: ids.growingAll,
         parentTable: "dc_growing",
         access: { overrideAccess: true },
         fields: [fieldGroup({ name: "extra", component: "card" })] as never,
@@ -1536,6 +1562,50 @@ describe.each(getConfiguredTestDialects())(
       // Nothing was promoted: the live entry keeps its title.
       const row = await t.adapter.selectOne<{ title?: string }>("dc_growing", {
         where: { and: [{ column: "id", op: "=", value: ids.growing }] },
+      });
+      expect(row?.title).toBe("growing");
+    });
+
+    // A publish of every language promotes a pending change as a publish of
+    // one language does, so it is judged on what is stored once it holds the
+    // entry's lock. The plausible broken implementation judges the change's
+    // relations as they were read before the lock, and puts live a document
+    // whose required component another writer removed in between.
+    it("refuses publishing every language once a required component it promotes with is removed before the lock", async () => {
+      const registry = t.getService("fieldGroupRegistryService") as {
+        getComponent(slug: string): Promise<{ tableName: string }>;
+      };
+      const { tableName } = await registry.getComponent("card");
+      // The other writer, run just before the publish opens its transaction:
+      // after everything the publish judges off the lock, before the lock.
+      const transaction = t.adapter.transaction.bind(t.adapter);
+      let removed = false;
+      const spy = vi
+        .spyOn(t.adapter, "transaction")
+        .mockImplementationOnce(async (...args) => {
+          await t.adapter.executeQuery(
+            `DELETE FROM ${tableName} WHERE _parent_id = '${ids.growingAll}' AND _parent_field = 'extra'`
+          );
+          removed = true;
+          return transaction(...args);
+        });
+      let result: Result;
+      try {
+        result = await entriesOf(t).publishAllLocales({
+          collectionName: "growing",
+          entryId: ids.growingAll,
+          overrideAccess: true,
+        });
+        expect(removed).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("extra");
+      // Nothing was promoted: the live entry keeps its title.
+      const row = await t.adapter.selectOne<{ title?: string }>("dc_growing", {
+        where: { and: [{ column: "id", op: "=", value: ids.growingAll }] },
       });
       expect(row?.title).toBe("growing");
     });

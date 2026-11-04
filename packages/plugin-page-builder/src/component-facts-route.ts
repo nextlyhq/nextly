@@ -11,6 +11,15 @@
  * minted under the same id. The draft in the editor has forgotten it; the
  * live row has not.
  *
+ * ## Why the retired ids are derived as well as read
+ *
+ * A retirement is recorded after the publish that drops the field, and a
+ * record that fails leaves the id in neither the definition nor the table.
+ * This answer is what the editor mints against, so it is the place a lost
+ * record must not reach: the ids are derived again from the component's
+ * published history, and any the table lacks are recorded on the way
+ * (`retired-history`).
+ *
  * ## Why the count may be a floor
  *
  * It comes from the usage index, which may not yet cover every document, and
@@ -53,6 +62,12 @@ export interface ComponentFactsSources {
   readonly readLive: (id: string) => Promise<unknown>;
   /** How many documents place the component. */
   readonly countPlacements: (id: string) => Promise<UsageCount>;
+  /**
+   * How many pages a change to it reaches, through components and Layouts
+   * too. Optional, so a source with no Layouts or index to read answers
+   * `null` rather than a number it did not count.
+   */
+  readonly countPages?: (id: string) => Promise<UsageCount>;
   /**
    * The ids the component has retired, or `null` where they are not recorded.
    * A failure here fails the answer: the editor then waits rather than minting
@@ -101,13 +116,22 @@ export async function readComponentFacts(
 ): Promise<ComponentFactsResponse> {
   const row = await sources.readLive(id);
   if (row === null || row === undefined) {
-    return { live: NONE, retired: NONE, reach: null };
+    return { live: NONE, retired: NONE, reach: null, pages: null };
   }
   const retired = await sources.readRetired(id);
   const count = await sources.countPlacements(id).then(
     found => found,
     () => null
   );
+  // Like the direct count, a page count that fails leaves its answer null
+  // rather than failing the live ids beside it.
+  const pages =
+    sources.countPages === undefined
+      ? null
+      : await sources.countPages(id).then(
+          found => found,
+          () => null
+        );
   return {
     live: liveIdsOf(row, sources.field),
     retired:
@@ -118,6 +142,10 @@ export async function readComponentFacts(
       count === null
         ? null
         : { count: count.documents, complete: count.complete },
+    pages:
+      pages === null
+        ? null
+        : { count: pages.documents, complete: pages.complete },
   };
 }
 
@@ -162,23 +190,55 @@ export function factsQuery(url: string): {
   };
 }
 
+/** What the component store's configuration says about its retirements. */
+export interface ComponentStoreShape {
+  /**
+   * A localized store records no retirements, since publishing there is per
+   * language.
+   */
+  readonly localized: boolean;
+  /** Whether it has the Draft/Published lifecycle. */
+  readonly lifecycle: boolean;
+}
+
 /**
- * Whether the component store is localized, read from its own configuration
- * as the request's user. Such a store records no retirements, since publishing
- * there is per language. The service is named structurally, as the write hooks
- * name it, for the one method read.
+ * The component store's shape, read from its own configuration as the
+ * request's user. The service is named structurally, as the write hooks name
+ * it, for the one method read.
  */
-export async function storeIsLocalized(
+export async function componentStoreShape(
   collections: {
     getCollection(name: string, context: unknown): Promise<unknown>;
   },
   slug: string,
   user: unknown
-): Promise<boolean> {
-  const store = await collections.getCollection(slug, {
+): Promise<ComponentStoreShape> {
+  const store = (await collections.getCollection(slug, {
     user: user ?? undefined,
-  });
-  return (store as { localized?: unknown } | null)?.localized === true;
+  })) as { localized?: unknown; status?: unknown } | null;
+  return {
+    localized: store?.localized === true,
+    lifecycle: store?.status === true,
+  };
+}
+
+/**
+ * The retired ids the editor is told: the table's, and those the component's
+ * published history implies, which `reconcile` records where the table lacks
+ * them. `null` for a localized store, which records none.
+ */
+export function reconciledRetired(args: {
+  readonly shape: () => Promise<ComponentStoreShape>;
+  readonly reconcile: (
+    id: string,
+    lifecycle: boolean
+  ) => Promise<RetiredExposures>;
+}): (id: string) => Promise<RetiredExposures | null> {
+  return async id => {
+    const shape = await args.shape();
+    if (shape.localized) return null;
+    return args.reconcile(id, shape.lifecycle);
+  };
 }
 
 /** The live row, read as the caller; null when it is gone or not theirs. */
@@ -218,6 +278,8 @@ export function componentFactsRoute(args: {
   countPlacements: (
     ctx: PluginRouteContext
   ) => (id: string) => Promise<UsageCount>;
+  /** How many pages a change reaches, through components and Layouts too. */
+  countPages?: (ctx: PluginRouteContext) => (id: string) => Promise<UsageCount>;
   readRetired: (
     ctx: PluginRouteContext
   ) => (id: string) => Promise<RetiredExposures | null>;
@@ -241,6 +303,9 @@ export function componentFactsRoute(args: {
         await readComponentFacts(id, {
           readLive: liveRowReader(ctx, slug, locale),
           countPlacements: args.countPlacements(ctx),
+          ...(args.countPages === undefined
+            ? {}
+            : { countPages: args.countPages(ctx) }),
           readRetired: args.readRetired(ctx),
           field: args.store.field,
         })

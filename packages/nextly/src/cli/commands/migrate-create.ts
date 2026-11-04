@@ -52,6 +52,7 @@ import type { Command } from "commander";
 
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   orderedMigrations,
   type PluginMigration,
@@ -160,16 +161,10 @@ export interface MigrateCreateCommandOptions {
   blank?: boolean;
 
   /**
-   * Skip interactive prompts. Used in CI / non-TTY environments. With
-   * this flag set and `--accept-renames` not set, all rename candidates
-   * are declined (DROP + ADD with possible data loss).
-   * @default detected from process.stdout.isTTY
-   */
-  nonInteractive?: boolean;
-
-  /**
-   * Only meaningful with `--non-interactive`. Auto-accept all rename
-   * candidates. ADVANCED — verify the diff first via `migrate:create`
+   * Only meaningful when the run cannot prompt (`canPrompt`: no terminal,
+   * `CI` set, or the global `--non-interactive`), where rename candidates are
+   * otherwise declined (DROP + ADD with possible data loss). Auto-accept all
+   * rename candidates. ADVANCED — verify the diff first via `migrate:create`
    * in interactive mode before flipping this on for CI.
    * @default false
    */
@@ -214,10 +209,6 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
 // ============================================================================
 
 /**
- * `--record-snapshot` with nothing to record exits 2, as a plain run with
- * nothing to write does, so a script can tell it from a record to commit.
- */
-/**
  * What `--record-snapshot` reads the translations tables through (`liveCompanionColumns`): the
  * database `DATABASE_URL` names, opened on the first read and closed by `close`. Nothing for any
  * other run, which stays offline.
@@ -247,12 +238,17 @@ function recordModeReader(recording: boolean | undefined): {
   };
 }
 
+/**
+ * `--record-snapshot` with nothing to record exits 0, as a plain run with
+ * nothing to write does: nothing to do is not a failure. The message, not the
+ * code, tells it from a record to commit.
+ */
 function nothingToRecord(logger: CommandContext["logger"]): never {
   logger.newline();
   logger.info(
     "Nothing to record: no snapshot here predates the record of which fields are translated."
   );
-  process.exit(2);
+  process.exit(0);
 }
 
 /**
@@ -360,12 +356,11 @@ export async function runMigrateCreate(
     return;
   }
 
-  // F11 PR 3: detect non-interactive mode from the explicit flag OR from
-  // a non-TTY stdout. CI environments typically have isTTY=false; the
-  // safer default in that case is to decline renames (treat as DROP+ADD)
+  // Whether rename candidates may be asked about: the one answer every
+  // prompt takes (terminal on stdin and stdout, no `CI`, no global
+  // `--non-interactive`). Without one, renames are declined (DROP + ADD)
   // unless --accept-renames is explicit.
-  const nonInteractive =
-    options.nonInteractive === true || !process.stdout.isTTY;
+  const nonInteractive = !canPrompt();
 
   // F11 PR 3 review fix #8: surface a warning when --accept-renames was
   // passed but interactive mode is in effect. The flag is only consulted
@@ -628,9 +623,9 @@ export async function runMigrateCreate(
     logger.info(
       "No changes detected. Your config matches the latest snapshot."
     );
-    // Per spec: exit code 2 distinguishes "happy no-op" from "actual
-    // error" so CI scripts can react differently.
-    process.exit(2);
+    // Nothing to do is not a failure: 0, as every command ends a run with
+    // nothing to do.
+    process.exit(0);
   }
 
   const duration = Date.now() - startTime;
@@ -1469,7 +1464,8 @@ async function runMigrateCreatePlugin(
     logger.info(
       `No schema changes detected for plugin "${definition.name}" — nothing to generate.`
     );
-    process.exit(2);
+    // Nothing to do, which is not a failure.
+    process.exit(0);
   }
 
   reportPluginMigration(result, cwd, logger);

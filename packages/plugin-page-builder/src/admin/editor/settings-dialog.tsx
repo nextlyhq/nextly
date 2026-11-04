@@ -90,6 +90,12 @@ export interface SettingsDialogProps extends DialogState {
    * server knows which.
    */
   share: SharePreview;
+  /**
+   * Whether the page has the SEO plugin's fields. Where it does, they are among
+   * the page's fields above; where it does not, the preview is all there is,
+   * and a line says the SEO plugin adds them.
+   */
+  seoFields: boolean;
   /** The site's breakpoints: what is saved, how to save, whether it is read. */
   breakpoints: Pick<
     ComponentProps<typeof BreakpointManager>,
@@ -116,6 +122,7 @@ export function SettingsDialog({
   pageFields,
   pageLayout = null,
   share,
+  seoFields,
   breakpoints,
 }: SettingsDialogProps): JSX.Element {
   const site = usePluginRoute<SiteSettingsRead>({
@@ -143,7 +150,9 @@ export function SettingsDialog({
         }
       >
         <DialogContent
-          className="flex max-h-[85vh] max-w-[680px] flex-col gap-0 p-0"
+          // One height for both tabs, so moving between them never resizes
+          // the dialog under the pointer.
+          className="flex h-[min(85vh,720px)] max-w-[680px] flex-col gap-0 p-0"
           onCloseAutoFocus={event => {
             const target = returnFocus();
             if (target === null) return;
@@ -174,6 +183,7 @@ export function SettingsDialog({
                 pageFields={pageFields}
                 pageLayout={pageLayout}
                 share={share}
+                seoFields={seoFields}
               />
             </TabsContent>
             {siteTab ? (
@@ -193,11 +203,13 @@ export function SettingsDialog({
               </TabsContent>
             ) : null}
           </Tabs>
-          <p className="border-t px-6 py-3 text-xs text-muted-foreground">
-            {
-              "This page's settings save with the page, from Save or Publish in the top bar. Site settings save as you change them."
-            }
-          </p>
+          {/* Per tab, one line: This page says when its settings save. Site
+              has its own banner saying it applies at once, so it adds none. */}
+          {leave.tab === "page" ? (
+            <p className="border-t px-6 py-3 text-xs text-muted-foreground">
+              Saved with the page when you Save or Publish.
+            </p>
+          ) : null}
         </DialogContent>
       </Dialog>
       <AlertDialog
@@ -342,9 +354,10 @@ function ThisPage({
   pageFields,
   pageLayout,
   share,
+  seoFields,
 }: Pick<
   SettingsDialogProps,
-  "pageFields" | "pageLayout" | "share"
+  "pageFields" | "pageLayout" | "share" | "seoFields"
 >): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
@@ -358,6 +371,13 @@ function ThisPage({
         <p className="text-xs text-muted-foreground">
           {"Approximate: your site's metadata may differ."}
         </p>
+        {seoFields ? null : (
+          <p className="text-sm text-muted-foreground">
+            {
+              "Built from this page's title, first heading and first image. The SEO plugin adds fields to set the title, description and image yourself."
+            }
+          </p>
+        )}
       </section>
     </div>
   );

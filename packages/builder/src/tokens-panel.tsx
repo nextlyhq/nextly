@@ -15,9 +15,12 @@
  * ## The header is the Design panel's
  *
  * The preview switch and the import-and-export menu belong in the Design
- * panel's own header, beside its title. The host passes that element as
- * `headerActions`, and the controls are drawn into it; with none, they sit at
- * the top of this view.
+ * panel's own header, beside its title, and stay there whichever of its tabs
+ * is open. A host that draws that header holds them with
+ * {@link useVariablesHeader} and hands the result in as `header`; this view
+ * then takes its preview mode from it and draws no controls of its own.
+ * Without one, the view holds them itself: drawn into `headerActions` when
+ * the host gives that element, else at the top of this view.
  *
  * ## Edits are lifted, not saved here
  *
@@ -56,8 +59,10 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { ShowMore } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
-import { colourHexOf } from "./style-colour";
+import { colourHexOf, colourPairOf } from "./style-colour";
+import { lengthInPx } from "./style-variables";
 import {
   addVariable,
   labelNewVariable,
@@ -66,7 +71,8 @@ import {
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
-import { swatchStyle, VariableEditor } from "./variable-editor";
+import { VariableEditor } from "./variable-editor";
+import { ColourPair, swatchStyle } from "./variable-swatch";
 import { useVariablesTransfer } from "./variables-transfer";
 
 export interface TokensPanelProps {
@@ -77,6 +83,17 @@ export interface TokensPanelProps {
   tokens: SiteTokenSet | undefined;
   /** An edit. The host owns the site style and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * The author is still at work here: typing in a field before it commits.
+   * For a host that waits for a pause before persisting, so a save is not
+   * made between one field's edit and the next.
+   */
+  onActivity?: () => void;
+  /**
+   * The author is done for now: a variable's editor closed, or this panel
+   * went away. A host waiting for a pause persists what it holds at once.
+   */
+  onSettle?: () => void;
   /**
    * The set the host holds RIGHT NOW, asked at the moment it is needed.
    * Answer it from a ref the host writes as it dispatches: an import reads
@@ -111,37 +128,143 @@ export interface TokensPanelProps {
   readOnly?: boolean;
   /** The Design panel's header element, where the header controls are drawn. */
   headerActions?: HTMLElement | null;
+  /**
+   * The header a host draws for the whole Design panel, from
+   * {@link useVariablesHeader}. Given, the view previews its mode and leaves
+   * the controls, and what an import or export reports, to the host.
+   */
+  header?: VariablesHeader;
 }
 
-/** How many rows of one group mount before the author asks for more. */
-const PAGE_SIZE = 50;
+/** The Design panel's header controls, and the preview mode they choose. */
+export interface VariablesHeader {
+  /** Which mode's values the swatches and specimens show. */
+  readonly mode: TokenMode;
+  /** The preview switch and the import-and-export menu. */
+  readonly controls: React.JSX.Element;
+  /** What an import or an export reports, and the import's preview. */
+  readonly overlays: React.JSX.Element;
+}
 
-export function TokensPanel({
-  tokens,
+/**
+ * The header controls and their state, for a host that keeps them while the
+ * Design panel's tabs change under them: the preview mode, the switch that
+ * chooses it, and the import-and-export menu with what it reports.
+ *
+ * `prefersDark` is as {@link TokensPanelProps.prefersDark} reads it.
+ */
+export function useVariablesHeader({
   onChange,
   currentTokens,
-  supplied,
-  issue,
-  absence = "pending",
+  readOnly,
   prefersDark,
-  readOnly = false,
-  headerActions,
-}: TokensPanelProps): React.JSX.Element {
+}: {
+  onChange: (tokens: SiteTokenSet) => void;
+  currentTokens: () => SiteTokenSet | undefined;
+  readOnly: boolean;
+  prefersDark?: boolean;
+}): VariablesHeader {
   // The device's scheme until the author picks one, as the canvas shows it.
   const device = usePrefersDark();
   const [picked, setMode] = React.useState<TokenMode | null>(() =>
     statedPreview(prefersDark)
   );
   const mode: TokenMode = picked ?? (device ? "dark" : "light");
+  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
+  return {
+    mode,
+    controls: (
+      <div className="nx-vars__controls">
+        <PreviewSwitch mode={mode} onMode={setMode} />
+        {transfer.menu}
+      </div>
+    ),
+    overlays: transfer.overlays,
+  };
+}
+
+/** How many rows of one group mount before the author asks for more. */
+const PAGE_SIZE = 50;
+
+export function TokensPanel(props: TokensPanelProps): React.JSX.Element {
+  const { header } = props;
+  if (header !== undefined) {
+    return <VariablesView {...props} header={header} placed={false} />;
+  }
+  return <OwnHeader {...props} />;
+}
+
+/** The view holding its header itself, where no host draws one. */
+function OwnHeader(props: TokensPanelProps): React.JSX.Element {
+  const header = useVariablesHeader({
+    onChange: props.onChange,
+    currentTokens: props.currentTokens,
+    readOnly: props.readOnly ?? false,
+    ...(props.prefersDark === undefined
+      ? {}
+      : { prefersDark: props.prefersDark }),
+  });
+  return <VariablesView {...props} header={header} placed />;
+}
+
+function VariablesView({
+  tokens,
+  onChange,
+  onActivity,
+  onSettle,
+  currentTokens,
+  supplied,
+  issue,
+  absence = "pending",
+  readOnly = false,
+  headerActions,
+  header,
+  placed,
+}: TokensPanelProps & {
+  header: VariablesHeader;
+  /** Whether this view draws the header's controls and reports itself. */
+  placed: boolean;
+}): React.JSX.Element {
+  const { mode } = header;
   const [query, setQuery] = React.useState("");
   const { root, openKey, toggle, add, forget } = useOpenVariable({
     tokens,
     onChange,
     currentTokens,
     onAdded: () => setQuery(""),
+    onSettle,
   });
+  // Going away ends the author's work here as closing an editor does: a tab
+  // change or the panel closing. The latest callback, so the effect runs
+  // only on unmount rather than on every render that hands a new one.
+  const settle = React.useRef(onSettle);
+  settle.current = onSettle;
+  // Which editor is open as of the latest render, and whether the panel is
+  // still mounted: read when an editor commits, which it may do as it goes
+  // away, after the close or the unmount has already settled.
+  const openNow = React.useRef(openKey);
+  openNow.current = openKey;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      settle.current?.();
+    };
+  }, []);
+  /*
+   * An edit committed by an editor that is already closed, such as a colour
+   * picker writing what it held as it unmounts, comes after the settle its
+   * closing made, so it settles again rather than wait for a pause the
+   * author has already ended.
+   */
+  const commitFrom =
+    (key: string) =>
+    (next: SiteTokenSet): void => {
+      onChange(next);
+      if (!mounted.current || openNow.current !== key) settle.current?.();
+    };
   const search = React.useRef<HTMLInputElement>(null);
-  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
 
   const groups = React.useMemo(
     () => (tokens === undefined ? [] : variableGroups(tokens, mode)),
@@ -150,24 +273,22 @@ export function TokensPanel({
   const needle = query.trim().toLowerCase();
   const shown = searched(groups, needle);
 
-  const header = (
-    <div className="nx-vars__controls">
-      <PreviewSwitch mode={mode} onMode={setMode} />
-      {transfer.menu}
-    </div>
-  );
-
   if (tokens === undefined) {
     return <Unread absence={absence} />;
   }
 
   return (
+    // Typing anywhere in the panel, the editors beside the rows included
+    // (React carries their events here through the portal), is activity.
     <div
       className="nx-vars"
       ref={root}
       data-read-only={readOnly ? "" : undefined}
+      onInput={onActivity}
     >
-      <HeaderControls slot={headerActions}>{header}</HeaderControls>
+      {placed ? (
+        <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
+      ) : null}
       <div className="nx-vars__search">
         <Search aria-hidden="true" size={16} />
         <Input
@@ -181,7 +302,7 @@ export function TokensPanel({
       </div>
       <div className="nx-vars__body">
         <PanelNotes readOnly={readOnly} issue={issue} />
-        {transfer.overlays}
+        {placed ? header.overlays : null}
         {shown.length === 0 ? (
           <p className="nx-vars__note">No variables match this search.</p>
         ) : (
@@ -206,7 +327,7 @@ export function TokensPanel({
                   readOnly={readOnly}
                   open={openKey === entry.row.key}
                   onOpenChange={open => toggle(entry.row.key, open)}
-                  onChange={onChange}
+                  onChange={commitFrom(entry.row.key)}
                   onRemoved={() => {
                     forget(entry.row.key);
                     search.current?.focus();
@@ -291,11 +412,14 @@ function useOpenVariable({
   onChange,
   currentTokens,
   onAdded,
+  onSettle,
 }: {
   tokens: SiteTokenSet | undefined;
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
   onAdded: () => void;
+  /** The author is done with a variable; see `TokensPanelProps.onSettle`. */
+  onSettle: (() => void) | undefined;
 }): {
   /** The panel's element, which rows are found in to be focused. */
   root: React.RefObject<HTMLDivElement | null>;
@@ -332,16 +456,22 @@ function useOpenVariable({
 
   const close = (key: string): void => {
     setOpenKey(null);
-    if (!fresh.current.delete(key)) return;
-    const named = namedAfterLabel(currentTokens(), key);
-    if (named === undefined) return;
-    onChange(named.tokens);
-    setFocusKey(named.key);
+    // Settled after the renaming below, so a just-added variable's code name
+    // is part of what is persisted with the rest of its edit.
+    if (fresh.current.delete(key)) {
+      const named = namedAfterLabel(currentTokens(), key);
+      if (named !== undefined) {
+        onChange(named.tokens);
+        setFocusKey(named.key);
+      }
+    }
+    onSettle?.();
   };
 
   const forget = (key: string): void => {
     fresh.current.delete(key);
     setOpenKey(null);
+    onSettle?.();
   };
 
   const toggle = (key: string, open: boolean): void => {
@@ -528,15 +658,11 @@ function Group({
       ) : (
         <ul className="nx-vars__list">{shown.map(children)}</ul>
       )}
-      {hidden > 0 ? (
-        <button
-          type="button"
-          className="nx-vars__link"
-          onClick={() => setPages(count => count + 1)}
-        >
-          {`Show ${String(Math.min(hidden, PAGE_SIZE))} more`}
-        </button>
-      ) : null}
+      <ShowMore
+        hidden={hidden}
+        pageSize={PAGE_SIZE}
+        onMore={() => setPages(count => count + 1)}
+      />
     </section>
   );
 }
@@ -788,9 +914,10 @@ const KIND_ICONS: Readonly<
  * still reads larger than body text without growing the row.
  */
 function specimenSize(value: string): number {
-  const match = /^(\d*\.?\d+)(px|rem)$/.exec(value.trim());
-  const px =
-    match === null ? 16 : Number(match[1]) * (match[2] === "rem" ? 16 : 1);
+  // Read through the inspector's own reading of a length, so a type size is
+  // measured the same way in both places; a value it cannot measure is drawn
+  // at body size, as before.
+  const px = lengthInPx(value) ?? 16;
   return Math.min(18, Math.max(11, Math.round(10 + px * 0.2)));
 }
 
@@ -818,22 +945,7 @@ function RowTail({
 }): React.JSX.Element | null {
   if (token === undefined) return null;
   if (entry.row.kind === "color") {
-    return (
-      <span className="nx-vars__pair" aria-hidden="true">
-        <span
-          className="nx-vars__swatch nx-vars__swatch--mode"
-          data-mode="light"
-          style={swatchStyle(colourHexOf(token.values.light, undefined))}
-        />
-        <span
-          className="nx-vars__swatch nx-vars__swatch--mode"
-          data-mode="dark"
-          style={swatchStyle(
-            colourHexOf(token.values.dark ?? token.values.light, undefined)
-          )}
-        />
-      </span>
-    );
+    return <ColourPair {...colourPairOf(token)} />;
   }
   return (
     <span className="nx-vars__chip" aria-hidden="true">

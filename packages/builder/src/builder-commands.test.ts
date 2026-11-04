@@ -42,11 +42,11 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     selectParent: vi.fn(),
     saveAsPattern: vi.fn(),
     editComponent: vi.fn(),
-    saveAsComponent: vi.fn(),
-    convertToComponent: vi.fn(),
+    turnIntoComponent: vi.fn(),
     detachComponent: vi.fn(),
     duplicateComponent: vi.fn(),
     updatePattern: vi.fn(),
+    saveAsSharedStyle: vi.fn(),
   } as unknown as CommandVerbs & Record<string, ReturnType<typeof vi.fn>>;
 }
 

@@ -3086,6 +3086,11 @@ export class SingleMutationService extends BaseService {
                     companion,
                     singleDraftLocale ?? null
                   );
+                  // Judged as the publish writes it: the stored change with
+                  // the request merged over it, as the gate above judges it.
+                  // A request that retypes the live value of a field the
+                  // change is behind on publishes nothing behind live, so it
+                  // goes through in one step.
                   const stale = await outOfDateSharedFields(tx, {
                     ref: {
                       scopeKind: "single",
@@ -3095,7 +3100,11 @@ export class SingleMutationService extends BaseService {
                     locale: singleDraftLocale ?? null,
                     shared,
                     live,
-                    pending: snapshotRecord(pendingDraft.snapshot),
+                    pending: {
+                      ...snapshotRecord(pendingDraft.snapshot),
+                      ...currentData,
+                      ...promotedComponents,
+                    },
                     views,
                   });
                   if (stale.length > 0) {

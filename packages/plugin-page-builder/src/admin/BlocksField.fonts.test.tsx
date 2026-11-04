@@ -132,6 +132,12 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The editor mount asks for the variant-use writer; no case here opens a
@@ -169,6 +175,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveIndicator: () => null,
@@ -179,6 +187,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
    * a rejection into per-field messages. Answering none exercises the branch

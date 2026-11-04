@@ -584,6 +584,7 @@ export {
   type HookPointValue,
   type PluginRoute,
   type PluginRouteCaller,
+  type PluginRouteCanOptions,
   type PluginRouteIdentity,
   type PluginRouteContext,
   type PluginRouteHandler,

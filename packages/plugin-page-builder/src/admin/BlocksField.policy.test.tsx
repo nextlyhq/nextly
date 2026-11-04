@@ -166,7 +166,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     }: {
       children?: React.ReactNode;
     }): React.JSX.Element => <>{children}</>,
-    ClassManagerPanel: record("classes"),
+    SharedStylesPanel: record("classes"),
     BlockKeyboardActions: passthrough,
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
@@ -225,6 +225,15 @@ vi.mock("./editor/settings-dialog", () => ({
   },
 }));
 
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * whenever the classes manager is, and it asks whether the variables may be
+ * changed.
+ */
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 /** Asking the stored style again, as the editor does after a save. */
 const refetchStoredStyle = async () => ({ isError: false });
 // The stored site style arrives through the editor's one read, the plugin's
@@ -234,6 +243,12 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The editor mount asks for the variant-use writer; no case here opens a
@@ -277,6 +292,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveIndicator: () => null,
@@ -290,6 +307,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the
   // merge of stored over defaults is `site-style-client`'s own question and has
@@ -319,12 +338,12 @@ const { PageBuilderView } = await import("./editor/PageBuilderView");
 const BODY_FIELD = { name: "body", type: "blocks" } as never;
 
 /*
- * The REAL class manager, which the shell mock above replaces with a recorder.
- * A case about what the manager tells an author renders this with the props the
- * editor actually handed the recorder, so the assertion reads the summary the
- * author sees rather than which arguments were passed.
+ * The REAL Shared styles tab, which the shell mock above replaces with a
+ * recorder. A case about what the tab tells an author renders this with the
+ * props the editor actually handed the recorder, so the assertion reads the
+ * summary the author sees rather than which arguments were passed.
  */
-const { ClassManagerPanel: RealClassManagerPanel } = await vi.importActual<
+const { SharedStylesPanel: RealSharedStylesPanel } = await vi.importActual<
   typeof import("@nextlyhq/builder/shell")
 >("@nextlyhq/builder/shell");
 
@@ -833,6 +852,8 @@ describe("what the breakpoint manager is told", () => {
             container: [],
           },
         },
+        // Sent to outlive the page, as every site style write is.
+        keepalive: true,
       },
     ]);
   });
@@ -1030,14 +1051,12 @@ describe("what the inspector is told about provenance", () => {
     expect(hasColour()).toBe(true);
   });
 
-  it("tells the classes manager about a class a linked component applies on this page", () => {
+  it("counts the page's own blocks for Shared styles, not a linked component's", () => {
     /*
-     * The same map, a third reader. The manager's on-this-page filter is
-     * built from a walk of the document, and the stored document holds one
-     * instance node where the canvas draws a whole definition — so a class
-     * applied inside that definition is rendered on the page and absent from
-     * the filter unless the walk composes through the same map the canvas
-     * draws with.
+     * "3 blocks on this page" counts the page as stored. A class applied
+     * inside a linked component's definition is that component's own use,
+     * which the site's index counts as a component, so counting it here too
+     * would count one block twice.
      */
     const definition = {
       formatVersion: 1,
@@ -1084,12 +1103,17 @@ describe("what the inspector is told about provenance", () => {
 
     openEditor();
 
-    expect(seen.classes?.documentClassIds).toEqual(["hero", "own"]);
-    expect(seen.classes?.documentScan).toBe("complete");
+    const blocks = (
+      seen.classes as
+        | { pageBlocks?: { counts: Map<string, number>; complete: boolean } }
+        | undefined
+    )?.pageBlocks;
+    expect(blocks?.complete).toBe(true);
+    expect([...(blocks?.counts ?? new Map()).entries()]).toEqual([["own", 1]]);
   });
 });
 
-describe("what the classes manager says a class writes", () => {
+describe("what the Shared styles tab says a style declares", () => {
   const TRACKER = "https://tracker.example/p.png";
 
   /** One class in the site config, holding `values` at the base breakpoint. */
@@ -1112,23 +1136,31 @@ describe("what the classes manager says a class writes", () => {
   }
 
   /**
-   * Open the editor on the classes panel, then draw the real manager with the
-   * props the editor gave it and return the declaration summary's text.
+   * Open the editor on the Shared styles tab, then draw the real tab with the
+   * props the editor gave it, open the style's details and return what they
+   * say it declares.
    */
-  function summaryAsDrawn(): string {
+  async function summaryAsDrawn(): Promise<string> {
     shownPanel = "classes";
     openEditor();
     const props = seen.classes as
-      | React.ComponentProps<typeof RealClassManagerPanel>
+      | React.ComponentProps<typeof RealSharedStylesPanel>
       | undefined;
     expect(props).toBeDefined();
     cleanup();
     if (props === undefined) return "";
-    render(<RealClassManagerPanel {...props} />);
-    return document.querySelector(".nx-classman__declares")?.textContent ?? "";
+    // Drawn without the routes: what a style declares is read from the
+    // library alone.
+    render(<RealSharedStylesPanel {...props} access={undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: /^hero, \.nx-c-hero/ }));
+    const details = await screen.findByRole("dialog", { name: "hero" });
+    return (
+      details.querySelector(".nx-shared-styles__declares")?.parentElement
+        ?.textContent ?? ""
+    );
   }
 
-  it("does not list a declaration the site's host policy drops", () => {
+  it("does not list a declaration the site's host policy drops", async () => {
     /*
      * The page compile refuses a URL naming a host the site does not load
      * from, so the class writes no `background-image` on the page. A summary
@@ -1143,7 +1175,7 @@ describe("what the classes manager says a class writes", () => {
       remotePatterns: [{ hostname: "cdn.example" }],
       siteStyle: site,
     };
-    const refused = summaryAsDrawn();
+    const refused = await summaryAsDrawn();
     // Must-be-found: the summary was drawn, so its silence below means
     // something.
     expect(refused).toContain("color");
@@ -1157,14 +1189,14 @@ describe("what the classes manager says a class writes", () => {
       remotePatterns: [{ hostname: "tracker.example" }],
       siteStyle: site,
     };
-    expect(summaryAsDrawn()).toContain("background-image");
+    expect(await summaryAsDrawn()).toContain("background-image");
     cleanup();
 
     clientConfig = { siteStyle: site };
-    expect(summaryAsDrawn()).toContain("background-image");
+    expect(await summaryAsDrawn()).toContain("background-image");
   });
 
-  it("counts styles held under a breakpoint the site defines", () => {
+  it("counts styles held under a breakpoint the site defines", async () => {
     /*
      * With no breakpoints to compile against, only the base context is
      * emitted, so a class's styles under a site-defined tier went uncounted
@@ -1177,14 +1209,16 @@ describe("what the classes manager says a class writes", () => {
         container: [],
       }),
     };
-    expect(summaryAsDrawn()).toContain("1 more elsewhere");
+    expect(await summaryAsDrawn()).toContain(
+      "and 1 more on other devices and states"
+    );
     cleanup();
 
     // Control: the same class on a site that does not define that tier writes
     // no rule for it, so nothing is counted — the output from before.
     clientConfig = { siteStyle: siteWithClass({ color: "#112233" }, extra) };
-    const undefinedTier = summaryAsDrawn();
+    const undefinedTier = await summaryAsDrawn();
     expect(undefinedTier).toContain("color");
-    expect(undefinedTier).not.toContain("elsewhere");
+    expect(undefinedTier).not.toContain("more on other devices");
   });
 });

@@ -153,6 +153,8 @@ export { nextlyEmailBrandPg as nextlyEmailBrand } from "../email-brand/postgres"
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/postgres";
+export { nextlyReviewStatesPg as nextlyReviewStates } from "../review-states/postgres";
+export { nextlyWorkflowSettingsPg as nextlyWorkflowSettings } from "../workflow-settings/postgres";
 // The record of content events; in the bundle so freshPushSchema creates the
 // tables on a fresh database, for the reason the release tables above give.
 export {

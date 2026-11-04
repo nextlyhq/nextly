@@ -169,8 +169,7 @@ describe("BlockToolbar", () => {
           editor={editor}
           components={{
             mayCreate: true,
-            onSaveAsComponent: () => {},
-            onConvertToComponent: () => {},
+            onTurnIntoComponent: () => {},
           }}
         >
           <Canvas
@@ -408,6 +407,152 @@ describe("BlockToolbar", () => {
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     expect(document.activeElement).toBe(buttons.at(-1));
+  });
+
+  it("takes focus from anywhere in the editor on Alt+F10, at its tab stop", () => {
+    // The editor convention for reaching a block's toolbar from the keyboard:
+    // from the canvas, or from text being edited inside the block.
+    mount(editorSpy(pair(), "a"));
+    fireEvent.keyDown(document.body, { key: "F10", code: "F10", altKey: true });
+    const stop = screen
+      .getByRole("toolbar", { name: "Block actions" })
+      .querySelector('[tabindex="0"]');
+    expect(stop).not.toBeNull();
+    expect(document.activeElement).toBe(stop);
+  });
+
+  it("leaves Alt+F10 to the browser in an editor drawing no toolbar", () => {
+    // A host may render the keystrokes alone, and the bar is not drawn while
+    // a block is dragged: with no bar to focus, the key is not taken.
+    register();
+    const editor = editorSpy(pair(), "a");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
+          <Canvas
+            document={editor.document}
+            siteStyles={{ css: "", classes: {} } as never}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+          />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+    const taken = !fireEvent.keyDown(document.body, {
+      key: "F10",
+      code: "F10",
+      altKey: true,
+    });
+    expect(taken).toBe(false);
+  });
+
+  it("takes focus on Alt+F10 in ITS editor, with another editor on the page", () => {
+    // Two editors in one document, as two blocks fields on one form give,
+    // each listening for keys inside itself. The bar Alt+F10 reaches is the
+    // one of the editor the key was pressed in, not the first in the page.
+    function Scoped({ editor }: { editor: EditorState }) {
+      const [scope, setScope] = React.useState<HTMLElement | null>(null);
+      return (
+        <div ref={setScope} data-testid="editor">
+          {scope !== null && (
+            <ShortcutProvider target={scope}>
+              <BlockKeyboardActions
+                onSaveAsPattern={() => undefined}
+                editor={editor}
+              >
+                <Canvas
+                  document={editor.document}
+                  siteStyles={{ css: "", classes: {} } as never}
+                  selectedId={editor.selectedId}
+                  onSelect={editor.select}
+                  overlay={<BlockToolbar editor={editor} />}
+                />
+              </BlockKeyboardActions>
+            </ShortcutProvider>
+          )}
+        </div>
+      );
+    }
+    register();
+    render(
+      <>
+        <Scoped editor={editorSpy(pair(), "a")} />
+        <Scoped editor={editorSpy(pair(), "b")} />
+      </>
+    );
+    const second = screen.getAllByTestId("editor")[1];
+    if (second === undefined) throw new Error("no second editor");
+    fireEvent.keyDown(second, { key: "F10", code: "F10", altKey: true });
+    const bar = second.querySelector('[role="toolbar"]');
+    expect(bar).not.toBeNull();
+    expect(bar?.contains(document.activeElement)).toBe(true);
+  });
+
+  it("moves to the screen's top as a tall block is scrolled past its own", () => {
+    // jsdom lays nothing out, so the boxes are given: a page in a scroller
+    // showing 900px of it, and a 2000px block 100px down the page. Scrolling
+    // moves the page under the scroller and changes nothing a render reports.
+    let scrolled = 0;
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(-scrolled, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]'))
+          return box(100 - scrolled, 1000, 2000);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("above");
+      scrolled = 700;
+      const scroller = document.querySelector("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      fireEvent.scroll(scroller);
+      expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("moves when the window resizes the part of the page on screen", () => {
+    // A block 10px down a scroller: the bar goes below it while that fits on
+    // screen, and to the screen's top once the window is too short for it.
+    // Nothing the bar observes resizes: only the scroller's visible part.
+    let shown = 900;
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, shown);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(10, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("below");
+      shown = 150;
+      fireEvent(window, new Event("resize"));
+      expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
   });
 
   it("keeps the roving stop where FOCUS is when the selection moves", () => {
