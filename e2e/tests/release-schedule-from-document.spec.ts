@@ -213,7 +213,9 @@ test("lists a post in two releases, says which one wins, and takes it out of eac
     opened.push(s);
 
     await openPost(page, title, id);
-    const banner = page.getByRole("status").filter({ hasText: `A ${stamp}` });
+    // Found by B, which holds the post throughout: the locator is evaluated at each use, and A
+    // and the single-document release are taken out along the way.
+    const banner = page.getByRole("status").filter({ hasText: `B ${stamp}` });
     await expect(banner.getByRole("listitem")).toHaveCount(3);
     await expect(banner).toContainText(
       `B ${stamp} was scheduled last, so its version is the one readers get.`
