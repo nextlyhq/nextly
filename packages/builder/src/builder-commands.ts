@@ -57,16 +57,19 @@ export interface CommandVerbs {
    * keeps compiling; absent, the verb does nothing.
    */
   readonly editComponent?: () => void;
-  /** Begin saving the selection as a component; the host owns the form. */
-  readonly saveAsComponent?: () => void;
-  /** Begin converting the selection into a component placement. */
-  readonly convertToComponent?: () => void;
+  /**
+   * Begin turning the selection into a component, replacing it with a
+   * placement or keeping it and saving a copy; the host owns the form.
+   */
+  readonly turnIntoComponent?: () => void;
   /** Begin detaching the selected placement from its component. */
   readonly detachComponent?: () => void;
   /** Begin duplicating the selected placement's component. */
   readonly duplicateComponent?: () => void;
   /** Begin replacing a pattern's content with the selection. */
   readonly updatePattern?: () => void;
+  /** Begin saving the block's look as a shared style; the host owns the form. */
+  readonly saveAsSharedStyle?: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -127,17 +130,28 @@ const BLOCK_COMMAND_COPY: Record<
     // that before they can find it.
     keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
   },
+  "save-as-shared-style": {
+    label: "Save block as shared style",
+    keywords: ["save", "shared style", "class", "reuse", "style", "preset"],
+  },
   "edit-component": {
     label: "Edit component",
     keywords: ["component", "edit", "open", "original", "definition"],
   },
-  "save-as-component": {
-    label: "Save as component",
-    keywords: ["save", "component", "library", "reuse", "symbol", "synced"],
-  },
-  "convert-to-component": {
-    label: "Convert to component",
-    keywords: ["convert", "component", "turn into", "symbol", "synced", "link"],
+  // One verb for both ways of making a component, so the palette finds it
+  // by the words of either.
+  "turn-into-component": {
+    label: "Turn into component…",
+    keywords: [
+      "turn into",
+      "convert",
+      "save",
+      "component",
+      "library",
+      "reuse",
+      "symbol",
+      "synced",
+    ],
   },
   "detach-component": {
     label: "Detach from component",
@@ -186,9 +200,9 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
+    "save-as-shared-style": () => verbs.saveAsSharedStyle?.(),
     "edit-component": () => verbs.editComponent?.(),
-    "save-as-component": () => verbs.saveAsComponent?.(),
-    "convert-to-component": () => verbs.convertToComponent?.(),
+    "turn-into-component": () => verbs.turnIntoComponent?.(),
     "detach-component": () => verbs.detachComponent?.(),
     "duplicate-component": () => verbs.duplicateComponent?.(),
     "update-pattern": () => verbs.updatePattern?.(),

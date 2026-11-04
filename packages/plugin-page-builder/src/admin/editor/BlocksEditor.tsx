@@ -15,6 +15,7 @@ import {
   prepareDocumentForRead,
   registeredBlocks,
 } from "@nextlyhq/blocks-react";
+import { blockNameOf } from "@nextlyhq/builder";
 import {
   BlockContextMenu,
   BlockKeyboardActions,
@@ -33,7 +34,12 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  VariantPreviewTag,
+  type ComponentFieldsHost,
+  type ComponentVariantsHost,
   type OpenPassages,
+  type SharedStylesHost,
+  type VariantPreviewState,
 } from "@nextlyhq/builder/shell";
 import {
   DocumentPrimaryAction,
@@ -42,7 +48,7 @@ import {
   MediaPickerDialog,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useState, type ComponentProps, type JSX } from "react";
+import { useEffect, useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
   useWatch,
@@ -59,7 +65,10 @@ import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
-import { SiteStyleHistoryContext } from "../site-style-client";
+import {
+  SiteStyleHistoryContext,
+  SiteStylePreviewContext,
+} from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
 import {
@@ -69,14 +78,20 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import {
+  useMediaSummaryReader,
+  type ReadMediaSummary,
+} from "./media-summary-reader";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
+import { useReveal, type Reveal } from "./reveal-hidden";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
   type SharePreview,
   type ShareSeoFields,
 } from "./share-preview";
+import { SiteLayoutNote } from "./site-canvas";
 import {
   ConnectStyleHistoryContext,
   RemountOnStyleReplay,
@@ -113,6 +128,14 @@ type EditorView = EditorMount &
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** The block verbs shared for the surfaces drawn outside the provider. */
+    layerVerbs: CardVerbs;
+    /** What the canvas draws: the document, with selected hidden blocks shown. */
+    reveal: Reveal;
+    /** A stored media id's name, picture and alt text, for the image fields. */
+    readMedia: ReadMediaSummary;
+    /** The variant open in a component's view, which the canvas previews. */
+    preview: ComponentView["preview"];
   };
 
 /**
@@ -305,11 +328,12 @@ function editorTopBar(
           state opens towards the panel buttons rather than between it and
           what it describes. Reserved only where the bar has the room: below
           1400px it takes what it shows, as the device labels give way there,
-          so the end column never runs into the zoom. */}
+          so the end column never runs into the zoom. Set in the bar's own
+          text size, as Preview beside it is. */}
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
+        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end text-sm @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
           document's leading action with its other ways to publish on its
@@ -358,7 +382,8 @@ const servicesByPassages = new WeakMap<
 
 function servicesFor(
   passages: OpenPassages,
-  locale: string | undefined
+  locale: string | undefined,
+  readMedia: ReadMediaSummary
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -371,6 +396,7 @@ function servicesFor(
     services = {
       ...borrowedServices(),
       openPassages: passages,
+      readMedia,
       findEntries: query =>
         findEntries(locale === undefined ? query : { ...query, locale }),
     };
@@ -401,7 +427,8 @@ function editorChecklist({
 /** The inspector, given the same readings the canvas draws with. */
 function editorInspector(
   view: EditorView,
-  verbs: CardVerbs
+  verbs: CardVerbs,
+  sharedStyles: SharedStylesHost
 ): React.JSX.Element {
   const {
     editor,
@@ -444,14 +471,19 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(view.passages, view.locale)}
+      contentServices={servicesFor(view.passages, view.locale, view.readMedia)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
-      onCreateClass={classes.create}
+      // The author's right, the style write and the reach reads, so a
+      // shared style the block wears can become the Style tab's target.
+      sharedStyles={sharedStyles}
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
+      // The set above is the config's defaults until the stored one is read,
+      // so a per-device hide waits for it.
+      breakpointsStatus={siteStyleStatus(siteStylePending, siteStyleError)}
       // Which tier the Style tab writes to, and which tiers are live: the
       // canvas's answer rather than the panel's, as the frame's width is
       // what the page's media queries answer for.
@@ -483,12 +515,31 @@ function editorInspector(
         onManageFonts: () => requestPanel("design", "fonts"),
       }}
       // In a component's own view: the ids its live definition holds, which a
-      // new field must never reuse, and how far a removal reaches.
-      componentFields={componentFacts}
-      // And how many placements chose a variant, for its delete dialog.
-      componentVariants={componentVariants}
+      // new field must never reuse, how far a removal reaches, and its name
+      // for the card heading the view, which is the open document's title.
+      componentFields={namedFacts(componentFacts, view.pageTitle)}
+      // And how many placements chose a variant, for its delete dialog, and
+      // the open variant, which the canvas previews.
+      componentVariants={previewingHost(componentVariants, view.preview)}
     />
   );
+}
+
+/** The variants host, holding the open variant for the canvas to preview. */
+function previewingHost(
+  host: ComponentVariantsHost | undefined,
+  preview: VariantPreviewState
+): ComponentVariantsHost {
+  return { ...host, preview: preview.binding };
+}
+
+/** The component facts with the component's name, or nothing for a page. */
+function namedFacts(
+  facts: ComponentFieldsHost | undefined,
+  title: string | undefined
+): ComponentFieldsHost | undefined {
+  if (facts === undefined || title === undefined || title === "") return facts;
+  return { ...facts, name: title };
 }
 
 /** The canvas, or what stands in its place while a read it needs is out. */
@@ -498,7 +549,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     siteStylePending,
     siteStyleError,
     editor,
-    inline,
     zoom,
     setAppliedScale,
     frameWidth,
@@ -516,6 +566,10 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     showEmptyElements,
     openInsertPanel,
     locale,
+    canvasSource,
+    canvasFallback,
+    onCanvasFallback,
+    canvasDir,
   } = view;
   return (
     <>
@@ -554,6 +608,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
         and confirm.
       */}
       <RepairNotice editor={editor} />
+      {/*
+        Whether the page is drawn inside the site's own layout, and why not
+        when it is not: without the site's stylesheets the canvas can differ
+        from the published page.
+      */}
+      <SiteLayoutNote fallback={canvasFallback} />
       {siteStylePending ||
       siteStyleError !== null ||
       componentLibrary.state === "pending" ? (
@@ -577,12 +637,36 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             zoom={zoom}
             onScale={setAppliedScale}
             title={pageTitle}
-            // The language being edited, for a screen reader in the frame.
+            // The language being edited, for a screen reader in the frame, and
+            // the way it is written.
             lang={locale}
+            dir={canvasDir}
+            // The site's canvas route, where the site serves one, so the page
+            // is drawn inside the site's own layout and stylesheets.
+            source={canvasSource}
+            onSourceFallback={onCanvasFallback}
             showEmptyElements={showEmptyElements}
             overlay={
               <>
-                <CanvasMarks />
+                <VariantPreviewTag name={view.preview.previewing} />
+                {/* A selected block the page hides on this device is drawn
+                    anyway, and its ring says so. */}
+                <CanvasMarks
+                  revealed={view.reveal.ids}
+                  device={{
+                    breakpoints: canvasRender.styleContext.breakpoints,
+                    id: view.editedBreakpoint,
+                  }}
+                  // A selected placement's frame is tagged with the name its
+                  // Layers row reads.
+                  nameOf={address =>
+                    blockNameOf(
+                      editor.document,
+                      address,
+                      componentLibrary.titleOf
+                    )
+                  }
+                />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
                 {/*
@@ -633,7 +717,10 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             }
           >
             <Canvas
-              document={editor.document}
+              // The document as the open variant draws it, in a component's
+              // view, with a selected block it hides on this device drawn
+              // while selected; the document itself otherwise.
+              document={view.reveal.document}
               rootRef={canvasRoot}
               onRoot={setCanvasElement}
               forcedState={shownStyleState}
@@ -657,7 +744,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The pointer route into typing a block's text. Its keyboard
               // counterpart is the Enter binding, registered in the same
               // place so a surface cannot gain one without the other.
-              onDoubleClick={inline.onDoubleClick}
+              onDoubleClick={view.preview.onDoubleClick}
             />
           </CanvasFrame>
         </BlockContextMenu>
@@ -744,6 +831,9 @@ function editorSettings(
           // dialog on every pass, open or not.
           dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
         }
+        // The SEO plugin's group, where the page has one: its fields are then
+        // among the page's own, and the preview is not all there is.
+        seoFields={page.seo !== undefined}
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
@@ -785,19 +875,22 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
   const style = useSiteStyleHistory();
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
-      <StyleRevisionContext.Provider value={style.replay}>
-        <ConnectStyleHistoryContext.Provider value={style.connect}>
-          {/*
+      {/* Held style edits, drawn before they are stored. */}
+      <SiteStylePreviewContext.Provider value={style.preview}>
+        <StyleRevisionContext.Provider value={style.replay}>
+          <ConnectStyleHistoryContext.Provider value={style.connect}>
+            {/*
             The canvas's frame, provided above the whole editor: the canvas
             registers it here, and the inspector, the toolbar, inline editing
             and the keys outside the canvas all ask it which document and
             window the page is drawn in.
           */}
-          <CanvasFrameProvider>
-            <EditorBody {...props} />
-          </CanvasFrameProvider>
-        </ConnectStyleHistoryContext.Provider>
-      </StyleRevisionContext.Provider>
+            <CanvasFrameProvider>
+              <EditorBody {...props} />
+            </CanvasFrameProvider>
+          </ConnectStyleHistoryContext.Provider>
+        </StyleRevisionContext.Provider>
+      </SiteStylePreviewContext.Provider>
     </SiteStyleHistoryContext.Provider>
   );
 }
@@ -881,13 +974,35 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentLibrary: mount.componentLibrary,
     fieldName: name,
     componentFacts: mount.componentFacts,
+    // Said by the banner's Back in the view a placement here opens.
+    here: page.title,
+    inline,
   });
+  // The "Part of" toast offers the same Edit component the panel does.
+  useOfferedEditComponent(
+    mount.offerEditComponent,
+    componentView.onEditComponent
+  );
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
 
+  // Shared styles on a block: the Style tab's target and "Save as shared
+  // style…", from the same class surface the canvas compiles from.
+  const { sharedStyle } = canvas;
   // The page's title, for the canvas frame's accessible name.
   const pageTitle = page.title;
+  // Over the document the canvas draws: in a component's view, the open
+  // variant's.
+  const reveal = useReveal(
+    componentView.preview.document,
+    mount.editor.selection.ids,
+    canvas.canvasRender.styleContext.breakpoints,
+    canvas.editedBreakpoint
+  );
+  // A stored image's name and picture in the inspector, read as the canvas
+  // reads it.
+  const readMedia = useMediaSummaryReader();
   const view: EditorView = {
     ...mount,
     ...style,
@@ -896,6 +1011,10 @@ function EditorBody<TFieldValues extends FieldValues>({
     documentDirty,
     pageTitle,
     componentView,
+    layerVerbs: cardVerbs,
+    reveal,
+    readMedia,
+    preview: componentView.preview,
   };
   useOpenAtSection({
     sectionId: openAt,
@@ -926,7 +1045,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     <EditorFrame banner={componentView.banner}>
       <BuilderShell
         notices={notices}
-        onExit={done}
+        onExit={shellExit(componentView, done)}
         // The signed-in author's own preferences, not the browser's.
         store={mount.preferenceStore}
         availablePanels={availablePanels}
@@ -967,7 +1086,7 @@ function EditorBody<TFieldValues extends FieldValues>({
         // already holds and cannot enumerate one. This is the MERGED set the
         // canvas compiles with, so the picker offers exactly the tokens the
         // page will resolve.
-        inspector={editorInspector(view, cardVerbs)}
+        inspector={editorInspector(view, cardVerbs, sharedStyle.host)}
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
@@ -996,7 +1115,7 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
         <BlockKeyboardActions
           editor={editor}
-          onEditText={inline.begin}
+          onEditText={componentView.preview.onEditText}
           onSaveAsPattern={savePattern.open}
           /*
             The same map the canvas draws with, so a keyboard move of an
@@ -1015,6 +1134,8 @@ function EditorBody<TFieldValues extends FieldValues>({
           */
           mayCreatePattern={mayCreatePattern}
           components={componentVerbs}
+          // "Save as shared style…", offered by every block menu.
+          sharedStyles={sharedStyle.verb}
           // Opening a placed component in its own view: the host's, since it
           // knows the view's address and whether this author may update
           // components. Absent, no surface offers it.
@@ -1070,10 +1191,23 @@ function EditorBody<TFieldValues extends FieldValues>({
             onClose={makeComponent.close}
             returnFocusTo={makeComponent.returnFocusTo}
           />
+          {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>
     </EditorFrame>
   );
+}
+
+/**
+ * The shell's exit arrow: withheld while the component banner offers its
+ * Back, so the view has one way back rather than two arrows going to two
+ * places. Leaving through search still commits, as the exit always did.
+ */
+function shellExit(
+  view: Pick<ComponentView, "offersBack">,
+  done: () => void
+): (() => void) | undefined {
+  return view.offersBack ? undefined : done;
 }
 
 /**
@@ -1096,4 +1230,17 @@ function EditorFrame({
       <div className="min-h-0 flex-1">{children}</div>
     </div>
   );
+}
+
+/**
+ * Hand the "Part of" toast the component opener the view built, so its Edit
+ * component action opens what the panel's button does.
+ */
+function useOfferedEditComponent(
+  offer: EditorMount["offerEditComponent"],
+  open: ComponentView["onEditComponent"]
+): void {
+  useEffect(() => {
+    offer(open);
+  }, [offer, open]);
 }

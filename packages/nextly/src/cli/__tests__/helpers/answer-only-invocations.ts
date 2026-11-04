@@ -9,11 +9,27 @@ import type { Command } from "commander";
 export const UNKNOWN_COMMAND = "no-such-command";
 
 /** Every command under `command`, as the words that name it on the command line. */
-function commandPaths(command: Command, prefix: string[] = []): string[][] {
+export function commandPaths(
+  command: Command,
+  prefix: string[] = []
+): string[][] {
   return command.commands.flatMap(child => {
     const path = [...prefix, child.name()];
     return [path, ...commandPaths(child, path)];
   });
+}
+
+/** The command `path` names under `program`, as `commandPaths` lists it. */
+export function commandAt(program: Command, path: readonly string[]): Command {
+  let command = program;
+  for (const name of path) {
+    const child = command.commands.find(each => each.name() === name);
+    if (child === undefined) {
+      throw new Error(`no command "${path.join(" ")}"`);
+    }
+    command = child;
+  }
+  return command;
 }
 
 /**

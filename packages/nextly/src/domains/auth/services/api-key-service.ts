@@ -88,6 +88,7 @@ import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignmen
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+import { isPublishWithoutReview } from "../../workflows/permissions";
 
 import { refuseLinkingPublicRole } from "./public-role";
 
@@ -1053,6 +1054,27 @@ export class ApiKeyService extends BaseService {
    * read again.
    */
   private async resolveGrantRows(
+    tokenType: ApiKeyTokenType,
+    roleId: string | null,
+    userId: string
+  ): Promise<{ rows: GrantedPermission[]; validUntil?: number }> {
+    const resolved = await this.resolveGrantRowsOfKind(
+      tokenType,
+      roleId,
+      userId
+    );
+    // No key holds `publish-without-review-<slug>`, whatever its type, role or creator: publishing
+    // past a workflow is a person's act, and a key may act for an agent. Dropped here, where every
+    // key's grants and every summary of them are resolved, so no route that grants a role a
+    // permission, or gives its creator one, can put it within a key's reach.
+    return {
+      ...resolved,
+      rows: resolved.rows.filter(row => !isPublishWithoutReview(row)),
+    };
+  }
+
+  /** {@link resolveGrantRows} before the permissions no key holds are dropped. */
+  private async resolveGrantRowsOfKind(
     tokenType: ApiKeyTokenType,
     roleId: string | null,
     userId: string

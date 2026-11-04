@@ -177,6 +177,17 @@ export function rootInFrameViewport(root: HTMLElement): Point {
 }
 
 /**
+ * Where an element of a frame's page is, in that frame's VIEWPORT: its client
+ * rectangle inside the frame, which moves with the frame's scroll, as the
+ * canvas root's corner does above. Chrome drawn over the frame scales it by
+ * the frame's painted scale.
+ */
+export function boxInFrameViewport(element: Element): Rect {
+  const box = element.getBoundingClientRect();
+  return { x: box.left, y: box.top, width: box.width, height: box.height };
+}
+
+/**
  * Where editor chrome is drawn, and how it maps the canvas's coordinates.
  *
  * Chrome is drawn in one of two places. Over a canvas sharing the editor's
@@ -216,6 +227,13 @@ export interface OverlaySpace {
  * it, and the component imports it from here.
  */
 export const CANVAS_LAYER_ATTRIBUTE = "data-nx-canvas-layer";
+
+/**
+ * How far past the frame's viewport the layer draws, on every side, in the
+ * chrome's pixels: as far as a selection ring stands outside its block, so the
+ * ring of a block flush with the page's edge is drawn rather than cut off.
+ */
+export const CHROME_BLEED = 4;
 
 /** The attribute marking the box holding a canvas frame and its layer. */
 export const CANVAS_FRAME_BOX_ATTRIBUTE = "data-nx-canvas-frame-box";
@@ -664,6 +682,22 @@ export function canvasScroller(
   return framed
     ? (root.ownerDocument.scrollingElement ?? null)
     : scrollableAncestor(root);
+}
+
+/**
+ * What of a canvas is on screen, in the chrome's coordinates: the part of the
+ * page its scroller shows, where the canvas cuts off anything drawn past it;
+ * the whole page where nothing scrolls it. The marks and the block toolbar
+ * keep to it, so a tag or a bar is never drawn where the canvas cuts it off.
+ */
+export function onScreenOf(space: OverlaySpace): Rect {
+  const { root } = space;
+  const scroller = canvasScroller(root, space.frame !== null);
+  return space.place(
+    scroller === null
+      ? canvasContentRect(root, root)
+      : visibleBandOf(scroller, root)
+  );
 }
 
 /**

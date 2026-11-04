@@ -10,6 +10,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { defineWorkflow } from "../../domains/workflows/define-workflow";
+import { workflowSeededPermissions } from "../../domains/workflows/permissions";
+import { reviewWorkflow } from "../../domains/workflows/preset";
+
 import {
   ROLE_PRESETS,
   resolvePreset,
@@ -212,5 +216,75 @@ describe("the presets against each other", () => {
     for (const slug of of("editor")) {
       expect(admin.has(slug)).toBe(true);
     }
+  });
+});
+
+// A workflow's own permissions are each project's to grant: no preset holds one, a step's custom
+// action included, while each preset still holds what it held of the same collection.
+describe("the permissions a workflow seeds", () => {
+  const legalReview = defineWorkflow({
+    slug: "legal",
+    label: "Legal",
+    stages: [
+      { name: "drafting", label: "Drafting" },
+      { name: "inLegal", label: "In legal" },
+      { name: "cleared", label: "Cleared", allowsPublish: true },
+    ],
+    steps: [
+      {
+        name: "submit",
+        label: "Submit",
+        kind: "submit",
+        from: "drafting",
+        to: "inLegal",
+      },
+      {
+        name: "signOff",
+        label: "Sign off",
+        kind: "approve",
+        from: "inLegal",
+        to: "cleared",
+        permission: "legal-sign-off",
+      },
+    ],
+    onEdit: { to: "inLegal" },
+    afterPublish: "drafting",
+  });
+  const isWorkflow = workflowSeededPermissions([
+    { workflow: reviewWorkflow(), collections: ["posts"], singles: [] },
+    { workflow: legalReview, collections: [], singles: ["terms"] },
+  ]);
+  const SEEDED = [
+    perm("approve", "posts"),
+    perm("publish-without-review", "posts"),
+    perm("legal-sign-off", "terms"),
+    perm("publish-without-review", "terms"),
+  ];
+  const withWorkflows: PresetPermission[] = [
+    ...PERMISSIONS,
+    perm("publish", "posts"),
+    perm("update", "terms"),
+    ...SEEDED,
+  ];
+
+  it.each(["admin", "editor", "author"])(
+    "are held by no %s preset, while it keeps the collection's own",
+    slug => {
+      const granted = slugs(
+        resolvePreset(preset(slug), withWorkflows, isWorkflow)
+      );
+      for (const seeded of slugs(SEEDED)) {
+        expect(granted).not.toContain(seeded);
+      }
+      // Not refused wholesale: the same collection's own permission is still granted.
+      expect(granted).toContain("update-posts");
+    }
+  );
+
+  it("are told apart from the permissions they sit beside", () => {
+    expect(isWorkflow(perm("approve", "posts"))).toBe(true);
+    expect(isWorkflow(perm("Legal-Sign-Off", "Terms"))).toBe(true);
+    expect(isWorkflow(perm("approve", "pages"))).toBe(false);
+    expect(isWorkflow(perm("publish", "posts"))).toBe(false);
   });
 });

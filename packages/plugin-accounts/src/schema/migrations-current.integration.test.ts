@@ -49,9 +49,10 @@ describe("the accounts plugin's migration modules against its declaration", () =
       );
       const shipped = readdirSync(join(scratch, "src/schema/migrations"));
 
-      // The generator exits 2 when it finds nothing to generate, 0 when it
-      // wrote a module (the drift this test exists to catch), and anything
-      // else when it failed; only 2 passes.
+      // The generator exits 0 both when it finds nothing to generate and when
+      // it wrote a module (the drift this test exists to catch), and anything
+      // else when it failed. The code rules out a failure; the "No schema
+      // changes detected" line and the unchanged folder below rule out drift.
       const outcome = await run(
         join(packageRoot, "node_modules/.bin/nextly"),
         [
@@ -73,7 +74,7 @@ describe("the accounts plugin's migration modules against its declaration", () =
       );
 
       expect(outcome, `${outcome.stdout}\n${outcome.stderr}`).toMatchObject({
-        code: 2,
+        code: 0,
       });
       expect(outcome.stdout).toContain("No schema changes detected");
       expect(

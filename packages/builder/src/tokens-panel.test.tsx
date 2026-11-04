@@ -5,7 +5,11 @@
  * panel, the keyboard behaviour of that editor, the read-only view, and each
  * state the panel can be in.
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  emitTokenBlocks,
+  validateStyleValues,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   act,
   cleanup,
@@ -18,7 +22,11 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
+import {
+  TokensPanel,
+  useVariablesHeader,
+  type TokensPanelProps,
+} from "./tokens-panel";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
   Partial<Pick<TokensPanelProps, "currentTokens" | "onChange">>;
@@ -145,6 +153,40 @@ describe("the rows", () => {
       within(slot).getByRole("button", { name: "Import or export" })
     ).toBeDefined();
     slot.remove();
+  });
+
+  it("leaves its header to a host that draws one for the whole panel, and previews the host's mode", () => {
+    // The host keeps the header across its own tabs, so the panel must take
+    // the mode from it and draw no second switch or menu of its own.
+    function Host(): React.JSX.Element {
+      const header = useVariablesHeader({
+        onChange: () => undefined,
+        currentTokens: () => SITE,
+        readOnly: false,
+      });
+      return (
+        <>
+          <div data-testid="host-header">{header.controls}</div>
+          <TokensPanel
+            tokens={SITE}
+            onChange={() => undefined}
+            currentTokens={() => SITE}
+            header={header}
+          />
+        </>
+      );
+    }
+    render(<Host />);
+    expect(screen.getAllByRole("group", { name: "Preview" })).toHaveLength(1);
+    expect(
+      screen.getAllByRole("button", { name: "Import or export" })
+    ).toHaveLength(1);
+    const hosted = screen.getByTestId("host-header");
+    fireEvent.click(within(hosted).getByRole("button", { name: "Dark" }));
+    const swatch = row(/^Brand/).querySelector(
+      ".nx-vars__swatch--main"
+    ) as HTMLElement;
+    expect(swatch.style.getPropertyValue("--nx-swatch")).toBe("#8fa7ff");
   });
 
   it("shows one line with an Add type size action when there are no type sizes", () => {
@@ -504,6 +546,214 @@ describe("dark values for every kind", () => {
   });
 });
 
+describe("a type size's line height", () => {
+  const REFUSAL = "A line height is a number like 1.4, or a length like 24px.";
+
+  it("says dark follows light when a light edit changes which kind they are", async () => {
+    const dark: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={dark} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(
+      within(editor).getByText(
+        "Dark now follows the light value; set a dark value again if you need one."
+      )
+    ).toBeDefined();
+  });
+
+  const FOLLOWS =
+    "Dark now follows the light value; set a dark value again if you need one.";
+  const BOTH: SiteTokenSet = {
+    tokens: [
+      { name: "font-size.body", kind: "dimension", values: { light: "16px" } },
+      {
+        name: "line-height.body",
+        kind: "dimension",
+        values: { light: "24px", dark: "28px" },
+      },
+    ],
+  };
+
+  it("drops the dark-follows note when Add dark values sets dark again", async () => {
+    render(<Hosted tokens={BOTH} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Add dark values" })
+    );
+    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
+  });
+
+  it("drops the dark-follows note when Reset puts the code's values back", async () => {
+    render(<Hosted tokens={BOTH} supplied={BOTH} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
+    fireEvent.click(within(editor).getByRole("button", { name: "Reset" }));
+    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
+  });
+
+  it("drops a refusal when Use light value removes the refused field", async () => {
+    const dark: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={dark} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, dark"), "tall");
+    expect(within(editor).getByText(REFUSAL)).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Use light line height" })
+    );
+    expect(within(editor).queryByText(REFUSAL)).toBeNull();
+  });
+
+  it("drops a refusal when Reset puts back the value the site's code supplies", async () => {
+    const supplied: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={SITE} supplied={supplied} />);
+    const editor = await openEditor(/^Body/);
+    const line = within(editor).getByLabelText("Line height, light");
+    enter(line, "tall");
+    expect(line.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(within(editor).getByRole("button", { name: "Reset" }));
+    expect(within(editor).queryByText(REFUSAL)).toBeNull();
+    expect(line).toHaveProperty("value", "24px");
+    expect(line.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  const savedLine = (onChange: ReturnType<typeof vi.fn>) =>
+    (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet | undefined)?.tokens.find(
+      token => token.name === "line-height.body"
+    );
+
+  it("takes a unitless number, stored as a number the page reads unitless", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "1.02");
+
+    const line = savedLine(onChange);
+    expect(line?.values).toEqual({ light: "1.02" });
+    expect(line?.kind).toBe("number");
+    // The field keeps what was typed rather than going back to the old value.
+    expect(field).toHaveProperty("value", "1.02");
+
+    // What the site's sheet emits: the value as written, with no unit added
+    // and nothing reported, which is what a save is judged on.
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    const sheet = emitTokenBlocks(saved, ":root");
+    expect(sheet.issues).toEqual([]);
+    expect(sheet.css).toContain("--site-line-height-body:1.02");
+    // And a block whose line height is bound to it is a valid style.
+    const kinds = new Map(saved.tokens.map(token => [token.name, token.kind]));
+    expect(
+      validateStyleValues(
+        { lineHeight: { $token: "line-height.body" } },
+        "/styles",
+        "strict",
+        undefined,
+        false,
+        { kindOf: name => kinds.get(name) }
+      )
+    ).toEqual([]);
+  });
+
+  it("goes back to a length when a unit is typed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "1.4");
+    enter(field, "28px");
+    expect(savedLine(onChange)).toMatchObject({
+      kind: "dimension",
+      values: { light: "28px" },
+    });
+  });
+
+  it("says why a value is refused, under the field, and keeps what was typed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "tall");
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(
+      within(editor).getByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeDefined();
+    expect(field).toHaveProperty("value", "tall");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+
+    // A value that is accepted clears the message.
+    enter(field, "1.5");
+    expect(
+      within(editor).queryByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeNull();
+    expect(field.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("keeps a refusal until that field is corrected, whatever else is committed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const line = within(editor).getByLabelText("Line height, light");
+    enter(line, "tall");
+    // Another field committed successfully says nothing about this one.
+    enter(within(editor).getByLabelText("Size, light"), "18px");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(
+      within(editor).getByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeDefined();
+    expect(line).toHaveProperty("value", "tall");
+    expect(line.getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
 describe("a variable added past the first page", () => {
   it("is shown and opened, though its group holds more than a page", async () => {
     const many: SiteTokenSet = {
@@ -788,6 +1038,33 @@ describe("a row's name in the dark preview", () => {
 });
 
 describe("the colour picker in the editor", () => {
+  it("has what the open picker held stored before the editor says it is done", async () => {
+    // Closing the editor with its picker still open: the picker's colour is
+    // committed as it goes away, and the host is told the edit is done after
+    // that commit, not before it.
+    const events: string[] = [];
+    render(
+      <Hosted
+        tokens={SITE}
+        onChange={() => events.push("change")}
+        onSettle={() => events.push("settle")}
+      />
+    );
+    const editor = await openEditor(/^Text/);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Pick the light colour" })
+    );
+    fireEvent.keyDown(
+      within(editor).getByLabelText(/^Saturation and brightness/),
+      { key: "ArrowRight" }
+    );
+    expect(events).toEqual([]);
+    escape();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(events).toContain("change");
+    expect(events.at(-1)).toBe("settle");
+  });
+
   it("keeps each step of a gesture rather than snapping back", async () => {
     render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Text/);

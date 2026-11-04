@@ -68,10 +68,12 @@ const BOX = ".nx-style-inspector__side-box";
 
 describe("the box places sides by identity", () => {
   it.each([
-    ["blockStart", "1 / 2"],
+    // The block sides span the row, centred: the inner box's centre column
+    // shrinks to a small square, too narrow to hold a value.
+    ["blockStart", "1 / 1 / 2 / -1"],
     ["inlineStart", "2 / 1"],
     ["inlineEnd", "2 / 3"],
-    ["blockEnd", "3 / 2"],
+    ["blockEnd", "3 / 1 / 4 / -1"],
   ])("puts %s at row/column %s", (side, area) => {
     /*
      * Placed by WHICH SIDE the field is, never by its position among the
@@ -202,5 +204,66 @@ describe("the narrow fallback actually wins", () => {
     // And WITHOUT shouting: the cap on `!important` here is a real constraint,
     // and needing one would have meant the axes were applied in the wrong place.
     expect(fallback).not.toContain("!important");
+  });
+});
+
+describe("a side's value fits its cell", () => {
+  it("gives the side columns the width, the centre only what it holds", () => {
+    // "0.95rem" was cut to "0.95re": the inner box's sides were a third of a
+    // third of the panel. The outer centre now takes the inner box's own
+    // width and the inner centre a small square, so every side cell is at
+    // least 3.5rem.
+    expect(ruleBody(BOX, "A per-side property drawn as the box")).toContain(
+      "grid-template-columns: minmax(3.5rem, 1fr) auto minmax(3.5rem, 1fr)"
+    );
+    expect(
+      ruleBody(`${BOX}::before`, "A per-side property drawn as the box")
+    ).toContain("min-inline-size: 1.5rem");
+    for (const side of ["blockStart", "blockEnd"]) {
+      const block = ruleBody(`${BOX} > [data-side="${side}"]`);
+      expect(block).toContain("justify-self: center");
+      expect(block).toContain("inline-size: 3.5rem");
+    }
+  });
+
+  it("sets a value centred in even-width digits, with the cell's edge to itself", () => {
+    const value = ruleBody(`${BOX} input[data-slot="input"]`);
+    // 2px each side: at 12px "0.95rem" is about 46px, and the spacing box
+    // has room for cells of about 53px, nested two rings deep.
+    expect(value).toContain("padding-inline: 0.125rem");
+    expect(value).toContain("text-align: center");
+    expect(value).toContain("font-variant-numeric: tabular-nums");
+  });
+});
+
+describe("the spacing box's rings give their sides the room", () => {
+  it("sizes both rings' side columns for a seven-character value", () => {
+    // The margin ring's centre is the padding ring, at its own width; the
+    // padding ring's centre is a small square. Both rings' side cells are
+    // 3.3rem, which "0.95rem" fits at 12px.
+    expect(ruleBody(`${BOX}[data-ring="margin"]`)).toContain(
+      "grid-template-columns: minmax(3.3rem, 1fr) auto minmax(3.3rem, 1fr)"
+    );
+    expect(ruleBody(`${BOX}[data-ring="padding"]`)).toContain(
+      // As the formatter wraps it.
+      "grid-template-columns: minmax(3.3rem, 1fr) minmax(1rem, auto) minmax( 3.3rem, 1fr )"
+    );
+  });
+});
+
+describe("a box side in a narrow rail", () => {
+  it("lets every side's row take the rail's width again", () => {
+    // The block sides' fixed 3.5rem stayed on in the narrow fallback, where
+    // every side is a labelled row: those two rows were crushed while the
+    // other two stretched.
+    expect(FLAT).toContain(
+      `@container nx-inspector-fields (max-width: 18rem) { ${BOX} { display: flex;`
+    );
+    const fallback = FLAT.slice(
+      FLAT.lastIndexOf("@container nx-inspector-fields (max-width: 18rem)")
+    );
+    expect(fallback).toContain(
+      `${BOX} > [data-side] { inline-size: auto; justify-self: stretch; }`
+    );
   });
 });

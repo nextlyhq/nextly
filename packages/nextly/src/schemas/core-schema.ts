@@ -57,6 +57,7 @@ import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
+import { reviewStatesTables } from "./review-states";
 import { schemaEventsTables } from "./schema-events";
 import { SCHEMA_OWNERS_TABLE, schemaOwnersTables } from "./schema-owners";
 import {
@@ -70,6 +71,7 @@ import { versionViewsTables } from "./version-views";
 import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
 import { widgetLayoutTables } from "./widget-layout";
+import { workflowSettingsTables } from "./workflow-settings";
 
 // =============================================================================
 // Public API — populated incrementally by Plan A tasks 4–14.
@@ -238,6 +240,11 @@ export function getCoreSchema(
     // document and part. Nothing marks before the table exists, so
     // core-reconcile creating it is sufficient, as for `nextly_versions`.
     ...Object.values(versionViewsTables(dialect)),
+    // A workflow's review state per document and part, and what admins change for each workflow.
+    // Nothing writes them before they exist, so core-reconcile creating them is sufficient, as for
+    // `nextly_versions`.
+    ...Object.values(reviewStatesTables(dialect)),
+    ...Object.values(workflowSettingsTables(dialect)),
     // The record of content events and the parts each one involved. Nothing
     // records into them before they exist, so core-reconcile creating them is
     // sufficient, as for `nextly_versions`.
@@ -361,6 +368,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_i18n_archive",
   "nextly_versions",
   "nextly_version_views",
+  "nextly_review_states",
+  "nextly_workflow_settings",
   "nextly_content_events",
   "nextly_content_event_parts",
   "nextly_preview_links",

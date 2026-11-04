@@ -40,6 +40,7 @@ import {
   type BlockDocument,
   type BreakpointId,
   type BreakpointSet,
+  type NodeStyles,
   type StyleState,
   type StyleSubject,
   type StyleTraceEntry,
@@ -100,6 +101,11 @@ export interface StyleInspectionOptions extends StyleControlOptions {
    * for. The canvas knows what a block renders as; the document does not.
    */
   readonly media?: boolean;
+  /**
+   * The styles the controls read, when they are not the node's own: a shared
+   * style the block wears, chosen as the target. The node's own otherwise.
+   */
+  readonly styles?: NodeStyles;
   /**
    * The site's breakpoints, so the display a tier is judged by can be read
    * through the wider tiers that also apply at this one. Without them only
@@ -206,6 +212,9 @@ export function inspectStyle(
   const node = selectedNode(document, selectedId);
   if (node === null) return null;
   const definition = getBlock(node.type);
+  // The envelope every control below reads: the target's, which is the
+  // node's own unless a shared style is being edited.
+  const styles = options?.styles ?? node.styles;
 
   const state = options?.state ?? "base";
   const breakpoint = options?.breakpoint ?? BASE_BREAKPOINT;
@@ -234,7 +243,7 @@ export function inspectStyle(
   const allowed = new Set(offered);
   for (const entry of STYLE_CATALOG) {
     if (allowed.has(entry.property)) continue;
-    const stored = readStyleValue(node.styles, {
+    const stored = readStyleValue(styles, {
       state,
       breakpoint,
       property: entry.property,
@@ -244,7 +253,7 @@ export function inspectStyle(
   }
 
   const tiers: TierContext = {
-    display: displayOf(node.styles, {
+    display: displayOf(styles, {
       state,
       breakpoint,
       breakpoints: options?.breakpoints,
@@ -256,7 +265,7 @@ export function inspectStyle(
   const inspected = [...allowed].map(property => {
     const entry = getStyleProperty(property);
     const placement = placementOf(property, entry?.group ?? "effects");
-    const row = inspectProperty(property, node.styles, offered.has(property), {
+    const row = inspectProperty(property, styles, offered.has(property), {
       ...options,
       state,
       breakpoint,
@@ -362,6 +371,16 @@ function tiersFrom(
   );
 }
 
+/**
+ * Labels shorter than the property's name, where the name is cut short in
+ * the Style tab's 7rem label column: "Justify content" read "Justify cont…".
+ * Webflow's and Figma's words for the same two controls.
+ */
+const SHORT_LABELS: Readonly<Record<string, string>> = {
+  justifyContent: "Justify",
+  alignItems: "Align",
+};
+
 /** One property's controls and the value they are showing. */
 function inspectProperty(
   property: string,
@@ -393,10 +412,15 @@ function inspectProperty(
     // told only the path would answer for whichever asked first.
     variantAt: path => options.variantAt?.(property, path),
   });
+  const short = SHORT_LABELS[property];
   return {
     property,
-    label: fieldLabel(property),
-    summary: entry.summary,
+    label: short ?? fieldLabel(property),
+    // A shortened label keeps the property's CSS name in its tooltip.
+    summary:
+      short === undefined
+        ? entry.summary
+        : `${fieldLabel(property)}: ${entry.summary}`,
     controls: set.controls,
     variants: set.variants,
     value,

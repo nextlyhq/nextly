@@ -78,6 +78,10 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import {
+  saveAsSharedStyleRefusal,
+  type SharedStyleOffer,
+} from "./shared-style-target";
 
 /** The editor's own lock question, asked of the ops a verb would apply. */
 type LockQuestion = (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
@@ -114,9 +118,9 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
+  | "save-as-shared-style"
   | "edit-component"
-  | "save-as-component"
-  | "convert-to-component"
+  | "turn-into-component"
   | "detach-component"
   | "duplicate-component"
   | "update-pattern"
@@ -189,39 +193,28 @@ const MAKE_COMPONENT_GRANT_REFUSAL =
 const PLANNED_COMPONENT_ID = "planned-component";
 
 /**
- * "Save as component" and "Convert to component", each enabled or dimmed with
- * the reason, both asked of the planners rather than restated. Save shares
- * the pattern save's selection rules; convert is planned in full, and the
- * ops it would apply are put to the editor's lock question, since a slot's
- * lock can refuse the placement that replaces the run.
+ * What "Turn into component…" may do with a selection: replace the blocks
+ * with a placement of the new component, or keep them and save a copy. Each
+ * way is asked of its planner rather than restated: keeping shares the
+ * pattern save's selection rules; replacing is planned in full, and the ops
+ * it would apply are put to the editor's lock question, since a slot's lock
+ * can refuse the placement that replaces the run. A way that is refused
+ * carries its reason; both open, the object is empty.
  */
-function componentActions(
+export interface TurnIntoChoice {
+  /** Why the blocks cannot be replaced, so only a copy can be saved. */
+  readonly replaceRefused?: string;
+  /** Why no copy can be saved leaving them, so only replacing is open. */
+  readonly keepRefused?: string;
+}
+
+/** Each way "Turn into component…" may go, and why not where it may not. */
+export function turnIntoChoice(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
-): ToolbarAction[] {
-  if (offer === undefined) return [];
-  const save: ToolbarAction = {
-    id: "save-as-component",
-    label: "Save as component",
-    enabled: true,
-    inMenu: true,
-  };
-  const convert: ToolbarAction = {
-    id: "convert-to-component",
-    label: "Convert to component",
-    enabled: true,
-    inMenu: true,
-  };
-  if (!offer.mayCreate) {
-    const reason = MAKE_COMPONENT_GRANT_REFUSAL;
-    return [
-      { ...save, enabled: false, reason },
-      { ...convert, enabled: false, reason },
-    ];
-  }
+  ask?: LockQuestion
+): TurnIntoChoice {
   const saving = saveAsPatternRefusal(document, ids, nesting);
   const converting = planConvertToComponent(
     document,
@@ -231,18 +224,47 @@ function componentActions(
     {},
     nesting
   );
-  return [
-    saving === undefined
-      ? save
-      : { ...save, enabled: false, reason: compositionRefusalReason(saving) },
-    converting.problem === undefined
-      ? heldByLock(convert, ask, converting.pageOps)
-      : {
-          ...convert,
-          enabled: false,
-          reason: compositionRefusalReason(converting),
-        },
-  ];
+  const replaceRefused =
+    converting.problem !== undefined
+      ? compositionRefusalReason(converting)
+      : converting.pageOps === undefined
+        ? undefined
+        : lockReason(ask, converting.pageOps);
+  return {
+    ...(replaceRefused === undefined ? {} : { replaceRefused }),
+    ...(saving === undefined
+      ? {}
+      : { keepRefused: compositionRefusalReason(saving) }),
+  };
+}
+
+/**
+ * "Turn into component…": ONE item for both ways of making a component from
+ * the selection, the choice between them made in its dialog. Offered while
+ * either way is open; dimmed, with the reason, when neither is.
+ */
+function componentActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const turn: ToolbarAction = {
+    id: "turn-into-component",
+    label: "Turn into component…",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    return [{ ...turn, enabled: false, reason: MAKE_COMPONENT_GRANT_REFUSAL }];
+  }
+  const choice = turnIntoChoice(document, ids, nesting, ask);
+  if (choice.replaceRefused !== undefined && choice.keepRefused !== undefined) {
+    return [{ ...turn, enabled: false, reason: choice.replaceRefused }];
+  }
+  return [turn];
 }
 
 /**
@@ -581,6 +603,34 @@ function saveAction(
 }
 
 /**
+ * "Save as shared style…" for one block, where the host offers shared
+ * styles: dimmed with the reason the save rule gives (one style per block in
+ * the first release, a block with no styles of its own, the author's right,
+ * the block's lock), asked of that rule rather than restated.
+ */
+function sharedStyleActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  offer: SharedStyleOffer | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const action: ToolbarAction = {
+    id: "save-as-shared-style",
+    label: "Save as shared style…",
+    enabled: true,
+    inMenu: true,
+  };
+  const only = ids.length === 1 ? ids[0] : undefined;
+  if (only === undefined) {
+    return [{ ...action, enabled: false, reason: oneAtATime(ids.length) }];
+  }
+  const reason = saveAsSharedStyleRefusal(document, only, offer);
+  return [
+    reason === undefined ? action : { ...action, enabled: false, reason },
+  ];
+}
+
+/**
  * The bar for a selection holding more than one block.
  *
  * **Duplicate, delete and move keep their meaning; select-parent loses it.**
@@ -606,7 +656,8 @@ function manyBlockActions(
   nesting: NestingSource,
   mayCreate: boolean,
   ask?: LockQuestion,
-  components?: ComponentVerbsOffer
+  components?: ComponentVerbsOffer,
+  sharedStyles?: SharedStyleOffer
 ): ToolbarAction[] {
   const many = oneAtATime(ids.length);
   const deleteLock = ids
@@ -630,6 +681,7 @@ function manyBlockActions(
       opsOf(selectionDuplication(document, ids))
     ),
     saveAction(document, ids, nesting, mayCreate),
+    ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask),
     deleteLock?.locked === undefined
       ? heldByLock(
@@ -708,7 +760,13 @@ export function toolbarActions(
    * for one selected placement, and only by a host that answers it; the host
    * also withholds it from an author who may not update components.
    */
-  offersEditComponent: boolean = false
+  offersEditComponent: boolean = false,
+  /**
+   * What the host knows about the site's shared styles and the author's
+   * right to change them, or nothing where it has none: then "Save as shared
+   * style…" is not offered.
+   */
+  sharedStyles?: SharedStyleOffer
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -724,7 +782,8 @@ export function toolbarActions(
       rules,
       mayCreatePattern,
       lockRefusalFor,
-      components
+      components,
+      sharedStyles
     );
 
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -769,6 +828,7 @@ export function toolbarActions(
       duplication?.ops
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),
     ...compositionActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined
@@ -850,8 +910,24 @@ export interface ToolbarSize {
 export interface ToolbarPlacement {
   readonly x: number;
   readonly y: number;
-  readonly side: "above" | "below";
+  /**
+   * Above the block, below it, or pinned to the top of the screen over a tall
+   * block whose own top is scrolled out of view.
+   */
+  readonly side: "above" | "below" | "pinned";
 }
+
+/** The part of the canvas on screen, top and bottom, in its coordinates. */
+export interface ToolbarScreen {
+  readonly top: number;
+  readonly bottom: number;
+}
+
+/** No screen to keep to: the whole page, from its top down. */
+const WHOLE_PAGE: ToolbarScreen = {
+  top: 0,
+  bottom: Number.POSITIVE_INFINITY,
+};
 
 /** The gap between the bar and the block it names, in pixels. */
 export const TOOLBAR_GAP_PX = 6;
@@ -873,20 +949,23 @@ export const TOOLBAR_GAP_PX = 6;
  * is unreachable, so it slides back in. Vertical overflow is handled by the
  * side flip above rather than by clamping, because a clamped bar overlaps the
  * block and a flipped one does not.
+ *
+ * **Kept to what is on screen** (`screen`, the whole page when not given):
+ * room above is room above on screen, so a block just below the screen's top
+ * flips its bar below it; and a tall block whose top is scrolled away keeps
+ * its bar pinned at the top of the screen, over the block, where an author
+ * working in its middle can reach it.
  */
 export function toolbarPlacement(
   block: Rect,
   toolbar: ToolbarSize,
   canvas: ToolbarSize,
-  gap: number = TOOLBAR_GAP_PX
+  gap: number = TOOLBAR_GAP_PX,
+  screen: ToolbarScreen = WHOLE_PAGE
 ): ToolbarPlacement {
   const above = block.y - toolbar.height - gap;
   const below = block.y + block.height + gap;
-
-  // Below only when above would leave the canvas. A block near the BOTTOM keeps
-  // the bar above it, where it is still visible — flipping there would push it
-  // under the fold for no gain.
-  const side: "above" | "below" = above >= 0 ? "above" : "below";
+  const side = toolbarSide(block, toolbar, gap, screen, above, below);
 
   // The clamp is skipped when the bar is wider than the canvas, because there
   // is no position that satisfies both edges and clamping would silently choose
@@ -895,7 +974,36 @@ export function toolbarPlacement(
   const maxX = canvas.width - toolbar.width;
   const x = maxX <= 0 ? 0 : Math.min(Math.max(block.x, 0), maxX);
 
-  return { x, y: side === "above" ? above : below, side };
+  const y =
+    side === "above" ? above : side === "below" ? below : screen.top + gap;
+  return { x, y, side };
+}
+
+/**
+ * Which side the bar takes. Below only when above would leave the screen, the
+ * block's top is on it and the bar fits on screen under the block; a block
+ * near the BOTTOM keeps the bar above it, where it is still visible, since
+ * flipping there would push it under the fold for no gain. Pinned to the
+ * screen's top over a block that fills the screen below the bar: one whose top
+ * is scrolled away, or one too tall for the bar to fit under it on screen.
+ * Above for a block wholly out of view.
+ */
+function toolbarSide(
+  block: Rect,
+  toolbar: ToolbarSize,
+  gap: number,
+  screen: ToolbarScreen,
+  above: number,
+  below: number
+): ToolbarPlacement["side"] {
+  if (above >= screen.top) return "above";
+  const stillShown =
+    block.y + block.height >= screen.top + toolbar.height + gap;
+  if (block.y >= screen.top) {
+    const fitsBelow = below + toolbar.height <= screen.bottom;
+    return fitsBelow || !stillShown ? "below" : "pinned";
+  }
+  return stillShown ? "pinned" : "above";
 }
 
 /** A plan's ops, or undefined for no plan or a refusal. */

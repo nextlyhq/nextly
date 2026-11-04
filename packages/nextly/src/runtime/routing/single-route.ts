@@ -40,6 +40,7 @@ import { nextlySingleTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
 import { deferToRequest } from "./defer-to-request";
+import { isMissOrDenied } from "./miss-or-denied";
 import { triggerNotFound } from "./not-found";
 
 /** A resolved Single (loose by design — the shape is the app's own). */
@@ -278,34 +279,6 @@ export interface SingleRoute<TNode> {
   SinglePage: () => Promise<TNode>;
   /** Export as `generateMetadata`. */
   generateMetadata: () => Promise<Metadata>;
-}
-
-/**
- * Whether a failed read means "this page is not here" rather than "the read
- * broke".
- *
- * A genuine miss, an access denial and a visitor asked to sign in all become a
- * 404, deliberately: a Single the visitor may not see must not be
- * distinguishable from one that does not exist, or the route answers a
- * question the access rule refused.
- *
- * Everything else RETHROWS. A database blip degraded to `null` would be
- * rendered as a 404 and — on a public route — cached as one, so a transient
- * fault would outlive itself as a permanent missing page.
- *
- * `NextlyError.is` rather than `instanceof`, because it matches across bundled
- * copies of the package; `statusCode` rather than the code name, because the
- * status is what the classification is actually about and one status covers
- * several codes.
- */
-function isMissOrDenied(error: unknown): boolean {
-  return (
-    (NextlyError.is(error) &&
-      (error.statusCode === 404 || error.statusCode === 403)) ||
-    // The visitor refusal only: another 401, such as an invalid or expired
-    // credential, is the caller's to fix and rethrows.
-    NextlyError.isCode(error, "AUTH_REQUIRED")
-  );
 }
 
 function buildSingleRoute<TNode>(

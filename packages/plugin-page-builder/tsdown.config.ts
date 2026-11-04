@@ -9,6 +9,7 @@ import { defineConfig } from "tsdown";
  *   - src/index.ts        → "."        (isomorphic: the field, plugin, collections)
  *   - src/blocks/index.ts → "./blocks" (the registry a plugin contributes through)
  *   - src/admin/index.ts  → "./admin"  ("use client"; the blocks field's summary)
+ *   - src/canvas/index.tsx → "./canvas" ("use client"; the site's canvas route page)
  *
  * There was a `./render` entry, and a separate one for its error boundary — the
  * single client island inside an otherwise server-first renderer. Both are gone
@@ -27,11 +28,19 @@ import { defineConfig } from "tsdown";
 // imports it.
 
 export default defineConfig({
-  // Three entries, where there were five. The renderer and its error boundary
+  // Four entries, where there were five. The renderer and its error boundary
   // were this package's own, built beside `@nextlyhq/blocks-react` rather than
   // on it, so neither has a bundle here to emit. `./admin` survives carrying one
   // component — the blocks field's summary — where it used to carry the editor.
-  entry: ["src/index.ts", "src/blocks/index.ts", "src/admin/index.ts"],
+  // `./canvas` is the one entry a site's own route imports: the page its canvas
+  // route serves, a client component small enough to load in front of the
+  // site's layout without the editor.
+  entry: [
+    "src/index.ts",
+    "src/blocks/index.ts",
+    "src/admin/index.ts",
+    "src/canvas/index.tsx",
+  ],
   format: ["esm"],
   // `.js` and `.d.ts`, the names the exports map already publishes.
   fixedExtension: false,

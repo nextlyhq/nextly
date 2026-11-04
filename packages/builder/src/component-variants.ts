@@ -67,6 +67,19 @@ export interface ComponentVariantsHost {
    * dialog then says the placements fall back without a number.
    */
   readonly countUse?: (variantId: string) => Promise<VariantUse>;
+  /**
+   * Which variant is open, held by the host so the canvas can preview it.
+   * Absent, the section holds it alone and the canvas draws the defaults.
+   */
+  readonly preview?: VariantPreviewBinding;
+}
+
+/** The open variant, as the host holds it for the canvas to preview. */
+export interface VariantPreviewBinding {
+  /** The open variant's id, or nothing while none is open. */
+  readonly open: string | undefined;
+  /** Open a variant, or close the open one with `undefined`. */
+  readonly onOpen: (variantId: string | undefined) => void;
 }
 
 /** What the variant edits read from the editor, gathered once. */
@@ -102,7 +115,7 @@ function problemSentence(
     case "unknown-variant":
       return "That variant is no longer on this component.";
     case "unknown-exposure":
-      return "That field is no longer exposed on this component.";
+      return "That field is no longer on this component.";
     case "not-a-component":
       return "Variants belong to components, and this is not one.";
     case "exceeds-limits":
@@ -246,11 +259,11 @@ const UNPLACED: BlockNode = {
   props: { componentId: "" },
 };
 
-/** How many values a variant presets, in words: "2 values", "(no changes)". */
+/** How many values a variant presets, in words: "2 changes", "No changes yet". */
 export function valuesSummary(option: VariantOption): string {
-  if (option.empty) return "(no changes)";
+  if (option.empty) return "No changes yet";
   const count = Object.keys(option.values).length;
-  return count === 1 ? "1 value" : `${String(count)} values`;
+  return count === 1 ? "1 change" : `${String(count)} changes`;
 }
 
 /**
@@ -261,20 +274,20 @@ export function valuesSummary(option: VariantOption): string {
  */
 export function deleteSentence(use: VariantUse | null | undefined): string {
   const after =
-    "They will show the component’s defaults, and keep their own changes.";
-  if (use === undefined) return "Counting the placements that use it…";
+    "Each use of this variant will show the component’s defaults, and keep its own changes.";
+  if (use === undefined) return "Counting where it is used…";
   if (use === null) {
-    return `Its placements could not be counted. ${after}`;
+    return `Where it is used could not be counted. ${after}`;
   }
   if (use.placements === 0) {
     return use.complete
-      ? "No placement uses this variant."
-      : "No placement was found using this variant, though not every page could be checked.";
+      ? "Nothing uses this variant."
+      : "Nothing was found using this variant, though not every page could be checked.";
   }
   const floor = use.complete ? "" : "at least ";
-  const placements = `${floor}${String(use.placements)} ${use.placements === 1 ? "placement" : "placements"}`;
+  const times = `${floor}${String(use.placements)} ${use.placements === 1 ? "time" : "times"}`;
   const documents = `${floor}${String(use.documents)} ${use.documents === 1 ? "document" : "documents"}`;
-  return `Used by ${placements} in ${documents}. ${after}`;
+  return `Used ${times} in ${documents}. ${after}`;
 }
 
 /**

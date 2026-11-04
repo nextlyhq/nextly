@@ -7,22 +7,50 @@
  * @module admin/editor/site-style-history.test
  */
 import { act, renderHook } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const toastError = vi.fn();
 vi.mock("@nextlyhq/ui", () => ({ toast: { error: toastError } }));
 
-/** The site style's read, as the editor's query holds it. */
-const refetch = vi.fn(() => Promise.resolve());
-let read: { data: unknown; refetch: () => Promise<void> } = {
+/**
+ * The site style's read, as the editor's query on the plugin's route holds
+ * it: the one read the canvas draws from, so the one a replay waits for.
+ */
+const refetch = vi.fn(() => Promise.resolve({ isError: false }));
+let read: { data: unknown; refetch: () => Promise<{ isError: boolean }> } = {
   data: { tokens: null },
   refetch,
 };
+vi.mock("../site-style-read", () => ({
+  useStoredSiteStyle: () => read,
+}));
+
+/** What the Single was asked to store, in order. */
+const singleWrites: Record<string, unknown>[] = [];
+// No `useSingleDocument`: the editor reads the style only through the route,
+// so a read of the Single fails here.
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  useSingleDocument: () => read,
+  useUpdateSingleDocument: () => ({
+    mutateAsync: async (data: Record<string, unknown>) => {
+      singleWrites.push(data);
+      return { id: "1" };
+    },
+    isPending: false,
+  }),
+  validationIssues: () => [],
+  readPluginRoute: async () => undefined,
+  writePluginRoute: async () => undefined,
+  // Outside a document editor, where there is no Save to run before.
+  useBeforeDocumentAction: () => {},
+  // The form's storing gate, absent here: nothing is tracked.
+  useTrackedWrite: () => () => {},
 }));
 
 const { useSiteStyleHistory } = await import("./site-style-history");
+const { SiteStyleHistoryContext, useSaveSiteStyle } = await import(
+  "../site-style-client"
+);
 
 /** What a step's half came to, as the site style client reports it. */
 type Outcome = { stored: boolean; section: "tokens"; value: unknown };
@@ -50,6 +78,7 @@ const step = (stored: boolean): Step => ({
 beforeEach(() => {
   toastError.mockReset();
   refetch.mockClear();
+  singleWrites.length = 0;
   read = { data: { tokens: null }, refetch };
 });
 
@@ -180,9 +209,7 @@ describe("useSiteStyleHistory", () => {
         Promise.reject(new Error("offline"))
       );
       // And a fetch that answers with an error, as a query reports a failure.
-      refetch.mockImplementationOnce(() =>
-        Promise.resolve({ isError: true } as never)
-      );
+      refetch.mockImplementationOnce(() => Promise.resolve({ isError: true }));
       const { result } = renderHook(() => useSiteStyleHistory());
       const recorded: EditorStep[] = [];
       act(() => result.current.connect(record(recorded)));
@@ -217,5 +244,48 @@ describe("useSiteStyleHistory", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("a Design writer's save and its undo, through the editor's read", () => {
+  it("stores the change, takes it back, and settles once the route's read holds the value", async () => {
+    const BEFORE = { tokens: [{ name: "brand" }] };
+    const AFTER = { tokens: [{ name: "accent" }] };
+    read = { data: { tokens: BEFORE }, refetch };
+    const history = renderHook(() => useSiteStyleHistory());
+    const recorded: EditorStep[] = [];
+    act(() => history.result.current.connect(record(recorded)));
+    const value = history.result.current.history;
+    const writer = renderHook(() => useSaveSiteStyle(), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(SiteStyleHistoryContext.Provider, { value }, children),
+    });
+
+    await act(async () => {
+      await writer.result.current.save("tokens", AFTER);
+    });
+    // The Single stored it, and the editor's read was asked again.
+    expect(singleWrites).toEqual([{ tokens: AFTER }]);
+    expect(refetch).toHaveBeenCalledTimes(1);
+    read = { data: { tokens: AFTER }, refetch };
+    history.rerender();
+    writer.rerender();
+
+    const before = history.result.current.replay.revision;
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await recorded[0]?.undo();
+    });
+    expect(undone).toBe(true);
+    expect(singleWrites).toEqual([{ tokens: AFTER }, { tokens: BEFORE }]);
+    // Waiting on the route's read, which still holds the undone value.
+    expect(history.result.current.replay.settling).toBe(true);
+    expect(history.result.current.replay.revision).toBe(before);
+
+    read = { data: { tokens: BEFORE }, refetch };
+    history.rerender();
+    expect(history.result.current.replay.revision).toBe(before + 1);
+    expect(history.result.current.replay.settling).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

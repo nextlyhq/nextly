@@ -163,6 +163,19 @@ export function createMockComponentDataService(): MockRecord {
       .mockImplementation(
         async ({ entry }: { entry: Record<string, unknown> }) => entry
       ),
+    // The read of one entry's components in several languages, which every
+    // component read goes through: one copy of the entry per language asked.
+    populateComponentDataByLanguage: vi
+      .fn()
+      .mockImplementation(
+        async ({
+          entry,
+          languages,
+        }: {
+          entry: Record<string, unknown>;
+          languages: readonly unknown[];
+        }) => languages.map(() => ({ ...entry }))
+      ),
     saveComponentData: vi.fn().mockResolvedValue(undefined),
     saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
     // Asked before the caller opens its transaction, and its result is handed

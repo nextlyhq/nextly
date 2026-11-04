@@ -44,7 +44,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import { ChevronDown, Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
 import * as React from "react";
 
-import { authoredBreakpoints } from "./breakpoints";
+import { authoredBreakpoints, BASE_DEVICE_LABEL } from "./breakpoints";
 import { baseWidth, offeredTiers, previewWidth } from "./canvas-width";
 import { radioGroupStep } from "./roving-radios";
 
@@ -104,7 +104,7 @@ export function deviceOptions(
   return [
     {
       id: BASE_BREAKPOINT,
-      label: "Desktop",
+      label: BASE_DEVICE_LABEL,
       preview: previewWidth(breakpoints, BASE_BREAKPOINT),
       range: from === undefined ? "every width" : `from ${from} pixels`,
     },
@@ -234,7 +234,7 @@ function MoreDevices({
         aria-label={trigger.name}
         title={trigger.title}
         className={cn(
-          "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs disabled:opacity-40",
+          "inline-flex h-full items-center gap-1 rounded px-1.5 text-xs disabled:opacity-40",
           FOCUS_RING,
           trigger.tone
         )}
@@ -302,11 +302,14 @@ export function BreakpointSwitcher({
   if (options.length < 2) return null;
 
   return (
-    <div className="inline-flex items-center gap-0.5 rounded-md border p-0.5">
+    // The whole switcher one control high, its border and padding inside that
+    // height, with the device buttons filling what is left; the scale's own
+    // value stands in where the density tokens aren't declared.
+    <div className="inline-flex h-[var(--nx-builder-control-height,1.75rem)] items-center gap-0.5 rounded-md border p-0.5">
       <div
         role="radiogroup"
         aria-label="Device"
-        className="nx-breakpoint-switcher inline-flex items-center gap-0.5"
+        className="nx-breakpoint-switcher inline-flex h-full items-center gap-0.5"
         onKeyDown={event => {
           if (!ready) return;
           const step = radioGroupStep(event.key);
@@ -340,7 +343,7 @@ export function BreakpointSwitcher({
               tabIndex={index === Math.max(buttonIndex, 0) ? 0 : -1}
               onClick={() => onSelect(option.id)}
               className={cn(
-                "inline-flex items-center gap-1 rounded px-2 py-1 text-xs",
+                "inline-flex h-full items-center gap-1 rounded px-2 text-xs",
                 FOCUS_RING,
                 isSelected
                   ? "bg-accent text-accent-foreground"
