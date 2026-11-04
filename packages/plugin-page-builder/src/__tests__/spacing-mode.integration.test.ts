@@ -465,6 +465,92 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("answers a render made while the first decision is still running with that decision", async () => {
+      const t = await boot();
+      await t.nextly.create({
+        collection: PAGES_SLUG,
+        data: {
+          title: "Early",
+          slug: "early",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "eb",
+                type: "core/box",
+                version: 1,
+                props: {},
+                slots: {
+                  children: [
+                    {
+                      id: "e1",
+                      type: "core/heading",
+                      version: 1,
+                      props: { text: "One", level: "h2" },
+                    },
+                    {
+                      id: "e2",
+                      type: "core/heading",
+                      version: 1,
+                      props: { text: "Two", level: "h2" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      // The first decision, slowed in its survey, as on a large site.
+      const base = deps(t);
+      let surveyed = false;
+      const deciding = settleSpacingModeAtStart({
+        ...base,
+        survey: async () => {
+          await new Promise(resolve => setTimeout(resolve, 300));
+          surveyed = true;
+          return base.survey();
+        },
+      });
+      const route = createBlocksPage({
+        collections: [PAGES_SLUG],
+        field: "content",
+        nextly: t.nextly as never,
+        blocks: createBlockResolver(coreBlocks),
+        styleContext: {
+          breakpoints: {
+            viewport: [{ id: "base", label: "Desktop" }],
+            container: [],
+          },
+        },
+        siteStyles: {
+          read: () => loadSiteStyle({ nextly: t.nextly }),
+          singles: [SITE_STYLE_SLUG],
+        },
+      });
+      // Asked before the decision has surveyed anything.
+      const [style, page] = await Promise.all([
+        loadSiteStyle({ nextly: t.nextly }),
+        route.ContentPage({ params: { slug: ["early"] } }),
+      ]);
+      expect(style.spacingMode).toBe("classic");
+      // The read waited for the survey rather than racing it.
+      expect(surveyed).toBe(true);
+      expect(await deciding).toBe("classic");
+      let element = page as ReactElement<{ children: ReactElement }>;
+      if (element.type === Suspense) {
+        const body = element.props.children;
+        const Body = body.type as (props: unknown) => Promise<ReactElement>;
+        element = (await Body(body.props)) as typeof element;
+      }
+      const html = renderToStaticMarkup(element);
+      expect(html).toContain("One");
+      expect(html).not.toContain("nx-pb-gap");
+    });
+
     it("hands the recorded model to a render reading the stored style", async () => {
       const t = await boot();
       expect((await loadSiteStyle({ nextly: t.nextly })).spacingMode).toBe(

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   type BlocksSurvey,
   configuredSpacingMode,
+  readJoiningDecision,
   settleSpacingModeOnce,
   siteVerdict,
   spacingModeFor,
@@ -271,5 +272,65 @@ describe("settleSpacingModeOnce", () => {
       expect(writes).toEqual([]);
       expect(asked).toEqual([]);
     }
+  });
+});
+
+describe("readJoiningDecision", () => {
+  /** A store whose row a decision records after it settles. */
+  function recording() {
+    let row: "classic" | "gaps" | null = null;
+    let reads = 0;
+    return {
+      store: {
+        read: () => {
+          reads += 1;
+          return Promise.resolve(row);
+        },
+      },
+      record: (mode: "classic" | "gaps") => {
+        row = mode;
+      },
+      reads: () => reads,
+    };
+  }
+
+  it("waits for a decision in flight and answers what it recorded", async () => {
+    const { store, record } = recording();
+    const decision = new Promise<void>(resolve =>
+      setTimeout(() => {
+        record("classic");
+        resolve();
+      }, 20)
+    );
+    expect(await readJoiningDecision(store, () => decision)).toBe("classic");
+  });
+
+  it("asks for no decision when a model is recorded", async () => {
+    const { store, record, reads } = recording();
+    record("gaps");
+    let asked = false;
+    const answer = await readJoiningDecision(store, () => {
+      asked = true;
+      return null;
+    });
+    expect(answer).toBe("gaps");
+    expect(asked).toBe(false);
+    expect(reads()).toBe(1);
+  });
+
+  it("answers no model when nothing is deciding, or the decision failed", async () => {
+    expect(await readJoiningDecision(recording().store, () => null)).toBeNull();
+    expect(
+      await readJoiningDecision(recording().store, () =>
+        Promise.reject(new Error("the survey failed"))
+      )
+    ).toBeNull();
+  });
+
+  it("stops waiting for a decision that never settles", async () => {
+    const stalled = new Promise<void>(() => {});
+    expect(
+      await readJoiningDecision(recording().store, () => stalled, 10)
+    ).toBeNull();
   });
 });

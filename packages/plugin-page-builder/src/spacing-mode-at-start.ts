@@ -154,6 +154,53 @@ export function settleSpacingModeAtStart(
   return run;
 }
 
+/** The run in flight in this process, or `null` when none is. */
+export function spacingModeRunInFlight(): Promise<SpacingModeOutcome> | null {
+  return inFlight;
+}
+
+/**
+ * The longest a read waits for a decision in flight before answering without
+ * one. The decision's own queries are bounded (one row per collection, two
+ * reads per Single and language), so this only stops a stalled database from
+ * holding a page render for good.
+ */
+const SPACING_DECISION_WAIT_MS = 30_000;
+
+/**
+ * The recorded model, waiting for a decision this process is making when
+ * none is recorded yet.
+ *
+ * On an existing site's first start the step runs after the boot, unawaited,
+ * and a page can be rendered before it has recorded `classic`: read alone,
+ * that render sees no model, draws container gaps and may be cached. So a
+ * read that finds no model and a decision `pending` waits for it (bounded by
+ * {@link SPACING_DECISION_WAIT_MS}) and reads again. A decision that fails,
+ * or none pending, leaves the answer as it was: no model.
+ */
+export async function readJoiningDecision(
+  store: Pick<SpacingModeStore, "read">,
+  pending: () => PromiseLike<unknown> | null,
+  waitMs: number = SPACING_DECISION_WAIT_MS
+): Promise<SpacingMode | null> {
+  const recorded = await store.read();
+  if (recorded !== null) return recorded;
+  const decision = pending();
+  if (decision === null) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.resolve(decision).then(
+      () => undefined,
+      () => undefined
+    ),
+    new Promise<void>(resolve => {
+      timer = setTimeout(resolve, waitMs);
+    }),
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
+  return store.read();
+}
+
 /**
  * One run, not joined with any other: read, decide, and record with one
  * insert. What two processes each run; within a process, call

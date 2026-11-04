@@ -155,8 +155,10 @@ import {
 } from "./site-style-storage";
 import {
   configuredSpacingMode,
+  readJoiningDecision,
   settleSpacingModeAfterBoot,
   spacingModeJob,
+  spacingModeRunInFlight,
   type SpacingModeAtStartDeps,
   type SpacingModeSlugs,
 } from "./spacing-mode-at-start";
@@ -976,6 +978,12 @@ export const pageBuilder = (
     return spacingSetup;
   };
 
+  /**
+   * The start's decision while it runs: the default-Layout seed, then the
+   * spacing step. `null` once it has settled.
+   */
+  let spacingStartup: Promise<void> | null = null;
+
   /** The step's deps for one run, the Direct API resolved at call time. */
   const spacingModeDeps = async (): Promise<SpacingModeAtStartDeps> => {
     const { store, slugs, survey, siteStyle, warn } = requireSpacingSetup();
@@ -1340,9 +1348,15 @@ export const pageBuilder = (
       const seeded =
         setup === null ? Promise.resolve() : seedDefaultLayoutAtStart(setup);
       if (spacing !== null) {
-        void seeded.then(() =>
+        // Not awaited, so the boot is not held; a style read made meanwhile
+        // joins it instead (see the spacing-model service below).
+        const startup = seeded.then(() =>
           settleSpacingModeAfterBoot(spacingModeDeps, spacing.warn)
         );
+        spacingStartup = startup;
+        void startup.finally(() => {
+          if (spacingStartup === startup) spacingStartup = null;
+        });
       }
     },
     // Moves with every migration of the plugin's own tables below.
@@ -1370,8 +1384,15 @@ export const pageBuilder = (
         // API: `loadSiteStyle` reads it through this service. Resolved per
         // call, so a read before `init` refuses rather than answering a
         // default the site never chose.
+        // A read finding no model while this process is still deciding one,
+        // at start or in a sweep, waits for that decision, so a first render
+        // is not drawn under a default the site is about to replace.
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
-          read: () => requireSpacingSetup().store.read(),
+          read: () =>
+            readJoiningDecision(
+              requireSpacingSetup().store,
+              () => spacingStartup ?? spacingModeRunInFlight()
+            ),
         }),
       },
       // The backfill sweep. Contributed unconditionally beside the index it
