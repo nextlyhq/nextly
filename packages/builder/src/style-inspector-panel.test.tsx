@@ -5048,6 +5048,21 @@ describe("opacity in percent", () => {
     expect(submitted).not.toHaveBeenCalled();
   });
 
+  it("says in its label's tooltip that it is in percent", () => {
+    // The catalog's summary reads "0 to 1", which the field no longer takes.
+    mount({ effects: true });
+    const title = screen.getByText("Opacity").closest("label")?.title ?? "";
+    expect(title).toMatch(/percent/);
+    expect(title).not.toMatch(/0 to 1/);
+  });
+
+  it("names its unit for a screen reader, which hears no % sign", () => {
+    mount({ effects: true });
+    expect(
+      screen.getByRole("textbox", { name: "Opacity", description: "percent" })
+    ).toBeDefined();
+  });
+
   it("passes a CSS-wide keyword through, unscaled", () => {
     const editor = mount({ effects: true });
     const field = screen.getByRole("textbox", { name: "Opacity" });
@@ -5093,6 +5108,62 @@ describe("an image's fit", () => {
     expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
     expect(screen.getByText("Fit").closest("label")?.title).toMatch(
       /^Object fit/
+    );
+  });
+});
+
+describe("text decoration", () => {
+  it("is drawn as icons where the stored value is one it can read", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline dotted" } } }
+    );
+    const row = fieldsOf("textDecoration");
+    expect(
+      row.getByRole("radio", { name: "Underline" }).getAttribute("aria-checked")
+    ).toBe("true");
+    expect(row.getByRole("button", { name: /style$/ })).toBeDefined();
+  });
+
+  it("keeps the text field for a value the icons cannot draw", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline overline" } } }
+    );
+    const row = fieldsOf("textDecoration");
+    expect(row.queryByRole("radio")).toBeNull();
+    expect(row.getByRole("textbox")).toBeDefined();
+  });
+
+  it("focuses the icons from the label without choosing or clearing a line", () => {
+    // A label's `for` would CLICK the tab stop's radio, clearing the line
+    // chosen or writing the first.
+    const editor = mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline dotted" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe("");
+    fireEvent.click(label);
+    expect(document.activeElement?.getAttribute("role")).toBe("radio");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Underline"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps the label's `for` on the text field the icons give way to", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline overline" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe(
+      fieldsOf("textDecoration").getByRole("textbox").id
     );
   });
 });

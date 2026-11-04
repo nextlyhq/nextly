@@ -8332,6 +8332,65 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * Text decoration: its line's icons, then Style… for the line's style,
+ * thickness and colour, in a popover laid out as label and control rows.
+ */
+.nx-style-inspector__decoration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__decoration-style {
+  display: grid;
+  place-items: center;
+  block-size: var(--nx-builder-control-height);
+  inline-size: var(--nx-builder-control-height);
+  padding: 0;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  cursor: pointer;
+}
+
+/*
+ * The popover is mounted outside the inspector, so it takes the inspector's
+ * density itself: 12px text, and the shared controls at the control height.
+ */
+[data-slot="popover-content"].nx-style-inspector__decoration-popover {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  inline-size: auto;
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-style-inspector__decoration-popover
+  :is(input, button, label, [data-slot="select-trigger"]) {
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-style-inspector__decoration-parts {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 14rem;
+}
+
+.nx-style-inspector__decoration-part {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
  * An aspect ratio: the menu, and under it a custom ratio's width and height
  * on one line, split by a colon as the ratio is written.
  */

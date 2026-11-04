@@ -724,6 +724,10 @@ export {
   checkCssValue,
   checkDimensionValue,
   checkUrlValue,
+  // Whether a word is one of the keywords legal on every property, which
+  // stands only alone: a shorthand's editor needs it to refuse `underline
+  // inherit`, a value the browser discards whole.
+  isCssWideKeyword,
   // How CSS reads an identifier that carries escapes. Public for the same
   // reason as the namespacing rule: anything deciding what a name IS has to
   // decode it the same way, or `font\2d family` reads as a different property

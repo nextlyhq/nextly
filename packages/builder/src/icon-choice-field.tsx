@@ -65,7 +65,10 @@ import {
   Shrink,
   StretchHorizontal,
   StretchVertical,
+  Strikethrough,
+  Underline,
   WrapText,
+  createLucideIcon,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -78,6 +81,15 @@ import {
   keywordLabel,
   menuKeywords,
 } from "./style-keyword-labels";
+
+/**
+ * A line over an O, as Underline is a U over one: lucide has no overline, and
+ * a mark drawn in its own grid sits in the set as one of its own.
+ */
+const Overline = createLucideIcon("overline", [
+  ["path", { d: "M5 3h14", key: "line" }],
+  ["circle", { cx: "12", cy: "14", r: "6", key: "letter" }],
+]);
 
 /** The icons the mapping names, by their lucide export name. */
 const ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -121,6 +133,9 @@ const ICONS: Readonly<Record<string, LucideIcon>> = {
   Shrink,
   StretchHorizontal,
   StretchVertical,
+  Strikethrough,
+  Underline,
+  Overline,
   WrapText,
 };
 

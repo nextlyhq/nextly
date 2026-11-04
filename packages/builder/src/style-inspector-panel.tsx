@@ -88,6 +88,7 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { commitOnEnter } from "./commit-on-enter";
+import { DecorationField, drawsDecoration } from "./decoration-field";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
@@ -1907,7 +1908,7 @@ function StyleControlField({
           id={labelId}
           htmlFor={id}
           readOnly={readOnly}
-          focusOnly={drawsIcons(control.leaf)}
+          focusOnly={labelFocusOnly(control.leaf, stored)}
           title={summary}
           label={label}
           answer={answer}
@@ -4963,6 +4964,47 @@ const UNOFFERED_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
+/**
+ * Properties whose free CSS has a field of its own, by CSS property: an aspect
+ * ratio's menu and text decoration's icons, each with what it can draw.
+ */
+const OWN_FIELDS: Readonly<
+  Record<
+    string,
+    {
+      draws: (stored: StyleValue | undefined) => boolean;
+      Field: typeof AspectRatioField;
+      /** Whether its tab stop is a button a label's `for` would click. */
+      buttons: boolean;
+    }
+  >
+> = {
+  "aspect-ratio": {
+    draws: drawsAspectRatio,
+    Field: AspectRatioField,
+    buttons: false,
+  },
+  "text-decoration": {
+    draws: drawsDecoration,
+    Field: DecorationField,
+    buttons: true,
+  },
+};
+
+/**
+ * Whether a field's label only moves focus: where the control drawn is a
+ * group of buttons, whose tab stop a label's `for` would click. Read from the
+ * same decision that picks the control, so the two never disagree.
+ */
+function labelFocusOnly(
+  leaf: StyleControl["leaf"],
+  stored: StyleValue | undefined
+): boolean {
+  if (drawsIcons(leaf)) return true;
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own !== undefined && own.buttons && own.draws(stored);
+}
+
 /** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({
   writingMode: "horizontal-tb",
@@ -5061,11 +5103,12 @@ function ValueField({
       />
     );
   }
-  // A ratio from a menu of the ones an author reaches for, where the stored
-  // value is one it can draw; any other spelling keeps the text field.
-  if (control.leaf.cssProperty === "aspect-ratio" && drawsAspectRatio(stored)) {
+  // A property with a field of its own, where the stored value is one that
+  // field can draw; any other spelling keeps the text field.
+  const own = OWN_FIELDS[control.leaf.cssProperty];
+  if (own !== undefined && own.draws(stored)) {
     return (
-      <AspectRatioField
+      <own.Field
         id={id}
         labelledBy={labelledBy}
         stored={stored}
@@ -5135,6 +5178,13 @@ function textNumber(text: string): number | undefined {
 const SectionHeld = React.createContext(false);
 
 /**
+ * The id of words naming a field's unit for a screen reader, where the unit
+ * shows only as a sign beside it (opacity's %). Read by the number field and
+ * added to what describes it, never to what marks it invalid.
+ */
+const UnitWords = React.createContext<string | undefined>(undefined);
+
+/**
  * A fraction as a percent, and back: multiplied or divided by 100 and no
  * more, to twelve significant figures, which drops the binary noise of the
  * division (`12.345 / 100` is `0.12345000000000001`) without rounding a
@@ -5182,6 +5232,7 @@ function OpacityField(
   props: React.ComponentProps<typeof NumericField>
 ): React.JSX.Element {
   const { control, stored, actionName, describedBy, onCommit } = props;
+  const unitId = React.useId();
   const { shown, inheritedShown, resting } = opacityReading(
     stored,
     React.useContext(InheritedValue)
@@ -5202,15 +5253,21 @@ function OpacityField(
         />
       )}
       <InheritedValue.Provider value={inheritedShown}>
-        <NumericField
-          {...props}
-          control={percentControl}
-          stored={shown}
-          onCommit={value => onCommit(fromPercent(value))}
-        />
+        <UnitWords.Provider value={unitId}>
+          <NumericField
+            {...props}
+            control={percentControl}
+            stored={shown}
+            onCommit={value => onCommit(fromPercent(value))}
+          />
+        </UnitWords.Provider>
       </InheritedValue.Provider>
       <span className="nx-style-inspector__percent" aria-hidden="true">
         %
+      </span>
+      {/* The sign is not read; these words are, as the field's description. */}
+      <span id={unitId} className="sr-only">
+        percent
       </span>
     </div>
   );
@@ -5404,6 +5461,8 @@ function NumericField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // Words for a unit shown only as a sign beside the field, for its description.
+  const unitWords = React.useContext(UnitWords);
   const units = unitChoicesFor(control.leaf);
   // The draft lives HERE rather than inside the text field, because two
   // controls edit one value and the unit menu was reading the other copy. An
@@ -5465,7 +5524,11 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         tokens={tokens}
-        describedBy={describedBy}
+        describedBy={
+          unitWords === undefined
+            ? describedBy
+            : [describedBy, unitWords].filter(Boolean).join(" ")
+        }
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
