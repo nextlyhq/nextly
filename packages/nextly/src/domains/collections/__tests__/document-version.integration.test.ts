@@ -22,6 +22,10 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import type { CollectionService } from "../services/collection-service";
 
+/** The statement that reads translation counters on their own. */
+const COUNTER_READ =
+  /select\s+[`"]?_parent[`"]?,\s*[`"]?_locale[`"]?,\s*[`"]?_revision[`"]?\s+from/i;
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
@@ -166,6 +170,35 @@ async function recordedSnapshots(t: TestNextly): Promise<string[]> {
       ? row.snapshot
       : JSON.stringify(row.snapshot)
   );
+}
+
+/**
+ * One read of `table`'s translation counters, sent before any read of its
+ * translated content. An early read whose counters went unused would leave a
+ * later one, and a counter read after the content could be newer than it.
+ */
+function expectCountersBeforeContent(
+  statements: string[],
+  table: string
+): void {
+  const reads = statements
+    .map((statement, at) => ({ statement, at }))
+    .filter(
+      ({ statement }) =>
+        statement.includes(table) && /^\s*select/i.test(statement)
+    );
+  // The counter read names only the keys and the counter; a joined read
+  // names it beside the content columns.
+  const counters = reads.filter(({ statement }) =>
+    COUNTER_READ.test(statement)
+  );
+  const content = reads.find(
+    ({ statement }) =>
+      !statement.includes("_revision") && !/select\s+1\s+from/i.test(statement)
+  );
+  expect(counters).toHaveLength(1);
+  expect(content).toBeDefined();
+  expect(counters[0].at).toBeLessThan(content!.at);
 }
 
 async function readRev(
@@ -451,23 +484,30 @@ describe.each(getConfiguredTestDialects())(
           status: "all",
         } as never)
       );
-      const translations = statements
-        .map((statement, at) => ({ statement, at }))
-        .filter(({ statement }) => statement.includes(`dc_${DOCS}_locales`));
-      // One counter read, and it is the one the version is made from: an
-      // early read whose counters went unused would leave a later one here.
-      const counterReads = translations.filter(({ statement }) =>
-        statement.includes("_revision")
-      );
-      expect(counterReads).toHaveLength(1);
-      const [counters] = counterReads;
-      const content = translations.find(
-        ({ statement }) => !statement.includes("_revision")
-      );
-      expect(counters).toBeDefined();
-      expect(content).toBeDefined();
-      expect(counters!.at).toBeLessThan(content!.at);
+      expectCountersBeforeContent(statements, `dc_${DOCS}_locales`);
       expect(await readRev(t, DOCS, id, "en")).toBe("1.en:1");
+    });
+
+    it("a read of every language takes the translation counters before the translated content", async () => {
+      // Not joined with the entry, as a one-language read is: the counters
+      // are read apart from the content, and first.
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "hello", note: "n" }
+        )
+      );
+      const statements = await statementsOf(dialect, () =>
+        t.nextly.findByID({
+          collection: DOCS as never,
+          id,
+          locale: "*",
+          overrideAccess: true,
+          status: "all",
+        } as never)
+      );
+      expectCountersBeforeContent(statements, `dc_${DOCS}_locales`);
     });
 
     it("a wildcard save answers with every language's version", async () => {

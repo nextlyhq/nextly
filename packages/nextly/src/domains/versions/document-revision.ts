@@ -371,61 +371,59 @@ function documentIdOf(row: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Publish each row's version under `_rev`, in place, reading every
- * translation counter the rows need in one statement.
+ * Publish each row's version under `_rev`, in place.
+ *
+ * Never reads a counter itself. The translation counters are the read's own:
+ * taken with the content in one statement (`languageRevisionsOf`), or before
+ * it (`languageCountersBeforeContent`). Read here, after the content, a
+ * counter could be newer than what the read shows, and a client saving from
+ * it would overwrite a translation it never saw.
  *
  * A row whose stored counter was not read gets no version rather than a
  * guessed one.
  */
-export async function attachDocumentVersions(
+export function attachDocumentVersions(
   rows: Record<string, unknown>[],
   args: {
     stored: ReadonlyMap<string, unknown>;
-    run: RunStatement;
-    dialect: SupportedDialect;
-    /** The documents' translation table, or null (`documentVersionOn`). */
-    languagesTable: string | null;
     localization: SanitizedLocalizationConfig | undefined;
     locale: string | undefined;
     /**
-     * Translation counters the read already took with the documents, and the
-     * languages it took them in (`languageRevisionsOf`). Used in place of a
-     * statement of their own when they cover every language the versions name.
+     * The translation counters the read took, and the languages it took them
+     * in; absent for documents that keep no translations, or whose
+     * translation table is not there yet. The versions name languages exactly
+     * when these are given.
      */
     known?: {
       revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
       locales: readonly string[];
     };
   }
-): Promise<void> {
+): void {
   const locales = versionLanguagesFor({
-    localized: args.languagesTable !== null,
+    localized: args.known !== undefined,
     localization: args.localization,
     locale: args.locale,
   });
-  const ids = rows
-    .map(documentIdOf)
-    .filter((id): id is string => id !== undefined && args.stored.has(id));
-  if (ids.length === 0) return;
-  const covered =
+  // A read whose counters do not cover the languages its versions name took
+  // them for the wrong languages; answering with zeros there would publish a
+  // version no save produced.
+  if (
     locales !== undefined &&
-    args.known !== undefined &&
-    locales.every(locale => args.known!.locales.includes(locale));
-  const languages = covered
-    ? args.known!.revisions
-    : locales && args.languagesTable !== null
-      ? await readLanguageRevisions(args.run, {
-          dialect: args.dialect,
-          table: args.languagesTable,
-          ids,
-        })
-      : undefined;
+    !locales.every(locale => args.known?.locales.includes(locale))
+  ) {
+    throw NextlyError.internal({
+      logContext: { reason: "document-version-languages-not-read" },
+    });
+  }
   for (const row of rows) {
     const id = documentIdOf(row);
     if (id === undefined || !args.stored.has(id)) continue;
     row[DOCUMENT_VERSION_KEY] = encodeDocumentVersion(
       revisionOf(args.stored.get(id)),
-      locales ? languageCounters(languages?.get(id), locales) : undefined
+      locales
+        ? languageCounters(args.known?.revisions.get(id), locales)
+        : undefined
     );
   }
 }
@@ -525,4 +523,21 @@ export async function languageCountersBeforeContent(
     }),
     locales: args.localization.locales.map(locale => locale.code),
   };
+}
+
+/**
+ * Whether a read taking its translations in `chain` holds the counter of
+ * every language its version names, so the version can come out of that
+ * same statement. A read of every language does not: its chain is the
+ * fallback chain of one language.
+ */
+export function chainCoversVersion(
+  chain: readonly string[],
+  args: {
+    localization: SanitizedLocalizationConfig | undefined;
+    locale: string | undefined;
+  }
+): boolean {
+  const locales = versionLanguagesFor({ localized: true, ...args });
+  return locales === undefined || locales.every(code => chain.includes(code));
 }

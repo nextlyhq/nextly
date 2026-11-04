@@ -161,6 +161,7 @@ import {
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   attachDocumentVersions,
+  chainCoversVersion,
   languageCountersBeforeContent,
   languageRevisionsOf,
   storedRevisionsOf,
@@ -1256,11 +1257,6 @@ export class SingleQueryService extends BaseService {
       const read = await this.readDocument(slug, singleMeta, options);
       const { translations } = read;
       let { doc } = read;
-      // Not joined with the document: the translation counters now, before
-      // the translated content is read.
-      const countersFirst = translations
-        ? undefined
-        : await this.languageCountersFirst(singleMeta, doc);
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -1301,6 +1297,11 @@ export class SingleQueryService extends BaseService {
       // The stored counter, taken before anything below strips it with the
       // other server-only columns or overlays a held draft on the document.
       const storedRevisions = storedRevisionsOf([doc]);
+      // Not joined with the document — including one this read just created —
+      // the translation counters now, before the translated content is read.
+      const countersFirst = translations
+        ? undefined
+        : await this.languageCountersFirst(singleMeta, doc);
 
       doc = await this.assembleStoredDocument({
         slug,
@@ -1390,8 +1391,7 @@ export class SingleQueryService extends BaseService {
 
       // Last, so no hook can drop or forge it. The live row's version, a held
       // draft overlaid on the document included.
-      await this.attachVersion(doc, {
-        singleMeta,
+      this.attachVersion(doc, {
         stored: storedRevisions,
         translations,
         countersFirst,
@@ -1448,36 +1448,25 @@ export class SingleQueryService extends BaseService {
 
   /**
    * Publish the document's version on `doc`, from the counter read with it and
-   * its translation counters: those the joined read took, else one read of
-   * its own. A translated Single whose table is not there yet keeps its
-   * translated values on its own row, and its version names no language.
+   * the translation counters this read took: with the content in the joined
+   * read, or before it. A Single that keeps no translations, or whose table is
+   * not there yet, has none, and its version names no language.
    */
-  private async attachVersion(
+  private attachVersion(
     doc: Record<string, unknown>,
     args: {
-      singleMeta: DynamicSingleRecord;
       stored: ReadonlyMap<string, unknown>;
       translations: JoinedTranslations | undefined;
       /** Counters read before the content, when it was not joined. */
       countersFirst?: Awaited<ReturnType<typeof languageCountersBeforeContent>>;
       locale: string | undefined;
     }
-  ): Promise<void> {
-    const languagesTable = `${args.singleMeta.tableName}_locales`;
-    const translated =
-      this.localization !== undefined && args.singleMeta.localized === true;
+  ): void {
     const joined = args.translations
       ? languageRevisionsOf(args.translations.companionRows)
       : undefined;
-    await attachDocumentVersions([doc], {
+    attachDocumentVersions([doc], {
       stored: args.stored,
-      run: (statement, values) =>
-        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
-      dialect: this.adapter.dialect,
-      languagesTable:
-        translated && (await isCompanionReady(this.adapter, languagesTable))
-          ? languagesTable
-          : null,
       localization: this.localization,
       locale: args.locale,
       ...(args.translations && joined
@@ -1573,6 +1562,16 @@ export class SingleQueryService extends BaseService {
       fallbackLocale
     );
     if (!localeChain || singleMeta.localized !== true) return null;
+    // Joined only when the chain holds every language the version names:
+    // otherwise the counters are read before the content, apart from it.
+    if (
+      !chainCoversVersion(localeChain, {
+        localization: this.localization,
+        locale,
+      })
+    ) {
+      return null;
+    }
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return null;
     if (

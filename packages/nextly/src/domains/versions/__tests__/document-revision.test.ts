@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  attachDocumentVersions,
   DOCUMENT_VERSION_KEY,
   DOCUMENT_REVISION_COLUMN,
   encodeDocumentVersion,
@@ -68,5 +69,38 @@ describe("withoutDocumentVersionKeys", () => {
   it("names the published key `_rev`", () => {
     expect(DOCUMENT_VERSION_KEY).toBe("_rev");
     expect(DOCUMENT_REVISION_COLUMN).toBe("_revision");
+  });
+});
+
+describe("attachDocumentVersions", () => {
+  const localization = {
+    locales: [{ code: "en" }, { code: "es" }],
+    defaultLocale: "en",
+  } as never;
+
+  it("names the languages the read brought counters for", () => {
+    const rows: Record<string, unknown>[] = [{ id: "a" }];
+    attachDocumentVersions(rows, {
+      stored: new Map([["a", 3]]),
+      localization,
+      locale: "*",
+      known: {
+        revisions: new Map([["a", new Map([["es", 2]])]]),
+        locales: ["en", "es"],
+      },
+    });
+    expect(rows[0]._rev).toBe("3.en:0,es:2");
+  });
+
+  it("refuses counters taken for fewer languages than the version names", () => {
+    // Zeros for the languages not read would publish a version no save made.
+    expect(() =>
+      attachDocumentVersions([{ id: "a" }], {
+        stored: new Map([["a", 3]]),
+        localization,
+        locale: "*",
+        known: { revisions: new Map(), locales: ["en"] },
+      })
+    ).toThrow();
   });
 });

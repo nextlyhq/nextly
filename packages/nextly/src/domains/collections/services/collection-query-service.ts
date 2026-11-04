@@ -194,6 +194,7 @@ import {
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   attachDocumentVersions,
+  chainCoversVersion,
   DOCUMENT_REVISION_COLUMN,
   languageCountersBeforeContent,
   languageRevisionsOf,
@@ -2589,19 +2590,6 @@ export class CollectionQueryService extends BaseService {
   // `listEntries` (cyclomatic 87) and `getEntry` (64), both critical — which
   // had already diverged on where the owner column is cleared.
   // fallow-ignore-next-line complexity
-  /**
-   * A translated collection's translation table when it is there to read;
-   * null for one that keeps no translations or whose table is not there yet,
-   * whose translated values then live on its own rows.
-   */
-  private async translationTableIfReady(
-    localized: boolean,
-    tableName: string
-  ): Promise<string | null> {
-    if (!localized || this.localization === undefined) return null;
-    const table = `${tableName}_locales`;
-    return (await isCompanionReady(this.adapter, table)) ? table : null;
-  }
 
   /**
    * The translation counters of `rows`, read before their translated content
@@ -2610,18 +2598,19 @@ export class CollectionQueryService extends BaseService {
    */
   private async languageCountersFirst(
     rows: readonly Record<string, unknown>[],
-    collection: unknown,
-    collectionName: string
+    /** The collection's translation schema; null for one that keeps none. */
+    companion: { companionTableName: string } | null | undefined
   ) {
+    const table = companion?.companionTableName ?? null;
     return languageCountersBeforeContent(
       (statement, values) =>
         this.adapter.executeQuery<Record<string, unknown>>(statement, values),
       {
         dialect: this.dialect,
-        languagesTable: await this.translationTableIfReady(
-          (collection as { localized?: boolean }).localized === true,
-          collectionTableName(collection, collectionName)
-        ),
+        languagesTable:
+          table !== null && (await isCompanionReady(this.adapter, table))
+            ? table
+            : null,
         localization: this.localization,
         ids: rows.flatMap(row => (typeof row.id === "string" ? [row.id] : [])),
       }
@@ -2675,8 +2664,6 @@ export class CollectionQueryService extends BaseService {
      * sees the grant, so the waiver does not travel.
      */
     hooksWaived?: boolean;
-    /** Whether the collection keeps translations, whose rows its version names. */
-    localized: boolean;
     /** Translation counters the read already took (`attachDocumentVersions`). */
     knownLanguages?: {
       revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
@@ -2933,17 +2920,8 @@ export class CollectionQueryService extends BaseService {
 
     // The version, after everything a hook or a selection can do to a row,
     // so neither can drop or forge it.
-    await attachDocumentVersions(finalData, {
+    attachDocumentVersions(finalData, {
       stored: storedRevisions,
-      run: (statement, values) =>
-        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
-      dialect: this.dialect,
-      // A translated collection whose table is not there yet keeps its
-      // translated values on its own row, and its versions name none.
-      languagesTable: await this.translationTableIfReady(
-        params.localized,
-        tableName
-      ),
       localization: this.localization,
       locale: params.locale,
       known: params.knownLanguages,
@@ -3732,8 +3710,7 @@ export class CollectionQueryService extends BaseService {
       // The page's translation counters, before its translated content.
       const knownLanguages = await this.languageCountersFirst(
         entries,
-        collection,
-        params.collectionName
+        companion
       );
       // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
@@ -3931,7 +3908,6 @@ export class CollectionQueryService extends BaseService {
         select: params.select,
         richTextFormat: params.richTextFormat,
         locale: params.locale,
-        localized: (collection as { localized?: boolean }).localized === true,
       });
 
       // Build paginated response with all metadata
@@ -5061,9 +5037,15 @@ export class CollectionQueryService extends BaseService {
       // companion is there to join to: one round trip where reading them after it took two. They
       // are resolved onto it as the batched fill resolves them. Until the companion is there, the
       // entry is read alone and its main-table values stand.
+      // Joined only when the chain holds every language the version names:
+      // otherwise the counters are read before the content, apart from it.
       const joinedLocaleChain =
         localeChain &&
         companion &&
+        chainCoversVersion(localeChain, {
+          localization: this.localization,
+          locale: params.locale,
+        }) &&
         (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
           "ready"
           ? localeChain
@@ -5131,6 +5113,9 @@ export class CollectionQueryService extends BaseService {
       // The row's own id, as stored, before any overlay or hook can reshape
       // what this read returns.
       const resolvedEntryId = String((entry as { id: unknown }).id);
+      // Not joined with the entry: the translation counters now, before the
+      // translated content is read below.
+      knownLanguages ??= await this.languageCountersFirst([entry], companion);
 
       // `localeChain` and `companion` were resolved above the access predicate,
       // which needs the same pair to judge a rule naming a localized field.
@@ -5540,7 +5525,6 @@ export class CollectionQueryService extends BaseService {
         rows: [expandedEntry],
         hooksWaived,
         knownLanguages,
-        localized: (collection as { localized?: boolean }).localized === true,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,

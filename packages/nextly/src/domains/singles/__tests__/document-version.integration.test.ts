@@ -17,7 +17,12 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import type { SingleEntryService } from "../services/single-entry-service";
+
+/** The statement that reads translation counters on their own. */
+const COUNTER_READ =
+  /select\s+[`"]?_parent[`"]?,\s*[`"]?_locale[`"]?,\s*[`"]?_revision[`"]?\s+from/i;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -144,6 +149,38 @@ describe.each(getConfiguredTestDialects())(
       expect(await readRev(t, PLAIN)).toBe("1");
       expect(await readRev(t, PLAIN)).toBe("1");
       expect(await mainCounter(t, PLAIN)).toBe(1);
+    });
+
+    it("the read that creates a translated Single takes its translation counters before its translated content", async () => {
+      const t = await boot(dialect);
+      const statements = await statementsOf(dialect, () =>
+        t.nextly.findSingle({
+          slug: PREFS as never,
+          locale: "en",
+          overrideAccess: true,
+          status: "all",
+        } as never)
+      );
+      const reads = statements
+        .map((statement, at) => ({ statement, at }))
+        .filter(
+          ({ statement }) =>
+            statement.includes(`single_${PREFS}_locales`) &&
+            /^\s*select/i.test(statement)
+        );
+      // The counter read names only the keys and the counter; the joined
+      // read made before the Single existed names it beside the content.
+      const counters = reads.filter(({ statement }) =>
+        COUNTER_READ.test(statement)
+      );
+      const content = reads.find(
+        ({ statement }) =>
+          !statement.includes("_revision") &&
+          !/select\s+1\s+from/i.test(statement)
+      );
+      expect(counters).toHaveLength(1);
+      expect(content).toBeDefined();
+      expect(counters[0].at).toBeLessThan(content!.at);
     });
 
     it("a read that does not create writes nothing", async () => {
