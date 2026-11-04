@@ -267,38 +267,41 @@ function mysqlIndexRefusals(
   const refused = new Map<string, CannotCarry>();
   for (const index of indexes) {
     if (refused.has(index.name)) continue;
-    if (index.expression) {
-      if (target.kindChange) {
-        refused.set(index.name, expressionIndexRefusal(index.name, to));
-      }
-      continue;
-    }
-    const reason = mysqlIndexRefusal(index, to, target);
-    if (reason === null) {
-      // A unique key the new type can index, but whose values the change can make equal.
-      if (index.unique && !target.keepsValuesApart) {
-        refused.set(index.name, uniqueKeyRefusal(index.name, to));
-      }
-      continue;
-    }
-    refused.set(
-      index.name,
-      index.name === "PRIMARY"
-        ? {
-            property: "key",
-            name: index.name,
-            reason: `the column is in the table's primary key, and ${reason}`,
-            ownerCan: PRIMARY_KEY_OWNER_CAN,
-          }
-        : {
-            property: "index",
-            name: index.name,
-            reason,
-            ownerCan: OWNER_CAN.index,
-          }
-    );
+    const entry = mysqlIndexEntry(index, to, target);
+    if (entry !== null) refused.set(index.name, entry);
   }
   return [...refused.values()];
+}
+
+/** What one index part over the column makes the new type unable to keep, or null. */
+function mysqlIndexEntry(
+  index: MysqlIndexUse,
+  to: string,
+  target: MysqlTarget
+): CannotCarry | null {
+  if (index.expression) {
+    return target.kindChange ? expressionIndexRefusal(index.name, to) : null;
+  }
+  const reason = mysqlIndexRefusal(index, to, target);
+  if (reason === null) {
+    // A unique key the new type can index, but whose values the change can make equal.
+    return index.unique && !target.keepsValuesApart
+      ? uniqueKeyRefusal(index.name, to)
+      : null;
+  }
+  return index.name === "PRIMARY"
+    ? {
+        property: "key",
+        name: index.name,
+        reason: `the column is in the table's primary key, and ${reason}`,
+        ownerCan: PRIMARY_KEY_OWNER_CAN,
+      }
+    : {
+        property: "index",
+        name: index.name,
+        reason,
+        ownerCan: OWNER_CAN.index,
+      };
 }
 
 /**
