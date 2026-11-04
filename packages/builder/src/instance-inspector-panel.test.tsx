@@ -538,6 +538,20 @@ describe("a link and a visibility exposure", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("keeps a visibility row's source under its name, the switch in the control cell", () => {
+    // One row like every other placement field: the note under the name, not
+    // under the control, which made each field two rows.
+    mount(instance(), linked());
+    const toggle = screen.getByRole("switch", { name: "Newsletter form" });
+    const row = toggle.closest(".nx-inspector__field--exposed");
+    expect(toggle.closest(".nx-inspector__exposed")).not.toBeNull();
+    const name = row?.querySelector(".nx-inspector__exposed-name");
+    expect(name?.querySelector(".nx-inspector__source")).not.toBeNull();
+    expect(
+      row?.querySelector(".nx-inspector__exposed .nx-inspector__source")
+    ).toBeNull();
+  });
+
   it("is a switch named by its row, with no words beside it", () => {
     // A checkbox beside "Shown on this page" wrapped onto two lines; the
     // switch's state says it, and the row's label names it.
