@@ -27,11 +27,10 @@ function siteWith(
     resolveCollection: async () => declaration,
     singles: async () => singles,
     locales: () => ["en", "de"],
-    defaultLocale: () => "en",
     layouts: "layouts",
     hints: async () => [],
     componentId: "card",
-    identity: async () => ({ overrideAccess: false }),
+    identity: async () => ({ user: { id: "u1" } }) as never,
   };
 }
 

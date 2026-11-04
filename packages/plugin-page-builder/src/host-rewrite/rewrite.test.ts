@@ -7,6 +7,7 @@
  * what the real write's validation does: it refuses a write whose expected
  * hash is not the hash of what is stored now.
  */
+import { storedValueHash } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import type { HostAddress, HostStep, LeftHost, StepOutcome } from "./contract";
@@ -20,7 +21,6 @@ import {
   type RewriteDeps,
   type WriteResult,
 } from "./rewrite";
-import { storedHash } from "./stored-hash";
 
 /** A stored value the test step understands: how many copies it still holds. */
 interface Value {
@@ -55,7 +55,11 @@ async function stillAsRead(
     write.expected.form === "draft" && held.draft !== null
       ? held.draft
       : held.published;
-  return (await storedHash(now)) === write.expected.hash;
+  const stored =
+    now === null
+      ? ({ kind: "absent" } as const)
+      : ({ kind: "value", value: now } as const);
+  return (await storedValueHash(stored)) === write.expected.hash;
 }
 
 /** Store a write where it lands: live for a publish or a row with no draft. */

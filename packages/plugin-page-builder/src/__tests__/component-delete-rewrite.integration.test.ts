@@ -75,14 +75,19 @@ const pageDoc = (nodes: Node[]) => ({
 
 /** What the harness's hooks do, switched by each test as it runs. */
 interface Switches {
-  /** Run once, the next time a note is read by id. */
-  onNoteRead?: (id: string) => Promise<void>;
+  /**
+   * Run once, as the next update of a note starts: after the rewrite has read
+   * it, and before the update's transaction takes the row lock.
+   */
+  onNoteUpdate?: (id: string) => Promise<void>;
   /** Hold the next note write with this title after its validation. */
   holdAfterValidation?: {
     title: string;
     reached: () => void;
     release: Promise<void>;
   };
+  /** Hide every component copy from what a read of a note returns. */
+  hideCopiesOnRead?: boolean;
   /** Fail the next update of this note as if the process stopped. */
   crashOn?: string;
   /** Run once, on the `atRead`-th read of this page by id. */
@@ -102,14 +107,27 @@ function harness(
     version: "1.0.0",
     nextly: ">=0.0.0",
     init(ctx) {
-      ctx.hooks.on("afterRead", NOTES, async context => {
+      // A site's presentation hook, reshaping what reads return: the stored
+      // value keeps its copies.
+      ctx.hooks.on("afterRead", NOTES, context => {
+        if (switches.hideCopiesOnRead !== true) return;
         const data = (context as { data?: unknown }).data;
-        const run = switches.onNoteRead;
-        if (run === undefined || Array.isArray(data)) return;
-        const id = (data as { id?: unknown } | undefined)?.id;
-        if (typeof id !== "string") return;
-        switches.onNoteRead = undefined;
-        await run(id);
+        const hide = (row: unknown) => {
+          const content = asDocument(
+            (row as { content?: unknown } | null)?.content
+          );
+          if (content === null) return row;
+          return {
+            ...(row as Record<string, unknown>),
+            content: {
+              ...content,
+              nodes: content.nodes.filter(
+                node => node.type !== COMPONENT_INSTANCE_TYPE
+              ),
+            },
+          };
+        };
+        return Array.isArray(data) ? data.map(hide) : hide(data);
       });
       let pageReads = 0;
       ctx.hooks.on("afterRead", "pages", async context => {
@@ -130,9 +148,14 @@ function harness(
         hold.reached();
         await hold.release;
       });
-      ctx.hooks.on("beforeUpdate", NOTES, context => {
+      ctx.hooks.on("beforeUpdate", NOTES, async context => {
         const original = (context as { originalData?: { id?: unknown } })
           .originalData;
+        const run = switches.onNoteUpdate;
+        if (run !== undefined && typeof original?.id === "string") {
+          switches.onNoteUpdate = undefined;
+          await run(original.id);
+        }
         if (switches.crashOn === undefined) return;
         if (original?.id !== switches.crashOn) return;
         switches.crashOn = undefined;
@@ -486,9 +509,10 @@ describe.each(getConfiguredTestDialects())(
       ]);
       await open(cookie, cardId);
 
-      // The author saves the moment the rewrite has read the note.
-      switches.onNoteRead = async readId => {
-        if (readId !== id) return;
+      // The author saves once the rewrite has read the note and its write has
+      // started, before that write takes the row lock.
+      switches.onNoteUpdate = async writtenId => {
+        if (writtenId !== id) return;
         await t.nextly.update({
           collection: NOTES,
           id,
@@ -927,6 +951,26 @@ describe.each(getConfiguredTestDialects())(
 
       expect(kept.failed).toBe(1);
       expect(dropped.failed).toBe(0);
+    });
+
+    it("finds a copy a site's read hook hides, by reading what is stored", async () => {
+      const switches: Switches = {};
+      const { t, cookie } = await boot(switches);
+      const cardId = await card(t);
+      const id = await note(t, "Note", [
+        heading("own", "Own"),
+        copyOf("i1", cardId),
+      ]);
+      await open(cookie, cardId);
+      switches.hideCopiesOnRead = true;
+
+      await rewriteToTheEnd(cookie, cardId);
+
+      // Read with the hook off: what is stored.
+      switches.hideCopiesOnRead = false;
+      const nodes = await nodesOf(t, NOTES, id);
+      expect(copies(nodes, cardId)).toBe(0);
+      expect(texts(nodes)).toEqual(["Own", "Card title"]);
     });
   }
 );

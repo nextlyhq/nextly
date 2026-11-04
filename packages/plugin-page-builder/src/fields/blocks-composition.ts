@@ -86,7 +86,6 @@ import {
   type HeldLibrary,
   type ReadComposition,
 } from "../composition-reading";
-import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import { isForest } from "./blocks-document";
@@ -379,9 +378,9 @@ export async function compositionIssues(
 
 /**
  * What a rewrite of every host adds to a write's judgement, on every write:
- * a rewrite's own write is refused when the host changed since the rewrite
- * read it, and any write adding a reference to a component being deleted is
- * refused (see `host-rewrite/fence`).
+ * any write adding a reference to a component being deleted is refused (see
+ * `host-rewrite/fence`). A rewrite's own write is checked against what it
+ * read by core's conditional write, under the write's own row lock.
  */
 async function judgeHostRewrite(
   document: BlockDocument,
@@ -391,8 +390,6 @@ async function judgeHostRewrite(
   setup: CompositionSetup,
   report: Report
 ): Promise<void> {
-  const changed = await changedSinceRead(write, args.path);
-  if (changed !== undefined) report.add(changed.code, changed.message);
   if (setup.fencedComponents === undefined) return;
   const refused = await fenceIssues({
     document,

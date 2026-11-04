@@ -948,7 +948,6 @@ function rewriteInstallFor(
       singles: () => singlesDeclaringBlocks(ctx),
       locales: () =>
         ctx.config.localization?.locales.map(locale => locale.code) ?? [],
-      defaultLocale: () => ctx.config.localization?.defaultLocale,
       layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
     },
     hints: async componentId => {
