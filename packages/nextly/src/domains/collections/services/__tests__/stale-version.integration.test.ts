@@ -36,6 +36,8 @@ const LANGUAGES = `dc_${DOCS}_locales`;
 const NOTES = "notes";
 /** Draft and published, so a published entry holds an edit as a working draft. */
 const POSTS = "posts";
+/** Two languages, each with its own status, for a sweep of every language. */
+const LIVES = "lives";
 /** Keeps history and runs an after-change hook, to see a refusal reach neither. */
 const HOOKED = "hooked";
 let afterChangeCalls = 0;
@@ -71,6 +73,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: NOTES,
         access: OPEN,
         fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: LIVES,
+        localized: true,
+        status: true,
+        access: { ...OPEN, publish: () => true, unpublish: () => true },
+        fields: [text({ name: "headline", localized: true })],
       }),
       defineCollection({
         slug: HOOKED,
@@ -985,5 +994,90 @@ describe.each(getConfiguredTestDialects())(
         expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
       }
     );
+
+    it("answers a translated save refused over a shared change with a version that names its language, which that save may send", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      const es = await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      await update(t, DOCS, id, { note: "shared" }, { locale: "en" });
+      const refused = await update(
+        t,
+        DOCS,
+        id,
+        { title: "otra", _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      const current = String(refused.publicData?.currentVersion);
+      expect(current).toMatch(/\.es:\d+$/);
+      const again = await update(
+        t,
+        DOCS,
+        id,
+        { title: "otra", _rev: current },
+        { locale: "es" }
+      );
+      expect(again.success, JSON.stringify(again)).toBe(true);
+    });
+
+    it("refuses a status sweep of every language when any language moved since its version", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: LIVES, overrideAccess: true, locale: "en" },
+        { headline: "Hi", status: "published" }
+      );
+      const id = idOf(created);
+      await update(
+        t,
+        LIVES,
+        id,
+        { headline: "Hola", status: "published" },
+        { locale: "es" }
+      );
+      const everyLanguage = async () =>
+        String(
+          (
+            (await t.nextly.findByID({
+              collection: LIVES as never,
+              id,
+              locale: "*",
+              overrideAccess: true,
+              status: "all",
+            } as never)) as { _rev: string }
+          )._rev
+        );
+      const read = await everyLanguage();
+      // Spanish alone changes after the read.
+      await update(
+        t,
+        LIVES,
+        id,
+        { headline: "Hola de nuevo" },
+        { locale: "es" }
+      );
+      const swept = await update(
+        t,
+        LIVES,
+        id,
+        { status: "draft", _rev: read },
+        { locale: "*" }
+      );
+      expect(swept).toMatchObject({ success: false, code: "STALE_VERSION" });
+      expect(String(swept.publicData?.currentVersion)).toBe(
+        await everyLanguage()
+      );
+      const fresh = await update(
+        t,
+        LIVES,
+        id,
+        { status: "draft", _rev: await everyLanguage() },
+        { locale: "*" }
+      );
+      expect(fresh.success, JSON.stringify(fresh)).toBe(true);
+    });
   }
 );

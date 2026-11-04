@@ -51,9 +51,10 @@ export interface DecodedVersion {
 }
 
 // `7`, `7.es:3`, `7.en:2,es:3`: what `encodeDocumentVersion` spells. A
-// language code holds letters, digits and `-` (`pt-BR`), never `.`, `:` or `,`.
+// language code holds letters, digits, `-` and `_` (`pt-BR`, `zh_Hant`), never
+// `.`, `:` or `,`.
 const VERSION_PATTERN =
-  /^(\d+)(?:\.([A-Za-z0-9-]+:\d+(?:,[A-Za-z0-9-]+:\d+)*))?$/;
+  /^(\d+)(?:\.([A-Za-z0-9_-]+:\d+(?:,[A-Za-z0-9_-]+:\d+)*))?$/;
 
 /** The refusal of a version that can't be judged: a client's mistake, not someone's change. */
 function unjudgeable(message: string): NextlyError {
@@ -593,7 +594,12 @@ async function callerMayReadDocument(args: {
 /** Where a save found out of date is answered from: its table, and the language that moved. */
 export interface StaleWrite {
   table: string;
-  languages?: { table: string; locale: string };
+  /**
+   * The translation table and the languages the refusal's current version
+   * names: the ones the save is judged on, so the version it answers can be
+   * sent back with the same save.
+   */
+  languages?: { table: string; locales: readonly string[] };
 }
 
 /**
@@ -671,12 +677,20 @@ export async function refuseIfMainMoved(
   tx: Pick<TransactionContext, "select" | "execute">,
   dialect: SupportedDialect,
   check: VersionCheck,
-  row: { table: string; id: string },
+  row: {
+    table: string;
+    id: string;
+    /** The languages the save is judged on, for the version a refusal names. */
+    languages?: StaleWrite["languages"];
+  },
   holder: StaleWriteHolder
 ): Promise<DocumentRevisionState | undefined> {
   const judged = await judgeMainRow(tx, dialect, check, row);
   if (!judged.stale) return judged.before;
-  holder.at = { table: row.table };
+  holder.at = {
+    table: row.table,
+    ...(row.languages ? { languages: row.languages } : {}),
+  };
   throw NextlyError.staleVersion({
     data: { currentVersion: String(judged.before?.main.counter) },
   });
@@ -754,7 +768,46 @@ export async function refuseIfLanguageMoved(
   if (!judged.stale) return judged;
   holder.at = {
     table: row.table,
-    languages: { table: row.languagesTable, locale: row.written },
+    languages: { table: row.languagesTable, locales: [row.written] },
+  };
+  throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
+}
+
+/**
+ * Refuse a write over every language at once (a status sweep with `locale:
+ * "*"`) when any language's row moved since the version given, which names
+ * every language: read before any write, under the main-row lock every
+ * writer of a translation row takes first, so a plain read sees what is
+ * committed. A language the version names as 0, or does not name, must
+ * still have no row.
+ */
+export async function refuseIfLanguagesMoved(
+  tx: Pick<TransactionContext, "select" | "execute">,
+  dialect: SupportedDialect,
+  check: VersionCheck,
+  row: {
+    table: string;
+    id: string;
+    languagesTable: string;
+    locales: readonly string[];
+  },
+  holder: StaleWriteHolder
+): Promise<void> {
+  if (check.kind !== "judge" || row.locales.length === 0) return;
+  const read = await readDocumentRevision(tx, {
+    dialect,
+    table: row.table,
+    id: row.id,
+    languages: { table: row.languagesTable, locales: row.locales },
+  });
+  if (!read) return;
+  const stale = staleParts(check.given, {
+    languages: row.locales.map(locale => read.languages[locale]),
+  });
+  if (stale.length === 0) return;
+  holder.at = {
+    table: row.table,
+    languages: { table: row.languagesTable, locales: row.locales },
   };
   throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
 }
@@ -786,13 +839,13 @@ export async function staleVersionErrorFor(
     >;
   }
 ): Promise<NextlyError> {
-  const locale = args.at.languages?.locale;
+  const locales = args.at.languages?.locales ?? [];
   const state = await readDocumentRevision(db, {
     dialect: args.dialect,
     table: args.at.table,
     id: args.id,
-    ...(args.at.languages && locale
-      ? { languages: { table: args.at.languages.table, locales: [locale] } }
+    ...(args.at.languages && locales.length > 0
+      ? { languages: { table: args.at.languages.table, locales } }
       : {}),
   });
   if (!state) {
@@ -804,15 +857,22 @@ export async function staleVersionErrorFor(
       },
     });
   }
-  const language = locale ? state.languages[locale] : undefined;
+  const languages = locales.flatMap(code =>
+    state.languages[code] ? [state.languages[code]] : []
+  );
+  // The part a one-language save writes, for the history version: a save of
+  // every language, or of none, writes the part with no language.
+  const locale = locales.length === 1 ? locales[0] : undefined;
   return staleVersionRefusal({
     state,
     given: args.given,
     currentVersion: encodeDocumentVersion(
       state.main.counter,
-      locale && language ? { [locale]: language.counter } : undefined
+      languages.length > 0
+        ? Object.fromEntries(languages.map(part => [part.part, part.counter]))
+        : undefined
     ),
-    parts: language ? [state.main, language] : [state.main],
+    parts: [state.main, ...languages],
     mayRead: () =>
       args.inSharedTransaction
         ? Promise.resolve(args.reader.trusted)
