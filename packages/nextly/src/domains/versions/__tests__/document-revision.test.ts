@@ -53,6 +53,7 @@ describe("withoutDocumentVersionKeys", () => {
       _changed_by_kind: "person",
       _changed_by_id: "someone-else",
       _changed_by_principal_kind: "x",
+      _changed_at: "2026-01-01T00:00:00Z",
     };
     expect(withoutDocumentVersionKeys(body)).toEqual({ title: "kept" });
     expect(body[DOCUMENT_VERSION_KEY]).toBe("999");

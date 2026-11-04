@@ -266,9 +266,11 @@ import {
   changerColumns,
   documentVersionOn,
   mainRowBump,
-  revisionBumpColumns,
   setDocumentVersion,
+  translationChangeColumns,
+  translationRevisionBumpColumns,
   translationTableOf,
+  updateTimeOf,
   withDocumentVersion,
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
@@ -2924,7 +2926,7 @@ export class CollectionMutationService extends BaseService {
     // insert above, built from that model, cannot carry it.
     await tx.update(
       localizedWrite.companionTableName,
-      changerColumns(savedBy),
+      translationChangeColumns(savedBy, this.dialect),
       {
         and: [
           { column: "_parent", op: "=", value: String(parentId) },
@@ -6917,11 +6919,12 @@ export class CollectionMutationService extends BaseService {
       for (const [key, value] of Object.entries(rawEntryData)) {
         entryData[toSnakeCase(key)] = value;
       }
-      // Who created it is the document's first changer; its counter starts at
-      // the column default, 1.
+      // Who created it is the document's first changer, at the moment it was
+      // created; its counter starts at the column default, 1.
       Object.assign(
         entryData,
-        changerColumns(actorForWrite(params.actor, params.user))
+        changerColumns(actorForWrite(params.actor, params.user)),
+        { _changed_at: now }
       );
 
       // A create has no prior status, so landing on published IS a first publication. Read from
@@ -7765,7 +7768,7 @@ export class CollectionMutationService extends BaseService {
       args.companionTableName,
       {
         [COMPANION_STATUS_COLUMN]: args.status,
-        ...revisionBumpColumns(args.savedBy),
+        ...translationRevisionBumpColumns(args.savedBy, this.dialect),
       },
       { and: conditions }
     );
@@ -11877,7 +11880,8 @@ export class CollectionMutationService extends BaseService {
             columns,
             mainRowBump(
               { updatePayload, componentFieldData, manyToManyData },
-              actorForWrite(params.actor, params.user)
+              actorForWrite(params.actor, params.user),
+              updateTimeOf(updatePayload.updatedAt)
             )
           );
           // Skip the live-row UPDATE for a draft edit — the pending
@@ -15411,10 +15415,12 @@ export class CollectionMutationService extends BaseService {
       if (createStamp) {
         (entryData as Record<string, unknown>).first_published_at = createStamp;
       }
-      // The document's first changer; its counter starts at the default, 1.
+      // The document's first changer, at its creation; its counter starts at
+      // the default, 1.
       Object.assign(
         entryData,
-        changerColumns(actorForWrite(params.actor, params.user))
+        changerColumns(actorForWrite(params.actor, params.user)),
+        { _changed_at: nowForTxCreate }
       );
 
       // The bulk create worker inserts status like any other field, so publishing
@@ -16391,7 +16397,8 @@ export class CollectionMutationService extends BaseService {
                   componentFieldData,
                   manyToManyData,
                 },
-                actorForWrite(params.actor, params.user)
+                actorForWrite(params.actor, params.user),
+                updateTimeOf(nowForUpdate)
               ),
             },
             this.whereEq("id", entryId),

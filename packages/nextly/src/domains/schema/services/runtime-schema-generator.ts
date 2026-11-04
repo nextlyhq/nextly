@@ -13,7 +13,7 @@
  * @module services/schema/runtime-schema-generator
  */
 
-import { sql } from "drizzle-orm";
+import { getColumns, sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -76,7 +76,7 @@ import type { ExtensionColumn } from "../extension/types";
 import type { ForeignKeySpec } from "../pipeline/diff/types";
 
 import {
-  type getSystemColumnDescriptors,
+  getSystemColumnDescriptors,
   type ColumnDescriptor,
   type ColumnKind,
   type ColumnOrigin,
@@ -679,6 +679,56 @@ function buildSystemDrizzleColumn(
   }
   const col = sqliteText(sys.name);
   return finishColumn(literal === undefined ? col : col.default(literal), sys);
+}
+
+/** One-column tables, by dialect and column, whose column encodes a value. */
+const encoderTables = new Map<string, Record<string, unknown>>();
+
+/**
+ * A value as the driver receives it for system column `name` on `dialect`:
+ * what the runtime table's own column turns it into on a write.
+ *
+ * For a statement that names a system column its table's runtime model does
+ * not declare — a translation table's `_changed_at` — so the value is stored
+ * exactly as the declared column on a main table stores it, rather than as
+ * the driver would bind a bare `Date`, which on PostgreSQL and MySQL depends
+ * on the server's time zone. Built from the same descriptor and builder as
+ * the column itself, so the two cannot encode differently.
+ */
+export function systemColumnDriverValue(
+  dialect: SupportedDialect,
+  name: string,
+  value: unknown
+): unknown {
+  const key = `${dialect}\u0000${name}`;
+  let table = encoderTables.get(key);
+  if (table === undefined) {
+    const descriptor = getSystemColumnDescriptors(dialect, {
+      hasTitleField: true,
+      hasSlugField: true,
+      hasStatus: true,
+      isSingle: false,
+    }).find(column => column.name === name);
+    if (descriptor === undefined) {
+      throw NextlyError.internal({
+        logContext: { reason: "unknown-system-column", name },
+      });
+    }
+    const record = { column: buildSystemDrizzleColumn(descriptor, dialect) };
+    table = (
+      dialect === "postgresql"
+        ? pgTable("__nextly_encode", record as never)
+        : dialect === "mysql"
+          ? mysqlTable("__nextly_encode", record as never)
+          : sqliteTable("__nextly_encode", record as never)
+    ) as Record<string, unknown>;
+    encoderTables.set(key, table);
+  }
+  const columns = getColumns(table as never) as Record<
+    string,
+    { mapToDriverValue(value: unknown): unknown }
+  >;
+  return columns.column.mapToDriverValue(value);
 }
 
 /**

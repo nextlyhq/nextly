@@ -327,6 +327,7 @@ describe.each(getConfiguredTestDialects())(
             ? row.snapshot
             : JSON.stringify(row.snapshot);
         expect(snapshot).not.toContain("_changed_by");
+        expect(snapshot).not.toContain("_changed_at");
         expect(snapshot).not.toContain("_revision");
         expect(snapshot).not.toContain('"_rev"');
       }
@@ -433,7 +434,11 @@ describe.each(getConfiguredTestDialects())(
       } as never)) as Record<string, unknown>;
       expect(
         Object.keys(read).filter(
-          key => key.includes("changed_by") || key.includes("changedBy")
+          key =>
+            key.includes("changed_by") ||
+            key.includes("changedBy") ||
+            key.includes("changed_at") ||
+            key.includes("changedAt")
         )
       ).toEqual([]);
       expect(read._revision).toBeUndefined();
