@@ -18,7 +18,7 @@ import {
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import { isInteractiveTerminal } from "../../domains/schema/migrate/data-loss-consent";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   orderedMigrations,
   pluginModuleStatements,
@@ -623,9 +623,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             // a transformer that adds a plugin or a collection added it again.
             //
             // Boot migrations off: the hook runs inside the command's migrate
-            // lock, so a boot that migrated would wait on that lock itself,
-            // and on SQLite, whose lock holds nothing back, it could apply a
-            // module after the uninstall had fixed which ones to undo.
+            // lock, which this process may take again, so a boot that
+            // migrated would apply a pending module after the uninstall had
+            // fixed which ones to undo, on every dialect.
             config: {
               ...appConfig,
               db: { ...appConfig.db, runMigrationsOnBoot: false },
@@ -769,8 +769,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     runDown,
     underMigrateLock,
     // A full uninstall without consent asks the person at a terminal, and is
-    // refused at once where nobody is there to answer.
-    interactive: isInteractiveTerminal(),
+    // refused at once where nobody can answer: no terminal, `CI` set, or
+    // `--non-interactive`.
+    interactive: canPrompt(),
     askToDelete: askToDeleteInTerminal,
     // What other owners built on or into the plugin's schema. Loaded when an
     // uninstall asks: nothing else in a command needs the dependents' reader.

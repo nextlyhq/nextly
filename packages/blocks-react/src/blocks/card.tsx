@@ -52,6 +52,7 @@ import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
 import {
+  CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
   linkableContentModel,
   renderLinkableContainer,
@@ -86,6 +87,14 @@ export const CARD_BASE_STYLES = {
       // literal is wrong in whichever of light and dark it was not chosen for,
       // which is the whole reason a token set exists. Spacing could take a
       // literal safely; a surface cannot.
+      // Room between the edge and what the card holds, from a site token. A
+      // full-bleed image at the top of a card takes an override on the card.
+      padding: {
+        blockStart: { $token: "space.card" },
+        blockEnd: { $token: "space.card" },
+        inlineStart: { $token: "space.card" },
+        inlineEnd: { $token: "space.card" },
+      },
       backgroundColor: { $token: "color.surface" },
       border: {
         // A hairline on all four sides, written per LOGICAL side so it follows
@@ -130,7 +139,8 @@ export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     // announced as a landmark, which is noise on a card that merely groups a
     // heading and a sentence. The author knows which one theirs is.
     as: {
-      label: "HTML tag",
+      label: "Element type",
+      display: "menu",
       type: "select",
       options: ["div", "article", "section", "aside"],
     },
@@ -155,6 +165,7 @@ export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     },
   },
   baseStyles: CARD_BASE_STYLES,
+  childGap: CONTAINER_CHILD_GAP,
   supports: CONTAINER_SUPPORTS,
   // A linked card is an `<a>`, so what may sit inside it follows its link.
   contentModel: linkableContentModel,

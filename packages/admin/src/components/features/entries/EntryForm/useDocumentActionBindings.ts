@@ -246,6 +246,8 @@ export interface DocumentActionBindings {
    * has failed.
    */
   trackWrite: (label: string, write: Promise<unknown>) => void;
+  /** Whether a tracked write is still on its way. */
+  writesPending: boolean;
   /**
    * The Save the document's state calls for, run as its control runs it —
    * every open edit committed and tracked write settled first — wherever that
@@ -630,6 +632,7 @@ export function useDocumentActionBindings({
     },
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
+    writesPending: gate.writesPending,
     saveWithoutPublishing: storingWithoutPublishing(
       hasStatus,
       saveWithoutPublishing(runSave, onSaveChanges),

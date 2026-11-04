@@ -367,6 +367,48 @@ export type { PlacementTarget } from "@nextlyhq/blocks-engine";
 export type InsertTarget = PlacementTarget;
 
 /**
+ * The props a block is placed with: its defaults, overlaid by its example.
+ *
+ * The one answer for "what a block starts as", for the inserter that places
+ * it and for anything that must tell an author's own values from a block's
+ * starting ones (Getting started's "Write something"). Spread, so the caller
+ * owns its copy and cannot reach back into the definition.
+ */
+function insertionProps(
+  definition: Pick<AnyBlockDefinition, "defaultProps" | "example">
+): Record<string, unknown> {
+  return {
+    ...(definition.defaultProps ?? {}),
+    ...(definition.example?.props ?? {}),
+  };
+}
+
+/** The props a block is placed with under one of its variations. */
+function variationProps(
+  base: Record<string, unknown>,
+  variation: { readonly props?: object }
+): Record<string, unknown> {
+  return { ...base, ...(variation.props ?? {}) };
+}
+
+/**
+ * Every set of props a block can be placed with: its own, then each
+ * variation's. The candidates the inserter offers, for anything that must
+ * tell an author's values from ones a block was placed with.
+ */
+export function insertionPropSets(
+  definition: Pick<AnyBlockDefinition, "defaultProps" | "example" | "editor">
+): Record<string, unknown>[] {
+  const base = insertionProps(definition);
+  return [
+    base,
+    ...(definition.editor?.variations ?? []).map(variation =>
+      variationProps(base, variation)
+    ),
+  ];
+}
+
+/**
  * Build the offerable list from block definitions.
  *
  * Takes definitions rather than reading the registry, matching how the engine
@@ -396,7 +438,7 @@ export function catalogFrom(
       editor?.keywords === undefined || editor.keywords.length === 0
         ? [labelOf(definition)]
         : editor.keywords;
-    // The block's DEFAULTS, overlaid by its EXAMPLE.
+    // The block's DEFAULTS, overlaid by its EXAMPLE: see `insertionProps`.
     //
     // Defaults alone are what an author was getting, and they are deliberately
     // empty: `core/heading` defaults to `text: ""`, `core/text` to `text: ""`,
@@ -414,10 +456,7 @@ export function catalogFrom(
     //
     // Spread rather than referenced, so the entry owns its copy and the clone
     // taken at insert time cannot reach back into the definition.
-    const defaults = {
-      ...(definition.defaultProps ?? {}),
-      ...(definition.example?.props ?? {}),
-    };
+    const defaults = insertionProps(definition);
 
     entries.push({
       kind: "block",
@@ -459,7 +498,7 @@ export function catalogFrom(
         // plugin authors can actually write against.
         icon: editor?.icon,
         version: definition.version,
-        props: { ...defaults, ...(variation.props ?? {}) },
+        props: variationProps(defaults, variation),
       });
     }
   }
@@ -565,22 +604,63 @@ export function componentEntriesFrom(
       definitions
     );
     if (offered === undefined) continue;
-    entries.push({
-      kind: "component",
-      id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
-      componentId: component.id,
-      label: component.title,
-      description: component.description ?? "",
-      // Every component under the one components group and with the one
-      // component mark, whatever its row declares: see COMPONENT_CATEGORY.
-      category: COMPONENT_CATEGORY,
-      icon: "component",
-      keywords: keywordsOf(component.keywords),
-      ...offered,
-      ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
-    });
+    entries.push(componentEntryOf(component, offered));
   }
   return entries;
+}
+
+/**
+ * The rows {@link componentEntriesFrom} offered no entry for, each as an entry
+ * with nothing in it to place: no roots, and an empty definition.
+ *
+ * For a surface that lists the library to manage it as well as to place from
+ * it. A component saved without content, or with none the canvas could draw,
+ * is still one an author can open and fill, so it is listed, refused, rather
+ * than left out. Never handed to the offers: there is nothing in it to judge
+ * or to place, and the surface says so.
+ *
+ * Given the entries already built rather than the lookup, because building
+ * them walks every definition's roots, and a second walk to learn which rows
+ * were offered would repeat it.
+ */
+export function unplaceableComponentEntries(
+  components: readonly SavedComponent[],
+  entries: readonly InsertEntry[]
+): ComponentInsertEntry[] {
+  const offered = new Set(
+    entries.flatMap(entry =>
+      entry.kind === "component" ? [entry.componentId] : []
+    )
+  );
+  return components
+    .filter(component => !offered.has(component.id))
+    .map(component =>
+      componentEntryOf(component, {
+        document: { formatVersion: 1, kind: "component", nodes: [] },
+        roots: [],
+      })
+    );
+}
+
+/** One stored row as an entry, with the definition and roots it offers. */
+function componentEntryOf(
+  component: SavedComponent,
+  offered: Pick<ComponentInsertEntry, "document" | "roots">
+): ComponentInsertEntry {
+  return {
+    kind: "component",
+    id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
+    componentId: component.id,
+    label: component.title,
+    description: component.description ?? "",
+    // Every component under the one components group and with the one
+    // component mark, whatever its row declares: see COMPONENT_CATEGORY.
+    category: COMPONENT_CATEGORY,
+    icon: "component",
+    keywords: keywordsOf(component.keywords),
+    ...offered,
+    ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
+  };
 }
 
 /**

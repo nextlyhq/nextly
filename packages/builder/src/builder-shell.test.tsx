@@ -36,6 +36,7 @@ import {
   EMPTY_ELEMENTS_ATTRIBUTE,
   fitsFullShell,
   MIN_SHELL_WIDTH,
+  readPreferences,
   type PreferenceStore,
 } from "./shell-state";
 
@@ -172,6 +173,217 @@ function renderShell(props: Partial<Parameters<typeof BuilderShell>[0]> = {}) {
   );
   return { onExit, ...result };
 }
+
+describe("the rail's panel keys", () => {
+  const railItem = (name: string) =>
+    within(screen.getByRole("navigation", { name: "Editor panels" })).getByRole(
+      "button",
+      { name }
+    );
+
+  it("opens a panel on its key, and closes it on the same key, as clicking does", () => {
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("does nothing while text is being typed, or with a modifier held", () => {
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    const before = railItem("Design").getAttribute("aria-pressed");
+    const field = document.createElement("input");
+    document.body.append(field);
+    field.focus();
+    fireEvent.keyDown(field, { key: "d" });
+    field.remove();
+    fireEvent.keyDown(document.body, { key: "d", ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: "D", shiftKey: true });
+    expect(railItem("Design").getAttribute("aria-pressed")).toBe(before);
+  });
+
+  it("answers for the editor the author is in, with two on the page", () => {
+    // The shortcut manager hands a key to the binding registered last, which
+    // is the second editor's: without the shell's own check, a key pressed in
+    // the first switched panels in the second.
+    stubContainerFits(true);
+    const shell = (label: string) => (
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        inspector={<button type="button">{label} inspector control</button>}
+      />
+    );
+    render(shell("first"));
+    render(shell("second"));
+    const [first, second] = screen
+      .getAllByRole("navigation", { name: "Editor panels" })
+      .map(rail => within(rail).getByRole("button", { name: "Layers" }));
+    screen.getByRole("button", { name: "first inspector control" }).focus();
+
+    fireEvent.keyDown(document.activeElement ?? document, { key: "l" });
+
+    expect(first?.getAttribute("aria-pressed")).toBe("true");
+    expect(second?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("passes the key on from an editor behind its narrow-window notice", () => {
+    // That editor stays mounted to keep its slots, so its keys stay
+    // registered; registered last, it took the key from the editor the author
+    // can see.
+    observedWidth = MIN_SHELL_WIDTH + 160;
+    render(
+      <BuilderShell
+        store={memoryStore()}
+        renderPanel={panel => <p>{panel} panel</p>}
+      >
+        <p>wide canvas</p>
+      </BuilderShell>
+    );
+    act(() => {
+      observedWidth = MIN_SHELL_WIDTH - 100;
+    });
+    render(
+      <BuilderShell
+        store={memoryStore()}
+        renderPanel={panel => <p>{panel} panel</p>}
+      >
+        <p>narrow canvas</p>
+      </BuilderShell>
+    );
+    expect(screen.queryAllByText(/needs more width/i)).toHaveLength(1);
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document.body, { key: "l" });
+
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("keeps focus in the editor when a key closes the panel holding it", () => {
+    // The panel unmounts the control holding focus; left there, focus fell to
+    // the page body, where a second editor on the page would claim no key.
+    renderShell({
+      renderPanel: panel => <button type="button">{panel} control</button>,
+    });
+    fireEvent.keyDown(document.body, { key: "l" });
+    screen.getByRole("button", { name: "layers control" }).focus();
+
+    fireEvent.keyDown(document.activeElement ?? document, { key: "l" });
+
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("false");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(
+      document.activeElement?.closest(".nx-builder-chrome")
+    ).not.toBeNull();
+  });
+
+  it("can be turned off in Help, and then none answers or is offered", async () => {
+    // A key with no modifier can be set off by speech input; WCAG 2.1.4 asks
+    // for a way to turn it off.
+    const store = memoryStore();
+    renderShell({ store, renderPanel: panel => <p>{panel} panel</p> });
+    fireEvent.click(railItem("Help"));
+    const keys = await screen.findByRole("switch", {
+      name: "Single-letter shortcuts",
+    });
+    expect(keys.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(keys);
+    fireEvent.keyDown(document.activeElement ?? document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("false");
+    expect(railItem("Layers").hasAttribute("aria-keyshortcuts")).toBe(false);
+    expect(readPreferences(store).panelKeys).toBe(false);
+  });
+
+  it("names each panel's key on its item, for assistive technology", () => {
+    renderShell();
+    expect(railItem("Add").getAttribute("aria-keyshortcuts")).toBe("A");
+    expect(railItem("Pages").getAttribute("aria-keyshortcuts")).toBe("P");
+    expect(railItem("Components").getAttribute("aria-keyshortcuts")).toBe("C");
+  });
+
+  it("names an item and its key in the tooltip its focus shows", async () => {
+    // The rail draws icons only: the tooltip is how a sighted author learns
+    // both what an item is and its key.
+    renderShell();
+    act(() => railItem("Layers").focus());
+
+    // The whole text, since "Layers" alone already holds an "L".
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent?.replace(/\s+/g, "")).toBe("LayersL");
+  });
+
+  it("keeps a keyboard-focused item's tooltip open when the pointer enters the frame", async () => {
+    // The tooltip is the focused item's only visible name. Reached by Tab, so
+    // the focus is a keyboard user's and shows as such.
+    renderShell();
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => railItem("Layers").focus());
+    expect(railItem("Layers").matches(":focus-visible")).toBe(true);
+    await screen.findByRole("tooltip");
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+
+    fireEvent.pointerOver(frame);
+
+    expect(screen.getByRole("tooltip")).toBeTruthy();
+    frame.remove();
+  });
+
+  it("closes a pointer-opened tooltip when the pointer moves into the canvas frame", () => {
+    // A frame is another document: once the pointer is in it, this one sees
+    // no move that could tell the tooltip it was left, and it stayed open over
+    // the canvas.
+    vi.useFakeTimers();
+    try {
+      renderShell();
+      fireEvent.pointerMove(railItem("Layers"), { pointerType: "mouse" });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.getByRole("tooltip")).toBeTruthy();
+      const frame = document.createElement("iframe");
+      document.body.append(frame);
+
+      fireEvent.pointerOver(frame);
+
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      frame.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lists in Help only its own editor's panel keys, with two on the page", async () => {
+    // The shortcut manager is shared, and lists every editor's bindings: Help
+    // in an editor whose keys are off listed the other editor's as if they
+    // were its own.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, panelKeys: false })
+        )}
+      />
+    );
+    render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
+    const [first] = screen.getAllByRole("navigation", {
+      name: "Editor panels",
+    });
+    fireEvent.click(
+      within(first as HTMLElement).getByRole("button", { name: "Help" })
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("Hide or show the side panels");
+    expect(dialog.textContent).not.toContain("Open or close Layers");
+  });
+});
 
 describe("whose notices the shell reports", () => {
   it("renders and provides the HOST's queue when one is handed in, so a sentence raised above the shell lands in its region", () => {
@@ -316,7 +528,7 @@ describe("panels the host cannot fill", () => {
     const rail = screen.getByRole("navigation", { name: "Editor panels" });
     const names = within(rail)
       .getAllByRole("button")
-      .map(button => button.textContent);
+      .map(button => button.getAttribute("aria-label"));
     expect(names).toEqual([
       "Add",
       "Layers",
@@ -388,7 +600,7 @@ describe("the rail's groups", () => {
     expect(
       within(bottom)
         .getAllByRole("button")
-        .map(button => button.textContent)
+        .map(button => button.getAttribute("aria-label"))
     ).toEqual(["Settings", "Help"]);
     expect(within(top).queryByRole("button", { name: "Help" })).toBeNull();
   });
@@ -475,6 +687,71 @@ describe("Settings, as the host's dialog", () => {
     const item = screen.getByRole("button", { name: "Settings" });
     fireEvent.click(item);
     expect(handed.at(-1)?.returnFocus()).toBe(item);
+  });
+
+  it("opens from a host's request once per count, and not again on a re-render", () => {
+    const { renderSettings } = settingsHost();
+    const { rerender } = renderShell({
+      renderSettings,
+      openSettingsRequest: { count: 1 },
+    });
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    // The same request again is not a new one: closed stays closed.
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 1 }}
+      />
+    );
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 2 }}
+      />
+    );
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+  });
+
+  it("holds a request that arrives while the window is too narrow, and opens once it fits", async () => {
+    // A dialog there would trap focus over the notice and its way out. Read
+    // from what the shell hands the host: a real dialog portals out of the
+    // hidden regions, so "open" is the trap whatever this stand-in shows.
+    const { handed, renderSettings } = settingsHost();
+    const shell = (request?: { count: number }) => (
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        {...(request === undefined ? {} : { openSettingsRequest: request })}
+      />
+    );
+    const request = { count: 1 };
+    const { rerender } = render(shell());
+    act(() => stubContainerFits(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("navigation", { name: "Editor panels" })
+      ).toBeNull()
+    );
+
+    const before = handed.length;
+    rerender(shell(request));
+    await new Promise(settle => setTimeout(settle, 20));
+    expect(handed.slice(before).some(dialog => dialog.open)).toBe(false);
+
+    act(() => stubContainerFits(true));
+    rerender(shell(request));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    );
   });
 
   it("closes when the editor gives way to its narrow-window notice", async () => {
@@ -2098,6 +2375,19 @@ describe("zooming from the keyboard", () => {
     fireEvent.keyDown(document, { key: "0", ctrlKey: true, metaKey: false });
     fireEvent.keyDown(document, { key: "0", metaKey: true, ctrlKey: false });
     expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+  });
+
+  it("lists fitting in Help under Shift+1 alone, not a second key cap for the same press", async () => {
+    zoomShell({ zoom: 1.5 });
+    fireEvent.click(
+      within(
+        screen.getByRole("navigation", { name: "Editor panels" })
+      ).getByRole("button", { name: "Help" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    const row = within(dialog).getByText("Fit the page to the canvas");
+    const caps = row.parentElement?.querySelectorAll("kbd") ?? [];
+    expect([...caps].map(cap => cap.textContent)).toEqual(["Shift+1"]);
   });
 
   it("fits the canvas on Shift+1, whichever character the layout gives", () => {

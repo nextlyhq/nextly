@@ -146,6 +146,12 @@ export interface LayersDrag {
   readonly drawn: LayersDrawn | null;
   /** The live region's text: why the drop under the pointer is refused. */
   readonly announcement: string;
+  /**
+   * Abandon the gesture, held or in flight, drawing nothing: for another
+   * gesture that claims the same press, such as a touch's long press opening
+   * the row menu.
+   */
+  readonly cancel: () => void;
 }
 
 /** What one gesture remembers, none of which renders. */
@@ -783,6 +789,7 @@ export function useLayersDrag({
     draggingId,
     drawn,
     announcement,
+    cancel: reset,
   };
 }
 

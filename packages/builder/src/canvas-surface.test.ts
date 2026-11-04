@@ -82,9 +82,15 @@ function declared(body: string, property: string): string | undefined {
   return match?.[1]?.trim();
 }
 
-/** The canvas root's rule in the frame's sheet. */
+/**
+ * The scope of the rules that stand in for a site on the editor's blank page,
+ * which a page the site serves never matches.
+ */
+const BLANK = ":where(:root[data-nx-canvas-frame])";
+
+/** The canvas root's rule on the blank page, in the frame's sheet. */
 function canvasRule(): string {
-  return ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas");
+  return ruleIn(CANVAS_FRAME_SHEET, `${BLANK} .nx-canvas`);
 }
 
 describe("the canvas's frame as a sheet on the editor's surface", () => {
@@ -129,9 +135,40 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
 
 describe("the canvas surface is the site's, not the admin's", () => {
   it("starts from a plain base, with no browser margin around the page", () => {
-    expect(declared(ruleIn(CANVAS_FRAME_SHEET, "html, body"), "margin")).toBe(
-      "0"
-    );
+    expect(
+      declared(ruleIn(CANVAS_FRAME_SHEET, `${BLANK}, ${BLANK} body`), "margin")
+    ).toBe("0");
+  });
+
+  it("leaves the site's own page to the site's stylesheet", () => {
+    /*
+     * On a page the site serves, the canvas sits in the site's own layout,
+     * and the site's stylesheet decides its ground, ink, type, scheme and
+     * base, as it does for the published page. So the rules that are not
+     * scoped to the blank page state none of them.
+     */
+    const root = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas");
+    for (const property of [
+      "background-color",
+      "color",
+      "font-family",
+      "color-scheme",
+      "flex",
+    ]) {
+      expect(declared(root, property), property).toBe(undefined);
+    }
+    const unscoped = [
+      ...CANVAS_FRAME_SHEET.matchAll(/([^{}]+)\{([^{}]*)\}/g),
+    ].filter(([, selector]) => {
+      const bare = (selector ?? "").replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      return !bare.includes(BLANK) && !bare.startsWith("@");
+    });
+    // The control: the scan reads rules, the canvas root's among them.
+    expect(unscoped.length).toBeGreaterThan(0);
+    for (const [, selector] of unscoped) {
+      const bare = (selector ?? "").replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      expect(/(^|[\s,])(html|body)([\s,]|$)/.test(bare), bare).toBe(false);
+    }
   });
 
   it("states a background, a text colour and a colour scheme of its own", () => {
@@ -170,9 +207,11 @@ describe("the canvas surface is the site's, not the admin's", () => {
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .split(",")
         .map(part => part.trim());
+      // The site's own layout around the canvas is quietened as a region's
+      // content is, by the same handed token.
       for (const part of selectors) {
         expect(part, "a rule painting with an admin token").toMatch(
-          /^\.nx-canvas-region/
+          /^(\.nx-canvas-region|\[data-nx-site-chrome\])/
         );
       }
     }
@@ -189,14 +228,14 @@ describe("the canvas surface is the site's, not the admin's", () => {
       declared(
         ruleIn(
           CANVAS_FRAME_SHEET,
-          '.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"]'
+          `${BLANK} .nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"]`
         ),
         "color-scheme"
       )
     ).toBe("dark");
     // With no marker stated, the device decides, as it does for the values.
     const media =
-      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\]:not\(\[data-nx-site-theme\]\) \{([^}]*)\}/.exec(
+      /@media \(prefers-color-scheme: dark\) \{\s*:where\(:root\[data-nx-canvas-frame\]\) \.nx-canvas\[data-nx-site-dark-ground\]:not\(\[data-nx-site-theme\]\) \{([^}]*)\}/.exec(
         CANVAS_FRAME_SHEET
       );
     expect(media, "the device rule exists").not.toBeNull();
@@ -208,7 +247,10 @@ describe("the canvas surface is the site's, not the admin's", () => {
   });
 
   it("makes the page one stacking context, and repeats only an opaque ground", () => {
-    const page = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas > .nx-pb-page");
+    const page = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${BLANK} .nx-canvas > .nx-pb-page`
+    );
     expect(declared(page, "isolation")).toBe("isolate");
     for (const property of ["display", "background-color", "background"]) {
       expect(declared(page, property), `the page root's ${property}`).toBe(
@@ -219,7 +261,7 @@ describe("the canvas surface is the site's, not the admin's", () => {
       declared(
         ruleIn(
           CANVAS_FRAME_SHEET,
-          ":where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page)"
+          `:where(${BLANK} .nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page)`
         ),
         "background-color"
       )
@@ -303,6 +345,15 @@ describe("the editing colours drawn on the page", () => {
     expect(
       declared(ruleFor('.nx-canvas-mark[data-mark="exposed"]'), "outline")
     ).toBe("1px dashed var(--nx-builder-component)");
+    // Inside its part: the placement's frame is drawn outside the parts, and
+    // a dash outside a full-width part would run under it, leaving only its
+    // top and bottom to read, as rules rather than a box per part.
+    expect(
+      declared(
+        ruleFor('.nx-canvas-mark[data-mark="exposed"]'),
+        "outline-offset"
+      )
+    ).toBe("-2px");
     const marks = [
       SELECTED,
       ".nx-drop-indicator",

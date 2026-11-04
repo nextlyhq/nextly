@@ -23,7 +23,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 
-import { exitWithError, printCliError } from "../errors";
+import { exitWithError } from "../errors";
 import { packageInstallFailed } from "../errors/areas/commands";
 import {
   createContext,
@@ -140,10 +140,9 @@ export async function runAdd(
     logger.info(`Installing ${pc.cyan(pkg)} with ${pc.yellow(pm)}…`);
     const code = await runInstall(pm, args, cwd);
     if (code !== 0) {
-      // The package manager's own failing code is the command's, so the shape is printed here
-      // and the exit keeps that code rather than the 1 `exitWithError` ends with.
-      printCliError(logger, packageInstallFailed(pm, pkg, code));
-      process.exit(code || 1);
+      // A failed install is a failed run, so it ends with the shared 1; the
+      // package manager's own code is named in the message instead.
+      exitWithError(logger, packageInstallFailed(pm, pkg, code));
     }
     logger.success(`Installed ${pkg}`);
   }
@@ -151,32 +150,23 @@ export async function runAdd(
   showWiring(pkg, context);
 }
 
-/** Register the `add` command with the program. */
-export function registerAddCommand(program: Command): void {
-  program
-    .command("add <package>")
-    .description("Install a Nextly plugin and show how to register it")
-    .option("-D, --dev", "Install as a dev dependency", false)
-    .option(
-      "--skip-install",
-      "Skip the package-manager install; just print the wiring snippet",
-      false
-    )
-    .action(
-      async (pkg: string, cmdOptions: AddCommandOptions, cmd: Command) => {
-        const globalOpts: GlobalOptions = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        const resolved: ResolvedAddOptions = {
-          ...cmdOptions,
-          cwd: globalOpts.cwd,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-        };
-        try {
-          await runAdd(pkg, resolved, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
-    );
+/** The action of `nextly add`, loaded when it runs. */
+export async function addAction(
+  pkg: string,
+  cmdOptions: AddCommandOptions,
+  cmd: Command
+) {
+  const globalOpts: GlobalOptions = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  const resolved: ResolvedAddOptions = {
+    ...cmdOptions,
+    cwd: globalOpts.cwd,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+  };
+  try {
+    await runAdd(pkg, resolved, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

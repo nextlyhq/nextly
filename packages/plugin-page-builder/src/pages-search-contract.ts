@@ -59,7 +59,24 @@ export const PAGES_SEARCH_PARAMS = {
   q: "q",
   limit: "limit",
   exclude: "exclude",
+  before: "before",
+  order: "order",
 } as const;
+
+/**
+ * How a search's pages are ordered. `title`, the default, is the best matches
+ * first across every collection, for a search that shows a few; `collection`
+ * is each collection's pages together, the plugin's own Pages first and the
+ * others by name, each in title order, for a list grouped by collection.
+ */
+export type PagesSearchOrder = "title" | "collection";
+
+/**
+ * The longest cursor the route accepts, in characters. A cursor names a
+ * position in each page collection, and a site has few of them; the bound keeps
+ * one oversized value from being decoded at all.
+ */
+export const PAGES_SEARCH_CURSOR_MAX = 4096;
 
 /**
  * What separates the collection from the id in `exclude`. A collection slug
@@ -70,6 +87,15 @@ export const PAGES_SEARCH_EXCLUDE_SEPARATOR = ":";
 /** A page's lifecycle state, sent only for a collection with Draft/Published. */
 export type PageStatus = "draft" | "published";
 
+/**
+ * Where a page stands in publishing when that is not plainly published, in the
+ * admin's own words for its status pill (`PILL_LABEL` names each): `draft`, never
+ * published; `changed`, published with a working draft not yet published; and
+ * `scheduled`, which a scheduled release will publish. A publish that is
+ * scheduled is what the author has to know first, so it wins over the other two.
+ */
+export type PageState = "draft" | "changed" | "scheduled";
+
 /** One page as a search result shows it, and as the editor's address needs it. */
 export interface PageItem {
   readonly id: string;
@@ -77,11 +103,28 @@ export interface PageItem {
   readonly collection: string;
   /** The collection's display name, so a result can say what kind of page it is. */
   readonly collectionLabel: string;
+  /**
+   * The collection's plural name ("Landing pages"), for a heading over its
+   * pages. Absent where the collection names no plural.
+   */
+  readonly collectionPluralLabel?: string;
   /** The Page Builder field the editor opens for, by its name. */
   readonly field: string;
   readonly title: string;
   /** Present only when the collection has the Draft/Published lifecycle. */
   readonly status?: PageStatus;
+  /**
+   * Present only when the page is not plainly published: absent for a
+   * published page with nothing waiting, and for a collection without the
+   * Draft/Published lifecycle. Sent by the search; a write's answer leaves it
+   * out, since a write does not read where its page stands in a release.
+   */
+  readonly state?: PageState;
+  /**
+   * Present when the page holds changes not yet published, whatever its state
+   * says: a scheduled page can hold them too. Absent otherwise.
+   */
+  readonly pendingChange?: true;
 }
 
 /**
@@ -94,6 +137,17 @@ export interface PageItem {
  * reads a bounded number of rows per collection, so the total counts the
  * openable pages among the rows read plus every match it did not read. It is
  * never smaller than the true count, so `meta.hasNext` false means no more.
+ *
+ * ## Paging
+ *
+ * By cursor, not by page number. Each page collection is read in its own
+ * database's title order and the answer is merged from their heads, so where a
+ * page ends is a position in EACH collection; `meta.nextBefore` names those
+ * positions, and sending it back as `before` continues the merge exactly where
+ * it stopped, with no page repeated or skipped. A page number would have to
+ * re-read every earlier page from every collection to find the same positions.
+ * `meta.nextBefore` is present exactly when `meta.hasNext` is; `meta.page`
+ * counts the pages walked, from 1.
  */
 export interface PagesSearchResponse {
   readonly items: readonly PageItem[];
@@ -114,6 +168,13 @@ export interface PagesSearchQuery {
   readonly limit?: number;
   /** A page to leave out, ordinarily the one being edited. */
   readonly exclude?: PageReference;
+  /**
+   * Where to continue from: the previous answer's `meta.nextBefore`, sent with
+   * the same `q`, `limit`, `exclude` and `order`.
+   */
+  readonly before?: string;
+  /** How the pages are ordered; by title when absent. */
+  readonly order?: PagesSearchOrder;
 }
 
 /**
@@ -135,6 +196,13 @@ export function pagesSearchPath(query: PagesSearchQuery = {}): string {
       PAGES_SEARCH_PARAMS.exclude,
       `${query.exclude.collection}${PAGES_SEARCH_EXCLUDE_SEPARATOR}${query.exclude.id}`
     );
+  }
+  if (query.before !== undefined && query.before !== "") {
+    params.set(PAGES_SEARCH_PARAMS.before, query.before);
+  }
+  // The default is left out, as an absent value is.
+  if (query.order === "collection") {
+    params.set(PAGES_SEARCH_PARAMS.order, query.order);
   }
   const search = params.toString();
   return search === ""

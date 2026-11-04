@@ -9,9 +9,11 @@
  * @module pages/dashboard/entries/[slug]/[id]/custom-edit-view-lock.test
  */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import type { UpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import {
   clearRegistry,
@@ -78,6 +80,8 @@ vi.mock("@admin/hooks/queries/useEntry", () => ({
 // here the page is handed the entry as the populated read gives it, unless a
 // case sets `mergedEntry` to stand for a merge that differs from it.
 let mergedEntry: Record<string, unknown> | undefined;
+/** When the entry was read and how to read it again, for a case that gains it. */
+let entryLatest: DocumentLatest | undefined;
 vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
   useStoredEntry: () => ({ data: undefined, isLoading: false, error: null }),
   useWithStoredReferences: ({
@@ -88,6 +92,7 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
     document: mergedEntry ?? populated.data,
     isLoading: populated.isLoading,
     error: populated.error,
+    latest: entryLatest,
   }),
 }));
 /** What the server's answer says about the user changing this collection. */
@@ -153,6 +158,7 @@ beforeEach(() => {
   };
   // Cleared, so a case reading these cannot pass on the previous case's render.
   mergedEntry = undefined;
+  entryLatest = undefined;
   customViewProps = undefined;
   entryFormProps = undefined;
 });
@@ -574,5 +580,60 @@ describe("the scheduled-release banner on the default editor", () => {
     ).not.toBeInTheDocument();
     render(<>{entryFormProps?.documentBanner}</>);
     expect(screen.getByText("scheduled release banner")).toBeInTheDocument();
+  });
+});
+
+describe("a custom edit view that gains the entry", () => {
+  it("starts again from the copy loaded after the gain, not the one it read before", async () => {
+    // A view may read `initialData` once, as it mounts, and keep its own copy.
+    // Handed the newer entry as a prop alone, it would unlock over the copy it
+    // read while the colleague held the entry, and its next save would put
+    // that copy back over what they saved.
+    registerComponent(
+      CUSTOM_VIEW,
+      ({ initialData }: { initialData?: Record<string, unknown> }) => {
+        const [title] = useState(String(initialData?.title));
+        return <p>editing {title}</p>;
+      }
+    );
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    const reload = vi.fn(() => Promise.resolve());
+    entryLatest = { readAt: 1, failed: false, reload };
+    useDocumentLock.mockReturnValue({
+      state: {
+        status: "held-by-other",
+        holder: { ownerId: "u2", ownerLabel: "Ada", expiresInSeconds: 90 },
+        requestSent: false,
+      },
+      gains: 0,
+      takeOver,
+    });
+    const view = renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42" }} />
+    );
+    expect(screen.getByText("editing A post")).toBeInTheDocument();
+
+    // Ada saved and left: this editor gains the entry and reloads it.
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver,
+    });
+    view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // The reads made since arrive with what Ada saved.
+    entryQuery = {
+      data: { id: "42", title: "Ada's post" },
+      isLoading: false,
+      error: null,
+    };
+    entryLatest = { readAt: 2, failed: false, reload };
+    view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(await screen.findByText("editing Ada's post")).toBeInTheDocument();
   });
 });

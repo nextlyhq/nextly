@@ -165,6 +165,12 @@ export type {
   PreferenceStore,
   ShellPreferences,
 } from "./shell-state";
+/**
+ * @experimental A `localStorage` store under a key of the host's own, for
+ * something the editor remembers beside the shell's chrome (a list of
+ * recently opened pages, say). Outside a browser it remembers nothing.
+ */
+export { browserStore } from "./shell-state";
 
 /**
  * @experimental The command palette's TYPES only.
@@ -263,6 +269,7 @@ export {
  */
 export {
   ancestorIds,
+  blockNameOf,
   componentTitles,
   filterLayers,
   layerLabel,

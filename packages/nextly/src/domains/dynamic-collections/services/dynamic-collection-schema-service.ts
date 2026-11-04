@@ -69,10 +69,16 @@ import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
-import { backfillDefaultForType } from "../../schema/utils/backfill-default";
+import {
+  backfillDefaultForType,
+  backfillValueForType,
+} from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+
+/** A field-group field renamed with no column of its own: its instances move with it. */
+type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
 
 /**
  * What a drop file's name says it drops: the collection, or for several, how
@@ -577,30 +583,23 @@ export class DynamicCollectionSchemaService {
    * development, where saves queue files without running them: a save that turns Unique off and
    * a later one that turns it back on must replay as a drop and then a create, whatever the table
    * shows while both are waiting.
-   *
-   * This database's own run (`planFor: "database"`) also skips what the live table already shows,
-   * for a save MySQL stopped part-way: a create where a unique index already covers the column
-   * (asked by what the index covers, since a name proves nothing), and a drop where none is left.
    */
   private uniquenessToggleStatements(
     tableName: string,
     pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
     options:
       | {
-          planFor?: "artefact" | "database";
           uniqueColumns?: ReadonlyMap<string, string | null>;
           indexNames?: ReadonlySet<string>;
         }
       | undefined
   ): string[] {
-    const forDatabase = options?.planFor === "database";
     const statements: string[] = [];
     for (const { previous, field } of pairs) {
       if (previous.unique === field.unique || !fieldProducesColumn(field))
         continue;
       const column = toSnakeCase(field.name);
       if (field.unique === true) {
-        if (forDatabase && options?.uniqueColumns?.has(column)) continue;
         if (this.plannedUniqueIndexName(tableName, field) === null) {
           if (column === "slug") continue;
           throw this.uniquenessNotEnforceable(tableName, field);
@@ -621,7 +620,6 @@ export class DynamicCollectionSchemaService {
         ) ??
         options?.uniqueColumns?.get(before) ??
         undefined;
-      if (forDatabase && live === undefined) continue;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
       // index of its own to drop.
       if (
@@ -885,32 +883,6 @@ export class DynamicCollectionSchemaService {
     ];
   }
 
-  /**
-   * Whether this database's own run already has a column's plain index: a save that MySQL, which
-   * commits each schema statement, refused part-way can have created it while the registry still
-   * records the index off. The migration file keeps the create, since it is replayed on
-   * databases that never ran that save.
-   */
-  private indexAlreadyRun(
-    tableName: string,
-    column: string,
-    options:
-      | {
-          planFor?: "artefact" | "database";
-          indexColumns?: ReadonlyMap<string, readonly string[]>;
-        }
-      | undefined
-  ): boolean {
-    // The index of the expected name, and on exactly this column: another index can hold the name.
-    return (
-      options?.planFor === "database" &&
-      this.indexNameCandidates(tableName, column).some(name => {
-        const covered = options.indexColumns?.get(name);
-        return covered?.length === 1 && covered[0] === column;
-      })
-    );
-  }
-
   private indexNameCandidates(tableName: string, column: string): string[] {
     const full = `idx_${tableName}_${column}`;
     const candidates = [indexNameForColumn(tableName, column), full];
@@ -961,6 +933,79 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * A field-group field's association moved to its new name, when the change renames one and
+   * renames no column: a field group's instances are keyed by the field name in its own table, so
+   * a rename that emits no DDL would leave every existing row keyed by the old name and reads would
+   * return no nested data. Only an unambiguous removed/added pair whose referenced slugs are
+   * identical is moved; anything else is a remove and an add of different field groups.
+   */
+  private associationMove(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+    }
+  ): { rename: AssociationRename; statements: string[] } | null {
+    // The caller's pair wins: it was detected from the save's full field lists, which these
+    // arguments may be a filtered subset of.
+    const groupRename =
+      options?.associationRename ??
+      this.detectFieldGroupAssociationRename(oldFields, newFields);
+    if (!groupRename) return null;
+    const statements: string[] = [];
+    for (const slug of fieldGroupSlugList(groupRename.to)) {
+      // The registry resolves the physical table: comp_ today, fg_ or a historical custom name
+      // once the storage migration has run, so the name is passed in per slug rather than derived
+      // here. A slug with no resolved name has no record and no table: nothing to move.
+      const groupTable = options?.fieldGroupTableNames?.get(slug);
+      if (groupTable === undefined) continue;
+      statements.push(
+        `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
+          `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
+          `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
+          `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
+      );
+    }
+    return { rename: groupRename, statements };
+  }
+
+  /**
+   * What a collection change needs beside the schema pipeline's push, which leaves these tables
+   * out of its diff: a renamed field-group field's association, and the junction tables of
+   * many-to-many fields. The same statements the change's migration file carries for them, from
+   * the same lists, so this database and one built from the files end alike.
+   *
+   * `oldFields` / `newFields` are the lists the main diff is planned on; the junctions are decided
+   * on the full lists when those are a localized collection's shared subset.
+   */
+  statementsBesideThePush(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+      junctionFields?: { old: FieldDefinition[]; new: FieldDefinition[] };
+    }
+  ): string[] {
+    // The association moves only when no column is renamed, as the file decides it.
+    const association =
+      this.detectFieldRename(oldFields, newFields) === null
+        ? this.associationMove(tableName, oldFields, newFields, options)
+        : null;
+    return [
+      ...(association?.statements ?? []),
+      ...this.junctionLifecycle(
+        tableName,
+        options?.junctionFields?.old ?? oldFields,
+        options?.junctionFields?.new ?? newFields
+      ),
+    ];
+  }
+
+  /**
    * The literal that backfills existing rows when a required column is added, or null when the
    * field's type states none.
    *
@@ -977,6 +1022,57 @@ export class DynamicCollectionSchemaService {
     return field.required || field.default !== undefined
       ? this.requiredColumnBackfill(field)
       : null;
+  }
+
+  /**
+   * The value the rows already there are filled with when this required column is added, bound by
+   * the apply rather than written into the column's definition: the field's stated default, or
+   * the empty its type backfills with, as `requiredColumnBackfill` writes it in SQL. `undefined`
+   * where nothing satisfies NOT NULL.
+   */
+  addedColumnFillValue(field: FieldDefinition, now: Date): unknown {
+    if (field.default !== undefined) {
+      const value: unknown = field.default;
+      // SQLite's driver binds no boolean.
+      if (this.dialect === "sqlite" && typeof value === "boolean") {
+        return Number(value);
+      }
+      // A stated date is bound as the moment it names, in whatever form it was
+      // typed ("2026-01-02", an offset time): a Date, which every driver binds
+      // as one, or on SQLite, which keeps a date as its epoch seconds, those, as
+      // `formatDefaultValue` writes it into the migration file. A plugin type is judged by what it
+      // stores, so one stored as a timestamp is bound as a date too.
+      if (storageTypeToken(field) === "date") {
+        const at =
+          value instanceof Date
+            ? value
+            : typeof value === "string"
+              ? new Date(value)
+              : null;
+        if (at !== null && !Number.isNaN(at.getTime())) {
+          return this.dialect === "sqlite"
+            ? Math.floor(at.getTime() / 1000)
+            : at;
+        }
+      }
+      // No driver binds an object or an array as JSON: SQLite refuses one, and PostgreSQL's
+      // driver turns an array into an array literal. A JSON default is bound as its text, which
+      // every dialect's JSON column reads back as written.
+      return value !== null &&
+        typeof value === "object" &&
+        !(value instanceof Date)
+        ? JSON.stringify(value)
+        : value;
+    }
+    return backfillValueForType(
+      {
+        type: field.type,
+        field,
+        dialect: this.dialect,
+        jsonArrayTypes: COLLECTION_JSON_ARRAY_TYPES,
+      },
+      now
+    );
   }
 
   private requiredColumnBackfill(field: FieldDefinition): string | null {
@@ -1336,13 +1432,6 @@ ${allColumnDefs.join(",\n")}
     newFields: FieldDefinition[],
     options?: {
       /**
-       * Whom the statements are for. The migration file (`"artefact"`, the default) is replayed on
-       * databases that only ever ran migrations, so what it does to an index follows from the
-       * field's history alone. `"database"` is this database's own run, which also skips an index
-       * change the live table already shows: a save MySQL stopped part-way can have made it.
-       */
-      planFor?: "artefact" | "database";
-      /**
        * Previous Draft/Published flag — pass `existing.status === true` so
        * the diff knows whether the table currently has a `status` column.
        */
@@ -1519,12 +1608,6 @@ ${allColumnDefs.join(",\n")}
       );
 
       for (const column of lifecycleColumns) {
-        // This database's own run skips a lifecycle column change the table already shows: a
-        // save that MySQL, which commits each schema statement, refused part-way can have added
-        // or dropped it while the registry still records the lifecycle as before. The migration
-        // file keeps both, since it is replayed on databases that never ran that save.
-        const present = options?.liveColumnTypes?.has(column.name) === true;
-        if (options?.planFor === "database" && present === hasStatus) continue;
         statements.push(
           hasStatus
             ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
@@ -1609,26 +1692,16 @@ ${allColumnDefs.join(",\n")}
       // stays with the loops.
       // The caller's pair wins: it was detected from the save's full field
       // lists, which these arguments may be a filtered subset of.
-      const groupRename =
-        options?.associationRename ??
-        this.detectFieldGroupAssociationRename(oldFields, newFields);
-      if (groupRename) {
-        renamedFromName = groupRename.from.name;
-        renamedToName = groupRename.to.name;
-        for (const slug of fieldGroupSlugList(groupRename.to)) {
-          // The registry resolves the physical table: comp_ today, fg_ or a
-          // historical custom name once the storage migration has run, so the
-          // name is passed in per slug rather than derived here. A slug with
-          // no resolved name has no record and no table — nothing to migrate.
-          const groupTable = options?.fieldGroupTableNames?.get(slug);
-          if (groupTable === undefined) continue;
-          statements.push(
-            `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
-              `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
-              `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
-              `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
-          );
-        }
+      const association = this.associationMove(
+        tableName,
+        oldFields,
+        newFields,
+        options
+      );
+      if (association) {
+        renamedFromName = association.rename.from.name;
+        renamedToName = association.rename.to.name;
+        statements.push(...association.statements);
       }
     }
 
@@ -1776,12 +1849,7 @@ ${allColumnDefs.join(",\n")}
                 field
               )
           );
-          if (
-            toggleIndexSql &&
-            !this.indexAlreadyRun(tableName, idxCol, options)
-          ) {
-            statements.push(toggleIndexSql);
-          }
+          if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
           // Same guard as the removal path: turning an index off that the table never carried
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
@@ -2856,7 +2924,7 @@ ${allColumnDefs.join(",\n")}
     // declared NOT NULL: a junction created with `set null` could never have
     // enforced it, and would meet the refusal on its first action edit.
     this.refuseJunctionSetNull(field, j);
-    return `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
+    const table = `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
 CREATE TABLE IF NOT EXISTS ${q(j.table)} (
   ${q("id")} ${idType} PRIMARY KEY NOT NULL,
   ${q(j.sourceColumn)} ${idType} NOT NULL,
@@ -2864,12 +2932,24 @@ CREATE TABLE IF NOT EXISTS ${q(j.table)} (
   ${q("created_at")} ${timestampDefault},
   CONSTRAINT ${q(j.fkSource)} FOREIGN KEY (${q(j.sourceColumn)}) REFERENCES ${q(j.sourceTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
   CONSTRAINT ${q(j.fkTarget)} FOREIGN KEY (${q(j.targetColumn)}) REFERENCES ${q(j.targetTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
-  CONSTRAINT ${q(j.uqPair)} UNIQUE (${q(j.sourceColumn)}, ${q(j.targetColumn)})
+  CONSTRAINT ${q(j.uqPair)} UNIQUE (${q(j.sourceColumn)}, ${q(j.targetColumn)})`;
+    // MySQL commits each schema statement alone and has no `IF NOT EXISTS` on
+    // CREATE INDEX, so a junction created by one statement and indexed by two
+    // more could be left half-built, and the next run would stop at the first
+    // index's name. There the indexes are declared inside the table, so the
+    // junction lands whole and a repeated run passes over it.
+    if (this.dialect === "mysql") {
+      return `${table},
+  INDEX ${q(j.idxSource)} (${q(j.sourceColumn)}),
+  INDEX ${q(j.idxTarget)} (${q(j.targetColumn)})
+);`;
+    }
+    return `${table}
 );
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxSource)} ON ${q(j.table)}(${q(j.sourceColumn)});
+CREATE INDEX IF NOT EXISTS ${q(j.idxSource)} ON ${q(j.table)}(${q(j.sourceColumn)});
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn)});`;
+CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn)});`;
   }
 
   /**

@@ -521,19 +521,33 @@ function shownGroups(
 }
 
 /**
- * Tell a host the search after the render that shows it, so a host searching
- * elsewhere starts from what is on screen. Read through a ref, so a host
- * passing a fresh function each render does not re-run it.
+ * The search text, and a setter that tells a host the trimmed search in the
+ * SAME update as the keystroke.
+ *
+ * Not after the render that shows it: a host's own results (a group marked
+ * `matched`, which this palette shows unfiltered) are answers to the search
+ * they came from, and told only afterwards the host would leave them on screen
+ * under the new search for a render, where Enter could choose one. Told here,
+ * the host's change and the new text render together. Read through a ref, so a
+ * host passing a fresh function each render changes nothing.
  */
-function useSearchListener(
-  query: string,
+function useSearchText(
   onSearchChange: ((query: string) => void) | undefined
-): void {
-  const searchListener = React.useRef(onSearchChange);
-  searchListener.current = onSearchChange;
-  React.useEffect(() => {
-    searchListener.current?.(query);
-  }, [query]);
+): [string, (next: string) => void] {
+  const [search, setSearch] = React.useState("");
+  const listener = React.useRef(onSearchChange);
+  listener.current = onSearchChange;
+  // What the host was last told, so a keystroke that changes only the edge
+  // spaces tells it nothing.
+  const told = React.useRef("");
+  const change = React.useCallback((next: string) => {
+    setSearch(next);
+    const query = next.trim();
+    if (query === told.current) return;
+    told.current = query;
+    listener.current?.(query);
+  }, []);
+  return [search, change];
 }
 
 /** The groups, or the empty message, and the keys that work on them. */
@@ -595,7 +609,7 @@ function PaletteSurface({
   // condition held, including on a viewport where the shell has hidden everything else, which is
   // the case this prop exists to cover.
   const enabled = (enabledProp ?? true) && shellIsActive;
-  const [search, setSearch] = React.useState("");
+  const [search, setSearch] = useSearchText(onSearchChange);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const isControlled = controlledOpen !== undefined;
   // One expression decides whether the palette is showing, so `enabled` cannot be honoured by the
@@ -677,7 +691,7 @@ function PaletteSurface({
   // Cleared when the palette shuts, so a stale search never greets the next opening.
   React.useEffect(() => {
     if (!open) setSearch("");
-  }, [open]);
+  }, [open, setSearch]);
 
   // Read through a ref so the binding's `run` never goes stale, without re-registering the layer
   // on every render — re-registering would move it to the top of its depth and change precedence
@@ -718,7 +732,6 @@ function PaletteSurface({
   // `open settings` is unreachable. The raw string stays editable; the normalised one is derived.
   const query = search.trim();
   const { groups, verbs } = shownGroups(commands, declaredGroups, query);
-  useSearchListener(query, onSearchChange);
 
   const choose = React.useCallback(
     (command: BuilderCommand) => {

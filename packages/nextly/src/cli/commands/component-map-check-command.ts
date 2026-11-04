@@ -5,11 +5,12 @@
  * The verdict comes first and the exit status says it, since a gate's reader skims:
  *
  * - **0** the map agrees.
- * - **1** it does not: each missing component (with its owner, and its widget for a widget),
+ * - **2** it does not: each missing component (with its owner, and its widget for a widget),
  *   each path no longer declared, each file absent or unreadable, and a map that does not
- *   register what its list names, then the fix.
- * - **2** the check could not be asked: the config did not load, or a file there could not be
- *   read. Not an answer about the map, so never read as one.
+ *   register what its list names, then the fix. A check that found something out of step
+ *   exits 2, as every command that checks does.
+ * - **1** the check could not be asked: the config did not load, or a file there could not be
+ *   read. Not an answer about the map, so it exits as any run that failed does.
  *
  * @module cli/commands/component-map-check-command
  */
@@ -31,8 +32,8 @@ import { loadConfig } from "../utils/config-loader";
 /** The exit status of each verdict. */
 export const COMPONENT_MAP_CHECK_EXIT = {
   agrees: 0,
-  outOfDate: 1,
-  couldNotCheck: 2,
+  outOfDate: 2,
+  couldNotCheck: 1,
 } as const;
 
 /**

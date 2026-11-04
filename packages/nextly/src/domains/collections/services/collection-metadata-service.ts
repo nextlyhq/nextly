@@ -24,7 +24,10 @@ import type { UnregisteredCollectionRow } from "../../dynamic-collections/servic
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import { applyCollectionSchemaChange } from "../../schema/services/collection-schema-apply";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
+import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
 import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
 
 /** The parts of a collection's registry row its delete reads. */
@@ -403,9 +406,32 @@ export class CollectionMetadataService extends BaseService {
     // Every collection create reaches this point (the Builder, the root-exported
     // CollectionService and plugins' ctx.services), so the address is judged here, before any
     // migration is written or DDL runs, and outside the result mapping below so the refusal keeps
-    // its address and reason: by the one rule as written, then against the collections' and
-    // Singles' addresses.
+    // its address and reason. The rule as written reads the request alone, so it is asked before
+    // the lock is taken: a malformed address is answered as one, not with a lock refusal.
     assertAddressAllowed("collection", data.name);
+    // The whole create holds the schema lock: the slug check, the migration it runs in
+    // development, its file and the registry row. A storage migration running beside it could
+    // rename the tables this create is checked against and built beside. Refused at once, and
+    // thrown rather than returned as a result, so every caller answers it as the same
+    // SERVICE_UNAVAILABLE with the editor's message.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `create collection "${data.name}"`,
+        // The DDL runs here only in development; elsewhere this writes a migration file and a
+        // registry row, and must not create the lock table on a role without DDL rights.
+        issuesDdl: this.isDevelopment(),
+      },
+      () => this.createCollectionExcluded(data)
+    );
+  }
+
+  private async createCollectionExcluded(
+    data: Parameters<CollectionMetadataService["createCollection"]>[0]
+  ): Promise<MetadataServiceResult> {
+    // Against the addresses as they stand now that the lock is held, so a collection or Single
+    // registered while this request waited is not built over.
     await assertGlobalResourceSlugAvailable(this.adapter, data.name, {
       addressKind: "collection",
     });
@@ -794,7 +820,32 @@ export class CollectionMetadataService extends BaseService {
       hooks?: StoredHookConfig[];
     }
   ): Promise<MetadataServiceResult> {
+    // The whole update holds the schema lock, from the registry read the update is generated from
+    // to the registry write, so a storage migration cannot move the table between them.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `update collection "${params.collectionName}"`,
+        // Only a save that reshapes the table, in development, issues DDL here; a label or admin
+        // option change writes the registry row alone.
+        issuesDdl: collectionSaveIssuesDdl(body, this.isDevelopment()),
+      },
+      () => this.updateCollectionExcluded(params, body)
+    );
+  }
+
+  /** The save, once the schema lock is held. */
+  private async updateCollectionExcluded(
+    params: { collectionName: string },
+    body: Parameters<CollectionMetadataService["updateCollection"]>[1]
+  ): Promise<MetadataServiceResult> {
     try {
+      // The collection as it stands before the save, read inside the lock: what the apply changes
+      // it from.
+      const before = await this.collectionService.getCollection(
+        params.collectionName
+      );
       const updateArtifacts =
         await this.collectionService.generateCollectionUpdate(
           params.collectionName,
@@ -810,12 +861,11 @@ export class CollectionMetadataService extends BaseService {
         // nothing reported as applied.
         if (this.isDevelopment()) {
           try {
-            // The file is what a fresh database will replay; this is what THIS one needs. They
-            // differ only where unattended provisioning left the local schema in a shape no
-            // migration history produces, and running the file here would then fail on a column
-            // that is already present.
-            // The file creates the archive when it is missing but cannot add the kind column to an
-            // archive from before rows recorded it, which its writes name.
+            // The file is what a database built from migrations replays; this database takes the
+            // change through one apply of the schema pipeline, as the schema dialog's does, which
+            // diffs the table as it is, so a save the database refused part-way is finished by the
+            // next. The file creates the archive when it is missing but cannot add the kind column
+            // to an archive from before rows recorded it, which the apply's writes name.
             if (updateArtifacts.needsArchive) {
               const { ensureI18nArchive } = await import(
                 "../../i18n/migration/ensure-archive"
@@ -825,9 +875,36 @@ export class CollectionMetadataService extends BaseService {
                 this.adapter.getCapabilities().dialect
               );
             }
-            await this.fileManager.runMigration(
-              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
-            );
+            const wasLocalized =
+              (before as { localized?: boolean }).localized === true;
+            const wasStatus = (before as { status?: boolean }).status === true;
+            const beforeFields = (before.fields ?? []) as FieldDefinition[];
+            await applyCollectionSchemaChange({
+              slug: params.collectionName,
+              collection: { tableName: before.tableName, fields: beforeFields },
+              fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
+              wasLocalized,
+              isLocalized:
+                body.localized !== undefined
+                  ? body.localized === true
+                  : wasLocalized,
+              status:
+                body.status !== undefined ? body.status === true : wasStatus,
+              wasStatus,
+              renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
+              eventResolutions: [],
+              legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+              fills: updateArtifacts.pushAnswers.fills,
+              // The save detects its own renames; every other pair is a drop and an add.
+              dropAndAddUnansweredRenames: true,
+            });
+            // What the push leaves out of its diff, once it has run: a renamed field group's
+            // association and the junction tables, as the file carries them.
+            if (updateArtifacts.besideStatements) {
+              await this.fileManager.runMigration(
+                updateArtifacts.besideStatements
+              );
+            }
           } catch (migrationError: unknown) {
             return errorToMetadataResult(
               migrationError,
@@ -995,6 +1072,27 @@ export class CollectionMetadataService extends BaseService {
     /** Collections deleted in the same operation, after `collectionName`. */
     together?: readonly string[];
   }): Promise<MetadataServiceResult> {
+    // The whole delete holds the schema lock: the rows it reads, the dependents it asks about,
+    // the teardown and the drop. Each of those reads describes storage a migration could be
+    // moving, and the delete acts on what they found.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `delete collection "${params.collectionName}"`,
+        // The table drop runs here only in development; elsewhere the delete writes a drop
+        // migration and removes rows. Its one DDL outside development, dropping a localized
+        // collection's translations table, still runs under the lock wherever the lock table
+        // exists; a path that otherwise issues no DDL does not create it.
+        issuesDdl: this.isDevelopment(),
+      },
+      () => this.deleteCollectionExcluded(params)
+    );
+  }
+
+  private async deleteCollectionExcluded(
+    params: Parameters<CollectionMetadataService["deleteCollection"]>[0]
+  ): Promise<MetadataServiceResult> {
     try {
       // Loaded when a delete runs, not with the service: everything that
       // constructs the service would otherwise load the delete's readers.
