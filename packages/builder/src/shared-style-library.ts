@@ -621,23 +621,37 @@ export function sharedStyleReachSentence(
   return exact ? "Not used anywhere" : "No uses counted yet";
 }
 
+/** A row's count in words, and whether it is a zero not counted yet. */
+export interface SharedStyleReachChip {
+  readonly words: string;
+  /** No use found so far on a site not counted in full: drawn muted. */
+  readonly uncounted: boolean;
+}
+
 /**
  * A row's count: its documents, with "+" when that is a floor, and what they
  * are. A bare number was read as uses, 17 blocks on 2 pages reading "2", so
  * the chip names the kind it counts: "4 pages", or "5 places" across several
- * kinds, which the row's name says one by one.
+ * kinds, which the row's name says one by one. A zero that is a floor says
+ * "Not counted yet" rather than "0+ pages", a number that says nothing.
  */
-export function sharedStyleReachChip(reach: SharedStyleReach): string {
+export function sharedStyleReachChip(
+  reach: SharedStyleReach
+): SharedStyleReachChip {
+  if (reach.documents === 0 && !reach.complete) {
+    return { words: "Not counted yet", uncounted: true };
+  }
   const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[]).filter(
     kind => reach.byKind[kind] > 0
   );
   const [only] = kinds;
-  // Nothing counted reads in pages, the kind a style is most often on.
+  // Nothing used reads in pages, the kind a style is most often on.
   const words: readonly [string, string] =
     kinds.length > 1 ? ["place", "places"] : KIND_WORDS[only ?? "pages"];
   const plus = reach.complete ? "" : "+";
   const [one, many] = words;
-  return `${reach.documents}${plus} ${reach.documents === 1 && plus === "" ? one : many}`;
+  const noun = reach.documents === 1 && plus === "" ? one : many;
+  return { words: `${reach.documents}${plus} ${noun}`, uncounted: false };
 }
 
 /**

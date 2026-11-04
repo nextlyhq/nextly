@@ -392,6 +392,19 @@ describe("counts", () => {
     ).toBe("https://nextlyhq.com/docs/jobs#running-the-queue");
   });
 
+  it("says a zero not counted yet in words, muted, rather than 0+", async () => {
+    const { access } = accessOf({
+      whole: false,
+      styles: { "c-card": reach({}, false) },
+    });
+    await panel({ access });
+    const chip = row(/^Card, \.nx-c-card/).querySelector(".nx-vars__chip");
+    expect(chip?.textContent).toBe("Not counted yet");
+    expect(chip?.classList.contains("nx-shared-styles__count--uncounted")).toBe(
+      true
+    );
+  });
+
   it("keeps the counts floors when an earlier batch was read before every page was counted", async () => {
     const many: NamedClass[] = Array.from({ length: 61 }, (_, n) => ({
       id: `c-${n}`,

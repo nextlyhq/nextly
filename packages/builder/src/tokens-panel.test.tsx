@@ -155,6 +155,74 @@ describe("the rows", () => {
     expect(fixed?.getAttribute("title")).toBeNull();
   });
 
+  it("tells apart two rows shown under one name by their kind, and only those", () => {
+    // `space.card` and `radius.card` both read "Card": side by side, nothing
+    // said which was which.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "radius.card",
+              kind: "dimension",
+              values: { light: "12px" },
+            },
+          ],
+        }}
+      />
+    );
+    const spacing = row(/^Card · spacing/);
+    const radius = row(/^Card · radius/);
+    expect(spacing.getAttribute("aria-label")).toBe("Card · spacing, 24px");
+    expect(radius.getAttribute("aria-label")).toBe("Card · radius, 12px");
+    // The kind is muted beside the name, not part of it.
+    expect(radius.querySelector(".nx-vars__name")?.textContent).toBe(
+      "Card · radius"
+    );
+    expect(radius.querySelector(".nx-vars__name-kind")?.textContent).toBe(
+      " · radius"
+    );
+    // A name only one row has stays as it is.
+    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 1rem");
+    // Each draws its kind's icon, so the two differ at a glance too.
+    expect(
+      radius
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("radius");
+    expect(
+      spacing
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("spacing");
+  });
+
+  it("says no kind for one name shown in two groups, whose headings tell them apart", () => {
+    // The body font and the body type size both read "Body", each under its
+    // own heading.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "font.body",
+              kind: "fontFamily",
+              values: { light: "Inter" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Body, size/).querySelector(".nx-vars__name-kind")).toBeNull();
+  });
+
   it("never says token to the author", () => {
     render(<Hosted tokens={SITE} />);
     expect(document.body.textContent).not.toMatch(/token/i);

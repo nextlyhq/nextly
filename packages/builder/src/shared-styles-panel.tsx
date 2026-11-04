@@ -1275,18 +1275,28 @@ function RowContent({
           In code
         </span>
       ) : null}
-      {reach === undefined ? null : (
-        <span
-          className="nx-vars__chip"
-          aria-hidden="true"
-          // Each kind in words on hover, which "5 places" totals; the row's
-          // name says the same to a screen reader.
-          title={sharedStyleReachSentence(undefined, reach) || undefined}
-        >
-          {sharedStyleReachChip(reach)}
-        </span>
-      )}
+      {reach === undefined ? null : <ReachChip reach={reach} />}
     </>
+  );
+}
+
+/** A row's count, muted while it is a zero not counted yet. */
+function ReachChip({ reach }: { reach: SharedStyleReach }): React.JSX.Element {
+  const chip = sharedStyleReachChip(reach);
+  return (
+    <span
+      className={
+        chip.uncounted
+          ? "nx-vars__chip nx-shared-styles__count--uncounted"
+          : "nx-vars__chip"
+      }
+      aria-hidden="true"
+      // Each kind in words on hover, which "5 places" totals; the row's
+      // name says the same to a screen reader.
+      title={sharedStyleReachSentence(undefined, reach) || undefined}
+    >
+      {chip.words}
+    </span>
   );
 }
 

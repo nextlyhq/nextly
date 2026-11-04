@@ -4888,6 +4888,12 @@
   white-space: nowrap;
 }
 
+/* A row's kind beside its name, said only when another row shares the name:
+   muted, so it reads as telling the two apart rather than as the name. */
+.nx-vars__name-kind {
+  color: var(--nx-muted-foreground);
+}
+
 .nx-vars__swatch {
   display: inline-block;
   width: 14px;
@@ -6025,6 +6031,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* A zero not counted yet is words, not a count: no box, the panel's own
+   type, and room for the whole phrase. */
+.nx-vars__chip.nx-shared-styles__count--uncounted {
+  max-width: none;
+  padding: 0;
+  border-color: transparent;
+  font-family: inherit;
 }
 
 .nx-shared-styles__meta,

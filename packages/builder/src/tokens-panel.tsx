@@ -53,6 +53,7 @@ import {
   Plus,
   Ruler,
   Search,
+  SquareRoundCorner,
   Timer,
   Type,
 } from "lucide-react";
@@ -66,6 +67,7 @@ import { lengthInPx, variableValueText } from "./style-variables";
 import {
   addVariable,
   labelNewVariable,
+  lengthFamilyOf,
   variableGroups,
   type NewVariable,
   type VariableEntry,
@@ -803,11 +805,16 @@ function VariableRow({
             data-variable-key={entry.row.key}
             // The visible name first, then the values the swatches show, so
             // a screen reader hears both and speech input still matches.
-            aria-label={`${entry.label}${describe(entry, token, tokens, mode)}`}
+            aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}`}
             data-kind={entry.row.kind}
           >
             <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
-            <span className="nx-vars__name">{entry.label}</span>
+            <span className="nx-vars__name">
+              {entry.label}
+              {entry.kindWord === undefined ? null : (
+                <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
+              )}
+            </span>
             <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
           </button>
         </PopoverTrigger>
@@ -830,6 +837,16 @@ function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/**
+ * The row's name as it is read: its label, and its kind when another row is
+ * shown under the same name.
+ */
+function shownName(entry: VariableEntry): string {
+  return entry.kindWord === undefined
+    ? entry.label
+    : `${entry.label} · ${entry.kindWord}`;
 }
 
 /** The value a variable shows for the preview mode, falling back to light. */
@@ -881,9 +898,15 @@ function RowLead({
       </span>
     );
   }
-  const Icon = KIND_ICONS[kind];
+  // A radius draws a corner, so it is told from a spacing step at a glance.
+  const radius = lengthFamilyOf(entry.row) === "radius";
+  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
   return (
-    <span className="nx-vars__kind" aria-hidden="true">
+    <span
+      className="nx-vars__kind"
+      aria-hidden="true"
+      data-variable-icon={lengthFamilyOf(entry.row) ?? kind}
+    >
       {kind === "shadow" ? (
         <span
           className="nx-vars__shadow"

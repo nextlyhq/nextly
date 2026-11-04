@@ -765,6 +765,41 @@ export interface VariableEntry {
   readonly label: string;
   /** A type size's line height, paired by name, when there is one. */
   readonly lineHeight?: TokenRow;
+  /**
+   * What kind of variable it is, in words ("radius"), when another row is
+   * shown under the same name: `space.card` and `radius.card` both read
+   * "Card", and side by side nothing else says which is which.
+   */
+  readonly kindWord?: string;
+}
+
+/** A row's kind in words, as the panel tells two rows of one name apart. */
+function kindWordOf(row: TokenRow): string {
+  const family = lengthFamilyOf(row);
+  if (family === "font-size") return "type size";
+  if (family === "line-height") return "line height";
+  if (family !== undefined) return family;
+  // The kind's own label, as the panel names kinds elsewhere.
+  return TOKEN_KIND_LABELS[row.kind].toLowerCase();
+}
+
+/**
+ * A group's rows with their kind added where two or more share a name,
+ * ignoring case, as {@link labelClashes} compares names.
+ */
+function withKindWhereNamesClash(
+  entries: readonly VariableEntry[]
+): VariableEntry[] {
+  const count = new Map<string, number>();
+  for (const { label } of entries) {
+    const key = label.toLowerCase();
+    count.set(key, (count.get(key) ?? 0) + 1);
+  }
+  return entries.map(entry =>
+    (count.get(entry.label.toLowerCase()) ?? 0) > 1
+      ? { ...entry, kindWord: kindWordOf(entry.row) }
+      : entry
+  );
 }
 
 /**
@@ -810,10 +845,14 @@ export function variableGroups(
       ...(lineHeight === undefined ? {} : { lineHeight }),
     });
   }
+  // Within each group: rows of one name under two headings are told apart
+  // by the headings already.
   return variableGroupHeadings().map(({ group, heading }) => ({
     group,
     heading,
-    entries: (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
+    entries: withKindWhereNamesClash(
+      (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
+    ),
   }));
 }
 
