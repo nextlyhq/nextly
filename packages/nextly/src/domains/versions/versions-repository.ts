@@ -24,9 +24,15 @@ import type {
   VersionsWhere,
   VersionsWhereCondition,
 } from "./db-api";
+import { withoutDocumentVersionKeys } from "./document-revision";
 import type { RecordedVersionStatus } from "./recorded-status";
 import type { PrunableVersion } from "./retention";
 import { workingDraftKey } from "./working-draft-key";
+
+/** A plain object: the shape a document snapshot has. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const TABLE = VERSIONS_TABLE;
 
@@ -1491,7 +1497,12 @@ export class VersionsRepository {
  */
 export function serializeVersionSnapshot(snapshot: unknown): string {
   try {
-    const serialized = JSON.stringify(snapshot);
+    // A document's version and last changer are the row's, never its
+    // content: a snapshot holding them would hand a changer's id to every
+    // history reader and write a stale counter back on restore.
+    const serialized = JSON.stringify(
+      isRecord(snapshot) ? withoutDocumentVersionKeys(snapshot) : snapshot
+    );
     if (typeof serialized !== "string") {
       throw new TypeError("snapshot did not serialize to a JSON string");
     }

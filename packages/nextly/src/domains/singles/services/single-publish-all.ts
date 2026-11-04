@@ -71,6 +71,7 @@ import {
   languagesToAsk,
   unaskedLanguages,
 } from "../../i18n/languages-going-live";
+import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
@@ -90,6 +91,14 @@ import {
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  bumpDocumentRevision,
+  documentVersionOn,
+  revisionBumpColumns,
+  translationRevisionBumpColumns,
+  translationTableOf,
+  withDocumentVersion,
+} from "../../versions/document-revision";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
@@ -174,6 +183,12 @@ export interface PublishAllSingleResult {
   id: string;
   status?: "published";
   /**
+   * Every language's version once the publish has committed.
+   *
+   * @experimental Nothing is judged against the version yet.
+   */
+  _rev?: string;
+  /**
    * What the publish did to each configured language, as its preview said it
    * would. Empty for a Single whose languages carry no status of their own,
    * and absent where the Single has no lifecycle to publish.
@@ -213,6 +228,8 @@ interface PublishPlan {
   companion: CompanionSchema | null;
   /** Whether the companion exists AND carries a per-locale `_status`. */
   companionPublishable: boolean;
+  /** Whether the translation table is there to read. */
+  companionReady: boolean;
   fieldConfigs: FieldConfig[];
   recordingEnabled: boolean;
   /**
@@ -232,6 +249,8 @@ interface PublishOutcome {
   committed: boolean;
   /** A durable outbox event was appended, so the fast drain is owed. */
   eventRecorded: boolean;
+  /** Every language's version after the publish, read in its transaction. */
+  version?: string;
   /** What the publish did to each configured language. */
   languages: LanguageOutcome[];
 }
@@ -396,11 +415,14 @@ export class SinglePublishAllService extends BaseService {
         success: true,
         statusCode: 200,
         message: "All languages published.",
-        data: {
-          id: plan.existingDoc.id,
-          status: "published",
-          languages: outcome.languages,
-        },
+        data: withDocumentVersion(
+          {
+            id: plan.existingDoc.id,
+            status: "published" as const,
+            languages: outcome.languages,
+          },
+          outcome.version
+        ),
         eventRecorded: outcome.eventRecorded,
         committed: outcome.committed,
         // A Single is consumed sitewide, so its one tag is the whole cascade.
@@ -597,7 +619,7 @@ export class SinglePublishAllService extends BaseService {
         : null;
     if (refused) return { result: refused };
 
-    const { hasMainStatus, companion, companionPublishable } =
+    const { hasMainStatus, companion, companionPublishable, companionReady } =
       await this.resolveLifecycle(slug, singleMeta);
 
     if (!hasMainStatus && !companionPublishable) {
@@ -635,6 +657,7 @@ export class SinglePublishAllService extends BaseService {
         hasMainStatus,
         companion,
         companionPublishable,
+        companionReady,
         fieldConfigs: singleMeta.fields ?? [],
         recordingEnabled: isOutboxRecordingActive("single", slug),
         actor: actorForWrite(options.actor ?? null, options.user),
@@ -669,6 +692,8 @@ export class SinglePublishAllService extends BaseService {
     hasMainStatus: boolean;
     companion: CompanionSchema | null;
     companionPublishable: boolean;
+    /** Whether the translation table is there to read. */
+    companionReady: boolean;
   }> {
     const hasMainStatus = singleMeta.status === true;
     const companion =
@@ -707,7 +732,7 @@ export class SinglePublishAllService extends BaseService {
         },
       });
     }
-    return { hasMainStatus, companion, companionPublishable };
+    return { hasMainStatus, companion, companionPublishable, companionReady };
   }
 
   /**
@@ -1116,6 +1141,14 @@ export class SinglePublishAllService extends BaseService {
       documentVanished: false,
       committed,
       eventRecorded,
+      version: await documentVersionOn(tx, {
+        dialect: this.adapter.dialect,
+        table: singleMeta.tableName,
+        id: existingDoc.id,
+        languagesTable: translationTableOf(plan.companion, plan.companionReady),
+        localization: this.localization,
+        locale: EVERY_LOCALE,
+      }),
       languages,
     };
   }
@@ -1186,8 +1219,18 @@ export class SinglePublishAllService extends BaseService {
           status: "published",
           updated_at: publishNow,
           ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
+          ...revisionBumpColumns(plan.actor, publishNow),
         },
         this.whereEq("id", existingDoc.id)
+      );
+    } else {
+      // A publish of every language is a save of the document even where the
+      // main row keeps no status of its own; its content is left as it is.
+      await bumpDocumentRevision(
+        tx,
+        singleMeta.tableName,
+        { id: existingDoc.id },
+        plan.actor
       );
     }
 
@@ -1203,7 +1246,10 @@ export class SinglePublishAllService extends BaseService {
       // and parameter binding are the adapter's problem and not this module's.
       await tx.update(
         companion.companionTableName,
-        { _status: "published" },
+        {
+          _status: "published",
+          ...translationRevisionBumpColumns(plan.actor, this.adapter.dialect),
+        },
         this.whereEq("_parent", existingDoc.id)
       );
     }
@@ -1391,7 +1437,11 @@ export class SinglePublishAllService extends BaseService {
       if (Object.keys(main).length > 0) {
         await tx.update(
           singleMeta.tableName,
-          { ...main, updated_at: publishNow },
+          {
+            ...main,
+            updated_at: publishNow,
+            ...revisionBumpColumns(plan.actor, publishNow),
+          },
           this.whereEq("id", existingDoc.id)
         );
       }
@@ -1407,6 +1457,7 @@ export class SinglePublishAllService extends BaseService {
           entryId: existingDoc.id,
           locale: draft.locale,
           values: companionValues,
+          savedBy: plan.actor,
         });
       }
       await this.promoteComponents(
