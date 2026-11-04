@@ -31,9 +31,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PATTERNS_SLUG } from "../collections/patterns";
-import type {
-  DefinitionActionResult,
-  PageActionResult,
+import {
+  definitionActionPath,
+  type DefinitionActionRequest,
+  type DefinitionActionResult,
+  type PageActionRequest,
+  type PageActionResult,
 } from "../composition-actions-contract";
 import { pageBuilder } from "../plugin";
 import { MANAGE_SITE_PERMISSION } from "../site-settings";
@@ -46,6 +49,7 @@ const AUTHOR = [
   "update-pages",
   "read-patterns",
   "create-patterns",
+  "publish-patterns",
   "read-components",
   "update-components",
   "publish-components",
@@ -149,7 +153,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const { page, pattern } = await site(t);
       const { cookie } = await holding(t, AUTHOR);
-      const request = {
+      const request: PageActionRequest = {
         page: { collection: "pages", id: page },
         action: { kind: "insert-pattern", patternId: pattern },
       };
@@ -251,7 +255,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const { page, pattern } = await site(t);
       const { cookie } = await holding(t, AUTHOR);
-      const request = {
+      const request: PageActionRequest = {
         page: { collection: "pages", id: page },
         action: { kind: "insert-pattern", patternId: pattern },
       };
@@ -315,7 +319,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const { page, pattern } = await site(t);
       const author = await holding(t, AUTHOR);
-      const request = {
+      const request: PageActionRequest = {
         page: { collection: "pages", id: page },
         action: { kind: "insert-pattern", patternId: pattern },
       };
@@ -411,7 +415,7 @@ describe.each(getConfiguredTestDialects())(
 
     describe("a component's definition", () => {
       const edit = (cookie: string, card: string, body: unknown) =>
-        post(cookie, ["components", card, "definition"], body);
+        post(cookie, definitionActionPath(card).slice(1).split("/"), body);
 
       it("exposes a field and defines a variant, a dry run writing nothing", async () => {
         const t = await boot();
@@ -512,7 +516,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const { card } = await site(t);
         const { cookie } = await holding(t, AUTHOR);
-        const body = {
+        const body: DefinitionActionRequest = {
           action: {
             kind: "rename-variant",
             variantId: "v-dark",
@@ -553,7 +557,7 @@ describe.each(getConfiguredTestDialects())(
           t,
           AUTHOR.filter(slug => slug !== "publish-components")
         );
-        const body = {
+        const body: DefinitionActionRequest = {
           action: {
             kind: "rename-variant",
             variantId: "v-dark",
@@ -579,9 +583,13 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    it("answers a save-as-pattern dry run without storing a pattern", async () => {
+    it("answers a save-as-pattern dry run without storing a pattern, refusals included", async () => {
       const t = await boot();
       const { cookie } = await holding(t, AUTHOR);
+      const drafter = await holding(
+        t,
+        AUTHOR.filter(slug => slug !== "publish-patterns")
+      );
       const count = async () =>
         (
           await t.nextly.find({
@@ -592,22 +600,32 @@ describe.each(getConfiguredTestDialects())(
         ).items.length;
       const before = await count();
 
-      const dry = await post(cookie, ["save-as-pattern"], {
-        document: {
-          formatVersion: 1,
-          kind: "page",
-          nodes: [heading("a", "Saved")],
-        },
-        selectedIds: ["a"],
-        fields: { title: "Saved", granularity: "section" },
-        dryRun: true,
-      });
+      const save = (as: string) =>
+        post(as, ["save-as-pattern"], {
+          document: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [heading("a", "Saved")],
+          },
+          selectedIds: ["a"],
+          fields: { title: "Saved", granularity: "section" },
+          dryRun: true,
+        });
 
+      const dry = await save(cookie);
       expect(dry.status).toBe(200);
       expect(dry.body.item).toMatchObject({
         dryRun: true,
         pattern: { title: "Saved" },
+        refusals: [],
       });
+      // A saved pattern is published, which this author may not do: the dry
+      // run says so rather than promising a save the site would refuse.
+      const refused = await save(drafter.cookie);
+      expect(refused.status).toBe(200);
+      expect(
+        (refused.body.item as { refusals: string[] }).refusals
+      ).not.toEqual([]);
       expect(await count()).toBe(before);
     });
   }

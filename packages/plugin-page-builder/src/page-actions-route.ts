@@ -38,6 +38,7 @@ import {
 import {
   NextlyError,
   respondMutation,
+  type PluginCollectionTransaction,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 import { requireNextly } from "nextly/runtime";
@@ -203,7 +204,7 @@ async function runPageAction(
   await collections.warmLocalizedReadiness(page.collection);
   const refusal = await judgeInTransaction(
     run => collections.withTransaction(run),
-    async tx => {
+    async (tx: PluginCollectionTransaction) => {
       await collections.updateEntryInTransaction(
         tx,
         page.collection,
@@ -372,8 +373,8 @@ async function insertPatternOps(
     at ?? { index: document.nodes.length },
     registryNestingSource()
   );
-  if ("problem" in plan) throw planRefusal(plan, "insert-pattern");
-  return { ops: plan.pageOps ?? [] };
+  if (plan.problem !== undefined) throw planRefusal(plan, "insert-pattern");
+  return { ops: plan.pageOps };
 }
 
 async function placeComponentOps(

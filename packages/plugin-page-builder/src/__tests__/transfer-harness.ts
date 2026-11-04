@@ -119,7 +119,7 @@ export async function post(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const handlers = createDynamicHandlers();
   const url = `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}/${route.join("/")}`;
-  const auth =
+  const auth: Record<string, string> =
     typeof as === "string"
       ? { cookie: `${as}; nextly_csrf=${CSRF}`, "x-csrf-token": CSRF }
       : { authorization: `Bearer ${as.bearer}` };

@@ -38,6 +38,7 @@ import {
 import {
   NextlyError,
   respondMutation,
+  type PluginCollectionTransaction,
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
@@ -174,7 +175,7 @@ async function runDefinitionAction(
   await collections.warmLocalizedReadiness(store.collection);
   const refusal = await judgeInTransaction(
     run => collections.withTransaction(run),
-    async tx => {
+    async (tx: PluginCollectionTransaction) => {
       await collections.updateEntryInTransaction(
         tx,
         store.collection,

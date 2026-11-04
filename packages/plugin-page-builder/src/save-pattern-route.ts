@@ -72,11 +72,16 @@ import {
   type BlockDocument,
   type PlanRefusal,
 } from "@nextlyhq/blocks-engine";
-import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
+import type {
+  PluginCollectionTransaction,
+  PluginRouteContext,
+  PluginRoutePermissionScope,
+} from "@nextlyhq/plugin-sdk";
 import { respondMutation, slugify } from "nextly";
 import { NextlyError } from "nextly/errors";
 
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { JUDGEMENT_CONTEXT, judgeInTransaction } from "./judged-writes";
 import {
   SAVE_PATTERN_ROUTE_PATH,
   type SavePatternFields,
@@ -147,7 +152,7 @@ const SETTABLE_FIELDS: ReadonlySet<string> = new Set(
 /** The capabilities this route uses, named rather than imported whole. */
 export interface SavePatternRouteContext {
   self: { collections: Record<string, string | undefined> };
-  user: unknown;
+  user: PluginRouteContext["user"];
   services: {
     collections: {
       createEntry(
@@ -158,6 +163,9 @@ export interface SavePatternRouteContext {
         item: unknown;
         warnings?: SavePatternResponse["warnings"];
       }>;
+      /** For a dry run: the save is made in a transaction and rolled back. */
+      withTransaction: PluginRouteContext["services"]["collections"]["withTransaction"];
+      createEntryInTransaction: PluginRouteContext["services"]["collections"]["createEntryInTransaction"];
     };
   };
 }
@@ -194,26 +202,38 @@ export async function savePattern(
     [PATTERN_DOCUMENT_FIELD]: plan.create.document,
     status: SAVED_PATTERN_STATUS,
   };
-  // A dry run answers the pattern it would store and stores nothing: the
-  // planner has already refused anything a save would, and the row's own
-  // rules (a unique slug, the caller's right to create) answer the write.
+  // AS THE USER. A write with the instance's own identity would let any
+  // authenticated caller create a pattern whatever the collection's
+  // permissions say — and would record the wrong author on the version.
+  const asUser = { as: "user" as const, user: ctx.user ?? undefined };
+  // A dry run answers the pattern it would store and stores nothing. The save
+  // is made as the caller and rolled back, so the row's own rules (a unique
+  // slug, the caller's right to create and publish a pattern) answer it.
   if (request.dryRun === true) {
-    return respondMutation(
-      "Nothing was written: this is the pattern it would save.",
-      {
-        dryRun: true,
-        pattern: data,
+    const collections = ctx.services.collections;
+    const refused = await judgeInTransaction(
+      run => collections.withTransaction(run),
+      async (tx: PluginCollectionTransaction) => {
+        await collections.createEntryInTransaction(
+          tx,
+          plan.create.collection,
+          data,
+          { ...asUser, context: { [JUDGEMENT_CONTEXT]: true } }
+        );
       }
+    );
+    return respondMutation(
+      refused === null
+        ? "Nothing was written: this is the pattern it would save."
+        : "Nothing was written: the site would refuse this pattern.",
+      { dryRun: true, pattern: data, refusals: refused?.messages ?? [] }
     );
   }
 
   const written = await ctx.services.collections.createEntry(
     plan.create.collection,
     data,
-    // AS THE USER. A write with the instance's own identity would let any
-    // authenticated caller create a pattern whatever the collection's
-    // permissions say — and would record the wrong author on the version.
-    { as: "user" as const, user: ctx.user ?? undefined }
+    asUser
   );
 
   // The canonical envelope, BUILT rather than assembled. `respondMutation`

@@ -99,7 +99,8 @@ code, such as `label-taken`.
 
 ## Other routes with a dry run
 
-- `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save.
+- `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save,
+  with `refusals` saying why the site would refuse it.
 - [Making a Layout the default and removing one](/docs/page-builder/layouts) both take
   `dryRun`, and their answers carry `by`.
 - [Importing a file](/docs/page-builder/moving-between-sites#through-the-api) takes

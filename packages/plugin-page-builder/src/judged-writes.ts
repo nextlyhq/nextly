@@ -41,9 +41,9 @@ export interface JudgedRefusal {
  * write went through, or the site's refusal. Any other failure is thrown: a
  * fault is not a judgement.
  */
-export async function judgeInTransaction(
-  withTransaction: <T>(run: (tx: unknown) => Promise<T>) => Promise<T>,
-  write: (tx: unknown) => Promise<void>
+export async function judgeInTransaction<Tx>(
+  withTransaction: (run: (tx: Tx) => Promise<never>) => Promise<unknown>,
+  write: (tx: Tx) => Promise<void>
 ): Promise<JudgedRefusal | null> {
   try {
     await withTransaction(async tx => {
