@@ -260,22 +260,24 @@ async function holdOnceCommitted(
   // What history showed before the transaction committed: the removal is
   // newer, and an earlier removal of the same id must not end the wait. Read
   // now, while the transaction is open; read later it would already show the
-  // removal. Without it, only a removal by the newest published version
-  // counts: before the commit that version still exposes the ids.
+  // removal. Without it, a hold cannot tell this removal from an earlier one,
+  // so every look holds what it finds and the wait runs its whole course.
   const visible = await lookOrNull(args, componentId, retired, () =>
     pins.newestVersion(componentId)
   );
-  const since =
-    visible === null ? ({ newestOnly: true } as const) : { newerThan: visible };
   for (let look = 0; look < COMMIT_LOOKS; look += 1) {
     await wait(look);
     const held = await lookOrNull(args, componentId, retired, () =>
-      pins.hold(componentId, retired, lifecycle, since)
+      pins.hold(componentId, retired, lifecycle, visible ?? 0)
     );
-    if (held === true) {
+    if (held === true && visible !== null) {
       await repair(args, { live: true, lifecycle }, componentId);
       return;
     }
+  }
+  if (visible === null) {
+    await repair(args, { live: true, lifecycle }, componentId);
+    return;
   }
   args.ctx.logger.warn(
     `[page-builder] component "${componentId}"'s removal, written in a ` +

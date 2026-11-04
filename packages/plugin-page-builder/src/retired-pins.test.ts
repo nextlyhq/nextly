@@ -197,25 +197,19 @@ describe("holding a lost removal", () => {
       memory
     );
 
-    expect(await pins.hold("hero", TITLE, true, { newerThan: 1 })).toBe(true);
+    expect(await pins.hold("hero", TITLE, true, 1)).toBe(true);
     expect(Object.fromEntries(memory.slots)).toEqual({
       "removal-2-before": 1,
       "removal-2": 2,
     });
   });
 
-  it("takes only the newest publish's removal when told to", async () => {
+  it("holds each id's removal when they were removed apart", async () => {
     const memory = memoryHolder();
-    const reexposed = pinsOver(
+    const pins = pinsOver(
       memoryHistory([
-        { status: "published", fields: ["title"] },
+        { status: "published", fields: ["title", "body"] },
         { status: "published", fields: [] },
-        { status: "published", fields: ["title"] },
-      ]),
-      memory
-    );
-    const removed = pinsOver(
-      memoryHistory([
         { status: "published", fields: ["title"] },
         { status: "published", fields: [] },
       ]),
@@ -223,11 +217,39 @@ describe("holding a lost removal", () => {
     );
 
     expect(
-      await reexposed.hold("hero", TITLE, true, { newestOnly: true })
-    ).toBe(false);
-    expect(await removed.hold("hero", TITLE, true, { newestOnly: true })).toBe(
-      true
+      await pins.hold(
+        "hero",
+        { properties: ["title", "body"], slots: [] },
+        true
+      )
+    ).toBe(true);
+    expect(Object.fromEntries(memory.slots)).toEqual({
+      "removal-4-before": 3,
+      "removal-4": 4,
+      "removal-2-before": 1,
+      "removal-2": 2,
+    });
+  });
+
+  it("scans past ten later publishes without a floor", async () => {
+    const memory = memoryHolder();
+    const pins = pinsOver(
+      memoryHistory([
+        { status: "published", fields: ["title"] },
+        { status: "published", fields: [] },
+        ...Array.from({ length: 12 }, () => ({
+          status: "published",
+          fields: [],
+        })),
+      ]),
+      memory
     );
+
+    expect(await pins.hold("hero", TITLE, true)).toBe(true);
+    expect(Object.fromEntries(memory.slots)).toEqual({
+      "removal-2-before": 1,
+      "removal-2": 2,
+    });
   });
 
   it("takes only a removal newer than the version it is given", async () => {
@@ -241,7 +263,7 @@ describe("holding a lost removal", () => {
       memory
     );
 
-    expect(await pins.hold("hero", TITLE, true, { newerThan: 3 })).toBe(false);
+    expect(await pins.hold("hero", TITLE, true, 3)).toBe(false);
     expect(memory.slots.size).toBe(0);
     expect(await pins.newestVersion("hero")).toBe(3);
   });

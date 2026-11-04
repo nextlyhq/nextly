@@ -56,22 +56,21 @@ export interface RetiredPinHolder<Tx> {
 /** Pinning and releasing the versions a component's lost removals need. */
 export interface RetiredPins {
   /**
-   * Pin the published versions either side of the newest removal of one of
-   * these ids: a published version exposing it, and the next published one,
-   * which does not. A later publish exposing it again does not hide the
-   * removal behind it. Answers whether it pinned.
+   * Pin, for each of these ids, the published versions either side of its
+   * newest removal: a published version exposing it, and the next published
+   * one, which does not. A later publish exposing an id again does not hide
+   * the removal behind it, and ids removed apart are each held. Answers
+   * whether every id's removal was found and held.
    *
-   * `since` narrows which removal counts, for one written in a transaction
-   * that may not have committed yet: `newerThan` takes only a removal made by
-   * a version newer than that number, read down to it however many versions
-   * followed; `newestOnly` takes only a removal made by the newest published
-   * version.
+   * `newerThan`, for a removal written in a transaction that may not have
+   * committed yet, takes only removals made by a version newer than it, read
+   * down to it however many versions followed.
    */
   hold(
     componentId: string,
     dropped: RetiredExposures,
     lifecycle: boolean,
-    since?: { newerThan: number } | { newestOnly: true }
+    newerThan?: number
   ): Promise<boolean>;
   /** The newest version number the component's history shows, or 0. */
   newestVersion(componentId: string): Promise<number>;
@@ -83,12 +82,13 @@ export interface RetiredPins {
 }
 
 /**
- * How many published versions `hold` reads looking for the removal, and how
+ * How many published versions `hold` reads looking for the removals, and how
  * many listing pages it reads to find them. It runs right after the publish
- * that made it, so the pair is the newest two published versions, however
- * many drafts were saved between them, up to the pages' bound.
+ * that made them, so they are usually the newest two published versions,
+ * however many drafts sit between; the bounds leave room for publishes made
+ * meanwhile, as `deriveRetired` reads under the same ones.
  */
-const MAX_SEARCHED = 10;
+const MAX_SEARCHED = 500;
 const MAX_PAGES = 100;
 
 /** How many listed versions one page returns. */
@@ -112,38 +112,33 @@ export function retiredPins<Tx>(args: {
     entryId: componentId,
   });
   return {
-    hold: async (componentId, dropped, lifecycle, since) => {
+    hold: async (componentId, dropped, lifecycle, newerThan = 0) => {
       const holder = args.holder();
       if (holder === undefined) return false;
       const ref = refOf(componentId);
-      const floor =
-        since !== undefined && "newerThan" in since ? since.newerThan : 0;
-      const pair = await removalOf(
+      const found = await removalsOf(
         args.history(),
         ref,
         args.componentField,
         dropped,
-        { lifecycle, floor }
+        { lifecycle, floor: newerThan }
       );
-      // The scan stops at the first version at or below the floor, so a pair
-      // it finds was made above it.
-      if (pair === undefined) return false;
-      if (since !== undefined && "newestOnly" in since && !pair.newest) {
-        return false;
-      }
+      if (found.pairs.length === 0) return false;
       await args.transaction(async tx => {
-        await holder.pin(
-          ref,
-          { slot: `removal-${pair.after}-before`, versionNo: pair.before },
-          { tx }
-        );
-        await holder.pin(
-          ref,
-          { slot: `removal-${pair.after}`, versionNo: pair.after },
-          { tx }
-        );
+        for (const pair of found.pairs) {
+          await holder.pin(
+            ref,
+            { slot: `removal-${pair.after}-before`, versionNo: pair.before },
+            { tx }
+          );
+          await holder.pin(
+            ref,
+            { slot: `removal-${pair.after}`, versionNo: pair.after },
+            { tx }
+          );
+        }
       });
-      return true;
+      return found.whole;
     },
     newestVersion: async componentId => {
       const rows = await args.history().list(refOf(componentId), { limit: 1 });
@@ -172,34 +167,39 @@ function removalNumberOf(slot: string): number | undefined {
 }
 
 /**
- * The version numbers of the removal: the newest published version exposing
- * none of the dropped ids it is asked about, and the published one before it
- * exposing at least one. `undefined` when the newest versions read show no
- * such pair.
+ * Each requested id's newest removal: the published version exposing it and
+ * the next published one, which does not. `whole` when every id's was found;
+ * the scan stops at the first version at or below the floor, so every pair
+ * it finds was made above it.
  */
-async function removalOf(
+async function removalsOf(
   history: ComponentHistory,
   ref: ComponentHistoryRef,
   field: string,
   dropped: RetiredExposures,
   scan: { lifecycle: boolean; floor: number }
-): Promise<{ before: number; after: number; newest: boolean } | undefined> {
+): Promise<{ pairs: { before: number; after: number }[]; whole: boolean }> {
+  const left = {
+    properties: new Set(dropped.properties),
+    slots: new Set(dropped.slots),
+  };
+  const pairs: { before: number; after: number }[] = [];
   let newer: { versionNo: number; exposure: RetiredExposures } | undefined;
-  let newest: number | undefined;
   for await (const versionNo of servedVersions(history, ref, scan)) {
-    newest ??= versionNo;
     const exposure = exposedIn(
       (await history.get(ref, versionNo)).snapshot,
       field
     );
     if (typeof exposure === "string") continue;
-    if (newer !== undefined && dropsAny(exposure, newer.exposure, dropped)) {
-      const after = newer.versionNo;
-      return { before: versionNo, after, newest: after === newest };
+    if (newer !== undefined && takeDropped(exposure, newer.exposure, left)) {
+      pairs.push({ before: versionNo, after: newer.versionNo });
+      if (left.properties.size === 0 && left.slots.size === 0) {
+        return { pairs, whole: true };
+      }
     }
     newer = { versionNo, exposure };
   }
-  return undefined;
+  return { pairs, whole: false };
 }
 
 /**
@@ -261,16 +261,26 @@ function oldestIn(
   return numbers.at(-1);
 }
 
-/** Whether going from `before` to `after` drops any of these ids. */
-function dropsAny(
+/**
+ * Whether going from `before` to `after` drops any id still `left`; those it
+ * drops are taken out of `left`.
+ */
+function takeDropped(
   before: RetiredExposures,
   after: RetiredExposures,
-  ids: RetiredExposures
+  left: { properties: Set<string>; slots: Set<string> }
 ): boolean {
-  return (
-    ids.properties.some(
-      id => before.properties.includes(id) && !after.properties.includes(id)
-    ) ||
-    ids.slots.some(id => before.slots.includes(id) && !after.slots.includes(id))
-  );
+  let took = false;
+  for (const [ids, was, now] of [
+    [left.properties, before.properties, after.properties],
+    [left.slots, before.slots, after.slots],
+  ] as const) {
+    for (const id of [...ids]) {
+      if (was.includes(id) && !now.includes(id)) {
+        ids.delete(id);
+        took = true;
+      }
+    }
+  }
+  return took;
 }

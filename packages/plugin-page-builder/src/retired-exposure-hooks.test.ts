@@ -392,14 +392,10 @@ describe("recording retired ids at publish", () => {
     const calls: string[] = [];
     let looks = 0;
     const pins: RetiredPins = {
-      hold: async (componentId, dropped, lifecycle, since) => {
+      hold: async (componentId, dropped, lifecycle, newerThan) => {
         calls.push(
           `hold ${componentId} ${dropped.properties.join(",")} ${lifecycle}` +
-            (since === undefined
-              ? ""
-              : "newerThan" in since
-                ? ` >${since.newerThan}`
-                : " newest")
+            (newerThan === undefined ? "" : ` >${newerThan}`)
         );
         const shown = shows[looks] ?? true;
         looks += 1;
@@ -497,8 +493,8 @@ describe("recording retired ids at publish", () => {
     expect(new Set(calls)).toEqual(new Set(["hold hero title true >7"]));
   });
 
-  it("takes only the newest publish's removal when history before the commit cannot be read", async () => {
-    const { pins, calls } = recordingPins([true], async () => {
+  it("holds at every look, then repairs, when history before the commit cannot be read", async () => {
+    const { pins, calls } = recordingPins([], async () => {
       throw new Error("database down");
     });
     const failing: RetiredStore = {
@@ -507,16 +503,20 @@ describe("recording retired ids at publish", () => {
         throw new Error("database down");
       },
     };
-    const { run } = harness({ store: failing, pins });
+    const { run } = harness({
+      store: failing,
+      pins,
+      history: [definition(["title"]), definition([])],
+    });
 
     await run("afterUpdate", COMPONENTS, {
       ...published(definition(["title"]), definition([])),
       executor: {},
     });
 
-    await vi.waitFor(() =>
-      expect(calls).toEqual(["hold hero title true newest"])
-    );
+    // A found removal does not end the wait: it may be an earlier one.
+    await vi.waitFor(() => expect(calls).toHaveLength(70));
+    expect(new Set(calls)).toEqual(new Set(["hold hero title true >0"]));
   });
 
   it("keeps looking after a look that fails", async () => {
