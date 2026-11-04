@@ -155,6 +155,7 @@
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
   /*
@@ -207,6 +208,8 @@
   --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
   --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
   --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
+  --nx-builder-component-text-on-light: #ffffff; /* design-lint-ok: text on the deep purple */
+  --nx-builder-component-text-on-dark: #15171c; /* design-lint-ok: text on the light purple */
   --nx-builder-halo: #ffffff; /* design-lint-ok: mode-invariant halo on site content */
 }
 
@@ -226,6 +229,7 @@
   --nx-builder-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
 }
 
@@ -1277,11 +1281,28 @@
 }
 
 /*
- * An exposed row stacks its control over its provenance, in the field's second
- * column: the control is what the author edits and the badge and reset beneath
- * it describe that value, so the two belong in one cell rather than in a third
- * column the label grid does not have.
+ * A rich-text field in the Content tab, drawn as a field: at least the
+ * control's height, so even an empty one is a target an author can hit (an
+ * unstyled element was as tall as its one 16px line, under the 24px a target
+ * needs), with the input's edge and surface and the focus ring.
  */
+.nx-inspector__rich-text {
+  min-height: var(--nx-control-height);
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+  cursor: text;
+}
+
+.nx-inspector__rich-text:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* The control, and a held row's reason under it, in the row's second column. */
 .nx-inspector__exposed {
   display: flex;
   flex-direction: column;
@@ -1290,21 +1311,44 @@
 }
 
 /*
- * An exposed row's label sits beside its CONTROL, not beside the whole cell:
- * the cell stacks the control over its provenance and, for a held row, the
- * reason, so a label centred on the cell drifts below the field it names.
- * Top-aligned, and as tall as the control, so every row reads the same way.
+ * A placement's row on the Style tab's grid: its name (with where its value
+ * comes from under it), its control, then a slot for the reset, so it is one
+ * row like a Style row. Top-aligned, so a held row's reason under the control
+ * does not move the name off the control it names.
  */
 .nx-inspector__field.nx-inspector__field--exposed {
+  /*
+   * Wider than a Style row's label, since "From the component" and its icon
+   * sit under it on one line (about 128px at 12px); the control column may
+   * shrink, as a placement row holds fields, selects and checkboxes, never an
+   * icon strip.
+   */
+  grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) 1.5rem;
   align-items: start;
 }
 
-/* As tall as the control beside it, so a label centres on its row. */
-.nx-inspector__field--exposed > label,
-.nx-inspector__field--exposed > .nx-inspector__field-name {
+/* As tall as the control beside it, so a one-line name centres on its row. */
+.nx-inspector__field--exposed > .nx-inspector__exposed-name {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
   min-height: var(--nx-control-height);
+}
+
+.nx-inspector__field--exposed > .nx-inspector__exposed {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot {
+  display: inline-grid;
+  place-items: center;
+  grid-column: 3;
+  grid-row: 1;
+  block-size: var(--nx-control-height);
 }
 
 /*
@@ -1324,14 +1368,6 @@
 /* On the first line of a reason that wraps, not centred across all of it. */
 .nx-inspector__held-reason > .nx-inspector__source-icon {
   margin-block-start: 0.1875rem;
-}
-
-.nx-inspector__provenance {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-height: 1.5rem;
 }
 
 /*
@@ -2051,10 +2087,24 @@
     grid-column: 1;
   }
 
-  /* Stacked, the label sits above its control and needs no control height. */
-  .nx-inspector__field--exposed > label,
-  .nx-inspector__field--exposed > .nx-inspector__field-name {
+  /*
+   * Stacked, a placement's row too: the name above its control, the reset
+   * after it. Weighed as the placements above, and after them, so it wins.
+   */
+  .nx-inspector__field.nx-inspector__field--exposed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nx-inspector__field.nx-inspector__field--exposed > * {
+    grid-column: 1;
+    grid-row: auto;
     min-height: 0;
+  }
+
+  /* An empty reset slot draws nothing stacked, not a blank row. */
+  .nx-inspector__field.nx-inspector__field--exposed
+    > .nx-inspector__exposed-reset-slot:empty {
+    display: none;
   }
 }
 
@@ -2454,8 +2504,11 @@
   /* Given up here and taken back by the first button, so a seam is one border. */
   border-inline-start-width: 0;
   background: var(--nx-background);
-  color: var(--nx-foreground);
+  /* Muted and lighter than the chosen one, so the choice is told by its words
+     as well as its fill. */
+  color: var(--nx-muted-foreground);
   font: inherit;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -2486,10 +2539,22 @@
  * state a screen reader reads, so styling from that attribute keeps what is
  * seen and what is announced reading off one value.
  */
+/*
+ * The chosen one in the panel's text colour at 600, beside the others' muted
+ * 500: the accent fill alone measured about 1.7:1 against the unselected
+ * background in dark, under 3:1.
+ */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
 .nx-style-inspector__toggle > button[aria-checked="true"] {
   background: var(--nx-accent);
-  color: var(--nx-accent-foreground);
+  color: var(--nx-foreground);
+  font-weight: 600;
+}
+
+/* A step lighter in dark, so its fill is told from the panel's black too. */
+.dark .nx-style-inspector__toggle > button[aria-pressed="true"],
+.dark .nx-style-inspector__toggle > button[aria-checked="true"] {
+  background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground));
 }
 
 /*
@@ -2568,13 +2633,70 @@
 }
 
 /*
- * The chosen tab's words in the panel's own text colour, with the accent left
- * to its underline. The accent as text measured 4.09:1 on the panel surface,
- * under the 4.5:1 that text this size needs; the underline still marks which
- * tab is chosen, and the words stay readable in both schemes.
+ * Content and Style as underlined tabs, set at the start of the panel: two
+ * views of one block, not a choice of value, so drawn unlike the segmented
+ * choices in the fields below. 12px semibold, the open tab in the panel's text
+ * colour over a 2px line, the other muted, and one 1px divider under the row.
+ * Unlayered, so these outrank the shared tabs' own utilities.
  */
-.nx-inspector__tabs [role="tab"][data-state="active"] {
+.nx-inspector__tablist {
+  display: flex;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 1rem;
+  height: var(--nx-builder-control-height);
+  padding: 0;
+  border: 0;
+  /* The builder's border token, which a request for more contrast promotes. */
+  border-block-end: 1px solid var(--nx-builder-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+/*
+ * As tall as the row, so the whole 28px answers a click; its line sits over
+ * the divider rather than under it.
+ */
+.nx-inspector__tab {
+  flex: none;
+  height: auto;
+  margin: 0 0 -1px;
+  padding: 0;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 600;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector__tab:hover {
+  color: var(--nx-foreground);
+}
+
+/*
+ * The open tab's words in the panel's own text colour, never the accent,
+ * which measured 4.09:1 as text on the panel surface, under the 4.5:1 text
+ * this size needs; its line is the foreground too, so it holds in both
+ * schemes.
+ */
+.nx-inspector__tab[data-state="active"] {
   color: var(--nx-builder-text, var(--nx-foreground));
+  border-block-end-color: var(--nx-foreground);
+}
+
+.nx-inspector__tab:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* Forced colours replace the palette: the open tab's line in a system colour. */
+@media (forced-colors: active) {
+  .nx-inspector__tab[data-state="active"] {
+    border-block-end-color: CanvasText;
+  }
 }
 
 .nx-style-inspector {
@@ -3097,11 +3219,13 @@
    */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-light);
 }
 
 .nx-canvas-layer[data-nx-page-scheme="dark"] {
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
 }
 
 .nx-canvas-layer__content {
@@ -3175,12 +3299,14 @@
  * the site's CSS can never restyle or hide them and they keep their width at
  * any zoom.
  *
- * The selection is drawn just INSIDE the block's edge, so a block flush with
- * the page's edge keeps its ring and two adjacent blocks' rings do not merge
- * into one thick line. TWO tones, because the ring is drawn on the site's
- * content and no single colour reads on all of it: the select blue disappears
- * on a blue section and a white mark on a white one, so an inset white band
- * directly inside the blue is the halo, which the outline covers half of.
+ * The selection's box is laid OUTSIDE the block (`RING_OUTSIDE` in
+ * `canvas-marks.tsx`) and the ring drawn just inside that box, so the ring
+ * never covers the block's own content, and a block flush with the page's
+ * edge, whose box is held to the page, keeps its ring. TWO tones, because the
+ * ring is drawn on the site's content and no single colour reads on all of
+ * it: the select blue disappears on a blue section and a white mark on a white
+ * one, so an inset white band directly inside the blue is the halo, which the
+ * outline covers half of.
  *
  * The rest of a multi-block selection is thinner: weight says which block the
  * inspector describes without implying two kinds of selected. A component
@@ -3217,6 +3343,37 @@
 }
 
 /*
+ * A selected placement's frame is tagged with a component's mark and its name,
+ * on the frame's top right corner outside it, in the component colour: the
+ * block toolbar takes the top left. Drawn from the mark's
+ * `data-placement-label`.
+ */
+.nx-canvas-mark[data-mark="selected"][data-placement-label]::before {
+  content: attr(data-placement-label);
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-builder-component);
+  color: var(--nx-builder-component-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* At the top of the page, inside the frame, where it stays on the page. */
+.nx-canvas-mark[data-mark="selected"][data-placement-label][data-placement-tag-inside]::before {
+  top: 0;
+  bottom: auto;
+  border-radius: 0 0 4px 4px;
+}
+
+/*
  * A selected block locked in Layers, by its own lock or one around it: the
  * ring is dashed, so the canvas says it is held before anything is tried on
  * it.
@@ -3237,11 +3394,13 @@
 /*
  * The parts of a selected component placement an author can edit: its exposed
  * values, dashed in the component colour, so they stand apart from the
- * component's own design around them.
+ * component's own design around them. Drawn just inside each part, so each
+ * reads as a box of its own inside the placement's frame, which is drawn
+ * outside the parts: outside, a full-width part's sides would run under it.
  */
 .nx-canvas-mark[data-mark="exposed"] {
   outline: 1px dashed var(--nx-builder-component);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .nx-canvas-mark[data-mark="drop-parent"] {
@@ -6187,7 +6346,13 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   writing-mode: var(--nx-side-writing-mode, horizontal-tb);
   direction: var(--nx-side-direction, ltr);
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  /*
+   * The width goes to the sides: the centre takes only what it holds (the
+   * inner box, or a small square), so every side cell is at least 3.5rem and
+   * a value like "0.95rem" is not cut to "0.95re", as it was when each inner
+   * side had a third of a third of the panel.
+   */
+  grid-template-columns: minmax(3.5rem, 1fr) auto minmax(3.5rem, 1fr);
   gap: 0.25rem;
   align-items: center;
 }
@@ -6200,8 +6365,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * every side the moment one appears. Each field says which side it draws and
  * this reads it, which is also why these selectors stay shallow.
  */
+/*
+ * The block sides span their row, centred at a side cell's width: the centre
+ * column is only as wide as what it holds, which for the inner box is too
+ * narrow for a value.
+ */
 .nx-style-inspector__side-box > [data-side="blockStart"] {
-  grid-area: 1 / 2;
+  grid-area: 1 / 1 / 2 / -1;
+  justify-self: center;
+  inline-size: 3.5rem;
 }
 
 .nx-style-inspector__side-box > [data-side="inlineStart"] {
@@ -6213,7 +6385,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 .nx-style-inspector__side-box > [data-side="blockEnd"] {
-  grid-area: 3 / 2;
+  grid-area: 3 / 1 / 4 / -1;
+  justify-self: center;
+  inline-size: 3.5rem;
 }
 
 /*
@@ -6273,6 +6447,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   grid-area: 2 / 2;
   align-self: stretch;
   min-height: 1.25rem;
+  min-inline-size: 1.5rem;
   border: 1px dashed var(--nx-border);
   border-radius: 0.25rem;
 }
@@ -6292,6 +6467,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * the quantity the whole 96px. Only inside a box: a full-width row has room for
  * both and reads better with them on one line.
  */
+/*
+ * A side's value centred in even-width digits, the cell's padding kept to
+ * 2px a side, so values up to seven characters ("0.95rem", about 46px at
+ * 12px) fit a 3.3rem cell whole.
+ */
+.nx-style-inspector__side-box input[data-slot="input"] {
+  padding-inline: 0.125rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .nx-style-inspector__side-box .nx-style-inspector__numeric {
   flex-direction: column;
   align-items: stretch;
@@ -6429,8 +6615,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-radius: var(--radius-md);
 }
 
+/*
+ * Both rings' side cells are 3.3rem, which a seven-character value
+ * ("0.95rem") fits at 12px: the margin ring's centre is the padding ring at
+ * its own width, the padding ring's a small square, so the box's width goes
+ * to the sides.
+ */
 .nx-style-inspector__side-box[data-ring="margin"] {
-  grid-template-columns: minmax(3rem, 1fr) minmax(0, 2.6fr) minmax(3rem, 1fr);
+  grid-template-columns: minmax(3.3rem, 1fr) auto minmax(3.3rem, 1fr);
   border: 1px dashed var(--nx-builder-border);
 }
 
@@ -6439,9 +6631,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 .nx-style-inspector__side-box[data-ring="padding"] {
-  /* Equal columns, so its top and bottom sides, in the middle one, have the
-     room its left and right have. */
-  grid-template-columns: repeat(3, minmax(2.75rem, 1fr));
+  grid-template-columns: minmax(3.3rem, 1fr) minmax(1rem, auto) minmax(
+      3.3rem,
+      1fr
+    );
   border: 1px solid var(--nx-builder-border);
   background: var(--nx-builder-surface-raised);
 }
@@ -6582,6 +6775,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
   .nx-style-inspector__side-box::before {
     display: none;
+  }
+
+  /* Each side a row as wide as the rail, the block sides' cell width undone. */
+  .nx-style-inspector__side-box > [data-side] {
+    inline-size: auto;
+    justify-self: stretch;
   }
 
   .nx-spacing-box__caption {
@@ -7147,11 +7346,16 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   white-space: nowrap;
 }
 
-/* A checkbox beside the words it names, kept apart from them. */
-.nx-inspector__check {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+/*
+ * An on/off row's switch at the start of the control column, its own size,
+ * rather than stretched across it.
+ */
+.nx-inspector__field[data-content-control="checkbox"] > [role="switch"] {
+  justify-self: start;
+}
+
+.nx-inspector__exposed [role="switch"] {
+  align-self: flex-start;
 }
 
 /*

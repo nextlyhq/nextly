@@ -2,7 +2,7 @@
  * Make sure the site has a usable default Layout: the seed, and its repair.
  *
  * A site always has one published default. A fresh site gets a seeded
- * "Default (site)" Layout with no areas, which draws pages with no regions
+ * "Site layout" Layout with no areas, which draws pages with no regions
  * until an author fills it or chooses another. When the default stops being
  * usable — deleted or unpublished by a path the guards could not see, such as
  * an import that skips hooks — this re-points it at the seed, publishing the
@@ -12,7 +12,7 @@
  *
  * The settings Single records the id of the Layout this seeded. Nothing here
  * matches a Layout by title or slug, so an author's own "Default" or
- * "Default (site)" is never adopted, renamed or republished: when one holds the
+ * "Site layout" is never adopted, renamed or republished: when one holds the
  * seed's name, the seed takes the next free one.
  *
  * ## Idempotent
@@ -218,7 +218,7 @@ async function reseed(
   await recordSeed(deps, created, settings.defaultLayout);
   deps.warn(
     settings.seededLayout === null
-      ? "[page-builder] the site had no usable default Layout, so a 'Default (site)' Layout was created and made the default"
+      ? "[page-builder] the site had no usable default Layout, so a Layout called 'Site layout' was created and made the default"
       : "[page-builder] the seeded default Layout no longer exists, so it was created again and made the default",
     {
       previous: settings.defaultLayout,
@@ -309,7 +309,7 @@ async function recordSeed(
  * a clash past the first page still moves the seed's name.
  *
  * The database can still refuse the slug the scan found free: MySQL compares
- * slugs without case or accents, so `Default-Site` holds `default-site` there.
+ * slugs without case or accents, so `Site-Layout` holds `site-layout` there.
  * A refusal as a duplicate adds the slug to the taken set and tries the next
  * numbered one, a bounded number of times; past that the run fails, and the
  * sweep tries again later. A refusal that came from another run seeding at the

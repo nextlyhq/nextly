@@ -25,6 +25,7 @@ vi.mock("../site-style-client", () => ({
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: [] })),
   }),
+  useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
   useFontCatalogueClient: () => ({
     load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
     add: async () => undefined,

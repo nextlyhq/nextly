@@ -84,6 +84,17 @@ export interface TokensPanelProps {
   /** An edit. The host owns the site style and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
   /**
+   * The author is still at work here: typing in a field before it commits.
+   * For a host that waits for a pause before persisting, so a save is not
+   * made between one field's edit and the next.
+   */
+  onActivity?: () => void;
+  /**
+   * The author is done for now: a variable's editor closed, or this panel
+   * went away. A host waiting for a pause persists what it holds at once.
+   */
+  onSettle?: () => void;
+  /**
    * The set the host holds RIGHT NOW, asked at the moment it is needed.
    * Answer it from a ref the host writes as it dispatches: an import reads
    * files asynchronously and must merge into the newest set, not into one this
@@ -199,6 +210,8 @@ function OwnHeader(props: TokensPanelProps): React.JSX.Element {
 function VariablesView({
   tokens,
   onChange,
+  onActivity,
+  onSettle,
   currentTokens,
   supplied,
   issue,
@@ -219,7 +232,38 @@ function VariablesView({
     onChange,
     currentTokens,
     onAdded: () => setQuery(""),
+    onSettle,
   });
+  // Going away ends the author's work here as closing an editor does: a tab
+  // change or the panel closing. The latest callback, so the effect runs
+  // only on unmount rather than on every render that hands a new one.
+  const settle = React.useRef(onSettle);
+  settle.current = onSettle;
+  // Which editor is open as of the latest render, and whether the panel is
+  // still mounted: read when an editor commits, which it may do as it goes
+  // away, after the close or the unmount has already settled.
+  const openNow = React.useRef(openKey);
+  openNow.current = openKey;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      settle.current?.();
+    };
+  }, []);
+  /*
+   * An edit committed by an editor that is already closed, such as a colour
+   * picker writing what it held as it unmounts, comes after the settle its
+   * closing made, so it settles again rather than wait for a pause the
+   * author has already ended.
+   */
+  const commitFrom =
+    (key: string) =>
+    (next: SiteTokenSet): void => {
+      onChange(next);
+      if (!mounted.current || openNow.current !== key) settle.current?.();
+    };
   const search = React.useRef<HTMLInputElement>(null);
 
   const groups = React.useMemo(
@@ -234,10 +278,13 @@ function VariablesView({
   }
 
   return (
+    // Typing anywhere in the panel, the editors beside the rows included
+    // (React carries their events here through the portal), is activity.
     <div
       className="nx-vars"
       ref={root}
       data-read-only={readOnly ? "" : undefined}
+      onInput={onActivity}
     >
       {placed ? (
         <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
@@ -280,7 +327,7 @@ function VariablesView({
                   readOnly={readOnly}
                   open={openKey === entry.row.key}
                   onOpenChange={open => toggle(entry.row.key, open)}
-                  onChange={onChange}
+                  onChange={commitFrom(entry.row.key)}
                   onRemoved={() => {
                     forget(entry.row.key);
                     search.current?.focus();
@@ -365,11 +412,14 @@ function useOpenVariable({
   onChange,
   currentTokens,
   onAdded,
+  onSettle,
 }: {
   tokens: SiteTokenSet | undefined;
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
   onAdded: () => void;
+  /** The author is done with a variable; see `TokensPanelProps.onSettle`. */
+  onSettle: (() => void) | undefined;
 }): {
   /** The panel's element, which rows are found in to be focused. */
   root: React.RefObject<HTMLDivElement | null>;
@@ -406,16 +456,22 @@ function useOpenVariable({
 
   const close = (key: string): void => {
     setOpenKey(null);
-    if (!fresh.current.delete(key)) return;
-    const named = namedAfterLabel(currentTokens(), key);
-    if (named === undefined) return;
-    onChange(named.tokens);
-    setFocusKey(named.key);
+    // Settled after the renaming below, so a just-added variable's code name
+    // is part of what is persisted with the rest of its edit.
+    if (fresh.current.delete(key)) {
+      const named = namedAfterLabel(currentTokens(), key);
+      if (named !== undefined) {
+        onChange(named.tokens);
+        setFocusKey(named.key);
+      }
+    }
+    onSettle?.();
   };
 
   const forget = (key: string): void => {
     fresh.current.delete(key);
     setOpenKey(null);
+    onSettle?.();
   };
 
   const toggle = (key: string, open: boolean): void => {

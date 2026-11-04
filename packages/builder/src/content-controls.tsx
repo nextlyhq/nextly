@@ -274,17 +274,16 @@ function CheckboxControl({
   label,
 }: ContentControlProps): React.JSX.Element {
   return (
-    <div
-      className="nx-inspector__field nx-inspector__field--inline"
-      data-content-control="checkbox"
-    >
+    // As every other row is: the label in the label column, the switch in the
+    // control column, where a switch drawn before its label broke the column.
+    <div className="nx-inspector__field" data-content-control="checkbox">
+      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
       <Switch
         id={id}
         disabled={disabled}
         checked={(prop.value ?? prop.defaultValue) === true}
         onCheckedChange={checked => onCommit(prop.name, checked)}
       />
-      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
     </div>
   );
 }

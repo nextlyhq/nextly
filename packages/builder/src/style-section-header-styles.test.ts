@@ -608,10 +608,8 @@ describe("the inspector at the editor's density", () => {
     );
     expect(input).toContain("padding-block: 0");
     expect(input).toContain("line-height: var(--nx-builder-line-height)");
-    // Exact text: the selector also appears inside a narrow-rail query.
-    expect(FLAT).toContain(
-      ".nx-inspector__field--exposed > label, .nx-inspector__field--exposed > .nx-inspector__field-name { display: flex; align-items: center; min-height: var(--nx-control-height); }"
-    );
+    // A placement row's name cell takes the control height: pinned in
+    // instance-inspector-styles.test.ts with the row's grid.
     const segment = ruleBody(".nx-style-inspector__toggle > button");
     expect(segment).toContain("height: var(--nx-control-height)");
     expect(segment).toContain("padding: 0 0.5rem");
@@ -623,6 +621,58 @@ describe("the inspector at the editor's density", () => {
     );
     expect(ruleBody(".nx-inspector__fields")).toContain(
       "gap: var(--nx-builder-row-gap)"
+    );
+  });
+});
+
+describe("a rich-text field in the Content tab", () => {
+  it("is drawn as a field at least the control's height", () => {
+    // An unstyled element is as tall as its one 16px line, or nothing when
+    // empty: under the 24px a target needs, which axe refused.
+    const field = ruleBody(".nx-inspector__rich-text");
+    expect(field).toContain("min-height: var(--nx-control-height)");
+    expect(field).toContain("border: 1px solid var(--nx-input)");
+    expect(field).toContain("cursor: text");
+    expect(ruleBody(".nx-inspector__rich-text:focus-visible")).toContain(
+      "outline: 2px solid var(--nx-ring)"
+    );
+  });
+});
+
+describe("the inspector's Content and Style tabs", () => {
+  it("are underlined tabs, set at the start of the panel, over one divider", () => {
+    // Tabs, not a segmented control: Content and Style are two views of one
+    // block, not a choice of value, and the choices beside them are drawn
+    // differently on purpose.
+    const list = ruleBody(".nx-inspector__tablist");
+    expect(list).toContain("justify-content: flex-start");
+    expect(list).toContain("height: var(--nx-builder-control-height)");
+    // The builder's border token, which more contrast promotes.
+    expect(list).toContain(
+      "border-block-end: 1px solid var(--nx-builder-border)"
+    );
+    expect(list).toContain("background: transparent");
+    const tab = ruleBody(".nx-inspector__tab");
+    expect(tab).toContain("flex: none");
+    expect(tab).toContain("font-size: var(--nx-builder-font-size)");
+    expect(tab).toContain("font-weight: 600");
+    expect(tab).toContain("border-block-end: 2px solid transparent");
+    expect(tab).toContain("color: var(--nx-muted-foreground)");
+    const active = ruleBody('.nx-inspector__tab[data-state="active"]');
+    expect(active).toContain(
+      "color: var(--nx-builder-text, var(--nx-foreground))"
+    );
+    expect(active).toContain("border-block-end-color: var(--nx-foreground)");
+    expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
+      "outline: 2px solid var(--nx-ring)"
+    );
+  });
+
+  it("keeps the open tab's line in forced colours", () => {
+    // Forced colours replace the palette; the line is named in system colours
+    // so the open tab stays marked.
+    expect(FLAT).toContain(
+      '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"] { border-block-end-color: CanvasText; } }'
     );
   });
 });

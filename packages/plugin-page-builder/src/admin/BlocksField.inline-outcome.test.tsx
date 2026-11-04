@@ -282,6 +282,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: (handler: (action: string) => void) => {
     beforeAction = handler;
   },

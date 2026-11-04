@@ -156,6 +156,7 @@ import {
   type StyleSection,
   type StyleInspection,
 } from "./style-inspector";
+import { keywordLabel, menuKeywords } from "./style-keyword-labels";
 import {
   CSS_NUMBER,
   measurementOf,
@@ -2969,11 +2970,13 @@ function SelectField({
   // whitespace and escapes, and accepts the CSS-wide keywords everywhere — so
   // a stored `Bold` or `inherit` is live and compiles while matching no item
   // here, and the select would render empty over a value that is doing
-  // something. Offered VERBATIM as its own item rather than normalised: any
-  // rule written here to fold spellings would be a second copy of the
-  // engine's, and the stored string is the one thing that needs no rule.
-  const extra =
-    current !== "" && !control.leaf.values.includes(current) ? current : null;
+  // something. Offered VERBATIM rather than normalised, in the place of the
+  // item it reads the same as, so the stored string needs no rule of its own.
+  const offered = menuKeywords(
+    control.leaf.cssProperty,
+    control.leaf.values,
+    current
+  );
   return (
     <div className="nx-style-inspector__select">
       <Select value={current} onValueChange={value => onCommit(value)}>
@@ -2985,12 +2988,10 @@ function SelectField({
           <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
-          {extra === null ? null : (
-            <SelectItem value={extra}>{extra}</SelectItem>
-          )}
-          {control.leaf.values.map(option => (
-            <SelectItem key={option} value={option}>
-              {option}
+          {/* In words, the CSS spelling in the tooltip; see style-keyword-labels. */}
+          {offered.map(option => (
+            <SelectItem key={option} value={option} title={option}>
+              {keywordLabel(control.leaf.cssProperty, option)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -4716,6 +4717,7 @@ function ValueField({
         id={id}
         labelledBy={labelledBy}
         options={toggle}
+        cssProperty={control.leaf.cssProperty}
         stored={stored}
         describedBy={describedBy}
         onCommit={onCommit}
@@ -4761,6 +4763,7 @@ function ToggleField({
   id,
   labelledBy,
   options,
+  cssProperty,
   stored,
   describedBy,
   onCommit,
@@ -4768,6 +4771,8 @@ function ToggleField({
   id: string;
   labelledBy: string;
   options: readonly string[];
+  /** The property the options are keywords of, for their words. */
+  cssProperty: string;
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
@@ -4805,8 +4810,9 @@ function ToggleField({
             // which is the only way a group of options can reach unset without
             // spending a button on "neither".
             onClick={() => onCommit(pressed ? null : option)}
+            title={option}
           >
-            {option}
+            {keywordLabel(cssProperty, option)}
           </button>
         );
       })}
@@ -4962,8 +4968,8 @@ function NumericField({
             ))}
             {keywords.length === 0 ? null : <SelectSeparator />}
             {keywords.map(keyword => (
-              <SelectItem key={keyword} value={keyword}>
-                {keyword}
+              <SelectItem key={keyword} value={keyword} title={keyword}>
+                {keywordLabel(control.leaf.cssProperty, keyword)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -5472,6 +5478,9 @@ function TextField({
     <Input
       id={id}
       {...shownText(display, typing, draft, hint)}
+      // A side of the spacing box is narrow: its whole value is in its
+      // tooltip, for one the cell cannot show.
+      title={compact && draft !== "" ? draft : undefined}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
