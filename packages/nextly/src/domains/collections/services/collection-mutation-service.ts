@@ -336,6 +336,7 @@ import {
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
+  type PartState,
   type StaleWrite,
   type StaleWriteHolder,
   staleVersionErrorFor,
@@ -11034,7 +11035,7 @@ export class CollectionMutationService extends BaseService {
         holder: StaleWriteHolder;
       };
     }
-  ): Promise<void> {
+  ): Promise<PartState | undefined> {
     const claim =
       args.translation && args.judge
         ? await refuseIfLanguageMoved(
@@ -11071,6 +11072,9 @@ export class CollectionMutationService extends BaseService {
         { savedBy: args.savedBy, revisionClaimed: claim?.claimed === true }
       );
     }
+    // The translation row as it was before this write, read by the claim:
+    // for an overwrite, what it replaced.
+    return claim?.before;
   }
 
   /**
