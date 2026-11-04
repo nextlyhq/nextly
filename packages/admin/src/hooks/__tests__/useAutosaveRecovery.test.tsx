@@ -442,6 +442,37 @@ describe("useAutosaveRecovery", () => {
     }
   });
 
+  it("offers every point from an older version as such, the author's own writes included", async () => {
+    const point = (superseded?: "by-you" | "by-another" | "unknown") => ({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+      ...(superseded === undefined ? {} : { superseded }),
+    });
+
+    // The author's own, anyone else's, or no one the server can name: offered,
+    // and said to be older. The author's own is not withheld: a write of
+    // theirs that left the point in place, such as publishing every language,
+    // did not store it, so it is the only copy of that work.
+    for (const superseded of ["by-you", "by-another", "unknown"] as const) {
+      getSpy.mockResolvedValue(point(superseded));
+      const other = renderRecovery(SCOPE);
+      await waitFor(() =>
+        expect(other.result.current.recovery.offer).not.toBeNull()
+      );
+      expect(other.result.current.recovery.offer?.olderVersion).toBe(true);
+      other.unmount();
+    }
+
+    // Current: offered as it always was.
+    getSpy.mockResolvedValue(point());
+    const current = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(current.result.current.recovery.offer).not.toBeNull()
+    );
+    expect(current.result.current.recovery.offer?.olderVersion).toBe(false);
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },
@@ -557,5 +588,125 @@ describe("after a save", () => {
     rerender({ entryId: "e2", savedCount: 1 });
 
     await waitFor(() => expect(result.current.offer).not.toBeNull());
+  });
+
+  describe("a current offer is asked about again before it is restored", () => {
+    const CURRENT = {
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    };
+
+    it("shows it as older instead, when the document was written since", async () => {
+      // Read once when the editor opened; a write since then, here or in
+      // another tab, made it an older version.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockResolvedValueOnce({ ...CURRENT, superseded: "by-another" });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(false)
+      );
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(true)
+      );
+      expect(result.current.form.getValues()).toEqual(STORED);
+
+      // Asked again with the warning in front of them: taken, unasked.
+      act(() => result.current.recovery.restore());
+      await waitFor(() =>
+        expect(result.current.form.getValues()).toEqual({ title: "recovered" })
+      );
+      expect(getSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("withdraws it when the point is gone", async () => {
+      getSpy.mockResolvedValueOnce(CURRENT).mockResolvedValueOnce(null);
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() => expect(result.current.recovery.offer).toBeNull());
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("runs a caller's own restore steps only once the offer is confirmed", async () => {
+      // A view's steps change what it shows; run before the answer, they
+      // would act on an offer that is then refused.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockResolvedValueOnce({ ...CURRENT, superseded: "by-another" });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+      const apply = vi.fn();
+
+      act(() => result.current.recovery.restore(apply));
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(true)
+      );
+      expect(apply).not.toHaveBeenCalled();
+
+      // Now shown as older: confirmed without asking, so the steps run.
+      act(() => result.current.recovery.restore(apply));
+      await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+      // In place of the take: the caller's steps write the form themselves.
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("draws the offer again from a point rewritten since, rather than restoring the old one", async () => {
+      // Another tab of the same author recorded newer work into the point.
+      getSpy.mockResolvedValueOnce(CURRENT).mockResolvedValueOnce({
+        ...CURRENT,
+        snapshot: { title: "newer" },
+        updatedAt: "2026-08-17T10:05:00.000Z",
+      });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.snapshot).toEqual({
+          title: "newer",
+        })
+      );
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("restores nothing when it cannot be asked about again", async () => {
+      // Unchecked, it may be an older version shown without its warning.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockRejectedValueOnce(new Error("network"));
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.form.getValues()).toEqual(STORED);
+      // Still on offer, to be chosen again.
+      expect(result.current.recovery.offer?.snapshot).toEqual(CURRENT.snapshot);
+    });
+
+    it("restores it when it is still current, which is the control", async () => {
+      getSpy.mockResolvedValue(CURRENT);
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.form.getValues()).toEqual({ title: "recovered" })
+      );
+      expect(getSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
