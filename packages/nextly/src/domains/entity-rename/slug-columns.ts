@@ -45,6 +45,7 @@ import { releaseMemberKey } from "../releases/release-member-key";
 import { versionPinKey } from "../versions/version-pins";
 import { versionViewKey } from "../versions/version-views";
 import { workingDraftKey } from "../versions/working-draft-key";
+import { reviewStateKey } from "../workflows/review-state-repository";
 
 /** What can be renamed: a collection or a Single. */
 export type RenamedEntityKind = "collection" | "single";
@@ -390,6 +391,28 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
             scopeSlug: slug,
             entryId: textOf(row, "entry_id"),
           },
+          part: textOrNullOf(row, "part"),
+        }),
+      }),
+    },
+  },
+  {
+    // A workflow's review state, per document and part. Its key is a digest over the slug, so it
+    // is derived again under the new one.
+    table: "nextly_review_states",
+    slugColumn: "scope_slug",
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
+    onRename: "follow",
+    derived: {
+      rowId: "id",
+      columns: ["part_key"],
+      sources: ["entry_id", "part"],
+      derive: (row, slug) => ({
+        part_key: reviewStateKey({
+          scopeKind:
+            textOf(row, "scope_kind") === "single" ? "single" : "collection",
+          scopeSlug: slug,
+          entryId: textOf(row, "entry_id"),
           part: textOrNullOf(row, "part"),
         }),
       }),

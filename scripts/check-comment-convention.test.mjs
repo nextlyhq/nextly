@@ -306,9 +306,13 @@ describe("the allowlist", () => {
   // 452 -> 449: one recorded offence each in `migrate-create.ts`,
   // `permission-seed-service.ts` and `prompt-renames.ts` no longer exists;
   // all three entries remain.
-  // 449 -> 447: one recorded offence each in `generate.ts` and
+  // 449 -> 446: three recorded offences in `collection-mutation-service.ts`,
+  // each naming a roadmap milestone, no longer exist; its entry remains.
+  // 446 -> 445: one recorded offence in `route-parser.ts`, naming a roadmap
+  // milestone, no longer exists; its entry remains.
+  // 445 -> 443: one recorded offence each in `generate.ts` and
   // `collection-file-manager.ts` no longer exists; both entries remain.
-  const EXPECTED_TOTAL = 447;
+  const EXPECTED_TOTAL = 443;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

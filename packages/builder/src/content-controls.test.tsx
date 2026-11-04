@@ -186,6 +186,19 @@ describe("what an author reads", () => {
               optionLabels: { lazy: "Load when near the screen" },
             },
             open: { type: "checkbox", label: "Open by default" },
+            tag: {
+              type: "select",
+              label: "HTML tag",
+              display: "menu",
+              options: ["div", "section", "article", "aside"],
+              optionLabels: {
+                div: "Generic box",
+                section: "Section",
+                article: "Article",
+                aside: "Aside",
+              },
+              showOptionValue: true,
+            },
           },
           render: () => null,
         },
@@ -215,6 +228,33 @@ describe("what an author reads", () => {
     );
     expect(getByRole("switch", { name: "Open by default" })).toBeDefined();
     expect(queryByRole("checkbox")).toBeNull();
+  });
+
+  it("shows an option's value muted beside its words, where the block asks", () => {
+    // "div" read as code; "Generic box" alone hid the tag from whoever knows it.
+    registerWorded();
+    const { getByRole } = render(
+      <InspectorPanel editor={editorFor(documentOf())} />
+    );
+    fireEvent.click(getByRole("combobox", { name: "HTML tag" }));
+    const option = getByRole("option", { name: /Generic box/ });
+    expect(
+      option.querySelector(".nx-inspector__option-value")?.textContent
+    ).toBe("div");
+  });
+
+  it("puts an on/off prop's label in the label column and its switch in the control column", () => {
+    // The switch drawn before its label broke the column every other row
+    // keeps: label on the left, control on the right.
+    registerWorded();
+    const { getByRole } = render(
+      <InspectorPanel editor={editorFor(documentOf())} />
+    );
+    const toggle = getByRole("switch", { name: "Open by default" });
+    const row = toggle.closest('[data-content-control="checkbox"]');
+    expect(row?.className).not.toContain("nx-inspector__field--inline");
+    expect(row?.firstElementChild?.tagName).toBe("LABEL");
+    expect(row?.lastElementChild).toBe(toggle);
   });
 });
 

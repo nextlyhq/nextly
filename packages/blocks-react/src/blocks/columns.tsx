@@ -61,6 +61,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 
@@ -93,25 +94,12 @@ export const COLUMNS_BASE_STYLES = {
        * columns touching. Measured on a published page: three tracks of 427px
        * with no space between them.
        *
-       * A LITERAL, matching `core/gallery` and `core/accordion`, and the reason
-       * is no longer the one those two were given. Both of them shipped
-       * `{ $token: "space.4" }` and rendered their children touching because
-       * nothing turned a token set into CSS; that is fixed, and `PageRenderer`
-       * now compiles a site sheet by default.
-       *
-       * It was not safe HERE until the renderer stopped withholding the token
-       * tier from a consumer holding a stored `styles` artifact. On that path
-       * the stored page CSS carried `gap: var(--site-space-4)` with the property
-       * undeclared, which is invalid at computed-value time, and `gap` fell back
-       * to `normal` — zero for a grid, and the exact defect this block was fixed
-       * for. Measured on that same path now: `--site-space-4` is declared and
-       * resolves to `1rem`, which is the value the literal was standing in for.
-       *
-       * So the gutter follows the site again. A site that redefines `space.4`
-       * moves this row with it, which is what a token set is for and what a
-       * length hard-coded here could never do.
+       * The gutter is the site's `space.columns` token, which grows with the
+       * viewport, so a site that redefines it moves every row with it. The
+       * token tier reaches every render path, a stored artifact handed back
+       * with no context included, so the reference always resolves.
        */
-      gap: { $token: "space.4" },
+      gap: { $token: "space.columns" },
     },
   },
 } as const;
@@ -135,12 +123,7 @@ export const columns: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["row", "grid", "split", "side by side"],
     },
     props: {
-      as: {
-        label: "Element type",
-        display: "menu",
-        type: "select",
-        options: ["div", "section", "article"],
-      },
+      as: htmlTagProp(["div", "section", "article"]),
       contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "div", contained: false },

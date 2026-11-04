@@ -916,8 +916,11 @@ function RailAndDialogs({
 > & {
   active: boolean;
   renderSettings: BuilderShellProps["renderSettings"];
-  panelKeys: PanelKeysSetting;
+  panelKeys: Pick<PanelKeysSetting, "on" | "onChange">;
 }): React.JSX.Element {
+  // This editor's own panel-key layer, so Help can find its keys among a
+  // second editor's on the same page.
+  const keysLayer = `${PANEL_KEYS_LAYER} ${React.useId()}`;
   const help = useRailDialog(active);
   const settings = useRailDialog(active);
   useSettingsRequest(
@@ -930,13 +933,19 @@ function RailAndDialogs({
       <EditorRail
         {...rail}
         keysOn={panelKeys.on}
+        keysLayer={keysLayer}
         {...railDialogItems(help, settings, renderSettings)}
       />
       <HelpDialog
         open={help.open}
         onOpenChange={help.setOpen}
         returnFocus={() => help.opener.current}
-        panelKeys={panelKeys}
+        panelKeys={{
+          ...panelKeys,
+          shortcuts: panelKeyShortcuts(rail.isAvailable, keysLayer),
+          layer: keysLayer,
+          family: PANEL_KEYS_LAYER,
+        }}
       />
       <HostSettings render={renderSettings} dialog={settings} />
     </>
@@ -1662,8 +1671,6 @@ function ShellRegions({
             // was a switch reads.
             on: preferences.panelKeys !== false,
             onChange: on => update(current => ({ ...current, panelKeys: on })),
-            shortcuts: panelKeyShortcuts(isAvailable),
-            layer: PANEL_KEYS_LAYER,
           }}
         />
 

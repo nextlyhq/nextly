@@ -58,10 +58,9 @@ function textNode(text: string) {
  * A heading node, for the caret case a paragraph cannot cover.
  *
  * A paragraph's box barely moves when the library's typographic baseline is
- * applied — line height and margins only. A heading's moves the most of
- * anything on the page: `h1` carries a `2.25em` size, a `1.15` line height and
- * a `1.5em` top margin, so its glyph boxes sit somewhere a paragraph's never
- * do. The caret is derived from the POINTER against those boxes, so a fixture
+ * applied. A heading's moves the most of anything on the page: `h1` carries a
+ * `2.25em` size and a `1.15` line height, so its glyph boxes sit somewhere a
+ * paragraph's never do. The caret is derived from the POINTER against those boxes, so a fixture
  * whose layout cannot change is a fixture that cannot see this fail.
  */
 function heading(text: string) {
@@ -223,7 +222,7 @@ test.describe("a passage edited on the canvas", () => {
     /*
      * The same property as the paragraph case above, on the block whose layout
      * this library actually moves. A heading is styled by the typographic
-     * baseline — size, line height, weight and a top margin — so its text sits
+     * baseline — size, line height and weight — so its text sits
      * at coordinates a paragraph's never occupies, and the inline editor
      * applies its own theme at edit-start. If those two typographies diverge,
      * the caret is measured against a layout the author never saw and lands on

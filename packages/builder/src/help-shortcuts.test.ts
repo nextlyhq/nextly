@@ -33,7 +33,7 @@ const active = [
     description: "Clear the block selection",
     layer: "builder-canvas-escape",
   },
-  { keys: "mod+s", description: "Save entry", layer: "entry-form" },
+  { keys: "mod+s", description: "Save", layer: "entry-form" },
   { keys: "Escape", description: "Cancel and go back", layer: "entry-form" },
 ];
 
@@ -46,15 +46,28 @@ describe("helpShortcuts", () => {
       },
       { description: "Duplicate the selected block", keys: ["Ctrl+D"] },
       { description: "Clear the block selection", keys: ["Escape"] },
-      { description: "Save entry", keys: ["Ctrl+S"] },
+      { description: "Save", keys: ["Ctrl+S"] },
+    ]);
+  });
+
+  it("leaves out the admin's key sequences, and keeps a single key they begin with", () => {
+    // "g d" is the admin's site navigation; Help inside the editor lists what
+    // the editor does. A single "d" binding is a different keystroke.
+    const rows = helpShortcuts(
+      [
+        { keys: "g d", description: "Go to the dashboard", layer: "nav" },
+        { keys: "d", description: "Open or close Design", layer: "panels" },
+      ],
+      false
+    );
+    expect(rows).toEqual([
+      { description: "Open or close Design", keys: ["D"] },
     ]);
   });
 
   it("spells the keys for the platform", () => {
     const rows = helpShortcuts(active, true);
-    expect(rows.find(row => row.description === "Save entry")?.keys).toEqual([
-      "⌘S",
-    ]);
+    expect(rows.find(row => row.description === "Save")?.keys).toEqual(["⌘S"]);
   });
 
   it("lists a key several layers bind once, with the binding that takes it", () => {

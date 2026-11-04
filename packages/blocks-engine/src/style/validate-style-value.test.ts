@@ -20,6 +20,7 @@ import {
   speculativeBudget,
   styleUnionVariant,
   validateStyleValues,
+  leafAcceptsValue,
 } from "./validate-style-value";
 
 /** Validate one style-values record at the document root, strictly. */
@@ -3490,5 +3491,28 @@ describe("the truncation marker only claims what really went unchecked", () => {
     expect(check("alsoGone", "/b").map(issue => issue.code)).toEqual([
       "site-issues-truncated",
     ]);
+  });
+});
+
+describe("leafAcceptsValue", () => {
+  const leafOf = (property: string, side?: string) => {
+    const shape = getStyleProperty(property)?.shape as unknown as Record<
+      string,
+      unknown
+    >;
+    const sides = shape.sides as Record<string, StyleLeaf> | undefined;
+    return (side === undefined ? shape : sides?.[side]) as unknown as StyleLeaf;
+  };
+
+  it("answers as the validator does: a negative length for margin, not padding", () => {
+    expect(leafAcceptsValue(leafOf("margin", "blockStart"), "-8px")).toBe(true);
+    expect(leafAcceptsValue(leafOf("padding", "blockStart"), "-8px")).toBe(
+      false
+    );
+  });
+
+  it("holds a number to its bounds", () => {
+    expect(leafAcceptsValue(leafOf("opacity"), 0.5)).toBe(true);
+    expect(leafAcceptsValue(leafOf("opacity"), 1.5)).toBe(false);
   });
 });

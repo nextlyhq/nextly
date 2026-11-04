@@ -228,6 +228,13 @@ export interface OverlaySpace {
  */
 export const CANVAS_LAYER_ATTRIBUTE = "data-nx-canvas-layer";
 
+/**
+ * How far past the frame's viewport the layer draws, on every side, in the
+ * chrome's pixels: as far as a selection ring stands outside its block, so the
+ * ring of a block flush with the page's edge is drawn rather than cut off.
+ */
+export const CHROME_BLEED = 4;
+
 /** The attribute marking the box holding a canvas frame and its layer. */
 export const CANVAS_FRAME_BOX_ATTRIBUTE = "data-nx-canvas-frame-box";
 
@@ -675,6 +682,22 @@ export function canvasScroller(
   return framed
     ? (root.ownerDocument.scrollingElement ?? null)
     : scrollableAncestor(root);
+}
+
+/**
+ * What of a canvas is on screen, in the chrome's coordinates: the part of the
+ * page its scroller shows, where the canvas cuts off anything drawn past it;
+ * the whole page where nothing scrolls it. The marks and the block toolbar
+ * keep to it, so a tag or a bar is never drawn where the canvas cuts it off.
+ */
+export function onScreenOf(space: OverlaySpace): Rect {
+  const { root } = space;
+  const scroller = canvasScroller(root, space.frame !== null);
+  return space.place(
+    scroller === null
+      ? canvasContentRect(root, root)
+      : visibleBandOf(scroller, root)
+  );
 }
 
 /**

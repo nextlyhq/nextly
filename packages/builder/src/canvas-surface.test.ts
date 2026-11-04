@@ -345,6 +345,15 @@ describe("the editing colours drawn on the page", () => {
     expect(
       declared(ruleFor('.nx-canvas-mark[data-mark="exposed"]'), "outline")
     ).toBe("1px dashed var(--nx-builder-component)");
+    // Inside its part: the placement's frame is drawn outside the parts, and
+    // a dash outside a full-width part would run under it, leaving only its
+    // top and bottom to read, as rules rather than a box per part.
+    expect(
+      declared(
+        ruleFor('.nx-canvas-mark[data-mark="exposed"]'),
+        "outline-offset"
+      )
+    ).toBe("-2px");
     const marks = [
       SELECTED,
       ".nx-drop-indicator",

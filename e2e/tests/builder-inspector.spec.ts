@@ -21,6 +21,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
 import { canvasFrame } from "./support/canvas-frame";
 
@@ -109,11 +110,7 @@ async function storedNodes(
   request: APIRequestContext,
   id: string
 ): Promise<Record<string, unknown>[]> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: Record<string, unknown>[] } }[];
-  };
-  return body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  return await storedPageNodes(request, ENTRIES, id);
 }
 
 async function openBuilder(page: Page, id: string): Promise<void> {
@@ -236,17 +233,23 @@ test.describe("the inspector", () => {
     const bar = page.getByRole("region", { name: "What you're editing" });
     await expect(bar.locator("[data-edit-target]")).toHaveText("This block");
     await expect(bar.locator("[data-edit-state]")).toHaveText("Normal");
-    // The device is the canvas's own: which band its width falls in. Moving
-    // the canvas to a device moves the bar with it.
+    // The device is the canvas's own, said as the devices an edit there
+    // reaches. Moving the canvas to a device moves the bar with it.
+    await expect(bar.locator("[data-edit-device]")).toHaveText("All devices");
     const widths = page.getByRole("radiogroup", { name: "Device" });
-    for (const device of ["Mobile", "Tablet"]) {
+    for (const [device, reach] of [
+      ["Mobile", "Mobile"],
+      ["Tablet", "Tablet and smaller"],
+    ]) {
       await widths
         .getByRole("radio", { name: new RegExp(`^${device}`) })
         .click();
-      await expect(bar.locator("[data-edit-device]")).toHaveText(device);
+      await expect(bar.locator("[data-edit-device]")).toHaveText(reach);
     }
 
-    await bar.getByRole("radio", { name: /^Hover/ }).click();
+    // The state is a compact menu named State on the bar's second line.
+    await bar.getByRole("button", { name: /^State: / }).click();
+    await page.getByRole("menuitemradio", { name: /^Hover/ }).click();
     await expect(bar.locator("[data-edit-state]")).toHaveText("Hover");
   });
 

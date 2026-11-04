@@ -28,10 +28,18 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { boxOf, pressSave, structure } from "./canvas/editor-driver";
+import {
+  boxOf,
+  clearSelection,
+  layerRow,
+  openLayers,
+  pressSave,
+  structure,
+} from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { settleTransitions } from "./support/axe-scan.mjs";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
+import { storedPageNodes } from "./support/stored-page";
 import { fileAccount, test } from "./support/test";
 
 const COMPONENTS = "/admin/api/collections/components/entries";
@@ -113,21 +121,40 @@ async function createPage(
   return ((await created.json()) as { item: { id: string } }).item.id;
 }
 
+/** A published page placing the component, so a change to it reaches one. */
+async function placeOnAPublishedPage(
+  request: APIRequestContext,
+  componentId: string
+): Promise<void> {
+  const t = stamp();
+  const created = await request.post(PAGES, {
+    data: {
+      title: `Places it ${t}`,
+      slug: `places-it-${t}`,
+      status: "published",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          { id: "placed", type: INSTANCE, version: 1, props: { componentId } },
+        ],
+      },
+    },
+  });
+  expect(created.ok(), `creating the placing page: ${created.status()}`).toBe(
+    true
+  );
+}
+
 /** The page's stored top-level nodes, read back through the API. */
 async function storedNodes(
   request: APIRequestContext,
   id: string
 ): Promise<{ type: string; props?: { componentId?: string } }[]> {
-  const response = await request.get(`${PAGES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: {
-      id: string;
-      content?: {
-        nodes?: { type: string; props?: { componentId?: string } }[];
-      };
-    }[];
-  };
-  return body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  return (await storedPageNodes(request, PAGES, id)) as {
+    type: string;
+    props?: { componentId?: string };
+  }[];
 }
 
 /** What the page holds, as a type per block and the component it places. */
@@ -196,6 +223,10 @@ async function selectHeading(page: Page): Promise<void> {
 /**
  * Drag an element onto the lower part of the heading, which drops after it:
  * pressed, moved past the drag threshold, then across in steps, as a hand.
+ *
+ * Level with the heading before it enters the canvas: a drag holds the place
+ * it first aimed at until the pointer has travelled past a switch band, so a
+ * path that crossed the end of the page on its way would keep that place.
  */
 async function dragAfterHeading(page: Page, from: ReturnType<typeof row>) {
   const start = await from.boundingBox();
@@ -206,11 +237,9 @@ async function dragAfterHeading(page: Page, from: ReturnType<typeof row>) {
   await page.mouse.down();
   await page.mouse.move(x + 24, y, { steps: 4 });
   const target = await boxOf(page, HEADING);
-  await page.mouse.move(
-    target.x + target.width / 2,
-    target.y + target.height * 0.8,
-    { steps: 12 }
-  );
+  const aimY = target.y + target.height * 0.8;
+  await page.mouse.move(x + 24, aimY, { steps: 8 });
+  await page.mouse.move(target.x + target.width / 2, aimY, { steps: 12 });
   await page.mouse.up();
 }
 
@@ -310,58 +339,96 @@ test.describe("the Components panel", () => {
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
   });
 
-  for (const way of ["click", "keyboard", "drag"] as const) {
+  for (const way of ["click", "keyboard"] as const) {
     test(`inserts from Add and from Components by ${way}, in the same spot`, async ({
       page,
     }) => {
-      const title = `Promo ${stamp()}`;
-      const component = await createComponent(page.request, title);
+      // One component from each panel, so the stored page says which landed
+      // where.
+      const t = stamp();
+      const fromAdd = `Added ${t}`;
+      const fromPanel = `Placed ${t}`;
+      const addId = await createComponent(page.request, fromAdd);
+      const panelId = await createComponent(page.request, fromPanel);
       const id = await createPage(page.request);
       await openBuilder(page, id);
 
       const before = (await structure(page)).length;
-      // From Add, with the heading selected.
+      // From Add, after the selected heading.
       await selectHeading(page);
       await openPanel(page, "Add");
       const combobox = page.getByRole("combobox", { name: "Insert a block" });
       await expect(combobox).toBeVisible();
-      await combobox.fill(title);
-      if (way === "click") await tile(page, title).click();
-      if (way === "keyboard") await combobox.press("Enter");
-      if (way === "drag") await dragAfterHeading(page, tile(page, title));
+      await combobox.fill(fromAdd);
+      if (way === "click") await tile(page, fromAdd).click();
+      else await combobox.press("Enter");
       // Drawn on the canvas before the next insert is aimed at the heading.
       await expect
         .poll(async () => (await structure(page)).length)
         .toBeGreaterThan(before);
 
-      // From Components, with the heading selected again.
+      // From Components, after the heading selected again.
       await selectHeading(page);
       await openComponents(page);
-      if (way === "click") await row(page, title).click();
-      if (way === "keyboard") {
-        await searchBox(page).fill(title);
+      if (way === "click") {
+        await row(page, fromPanel).click();
+      } else {
+        await searchBox(page).fill(fromPanel);
         await searchBox(page).press("ArrowDown");
-        await expect(row(page, title)).toBeFocused();
+        await expect(row(page, fromPanel)).toBeFocused();
         await page.keyboard.press("Enter");
       }
-      if (way === "drag") await dragAfterHeading(page, row(page, title));
       await saveDraft(page);
 
       // Both right after the heading: the second pushed the first along.
       expect(await shape(page.request, id)).toEqual([
         "core/heading",
-        `component:${component}`,
-        `component:${component}`,
+        `component:${panelId}`,
+        `component:${addId}`,
         "core/section",
       ]);
     });
   }
+
+  test("inserts from Add and from Components by drag, in the same spot", async ({
+    page,
+  }) => {
+    // Each panel's drag onto its own copy of the same page, aimed at the same
+    // point: a drag aims by the pointer alone, so nothing is selected, and no
+    // block toolbar covers the heading it aims at.
+    const t = stamp();
+    const title = `Dragged ${t}`;
+    const component = await createComponent(page.request, title);
+    for (const from of ["Add", "Components"] as const) {
+      const id = await createPage(page.request);
+      await openBuilder(page, id);
+      await clearSelection(page);
+      if (from === "Add") {
+        await openPanel(page, "Add");
+        await page
+          .getByRole("combobox", { name: "Insert a block" })
+          .fill(title);
+        await dragAfterHeading(page, tile(page, title));
+      } else {
+        await openComponents(page);
+        await dragAfterHeading(page, row(page, title));
+      }
+      await saveDraft(page);
+
+      expect(await shape(page.request, id), from).toEqual([
+        "core/heading",
+        `component:${component}`,
+        "core/section",
+      ]);
+    }
+  });
 
   test("Edit opens the component alone, says what it reaches, and Back returns", async ({
     page,
   }) => {
     const title = `Promo ${stamp()}`;
     const component = await createComponent(page.request, title);
+    await placeOnAPublishedPage(page.request, component);
     const id = await createPage(page.request);
     await openBuilder(page, id);
     await openComponents(page);
@@ -377,10 +444,9 @@ test.describe("the Components panel", () => {
     );
     const banner = page.getByRole("region", { name: "Editing a component" });
     await expect(banner).toContainText(title);
-    // Whatever it says of reach is about pages, never documents: a component
-    // placed nowhere says "Not on any page yet", or nothing while the usage
-    // index is still being filled (a floor of none says nothing).
-    await expect(banner).not.toContainText(/document/);
+    // A published page places it, so the banner counts the page a change
+    // reaches, in pages, never documents.
+    await expect(banner).toContainText(/Changes reach (at least )?1 page/);
 
     // The one Back, named for the page it returns to.
     await banner.getByRole("button", { name: /^Back to / }).click();
@@ -453,9 +519,18 @@ test.describe("the Components panel, for an author who may not update components
     const component = await createComponent(admin, title);
     const id = await createPage(admin);
     const page = await author.context.newPage();
-    await openBuilder(page, id);
-    await selectHeading(page);
+    await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+    // Selected in Layers: this author may not read the site's styles, so the
+    // canvas is not drawn for them, and Layers is where they select.
+    await openLayers(page);
+    await expect(layerRow(page, HEADING)).toBeVisible({ timeout: 60_000 });
+    await layerRow(page, HEADING).click();
     await openComponents(page);
+    await expect(
+      page
+        .locator(".nx-components-panel")
+        .locator(".nx-insert-panel__placement")
+    ).toHaveText("Adding after Heading");
 
     await expect(row(page, title)).toBeVisible({ timeout: 30_000 });
     await expect(

@@ -195,4 +195,20 @@ export class FieldGroupDataService {
   ): Promise<Record<string, unknown>[]> {
     return this.queryService.populateComponentDataMany(params);
   }
+
+  /**
+   * One entry's component data in several languages at once, each component
+   * table read once for them all; see
+   * `FieldGroupQueryService.populateComponentDataByLanguage`.
+   */
+  // Reached through the component-subtree reader's optional dependency, which
+  // the dead-code gate cannot trace to the class.
+  // fallow-ignore-next-line unused-class-member
+  populateComponentDataByLanguage(
+    params: Parameters<
+      FieldGroupQueryService["populateComponentDataByLanguage"]
+    >[0]
+  ): Promise<Record<string, unknown>[]> {
+    return this.queryService.populateComponentDataByLanguage(params);
+  }
 }

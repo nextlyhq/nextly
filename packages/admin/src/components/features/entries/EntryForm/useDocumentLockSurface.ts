@@ -21,6 +21,7 @@ import {
 } from "@admin/hooks/queries/useDocumentLock";
 import { useDocumentLockHolder } from "@admin/hooks/queries/useDocumentLockHolder";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
+import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 
 import {
   documentLockAffordances,
@@ -257,6 +258,9 @@ export function useDocumentLockSurface({
     ...lockOptions,
     enabled: enabled && readOnlyForReader,
   });
+  // Who is signed in, so a claim held by this person in another tab is told
+  // as theirs rather than as a colleague's.
+  const me = useCurrentUserId();
 
   // 🔴 The colleague outlives a failed refresh. Every beat re-asks, so a
   // transient rejection arrives as `unavailable` long after a holder was
@@ -282,7 +286,12 @@ export function useDocumentLockSurface({
   return {
     ...(readOnlyForReader
       ? readOnlyAffordances(readOnlyBecause, holder, gainLoad.load)
-      : documentLockAffordances(state, lastKnownHolder.current, gainLoad.load)),
+      : documentLockAffordances(
+          state,
+          lastKnownHolder.current,
+          gainLoad.load,
+          me
+        )),
     takeOver,
     requestAccess,
     retryLoad: gainLoad.retry,
