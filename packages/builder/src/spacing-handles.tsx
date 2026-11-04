@@ -1300,18 +1300,19 @@ export function SpacingHandles({
    * from one edge. Padding is drawn later, so its handle would take every
    * press there and the margin's control would be advertised and unreachable.
    */
-  const placed = placeHandles(drawn, drawnEdgeOf, handleScale);
+  /*
+   * No handle where the block's author did not offer the property. The band
+   * still draws — it reports what the page renders, which is true either way —
+   * but a control that wrote it would bypass a capability declaration the
+   * Style panel honours. Left out BEFORE the handles are placed, so a handle
+   * with no partner drawn beside it keeps its whole band.
+   */
+  const handled = drawn.filter(band => writable.has(band.box));
+  const placed = placeHandles(handled, drawnEdgeOf, handleScale);
 
   return (
     <>
-      {drawn.map((band, index) => {
-        /*
-         * No handle where the block's author did not offer the property. The
-         * band still draws — it reports what the page renders, which is true
-         * either way — but a control that wrote it would bypass a capability
-         * declaration the Style panel honours.
-         */
-        if (!writable.has(band.box)) return null;
+      {handled.map((band, index) => {
         const rect = placed[index];
         if (rect === undefined) return null;
         return (

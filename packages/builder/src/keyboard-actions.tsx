@@ -522,15 +522,20 @@ export interface BlockKeyboardActionsResult {
    */
   readonly depthMoves: readonly DepthMoveAction[];
   /**
-   * Where this editor's block toolbar puts the call that focuses it, for
-   * Alt+F10 to make. Held per editor rather than looked up in the document,
-   * which may hold another editor's toolbar first.
+   * Where this editor's block toolbar puts the call that finds its tab stop,
+   * for Alt+F10 to focus. Held per editor rather than looked up in the
+   * document, which may hold another editor's toolbar first.
    */
   readonly toolbarFocus: ToolbarFocusSlot;
 }
 
-/** Holds the call that focuses an editor's block toolbar, while it is drawn. */
-export type ToolbarFocusSlot = React.MutableRefObject<(() => void) | null>;
+/**
+ * Holds the call that finds an editor's block toolbar's tab stop, which
+ * answers `null` while no bar is drawn.
+ */
+export type ToolbarFocusSlot = React.MutableRefObject<
+  (() => HTMLElement | null) | null
+>;
 
 /**
  * Register the move bindings for as long as the caller is mounted.
@@ -590,9 +595,9 @@ export function useBlockKeyboardActions({
   // the document from that render.
   const latest = React.useRef(editor);
   latest.current = editor;
-  const toolbarFocus: ToolbarFocusSlot = React.useRef<(() => void) | null>(
-    null
-  );
+  const toolbarFocus: ToolbarFocusSlot = React.useRef<
+    (() => HTMLElement | null) | null
+  >(null);
 
   const deleteSelected = React.useCallback(() => {
     const editorNow = latest.current;
@@ -915,9 +920,14 @@ export function useBlockKeyboardActions({
          */
         keys: "alt+F10",
         description: "Move focus to the selected block's toolbar",
-        when: () => latest.current.selectedId !== null,
+        // Only while a bar is drawn to take focus: a host may render the
+        // keystrokes alone, and the bar goes while a block is dragged. The key
+        // is then left to the browser rather than taken to do nothing.
+        when: () =>
+          latest.current.selectedId !== null &&
+          (toolbarFocus.current?.() ?? null) !== null,
         whenTyping: true,
-        run: () => toolbarFocus.current?.(),
+        run: () => toolbarFocus.current?.()?.focus(),
       },
       {
         keys: "mod+z",

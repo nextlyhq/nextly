@@ -142,21 +142,20 @@ export function BlockToolbar({
   const bar = React.useRef<HTMLDivElement | null>(null);
 
   /*
-   * Alt+F10's call, put in this editor's slot while the bar is drawn: focus
-   * at the bar's tab stop, the one button of its roving set that holds
-   * `tabindex="0"`. Through the editor's own slot rather than a search of the
-   * document, which may hold another editor's bar first.
+   * Alt+F10's way to the bar, put in this editor's slot while it is mounted:
+   * the bar's tab stop, the one button of its roving set that holds
+   * `tabindex="0"`, or `null` while no bar is drawn. Through the editor's own
+   * slot rather than a search of the document, which may hold another
+   * editor's bar first.
    */
   const focusSlot = useToolbarFocusSlot();
   React.useEffect(() => {
     if (focusSlot === null) return;
-    const focus = (): void => {
-      const stop = bar.current?.querySelector<HTMLElement>('[tabindex="0"]');
-      stop?.focus();
-    };
-    focusSlot.current = focus;
+    const stop = (): HTMLElement | null =>
+      bar.current?.querySelector<HTMLElement>('[tabindex="0"]') ?? null;
+    focusSlot.current = stop;
     return () => {
-      if (focusSlot.current === focus) focusSlot.current = null;
+      if (focusSlot.current === stop) focusSlot.current = null;
     };
   }, [focusSlot]);
   const [placement, setPlacement] = React.useState<ToolbarPlacement | null>(
@@ -337,11 +336,13 @@ export function BlockToolbar({
   }, [measure, hidden, selectedId, selectedIds, document, canvasFrame]);
 
   /*
-   * And when the canvas scrolls. The block does not move in the canvas's own
-   * coordinates, but what of it is on screen does, and the bar keeps to that:
-   * a tall block scrolled past its top takes its bar to the screen's top. The
-   * scroller is the one the screen band is read from, so what is heard and
-   * what is measured cannot be two different elements.
+   * And when the canvas scrolls, or the part of it on screen resizes. The
+   * block does not move in the canvas's own coordinates, but what of it is on
+   * screen does, and the bar keeps to that: a tall block scrolled past its top
+   * takes its bar to the screen's top, and a window made too short for the
+   * bar under a block moves it there too. The scroller is the one the screen
+   * band is read from, so what is heard and what is measured cannot be two
+   * different elements.
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
@@ -353,7 +354,19 @@ export function BlockToolbar({
     if (scroller === null) return;
     const source = scrollEventTarget(scroller);
     source.addEventListener("scroll", measure, { passive: true });
-    return () => source.removeEventListener("scroll", measure);
+    // The window resizing the viewport, and a panel resizing the scroller,
+    // which the observer only reports where the runtime has one.
+    const view = scroller.ownerDocument.defaultView;
+    view?.addEventListener("resize", measure);
+    const Sizes = view?.ResizeObserver;
+    const sizes =
+      typeof Sizes === "function" ? new Sizes(() => measure()) : null;
+    sizes?.observe(scroller);
+    return () => {
+      source.removeEventListener("scroll", measure);
+      view?.removeEventListener("resize", measure);
+      sizes?.disconnect();
+    };
   }, [measure, hidden, selectedId, canvasFrame]);
 
   const focusAt = React.useCallback((index: number) => {

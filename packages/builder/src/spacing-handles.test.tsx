@@ -1897,6 +1897,22 @@ describe("what the block's author allows", () => {
     ).toBeNull();
   });
 
+  it("gives a handle its whole band when the box beside it has no handle", () => {
+    // A margin-only block's page still renders a padding band over the same
+    // edge. With no padding handle there is nothing to share with, so the
+    // margin keeps its 24px on its moving edge.
+    const rect = { x: 0, y: 100, width: 50, height: 40 };
+    mount(
+      [
+        { box: "margin", side: "top", rect, label: "-40", negative: true },
+        { box: "padding", side: "top", rect, label: "40", negative: false },
+      ],
+      subjectWith(),
+      documentWith(undefined, "acme/margin-only")
+    );
+    expect(handle("top margin").style.height).toBe("24px");
+  });
+
   it("withholds every handle for a block declaring no spacing", () => {
     mount(
       [band("margin", "top", "10"), band("padding", "left", "4")],

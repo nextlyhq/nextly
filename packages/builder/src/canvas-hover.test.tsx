@@ -129,6 +129,41 @@ describe("pointing at a block on the canvas", () => {
     expect(pointed()).toBe("nothing");
   });
 
+  it("lets go of the block once the pointer moves onto chrome over it", async () => {
+    // A spacing handle or the toolbar is inside the canvas, so no
+    // `pointerleave` fires on the way from the block onto it.
+    render(canvas());
+    await act(async () => undefined);
+    const inner = node("inner");
+    if (inner === null) throw new Error("no inner block");
+    fireEvent.pointerMove(inner);
+    expect(pointed()).toBe("inner");
+    const chrome = document.createElement("div");
+    chrome.setAttribute("data-nx-chrome", "");
+    inner.append(chrome);
+    fireEvent.pointerMove(chrome);
+    expect(pointed()).toBe("nothing");
+  });
+
+  it("leaves a move inside a canvas a block renders to that canvas", async () => {
+    // A block can draw a canvas of its own, and its moves bubble here. Its
+    // addresses are another document's, so this canvas's hover is left alone.
+    render(canvas());
+    await act(async () => undefined);
+    const outer = node("outer");
+    if (outer === null) throw new Error("no outer block");
+    fireEvent.pointerMove(outer);
+    expect(pointed()).toBe("outer");
+    const nested = document.createElement("div");
+    nested.className = "nx-canvas";
+    const ghost = document.createElement("p");
+    ghost.setAttribute("data-nx-node", "ghost");
+    nested.append(ghost);
+    outer.append(nested);
+    fireEvent.pointerMove(ghost);
+    expect(pointed()).toBe("outer");
+  });
+
   it("points at nothing while a block is being dragged", async () => {
     const { rerender } = render(canvas());
     await act(async () => undefined);

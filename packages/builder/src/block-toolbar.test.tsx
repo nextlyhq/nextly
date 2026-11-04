@@ -421,6 +421,31 @@ describe("BlockToolbar", () => {
     expect(document.activeElement).toBe(stop);
   });
 
+  it("leaves Alt+F10 to the browser in an editor drawing no toolbar", () => {
+    // A host may render the keystrokes alone, and the bar is not drawn while
+    // a block is dragged: with no bar to focus, the key is not taken.
+    register();
+    const editor = editorSpy(pair(), "a");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
+          <Canvas
+            document={editor.document}
+            siteStyles={{ css: "", classes: {} } as never}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+          />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+    const taken = !fireEvent.keyDown(document.body, {
+      key: "F10",
+      code: "F10",
+      altKey: true,
+    });
+    expect(taken).toBe(false);
+  });
+
   it("takes focus on Alt+F10 in ITS editor, with another editor on the page", () => {
     // Two editors in one document, as two blocks fields on one form give,
     // each listening for keys inside itself. The bar Alt+F10 reaches is the
@@ -492,6 +517,38 @@ describe("BlockToolbar", () => {
       const scroller = document.querySelector("[data-scroller]");
       if (scroller === null) throw new Error("no scroller");
       fireEvent.scroll(scroller);
+      expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("moves when the window resizes the part of the page on screen", () => {
+    // A block 10px down a scroller: the bar goes below it while that fits on
+    // screen, and to the screen's top once the window is too short for it.
+    // Nothing the bar observes resizes: only the scroller's visible part.
+    let shown = 900;
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, shown);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(10, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("below");
+      shown = 150;
+      fireEvent(window, new Event("resize"));
       expect(bar.getAttribute("data-side")).toBe("pinned");
     } finally {
       boxes.mockRestore();

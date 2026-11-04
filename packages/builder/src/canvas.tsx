@@ -1826,8 +1826,23 @@ function useCanvasHover(
   const onPointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       dragMove?.(event);
-      if (dragging || isChrome(event.target)) return;
-      setHovered(nodeIdFromEvent(event.target));
+      if (dragging) return;
+      const { target } = event;
+      // Chrome over a block is inside the canvas, so moving onto it fires no
+      // `pointerleave`: the block is let go here instead.
+      if (isChrome(target)) {
+        setHovered(null);
+        return;
+      }
+      // A canvas a block renders is another document, with its own addresses:
+      // its moves bubble here and are left to it.
+      if (
+        !isElement(target) ||
+        target.closest(`.${CANVAS_ROOT_CLASS}`) !== event.currentTarget
+      ) {
+        return;
+      }
+      setHovered(nodeIdFromEvent(target));
     },
     [dragMove, dragging, setHovered]
   );
