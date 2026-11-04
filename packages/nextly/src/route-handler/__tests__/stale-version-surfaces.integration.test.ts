@@ -84,16 +84,24 @@ async function rest(
   const res = await createDynamicHandlers()[method](
     new Request(`http://localhost/api/${path.join("/")}`, {
       method,
-      headers: { origin: "http://localhost", "content-type": "application/json" },
+      headers: {
+        origin: "http://localhost",
+        "content-type": "application/json",
+      },
       ...(body ? { body: JSON.stringify(body) } : {}),
     }),
     { params: Promise.resolve({ params: path }) }
   );
-  return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+  return {
+    status: res.status,
+    json: (await res.json()) as Record<string, unknown>,
+  };
 }
 
 /** The error a call threw, or a failure if it threw none. */
-async function thrown(call: () => Promise<unknown>): Promise<Record<string, unknown>> {
+async function thrown(
+  call: () => Promise<unknown>
+): Promise<Record<string, unknown>> {
   try {
     await call();
   } catch (error) {
@@ -105,94 +113,122 @@ async function thrown(call: () => Promise<unknown>): Promise<Record<string, unkn
 const errorBodyOf = (json: Record<string, unknown>) =>
   (json.error as Record<string, unknown> | undefined) ?? json;
 
-describe.each(getConfiguredTestDialects())("an out-of-date update on every surface (%s)", dialect => {
-  it("is refused with STALE_VERSION and the current version by REST, the Direct API and the plugin service", async () => {
-    const t = await boot(dialect);
-    const created = (await t.nextly.create({
-      collection: NOTES as never,
-      data: { title: "first" },
-      overrideAccess: true,
-    } as never)) as { item?: Record<string, unknown> } & Record<string, unknown>;
-    const doc = created.item ?? created;
-    const id = String(doc.id);
-    const read = String(doc._rev);
-    await t.nextly.update({
-      collection: NOTES as never,
-      id,
-      data: { title: "theirs", _rev: read },
-      overrideAccess: true,
-    } as never);
-
-    // REST, as a visitor that may read and update.
-    const viaRest = await rest("PATCH", ["collections", NOTES, "entries", id], {
-      title: "mine",
-      _rev: read,
-    });
-    expect(viaRest.status).toBe(409);
-    const restError = errorBodyOf(viaRest.json);
-    expect(restError).toMatchObject({ code: "STALE_VERSION", data: { currentVersion: "2" } });
-    // A visitor has no account to be told who changed it by.
-    expect(restError.data).not.toHaveProperty("changedBy");
-    expect(restError.data).not.toHaveProperty("changedAt");
-
-    // The Direct API, trusted: told who and when as well.
-    const direct = await thrown(() =>
-      t.nextly.update({
+describe.each(getConfiguredTestDialects())(
+  "an out-of-date update on every surface (%s)",
+  dialect => {
+    it("is refused with STALE_VERSION and the current version by REST, the Direct API and the plugin service", async () => {
+      const t = await boot(dialect);
+      const created = (await t.nextly.create({
+        collection: NOTES as never,
+        data: { title: "first" },
+        overrideAccess: true,
+      } as never)) as unknown as { item?: Record<string, unknown> } & Record<
+        string,
+        unknown
+      >;
+      const doc = created.item ?? created;
+      const id = String(doc.id);
+      const read = String(doc._rev);
+      await t.nextly.update({
         collection: NOTES as never,
         id,
-        data: { title: "mine", _rev: read },
+        data: { title: "theirs", _rev: read },
         overrideAccess: true,
-      } as never)
-    );
-    expect(direct).toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
-    expect(direct.publicData).toMatchObject({ currentVersion: "2", changedBy: { kind: "system" } });
+      } as never);
 
-    // The plugin service.
-    const plugin = await thrown(() => services!.updateEntry(NOTES, id, { title: "mine", _rev: read }, SYSTEM));
-    expect(plugin).toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
-    expect((plugin.publicData as Record<string, unknown>).currentVersion).toBe("2");
+      // REST, as a visitor that may read and update.
+      const viaRest = await rest(
+        "PATCH",
+        ["collections", NOTES, "entries", id],
+        {
+          title: "mine",
+          _rev: read,
+        }
+      );
+      expect(viaRest.status).toBe(409);
+      const restError = errorBodyOf(viaRest.json);
+      expect(restError).toMatchObject({
+        code: "STALE_VERSION",
+        data: { currentVersion: "2" },
+      });
+      // A visitor has no account to be told who changed it by.
+      expect(restError.data).not.toHaveProperty("changedBy");
+      expect(restError.data).not.toHaveProperty("changedAt");
 
-    // Nothing was written by any of them.
-    const now = (await t.nextly.findByID({
-      collection: NOTES as never,
-      id,
-      overrideAccess: true,
-    } as never)) as Record<string, unknown>;
-    expect(now).toMatchObject({ title: "theirs", _rev: "2" });
-  });
+      // The Direct API, trusted: told who and when as well.
+      const direct = await thrown(() =>
+        t.nextly.update({
+          collection: NOTES as never,
+          id,
+          data: { title: "mine", _rev: read },
+          overrideAccess: true,
+        } as never)
+      );
+      expect(direct).toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
+      expect(direct.publicData).toMatchObject({
+        currentVersion: "2",
+        changedBy: { kind: "system" },
+      });
 
-  it("refuses a Single the same way through REST and the Direct API", async () => {
-    const t = await boot(dialect);
-    const first = docOrItem(
+      // The plugin service.
+      const plugin = await thrown(() =>
+        services!.updateEntry(NOTES, id, { title: "mine", _rev: read }, SYSTEM)
+      );
+      expect(plugin).toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
+      expect(
+        (plugin.publicData as Record<string, unknown>).currentVersion
+      ).toBe("2");
+
+      // Nothing was written by any of them.
+      const now = (await t.nextly.findByID({
+        collection: NOTES as never,
+        id,
+        overrideAccess: true,
+      } as never)) as Record<string, unknown>;
+      expect(now).toMatchObject({ title: "theirs", _rev: "2" });
+    });
+
+    it("refuses a Single the same way through REST and the Direct API", async () => {
+      const t = await boot(dialect);
+      const first = docOrItem(
+        await t.nextly.updateSingle({
+          slug: SETTINGS as never,
+          data: { notice: "first" },
+          overrideAccess: true,
+        } as never)
+      );
+      const read = String(first._rev);
       await t.nextly.updateSingle({
         slug: SETTINGS as never,
-        data: { notice: "first" },
+        data: { notice: "theirs", _rev: read },
         overrideAccess: true,
-      } as never)
-    );
-    const read = String(first._rev);
-    await t.nextly.updateSingle({
-      slug: SETTINGS as never,
-      data: { notice: "theirs", _rev: read },
-      overrideAccess: true,
-    } as never);
+      } as never);
 
-    const viaRest = await rest("PATCH", ["singles", SETTINGS], { notice: "mine", _rev: read });
-    expect(viaRest.status).toBe(409);
-    expect(errorBodyOf(viaRest.json)).toMatchObject({ code: "STALE_VERSION" });
+      const viaRest = await rest("PATCH", ["singles", SETTINGS], {
+        notice: "mine",
+        _rev: read,
+      });
+      expect(viaRest.status).toBe(409);
+      expect(errorBodyOf(viaRest.json)).toMatchObject({
+        code: "STALE_VERSION",
+      });
 
-    const direct = await thrown(() =>
-      t.nextly.updateSingle({
-        slug: SETTINGS as never,
-        data: { notice: "mine", _rev: read },
-        overrideAccess: true,
-      } as never)
-    );
-    expect(direct).toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
-  });
-});
+      const direct = await thrown(() =>
+        t.nextly.updateSingle({
+          slug: SETTINGS as never,
+          data: { notice: "mine", _rev: read },
+          overrideAccess: true,
+        } as never)
+      );
+      expect(direct).toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
+    });
+  }
+);
 
 function docOrItem(value: unknown): Record<string, unknown> {
-  const record = value as { item?: Record<string, unknown> } & Record<string, unknown>;
+  const record = value as { item?: Record<string, unknown> } & Record<
+    string,
+    unknown
+  >;
   return record.item ?? record;
 }
