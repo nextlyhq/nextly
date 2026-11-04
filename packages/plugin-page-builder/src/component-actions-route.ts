@@ -69,7 +69,6 @@ import {
   asCaller,
   blocksDocumentOf,
   createdId,
-  documentVersionOf,
   derivedSlug,
   planRefusal,
   readBodyWith,
@@ -79,11 +78,11 @@ import {
   requireUnchangedPage,
   storedPageReadOf,
   storeOf,
-  withVersionFrom,
   type CompositionRouteContext,
   type CompositionRouteSetup,
   type StoredPageRead,
 } from "./composition-route-kit";
+import { documentVersionOf, withVersionFrom } from "./document-version";
 import { DRY_RUN_COMPONENT_ID } from "./library-contract";
 import { readingAsUser } from "./library-route";
 import type { OriginStore } from "./origin-store";

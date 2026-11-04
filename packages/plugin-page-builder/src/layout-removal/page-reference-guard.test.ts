@@ -270,6 +270,13 @@ describe("a page write that landed while its Layout was removed", () => {
     ]);
   });
 
+  it("clears it with the version the page was read at, so a save since refuses the clear", async () => {
+    const page = { id: "p1", layout: FENCED, status: "draft", _rev: "9" };
+    const { run, updates } = guard(row({ step: "final" }), page);
+    await run("afterUpdate", { data: page, originalData: page });
+    expect(updates[0]?.data).toEqual({ layout: null, _rev: "9" });
+  });
+
   it("logs which page was cleared, from which Layout, and why", async () => {
     const page = { id: "p1", layout: FENCED, status: "draft" };
     const { run, logged } = guard(row({ step: "final" }), page);

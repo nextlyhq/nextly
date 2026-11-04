@@ -90,11 +90,11 @@ import {
   requireUnchangedPage,
   storedPageReadOf,
   storeOf,
-  withVersionFrom,
   type CompositionRouteContext,
   type CompositionRouteSetup,
   type StoredPageRead,
 } from "./composition-route-kit";
+import { withVersionFrom } from "./document-version";
 import {
   COMPONENT_FROM_SELECTION_ROUTE_PATH,
   DRY_RUN_COMPONENT_ID,

@@ -22,6 +22,7 @@ import type { CommittedWriteReconciler } from "./class-usage-hook";
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import type { ActionBy } from "./component-actions-contract";
+import { documentVersionOf } from "./document-version";
 import type { ComponentStore } from "./library-route";
 
 /** The capabilities the composition routes use, named rather than imported whole. */
@@ -188,23 +189,11 @@ export function blocksDocumentOf(
     : (value as BlockDocument);
 }
 
-/**
- * The key a read gives a document's version under, and an update sends it
- * back under: the update then applies only to the version it was read from.
- */
-export const DOCUMENT_VERSION_KEY = "_rev";
-
 /** A stored page's blocks document, and the version of the read it came from. */
 export interface StoredPageRead {
   readonly document: BlockDocument;
   /** The row's version as read; absent from a server that issues none. */
   readonly rev: string | undefined;
-}
-
-/** A row's version, as a read gave it, or `undefined` when it gave none. */
-export function documentVersionOf(row: unknown): string | undefined {
-  const value = (row as Record<string, unknown> | null)?.[DOCUMENT_VERSION_KEY];
-  return typeof value === "string" ? value : undefined;
 }
 
 /** A row's blocks field with the row's version, or `null` when it holds none. */
@@ -214,17 +203,6 @@ export function storedPageReadOf(
 ): StoredPageRead | null {
   const document = blocksDocumentOf(row, field);
   return document === null ? null : { document, rev: documentVersionOf(row) };
-}
-
-/**
- * The data of an update made from a read: it carries the version that read
- * gave, so a save made since refuses it rather than being overwritten.
- */
-export function withVersionFrom(
-  data: Record<string, unknown>,
-  rev: string | undefined
-): Record<string, unknown> {
-  return rev === undefined ? data : { ...data, [DOCUMENT_VERSION_KEY]: rev };
 }
 
 /**

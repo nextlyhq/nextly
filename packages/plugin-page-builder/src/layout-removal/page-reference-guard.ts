@@ -56,6 +56,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
 import { pageLayoutRefusal, type FencedLayoutState } from "./words";
@@ -237,10 +238,12 @@ export async function clearPageReference(
   }
   const isDraft = current._isWorkingDraft === true;
   if (!isDraft && current.status === "published") return false;
+  // Sent with the version the page was read at above, so a save of the page
+  // between that read and this write refuses it rather than being undone.
   await nextly.update({
     collection: pages,
     id: pageId,
-    data: { layout: null },
+    data: withVersionFrom({ layout: null }, documentVersionOf(current)),
     overrideAccess: true,
   });
   return true;

@@ -10,6 +10,12 @@
  */
 import type { Nextly } from "nextly";
 
+import {
+  asOverwrite,
+  documentVersionOf,
+  withVersionFrom,
+} from "../document-version";
+
 import { DEFAULT_LAYOUT_WRITE_CONTEXT } from "./settings-single";
 
 /**
@@ -43,6 +49,11 @@ export interface LayoutSettings {
    * set itself (the seed, or the repair) or one recorded before this existed.
    */
   readonly defaultLayoutChangedBy: string | null;
+  /**
+   * The settings document's version as read, which a write made from this
+   * read sends back; absent when the document was never stored.
+   */
+  readonly rev: string | undefined;
 }
 
 /**
@@ -93,6 +104,7 @@ export async function readLayoutSettings(
       doc.defaultLayoutChangedBy !== ""
         ? doc.defaultLayoutChangedBy
         : null,
+    rev: documentVersionOf(doc),
   };
 }
 
@@ -100,11 +112,16 @@ export async function readLayoutSettings(
  * Write the settings Single, with the marker its guard admits.
  *
  * The only function that carries the marker, so the set of sanctioned writers
- * is the set of callers of this function.
+ * is the set of callers of this function. `from` is the read the write was
+ * decided on: the write sends its version, so a change to the settings made
+ * since refuses the write rather than being overwritten. Settings never
+ * stored have no version, and nothing to overwrite, so the first write says
+ * it sets them whatever is there.
  */
 export async function writeLayoutSettings(
   nextly: Pick<DefaultLayoutDirectApi, "updateSingle">,
   slugs: DefaultLayoutSlugs,
+  from: LayoutSettings,
   data: {
     defaultLayout?: string | null;
     seededLayout?: string | null;
@@ -113,7 +130,10 @@ export async function writeLayoutSettings(
 ): Promise<void> {
   await nextly.updateSingle({
     slug: slugs.settings,
-    data,
+    data:
+      from.rev === undefined
+        ? asOverwrite(data)
+        : withVersionFrom(data, from.rev),
     overrideAccess: true,
     context: { ...DEFAULT_LAYOUT_WRITE_CONTEXT },
   });

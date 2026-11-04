@@ -903,7 +903,12 @@ describe.each(getConfiguredTestDialects())(
           )
             return;
           promoted = true;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: other }
+          );
         });
 
         const answer = await remove(cookie, other, "delete");
@@ -933,7 +938,12 @@ describe.each(getConfiguredTestDialects())(
           )
             return;
           armed = false;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: other }
+          );
         });
 
         const answer = await remove(cookie, other, "delete");
@@ -961,7 +971,12 @@ describe.each(getConfiguredTestDialects())(
           const original = (context as { originalData?: unknown }).originalData;
           if (!armed || relationId(original) !== other) return;
           armed = false;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: other }
+          );
         });
 
         const answer = await remove(cookie, other, "unpublish");
@@ -1642,7 +1657,12 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         /** The Layouts titled as the deleted one, other than the deleted id. */
         const restoredOnes = async () =>
           (
@@ -1709,7 +1729,12 @@ describe.each(getConfiguredTestDialects())(
         for (const [at, slug] of taken.entries()) {
           holders.push(await layout(t, `Holder ${String(at)}`, slug));
         }
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
 
         await expect(ensure(t)).rejects.toThrow();
         await settleLayoutRemovals({
@@ -1745,7 +1770,12 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
 
         expect(await ensure(t)).toBe("restored");
 
@@ -1774,7 +1804,12 @@ describe.each(getConfiguredTestDialects())(
         });
         const other = String(created.item.id);
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
 
         expect(await ensure(t)).toBe("restored");
 
@@ -1794,7 +1829,12 @@ describe.each(getConfiguredTestDialects())(
         // still there. The default names it, so the default is unusable.
         const other = await layout(t, "Other", "other", "draft");
         await stoppedAtFinal(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const count = (
           await t.nextly.find({
             collection: LAYOUTS_SLUG,

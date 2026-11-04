@@ -34,6 +34,7 @@ import {
   type DefaultLayoutDirectApi,
   type DefaultLayoutSlugs,
 } from "../default-layout/store";
+import { asOverwrite } from "../document-version";
 
 import { authoredOf } from "./layout-copy";
 import type { LayoutCopy, LayoutRemoval, LayoutRemovalStore } from "./store";
@@ -66,14 +67,16 @@ export async function republishFromCopy(
   context: Record<string, unknown>
 ): Promise<void> {
   const slug = copy?.live.slug;
+  // The copy is put back as it was, whatever the Layout holds now: an
+  // overwrite by intent.
   await deps.nextly.update({
     collection: deps.slugs.layouts,
     id: layoutId,
-    data: {
+    data: asOverwrite({
       ...(copy === null ? {} : authoredOf(copy.live)),
       ...(typeof slug === "string" && slug !== "" ? { slug } : {}),
       status: "published",
-    },
+    }),
     overrideAccess: true,
     context,
   });
@@ -108,11 +111,13 @@ async function restoreDraft(
   const draft = copy.draft;
   if (draft === null) return;
   const slug = draftSlug(copy);
+  // The copy's draft is put back whatever the Layout holds: an overwrite by
+  // intent, as the live row's is.
   const save = (data: Record<string, unknown>) =>
     deps.nextly.update({
       collection: deps.slugs.layouts,
       id: restored,
-      data,
+      data: asOverwrite(data),
       overrideAccess: true,
       ...(context === undefined ? {} : { context }),
     });
@@ -253,7 +258,7 @@ async function finishRestore(
   // kept, and the restored Layout is then simply one more Layout.
   const latest = await readLayoutSettings(deps.nextly, deps.slugs);
   if (latest.defaultLayout === removal.layoutId) {
-    await writeLayoutSettings(deps.nextly, deps.slugs, {
+    await writeLayoutSettings(deps.nextly, deps.slugs, latest, {
       defaultLayout: restored,
       defaultLayoutChangedBy: null,
     });
