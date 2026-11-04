@@ -223,3 +223,26 @@ describe("Visible on", () => {
     ).not.toContain("box-shadow");
   });
 });
+
+describe("an inspector switch", () => {
+  it("is a 24px target, with no other target needed out of its way", () => {
+    // The shared switch is 18px tall. A target under 24px passes only when no
+    // other target sits within 12px of its centre, and an on/off row ends
+    // directly above "Visible on", so the switch is sized to pass alone.
+    const root = ruleBody(
+      CHROME,
+      ':is(.nx-inspector, .nx-style-inspector) [data-slot="switch"]'
+    );
+    expect(root).toContain("block-size: 1.5rem");
+    expect(root).toContain("inline-size: 2.5rem");
+    // Its thumb grows with it, so the track's inset stays one pixel a side:
+    // 2.5rem less a 1px border each side, less the thumb, is the 18px that
+    // the thumb's `calc(100% - 2px)` travel covers.
+    expect(
+      ruleBody(
+        CHROME,
+        ':is(.nx-inspector, .nx-style-inspector) [data-slot="switch-thumb"]'
+      )
+    ).toContain("block-size: 1.25rem");
+  });
+});
