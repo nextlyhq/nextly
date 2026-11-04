@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../../plugins/__tests__/helpers/dialect-matrix";
+import { companionUniqueIndexName } from "../../../i18n/migration/companion-unique-indexes";
 import {
   createTestNextly,
   type TestNextly,
@@ -40,7 +41,12 @@ describeEachDialect(
 
     beforeEach(async () => {
       vi.stubEnv("NODE_ENV", "development");
-      current = await createTestNextly({ dialect, collections: [] });
+      // Languages configured, for the case of a translated unique field; the others aren't translated.
+      current = await createTestNextly({
+        dialect,
+        collections: [],
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
     });
 
     afterEach(async () => {
@@ -141,6 +147,54 @@ describeEachDialect(
           { heading: "Four", code: "same" }
         );
         expect(second.success, JSON.stringify(second)).toBe(false);
+      }
+    );
+
+    it.skipIf(dialect === "mysql")(
+      "refuses a new collection whose unique field's index name another table's index holds",
+      async () => {
+        await collectionWith("notes", ["Note"]);
+        const blocking = uniqueIndexNameForColumn("dc_posts", "code");
+        await query(
+          `CREATE INDEX ${q(blocking)} ON ${q("dc_notes")} (${q("id")})`
+        );
+
+        const refused = await handler().createCollection({
+          name: "posts",
+          label: "posts",
+          fields: withUniqueCode,
+        });
+
+        expect(refused.success, JSON.stringify(refused)).toBe(false);
+        expect(JSON.stringify(refused)).toContain(blocking);
+        expect(await columnsOf("dc_posts")).toEqual([]);
+      }
+    );
+
+    it.skipIf(dialect === "mysql")(
+      "refuses a translated unique field whose per-language index name another table's index holds",
+      async () => {
+        const created = await handler().createCollection({
+          name: "posts",
+          label: "posts",
+          localized: true,
+          fields: [{ name: "heading", type: "text" }],
+        });
+        expect(created.success, JSON.stringify(created)).toBe(true);
+        await collectionWith("notes", ["Note"]);
+        const blocking = companionUniqueIndexName("dc_posts_locales", "code");
+        await query(
+          `CREATE INDEX ${q(blocking)} ON ${q("dc_notes")} (${q("id")})`
+        );
+
+        const refused = await handler().updateCollection(
+          { collectionName: "posts" },
+          { localized: true, fields: withUniqueCode }
+        );
+
+        expect(refused.success, JSON.stringify(refused)).toBe(false);
+        expect(JSON.stringify(refused)).toContain(blocking);
+        expect(await columnsOf("dc_posts_locales")).not.toContain("code");
       }
     );
 
