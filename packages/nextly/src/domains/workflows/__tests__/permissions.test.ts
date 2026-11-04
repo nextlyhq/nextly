@@ -28,11 +28,11 @@ function target(slug: string, workflow?: Workflow): WorkflowTarget {
   };
 }
 
-/** A workflow whose approve step asks for `permission`. */
-function approvedBy(permission: string) {
+/** A workflow whose approve step asks for `permission`, under `slug`. */
+function approvedBy(permission: string, slug = "custom") {
   return () =>
     defineWorkflow({
-      slug: "custom",
+      slug,
       label: "Custom",
       stages: [
         { name: "drafting", label: "Drafting" },
@@ -155,6 +155,51 @@ describe("a workflow whose permissions could not be its own", () => {
         })
       )
     ).toEqual(["workflow_permission_collides"]);
+  });
+
+  it("refuses a step action whose seeded slug is another entity's built-in permission, naming both", () => {
+    // `read-without-review` on posts and `read` on `without-review-posts` are one slug.
+    let message = "";
+    try {
+      workflowAttachmentsOf({
+        collections: [
+          target("posts", approvedBy("read-without-review")()),
+          target("without-review-posts"),
+        ],
+      });
+    } catch (error) {
+      const data = (
+        error as { publicData?: { errors?: { message: string }[] } }
+      ).publicData;
+      message = (data?.errors ?? []).map(e => e.message).join(" ");
+    }
+    expect(
+      codesOf(() =>
+        workflowAttachmentsOf({
+          collections: [
+            target("posts", approvedBy("read-without-review")()),
+            target("without-review-posts"),
+          ],
+        })
+      )
+    ).toContain("workflow_permission_collides");
+    expect(message).toMatch(
+      /read-without-review-posts.*`read`.*without-review-posts/s
+    );
+  });
+
+  it("refuses two workflows whose seeded slugs are one", () => {
+    // `sign-off-legal` on `legal` and `sign` on `off-legal` are one slug.
+    expect(
+      codesOf(() =>
+        workflowAttachmentsOf({
+          collections: [
+            target("legal", approvedBy("sign-off")()),
+            target("off-legal", approvedBy("sign", "custom-sign")()),
+          ],
+        })
+      )
+    ).toContain("workflow_permission_collides");
   });
 
   it("refuses a seeded permission slug too long to store", () => {

@@ -221,16 +221,6 @@ export async function updateReviewState(
   return affected > 0;
 }
 
-/** Removes a part's review state. How many rows went: 0 or 1. */
-export function deleteReviewState(
-  db: ReviewStatesDb,
-  part: ReviewPart
-): Promise<number> {
-  return db.delete(REVIEW_STATES_TABLE, {
-    and: [{ column: "partKey", op: "=", value: reviewStateKey(part) }],
-  });
-}
-
 /** Removes the review state of every part of a document. */
 export function deleteDocumentReviewStates(
   db: ReviewStatesDb,

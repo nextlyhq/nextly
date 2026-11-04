@@ -18,7 +18,7 @@ import { WORKFLOW_SETTINGS_TABLE } from "../../schemas/workflow-settings";
 import type { ReviewStatesDb } from "./review-state-repository";
 
 /** What admins change for one workflow; every part optional, and absent when unchanged. */
-export const workflowSettingsSchema = z
+const workflowSettingsSchema = z
   .object({
     /** Each stage's default reviewer, by stage name. */
     defaultReviewers: z

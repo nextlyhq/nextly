@@ -71,14 +71,19 @@ export async function seedRolePresets(
     owner: p.owner ?? null,
   }));
 
-  // The permissions the attached workflows seed, which no preset grants. Read from the published
-  // workflows, which boot publishes before it seeds the presets.
-  const [{ registeredWorkflows }, { workflowSeededPermissions }] =
-    await Promise.all([
-      import("../../domains/workflows/registry"),
-      import("../../domains/workflows/permissions"),
-    ]);
-  const isWorkflow = workflowSeededPermissions(registeredWorkflows());
+  // The permissions workflows seed, which no preset grants: those the published workflows seed
+  // (boot publishes them before it seeds the presets), and any row with a workflow's shape, which
+  // a workflow seeded before it was detached or its action renamed.
+  const [
+    { registeredWorkflows },
+    { hasWorkflowSeededShape, workflowSeededPermissions },
+  ] = await Promise.all([
+    import("../../domains/workflows/registry"),
+    import("../../domains/workflows/permissions"),
+  ]);
+  const attached = workflowSeededPermissions(registeredWorkflows());
+  const isWorkflow = (p: (typeof permissions)[number]) =>
+    attached(p) || hasWorkflowSeededShape(p);
 
   for (const preset of ROLE_PRESETS) {
     try {

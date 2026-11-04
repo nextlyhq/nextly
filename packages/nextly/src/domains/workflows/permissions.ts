@@ -5,7 +5,10 @@
  *
  * @module domains/workflows/permissions
  */
-import { PermissionActionSchema } from "../../schemas/_zod/rbac";
+import {
+  isSystemResource,
+  PermissionActionSchema,
+} from "../../schemas/_zod/rbac";
 
 import type { Workflow } from "./types";
 
@@ -13,7 +16,7 @@ import type { Workflow } from "./types";
 export const PUBLISH_WITHOUT_REVIEW = "publish-without-review";
 
 /** The actions every collection or Single is seeded with already; a step naming one uses it. */
-const BUILT_IN_ACTIONS: ReadonlySet<string> = new Set(
+export const BUILT_IN_ACTIONS: ReadonlySet<string> = new Set(
   PermissionActionSchema.options
 );
 
@@ -44,6 +47,24 @@ export function isPublishWithoutReview(permission: {
     (permission.slug ?? "")
       .toLowerCase()
       .startsWith(`${PUBLISH_WITHOUT_REVIEW}-`)
+  );
+}
+
+/**
+ * Whether a stored permission row has the shape only a workflow seeds: owned by no app or plugin,
+ * on a collection or Single rather than a system resource, with an action no entity is built with.
+ * Read from the row itself, so a row a workflow seeded stays one after the workflow is detached or
+ * its step's action is renamed, when the registry no longer names it.
+ */
+export function hasWorkflowSeededShape(permission: {
+  action: string;
+  resource: string;
+  owner: string | null;
+}): boolean {
+  return (
+    permission.owner === null &&
+    !isSystemResource(permission.resource) &&
+    !BUILT_IN_ACTIONS.has(permission.action.toLowerCase())
   );
 }
 

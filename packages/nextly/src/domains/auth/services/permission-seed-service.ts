@@ -806,10 +806,12 @@ export class PermissionSeedService extends BaseService {
     const { workflowAttachedTo } = await import("../../workflows/registry");
     const attached = workflowAttachedTo(kind, entitySlug);
     if (!attached) return;
+    // Held as the class itself, so the call below is read as the service's own member.
+    const permissions: PermissionService = this.permissionService;
     for (const action of workflowPermissionActions(attached.workflow)) {
       result.total++;
       try {
-        const owner = await this.permissionService.ownerOf(action, entitySlug);
+        const owner = await permissions.ownerOf(action, entitySlug);
         if (typeof owner === "string") {
           result.skipped++;
           continue;
@@ -818,7 +820,7 @@ export class PermissionSeedService extends BaseService {
           action,
           entitySlug
         );
-        const ensured = await this.permissionService.ensurePermission(
+        const ensured = await permissions.ensurePermission(
           action,
           entitySlug,
           name,

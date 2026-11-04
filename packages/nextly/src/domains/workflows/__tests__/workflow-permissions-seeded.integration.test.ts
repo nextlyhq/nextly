@@ -137,5 +137,48 @@ describe.each(getConfiguredTestDialects())(
         expect(held, preset).not.toContain("publish-without-review-posts");
       }
     });
+
+    it("gives no preset role the rows a detached workflow left", async () => {
+      // Posts had a workflow, since detached: its seeded rows stay, owned by no one, while the
+      // registry no longer names them.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            versions: { drafts: true },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      await seedAllPermissions();
+      const permissions = new PermissionService(
+        current.getService("adapter"),
+        current.getService("logger")
+      );
+      for (const action of ["approve", "publish-without-review"]) {
+        await permissions.ensurePermission(
+          action,
+          "posts",
+          `${action} posts`,
+          `${action}-posts`
+        );
+      }
+
+      await seedRolePresets(current.adapter, current.getService("logger"));
+
+      const services = new ServiceContainer(current.adapter);
+      for (const preset of ["admin", "editor", "author"]) {
+        const found = await services.roles.findRoleIdBySlug(preset);
+        if (!found) throw new Error(`no ${preset} role`);
+        const held = (
+          await services.rolePermissions.listRolePermissions(found.id)
+        ).map(p => `${p.action}-${p.resource}`);
+        expect(held, preset).toContain("read-posts");
+        expect(held, preset).not.toContain("approve-posts");
+        expect(held, preset).not.toContain("publish-without-review-posts");
+      }
+    });
   }
 );
