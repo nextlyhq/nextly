@@ -340,7 +340,6 @@ import {
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
-  type PartState,
   type StaleWrite,
   type StaleWriteHolder,
   staleVersionErrorFor,
