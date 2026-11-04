@@ -7849,8 +7849,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  */
 .nx-icon-choice {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+}
+
+/* What the value that applies does, on its own line under the icons. */
+.nx-icon-choice__help {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 .nx-icon-choice__strip {

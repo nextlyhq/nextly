@@ -277,3 +277,13 @@ describe("a custom aspect ratio", () => {
     );
   });
 });
+
+describe("an icon choice's help line", () => {
+  it("takes a line of its own under the icons, rather than a column beside them", () => {
+    // Beside the strip it had what was left of the row, one word a line.
+    expect(ruleBody(CHROME, ".nx-icon-choice")).toContain("flex-wrap: wrap");
+    expect(ruleBody(CHROME, ".nx-icon-choice__help")).toContain(
+      "flex-basis: 100%"
+    );
+  });
+});

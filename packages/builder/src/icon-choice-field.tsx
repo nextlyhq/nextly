@@ -286,7 +286,7 @@ export function IconChoiceField({
           )}
         </div>
         {help === undefined ? null : (
-          <p className="nx-inspector__note" id={helpId}>
+          <p className="nx-inspector__note nx-icon-choice__help" id={helpId}>
             {help}
           </p>
         )}
