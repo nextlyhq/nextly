@@ -786,6 +786,56 @@ describe("LanguagePanel", () => {
     expect(publishAll).toHaveBeenCalledTimes(1);
   });
 
+  // Each opening asks the server again, and until it answers the dialog says
+  // nothing from the earlier answer: a language saved or published since
+  // changes what the publish does. The plausible broken implementation shows
+  // the cached outcomes while it refetches and offers Publish on them.
+  it("offers no publish on an earlier answer while it asks again", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    let answer: (preview: typeof PREVIEW) => void = () => {};
+    const fetchPreview = vi
+      .fn()
+      .mockResolvedValueOnce(PREVIEW)
+      .mockImplementationOnce(
+        () =>
+          new Promise<typeof PREVIEW>(resolve => {
+            answer = resolve;
+          })
+      );
+    publishState.mockReturnValue({
+      ...PUBLISH_IDLE,
+      preview: { fetch: fetchPreview, key: ["publish-all-preview", "again"] },
+    });
+    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
+    const confirmIn = () =>
+      Array.from(
+        screen.getByRole("alertdialog").querySelectorAll("button")
+      ).find(button => button.textContent === "Publish all");
+
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    await screen.findByRole("list", { name: "What happens to each language" });
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(
+      await screen.findByText("Checking what publishing does to each language…")
+    ).toBeInTheDocument();
+    expect(confirmIn()).toBeDisabled();
+    expect(fetchPreview).toHaveBeenCalledTimes(2);
+
+    answer({
+      ...PREVIEW,
+      blockers: [{ reason: "pending-change-forbidden", fields: ["lockState"] }],
+    });
+    expect(
+      await screen.findByText(
+        "Unpublished changes edit lockState, which you may not publish."
+      )
+    ).toBeInTheDocument();
+    expect(confirmIn()).toBeDisabled();
+    expect(publishAll).not.toHaveBeenCalled();
+  });
+
   it("offers no publish the server would refuse, and says why", async () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     publishState.mockReturnValue({

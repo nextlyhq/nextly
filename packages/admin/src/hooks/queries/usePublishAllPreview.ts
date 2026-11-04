@@ -43,6 +43,9 @@ export function usePublishAllPreview(
     gcTime: 0,
     retry: false,
   });
+  // An answer kept from an earlier opening is not this opening's: until the
+  // fresh read lands, the dialog waits, and offers no publish on it.
+  if (query.isFetching) return { status: "loading" };
   if (query.isError) return { status: "failed" };
   if (query.data === undefined) return { status: "loading" };
   return { status: "ready", preview: query.data };
