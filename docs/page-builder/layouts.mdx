@@ -153,7 +153,9 @@ default Layout, then removes the Layout:
   Layout cleared, so they use the site default.
 - A published page's live version is not changed, since that would publish its unsaved
   edits along with it. It switches to the site default's header and footer as soon as the
-  Layout is gone, and the dialog says how many pages this affects before you start.
+  Layout is gone, and the dialog says how many pages this affects before you start. A
+  published page with no unsaved edits keeps naming the removed Layout in its saved
+  version; it draws the site default, and nothing on the page breaks.
 
 Pages are moved as you: a page you can't edit is left on the Layout and named, with the
 reason ("You can't edit this page."), and the Layout is not removed while any unpublished

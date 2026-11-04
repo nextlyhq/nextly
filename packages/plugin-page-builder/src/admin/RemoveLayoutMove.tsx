@@ -219,7 +219,7 @@ function IdleBody({ check }: { check: RemovalCheck }): JSX.Element {
       {check.liveRows > 0 ? (
         <Alert variant="warning">
           <AlertDescription>
-            {`${String(check.liveRows)} published ${check.liveRows === 1 ? "page switches" : "pages switch"} to ${target}'s header and footer right away. Their saved choice of Layout clears the next time each one is published.`}
+            {`${String(check.liveRows)} published ${check.liveRows === 1 ? "page switches" : "pages switch"} to ${target}'s header and footer right away.`}
           </AlertDescription>
         </Alert>
       ) : null}

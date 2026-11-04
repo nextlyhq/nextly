@@ -402,7 +402,7 @@ describe("moving the pages to the site default first", () => {
     expect(screen.getByText("and 37 more")).toBeTruthy();
     expect(
       screen.getByText(
-        "12 published pages switch to Main's header and footer right away. Their saved choice of Layout clears the next time each one is published."
+        "12 published pages switch to Main's header and footer right away."
       )
     ).toBeTruthy();
     expect(
