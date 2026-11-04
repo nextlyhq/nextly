@@ -27,6 +27,7 @@ function siteWith(
     resolveCollection: async () => declaration,
     singles: async () => singles,
     locales: () => ["en", "de"],
+    defaultLocale: () => "en",
     layouts: "layouts",
     hints: async () => [],
     componentId: "card",

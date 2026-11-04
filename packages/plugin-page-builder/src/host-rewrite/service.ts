@@ -240,17 +240,38 @@ async function definitionsFor(
   form: StoredForm
 ): Promise<DefinitionsAnswer> {
   const locales = installed.site.locales();
+  const read = (locale: string | undefined) =>
+    form.form === "draft"
+      ? draftDefinitionsIn(installed, componentId, ids, locale)
+      : definitionsIn(installed, componentId, ids, locale);
   if (form.host.locale !== undefined || locales.length === 0) {
-    return {
-      kind: "definitions",
-      byId: await definitionsIn(installed, componentId, ids, form.host.locale),
-    };
+    return { kind: "definitions", byId: await read(form.host.locale) };
   }
   const byLanguage: DefinitionsById[] = [];
-  for (const locale of locales) {
-    byLanguage.push(await definitionsIn(installed, componentId, ids, locale));
-  }
+  for (const locale of locales) byLanguage.push(await read(locale));
   return definitionsAlikeInEveryLanguage(byLanguage, ids);
+}
+
+/**
+ * The definitions a working draft is converted from, in one language: each
+ * placed component as the editor resolves it, its own working draft overlaid
+ * on its published definition. A draft host shows those, so its copies are
+ * turned into the blocks its author sees; a live host is converted from the
+ * published definitions alone, which is what visitors see.
+ */
+async function draftDefinitionsIn(
+  installed: RewriteInstall,
+  componentId: string,
+  ids: readonly string[],
+  locale: string | undefined
+): Promise<DefinitionsById> {
+  const published = await definitionsIn(installed, componentId, ids, locale);
+  const overlaid = new Map(published);
+  for (const id of ids) {
+    const draft = await draftDefinition(installed, id, locale);
+    if (draft !== null) overlaid.set(id, draft);
+  }
+  return overlaid;
 }
 
 /**
@@ -280,7 +301,11 @@ async function definitionsIn(
     : new Map([...published, [componentId, draft]]);
 }
 
-/** A component's working draft definition, or `null` when there is none. */
+/**
+ * A component's definition as an editor's preview reads it (its pending
+ * working draft, else its stored row), or `null` when there is no such
+ * component.
+ */
 async function draftDefinition(
   installed: RewriteInstall,
   componentId: string,

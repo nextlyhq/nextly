@@ -278,6 +278,18 @@ export async function fenceIssues(
   }
   const candidates = fencedAmong(placed, fenced);
   if (candidates.length === 0) return [];
+  // A write inside a transaction may run with its hooks skipped (a bulk
+  // import does), and then nothing re-queues the document after it commits.
+  // Validation cannot tell which, so such a write may not hold a fenced
+  // reference at all, even one already stored: it is refused, and saving the
+  // document on its own, which does run its hooks, still works.
+  if (judged.write.inTransaction) {
+    return candidates.map(id => ({
+      path: judged.path,
+      code: COMPONENT_BEING_DELETED,
+      message: inBatchMessage(id),
+    }));
+  }
 
   const stored = await storedFormsOrNothing(judged);
   return candidates
@@ -341,6 +353,11 @@ function holds(form: unknown, componentId: string, maxNodes: number): boolean {
 }
 
 /** The refusal's words. */
+/** The refusal for a write inside a transaction holding a fenced reference. */
+function inBatchMessage(componentId: string): string {
+  return `Component "${componentId}" is being deleted, so content holding it cannot be saved as part of a batch or import. Save it on its own, or remove the component first.`;
+}
+
 /** The refusal when neither the fence nor the whole document could be read. */
 const UNCHECKABLE =
   "Whether this content adds a component that is being deleted could not be checked, so it cannot be saved right now. Try again in a moment.";

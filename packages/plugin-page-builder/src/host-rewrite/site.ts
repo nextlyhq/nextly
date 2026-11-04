@@ -85,6 +85,8 @@ export interface RewriteSite {
   readonly singles: () => Promise<readonly SingleToWalk[] | undefined>;
   /** The site's configured languages. */
   readonly locales: () => readonly string[];
+  /** The site's default language, which validation names as no language. */
+  readonly defaultLocale: () => string | undefined;
   /** The RESOLVED slug Layouts are stored under. */
   readonly layouts: string;
   /** The documents the usage index says place the component; a hint only. */
@@ -532,13 +534,22 @@ function valueAt(
  */
 function expectationFor(
   nextly: RewriteDirectApi,
-  write: HostWrite
+  write: HostWrite,
+  defaultLocale: string | undefined
 ): StoredExpectation {
+  // The language as validation names it: none for the default one.
+  const locale =
+    write.host.locale === undefined || write.host.locale === defaultLocale
+      ? {}
+      : { locale: write.host.locale };
+  const judged = { done: false };
   if (write.mode !== "publish") {
-    return { host: write.host, forms: [write.expected] };
+    return { host: write.host, forms: [write.expected], ...locale, judged };
   }
   return {
     host: write.host,
+    ...locale,
+    judged,
     forms: [write.expected, { form: "draft", hash: write.expected.hash }],
     noPendingDraft: async () => {
       const pending = await readRow(nextly, write.host, "draft");
@@ -549,7 +560,7 @@ function expectationFor(
 
 /** Writes a host as the person running the rewrite, checked against what was read. */
 export function siteHostWriter(
-  site: Pick<RewriteSite, "nextly" | "identity">
+  site: Pick<RewriteSite, "nextly" | "identity" | "defaultLocale">
 ): HostWriter {
   return async write => {
     const field = write.host.path[0];
@@ -570,23 +581,25 @@ export function siteHostWriter(
     const inLocale =
       write.host.locale === undefined ? {} : { locale: write.host.locale };
     try {
-      await writeExpecting(expectationFor(nextly, write), () =>
-        write.host.kind === "single"
-          ? nextly.updateSingle({
-              slug: write.host.slug,
-              data,
-              depth: 0,
-              ...inLocale,
-              ...identity,
-            })
-          : nextly.update({
-              collection: write.host.slug,
-              id: write.host.id ?? "",
-              data,
-              depth: 0,
-              ...inLocale,
-              ...identity,
-            })
+      await writeExpecting(
+        expectationFor(nextly, write, site.defaultLocale()),
+        () =>
+          write.host.kind === "single"
+            ? nextly.updateSingle({
+                slug: write.host.slug,
+                data,
+                depth: 0,
+                ...inLocale,
+                ...identity,
+              })
+            : nextly.update({
+                collection: write.host.slug,
+                id: write.host.id ?? "",
+                data,
+                depth: 0,
+                ...inLocale,
+                ...identity,
+              })
       );
       return { kind: "written" };
     } catch (error) {

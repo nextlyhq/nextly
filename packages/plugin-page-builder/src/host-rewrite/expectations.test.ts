@@ -36,6 +36,7 @@ describe("the compare-and-swap on a rewrite's own write", () => {
       forms: [
         { form: "draft" as const, hash: await storedHash({ nodes: [] }) },
       ],
+      judged: { done: false },
     };
 
     const issue = await writeExpecting(expected, () =>
@@ -51,6 +52,7 @@ describe("the compare-and-swap on a rewrite's own write", () => {
       forms: [
         { form: "draft" as const, hash: await storedHash({ nodes: [] }) },
       ],
+      judged: { done: false },
     };
 
     const issue = await writeExpecting(expected, () =>
@@ -64,6 +66,7 @@ describe("the compare-and-swap on a rewrite's own write", () => {
     const expected = {
       host,
       forms: [{ form: "draft" as const, hash: await storedHash("x") }],
+      judged: { done: false },
     };
 
     const other = await writeExpecting(expected, () =>
@@ -92,21 +95,23 @@ describe("the compare-and-swap on a rewrite's own write", () => {
   it("refuses a publish when a draft appeared, even one that leaves this field alone", async () => {
     const hash = await storedHash({ nodes: [] });
     let pending = false;
-    const expected = {
+    // One expectation per write, as the writer makes them.
+    const expected = () => ({
       host,
       forms: [
         { form: "published" as const, hash },
         { form: "draft" as const, hash },
       ],
       noPendingDraft: async () => !pending,
-    };
+      judged: { done: false },
+    });
 
-    const before = await writeExpecting(expected, () =>
+    const before = await writeExpecting(expected(), () =>
       changedSinceRead(writeOf({ nodes: [] }), "content")
     );
     // An author saves a draft that changes only the title.
     pending = true;
-    const after = await writeExpecting(expected, () =>
+    const after = await writeExpecting(expected(), () =>
       changedSinceRead(writeOf({ nodes: [] }), "content")
     );
 
@@ -134,10 +139,55 @@ describe("the compare-and-swap on a rewrite's own write", () => {
           { form: "published", hash },
           { form: "draft", hash },
         ],
+        judged: { done: false },
       },
       () => changedSinceRead(write, "content")
     );
 
     expect(issue?.code).toBe(HOST_CHANGED);
+  });
+
+  it("judges only the write's own validation, not a hook's nested write after it", async () => {
+    const expected = {
+      host,
+      forms: [
+        { form: "draft" as const, hash: await storedHash({ nodes: [] }) },
+      ],
+      judged: { done: false },
+    };
+
+    const issues = await writeExpecting(expected, async () => [
+      // The rewrite's write: the stored value is as read.
+      await changedSinceRead(writeOf({ nodes: [] }), "content"),
+      // A hook then writes the same field again; the stored value is now the
+      // rewrite's, and the expectation is not this write's to meet.
+      await changedSinceRead(
+        writeOf({ nodes: [{ id: "converted" }] }),
+        "content"
+      ),
+    ]);
+
+    expect(issues).toEqual([undefined, undefined]);
+  });
+
+  it("judges no write in another language", async () => {
+    const expected = {
+      host: { ...host, locale: "de" },
+      locale: "de",
+      forms: [{ form: "draft" as const, hash: await storedHash("x") }],
+      judged: { done: false },
+    };
+    const english = { ...writeOf({ nodes: [] }) };
+    const german = { ...writeOf({ nodes: [] }), locale: "de" };
+
+    const other = await writeExpecting(expected, () =>
+      changedSinceRead(english, "content")
+    );
+    const own = await writeExpecting(expected, () =>
+      changedSinceRead(german, "content")
+    );
+
+    expect(other).toBeUndefined();
+    expect(own?.code).toBe(HOST_CHANGED);
   });
 });

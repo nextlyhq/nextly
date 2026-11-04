@@ -204,4 +204,17 @@ describe("the fence on every write", () => {
 
     expect(issues.map(issue => issue.code)).toEqual([COMPONENT_BEING_DELETED]);
   });
+
+  it("refuses a write inside a transaction that keeps a stored fenced reference", async () => {
+    // A bulk write may skip the hooks that re-queue the document, so even a
+    // reference already stored may not stay in one.
+    const write: PluginFieldWrite = {
+      ...writeOver({ draft: page("card") }),
+      inTransaction: true,
+    };
+
+    const issues = await judge(page("card"), write, fencing("card"));
+
+    expect(issues.map(issue => issue.code)).toEqual([COMPONENT_BEING_DELETED]);
+  });
 });

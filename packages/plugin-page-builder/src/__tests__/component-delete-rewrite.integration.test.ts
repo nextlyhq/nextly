@@ -827,5 +827,106 @@ describe.each(getConfiguredTestDialects())(
         { documentKey: own, state: "unchanged", reason: null },
       ]);
     });
+
+    it("converts a page draft from the component's pending draft, and a live page from its published definition", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const publishedPage = async (title: string) =>
+        String(
+          (
+            await t.nextly.create({
+              collection: "pages",
+              data: {
+                title,
+                slug: `${title.toLowerCase()}-${String(Math.random()).slice(2, 10)}`,
+                status: "published",
+                content: pageDoc([copyOf("i1", cardId)]),
+              },
+              overrideAccess: true,
+            })
+          ).item.id
+        );
+      const withDraft = await publishedPage("Drafted");
+      const liveOnly = await publishedPage("Live");
+      await t.nextly.update({
+        collection: "pages",
+        id: withDraft,
+        data: {
+          content: pageDoc([copyOf("i1", cardId), heading("d", "Draft edit")]),
+        },
+        overrideAccess: true,
+      });
+      // The component's own pending change: "New title" over the published
+      // "Card title".
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id: cardId,
+        data: {
+          content: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [heading("t", "New title")],
+          },
+        },
+        overrideAccess: true,
+      });
+      await open(cookie, cardId);
+
+      await rewriteToTheEnd(cookie, cardId);
+
+      // The draft shows what its author saw in the editor...
+      expect(texts(await nodesOf(t, "pages", withDraft, true))).toEqual([
+        "New title",
+        "Draft edit",
+      ]);
+      // ...and a live page what its visitors saw.
+      expect(texts(await nodesOf(t, "pages", liveOnly))).toEqual([
+        "Card title",
+      ]);
+    });
+
+    it("refuses a bulk write that skips hooks and keeps a fenced reference", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const id = await note(t, "Note", [copyOf("i1", cardId)]);
+      await open(cookie, cardId);
+      const entries = (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): {
+            updateEntries(
+              params: { collectionName: string; overrideAccess?: boolean },
+              entries: { id: string; data: Record<string, unknown> }[],
+              options?: { skipHooks?: boolean }
+            ): Promise<{ failed: number }>;
+          };
+        }
+      ).getEntryService();
+
+      // Its hooks would re-queue the note after commit; skipped, nothing would.
+      const kept = await entries.updateEntries(
+        { collectionName: NOTES, overrideAccess: true },
+        [
+          {
+            id,
+            data: { title: "Bulk", content: pageDoc([copyOf("i1", cardId)]) },
+          },
+        ],
+        { skipHooks: true }
+      );
+      // CONTROL: the same bulk write without the copy goes through.
+      const dropped = await entries.updateEntries(
+        { collectionName: NOTES, overrideAccess: true },
+        [
+          {
+            id,
+            data: { title: "Bulk", content: pageDoc([heading("h", "Plain")]) },
+          },
+        ],
+        { skipHooks: true }
+      );
+
+      expect(kept.failed).toBe(1);
+      expect(dropped.failed).toBe(0);
+    });
   }
 );

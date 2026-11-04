@@ -54,6 +54,18 @@ export interface StoredExpectation {
    * asked as such, in the same validation, rather than inferred from a hash.
    */
   readonly noPendingDraft?: () => Promise<boolean>;
+  /**
+   * The language the write is judged in, as validation names it: absent for
+   * the site's default language. A write in another language (a hook's own
+   * write, say) is not this one.
+   */
+  readonly locale?: string;
+  /**
+   * Set once the write's own validation has judged it. Only that first
+   * validation is the rewrite's: a hook's nested write to the same field,
+   * made within the same call, runs later and is its own.
+   */
+  readonly judged: { done: boolean };
 }
 
 /** The context, once a rewrite in this process has asked for it. */
@@ -87,10 +99,11 @@ export interface ChangedIssue {
  * The refusal for this field write when it is a rewrite's own and the stored
  * value is not the one the rewrite read; `undefined` otherwise.
  *
- * Matched by document and field path, not by language: one expectation covers
- * one write of one field of one document. A write in the same context to
- * another document (a hook's own write, say) is not the rewrite's and is not
- * judged.
+ * Matched by document, field path and language, and used once: one
+ * expectation covers one write of one field of one document in one language.
+ * A write in the same context to another document, another language, or the
+ * same field again after the rewrite's own validation (a hook's nested write)
+ * is not the rewrite's and is not judged.
  */
 export async function changedSinceRead(
   write: PluginFieldWrite,
@@ -98,9 +111,10 @@ export async function changedSinceRead(
 ): Promise<ChangedIssue | undefined> {
   if (context === undefined) return undefined;
   const expected = (await context).getStore();
-  if (expected === undefined || !sameField(expected.host, write, path)) {
-    return undefined;
-  }
+  if (expected === undefined || expected.judged.done) return undefined;
+  if (!sameField(expected.host, write, path)) return undefined;
+  if (write.locale !== expected.locale) return undefined;
+  expected.judged.done = true;
   const field = expected.host.path[0] ?? path;
   for (const form of expected.forms) {
     if (!(await holdsStill(write, field, form))) return changedIssue(path);
