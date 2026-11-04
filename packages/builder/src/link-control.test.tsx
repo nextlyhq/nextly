@@ -696,6 +696,14 @@ describe("what the group reads of the block", () => {
     expect(
       screen.getByRole("switch", { name: "Open in new tab" })
     ).toBeDefined();
+    // Nothing is stored, so there is nothing for ✕ to remove: it would leave
+    // the default applying and look like a click that did nothing.
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+  });
+
+  it("offers to remove a stored link over the block's default", () => {
+    mountExtra("acme/default-link-heading", { href: "/other" });
+    expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeNull();
   });
 
   it("shows the block's default target while none is stored", () => {

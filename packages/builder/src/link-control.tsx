@@ -503,6 +503,11 @@ interface LinkControlProps {
   readonly find: FindLinkTargets | undefined;
   readonly onPick: (pick: LinkPick) => void;
   readonly onClear: () => void;
+  /**
+   * Whether there is a stored link to clear. A link that applies only as the
+   * block's default has nothing stored, so clearing it would change nothing.
+   */
+  readonly clearable: boolean;
 }
 
 /** The link combobox: an empty trigger or the chosen link's chip, and the list. */
@@ -515,6 +520,7 @@ function LinkControl({
   find,
   onPick,
   onClear,
+  clearable,
 }: LinkControlProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const [typed, setTyped] = React.useState("");
@@ -569,7 +575,7 @@ function LinkControl({
               <TriggerContent words={words} />
             </button>
           </PopoverTrigger>
-          {words === undefined ? null : (
+          {words === undefined || !clearable ? null : (
             <button
               type="button"
               className="nx-link-pick__clear"
@@ -1037,6 +1043,11 @@ export function LinkGroupField({
       : [group.entry.collection, group.entry.id]),
   ];
   const destinationWritable = destination.every(writable);
+  // Something stored to clear: a link that is only the block's default has
+  // none, and is changed by picking another rather than removed.
+  const clearable = props.some(
+    prop => destination.includes(prop.name) && prop.value != null
+  );
   return (
     <div className="nx-link-group" data-link-group={group.link}>
       <HeldByLock reasonId={destinationWritable ? undefined : reasonId}>
@@ -1049,6 +1060,7 @@ export function LinkGroupField({
             entryLinks={group.entry !== undefined}
             disabled={!destinationWritable}
             find={services?.findLinkTargets}
+            clearable={clearable}
             onPick={pick => {
               const changes = pickChanges(group, pick);
               if (changes !== undefined && destinationWritable) {
