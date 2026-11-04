@@ -915,8 +915,13 @@ export function refusalReasons({
   };
 }
 
-/** Why a write is refused while a colleague holds the document. */
-const LOCKED_REASON = "Someone else is editing this document";
+/**
+ * Why a write is refused while the document is held elsewhere.
+ *
+ * Says where, not who: the holder may be a colleague, an API key, or this
+ * person in another tab, and the lock notice above the form names which.
+ */
+const LOCKED_REASON = "This document is being edited elsewhere";
 
 /**
  * The page's contributions, with each way to publish held while a colleague

@@ -129,7 +129,7 @@ describe("running a document action through the host", () => {
     expect(outcome).toEqual({
       ok: false,
       reason: "refused",
-      message: "Someone else is editing this document",
+      message: "This document is being edited elsewhere",
     });
   });
 

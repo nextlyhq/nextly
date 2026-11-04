@@ -10,42 +10,18 @@
  *
  * @module tests/entry-lock
  */
-import type { Page } from "@playwright/test";
-
 import { test } from "./support/test";
-import { uniqueTag } from "./support/accounts";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import {
   secondEditorFindsItHeld,
   takeoverKeepsUnsavedEdits,
-  type LockedScreen,
 } from "./support/lock-cases";
+import { LOCKED_POST as POST } from "./support/locked-post";
 import { LOCK } from "./support/locks";
-import { createEntry } from "./support/runtime-collection";
 
 // Creates a second editor's account; see support/locks.ts for what each lock
 // guards.
 test.describe.configure({ lock: [LOCK.usersRoles] });
-
-/** A post of the test's own, edited through its Excerpt, a plain field. */
-const POST: LockedScreen = {
-  field: (page: Page) =>
-    page.locator("main").getByRole("textbox", { name: "Excerpt", exact: true }),
-  async prepare(api) {
-    const tag = uniqueTag();
-    const stored = `Stored excerpt ${tag}`;
-    const id = await createEntry(api, "posts", {
-      title: `Entry lock ${tag}`,
-      slug: `entry-lock-${tag}`,
-      excerpt: stored,
-    });
-    return {
-      document: { scopeKind: "collection", slug: "posts", entryId: id },
-      address: `/collections/posts/${id}`,
-      stored,
-    };
-  },
-};
 
 // Run on every dialect: the lease the two editors share lives in the database.
 test.describe("two editors on one entry", { tag: EVERY_DIALECT }, () => {
