@@ -969,7 +969,7 @@ function StyleTab({
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
   // ONE holder of what an edit changes, read by the bar and the controls.
-  const { target, choose } = useStyleTarget(
+  const { target, choose, held } = useStyleTarget(
     editor,
     shared.classLibrary,
     shared.sharedStyles
@@ -986,6 +986,7 @@ function StyleTab({
         editor={editor}
         target={target}
         onChoose={choose}
+        held={held}
         library={shared.classLibrary}
         libraryAbsence={shared.classLibraryAbsence}
         host={shared.sharedStyles}

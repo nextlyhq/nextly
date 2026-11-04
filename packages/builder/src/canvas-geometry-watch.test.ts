@@ -13,11 +13,12 @@
  * @module canvas-geometry-watch.test
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -266,5 +267,73 @@ describe("a block rendered after the watch began", () => {
       false
     );
     stop?.();
+  });
+});
+
+describe("what moves the part of a canvas on screen", () => {
+  /** A canvas in a frame, the frame in the host's document. */
+  function framed(): { frame: HTMLIFrameElement; root: HTMLElement } {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    const root = inner.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    inner.body.append(root);
+    return { frame, root };
+  }
+
+  afterEach(() => {
+    document.documentElement.style.overflowY = "";
+    vi.unstubAllGlobals();
+  });
+
+  it("hears the host page scrolling at its document, where a viewport's scroll is told", () => {
+    // The host's own page is the scroller around the frame: its scroll is
+    // dispatched at the document, never at <html>.
+    document.documentElement.style.overflowY = "auto";
+    Object.defineProperty(document, "scrollingElement", {
+      configurable: true,
+      value: document.documentElement,
+    });
+    const { frame, root } = framed();
+    const moved = vi.fn();
+    const stop = watchScreenBand(root, frame, moved);
+    document.dispatchEvent(new Event("scroll"));
+    expect(moved).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("hears the host's scroller resize, which no scroll or frame reading reports", () => {
+    // A side panel resized at a fixed zoom: the host's region changes size
+    // and nothing inside the frame does.
+    const observed: Element[] = [];
+    let report: (() => void) | undefined;
+    class Sizes {
+      constructor(callback: () => void) {
+        report = callback;
+      }
+      observe(element: Element): void {
+        observed.push(element);
+      }
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", Sizes);
+    const region = document.createElement("div");
+    region.style.overflowY = "auto";
+    document.body.append(region);
+    const frame = document.createElement("iframe");
+    region.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    const root = inner.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    inner.body.append(root);
+    const moved = vi.fn();
+    const stop = watchScreenBand(root, frame, moved);
+    expect(observed).toContain(region);
+    report?.();
+    expect(moved).toHaveBeenCalled();
+    stop();
   });
 });

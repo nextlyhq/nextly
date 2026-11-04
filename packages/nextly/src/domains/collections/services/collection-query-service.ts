@@ -170,6 +170,7 @@ import {
 } from "../../i18n/localization-source";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
+  isCompanionReady,
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
@@ -191,6 +192,15 @@ import {
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import {
+  attachDocumentVersions,
+  chainCoversVersion,
+  DOCUMENT_REVISION_COLUMN,
+  languageCountersBeforeContent,
+  type SelectsRows,
+  languageRevisionsOf,
+  storedRevisionsOf,
+} from "../../versions/document-revision";
 import {
   draftDocumentFacts,
   resolveDraftOverlay,
@@ -2581,6 +2591,32 @@ export class CollectionQueryService extends BaseService {
   // `listEntries` (cyclomatic 87) and `getEntry` (64), both critical — which
   // had already diverged on where the owner column is cleared.
   // fallow-ignore-next-line complexity
+
+  /**
+   * The translation counters of `rows`, read before their translated content
+   * (`languageCountersBeforeContent`); undefined for a collection that keeps
+   * no translations or whose table is not there yet.
+   */
+  private async languageCountersFirst(
+    rows: readonly Record<string, unknown>[],
+    /** The collection's translation schema; null for one that keeps none. */
+    companion: { companionTableName: string } | null | undefined
+  ) {
+    const table = companion?.companionTableName ?? null;
+    return languageCountersBeforeContent(
+      this.adapter.getDrizzle<SelectsRows>(),
+      {
+        dialect: this.dialect,
+        languagesTable:
+          table !== null && (await isCompanionReady(this.adapter, table))
+            ? table
+            : null,
+        localization: this.localization,
+        ids: rows.flatMap(row => (typeof row.id === "string" ? [row.id] : [])),
+      }
+    );
+  }
+
   private async finalizeReadRows(params: {
     rows: Record<string, unknown>[];
     /**
@@ -2628,8 +2664,16 @@ export class CollectionQueryService extends BaseService {
      * sees the grant, so the waiver does not travel.
      */
     hooksWaived?: boolean;
+    /** Translation counters the read already took (`attachDocumentVersions`). */
+    knownLanguages?: {
+      revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
+      locales: readonly string[];
+    };
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, tableName, fields } = params;
+    // Taken before step (1), which removes the counter with every other
+    // server-only column.
+    const storedRevisions = storedRevisionsOf(rows);
     // The field groups held inline in this collection's containers, whose
     // passwords sit in those containers' values: resolved once for the read.
     // A read of every translation returns each translated field keyed by
@@ -2873,6 +2917,15 @@ export class CollectionQueryService extends BaseService {
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
     for (const row of finalData) stripServerOnlyColumns(row, tableName);
+
+    // The version, after everything a hook or a selection can do to a row,
+    // so neither can drop or forge it.
+    attachDocumentVersions(finalData, {
+      stored: storedRevisions,
+      localization: this.localization,
+      locale: params.locale,
+      known: params.knownLanguages,
+    });
 
     return finalData;
   }
@@ -3654,6 +3707,11 @@ export class CollectionQueryService extends BaseService {
             : 0;
       }
 
+      // The page's translation counters, before its translated content.
+      const knownLanguages = await this.languageCountersFirst(
+        entries,
+        companion
+      );
       // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
@@ -3829,6 +3887,7 @@ export class CollectionQueryService extends BaseService {
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
         hooksWaived,
+        knownLanguages,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.
@@ -4978,14 +5037,28 @@ export class CollectionQueryService extends BaseService {
       // companion is there to join to: one round trip where reading them after it took two. They
       // are resolved onto it as the batched fill resolves them. Until the companion is there, the
       // entry is read alone and its main-table values stand.
+      // Joined only when the chain holds every language the version names:
+      // otherwise the counters are read before the content, apart from it.
       const joinedLocaleChain =
         localeChain &&
         companion &&
+        chainCoversVersion(localeChain, {
+          localization: this.localization,
+          locale: params.locale,
+        }) &&
         (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
           "ready"
           ? localeChain
           : null;
       let entry: Record<string, unknown> | undefined;
+      // The translation counters the joined read takes with the entry, so
+      // its version needs no statement of its own.
+      let knownLanguages:
+        | {
+            revisions: Map<string, Map<string, number>>;
+            locales: readonly string[];
+          }
+        | undefined;
       if (joinedLocaleChain && companion) {
         const table = companion.table;
         // As the translations read it stands for fails: the database's own message, which names
@@ -5003,6 +5076,11 @@ export class CollectionQueryService extends BaseService {
             })
         );
         entry = joined.entry;
+        const joinedRevisions = languageRevisionsOf(joined.companionRows);
+        knownLanguages = joinedRevisions && {
+          revisions: joinedRevisions,
+          locales: joinedLocaleChain,
+        };
         if (entry) {
           fillCompanionFields({
             rows: [entry],
@@ -5035,6 +5113,9 @@ export class CollectionQueryService extends BaseService {
       // The row's own id, as stored, before any overlay or hook can reshape
       // what this read returns.
       const resolvedEntryId = String((entry as { id: unknown }).id);
+      // Not joined with the entry: the translation counters now, before the
+      // translated content is read below.
+      knownLanguages ??= await this.languageCountersFirst([entry], companion);
 
       // `localeChain` and `companion` were resolved above the access predicate,
       // which needs the same pair to judge a rule naming a localized field.
@@ -5404,6 +5485,12 @@ export class CollectionQueryService extends BaseService {
             declaredFields,
             draftComponentSchemas
           );
+          // The version is the live row's: a held draft moved the live row's
+          // counter when it was saved, and a snapshot never holds one.
+          if (DOCUMENT_REVISION_COLUMN in expandedEntry) {
+            draftEntry[DOCUMENT_REVISION_COLUMN] =
+              expandedEntry[DOCUMENT_REVISION_COLUMN];
+          }
           expandedEntry = draftEntry;
           draftOverlaid = true;
         }
@@ -5437,6 +5524,7 @@ export class CollectionQueryService extends BaseService {
       const [finalData] = await this.finalizeReadRows({
         rows: [expandedEntry],
         hooksWaived,
+        knownLanguages,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,

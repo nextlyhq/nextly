@@ -1,0 +1,156 @@
+/**
+ * Which languages the walk reads each host in: a top-level field by its own
+ * classification, anything deeper in every configured language, because core
+ * stores a localized field group's values per language under a parent that is
+ * not translated.
+ */
+import { describe, expect, it } from "vitest";
+
+import {
+  singleToWalk,
+  siteHostSource,
+  type RewriteSite,
+  type SingleToWalk,
+} from "./site";
+
+/** A site with one collection, `notes`, holding one entry, `n1`, and these Singles. */
+function siteWith(
+  declaration: unknown,
+  singles: readonly SingleToWalk[] = []
+): RewriteSite {
+  const nextly = {
+    find: async () => ({ items: [{ id: "n1" }], meta: { hasNext: false } }),
+  };
+  return {
+    nextly: async () => nextly as never,
+    collectionSlugs: async () => ["notes"],
+    resolveCollection: async () => declaration,
+    singles: async () => singles,
+    locales: () => ["en", "de"],
+    defaultLocale: () => "en",
+    layouts: "layouts",
+    hints: async () => [],
+    componentId: "card",
+    identity: async () => ({ overrideAccess: false }),
+  };
+}
+
+/** Every host the walk yields, as `path@locale`. */
+async function hostsOf(
+  declaration: unknown,
+  singles: readonly SingleToWalk[] = []
+): Promise<string[]> {
+  const found: string[] = [];
+  const source = siteHostSource(siteWith(declaration, singles));
+  for await (const document of source.documents(null)) {
+    for (const { host } of document.hosts) {
+      found.push(`${host.path.join(".") || "*"}@${host.locale ?? "-"}`);
+    }
+  }
+  return found;
+}
+
+describe("the languages each host is read in", () => {
+  it("reads a field behind a field group in every language of an untranslated parent", async () => {
+    const hosts = await hostsOf({
+      fields: [
+        { type: "text", name: "title" },
+        { type: "fieldGroup", name: "hero", group: "hero-group" },
+      ],
+    });
+
+    expect(hosts).toEqual(["*@en", "*@de"]);
+  });
+
+  it("reads a field under a named group in every language", async () => {
+    const hosts = await hostsOf({
+      fields: [
+        {
+          type: "group",
+          name: "hero",
+          fields: [{ type: "blocks", name: "body" }],
+        },
+      ],
+    });
+
+    expect(hosts).toEqual(["hero.body@en", "hero.body@de"]);
+  });
+
+  it("CONTROL: reads an untranslated top-level field once", async () => {
+    const hosts = await hostsOf({
+      fields: [{ type: "blocks", name: "content" }],
+    });
+
+    expect(hosts).toEqual(["content@-"]);
+  });
+
+  it("reads every field of a Single made in the admin in every language", async () => {
+    // Listed with no declaration in code: its fields' own flags are unknown.
+    const home = singleToWalk(
+      { slug: "home", fields: [{ type: "blocks", name: "content" }] },
+      undefined,
+      true
+    );
+
+    const hosts = await hostsOf({ fields: [] }, [home]);
+
+    expect(hosts).toEqual(["content@en", "content@de"]);
+  });
+
+  it("CONTROL: a Single declared in code keeps its fields' own flags", async () => {
+    const home = singleToWalk(
+      { slug: "home", fields: [{ type: "blocks", name: "content" }] },
+      {
+        localized: true,
+        fields: [{ type: "blocks", name: "content", localized: false }],
+      },
+      true
+    );
+
+    const hosts = await hostsOf({ fields: [] }, [home]);
+
+    expect(hosts).toEqual(["content@-"]);
+  });
+
+  it("skips a hint naming a collection that no longer resolves", async () => {
+    const site = siteWith({ fields: [{ type: "blocks", name: "content" }] });
+    const hinted = await siteHostSource({
+      ...site,
+      hints: async () => [
+        { slug: "gone", id: "x" },
+        { slug: "notes", id: "n1" },
+      ],
+      resolveCollection: async slug => {
+        if (slug === "gone") throw new Error("no such collection");
+        return { fields: [{ type: "blocks", name: "content" }] };
+      },
+    }).hinted();
+
+    expect(hinted.map(document => document.key)).toEqual([
+      "collection\u001Fnotes\u001Fn1",
+    ]);
+  });
+
+  it("leaves the fields the walk reaches directly out of a row scan", async () => {
+    const source = siteHostSource(
+      siteWith({
+        fields: [
+          { type: "blocks", name: "content" },
+          {
+            type: "repeater",
+            name: "rows",
+            fields: [{ type: "blocks", name: "body" }],
+          },
+        ],
+      })
+    );
+    const scans: unknown[] = [];
+    for await (const document of source.documents(null)) {
+      for (const candidate of document.hosts) {
+        if (candidate.access === "scan") scans.push(candidate.excluded);
+      }
+    }
+
+    expect(scans).toEqual([[["content"]], [["content"]]]);
+  });
+});

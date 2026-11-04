@@ -35,7 +35,7 @@ import { CollectionRegistryService } from "../../collections/services/collection
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
-import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
+import { liveColumnNames } from "../pipeline/diff/introspect-live";
 import {
   builtByFor,
   isCodeOwned,
@@ -296,17 +296,7 @@ export async function findRegistryDisagreements(args: {
         .filter((name): name is string => typeof name === "string" && !!name)
     ),
   ];
-  const snapshot = await introspectLiveColumns(
-    adapter.getDrizzle(),
-    dialect,
-    tables
-  );
-  const live = new Map(
-    snapshot.tables.map(table => [
-      table.name.toLowerCase(),
-      new Set(table.columns.map(column => column.name.toLowerCase())),
-    ])
-  );
+  const live = await liveColumnNames(adapter.getDrizzle(), dialect, tables);
 
   return compareRegistryWithTables({
     rows,

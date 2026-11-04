@@ -68,6 +68,7 @@ export function renderRichText({
   className,
   markProp,
   hostPolicy,
+  spacingMode,
 }: BlockRenderArgs<RichTextBlockProps>): ReactElement {
   /*
    * The wrapper carries both the class and the mark, so the element an author
@@ -77,7 +78,11 @@ export function renderRichText({
    */
   return (
     <div className={className} {...markProp?.("content")}>
-      <RichText value={props.content} hostPolicy={hostPolicy} />
+      <RichText
+        value={props.content}
+        hostPolicy={hostPolicy}
+        {...(spacingMode === undefined ? {} : { spacingMode })}
+      />
     </div>
   );
 }
