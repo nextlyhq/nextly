@@ -177,16 +177,34 @@ const CLASSIC_BLOCK_BASES: Readonly<Record<string, NodeStyles | null>> =
   });
 
 /**
- * A block type's default under a spacing model: the frozen classic one where
- * the classic table lists the type, and the definition's own otherwise.
+ * This library's own definitions of the types the classic table lists, by
+ * identity. A host may register its own definition under a core name, and the
+ * resolver hands that replacement back; its defaults are the host's, so the
+ * frozen table stands in only for the definition it was frozen from.
+ */
+const LIBRARY_DEFINITIONS = new WeakSet<object>();
+
+/** Mark one of this library's own definitions, and hand it back unchanged. */
+export function libraryDefinition<T extends object>(definition: T): T {
+  LIBRARY_DEFINITIONS.add(definition);
+  return definition;
+}
+
+/**
+ * A block type's default under a spacing model: the frozen classic one when
+ * the definition is this library's own and the classic table lists its type,
+ * and the definition's own otherwise, a host's replacement included.
  */
 export function blockBaseUnder(
-  type: string,
-  current: NodeStyles | undefined,
+  definition: { readonly name: string; readonly baseStyles?: NodeStyles },
   mode: SpacingMode | undefined
 ): NodeStyles | undefined {
-  if (mode !== "classic" || !Object.hasOwn(CLASSIC_BLOCK_BASES, type)) {
-    return current;
+  if (
+    mode !== "classic" ||
+    !LIBRARY_DEFINITIONS.has(definition) ||
+    !Object.hasOwn(CLASSIC_BLOCK_BASES, definition.name)
+  ) {
+    return definition.baseStyles;
   }
-  return CLASSIC_BLOCK_BASES[type] ?? undefined;
+  return CLASSIC_BLOCK_BASES[definition.name] ?? undefined;
 }

@@ -216,8 +216,7 @@ export function blockBasesFor(
   return perUsedType(
     document,
     blocks,
-    definition =>
-      blockBaseUnder(definition.name, definition.baseStyles, spacingMode),
+    definition => blockBaseUnder(definition, spacingMode),
     stated
   );
 }

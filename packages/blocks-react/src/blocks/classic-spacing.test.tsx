@@ -75,6 +75,48 @@ describe("the classic spacing model", () => {
   });
 });
 
+describe("a host's own definition under a core name", () => {
+  it("keeps its own defaults under the classic model", () => {
+    const own = (name: string, padding: string) => {
+      const library = coreBlocks.find(block => block.name === name);
+      return {
+        ...library,
+        baseStyles: {
+          base: {
+            base: {
+              padding: {
+                blockStart: padding,
+                blockEnd: padding,
+                inlineStart: padding,
+                inlineEnd: padding,
+              },
+            },
+          },
+        },
+      } as NonNullable<typeof library>;
+    };
+    const replaced: BlockResolver = createBlockResolver([
+      ...coreBlocks,
+      own("core/card", "7px"),
+      own("core/section", "9px"),
+    ]);
+    const css = resolvePageStyles(
+      CLASSIC_SPACING_PAGE,
+      undefined,
+      context("classic"),
+      replaced
+    ).css;
+    expect(css).toContain(":where(.nx-bt-core--card) { padding-block-end: 7px");
+    expect(css).toContain(
+      ":where(.nx-bt-core--section) { padding-block-end: 9px"
+    );
+    // The library's own definitions beside them still take the frozen table.
+    expect(css).toContain(
+      ":where(.nx-bt-core--button) { background-color: var(--site-color-primary); border-style: none; border-block-end-width: 0; border-block-start-width: 0; border-inline-end-width: 0; border-inline-start-width: 0; border-radius: 8px; box-sizing: border-box; color: var(--site-color-background); display: inline-block; font-family: inherit; font-size: inherit; font-style: inherit; font-weight: inherit; letter-spacing: inherit; line-height: inherit; padding-block-end: 0.5rem"
+    );
+  });
+});
+
 describe("the spacing model in a stored sheet's stamp", () => {
   it("moves the stamp under classic and leaves the gaps stamp as it was", () => {
     const stamp = (ctx: StyleCompileContext) =>

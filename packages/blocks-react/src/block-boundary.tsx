@@ -1119,10 +1119,10 @@ function settledOf(pending: PromiseLike<unknown>): Promise<SettledOutput> {
  * selection or a panel opening. Run again, an async block makes a new promise,
  * and its boundary shows the fallback until that settles: an image or a
  * button blinks out. Kept by everything the output is made from: the block,
- * its class and the node as stored, so an edit to any of them runs the block
- * again. Per context, because the output also reads the context (the entry,
- * the language, a loop's item), and a block under another context is another
- * output.
+ * its class, the node as stored and the site's spacing model, so a change to
+ * any of them runs the block again. Per context, because the output also
+ * reads the context (the entry, the language, a loop's item), and a block
+ * under another context is another output.
  *
  * Never on a published page: a page served to visitors is rendered per
  * request, and an output kept across requests would serve one request's data
@@ -1140,10 +1140,14 @@ const EDITOR_OUTPUTS_KEPT = 256;
 function editorOutputKey(
   name: string,
   className: string,
-  node: BlockNode
+  node: BlockNode,
+  spacingMode: SpacingMode | undefined
 ): string | undefined {
   try {
-    return JSON.stringify([name, className, node]);
+    // The spacing model too: a render argument a block's markup may read, so
+    // an output drawn under one model is not the block as it stands under
+    // the other.
+    return JSON.stringify([name, className, node, spacingMode ?? null]);
   } catch {
     // A node a stringify cannot write (a cycle, a bigint) is drawn afresh.
     return undefined;
@@ -1191,10 +1195,11 @@ function editorOutputSlot(
   context: PageContext,
   name: string,
   className: string,
-  node: BlockNode
+  node: BlockNode,
+  spacingMode: SpacingMode | undefined
 ): EditorOutputSlot {
   if (!editorRender) return UNKEPT;
-  const key = editorOutputKey(name, className, node);
+  const key = editorOutputKey(name, className, node, spacingMode);
   if (key === undefined) return UNKEPT;
   const kept = EDITOR_OUTPUTS.get(context)?.get(key);
   return {
@@ -1416,7 +1421,8 @@ export function BlockBoundary({
     context,
     definition.name,
     className,
-    node
+    node,
+    spacingMode
   );
 
   let output: unknown;

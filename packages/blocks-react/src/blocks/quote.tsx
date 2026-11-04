@@ -17,6 +17,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
+import { libraryDefinition } from "./classic-spacing";
 import { text, url } from "./props";
 
 export interface QuoteProps {
@@ -189,52 +190,60 @@ const QUOTE_PARTS = {
   },
 } as const;
 
-export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
-  name: QUOTE_BLOCK,
-  version: 1,
-  // What an author reads, in the Add panel and the block card: one plain line.
-  // What the block does, for whoever maintains it: Quoted text with an optional
-  // attribution, kept outside the quotation so the speaker is not quoted saying
-  // their own name.
-  description: "A quotation, with who said it.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Quote",
-    icon: "quote",
-    category: CONTENT,
-    keywords: ["blockquote", "pull quote", "citation"],
-  },
-  baseStyles: QUOTE_BASE_STYLES,
-  parts: QUOTE_PARTS,
-  props: {
-    text: { label: "Quote", role: "content", type: "textarea", inline: true },
-    attribution: { label: "Attribution", role: "content", type: "text" },
-    source: {
-      label: "Source title",
-      role: "content",
-      type: "text",
-      inline: true,
-    },
-    citeUrl: { label: "Source URL", role: "content", type: "url" },
-  },
-  defaultProps: { text: "" },
-  example: {
-    props: {
-      text: "Simplicity is the soul of efficiency.",
-      attribution: "Austin Freeman",
-    },
-  },
-  supports: {
-    typography: true,
-    color: true,
-    background: true,
-    spacing: true,
-    dimensions: true,
-    border: true,
-    effects: true,
-    position: true,
-  },
-  render: renderQuote,
-});
+export const quote: BlockDefinition<QuoteProps, PageContext> =
+  libraryDefinition(
+    defineBlock({
+      name: QUOTE_BLOCK,
+      version: 1,
+      // What an author reads, in the Add panel and the block card: one plain line.
+      // What the block does, for whoever maintains it: Quoted text with an optional
+      // attribution, kept outside the quotation so the speaker is not quoted saying
+      // their own name.
+      description: "A quotation, with who said it.",
+      // Palette metadata. The category is imported rather than spelled here so
+      // nineteen blocks cannot drift into nineteen headings; keywords are what
+      // let a search for a word the description never uses still find this.
+      editor: {
+        label: "Quote",
+        icon: "quote",
+        category: CONTENT,
+        keywords: ["blockquote", "pull quote", "citation"],
+      },
+      baseStyles: QUOTE_BASE_STYLES,
+      parts: QUOTE_PARTS,
+      props: {
+        text: {
+          label: "Quote",
+          role: "content",
+          type: "textarea",
+          inline: true,
+        },
+        attribution: { label: "Attribution", role: "content", type: "text" },
+        source: {
+          label: "Source title",
+          role: "content",
+          type: "text",
+          inline: true,
+        },
+        citeUrl: { label: "Source URL", role: "content", type: "url" },
+      },
+      defaultProps: { text: "" },
+      example: {
+        props: {
+          text: "Simplicity is the soul of efficiency.",
+          attribution: "Austin Freeman",
+        },
+      },
+      supports: {
+        typography: true,
+        color: true,
+        background: true,
+        spacing: true,
+        dimensions: true,
+        border: true,
+        effects: true,
+        position: true,
+      },
+      render: renderQuote,
+    })
+  );
