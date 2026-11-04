@@ -279,6 +279,7 @@ describe("a prop the inspector leaves out, in a component's view", () => {
           props: {
             href: { type: "url" },
             kind: {
+              label: "Acts as",
               type: "select",
               options: ["button", "submit"],
               onlyWithout: ["href"],
@@ -301,7 +302,10 @@ describe("a prop the inspector leaves out, in a component's view", () => {
       }),
       "l1"
     );
-    expect(exposeRow("kind")).toBeDefined();
+    const row = exposeRow("kind");
+    // Named as the block names it, not by its prop name.
+    expect(row.parentElement?.textContent).toContain("Acts as");
+    expect(row.parentElement?.textContent).not.toContain("Kind");
     // Its control is still left out: only the expose icon is offered.
     expect(screen.queryByRole("combobox", { name: /Kind/ })).toBeNull();
   });

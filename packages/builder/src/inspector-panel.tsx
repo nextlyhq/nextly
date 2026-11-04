@@ -85,6 +85,7 @@ import {
   lockStatusOf,
   lockViewOf,
   propIsWritable,
+  propLabel,
   propPatch,
   renameOp,
   selectedNode,
@@ -1238,10 +1239,11 @@ function ContentFields({
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
-        // Named as a component's own expose rows name a prop, so its icon is
-        // not drawn bare.
+        // Named as the block names it, so its icon is not drawn bare.
         const field = !prop.offered ? (
-          <p className="nx-inspector__note">{fieldLabel(prop.name)}</p>
+          <p className="nx-inspector__note">
+            {propLabel(prop.name, prop.schema)}
+          </p>
         ) : (
           <HeldByLock
             // Keyed by node AND prop: a bare prop name would let React reuse
