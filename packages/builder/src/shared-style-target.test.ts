@@ -313,27 +313,43 @@ function shown(
   property: string,
   width: number,
   /** The pseudo-class active, as the sheet wraps it: `:hover`. */
-  pseudo?: string
+  pseudo?: string,
+  /**
+   * The site's breakpoints, and the width of the query container the block
+   * sits in, if any: a container rule applies only inside one.
+   */
+  frame: { breakpoints?: BreakpointSet; container?: number } = {}
 ): string | undefined {
   const { css, classes } = compilePageCss(document, {
-    breakpoints: BREAKPOINTS,
+    breakpoints: frame.breakpoints ?? BREAKPOINTS,
     namedClasses: library,
   });
   const tokens = new Set((classes.get("a") ?? "").split(" "));
   let value: string | undefined;
-  let limit = Infinity;
+  let applies = true;
   for (const line of css.split("\n")) {
     const media = /@media \(max-width: (\d+)px\)/.exec(line);
     if (media) {
-      limit = Number(media[1]);
+      applies = width <= Number(media[1]);
+      continue;
+    }
+    const query =
+      /@container \((max|min)-width: (\d+)px\)|@container \(min-width: 0\)/.exec(
+        line
+      );
+    if (query) {
+      const inside = frame.container;
+      applies =
+        inside !== undefined &&
+        (query[1] !== "max" || inside <= Number(query[2]));
       continue;
     }
     if (line.trim() === "}") {
-      limit = Infinity;
+      applies = true;
       continue;
     }
     const rule = /\.([\w-]+)(?::where\([^)]*\))? \{ (.*) \}/.exec(line);
-    if (!rule || !tokens.has(rule[1] ?? "") || width > limit) continue;
+    if (!rule || !tokens.has(rule[1] ?? "") || !applies) continue;
     // A state's rule applies only while that state is active; base always.
     const state = /:where\(([^)]*)\)/.exec(line)?.[1];
     if (state !== undefined && state !== pseudo) continue;
@@ -561,6 +577,52 @@ describe("detaching and removing a block's style", () => {
       expect(
         look(detached(before, styleA, [styleA, styleB]), [styleB])
       ).toEqual(was);
+    });
+
+    it("keeps a later style's container value over the detached style's viewport one", () => {
+      // The browser applies both axes at once: a tablet-wide page with the
+      // block in a small container shows the later style's container value,
+      // and a viewport value copied onto the block would beat it there.
+      const set: BreakpointSet = {
+        viewport: [
+          { id: "base", label: "Base" },
+          { id: "md", label: "Medium", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      };
+      const styleA = early({ base: { md: { color: "#aa0000" } } });
+      const styleB = late({ base: { "cq-sm": { color: "#0000aa" } } });
+      const before = page({ classes: ["c-early", "c-late"] });
+      const everywhere = (document: BlockDocument, library: NamedClass[]) =>
+        [1280, 800].flatMap(width =>
+          [undefined, 300, 600].map(container =>
+            shown(document, library, "color", width, undefined, {
+              breakpoints: set,
+              container,
+            })
+          )
+        );
+      const was = everywhere(before, [styleA, styleB]);
+      // The population first: the small container shows the later style.
+      // Desktop: no container, a small one, a wide one; then tablet.
+      expect(was).toEqual([
+        undefined,
+        "#0000aa",
+        undefined,
+        "#aa0000",
+        "#0000aa",
+        "#aa0000",
+      ]);
+      const plan = planDetachSharedStyle(
+        before,
+        "a",
+        styleA,
+        [styleA, styleB],
+        undefined,
+        set
+      );
+      if (!plan.ok) throw new Error(plan.reason);
+      expect(everywhere(applied(before, plan.ops), [styleB])).toEqual(was);
     });
 
     it("keeps the look for any mix of styles, states and widths", () => {

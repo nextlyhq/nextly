@@ -581,28 +581,47 @@ interface LookSituation {
 }
 
 /**
- * Every state at every width band the site defines, in an order where a
- * value written at one situation's own place reaches only situations after
- * it: base before the interaction states, and each state's widths widest
- * first.
+ * Every state at every band the site defines, in an order where a value
+ * written at one situation's own place reaches only situations after it.
+ *
+ * A band is a viewport width band crossed with a query-container band, or
+ * with no query container at all, since the browser applies both axes at
+ * once. Its place is the last context that applies there in the order the
+ * compiler writes them, which is where a rule on the block wins it. Bands
+ * are taken by that place, and base before the interaction states.
  */
 function lookSituations(set: BreakpointSet | undefined): LookSituation[] {
-  const contexts = breakpointContexts(set).map(context => context.id);
-  const situations: LookSituation[] = [];
-  for (const state of STYLE_STATES) {
-    for (const breakpoint of contexts) {
-      // The contexts that match within this one's band, by the reader the
-      // inspector asks the same question with.
-      const live = new Set<string>(liveBreakpointsFor(set, breakpoint));
-      situations.push({
-        state,
-        breakpoint,
-        states: state === "base" ? ["base"] : ["base", state],
-        breakpoints: contexts.filter(id => live.has(id)),
-      });
-    }
-  }
-  return situations;
+  const contexts = breakpointContexts(set);
+  const ids = contexts.map(context => context.id);
+  const onAxis = (axis: string): string[] =>
+    contexts
+      .filter(context => context.axis === axis)
+      .map(context => context.id);
+  const containers: (string | undefined)[] = [
+    undefined,
+    ...onAxis("container"),
+  ];
+  const bands = onAxis("viewport").flatMap(viewport =>
+    containers.map(container => {
+      // The contexts that match within the band, by the reader the
+      // inspector asks the same question with, one axis at a time.
+      const live = new Set<string>([
+        ...liveBreakpointsFor(set, viewport),
+        ...(container === undefined ? [] : liveBreakpointsFor(set, container)),
+      ]);
+      const breakpoints = ids.filter(id => live.has(id));
+      return { breakpoint: breakpoints.at(-1) ?? viewport, breakpoints };
+    })
+  );
+  // Stable, so bands sharing a place keep the viewport's own order.
+  bands.sort((a, b) => ids.indexOf(a.breakpoint) - ids.indexOf(b.breakpoint));
+  return STYLE_STATES.flatMap(state =>
+    bands.map(band => ({
+      state,
+      ...band,
+      states: state === "base" ? ["base"] : ["base", state],
+    }))
+  );
 }
 
 /**
