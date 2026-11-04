@@ -54,6 +54,11 @@ beforeEach(() => {
           },
           shade: { type: "select", options: ["light", "dark", "dim"] },
           size: { type: "select", options: ["small", "large"] },
+          as: {
+            type: "select",
+            options: ["div", "main"],
+            optionLabels: { div: "Generic box", main: "Main content" },
+          },
           count: { type: "number" },
         },
       },
@@ -180,6 +185,23 @@ describe("the exposure's type is inferred from the prop it drives", () => {
     expect(edit.document.exposed?.at(-1)?.options).toEqual([
       { value: "light", label: "light" },
       { value: "dark", label: "Dark" },
+    ]);
+  });
+
+  it("carries a select's words, from the block's option labels", () => {
+    // A placement offers the choice in the words the block's own inspector
+    // uses, not the raw values.
+    const edit = edited(
+      planExposeProperty(
+        component(),
+        { label: "Tag", nodeId: "c1", propPath: "as" },
+        sources()
+      )
+    );
+
+    expect(edit.document.exposed?.at(-1)?.options).toEqual([
+      { value: "div", label: "Generic box" },
+      { value: "main", label: "Main content" },
     ]);
   });
 
