@@ -388,10 +388,10 @@ function PickerList({
           More in {sources.truncated.join(", ")}. Search to narrow them.
         </p>
       ) : null}
-      {sources.singlesLeftOut ? (
+      {sources.singlesUnfiltered ? (
         <p className="text-xs text-muted-foreground">
-          Singles are not shown: whether a Single has unpublished changes is not
-          known here.
+          The unpublished-changes filter doesn&apos;t apply to Singles yet: they
+          are listed whatever their changes.
         </p>
       ) : null}
     </div>

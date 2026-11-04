@@ -109,8 +109,11 @@ export function useAddDocumentsSources(
   documents: PickerDocument[];
   /** Labels of the collections that held more than were listed. */
   truncated: string[];
-  /** Whether Singles were left out because their changes are not filterable. */
-  singlesLeftOut: boolean;
+  /**
+   * Whether Singles are listed whatever their changes, because "Has unpublished changes" is on
+   * and a Single's read does not say whether it has any.
+   */
+  singlesUnfiltered: boolean;
   isPending: boolean;
   isError: boolean;
 } {
@@ -120,11 +123,9 @@ export function useAddDocumentsSources(
   );
   const search = filters.search.trim();
   const collections = inScope.filter(each => each.kind === "collection");
-  // A Single's read says nothing of unpublished changes, so with that filter
-  // on no Single can be shown as having them, and the picker says so.
-  const singles = filters.pendingOnly
-    ? []
-    : inScope.filter(each => each.kind === "single");
+  // A Single's read says nothing of unpublished changes, so with that filter on Singles are
+  // still listed, unfiltered, and the picker says so rather than hiding them.
+  const singles = inScope.filter(each => each.kind === "single");
 
   const collectionReads = useQueries({
     queries: collections.map(scope => ({
@@ -192,8 +193,7 @@ export function useAddDocumentsSources(
     scopes: all.scopes,
     documents,
     truncated,
-    singlesLeftOut:
-      filters.pendingOnly && inScope.some(each => each.kind === "single"),
+    singlesUnfiltered: filters.pendingOnly && singles.length > 0,
     isPending: all.isPending || (enabled && reads.some(read => read.isPending)),
     isError: all.isError || reads.some(read => read.isError),
   };

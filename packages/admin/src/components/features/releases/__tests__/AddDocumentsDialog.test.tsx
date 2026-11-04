@@ -22,6 +22,7 @@ const { state } = vi.hoisted(() => ({
   state: {
     granted: [] as string[],
     documents: [] as PickerDocument[],
+    singlesUnfiltered: false,
   },
 }));
 
@@ -39,7 +40,7 @@ vi.mock("../useAddDocumentsSources", () => ({
     ],
     documents: state.documents,
     truncated: [],
-    singlesLeftOut: false,
+    singlesUnfiltered: state.singlesUnfiltered,
     isPending: false,
     isError: false,
   }),
@@ -145,6 +146,7 @@ beforeEach(() => {
     "publish-pages",
     "unpublish-pages",
   ];
+  state.singlesUnfiltered = false;
   state.documents = [
     doc("posts", "p1", "First post"),
     doc("posts", "p2", "Second post"),
@@ -217,6 +219,38 @@ describe("which documents may be picked", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Comes down" }));
     expect(screen.getByText("1 picked")).toBeInTheDocument();
     expect(box("First post")).not.toBeChecked();
+  });
+});
+
+describe("Singles under Has unpublished changes", () => {
+  it("are still listed, and the picker says the filter does not apply to them", () => {
+    state.singlesUnfiltered = true;
+    state.documents = [
+      ...state.documents,
+      {
+        scopeKind: "single",
+        scopeSlug: "homepage",
+        entryId: "s1",
+        title: "Homepage",
+        scopeLabel: "Homepage",
+        status: "published",
+      },
+    ];
+    state.granted = [...state.granted, "publish-homepage"];
+    open();
+    expect(box("Homepage").disabled).toBe(false);
+    expect(
+      screen.getByText(
+        "The unpublished-changes filter doesn't apply to Singles yet: they are listed whatever their changes."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing of it when the filter is off", () => {
+    open();
+    expect(
+      screen.queryByText(/doesn't apply to Singles/)
+    ).not.toBeInTheDocument();
   });
 });
 
