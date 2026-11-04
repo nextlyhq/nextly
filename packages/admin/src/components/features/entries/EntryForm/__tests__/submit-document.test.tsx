@@ -16,6 +16,8 @@ import { useSnapshotAutosave } from "@admin/hooks/useSnapshotAutosave";
 import { submitDocument } from "../submit-document";
 
 const DEBOUNCE = 2000;
+/** The document being saved, as `documentRecordingKey` spells it. */
+const DOC = "collection:posts:e1";
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -35,7 +37,12 @@ function recordingInFlight() {
       })
   );
   const recorder = renderHook(() =>
-    useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    useSnapshotAutosave({
+      identity: `${DOC}:`,
+      document: DOC,
+      save,
+      debounceMs: DEBOUNCE,
+    })
   );
   act(() => recorder.result.current.schedule());
   act(() => void vi.advanceTimersByTime(DEBOUNCE));
@@ -51,7 +58,12 @@ function submitting() {
     item: { id: "e1" },
     stored: payload,
   }));
-  const outcome = submitDocument({ form, toPayload: v => v, write });
+  const outcome = submitDocument({
+    form,
+    toPayload: v => v,
+    write,
+    recordingsFor: DOC,
+  });
   return { write, outcome };
 }
 

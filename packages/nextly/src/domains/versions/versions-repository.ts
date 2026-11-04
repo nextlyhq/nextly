@@ -272,6 +272,12 @@ export interface VersionRow {
  */
 export type AutosaveSupersession = "by-you" | "by-another" | "unknown";
 
+/** What a rewrite reads of the point it replaces, to say what base it keeps. */
+type StoredPointBase = Pick<
+  VersionRow,
+  "locale" | "baseVersionNo" | "baseDraftRevision"
+>;
+
 /**
  * The most later versions an autosave read looks at to say whose they are.
  * Past it, the point is from an older version someone else may have written:
@@ -1114,15 +1120,22 @@ export class VersionsRepository {
     const where = this.autosaveWhere(input.ref, createdBy);
     // Project only the id: the existence check must not transfer the (possibly
     // large) snapshot of the row it is about to overwrite.
-    const existing = await this.db.select<{
-      id: string;
-      revision: number;
-      locale: string | null;
-    }>(TABLE, {
+    const existing = await this.db.select<
+      StoredPointBase & {
+        id: string;
+        revision: number;
+      }
+    >(TABLE, {
       // `revision` rides along so the update can compare against the value
-      // this read OBSERVED rather than against a clock; `locale`, so a point
-      // moving to another language takes that language's base.
-      columns: ["id", "revision", "locale"],
+      // this read OBSERVED rather than against a clock; `locale` and the base,
+      // so a point that has none for its language takes one.
+      columns: [
+        "id",
+        "revision",
+        "locale",
+        "baseVersionNo",
+        "baseDraftRevision",
+      ],
       where,
       limit: 1,
     });
@@ -1147,7 +1160,7 @@ export class VersionsRepository {
           // Computed from the OBSERVED value rather than read again, so the
           // value written is the successor of the one being compared against.
           revision: existing[0].revision + 1,
-          ...(await this.rewriteBase(input, existing[0].locale)),
+          ...(await this.rewriteBase(input, existing[0])),
         },
         // Flattened into the same conjunction rather than nested, so the
         // predicate stays one readable list of conditions.
@@ -1288,16 +1301,20 @@ export class VersionsRepository {
   /**
    * The base a rewrite of an autosave row carries: none, keeping the one it
    * began with, unless the point moves to another language, where it is a new
-   * point and takes that language's base.
+   * point and takes that language's base, or it has none: a point recorded
+   * before the base was kept takes one when its snapshot is next replaced, or
+   * it would read as from an older version for as long as it is rewritten.
    */
   private async rewriteBase(
     input: { ref: VersionRef; locale?: string | null },
-    storedLocale: string | null
+    stored: StoredPointBase
   ): Promise<
     { baseVersionNo: number; baseDraftRevision: number } | Record<string, never>
   > {
     const locale = input.locale ?? null;
-    if ((storedLocale ?? null) === locale) return {};
+    const hasBase =
+      stored.baseVersionNo != null && stored.baseDraftRevision != null;
+    if (hasBase && (stored.locale ?? null) === locale) return {};
     return this.documentBase(input.ref, locale);
   }
 

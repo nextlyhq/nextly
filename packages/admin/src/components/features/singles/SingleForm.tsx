@@ -121,10 +121,12 @@ import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
   autosaveScopeFor,
+  documentRecordingKey,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
+import { afterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { generateClientSchema } from "@admin/lib/field-validation";
@@ -972,6 +974,10 @@ export function SingleForm({
           mayWrite: () => !writesHeldNow.current,
           // And the editor can move to another language.
           stillShown: () => scopeNow.current === startedIn,
+          // This Single's recovery points, addressed as its recorder does.
+          recordingsFor: documentRecordingKey(
+            autosaveScopeFor("single", schema.slug, document?.id)
+          ),
           // Why: shared intent→payload helper mirrors the EntryForm
           // contract (see useEntryForm.mapIntentToPayload). Unpublish
           // strips other dirty fields so a confirm-modal misclick can't
@@ -1207,7 +1213,14 @@ export function SingleForm({
     fetchSourceValues: singleSourceFetcher(schema.slug),
     publishAllLanguages: {
       slug: schema.slug,
-      publish: () => publishAllSingleLanguages.mutate(),
+      // After this Single's recordings in flight land, as a save waits.
+      publish: () =>
+        afterRecordings(
+          documentRecordingKey(
+            autosaveScopeFor("single", schema.slug, document?.id)
+          ),
+          () => publishAllSingleLanguages.mutate()
+        ),
       pending: publishAllSingleLanguages.isPending,
     },
   });

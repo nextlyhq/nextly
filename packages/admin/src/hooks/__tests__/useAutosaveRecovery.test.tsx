@@ -442,7 +442,7 @@ describe("useAutosaveRecovery", () => {
     }
   });
 
-  it("drops a point its author wrote over, and offers any other older one as such", async () => {
+  it("offers every point from an older version as such, the author's own writes included", async () => {
     const point = (superseded?: "by-you" | "by-another" | "unknown") => ({
       snapshot: { title: "recovered" },
       updatedAt: "2026-08-17T10:00:00.000Z",
@@ -450,18 +450,11 @@ describe("useAutosaveRecovery", () => {
       ...(superseded === undefined ? {} : { superseded }),
     });
 
-    // Their own later save holds what they meant to keep (a1).
-    getSpy.mockResolvedValue(point("by-you"));
-    const own = renderRecovery(SCOPE);
-    await waitFor(() =>
-      expect(own.result.current.recovery.isResolved).toBe(true)
-    );
-    expect(own.result.current.recovery.offer).toBeNull();
-    own.unmount();
-
-    // Anyone else, or no one the server can name: offered, and said to be
-    // older (a2).
-    for (const superseded of ["by-another", "unknown"] as const) {
+    // The author's own, anyone else's, or no one the server can name: offered,
+    // and said to be older. The author's own is not withheld: a write of
+    // theirs that left the point in place, such as publishing every language,
+    // did not store it, so it is the only copy of that work.
+    for (const superseded of ["by-you", "by-another", "unknown"] as const) {
       getSpy.mockResolvedValue(point(superseded));
       const other = renderRecovery(SCOPE);
       await waitFor(() =>

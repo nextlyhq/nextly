@@ -45,10 +45,12 @@ import { useCan } from "@admin/hooks/useCan";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
 import {
   autosaveScopeFor,
+  documentRecordingKey,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { afterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
@@ -460,7 +462,14 @@ export function EntryForm({
     if (!entryId) return undefined;
     return {
       slug: collection.slug ?? collection.name,
-      publish: () => publishAllEntryLocales.mutate(entryId),
+      // After this entry's recordings in flight land, as a save waits.
+      publish: () =>
+        afterRecordings(
+          documentRecordingKey(
+            autosaveScopeFor("collection", collection.name, String(entryId))
+          ),
+          () => publishAllEntryLocales.mutate(entryId)
+        ),
       pending: publishAllEntryLocales.isPending,
     };
   }, [entry?.id, collection.slug, collection.name, publishAllEntryLocales]);

@@ -358,14 +358,15 @@ export function useAutosaveRecovery({
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
     if (holdsStored(data, stored, locale)) return null;
-    // From an older version this author wrote over themselves: their later
-    // save holds what they meant to keep, so the point is not offered (a1).
-    if (data.superseded === "by-you") return null;
     return {
       savedAt,
       snapshot: data.snapshot,
-      // Anyone else's later write, or one the server cannot name: offered,
-      // and said to be from an older version (a2).
+      // Written since the point began, by anyone, the author included, or by
+      // a write the server cannot name: offered, and said to be from an older
+      // version. Not withheld when the later writes were all the author's
+      // own: a save of theirs deletes the point, so one still here outlived
+      // a write that did not store it, such as publishing every language,
+      // and it is the only copy of that work.
       olderVersion: data.superseded !== undefined,
     };
   }, [dismissed, data, stored, locale, isPutOff]);

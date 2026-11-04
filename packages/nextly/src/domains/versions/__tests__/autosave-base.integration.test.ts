@@ -130,6 +130,26 @@ describe.each(getConfiguredTestDialects())(
       expect(await verdict(ref, "u1")).toBe("unknown");
     });
 
+    it("takes a base when a point recorded before the base is next rewritten", async () => {
+      // Otherwise it reads as from an older version for as long as the author
+      // keeps typing into it.
+      const ref = doc();
+      await durable(ref, 1, "u1");
+      await autosave(ref, "u1", 10);
+      await handle.adapter.update(
+        "nextly_versions",
+        { baseVersionNo: null, baseDraftRevision: null },
+        {
+          and: [
+            { column: "entryId", op: "=", value: ref.entryId },
+            { column: "isAutosave", op: "=", value: true },
+          ],
+        }
+      );
+      await autosave(ref, "u1", 11);
+      expect(await verdict(ref, "u1")).toBeUndefined();
+    });
+
     it("sees an existing working draft rewritten after the point began", async () => {
       const ref = doc();
       const draft = (v: number) =>

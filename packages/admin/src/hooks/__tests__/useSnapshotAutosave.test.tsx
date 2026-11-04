@@ -11,7 +11,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { recordingsSettled, useSnapshotAutosave } from "../useSnapshotAutosave";
+import {
+  afterRecordings,
+  recordingsSettled,
+  useSnapshotAutosave,
+} from "../useSnapshotAutosave";
 
 const DEBOUNCE = 2000;
 const STORED_AT = "2026-08-19T02:00:00.000Z";
@@ -522,12 +526,15 @@ describe("a refusal is not asked again", () => {
 });
 
 describe("a real save waits for the recordings already sent", () => {
+  /** The document the cases save; see `documentRecordingKey`. */
+  const DOC = "collection:posts:e1";
+
   /**
    * A recorder whose recordings each stay open until released, in order.
    * Every case releases what it opened: the set of recordings in flight is
    * the tab's, so one left open would hold the next case's wait.
    */
-  function heldRecorder() {
+  function heldRecorder(document = "collection:posts:e1") {
     const open: Array<(answer: "stored" | "failed") => void> = [];
     const save = vi.fn(
       () =>
@@ -540,7 +547,12 @@ describe("a real save waits for the recordings already sent", () => {
         })
     );
     const hook = renderHook(() =>
-      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+      useSnapshotAutosave({
+        identity: `${document}:`,
+        document,
+        save,
+        debounceMs: DEBOUNCE,
+      })
     );
     const record = () => {
       act(() => hook.result.current.schedule());
@@ -568,8 +580,35 @@ describe("a real save waits for the recordings already sent", () => {
   }
 
   it("answers at once when nothing is on its way, which is the control", async () => {
-    const settled = watch(recordingsSettled());
+    const settled = watch(recordingsSettled(DOC));
     expect(await settled()).toBe(true);
+  });
+
+  it("does not wait for another document's recordings", async () => {
+    // A recording of another document cannot recreate the point this save
+    // deletes, and a slow one must not hold the save.
+    const other = heldRecorder("collection:posts:e2");
+    other.record();
+
+    const settled = watch(recordingsSettled(DOC));
+    expect(await settled()).toBe(true);
+
+    await other.release();
+  });
+
+  it("runs a write that is not a save only once the recordings have landed", async () => {
+    const recorder = heldRecorder();
+    recorder.record();
+    const write = vi.fn();
+
+    afterRecordings(DOC, write);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(write).not.toHaveBeenCalled();
+
+    await recorder.release();
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   });
 
   it("waits until the recording in flight has landed", async () => {
@@ -577,7 +616,7 @@ describe("a real save waits for the recordings already sent", () => {
     recorder.record();
     expect(recorder.save).toHaveBeenCalledTimes(1);
 
-    const settled = watch(recordingsSettled());
+    const settled = watch(recordingsSettled(DOC));
     expect(await settled()).toBe(false);
 
     await recorder.release();
@@ -590,7 +629,7 @@ describe("a real save waits for the recordings already sent", () => {
     const recorder = heldRecorder();
     recorder.record();
     recorder.record();
-    const settled = watch(recordingsSettled());
+    const settled = watch(recordingsSettled(DOC));
 
     await recorder.release();
     await waitFor(() => expect(recorder.save).toHaveBeenCalledTimes(2));
@@ -603,7 +642,7 @@ describe("a real save waits for the recordings already sent", () => {
   it("counts a recording that failed as landed", async () => {
     const recorder = heldRecorder();
     recorder.record();
-    const settled = watch(recordingsSettled());
+    const settled = watch(recordingsSettled(DOC));
 
     await recorder.release("failed");
     expect(await settled()).toBe(true);
@@ -612,7 +651,7 @@ describe("a real save waits for the recordings already sent", () => {
   it("stops waiting for a recording that never answers", async () => {
     const recorder = heldRecorder();
     recorder.record();
-    const settled = watch(recordingsSettled(1000));
+    const settled = watch(recordingsSettled(DOC, 1000));
 
     act(() => void vi.advanceTimersByTime(999));
     expect(await settled()).toBe(false);
