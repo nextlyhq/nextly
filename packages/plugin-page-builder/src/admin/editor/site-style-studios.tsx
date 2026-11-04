@@ -727,32 +727,37 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
 
 /**
  * One style's change applied to the stored classes as a replay finds them:
- * the classes with that style changed, nothing to write, or nothing it can do
- * once the style is no longer stored (it is not recreated).
+ * the stored tier with that style changed, nothing to write, or nothing it
+ * can do once the style is neither stored nor in the site's code (a removed
+ * style is not recreated).
  */
 function classChangeOn(
   held: unknown,
+  configured: readonly NamedClass[] | undefined,
   classId: string,
   change: SharedStyleChange
 ): SiteStyleReplayed {
-  const entries: readonly unknown[] = Array.isArray(held) ? held : [];
-  const at = entries.findIndex(
-    entry =>
-      typeof entry === "object" &&
-      entry !== null &&
-      (entry as { id?: unknown }).id === classId
+  const entries = (Array.isArray(held) ? held : []).filter(
+    (entry): entry is NamedClass => typeof entry === "object" && entry !== null
   );
-  const entry = entries[at] as NamedClass | undefined;
+  const at = entries.findIndex(entry => entry.id === classId);
+  // A style the site's code supplies is stored only while it differs from
+  // the code's, so after an undo the stored tier may not hold it: its
+  // styles are then the code's.
+  const entry = entries[at] ?? configured?.find(each => each.id === classId);
   if (entry === undefined) return { kind: "gone" };
   const out = change(entry.styles);
   if (out.kind === "refused") return { kind: "gone" };
   if (out.kind === "unchanged") return { kind: "unchanged" };
-  return {
-    kind: "write",
-    value: entries.map((each, index) =>
-      index === at ? { ...entry, styles: out.styles } : each
-    ),
-  };
+  const changed = { ...entry, styles: out.styles };
+  const next =
+    at === -1
+      ? [...entries, changed]
+      : entries.map((each, index) => (index === at ? changed : each));
+  // Only what differs from the code is stored, as a forward write stores
+  // it: an undo that brings a supplied style back to the code's drops it,
+  // so a later change in code shows.
+  return { kind: "write", value: classOverrideOf(configured, next) };
 }
 
 /** A section save's refusal in words, or the fallback when it gave none. */
@@ -884,8 +889,8 @@ function useWriteClassStyles(
          */
         const undo = change.invert(entry.styles);
         const result = await slot.save(classOverrideOf(configured, next), {
-          undo: held => classChangeOn(held, classId, undo),
-          redo: held => classChangeOn(held, classId, change),
+          undo: held => classChangeOn(held, configured, classId, undo),
+          redo: held => classChangeOn(held, configured, classId, change),
         });
         const refused = refusalOf(
           result,

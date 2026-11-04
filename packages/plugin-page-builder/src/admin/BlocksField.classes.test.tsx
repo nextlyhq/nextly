@@ -648,6 +648,43 @@ describe("writing a shared style's styles while it is the target", () => {
   });
 });
 
+describe("undoing an edit to a shared style the site's code supplies", () => {
+  const supplied = {
+    id: "c-code",
+    slug: "code",
+    label: "Code",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#111111" } } },
+  };
+
+  it("stores nothing for it once undone, and stores the edit again on redo", async () => {
+    // Undone, the style is the code's own again: an override equal to the
+    // code would mask any later change to it in code for good.
+    clientConfig = { siteStyle: { classes: [supplied] } };
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    openEditor();
+
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    const edited = saved.at(-1)?.classes as { id: string }[];
+    expect(edited.map(c => c.id)).toEqual(["c-code"]);
+
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    expect(saved.at(-1)).toEqual({ classes: [] });
+
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual({ classes: edited });
+  });
+});
+
 describe("undoing a shared style's edit after the library changed elsewhere", () => {
   const card = {
     id: "c-card",
