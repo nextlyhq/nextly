@@ -2774,14 +2774,12 @@ describe("where a control's value came from", () => {
     expect(swatch?.hasAttribute("data-empty")).toBe(false);
   });
 
-  it("shows an inherited keyword in its list in place of Not set", () => {
+  it("marks an inherited Display's icon, without choosing it", () => {
     mountCarded([fromCard({ property: "display", value: "flex" })], {
       layout: true,
     });
-    // By the label's start: the label also holds the source caption.
-    const trigger = screen.getByLabelText(/^Display/);
-    expect(trigger.textContent).toBe("flex");
-    expect(trigger.textContent).not.toContain("Not set");
+    const flex = screen.getByRole("radio", { name: "Flex, inherited" });
+    expect(flex.getAttribute("aria-checked")).toBe("false");
     expect(sourceIn("display")).toBe("From .card");
   });
 
@@ -4635,32 +4633,46 @@ describe("the Baseline gate on the panel", () => {
   it("offers no control for a withheld keyword", () => {
     mount({ layout: true });
 
-    fireEvent.click(screen.getByLabelText("Display"));
+    fireEvent.click(screen.getByLabelText("More Display values"));
 
-    expect(screen.getByRole("option", { name: "Flex" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Inline flex" })).toBeDefined();
     expect(screen.queryByRole("option", { name: "Contents only" })).toBeNull();
   });
 
   it("names a keyword in words, with its CSS spelling in the tooltip", () => {
     // "inline-flex" read as code; the words are what an author picks from.
     mount({ layout: true });
-    fireEvent.click(screen.getByLabelText("Display"));
+    fireEvent.click(screen.getByLabelText("More Display values"));
     const option = screen.getByRole("option", { name: "Inline flex" });
     expect(option.getAttribute("title")).toBe("inline-flex");
   });
 
   it("offers a stored spelling once, in words, in the place of the keyword it spells", () => {
-    // The validator stores `INLINE-FLEX` as the inline-flex it is, so the menu
-    // names it once in words rather than adding a second item read as code.
+    // The validator stores `DENSE ROW` as the row dense it is, so the menu
+    // names it once in words, in the place of both spellings of that value,
+    // rather than adding an item read as code.
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { display: "grid", gridAutoFlow: "DENSE ROW" },
+      },
+    } as NodeStyles;
+    mount({ layout: true }, styles);
+    fireEvent.click(screen.getByRole("combobox", { name: /^Grid auto flow/ }));
+    const options = screen.getAllByRole("option", { name: "Row, fill gaps" });
+    expect(options).toHaveLength(1);
+    expect(options[0]?.getAttribute("title")).toBe("DENSE ROW");
+    expect(screen.queryByRole("option", { name: "DENSE ROW" })).toBeNull();
+  });
+
+  it("offers a stored spelling once among the values beside the icons", () => {
     const styles = {
       base: { [BASE_BREAKPOINT]: { display: "INLINE-FLEX" } },
     } as NodeStyles;
     mount({ layout: true }, styles);
-    fireEvent.click(screen.getByLabelText("Display"));
+    fireEvent.click(screen.getByLabelText("More Display values"));
     const options = screen.getAllByRole("option", { name: "Inline flex" });
     expect(options).toHaveLength(1);
     expect(options[0]?.getAttribute("title")).toBe("INLINE-FLEX");
-    expect(screen.queryByRole("option", { name: "INLINE FLEX" })).toBeNull();
   });
 
   it("shows a stored withheld value clear-only, and says why", () => {

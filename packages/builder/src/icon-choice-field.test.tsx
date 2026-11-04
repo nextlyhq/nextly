@@ -67,7 +67,7 @@ describe("IconChoiceField", () => {
     const more = screen.getByLabelText(/^More Justify content values/);
     expect(more.hasAttribute("data-inherited")).toBe(true);
     expect(more.getAttribute("aria-label")).toBe(
-      "More Justify content values, showing normal"
+      "More Justify content values, showing Default"
     );
     expect(
       screen
@@ -138,7 +138,7 @@ describe("IconChoiceField", () => {
     mount("safe center");
 
     const more = screen.getByLabelText("More Justify content values");
-    expect(more.textContent).toContain("safe center");
+    expect(more.textContent).toContain("Safe center");
     // No icon is chosen for a value the icons do not draw.
     expect(
       screen
@@ -147,14 +147,53 @@ describe("IconChoiceField", () => {
     ).toBe(false);
   });
 
+  it("names the values in More in words, each CSS spelling in its tooltip", () => {
+    mount();
+    fireEvent.click(screen.getByLabelText("More Justify content values"));
+    const option = screen.getByRole("option", { name: "Default" });
+    expect(option.getAttribute("title")).toBe("normal");
+    expect(screen.queryByRole("option", { name: "normal" })).toBeNull();
+  });
+
+  it("draws Display's own icons, not the stand-in", () => {
+    const display = alignmentGroupFor(
+      "display",
+      ["block", "flex", "grid", "none", "inline"],
+      {
+        writingMode: "horizontal-tb",
+        rtl: false,
+        flex: false,
+        direction: "row",
+      }
+    )!;
+    render(
+      <IconChoiceField
+        id="display"
+        labelledBy="label"
+        group={display}
+        stored={undefined}
+        actionName="Display"
+        describedBy={undefined}
+        onCommit={() => "applied"}
+      />
+    );
+    for (const name of ["Block", "Flex", "Grid", "Hidden"]) {
+      const radio = screen.getByRole("radio", { name });
+      expect(radio.querySelector("svg")?.getAttribute("class")).not.toContain(
+        "lucide-circle"
+      );
+    }
+  });
+
   it("shows a stored spelling neither the icons nor the list carry, in More", () => {
     // The engine accepts spellings outside the catalogue's list, "inherit"
     // among them; shown as unset, an active declaration would look absent.
     mount("inherit");
 
+    // In words, as every value in More is.
     expect(
       screen.getByLabelText("More Justify content values").textContent
-    ).toContain("inherit");
+    ).toContain("Inherit");
   });
 
   it("leaves clearing to the row's reset, with no Clear of its own", () => {
