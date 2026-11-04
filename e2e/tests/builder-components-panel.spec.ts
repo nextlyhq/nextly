@@ -423,6 +423,36 @@ test.describe("the Components panel", () => {
     }
   });
 
+  test("drops a component after the heading on a page that already places one there", async ({
+    page,
+  }) => {
+    // The first placement saved and the page opened again, so the second is
+    // dropped beside one drawn from what the page stores: aimed at the
+    // heading's lower part, it lands after the heading, as the first did.
+    const t = stamp();
+    const title = `Twice ${t}`;
+    const component = await createComponent(page.request, title);
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await clearSelection(page);
+    await openPanel(page, "Add");
+    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
+    await dragAfterHeading(page, tile(page, title));
+    await saveDraft(page);
+    await openBuilder(page, id);
+    await clearSelection(page);
+    await openComponents(page);
+    await dragAfterHeading(page, row(page, title));
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([
+      "core/heading",
+      `component:${component}`,
+      `component:${component}`,
+      "core/section",
+    ]);
+  });
+
   test("Edit opens the component alone, says what it reaches, and Back returns", async ({
     page,
   }) => {
