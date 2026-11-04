@@ -1,0 +1,176 @@
+/**
+ * An update made from an out-of-date version of a Single is refused; one made
+ * from the current version, or with none, is applied.
+ *
+ * The oracle throughout is the stored row, read raw: a refused save leaves it
+ * as it was.
+ *
+ * @module domains/singles/__tests__/stale-version.integration.test
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import { defineSingle, text } from "../../../config";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import type { SingleEntryService } from "../services/single-entry-service";
+
+let current: TestNextly | undefined;
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+/** Two languages, with a shared field. */
+const PREFS = "prefs";
+/** No languages. */
+const PLAIN = "plain";
+const ANA = { id: "user-ana", name: "Ana Ruiz", email: "ana@x.test", role: "admin" };
+
+const OPEN = { read: () => true, update: () => true };
+
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    singles: [
+      defineSingle({
+        slug: PREFS,
+        localized: true,
+        access: OPEN,
+        fields: [
+          text({ name: "siteName", localized: true }),
+          text({ name: "contact", localized: false }),
+        ],
+      }),
+      defineSingle({ slug: PLAIN, access: OPEN, fields: [text({ name: "notice" })] }),
+    ],
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+  });
+  // A PostgreSQL or MySQL leg that silently booted SQLite proves nothing.
+  expect(current.adapter.dialect).toBe(dialect);
+  const now = new Date();
+  await current.adapter.insert("users", {
+    id: ANA.id,
+    email: ANA.email,
+    name: ANA.name,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return current;
+}
+
+type Result = {
+  success?: boolean;
+  statusCode?: number;
+  code?: string;
+  data?: Record<string, unknown> | null;
+  publicData?: Record<string, unknown>;
+};
+
+const singlesOf = (t: TestNextly): SingleEntryService => t.getService("singleEntryService");
+
+const save = (
+  t: TestNextly,
+  slug: string,
+  data: Record<string, unknown>,
+  options: { locale?: string; user?: typeof ANA } = {}
+): Promise<Result> =>
+  singlesOf(t).update(slug, data, { overrideAccess: true, ...options } as never) as Promise<Result>;
+
+const read = async (t: TestNextly, slug: string, locale?: string): Promise<string> => {
+  const result = (await singlesOf(t).get(slug, {
+    overrideAccess: true,
+    ...(locale ? { locale } : {}),
+  } as never)) as Result;
+  const rev = result.data?._rev;
+  if (typeof rev !== "string") throw new Error(`no _rev on ${JSON.stringify(result)}`);
+  return rev;
+};
+
+function revOf(result: Result): string {
+  const rev = result.data?._rev;
+  if (typeof rev !== "string") throw new Error(`no _rev on ${JSON.stringify(result)}`);
+  return rev;
+}
+
+async function mainRow(t: TestNextly, slug: string): Promise<Record<string, unknown>> {
+  const rows = await t.adapter.select<Record<string, unknown>>(`single_${slug}`, {});
+  if (rows.length !== 1) throw new Error(`${rows.length} rows for ${slug}`);
+  return rows[0];
+}
+
+describe.each(getConfiguredTestDialects())("judging a Single's update by the version it gives (%s)", dialect => {
+  it("applies the first save from the version a read of the unsaved Single gave", async () => {
+    const t = await boot(dialect);
+    const version = await read(t, PLAIN);
+    const first = await save(t, PLAIN, { notice: "first", _rev: version });
+    expect(first.success, JSON.stringify(first)).toBe(true);
+    expect((await mainRow(t, PLAIN)).notice).toBe("first");
+  });
+
+  it("refuses a save from a version someone else's save replaced, and leaves it as it was", async () => {
+    const t = await boot(dialect);
+    const first = await save(t, PLAIN, { notice: "first" });
+    const version = revOf(first);
+    const theirs = await save(t, PLAIN, { notice: "theirs", _rev: version }, { user: ANA });
+    expect(theirs.success, JSON.stringify(theirs)).toBe(true);
+
+    const mine = await save(t, PLAIN, { notice: "mine", _rev: version });
+    expect(mine).toMatchObject({ success: false, statusCode: 409, code: "STALE_VERSION" });
+    expect(mine.publicData).toMatchObject({
+      currentVersion: revOf(theirs),
+      changedBy: { kind: "person", name: ANA.name },
+    });
+    expect(JSON.stringify(mine)).not.toContain("theirs");
+    expect((await mainRow(t, PLAIN)).notice).toBe("theirs");
+  });
+
+  it("applies a save from the current version, and one that gives none", async () => {
+    const t = await boot(dialect);
+    const first = await save(t, PLAIN, { notice: "first" });
+    const second = await save(t, PLAIN, { notice: "second", _rev: revOf(first) });
+    expect(second.success, JSON.stringify(second)).toBe(true);
+    const unjudged = await save(t, PLAIN, { notice: "third" });
+    expect(unjudged.success, JSON.stringify(unjudged)).toBe(true);
+    expect((await mainRow(t, PLAIN)).notice).toBe("third");
+  });
+
+  it("refuses with 400 a version that is not one, and an _overwrite that is not true or false", async () => {
+    const t = await boot(dialect);
+    await save(t, PLAIN, { notice: "first" });
+    for (const data of [{ _rev: "seven" }, { _rev: 7 }, { _overwrite: "yes" }]) {
+      const result = await save(t, PLAIN, { notice: "no", ...data });
+      expect(result, JSON.stringify(data)).toMatchObject({ success: false, statusCode: 400 });
+    }
+    const overwritten = await save(t, PLAIN, { notice: "over", _overwrite: true });
+    expect(overwritten.success, JSON.stringify(overwritten)).toBe(true);
+    expect(await mainRow(t, PLAIN)).not.toHaveProperty("_overwrite");
+  });
+
+  it("judges a translated save on its own language and the shared fields", async () => {
+    const t = await boot(dialect);
+    await save(t, PREFS, { siteName: "Hello", contact: "c" }, { locale: "en" });
+    const es = await save(t, PREFS, { siteName: "Hola" }, { locale: "es" });
+    const readEs = revOf(es);
+
+    // English changes: the Spanish version is still current.
+    await save(t, PREFS, { siteName: "Hello again" }, { locale: "en" });
+    const fine = await save(t, PREFS, { siteName: "Hola otra vez", _rev: readEs }, { locale: "es" });
+    expect(fine.success, JSON.stringify(fine)).toBe(true);
+
+    // Spanish changes: a Spanish save from before it is out of date.
+    const stale = await save(t, PREFS, { siteName: "Adios", _rev: readEs }, { locale: "es" });
+    expect(stale).toMatchObject({ success: false, statusCode: 409, code: "STALE_VERSION" });
+    expect(stale.publicData).toMatchObject({ currentVersion: revOf(fine) });
+
+    // A shared field changes: every language's save from before it is out of date.
+    await save(t, PREFS, { contact: "shared" }, { locale: "en" });
+    const afterShared = await save(t, PREFS, { siteName: "Otra", _rev: revOf(fine) }, { locale: "es" });
+    expect(afterShared).toMatchObject({ success: false, statusCode: 409, code: "STALE_VERSION" });
+    expect(await read(t, PREFS, "es")).toBe(`${(await mainRow(t, PREFS))._revision}.es:2`);
+  });
+});
