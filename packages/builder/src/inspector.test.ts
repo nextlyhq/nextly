@@ -809,11 +809,12 @@ describe("which choices a block's inspector offers", () => {
           editor: { label: "Button" },
           props: {
             href: { type: "url" },
+            entryCollection: { type: "text" },
             entryId: { type: "text" },
             type: {
               type: "select",
               options: ["button", "submit", "reset"],
-              onlyWithout: ["href", "entryId"],
+              onlyWithout: ["href", ["entryCollection", "entryId"]],
             },
             as: { type: "select", options: ["div"] },
           },
@@ -825,8 +826,11 @@ describe("which choices a block's inspector offers", () => {
       { id: "b", type: "acme/button", version: 1, props } as BlockNode,
     ]);
   }
+  /** The props the inspector draws a control for. */
   const names = (document: BlockDocument) =>
-    inspectSelection(document, "b")?.props.map(prop => prop.name);
+    inspectSelection(document, "b")
+      ?.props.filter(prop => prop.offered)
+      .map(prop => prop.name);
 
   it("leaves out a prop that only applies without another, once that one is set", () => {
     // "Acts as" means nothing on a button that is a link.
@@ -835,8 +839,12 @@ describe("which choices a block's inspector offers", () => {
   });
 
   it("leaves it out once any of the props it applies without is set", () => {
-    // An entry link is as much a link as a typed URL.
-    expect(names(withButton({ entryId: "e1" }))).not.toContain("type");
+    // An entry link is as much a link as a typed URL, once it names both the
+    // collection and the entry: the renderer resolves no link from half of one.
+    expect(
+      names(withButton({ entryCollection: "pages", entryId: "e1" }))
+    ).not.toContain("type");
+    expect(names(withButton({ entryId: "e1" }))).toContain("type");
   });
 
   it("counts a link as set only when it is one a page can follow", () => {
@@ -849,5 +857,19 @@ describe("which choices a block's inspector offers", () => {
 
   it("leaves out a choice with only one option, which offers nothing to pick", () => {
     expect(names(withButton({}))).not.toContain("as");
+    expect(names(withButton({ as: "div" }))).not.toContain("as");
+  });
+
+  it("keeps a one-option choice whose stored value is not that option, so it can be repaired", () => {
+    // An imported `section` still renders; the choice is how it goes back.
+    expect(names(withButton({ as: "section" }))).toContain("as");
+  });
+
+  it("still lists a left-out prop, so a component can expose it", () => {
+    const type = inspectSelection(
+      withButton({ href: "/pricing" }),
+      "b"
+    )?.props.find(prop => prop.name === "type");
+    expect(type?.offered).toBe(false);
   });
 });

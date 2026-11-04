@@ -162,6 +162,6 @@ describe("a button's Acts as", () => {
     const type = (button?.props as Record<string, Record<string, unknown>>)
       .type;
     expect(type?.label).toBe("Acts as");
-    expect(type?.onlyWithout).toEqual(["href", "entryId"]);
+    expect(type?.onlyWithout).toEqual(["href", ["entryCollection", "entryId"]]);
   });
 });

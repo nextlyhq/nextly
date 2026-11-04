@@ -210,13 +210,15 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     },
     rel: { label: "Link relationship", type: "text" },
     // What the button does when it is not a link: offered only without a
-    // link, to a URL or to an entry, since a link is what it then does.
+    // link, to a URL or to an entry, since a link is what it then does. An
+    // entry link is the collection and the entry together, as the renderer
+    // resolves one.
     type: {
       label: "Acts as",
       optionLabels: { button: "Button", submit: "Submit", reset: "Reset" },
       type: "select",
       options: [...BUTTON_TYPES],
-      onlyWithout: ["href", "entryId"],
+      onlyWithout: ["href", ["entryCollection", "entryId"]],
     },
     ariaLabel: { label: "Accessible label", role: "content", type: "text" },
   },

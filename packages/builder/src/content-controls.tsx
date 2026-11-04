@@ -25,6 +25,7 @@
 import {
   isRichTextValue,
   ITEM_SCHEMA_MAX_DEPTH,
+  optionLabel,
   richTextToPlainText,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -48,7 +49,7 @@ import {
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
-import { optionLabel, propLabel, type EditableProp } from "./inspector";
+import { propLabel, type EditableProp } from "./inspector";
 import type { OpenPassages } from "./open-passages";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
@@ -849,6 +850,9 @@ function itemProp(
     value,
     supported: hasContentControl(schema.type),
     options,
+    // An item's fields are drawn whole: the rules that leave a block's prop
+    // out read the block's other props, which an item does not have.
+    offered: true,
     // The parent array control's `disabled` already holds the item fields.
     readOnly: false,
   };

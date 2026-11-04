@@ -31,8 +31,12 @@
 
 The inspector names three more choices the way an author thinks of them. A
 button's "type" is now "Acts as", and it is offered only while the button has
-no link, since a link is then what the button does. A container's tag is now
+no link, to a URL a page can follow or to an entry, since a link is then what
+the button does. A component can still expose it, for pages that clear the
+link. A container's tag is now
 "HTML tag", each option named in words ("Generic box", "Main content") with
 the tag itself shown muted beside it, and the row is hidden where a block has
-only one tag to offer. "Visible on" draws its three devices as separate
+only one tag to offer, unless what is stored is another one. A component
+field exposing a choice now offers it in the block's words too, read through
+`optionLabel`, which `@nextlyhq/blocks-engine` now exports. "Visible on" draws its three devices as separate
 toggles with a dot on the device being edited.
