@@ -233,20 +233,26 @@ export function variablesFor(
  * field writes as its length form) is the other form's to judge.
  */
 function valueFits(token: SiteVariable, leaf: StyleLeaf): boolean {
-  if (isFluidValue(token.value)) return true;
-  if (!judgedAt(token.kind, leaf.kind)) return true;
+  // A folded field's own forms, so the variable is judged by the one its kind
+  // is written in: a font weight's number by the number form's 1 to 1000,
+  // though the field shows the keyword form while unset.
+  const arms = FOLDED_ARMS.get(leaf) ?? [leaf];
+  const arm = arms.find(each => judgedAt(token.kind, each.kind));
+  if (arm === undefined) return true;
+  // A length or a number through a function resolves only on the page.
+  if (arm.kind !== "cssValue" && throughFunction(token.value)) return true;
   const text = trimCssWhitespace(token.value);
   // A number variable holds its number as text; the leaf takes a number.
   const value =
-    leaf.kind === "number" && CSS_NUMBER.test(text) ? Number(text) : text;
-  return leafAcceptsValue(leaf, value);
+    arm.kind === "number" && CSS_NUMBER.test(text) ? Number(text) : text;
+  return leafAcceptsValue(arm, value);
 }
 
 /**
  * Whether a value goes through a function (`clamp()`, `calc()`, `min()`,
- * `var()`), so what it comes to depends on the page it is drawn on.
+ * `var()`), whose result this cannot judge before the page draws it.
  */
-export function isFluidValue(value: string): boolean {
+function throughFunction(value: string): boolean {
   return value.includes("(");
 }
 
@@ -264,6 +270,27 @@ function judgedAt(kind: TokenKind, leafKind: StyleLeaf["kind"]): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * The forms behind a leaf drawn as one field over a union, by the leaf
+ * {@link foldedLeaf} made for them.
+ */
+const FOLDED_ARMS = new WeakMap<StyleLeaf, readonly StyleLeaf[]>();
+
+/**
+ * One leaf for a field drawn over a union's forms (a line height's number or
+ * length, a font weight's keyword or number): it takes every token kind any
+ * form takes, and each variable offered there is judged by the form its kind
+ * is written in, not by whichever form the field happens to show.
+ */
+export function foldedLeaf(arms: readonly StyleLeaf[]): StyleLeaf {
+  const [first] = arms;
+  if (first === undefined) throw new Error("a folded field has no forms");
+  const tokenKinds = [...new Set(arms.flatMap(arm => arm.tokenKinds))];
+  const leaf: StyleLeaf = { ...first, tokenKinds };
+  FOLDED_ARMS.set(leaf, arms);
+  return leaf;
 }
 
 /** Whether a variable belongs to the family this leaf's field offers. */

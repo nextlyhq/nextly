@@ -335,6 +335,9 @@ function VariableList({
         {...(groups === undefined ? {} : { groups })}
         choiceClassName="nx-variable-choice__option"
         renderChoice={entry => <VariableRow entry={entry} />}
+        // The whole name and value on the row, which never collapses, where
+        // the value itself may be cut short or given way entirely.
+        choiceTitle={entry => `${entry.label} ${entry.variable.value}`}
       />
     </div>
   );
@@ -381,7 +384,7 @@ function VariableRow({ entry }: { entry: VariableEntry }): React.JSX.Element {
       >
         {entry.label}
       </span>{" "}
-      <span className="nx-variable-choice__value" title={entry.variable.value}>
+      <span className="nx-variable-choice__value">
         {variableValueText(entry.variable)}
       </span>
     </>
@@ -418,18 +421,18 @@ export function VariableChip({
     // prohibits one. Focusable by script only, as the field's label targets it.
     <p
       className="nx-style-inspector__token nx-variable-chip"
+      // The whole name and value on the chip, which never collapses, where the
+      // value may be out of sight; its text, read out, holds both too.
+      title={variable === undefined ? name : `${name} ${variable.value}`}
       role="group"
       {...(labelledBy === undefined
         ? { "aria-label": label }
         : { "aria-labelledby": labelledBy })}
       tabIndex={-1}
     >
-      {/* One line, cut with an ellipsis where the field is narrow, with the
-          whole name on hover. */}
-      <span
-        className="nx-variable-chip__text"
-        title={variable === undefined ? name : `${name} ${variable.value}`}
-      >
+      {/* One line: the name whole, and its value only while it fits; the
+          whole of both is on the chip's tooltip. */}
+      <span className="nx-variable-chip__text">
         {onPick === undefined || offered.length === 0 ? (
           <span className="nx-variable-chip__name">{name}</span>
         ) : (

@@ -285,9 +285,7 @@ describe("a field holding a variable", () => {
     // The name the author gave it, never the code path it is stored under,
     // and the whole name and value on hover where the field cuts them short.
     expect(fontSize.queryByText(/font-size\.display/)).toBeNull();
-    expect(
-      (chip.querySelector(".nx-variable-chip__text") as HTMLElement).title
-    ).toBe("Display 48px");
+    expect(chip.title).toBe("Display 48px");
     fireEvent.click(
       within(chip).getByRole("button", {
         name: "Clear Font size",
@@ -761,5 +759,28 @@ describe("one reading of the canvas's mode for the whole panel", () => {
     } finally {
       canvas.remove();
     }
+  });
+});
+
+describe("a folded field in the panel", () => {
+  it("offers a font weight only the number variables its number form takes", () => {
+    mount(
+      { typography: true },
+      {},
+      {
+        tokens: [
+          { name: "weight.heavy", kind: "number", values: { light: "700" } },
+          { name: "weight.over", kind: "number", values: { light: "1500" } },
+        ],
+      }
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Variables for Font weight" })
+    );
+    const names = screen
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    expect(names).toContain("Heavy 700");
+    expect(names.some(text => text?.startsWith("Over"))).toBe(false);
   });
 });

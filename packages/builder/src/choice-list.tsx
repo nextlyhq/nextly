@@ -43,6 +43,11 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
   /** What an entry draws: its label unless said otherwise. */
   readonly renderChoice?: (choice: C) => React.ReactNode;
+  /**
+   * An entry's tooltip: its label unless said otherwise, such as a label and
+   * a value the row may cut short.
+   */
+  readonly choiceTitle?: (choice: C) => string;
   /** An entry's own style, such as a family drawn in itself. */
   readonly choiceStyle?: (choice: C) => React.CSSProperties | undefined;
   /** A class each entry carries beside the list's own. */
@@ -58,6 +63,7 @@ export function ChoiceList<C extends ListedChoice>({
   noMatch,
   groups,
   renderChoice,
+  choiceTitle,
   choiceStyle,
   choiceClassName,
 }: ChoiceListProps<C>): React.JSX.Element {
@@ -136,7 +142,7 @@ export function ChoiceList<C extends ListedChoice>({
           : `nx-font-pick__option ${choiceClassName}`
       }
       // Cut with an ellipsis when long: whole on hover.
-      title={choice.label}
+      title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
       style={choiceStyle?.(choice)}
       onMouseMove={() => setActive(shown.indexOf(choice))}
       onClick={() => onPick(choice)}

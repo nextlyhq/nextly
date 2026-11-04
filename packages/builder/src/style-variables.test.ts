@@ -14,7 +14,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { variablesFor } from "./style-colour";
+import { foldedLeaf, variablesFor } from "./style-colour";
 import {
   lengthInPx,
   tokenForTypedName,
@@ -292,5 +292,88 @@ describe("a fluid variable", () => {
       token => token.name === "space.sm"
     );
     expect(one === undefined ? "" : variableValueText(one)).toBe("8px");
+  });
+});
+
+describe("a folded field judges each variable by the form it fits", () => {
+  // The two forms of each folded property, as the catalog declares them.
+  const arms = (property: string): StyleLeaf[] =>
+    shapeOf(property).of as StyleLeaf[];
+  const VALUES: SiteTokenSet = {
+    tokens: [
+      { name: "weight.heavy", kind: "number", values: { light: "700" } },
+      { name: "weight.over", kind: "number", values: { light: "1500" } },
+      {
+        name: "line-height.loose",
+        kind: "dimension",
+        values: { light: "32px" },
+      },
+      {
+        name: "line-height.under",
+        kind: "dimension",
+        values: { light: "-8px" },
+      },
+    ],
+  };
+  const offered = (leaf: StyleLeaf): string[] =>
+    variablesFor(leaf, VALUES).map(token => token.name);
+
+  it("holds a font weight's number variable to the number form's 1 to 1000", () => {
+    // Unset, the field draws the keyword form; the number form still judges.
+    const weight = foldedLeaf(arms("fontWeight"));
+    expect(offered(weight)).toContain("weight.heavy");
+    expect(offered(weight)).not.toContain("weight.over");
+  });
+
+  it("holds a line height's length variable to the length form", () => {
+    const lineHeight = foldedLeaf(arms("lineHeight"));
+    expect(offered(lineHeight)).toContain("line-height.loose");
+    expect(offered(lineHeight)).not.toContain("line-height.under");
+  });
+});
+
+describe("what reads as Fluid", () => {
+  const SET: SiteTokenSet = {
+    tokens: [
+      {
+        name: "space.gutter-fluid",
+        kind: "dimension",
+        values: { light: "clamp(1rem, 4vw, 3rem)" },
+      },
+      {
+        name: "space.sum",
+        kind: "dimension",
+        values: { light: "calc(1rem + 2px)" },
+      },
+      {
+        name: "shadow.lift",
+        kind: "shadow",
+        values: { light: "0 2px 4px rgba(0, 0, 0, 0.2)" },
+      },
+    ],
+  };
+  const find = (leaf: StyleLeaf, name: string) => {
+    const found = variablesFor(leaf, SET).find(token => token.name === name);
+    if (found === undefined) throw new Error(`not offered: ${name}`);
+    return found;
+  };
+
+  it("is a length that changes with the viewport", () => {
+    expect(variableValueText(find(WIDTH, "space.gutter-fluid"))).toBe("Fluid");
+  });
+
+  it("is not a fixed length through calc(), which reads as itself", () => {
+    const sum = find(WIDTH, "space.sum");
+    expect(variableValueText(sum)).toBe("calc(1rem + 2px)");
+    expect(variableSample(sum)).toEqual({ kind: "none" });
+  });
+
+  it("is not a shadow, which reads and draws as itself", () => {
+    const lift = find(BOX_SHADOW, "shadow.lift");
+    expect(variableValueText(lift)).toBe("0 2px 4px rgba(0, 0, 0, 0.2)");
+    expect(variableSample(lift)).toEqual({
+      kind: "shadow",
+      value: "0 2px 4px rgba(0, 0, 0, 0.2)",
+    });
   });
 });

@@ -457,12 +457,28 @@ describe("a fluid variable in the list and on the chip", () => {
     );
     fireEvent.click(trigger("Width"));
     const row = screen.getByRole("option", { name: "Gutter fluid Fluid" });
-    expect(
-      (row.querySelector(".nx-variable-choice__value") as HTMLElement).title
-    ).toBe("clamp(1rem, 4vw, 3rem)");
+    expect(row.title).toBe("Gutter fluid clamp(1rem, 4vw, 3rem)");
     expect(
       row.querySelector(".nx-variable-choice__bar[data-fluid]")
     ).not.toBeNull();
+  });
+
+  it("keeps the whole name and value on the list row, however the value is cut", () => {
+    render(
+      <VariableChoice
+        leaf={FONT_SIZE}
+        tokens={TOKENS}
+        bound={false}
+        current={undefined}
+        label="Font size"
+        onPick={vi.fn()}
+      />
+    );
+    fireEvent.click(trigger());
+    // On the row, which never collapses, and in its name.
+    expect(screen.getByRole("option", { name: "Display 48px" }).title).toBe(
+      "Display 48px"
+    );
   });
 
   it("puts the whole name and value in the chip's tooltip", () => {
@@ -475,12 +491,9 @@ describe("a fluid variable in the list and on the chip", () => {
         onClear={vi.fn()}
       />
     );
-    expect(
-      (
-        screen
-          .getByRole("group", { name: "Font size" })
-          .querySelector(".nx-variable-chip__text") as HTMLElement
-      ).title
-    ).toBe("Display 48px");
+    // On the chip itself, which never collapses, and in what it reads out.
+    const chip = screen.getByRole("group", { name: "Font size" });
+    expect(chip.title).toBe("Display 48px");
+    expect(chip.textContent).toBe("Display 48px");
   });
 });

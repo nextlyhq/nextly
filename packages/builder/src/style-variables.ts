@@ -18,12 +18,7 @@ import type {
   TokenMode,
 } from "@nextlyhq/blocks-engine";
 
-import {
-  isFluidValue,
-  variableLabel,
-  variablesFor,
-  type SiteVariable,
-} from "./style-colour";
+import { variableLabel, variablesFor, type SiteVariable } from "./style-colour";
 import { typeScaleProperty } from "./tokens-studio";
 
 /**
@@ -103,12 +98,27 @@ export function lengthInPx(value: string): number | undefined {
 }
 
 /**
+ * Whether a variable is ONE length that changes with the page: `clamp()`,
+ * `min()`, `max()` or `calc()` over the viewport, a container or a
+ * percentage. A shadow, a fixed `calc(1rem + 2px)` and any value of several
+ * parts are not, and read as themselves.
+ */
+function isFluidLength(variable: SiteVariable): boolean {
+  if (variable.kind !== "dimension") return false;
+  const value = variable.value.trim();
+  return (
+    /^(clamp|min|max|calc)\(/i.test(value) &&
+    /\d(?:[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|%)/i.test(value)
+  );
+}
+
+/**
  * A variable's value in words short enough for a row: the value itself, or
- * "Fluid" for one through a function, whose whole text crowded the name out
- * of a list row. The whole value stays in the row's tooltip.
+ * "Fluid" for a length that changes with the page, whose whole text crowded
+ * the name out of a list row. The whole value stays in the row's tooltip.
  */
 export function variableValueText(variable: SiteVariable): string {
-  return isFluidValue(variable.value) ? "Fluid" : variable.value;
+  return isFluidLength(variable) ? "Fluid" : variable.value;
 }
 
 /** What a list draws beside a variable's name to show its value. */
@@ -149,7 +159,10 @@ export function variableSample(variable: SiteVariable): VariableSample {
     return { kind: "shadow", value: variable.value };
   }
   if (variable.kind !== "dimension") return { kind: "none" };
-  if (isFluidValue(variable.value)) return { kind: "fluid" };
+  if (isFluidLength(variable)) return { kind: "fluid" };
+  // Through any other function (`calc(1rem + 2px)`) it has no length here
+  // to draw, though it is fixed: drawn as nothing rather than as fluid.
+  if (variable.value.includes("(")) return { kind: "none" };
   const px = lengthInPx(variable.value);
   if (px === undefined) return { kind: "none" };
   if (typeScaleProperty(variable) === "font-size") {

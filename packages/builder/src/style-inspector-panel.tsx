@@ -32,8 +32,9 @@
 import {
   findNode,
   isRawColour,
+  isStyleLeaf,
   isTokenRef,
-  tokenKindsForProperty,
+  STYLE_CATALOG,
   trimCssWhitespace,
   walkNodes,
   type BreakpointId,
@@ -124,6 +125,7 @@ import {
   activeTokenMode,
   colourHexOf,
   colourShowable,
+  foldedLeaf,
   variableFor,
   variableLabel,
   variablesFor,
@@ -2866,14 +2868,32 @@ function HeldVariable({
 
 /**
  * The leaf a field's variables are offered for: the control's own, or, for a
- * folded union drawn as one field, the same leaf taking every kind either arm
- * takes, so a line height offers a number variable and a length one alike.
+ * folded union drawn as one field, one leaf over all its forms, which takes
+ * every kind any form takes and judges each variable by the form its kind is
+ * written in (see `foldedLeaf`).
  */
 function variableLeafOf(leaf: StyleLeaf, fold: Fold | undefined): StyleLeaf {
-  return fold === undefined
-    ? leaf
-    : { ...leaf, tokenKinds: tokenKindsForProperty(fold.property) };
+  return fold === undefined ? leaf : foldedLeafFor(fold.property, leaf);
 }
+
+/**
+ * The folded leaf for one catalog property, made once: its forms are the
+ * catalog's, which do not change, and one leaf object keeps the forms it
+ * carries attached. The control's own leaf stands in if the catalog has no
+ * union there.
+ */
+function foldedLeafFor(property: string, fallback: StyleLeaf): StyleLeaf {
+  const made = FOLDED_LEAVES.get(property);
+  if (made !== undefined) return made;
+  const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
+  const arms =
+    shape?.kind === "union" ? shape.of.filter(isStyleLeaf) : [fallback];
+  const leaf = foldedLeaf(arms.length > 0 ? arms : [fallback]);
+  FOLDED_LEAVES.set(property, leaf);
+  return leaf;
+}
+
+const FOLDED_LEAVES = new Map<string, StyleLeaf>();
 
 /**
  * A value that is live on the page and cannot be edited here: shown, and
@@ -5262,6 +5282,52 @@ function useHeldBlur(
   };
 }
 
+/**
+ * A side's tooltip: its whole value, for one the narrow cell cannot show, or
+ * none where there is nothing to show or the field is not a side.
+ */
+function sideTitle(compact: boolean, draft: string): string | undefined {
+  return compact && draft !== "" ? draft : undefined;
+}
+
+/**
+ * A text field's commit: the draft written, a variable's typed name matched
+ * in the mode the canvas shows, as the field's variables list offers them.
+ */
+function useDraftCommit({
+  draft,
+  stored,
+  control,
+  tokens,
+  onCommit,
+  setDraft,
+  setTyping,
+}: {
+  draft: string;
+  stored: StyleValue | undefined;
+  control: StyleControl;
+  tokens: SiteTokenSet | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+}): () => void {
+  const mode = useCanvasTokenMode();
+  return () => {
+    // Written or not, the text is no longer mid-edit.
+    setTyping(false);
+    commitDraft({
+      draft,
+      stored,
+      kind: control.kind,
+      leaf: control.leaf,
+      tokens,
+      mode,
+      onCommit,
+      setDraft,
+    });
+  };
+}
+
 /** Write a text field's draft, when it differs from what is stored. */
 function commitDraft({
   draft,
@@ -5453,26 +5519,18 @@ function TextField({
   const [typing, setTyping] = useTyping(editing);
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
-  // The mode the canvas shows: a typed name matches what the field's
-  // variables list offers, in that mode.
-  const mode = useCanvasTokenMode();
   const hint = useUnsetHint(
     compact ? "–" : (fallbackHint ?? placeholderFor(control))
   );
-  const commit = () => {
-    // Written or not, the text is no longer mid-edit.
-    setTyping(false);
-    commitDraft({
-      draft,
-      stored,
-      kind: control.kind,
-      leaf: control.leaf,
-      tokens,
-      mode,
-      onCommit,
-      setDraft,
-    });
-  };
+  const commit = useDraftCommit({
+    draft,
+    stored,
+    control,
+    tokens,
+    onCommit,
+    setDraft,
+    setTyping,
+  });
 
   return (
     <Input
@@ -5480,7 +5538,7 @@ function TextField({
       {...shownText(display, typing, draft, hint)}
       // A side of the spacing box is narrow: its whole value is in its
       // tooltip, for one the cell cannot show.
-      title={compact && draft !== "" ? draft : undefined}
+      title={sideTitle(compact, draft)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
