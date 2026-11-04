@@ -47,6 +47,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
+import type { SpacingMode } from "@nextlyhq/blocks-engine";
 import {
   apiErrorMessage,
   readPluginRoute,
@@ -67,7 +68,9 @@ import {
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
+  SPACING_MODE_ROUTE_PATH,
   type SiteBreakpointsRequest,
+  type SpacingModeResult,
 } from "../library-contract";
 import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
@@ -85,8 +88,12 @@ import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 import { useStoredSiteStyle } from "./site-style-read";
 
-/** The four sections of the document, each one studio's to own. */
-export type SiteStyleSection = keyof SiteStyleData;
+/**
+ * The four sections of the document, each one studio's to own. The spacing
+ * model is not one: it is kept beside the document and saved through its own
+ * route (see `useSaveSpacingMode`).
+ */
+export type SiteStyleSection = Exclude<keyof SiteStyleData, "spacingMode">;
 
 /**
  * The site style as the editor should draw it: the host's code-stated defaults
@@ -232,6 +239,64 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
  */
 export function refusalWords(reason: unknown, fallback: string): string {
   return apiErrorMessage(reason, fallback);
+}
+
+/**
+ * What one save of the site's spacing model came to: stored and read back,
+ * stored but not read back (the editor still holds the earlier style), or
+ * refused, with the words to show for the last two.
+ */
+export type SpacingModeSaveResult =
+  | { readonly saved: true; readonly refreshed: true }
+  | { readonly saved: true; readonly refreshed: false; readonly issue: string }
+  | { readonly saved: false; readonly issue: string };
+
+/** What a stored choice whose read-back failed is told. */
+const SPACING_MODE_NOT_REFRESHED =
+  "The space between blocks was saved, but the editor could not read it back. Reload to see it on the canvas.";
+
+/** What saving the site's spacing model answers. */
+export interface SpacingModeSave {
+  readonly save: (mode: SpacingMode) => Promise<SpacingModeSaveResult>;
+}
+
+/**
+ * Save the site's spacing model through its route, then read the style again.
+ *
+ * The model lives beside the Single rather than in it, so the Single's own
+ * write path cannot carry it; the editor's style read answers it, and reading
+ * that again is what moves the canvas onto the new model.
+ */
+export function useSaveSpacingMode(): SpacingModeSave {
+  const { refetch } = useStoredSiteStyle();
+  const save = useCallback<SpacingModeSave["save"]>(
+    async mode => {
+      try {
+        await writePluginRoute<SpacingModeResult>({
+          plugin: PAGE_BUILDER_PLUGIN_NAME,
+          path: SPACING_MODE_ROUTE_PATH,
+          body: { mode },
+        });
+      } catch (reason) {
+        return {
+          saved: false,
+          issue: refusalWords(
+            reason,
+            "The space between blocks was not changed."
+          ),
+        };
+      }
+      // Stored; the canvas moves only once the style is read again. A failed
+      // read answers rather than rejects, so its verdict is what tells a
+      // refreshed editor from one still drawing the earlier model.
+      const read = await refetch().catch(() => ({ isError: true }));
+      return read.isError
+        ? { saved: true, refreshed: false, issue: SPACING_MODE_NOT_REFRESHED }
+        : { saved: true, refreshed: true };
+    },
+    [refetch]
+  );
+  return { save };
 }
 
 /**

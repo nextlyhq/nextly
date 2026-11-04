@@ -1287,6 +1287,14 @@
   cursor: default;
 }
 
+/* A shared style chip held with the block's design: reachable, so its
+   tooltip can say why, but drawn as a press that will not land, as a held
+   toolbar verb is. */
+.nx-editing-bar__chip[aria-disabled="true"] {
+  color: color-mix(in srgb, var(--nx-builder-shared) 55%, transparent);
+  cursor: not-allowed;
+}
+
 .nx-editing-bar__chip-wrap {
   display: inline-flex;
   min-inline-size: 0;
@@ -4836,6 +4844,62 @@
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+}
+
+/* "Space between blocks": two answers, each a radio with its one-line hint. */
+.nx-vars-spacing__options {
+  display: grid;
+  gap: 2px;
+}
+
+.nx-vars-spacing__option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nx-vars-spacing__option:hover {
+  background: var(--nx-accent);
+}
+
+.nx-vars-spacing__option[data-chosen] {
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+}
+
+.nx-vars-spacing__option:has(input:disabled) {
+  cursor: default;
+}
+
+.nx-vars-spacing__option input {
+  margin: 0.125rem 0 0;
+  accent-color: var(--nx-primary);
+}
+
+.nx-vars-spacing__option:has(input:focus-visible) {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-vars-spacing__words {
+  display: grid;
+  gap: 2px;
+}
+
+.nx-vars-spacing__label {
+  font-size: 13px;
+  color: var(--nx-foreground);
+}
+
+.nx-vars-spacing__hint {
+  font-size: var(--text-xs);
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
 }
 

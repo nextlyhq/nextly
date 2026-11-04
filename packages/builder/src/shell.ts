@@ -544,7 +544,11 @@ export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
  * decides when an edit is persisted; this exports the surface, not the save.
  */
 export { TokensPanel, useVariablesHeader } from "./tokens-panel";
-export type { TokensPanelProps, VariablesHeader } from "./tokens-panel";
+export type {
+  SpacingModeControl,
+  TokensPanelProps,
+  VariablesHeader,
+} from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*

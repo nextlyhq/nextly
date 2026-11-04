@@ -1,0 +1,19 @@
+.nx-pb-page :where(h1) { font-size: 2.25em; font-weight: 700; line-height: 1.15; margin-block-end: 0.5em; margin-block-start: 1.5em }
+.nx-pb-page :where(h2) { font-size: 1.75em; font-weight: 700; line-height: 1.2; margin-block-end: 0.5em; margin-block-start: 1.5em }
+.nx-pb-page :where(h3) { font-size: 1.375em; font-weight: 700; line-height: 1.3; margin-block-end: 0.5em; margin-block-start: 1.5em }
+.nx-pb-page :where(h4) { font-size: 1.125em; font-weight: 700; line-height: 1.4; margin-block-end: 0.5em; margin-block-start: 1.5em }
+.nx-pb-page :where(h5) { font-size: 1em; font-weight: 700; line-height: 1.45; margin-block-end: 0.5em; margin-block-start: 1.5em }
+.nx-pb-page :where(h6) { font-size: 0.875em; font-weight: 700; line-height: 1.5; margin-block-end: 0.5em; margin-block-start: 1.5em }
+.nx-pb-page :where(p) { margin-block-end: 1em; margin-block-start: 0 }
+.nx-pb-page :where(.nx-bt-core--accordion) { display: grid; gap: var(--site-space-4) }
+.nx-pb-page :where(.nx-bt-core--box) { display: block }
+.nx-pb-page :where(.nx-bt-core--button) { background-color: var(--site-color-primary); border-style: none; border-block-end-width: 0; border-block-start-width: 0; border-inline-end-width: 0; border-inline-start-width: 0; border-radius: 8px; box-sizing: border-box; color: var(--site-color-background); display: inline-block; font-family: inherit; font-size: inherit; font-style: inherit; font-weight: inherit; letter-spacing: inherit; line-height: inherit; padding-block-end: 0.5rem; padding-block-start: 0.5rem; padding-inline-end: 1rem; padding-inline-start: 1rem; text-decoration: none }
+.nx-pb-page :where(.nx-bt-core--card) { background-color: var(--site-color-surface); border-color: var(--site-color-border); border-style: solid; border-block-end-width: 1px; border-block-start-width: 1px; border-inline-end-width: 1px; border-inline-start-width: 1px; border-radius: 12px; display: block; overflow: hidden }
+.nx-pb-page :where(.nx-bt-core--column) { min-width: 0 }
+.nx-pb-page :where(.nx-bt-core--columns) { display: grid; gap: var(--site-space-4); grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)) }
+.nx-pb-page :where(.nx-bt-core--divider) { border-color: var(--site-color-border); border-style: solid; border-block-end-width: 0; border-block-start-width: 1px; border-inline-end-width: 0; border-inline-start-width: 0; margin-block-end: 1.5em; margin-block-start: 1.5em }
+.nx-pb-page :where(.nx-bt-core--gallery) { display: grid; gap: var(--site-space-4); grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)) }
+.nx-pb-page :where(.nx-bt-core--list) { list-style-type: revert; padding-inline-start: 2.5em }
+.nx-pb-page :where(.nx-bt-core--quote) { margin-block-end: 1.5em; margin-block-start: 1.5em; margin-inline-end: 0; margin-inline-start: 0; padding-inline-start: 1.5em }
+.nx-pb-page :where(.nx-bp-core--quote--attribution) { font-size: 0.875em; margin-block-start: 0.75em }
+.nx-pb-page :where(.nx-bp-core--quote--quotation) { margin-block-end: 0; margin-block-start: 0; margin-inline-end: 0; margin-inline-start: 0 }

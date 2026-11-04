@@ -165,13 +165,29 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
+import { siteStyleExpiry } from "./site-style-expiry";
 import { referableClassIds } from "./site-style-record";
-import { siteStyleRoute } from "./site-style-route";
+import { blocksSurvey, siteStyleRoute } from "./site-style-route";
 import {
   loadSiteStyle,
   SITE_STYLE_SLUG,
   siteStyleSingle,
 } from "./site-style-storage";
+import {
+  configuredSpacingMode,
+  readJoiningDecision,
+  settleSpacingModeAfterBoot,
+  spacingModeJob,
+  spacingModeRunInFlight,
+  type SpacingModeAtStartDeps,
+  type SpacingModeSlugs,
+} from "./spacing-mode-at-start";
+import {
+  SPACING_MODE_SERVICE,
+  type SpacingModeReader,
+} from "./spacing-mode-reader";
+import { spacingModeRoute } from "./spacing-mode-route";
+import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
@@ -1090,6 +1106,50 @@ export const pageBuilder = (
   };
 
   /**
+   * What the spacing-model step and its reader need from the installed
+   * plugin: the store over the plugin's own table and the RESOLVED slugs it
+   * reads. Published by `init` for the reason `defaultLayoutSetup` is.
+   */
+  let spacingSetup: {
+    store: SpacingModeStore;
+    slugs: SpacingModeSlugs;
+    survey: SpacingModeAtStartDeps["survey"];
+    siteStyle: string;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+  } | null = null;
+
+  /** The installed spacing-model store, or a refusal naming why it is missing. */
+  const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
+    if (spacingSetup === null) {
+      throw new Error(
+        "[page-builder] the site's spacing model was asked for before the plugin was installed"
+      );
+    }
+    return spacingSetup;
+  };
+
+  /**
+   * The start's decision while it runs: the default-Layout seed, then the
+   * spacing step. `null` once it has settled.
+   */
+  let spacingStartup: Promise<void> | null = null;
+
+  /** The step's deps for one run, the Direct API resolved at call time. */
+  const spacingModeDeps = async (): Promise<SpacingModeAtStartDeps> => {
+    const { store, slugs, survey, siteStyle, warn } = requireSpacingSetup();
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const configured = configuredSpacingMode(opts.siteStyle);
+    return {
+      store,
+      slugs,
+      survey,
+      ...(configured === undefined ? {} : { configured }),
+      nextly: await getCachedNextly(),
+      expire: () => siteStyleExpiry(warn)(siteStyle),
+    };
+  };
+
+  /**
    * How the blocks field judges composition, once the plugin is installed.
    * Until then only a document's own rules run: nothing is installed to read
    * the library through.
@@ -1261,6 +1321,25 @@ export const pageBuilder = (
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
       defaultLayoutSetup = installDefaultLayout(ctx);
+
+      // The site's spacing model, kept in the plugin's own table, and the
+      // RESOLVED slugs the one-time step reads to tell an existing site from
+      // a fresh one.
+      spacingSetup = {
+        store: spacingModeStore(ctx.db, ctx.dialect),
+        slugs: {
+          layouts: defaultLayoutSetup.slugs.layouts,
+          settings: defaultLayoutSetup.slugs.settings,
+        },
+        // Where block documents may live: the registry's survey of every
+        // collection and live Single holding a blocks field the builder opens,
+        // the same survey the editor's style route asks.
+        survey: () => blocksSurvey(ctx),
+        // The RESOLVED Site Style slug, whose cached reads a recorded model
+        // expires.
+        siteStyle: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+        warn: (message, meta) => ctx.logger.warn(message, meta),
+      };
 
       // How a blocks value is judged as a reader would receive it: where
       // components live, the caps, who places a component, and where to say
@@ -1484,9 +1563,24 @@ export const pageBuilder = (
     // Seed the default Layout once the system is assembled, so a fresh site
     // has one before its first page is drawn. Deliberately not awaited:
     // `seedDefaultLayoutAtStart` says why, and catches every failure itself.
+    //
+    // Then record the site's spacing model, once: AFTER the seed, so the seed
+    // is recorded and not taken for content. Neither step throws.
     onReady: () => {
-      if (defaultLayoutSetup !== null) {
-        void seedDefaultLayoutAtStart(defaultLayoutSetup);
+      const setup = defaultLayoutSetup;
+      const spacing = spacingSetup;
+      const seeded =
+        setup === null ? Promise.resolve() : seedDefaultLayoutAtStart(setup);
+      if (spacing !== null) {
+        // Not awaited, so the boot is not held; a style read made meanwhile
+        // joins it instead (see the spacing-model service below).
+        const startup = seeded.then(() =>
+          settleSpacingModeAfterBoot(spacingModeDeps, spacing.warn)
+        );
+        spacingStartup = startup;
+        void startup.finally(() => {
+          if (spacingStartup === startup) spacingStartup = null;
+        });
       }
     },
     // Moves with every migration of the plugin's own tables below.
@@ -1515,6 +1609,20 @@ export const pageBuilder = (
         // host as the person who started it, and its progress.
         [COMPONENT_DELETE_REWRITE_SERVICE]: () =>
           componentDeleteRewriteService(requireRewriteInstall),
+        // The site's spacing model, for a render that holds only the Direct
+        // API: `loadSiteStyle` reads it through this service. Resolved per
+        // call, so a read before `init` refuses rather than answering a
+        // default the site never chose.
+        // A read finding no model while this process is still deciding one,
+        // at start or in a sweep, waits for that decision, so a first render
+        // is not drawn under a default the site is about to replace.
+        [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
+          read: () =>
+            readJoiningDecision(
+              requireSpacingSetup().store,
+              () => spacingStartup ?? spacingModeRunInFlight()
+            ),
+        }),
       },
       // The backfill sweep. Contributed unconditionally beside the index it
       // fills: the work is owed from the moment this plugin meets existing
@@ -1534,6 +1642,9 @@ export const pageBuilder = (
         // and every jobs pass confirms the site still has a published default,
         // whatever path took it away; the guards also queue it directly.
         defaultLayoutJob(defaultLayoutDeps),
+        // The spacing-model step, retried on every pass until a model is
+        // recorded; then one indexed read per pass.
+        spacingModeJob(spacingModeDeps),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -1807,6 +1918,13 @@ export const pageBuilder = (
         // The editor's read of the stored site style, for anyone who may
         // edit something the builder opens: the canvas cannot draw without it.
         siteStyleRoute(componentStoreOf(opts)),
+        // The owner's choice of how blocks are spaced, asked of the same
+        // permission a Site Style write needs.
+        // A choice expires the cached pages that read the site style, and says
+        // so in the plugin's log when it cannot.
+        spacingModeRoute(slug =>
+          siteStyleExpiry(requireSpacingSetup().warn)(slug)
+        ),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
         // The Design panel's shared styles: lock and unlock one, how widely
