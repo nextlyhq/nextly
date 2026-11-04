@@ -62,7 +62,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
-import { HTML_TAG_LABELS } from "./html-tags";
+import { htmlTagProp } from "./html-tags";
 
 /** This block's registered name, so its tests name it once. */
 export const GALLERY_BLOCK = "core/gallery";
@@ -116,14 +116,7 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["images", "photos", "grid", "carousel"],
     },
     props: {
-      as: {
-        label: "HTML tag",
-        optionLabels: HTML_TAG_LABELS,
-        showOptionValue: true,
-        display: "menu",
-        type: "select",
-        options: ["div", "section", "article"],
-      },
+      as: htmlTagProp(["div", "section", "article"]),
       contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "div", contained: false },

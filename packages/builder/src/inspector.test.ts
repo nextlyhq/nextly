@@ -813,7 +813,6 @@ describe("which choices a block's inspector offers", () => {
               type: "select",
               options: ["button", "submit", "reset"],
               onlyWithout: "href",
-              firstInside: { block: "acme/form", option: "submit" },
             },
             as: { type: "select", options: ["div"] },
           },
@@ -860,21 +859,5 @@ describe("which choices a block's inspector offers", () => {
 
   it("leaves out a choice with only one option, which offers nothing to pick", () => {
     expect(names(withButton({}, false))).not.toContain("as");
-  });
-
-  it("puts the option a container makes most likely first, inside that container", () => {
-    const optionsOf = (document: BlockDocument) =>
-      inspectSelection(document, "b")?.props.find(prop => prop.name === "type")
-        ?.options;
-    expect(optionsOf(withButton({}, false))).toEqual([
-      "button",
-      "submit",
-      "reset",
-    ]);
-    expect(optionsOf(withButton({}, true))).toEqual([
-      "submit",
-      "button",
-      "reset",
-    ]);
   });
 });

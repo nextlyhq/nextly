@@ -157,12 +157,11 @@ describe("a container's HTML tag", () => {
 });
 
 describe("a button's Acts as", () => {
-  it("is offered only without a link, Submit first inside a form", () => {
+  it("is offered only without a link", () => {
     const button = coreBlocks.find(block => block.name === "core/button");
     const type = (button?.props as Record<string, Record<string, unknown>>)
       .type;
     expect(type?.label).toBe("Acts as");
     expect(type?.onlyWithout).toBe("href");
-    expect(type?.firstInside).toEqual({ block: "core/form", option: "submit" });
   });
 });

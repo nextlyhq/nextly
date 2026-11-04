@@ -61,7 +61,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
-import { HTML_TAG_LABELS } from "./html-tags";
+import { htmlTagProp } from "./html-tags";
 
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 
@@ -123,14 +123,7 @@ export const columns: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["row", "grid", "split", "side by side"],
     },
     props: {
-      as: {
-        label: "HTML tag",
-        optionLabels: HTML_TAG_LABELS,
-        showOptionValue: true,
-        display: "menu",
-        type: "select",
-        options: ["div", "section", "article"],
-      },
+      as: htmlTagProp(["div", "section", "article"]),
       contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "div", contained: false },

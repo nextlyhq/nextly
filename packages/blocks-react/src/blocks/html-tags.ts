@@ -8,7 +8,9 @@
  *
  * @module blocks/html-tags
  */
-export const HTML_TAG_LABELS: Readonly<Record<string, string>> = {
+import type { PropSchema } from "@nextlyhq/blocks-engine";
+
+const HTML_TAG_LABELS: Readonly<Record<string, string>> = {
   div: "Generic box",
   section: "Section",
   article: "Article",
@@ -17,3 +19,19 @@ export const HTML_TAG_LABELS: Readonly<Record<string, string>> = {
   footer: "Footer",
   main: "Main content",
 };
+
+/**
+ * A container's `as` prop, one schema for all of them: only which tags a
+ * container offers differs, so only that is passed. A container offering one
+ * tag still declares it, and the inspector hides a choice of one.
+ */
+export function htmlTagProp(options: readonly string[]): PropSchema {
+  return {
+    label: "HTML tag",
+    optionLabels: HTML_TAG_LABELS,
+    showOptionValue: true,
+    display: "menu",
+    type: "select",
+    options: [...options],
+  };
+}

@@ -23,7 +23,7 @@ import {
   renderLinkableContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
-import { HTML_TAG_LABELS } from "./html-tags";
+import { htmlTagProp } from "./html-tags";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -47,14 +47,7 @@ export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     keywords: ["container", "div", "group", "wrapper"],
   },
   props: {
-    as: {
-      label: "HTML tag",
-      optionLabels: HTML_TAG_LABELS,
-      showOptionValue: true,
-      display: "menu",
-      type: "select",
-      options: ["div", "article", "aside"],
-    },
+    as: htmlTagProp(["div", "article", "aside"]),
     // Declared even though a box is full width by default: a preset differs
     // from its sibling in what it starts as, never in what it can be told to
     // do, and a schema is what lets anything but a human change a value.

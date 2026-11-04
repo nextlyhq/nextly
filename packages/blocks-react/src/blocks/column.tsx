@@ -32,7 +32,7 @@ import {
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
-import { HTML_TAG_LABELS } from "./html-tags";
+import { htmlTagProp } from "./html-tags";
 
 /** The block name a `core/columns` slot accepts, in one place. */
 export const COLUMN_BLOCK = "core/column";
@@ -101,14 +101,7 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       // `article` inside a row is nearly always a mistake the author meant to
       // make one level up. Anything genuinely semantic belongs in the column
       // rather than as the column.
-      as: {
-        label: "HTML tag",
-        optionLabels: HTML_TAG_LABELS,
-        showOptionValue: true,
-        type: "select",
-        options: ["div"],
-        display: "menu",
-      },
+      as: htmlTagProp(["div"]),
       contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: COLUMN_DEFAULT_PROPS,

@@ -320,51 +320,6 @@ function isSet(value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
-/**
- * A choice's options, with the one a container makes most likely first while
- * the node sits inside that container (`firstInside`), as a button inside a
- * form is most likely to submit it. Otherwise in the block's own order.
- */
-function orderedOptions(
-  schema: PropSchema,
-  document: BlockDocument,
-  nodeId: string
-): readonly string[] {
-  const options = optionsOf(schema);
-  const first = firstInsideOf(schema);
-  if (first === undefined || !options.includes(first.option)) return options;
-  if (!insideBlockOf(document.nodes, nodeId, first.block)) return options;
-  return [first.option, ...options.filter(option => option !== first.option)];
-}
-
-/** A schema's `firstInside` hint, when it is well formed. */
-function firstInsideOf(
-  schema: PropSchema
-): { block: string; option: string } | undefined {
-  const hint = schema.firstInside;
-  if (typeof hint !== "object" || hint === null) return undefined;
-  const { block, option } = hint as Record<string, unknown>;
-  return typeof block === "string" && typeof option === "string"
-    ? { block, option }
-    : undefined;
-}
-
-/** Whether `nodeId` sits, at any depth, inside a node of type `blockType`. */
-function insideBlockOf(
-  nodes: readonly BlockNode[],
-  nodeId: string,
-  blockType: string,
-  within = false
-): boolean {
-  return nodes.some(node => {
-    if (node.id === nodeId) return within;
-    const inside = within || node.type === blockType;
-    return Object.values(node.slots ?? {}).some(children =>
-      insideBlockOf(children, nodeId, blockType, inside)
-    );
-  });
-}
-
 export function lockStateOf(
   document: BlockDocument,
   ids: readonly string[]
@@ -433,7 +388,7 @@ export function inspectSelection(
             definition.defaultProps as Record<string, unknown> | undefined
           )?.[name],
           supported: hasContentControl(schema.type),
-          options: orderedOptions(schema, document, node.id),
+          options: optionsOf(schema),
           readOnly: designLock !== undefined && !content.has(name),
         },
       ];
