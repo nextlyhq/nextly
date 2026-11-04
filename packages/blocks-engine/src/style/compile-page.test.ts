@@ -2216,6 +2216,35 @@ describe("the space a container puts between its children", () => {
     }
   });
 
+  it("writes no gap and no marker under the classic spacing model", () => {
+    const child = node("child");
+    const document = doc([
+      node("parent", undefined, {
+        slots: { children: [child] },
+        styles: { base: { base: { display: "flex" } } },
+      }),
+    ]);
+    const classic = compilePageCss(document, {
+      ...CTX,
+      childGaps: GAPS,
+      spacingMode: "classic",
+    });
+    // Byte for byte the compile that was never handed a gap: the flag takes
+    // the whole tier away, the layout-mode rules a gap decides included.
+    expect(classic.css).toBe(compilePageCss(document, CTX).css);
+    expect(classic.classes.get("parent")?.split(" ")).not.toContain(
+      CHILD_GAP_CLASS
+    );
+    // The control: the same input under the gaps model writes both.
+    const gaps = compilePageCss(document, {
+      ...CTX,
+      childGaps: GAPS,
+      spacingMode: "gaps",
+    });
+    expect(gaps.css).toContain("> * + *");
+    expect(gaps.classes.get("parent")?.split(" ")).toContain(CHILD_GAP_CLASS);
+  });
+
   it("writes a child gap only where a margin AND a gap can take it", () => {
     // `-1rem` is a margin a block-flow container could write, but no `gap`:
     // written as the one and not the other, a container switched to flex or

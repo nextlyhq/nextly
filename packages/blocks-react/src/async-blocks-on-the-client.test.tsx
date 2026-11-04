@@ -114,6 +114,48 @@ describe("an async block in the editor's client render", () => {
     expect(renders.count).toBe(before);
   });
 
+  it("runs again when the site's spacing model changes", async () => {
+    // A block whose markup reads the model, as a render argument offers it.
+    const modeBlock = defineBlock<Record<string, never>>({
+      name: "test/mode",
+      version: 1,
+      description: "Draws the spacing model it was rendered under.",
+      example: { props: {} },
+      defaultProps: {},
+      render: async ({ className, spacingMode }) => {
+        await Promise.resolve();
+        return (
+          <p className={className} data-testid="mode">
+            {spacingMode ?? "none"}
+          </p>
+        );
+      },
+    }) as AnyBlockDefinition;
+    const context = createStandaloneContext();
+    const drawn = (spacingMode: "classic" | "gaps"): ReactElement => (
+      <PageRenderer
+        document={{
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [{ id: "m", type: "test/mode", version: 1, props: {} }],
+        }}
+        blocks={createBlockResolver([modeBlock])}
+        context={context}
+        styleContext={{
+          breakpoints: { viewport: [], container: [] },
+          spacingMode,
+        }}
+        nodeAttribute
+      />
+    );
+    const { rerender } = await act(async () => render(drawn("gaps")));
+    expect(screen.getByTestId("mode").textContent).toBe("gaps");
+    await act(async () => {
+      rerender(drawn("classic"));
+    });
+    expect(screen.getByTestId("mode").textContent).toBe("classic");
+  });
+
   it("runs again when the block's own props change", async () => {
     const renders = { count: 0 };
     const context = createStandaloneContext();

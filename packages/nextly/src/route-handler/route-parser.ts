@@ -740,8 +740,9 @@ function parseCollectionEntryDuplicateRoute(
 }
 
 /**
- * Parse the publish-all-languages route for a collection entry (i18n M7).
+ * Parse the publish-all-languages routes for a collection entry.
  * POST /api/collections/{slug}/entries/{id}/publish-all
+ * GET /api/collections/{slug}/entries/{id}/publish-all
  */
 function parseCollectionEntryPublishAllRoute(
   id: string | undefined,
@@ -773,6 +774,28 @@ function parseCollectionEntryPublishAllRoute(
       // permission name nothing seeds.
       operation: "update",
       method: allLocales,
+      routeParams,
+    };
+  }
+
+  // GET /api/collections/{slug}/entries/{id}/publish-all → what publishing
+  // every language would do, language by language, without doing it. A read,
+  // admitted on `publish-{slug}` as the POST is: a caller who may not publish
+  // is not told what a publish would do.
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    additionalParams[0] === "publish-all" &&
+    additionalParams.length === 1 &&
+    httpMethod === "GET"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "previewPublishAllLocales",
       routeParams,
     };
   }
@@ -1440,6 +1463,20 @@ function parseSingleRoutes(
       service: "singles",
       operation: "update",
       method: "publishAllSingleLocales",
+      routeParams,
+    };
+  }
+
+  // GET /api/singles/[slug]/publish-all → what publishing every language
+  // would do, language by language, without doing it. A read, admitted on
+  // `publish-{slug}` as the POST is: a caller who may not publish is not told
+  // what a publish would do.
+  if (id && subresource === "publish-all" && !subId && httpMethod === "GET") {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "previewPublishAllSingleLocales",
       routeParams,
     };
   }

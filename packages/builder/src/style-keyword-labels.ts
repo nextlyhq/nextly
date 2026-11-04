@@ -191,18 +191,26 @@ const SHARED_LABELS: Readonly<Record<string, string>> = {
  * between"), so no keyword is ever shown in its CSS spelling.
  */
 export function keywordLabel(cssProperty: string, keyword: string): string {
-  // Looked up as CSS reads a keyword: its escapes decoded, case-folded the
-  // ASCII way, with its CSS whitespace trimmed and collapsed, since the
-  // validator stores `INLINE-FLEX`, `inline\2d flex` and `row  dense` as the
-  // keywords they spell. Only the lookup is folded; the stored value and its
-  // tooltip keep the spelling they were given.
-  const folded = asciiLower(
-    decodeIdentifier(trimCssWhitespace(keyword))
-  ).replace(/[ \t\n\r\f]+/g, " ");
+  // Looked up as CSS reads a keyword; only the lookup is folded, and the
+  // stored value and its tooltip keep the spelling they were given.
+  const folded = foldKeyword(keyword);
   return (
     KEYWORD_LABELS[cssProperty]?.[folded] ??
     SHARED_LABELS[folded] ??
     inWords(folded)
+  );
+}
+
+/**
+ * A keyword as CSS reads it: its escapes decoded, case-folded the ASCII way,
+ * with its CSS whitespace trimmed and collapsed, since the validator stores
+ * `INLINE-FLEX`, `inline\2d flex` and `row  dense` as the keywords they
+ * spell. For comparing a stored value with the keywords a control offers.
+ */
+export function foldKeyword(keyword: string): string {
+  return asciiLower(decodeIdentifier(trimCssWhitespace(keyword))).replace(
+    /[ \t\n\r\f]+/g,
+    " "
   );
 }
 

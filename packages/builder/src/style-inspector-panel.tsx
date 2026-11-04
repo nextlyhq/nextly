@@ -32,7 +32,9 @@
 import {
   findNode,
   isRawColour,
+  isStyleLeaf,
   isTokenRef,
+  STYLE_CATALOG,
   trimCssWhitespace,
   walkNodes,
   type BreakpointId,
@@ -107,7 +109,11 @@ import {
   useLabelScrubProps,
 } from "./label-scrub";
 import { layerLabel } from "./layers";
-import { usePrefersDark } from "./prefers-dark";
+import {
+  CanvasTokenModeProvider,
+  useCanvasTokenMode,
+  useCanvasTokenModeAt,
+} from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
 import {
@@ -129,15 +135,16 @@ import {
   activeTokenMode,
   colourHexOf,
   colourShowable,
-  colourTokenFor,
-  colourTokenLabel,
-  colourTokensFor,
+  foldedLeaf,
+  variableFor,
+  variableLabel,
+  variablesFor,
   contrastAtLeaf,
   contrastObscuredAbove,
   contrastObscuredIn,
   contrastPartnerOf,
   contrastRatioText,
-  type ColourToken,
+  type SiteVariable,
 } from "./style-colour";
 import {
   formNamesOf,
@@ -199,6 +206,8 @@ import {
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
+import { tokenForTypedName } from "./style-variables";
+import { VariableChip, VariableChoice } from "./variable-choice";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 
 /**
@@ -534,7 +543,10 @@ function StyleInspectorBody({
   const [chosenForms, setChosenForms] = React.useState<Record<string, number>>(
     {}
   );
-  const prefersDark = usePrefersDark();
+  // The mode the selected block is drawn in, its nearest theme marker first
+  // and the device after, read once here and handed to every control below.
+  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  const prefersDark = tokenMode === "dark";
   /*
    * What the browser is applying, or `undefined` when nobody can say.
    *
@@ -684,28 +696,30 @@ function StyleInspectorBody({
 
   return (
     <StyleTargetContext.Provider value={target}>
-      <div className="nx-style-inspector" data-style-target={target.kind}>
-        <ReadOnlyNote target={target} reason={readOnlyReason} />
-        <NoStyleProperties count={inspected.sections.length} />
-        <Accordion
-          type="single"
-          collapsible
-          value={open}
-          onValueChange={setOpenGroup}
-        >
-          {inspected.sections.map(section => (
-            <StyleSectionItem
-              // Keyed by node AND group: a bare group would let React reuse one
-              // block's inputs for the next block's same-named section, so a field
-              // would keep the previous block's uncommitted text.
-              key={`${inspected.nodeId}:${section.key}`}
-              section={section}
-              readOnlyReason={readOnlyReason}
-              {...surroundings}
-            />
-          ))}
-        </Accordion>
-      </div>
+      <CanvasTokenModeProvider value={tokenMode}>
+        <div className="nx-style-inspector" data-style-target={target.kind}>
+          <ReadOnlyNote target={target} reason={readOnlyReason} />
+          <NoStyleProperties count={inspected.sections.length} />
+          <Accordion
+            type="single"
+            collapsible
+            value={open}
+            onValueChange={setOpenGroup}
+          >
+            {inspected.sections.map(section => (
+              <StyleSectionItem
+                // Keyed by node AND group: a bare group would let React reuse one
+                // block's inputs for the next block's same-named section, so a field
+                // would keep the previous block's uncommitted text.
+                key={`${inspected.nodeId}:${section.key}`}
+                section={section}
+                readOnlyReason={readOnlyReason}
+                {...surroundings}
+              />
+            ))}
+          </Accordion>
+        </div>
+      </CanvasTokenModeProvider>
     </StyleTargetContext.Provider>
   );
 }
@@ -2522,6 +2536,11 @@ function ControlValue({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // Read before any branch, as hooks must be: a folded union offers the
+  // variables either of its arms takes, and a side of the spacing box has
+  // room for a held variable's name and its clear, not a ◇ as well.
+  const fold = React.useContext(FoldedUnion);
+  const compact = React.useContext(CompactSides);
   if (clearOnly) {
     return (
       <RetainedValue
@@ -2571,13 +2590,25 @@ function ControlValue({
       />
     );
   }
+  /*
+   * A held variable, by name in place of the typed value, with the ◇ beside it
+   * to choose another. Every reference reaches this, including one at a leaf
+   * that takes no variable or to a variable the site no longer has: the chip
+   * still names it and removes it, and the ◇ draws only where a choice exists.
+   * Typing over a reference is not offered, because the text would store the
+   * variable's NAME as a literal, which compiles to nothing.
+   */
   if (isTokenRef(stored)) {
     return (
-      <TokenValue
+      <HeldVariable
+        id={id}
         labelledBy={labelledBy}
-        label={actionName}
-        name={stored.$token}
-        onClear={() => onCommit(null)}
+        leaf={variableLeafOf(control.leaf, fold)}
+        identity={stored.$token}
+        actionName={actionName}
+        tokens={tokens}
+        compact={compact}
+        onCommit={onCommit}
       />
     );
   }
@@ -2604,6 +2635,7 @@ function ControlValue({
       control={control}
       stored={stored}
       actionName={actionName}
+      tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -2611,46 +2643,95 @@ function ControlValue({
 }
 
 /**
- * A stored design-token reference, which is a value no text field can edit.
- *
- * Shown by name with a way to remove it rather than as editable text: `{$token}`
- * is one value spelled as an object, and typing over it would store the token's
- * NAME as a literal — a value that looks right in the field and compiles to
- * nothing. Choosing a token is the token picker's job and it does not exist
- * yet, so what is offered here is the honest half: see it, or clear it.
+ * A field holding a variable: the chip naming it, and the ◇ to choose
+ * another, or, in a side of the spacing box, where there is no room for both,
+ * the chip alone with its name as the way to choose.
  */
-function TokenValue({
+function HeldVariable({
+  id,
   labelledBy,
-  label,
-  name,
-  onClear,
+  leaf,
+  identity,
+  actionName,
+  tokens,
+  compact,
+  onCommit,
 }: {
-  /** The id of the label element that names this value. */
+  /** The id the typed field takes again once the variable is cleared. */
+  id: string;
   labelledBy: string;
-  label: string;
-  name: string;
-  onClear: () => void;
+  /** The leaf the field's variables are offered for; see `variableLeafOf`. */
+  leaf: StyleLeaf;
+  identity: string;
+  actionName: string;
+  tokens: SiteTokenSet | undefined;
+  compact: boolean;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  const pick = (picked: string): CommitOutcome => onCommit({ $token: picked });
+  const clear = (): void => {
+    // Removing the variable puts the typed field back in the chip's place, and
+    // the ✕ that held focus is gone: focus goes to that field once it is
+    // drawn, rather than falling to the page.
+    if (onCommit(null) === "refused") return;
+    requestAnimationFrame(() => {
+      document.getElementById(id)?.focus();
+    });
+  };
   return (
-    // Named by the property's own label, and given a role that can CARRY a
-    // name: a bare paragraph maps to the ARIA `paragraph` role, which prohibits
-    // one, so `aria-labelledby` on it may be dropped outright. The button is
-    // named for the PROPERTY as well, because a panel with several
-    // token-valued properties otherwise offers a column of buttons all called
-    // "Clear" and a screen-reader user cannot tell which style each removes.
-    <p
-      className="nx-style-inspector__token"
-      role="group"
-      aria-labelledby={labelledBy}
-      tabIndex={-1}
-    >
-      <span>{name}</span>
-      <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
-        Clear
-      </button>
-    </p>
+    <div className="nx-style-inspector__numeric">
+      <VariableChip
+        // In a side the name itself opens the list.
+        {...(compact ? { onPick: pick } : {})}
+        leaf={leaf}
+        tokens={tokens}
+        identity={identity}
+        label={actionName}
+        labelledBy={labelledBy}
+        onClear={clear}
+      />
+      {compact ? null : (
+        <VariableChoice
+          leaf={leaf}
+          tokens={tokens}
+          bound
+          current={identity}
+          label={actionName}
+          onPick={pick}
+        />
+      )}
+    </div>
   );
 }
+
+/**
+ * The leaf a field's variables are offered for: the control's own, or, for a
+ * folded union drawn as one field, one leaf over all its forms, which takes
+ * every kind any form takes and judges each variable by the form its kind is
+ * written in (see `foldedLeaf`).
+ */
+function variableLeafOf(leaf: StyleLeaf, fold: Fold | undefined): StyleLeaf {
+  return fold === undefined ? leaf : foldedLeafFor(fold.property, leaf);
+}
+
+/**
+ * The folded leaf for one catalog property, made once: its forms are the
+ * catalog's, which do not change, and one leaf object keeps the forms it
+ * carries attached. The control's own leaf stands in if the catalog has no
+ * union there.
+ */
+function foldedLeafFor(property: string, fallback: StyleLeaf): StyleLeaf {
+  const made = FOLDED_LEAVES.get(property);
+  if (made !== undefined) return made;
+  const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
+  const arms =
+    shape?.kind === "union" ? shape.of.filter(isStyleLeaf) : [fallback];
+  const leaf = foldedLeaf(arms.length > 0 ? arms : [fallback]);
+  FOLDED_LEAVES.set(property, leaf);
+  return leaf;
+}
+
+const FOLDED_LEAVES = new Map<string, StyleLeaf>();
 
 /**
  * A value that is live on the page and cannot be edited here: shown, and
@@ -2664,7 +2745,7 @@ function TokenValue({
  * action that removes it. `note` is what tells them WHICH of the three, since
  * only the first has a notice of its own beside the property.
  *
- * Named for the property for the same reason the token control is — several of
+ * Named for the property for the same reason the variable chip is — several of
  * these on one panel would otherwise be a column of identical "Clear" buttons.
  */
 function RetainedValue({
@@ -2686,7 +2767,7 @@ function RetainedValue({
   return (
     <>
       {/*
-        `group` for the reason {@link TokenValue} carries one: the ARIA
+        `group` for the reason the variable chip carries one: the ARIA
         `paragraph` role a bare paragraph maps to prohibits an accessible name.
 
         The note is pointed AT rather than left beside: it is the only thing
@@ -2800,24 +2881,49 @@ const FoldedUnion = React.createContext<Fold | undefined>(undefined);
 function FoldedField({
   id,
   fold,
+  leaf,
   stored,
+  actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
   fold: Fold;
+  /** The leaf the field's variables are offered for; see `variableLeafOf`. */
+  leaf: StyleLeaf;
   stored: StyleValue | undefined;
+  actionName: string;
+  tokens: SiteTokenSet | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The site's variables for this property, at the field's end: a fold has
+  // no unit menu to hold them.
+  const variables = (
+    <VariableChoice
+      leaf={leaf}
+      tokens={tokens}
+      bound={false}
+      empty={stored === undefined}
+      current={undefined}
+      label={actionName}
+      onPick={identity => onCommit({ $token: identity })}
+    />
+  );
   if (fold.kind === "number-or-length") {
     return (
-      <LengthOrNumberField
-        id={id}
-        stored={stored}
-        describedBy={describedBy}
-        onCommit={onCommit}
-      />
+      <div className="nx-style-inspector__numeric">
+        <LengthOrNumberField
+          id={id}
+          leaf={leaf}
+          stored={stored}
+          tokens={tokens}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+        {variables}
+      </div>
     );
   }
   return (
@@ -2827,6 +2933,7 @@ function FoldedField({
       stored={stored}
       describedBy={describedBy}
       onCommit={onCommit}
+      after={variables}
     />
   );
 }
@@ -2852,12 +2959,15 @@ function OptionSelect({
   stored,
   describedBy,
   onCommit,
+  after,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** What follows the list in its row: the site's variables, where offered. */
+  after?: React.ReactNode;
 }): React.JSX.Element {
   const current = storedKey(stored) ?? "";
   const inherited = React.useContext(InheritedValue);
@@ -2887,6 +2997,7 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
+      {after}
     </div>
   );
 }
@@ -2898,20 +3009,31 @@ function OptionSelect({
  */
 function LengthOrNumberField({
   id,
+  leaf,
   stored,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
+  /** The leaf the field's variables are offered for, both arms' kinds. */
+  leaf: StyleLeaf;
   stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const { draft, setDraft } = useDraft(stored);
+  const mode = useCanvasTokenMode();
   const hint = useUnsetHint("1.5, 24px or 150%");
   const commit = () => {
     if (draft === storedText(stored)) return;
-    if (onCommit(lineHeightFromText(draft)) === "unchanged") {
+    // A variable's name typed here is that variable, asked before the text is
+    // read as a number or a length, as every text field asks it.
+    const named = tokenForTypedName(leaf, tokens, draft, mode);
+    const value =
+      named === undefined ? lineHeightFromText(draft) : { $token: named };
+    if (onCommit(value) === "unchanged") {
       setDraft(storedText(stored));
     }
   };
@@ -3248,6 +3370,7 @@ function useFieldTarget({
     "data-provenance-quiet": string | undefined;
     style: React.CSSProperties | undefined;
     onFocus: () => void;
+    onBlur: (event: React.FocusEvent<HTMLElement>) => void;
   };
   commit: (value: StyleValue | null) => CommitOutcome;
   resetBlock: () => void;
@@ -3267,6 +3390,28 @@ function useFieldTarget({
    * focused again.
    */
   const [quiet, setQuiet] = React.useState(false);
+  /*
+   * Whether focus has left the field since the caption was held back. Only a
+   * return after leaving is the author focusing it again: a pick or a clear
+   * moves focus into the field by itself, and that must not bring the caption
+   * back over the row above.
+   */
+  const left = React.useRef(false);
+  const quieten = (): void => {
+    left.current = false;
+    setQuiet(true);
+  };
+  // Held back once the value here changes, however it changed: a pick, a
+  // typed name, an undo or an edit from elsewhere, as well as a commit here.
+  const opened = React.useRef(true);
+  React.useEffect(() => {
+    if (opened.current) {
+      opened.current = false;
+      return;
+    }
+    left.current = false;
+    setQuiet(true);
+  }, [stored]);
   // A refusal describes the draft that produced it, so it stops describing
   // anything the moment the document holds a different value here. Clearing on
   // the stored value rather than only on the next commit is what covers an undo
@@ -3311,10 +3456,22 @@ function useFieldTarget({
       style: quiet
         ? ({ "--nx-provenance-caption": "none" } as React.CSSProperties)
         : undefined,
-      onFocus: () => setQuiet(false),
+      onFocus: () => {
+        if (left.current) setQuiet(false);
+      },
+      onBlur: event => {
+        // Leaving for somewhere outside the field, while what had focus is
+        // still on the page: an element removed under focus, such as a
+        // picked list closing, has not taken the author anywhere.
+        const to = event.relatedTarget;
+        const inside = isElement(to) && event.currentTarget.contains(to);
+        if (!inside && isElement(event.target) && event.target.isConnected) {
+          left.current = true;
+        }
+      },
     },
     commit: value => {
-      setQuiet(true);
+      quieten();
       return writeTarget(value);
     },
     resetBlock: () => {
@@ -4023,13 +4180,13 @@ const PICKER_FALLBACK = "#000000";
  * an affordance on top, and it reports nothing until the author moves it.
  *
  * **A token reference is EDITABLE here rather than read-only**, which is the
- * other half of what this control adds. `TokenValue` shows a reference and
- * offers only Clear because choosing a token had nowhere to happen; a colour
- * control has the site's table, so it shows the token's CURRENT name and lets
- * the author swap it, replace it with a literal, or remove it.
+ * other half of what this control adds: it shows the token's CURRENT name on
+ * its own trigger, with its swatch, and lets the author swap it, replace it
+ * with a literal, or remove it. Every other field shows a held variable as the
+ * chip beside its ◇ instead.
  *
  * **A token is stored by IDENTITY, never by the name shown.** The two differ
- * after a rename, and `ColourToken` carries both for that reason — the list
+ * after a rename, and `SiteVariable` carries both for that reason — the list
  * hands back the variable it was given, so the identity travels with it and
  * the label never reaches the document.
  *
@@ -4073,7 +4230,7 @@ function ColourField({
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(prefersDark);
-  const choices = colourTokensFor(control.leaf, tokens, mode);
+  const choices = variablesFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
   // What the picker has produced and not yet written. Held in a ref as well as
@@ -4243,6 +4400,7 @@ function ColourField({
             stored={stored}
             draft={draft}
             setDraft={setDraft}
+            tokens={tokens}
             describedBy={describes}
             // The REFUSAL alone. `describes` also carries the contrast verdict,
             // which is supplementary text and never a complaint.
@@ -4299,7 +4457,7 @@ function ColourPicker({
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
-  choices: readonly ColourToken[];
+  choices: readonly SiteVariable[];
   /** Whether the site's variables have arrived; until then the list waits. */
   tokensRead: boolean;
   /** The identity the value refers to, or `null` for a value or none. */
@@ -4561,7 +4719,7 @@ function CustomColour({
 interface ColourChoice {
   readonly key: string;
   readonly label: string;
-  readonly token: ColourToken;
+  readonly token: SiteVariable;
 }
 
 /**
@@ -4574,7 +4732,7 @@ function ColourVariables({
   current,
   onPick,
 }: {
-  choices: readonly ColourToken[];
+  choices: readonly SiteVariable[];
   /** Whether the site's variables have arrived. */
   read: boolean;
   /** The identity the value refers to, marked in the list. */
@@ -4610,7 +4768,7 @@ function ColourVariables({
     // this name: two under one name with equal colours are otherwise
     // indistinguishable, and choosing either stores an identity the author
     // could not have predicted.
-    label: colourTokenLabel(token, choices),
+    label: variableLabel(token, choices),
     token,
   }));
   return (
@@ -4655,7 +4813,7 @@ function ColourVariables({
  * rather than an error — the value goes on compiling — so showing the stored
  * string is more use than showing an empty space.
  *
- * Separate from {@link colourTokenLabel} because that one answers about a token
+ * Separate from {@link variableLabel} because that one answers about a token
  * in hand, and this one has to find the token first, or account for there being
  * none.
  */
@@ -4663,11 +4821,11 @@ function storedTokenLabel(
   reference: string | null,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode,
-  among: readonly ColourToken[]
+  among: readonly SiteVariable[]
 ): string {
   if (reference === null) return "";
-  const token = colourTokenFor(reference, tokens, mode);
-  return token === undefined ? reference : colourTokenLabel(token, among);
+  const token = variableFor(reference, tokens, mode);
+  return token === undefined ? reference : variableLabel(token, among);
 }
 
 /**
@@ -4778,6 +4936,24 @@ function ContrastNote({
   );
 }
 
+/**
+ * Keywords a menu leaves out, still accepted when typed and still shown when
+ * stored: a font size's absolute sizes say no size an author can picture
+ * ("x-large"), where the type scale above them does.
+ */
+const UNOFFERED_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
+  "font-size": [
+    "xx-small",
+    "x-small",
+    "small",
+    "medium",
+    "large",
+    "x-large",
+    "xx-large",
+    "xxx-large",
+  ],
+};
+
 /** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({
   writingMode: "horizontal-tb",
@@ -4820,6 +4996,7 @@ function ValueField({
   control,
   stored,
   actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
@@ -4830,6 +5007,8 @@ function ValueField({
   stored: StyleValue | undefined;
   /** What this control's clear action removes, named for the property. */
   actionName: string;
+  /** The site's variables, which a field offers where its property takes one. */
+  tokens: SiteTokenSet | undefined;
   /**
    * The id of the message explaining why this control's last value was refused,
    * or `undefined` when nothing was. Also what marks the control invalid: the
@@ -4851,7 +5030,10 @@ function ValueField({
       <FoldedField
         id={id}
         fold={fold}
+        leaf={variableLeafOf(control.leaf, fold)}
         stored={stored}
+        actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -4904,6 +5086,7 @@ function ValueField({
       control={control}
       stored={stored}
       actionName={actionName}
+      tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -4994,12 +5177,14 @@ function NumericField({
   control,
   stored,
   actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
   /**
    * This control's own name, position included.
    *
@@ -5072,6 +5257,7 @@ function NumericField({
         stored={stored}
         draft={draft}
         setDraft={setDraft}
+        tokens={tokens}
         describedBy={describedBy}
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
@@ -5130,16 +5316,57 @@ function NumericField({
                 {choice}
               </SelectItem>
             ))}
-            {keywords.length === 0 ? null : <SelectSeparator />}
-            {keywords.map(keyword => (
-              <SelectItem key={keyword} value={keyword} title={keyword}>
-                {keywordLabel(control.leaf.cssProperty, keyword)}
-              </SelectItem>
-            ))}
+            <KeywordItems
+              cssProperty={control.leaf.cssProperty}
+              keywords={keywords}
+              draft={draft}
+            />
           </SelectContent>
         </Select>
       ) : null}
+      {/* The site's variables for this field, after its unit; nothing where
+          the site has none the property takes. */}
+      <VariableChoice
+        leaf={control.leaf}
+        tokens={tokens}
+        bound={false}
+        empty={stored === undefined}
+        current={undefined}
+        label={actionName}
+        onPick={identity => onCommit({ $token: identity })}
+      />
     </div>
+  );
+}
+
+/**
+ * A unit menu's keywords after a line, in words with the CSS spelling in the
+ * tooltip; see style-keyword-labels. Those a menu leaves out are left out
+ * unless the field holds one.
+ */
+function KeywordItems({
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  const unoffered = UNOFFERED_KEYWORDS[cssProperty] ?? [];
+  const offered = keywords.filter(
+    keyword => keyword === draft || !unoffered.includes(keyword)
+  );
+  if (offered.length === 0) return null;
+  return (
+    <>
+      <SelectSeparator />
+      {offered.map(keyword => (
+        <SelectItem key={keyword} value={keyword} title={keyword}>
+          {keywordLabel(cssProperty, keyword)}
+        </SelectItem>
+      ))}
+    </>
   );
 }
 
@@ -5182,6 +5409,7 @@ function useNumericLabelScrub({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): (value: StyleValue | null) => CommitOutcome {
   const inherited = React.useContext(InheritedValue);
+  const mode = useCanvasTokenMode();
   const commitText = (value: StyleValue | null): CommitOutcome =>
     onCommit(withDefaultUnit(control.leaf, value, unit));
   const owning = useLabelScrub({
@@ -5198,6 +5426,11 @@ function useNumericLabelScrub({
         draft: String(value),
         stored,
         kind: control.kind,
+        leaf: control.leaf,
+        // A drag writes a quantity, never a variable's name, so no variable
+        // is matched against it.
+        tokens: undefined,
+        mode,
         onCommit: commitText,
         setDraft,
       }),
@@ -5466,17 +5699,72 @@ function useHeldBlur(
   };
 }
 
+/**
+ * A side's tooltip: its whole value, for one the narrow cell cannot show, or
+ * none where there is nothing to show or the field is not a side.
+ */
+function sideTitle(compact: boolean, draft: string): string | undefined {
+  return compact && draft !== "" ? draft : undefined;
+}
+
+/**
+ * A text field's commit: the draft written, a variable's typed name matched
+ * in the mode the canvas shows, as the field's variables list offers them.
+ */
+function useDraftCommit({
+  draft,
+  stored,
+  control,
+  tokens,
+  onCommit,
+  setDraft,
+  setTyping,
+}: {
+  draft: string;
+  stored: StyleValue | undefined;
+  control: StyleControl;
+  tokens: SiteTokenSet | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+}): () => void {
+  const mode = useCanvasTokenMode();
+  return () => {
+    // Written or not, the text is no longer mid-edit.
+    setTyping(false);
+    commitDraft({
+      draft,
+      stored,
+      kind: control.kind,
+      leaf: control.leaf,
+      tokens,
+      mode,
+      onCommit,
+      setDraft,
+    });
+  };
+}
+
 /** Write a text field's draft, when it differs from what is stored. */
 function commitDraft({
   draft,
   stored,
   kind,
+  leaf,
+  tokens,
+  mode,
   onCommit,
   setDraft,
 }: {
   draft: string;
   stored: StyleValue | undefined;
   kind: StyleControlKind | undefined;
+  /** The leaf the field edits, whose variables a typed name may pick. */
+  leaf: StyleLeaf;
+  /** The site's variables, so a variable's name typed here picks it. */
+  tokens: SiteTokenSet | undefined;
+  /** The mode the canvas shows, so typing matches what the list offers. */
+  mode: TokenMode;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   setDraft: (value: string) => void;
 }): void {
@@ -5486,7 +5774,19 @@ function commitDraft({
   // non-breaking space would read as empty and DELETE the declaration —
   // where the engine treats it as a value and refuses it.
   const emptied = trimCssWhitespace(draft) === "";
-  const outcome = onCommit(emptied ? null : committedValue(kind, draft));
+  // A variable's name typed in, "Display" or "Text", is that variable, asked
+  // BEFORE the text is read as a value: read first, the word is refused as
+  // "not a length" or stored as a literal no page can use.
+  const named = emptied
+    ? undefined
+    : tokenForTypedName(leaf, tokens, draft, mode);
+  const outcome = onCommit(
+    emptied
+      ? null
+      : named === undefined
+        ? committedValue(kind, draft)
+        : { $token: named }
+  );
   // The document did not move because it already holds this value in another
   // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
   // effect above cannot cover it — `stored` is identical, so it does not fire
@@ -5573,6 +5873,7 @@ function TextField({
   stored,
   draft,
   setDraft,
+  tokens,
   describedBy,
   invalid,
   onCommit,
@@ -5594,6 +5895,8 @@ function TextField({
    */
   draft: string;
   setDraft: (value: string) => void;
+  /** The site's variables, so a variable's name typed here picks it. */
+  tokens: SiteTokenSet | undefined;
   /**
    * Everything describing this field: a refusal message, a contrast verdict, or
    * both.
@@ -5636,11 +5939,15 @@ function TextField({
   const hint = useUnsetHint(
     compact ? "–" : (fallbackHint ?? placeholderFor(control))
   );
-  const commit = () => {
-    // Written or not, the text is no longer mid-edit.
-    setTyping(false);
-    commitDraft({ draft, stored, kind: control.kind, onCommit, setDraft });
-  };
+  const commit = useDraftCommit({
+    draft,
+    stored,
+    control,
+    tokens,
+    onCommit,
+    setDraft,
+    setTyping,
+  });
 
   return (
     <Input
@@ -5648,7 +5955,7 @@ function TextField({
       {...shownText(display, typing, draft, hint)}
       // A side of the spacing box is narrow: its whole value is in its
       // tooltip, for one the cell cannot show.
-      title={compact && draft !== "" ? draft : undefined}
+      title={sideTitle(compact, draft)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per

@@ -36,6 +36,7 @@ import {
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { OLDER_VERSION_WARNING } from "./AutosaveRecoveryBanner";
 import {
   useClaimRecoveryOffer,
   type HostedRecoveryOffer,
@@ -281,6 +282,9 @@ function RecoveryOfferChip({
           You have unsaved changes from{" "}
           <span className="font-medium">{formatTimeAgo(offer.savedAt)}</span>.
         </p>
+        {offer.olderVersion === true ? (
+          <p className="mt-1 text-muted-foreground">{OLDER_VERSION_WARNING}</p>
+        ) : null}
         <div className="mt-3 flex justify-end gap-2">
           {/* "Not now", not "Discard": the recovery point is kept, and
               offered again the next time the document opens. */}

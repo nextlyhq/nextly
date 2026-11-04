@@ -638,7 +638,14 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock, ITEM_SCHEMA_MAX_DEPTH } from "./block";
+export {
+  BLOCK_ICONS,
+  defineBlock,
+  ITEM_SCHEMA_MAX_DEPTH,
+  // What a select's option is called. Public because the builder names a
+  // choice with it as the engine's exposure planner does.
+  optionLabel,
+} from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
@@ -747,6 +754,7 @@ export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";
 export {
   validateStyleValues,
+  leafAcceptsValue,
   newStyleIssueBudget,
   MAX_STYLE_ISSUES,
   MAX_STYLE_ISSUE_PATH_BYTES,
@@ -1015,6 +1023,15 @@ export type { StyleQuery, StyleSubject } from "./style/style-origin";
 // The stylesheet every page of a site shares, compiled once and addressed by its content.
 export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet, compileSiteTokenSheet } from "./style/site-sheet";
+// A site's spacing model: whether blocks space themselves with their own
+// margins (classic) or take the gap of the container holding them.
+export type { SpacingMode } from "./style/spacing-mode";
+export {
+  DEFAULT_SPACING_MODE,
+  isSpacingMode,
+  SPACING_MODES,
+  spacingModeOf,
+} from "./style/spacing-mode";
 // `outranksEntry` is published beside `styleOrigin` because that function
 // cannot answer every form of the question it answers: it is asked once per
 // STATE, so comparing two states' winners falls to the caller. Published, that
@@ -1169,3 +1186,81 @@ export {
   previewContainerName,
   type BreakpointContextOptions,
 } from "./style/compile-page";
+// Last, so the bundle reaches the style compiler's parser before the URL
+// policy's matcher, as the format entry's boundary test expects of the root.
+//
+// Bindings: the rules each one is checked against, the formatting of a bound
+// value, and the pass that fills bound props before blocks render. One set of
+// answers, shared by the renderer, the validator and the editor.
+export { BINDING_ISSUE_CODES } from "./binding-issues";
+export {
+  BINDABLE_KINDS,
+  bindablePropTypeOf,
+  bindingKindOf,
+  canBindFieldToProp,
+  FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+} from "./binding-vocabulary";
+export type {
+  BindablePropType,
+  BindingEndpoint,
+  BindingFieldType,
+  BindingValueKind,
+  FieldStoragePrimitive,
+  StorageFieldType,
+} from "./binding-vocabulary";
+export type { BindingIssue, BindingIssueCode } from "./binding-issues";
+export {
+  bindablePropKind,
+  checkBinding,
+  fieldFitsProp,
+  isBindPath,
+  isEmptyBoundValue,
+  isValidPropValue,
+} from "./binding-rules";
+export type {
+  BindablePropKind,
+  BindingCheck,
+  BindingCheckInput,
+  BindingFieldShape,
+  BindingRefs,
+  BindingSchemaRef,
+  BindingSchemaSource,
+  CheckedBinding,
+} from "./binding-rules";
+export {
+  checkFormat,
+  createBindingFormatter,
+  machineDate,
+  safeTimeZone,
+  supportedLocale,
+} from "./binding-format";
+export type {
+  BindingFormatter,
+  CheckedFormat,
+  FormatCheck,
+  FormatEnv,
+  FormatResult,
+  FormattedValue,
+} from "./binding-format";
+export {
+  bindDocument,
+  bindingDemand,
+  createBindingRun,
+  DEFAULT_BINDING_LOCALE,
+  hasItemBindings,
+  resolveNodeBindings,
+} from "./resolve-bindings";
+export type {
+  BindingDemand,
+  BindingRun,
+  BindingRunInput,
+  BindingScope,
+  BindingSources,
+  BlockPropsLookup,
+  BoundDocument,
+  BoundValue,
+  BoundValues,
+  NodeBindingResult,
+  SourceDemand,
+} from "./resolve-bindings";

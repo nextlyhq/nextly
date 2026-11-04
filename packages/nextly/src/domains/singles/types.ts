@@ -300,6 +300,15 @@ export interface SingleDocument {
   /** Last update timestamp */
   updatedAt: Date | string;
 
+  /**
+   * The document's version: changed by every save and by no read, and naming
+   * each language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
+   */
+  _rev?: string;
+
   /** Additional fields defined by the Single schema */
   [key: string]: unknown;
 }

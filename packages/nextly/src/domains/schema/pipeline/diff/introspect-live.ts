@@ -827,6 +827,28 @@ export async function introspectLiveColumns(
 }
 
 /**
+ * Each named table's live column names, lower-cased, keyed by its lower-cased
+ * name. A table that is not there has no entry.
+ *
+ * The question "which columns does this table have right now" in the form a
+ * check of presence wants, so callers asking it do not each fold the snapshot
+ * themselves.
+ */
+export async function liveColumnNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: string[]
+): Promise<Map<string, Set<string>>> {
+  const snapshot = await introspectLiveColumns(db, dialect, tableNames);
+  return new Map(
+    snapshot.tables.map(table => [
+      table.name.toLowerCase(),
+      new Set(table.columns.map(column => column.name.toLowerCase())),
+    ])
+  );
+}
+
+/**
  * The table each of the named indexes is on, by lower-cased index name, for
  * the drop guard: PostgreSQL's and SQLite's `DROP INDEX` names only the
  * index. Matched without regard to case, so a quoted mixed-case name is

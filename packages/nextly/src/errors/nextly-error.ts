@@ -15,6 +15,7 @@ import type {
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
   SharedFieldsConflictPublicData,
+  StaleVersionPublicData,
   ValidationPublicData,
 } from "./public-data";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
@@ -604,6 +605,25 @@ export class NextlyError extends Error {
       publicData: opts?.data,
       cause: opts?.cause,
       logContext: { reason: opts?.reason, ...opts?.logContext },
+    });
+  }
+
+  /**
+   * An update made from a version of the document that is no longer its
+   * current one. Never retried: the same version stays out of date, so the
+   * caller must read the document again and decide.
+   *
+   * @experimental
+   */
+  static staleVersion(opts: {
+    data: StaleVersionPublicData;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "STALE_VERSION",
+      publicMessage: `This document changed since the version you gave. Its current version is ${opts.data.currentVersion}.`,
+      publicData: opts.data,
+      logContext: opts.logContext,
     });
   }
 
