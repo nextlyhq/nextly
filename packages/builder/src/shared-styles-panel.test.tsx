@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   SharedStyleReach,
+  SharedStylesCount,
   SharedStylesUsage,
   SharedStyleUsesPage,
 } from "./shared-style-library";
@@ -780,6 +781,106 @@ describe("counts", () => {
         "Some pages haven't been counted yet, so these numbers are minimums."
       )
     ).toBeNull();
+  });
+});
+
+describe("counting the pages now", () => {
+  /**
+   * A site not counted in full until it is asked to count: each count moves
+   * it on by `step` pages of Card's, and the last one makes it whole.
+   */
+  function countingSite({
+    mayCount = true,
+    counts = [true],
+    refused,
+  }: {
+    mayCount?: boolean;
+    /** Whether each count in turn leaves the site whole. */
+    counts?: boolean[];
+    refused?: string;
+  } = {}) {
+    let whole = false;
+    let pages = 1;
+    const count = vi.fn(async (): Promise<SharedStylesCount> => {
+      if (refused !== undefined) return { kind: "refused", reason: refused };
+      whole = counts.shift() ?? true;
+      pages += 1;
+      return { kind: "counted", whole, counting: !whole };
+    });
+    const base = accessOf().access;
+    const access: SharedStylesAccess = {
+      ...base,
+      count,
+      usage: vi.fn(async (ids: readonly string[]) => ({
+        whole,
+        counting: !whole,
+        mayLock: false,
+        mayCount,
+        styles: new Map(ids.map(id => [id, reach({ pages }, whole)])),
+      })),
+    };
+    return { access, count };
+  }
+  const countNow = () => screen.queryByRole("button", { name: "Count now" });
+
+  it("offers Count now beside who counts the pages, and counts them", async () => {
+    const { access, count } = countingSite();
+    await panel({ access });
+    expect(
+      screen.getByText(/Pages are counted by the site's background jobs/)
+    ).toBeTruthy();
+    const button = countNow();
+    expect(button).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(button as HTMLElement);
+    });
+    expect(count).toHaveBeenCalledTimes(1);
+    // The rows are read again, now whole: the note and the button go.
+    await screen.findByRole("button", { name: "Card, .nx-c-card, On 2 pages" });
+    expect(screen.queryByText(/haven't been counted yet/)).toBeNull();
+    expect(countNow()).toBeNull();
+  });
+
+  it("says when pages are still left, and offers to count again", async () => {
+    const { access, count } = countingSite({ counts: [false, true] });
+    await panel({ access });
+    await act(async () => {
+      fireEvent.click(countNow() as HTMLElement);
+    });
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Some pages are still to count."
+    );
+    const again = screen.getByRole("button", { name: "Count again" });
+    await act(async () => {
+      fireEvent.click(again);
+    });
+    expect(count).toHaveBeenCalledTimes(2);
+    await screen.findByRole("button", { name: "Card, .nx-c-card, On 3 pages" });
+  });
+
+  it("says why a count was refused, in its own words", async () => {
+    const { access } = countingSite({ refused: "You can't count pages here." });
+    await panel({ access });
+    await act(async () => {
+      fireEvent.click(countNow() as HTMLElement);
+    });
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "You can't count pages here."
+    );
+  });
+
+  it("offers no Count now to an author who may not count, or a host that cannot", async () => {
+    await panel({ access: countingSite({ mayCount: false }).access });
+    expect(
+      screen.getByText(/Pages are counted by the site's background jobs/)
+    ).toBeTruthy();
+    expect(countNow()).toBeNull();
+    cleanup();
+
+    const { count: _count, ...noCount } = countingSite().access;
+    await panel({ access: noCount });
+    expect(countNow()).toBeNull();
   });
 });
 

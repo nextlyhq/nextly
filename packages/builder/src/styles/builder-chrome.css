@@ -4978,6 +4978,13 @@
   cursor: pointer;
 }
 
+/* While its work is under way ("Counting…"): muted, and no press. */
+.nx-vars__link:disabled {
+  color: var(--nx-muted-foreground);
+  text-decoration: none;
+  cursor: progress;
+}
+
 .nx-vars__report {
   display: flex;
   flex-direction: column;
