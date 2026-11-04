@@ -601,38 +601,34 @@ function CountedBy({
   counter: CountNow | undefined;
 }): React.JSX.Element {
   return (
-    <>
-      <p className="nx-vars__note">
-        {"Pages are counted by the site's background jobs. "}
-        {counter === undefined ? null : (
-          <>
-            <button
-              type="button"
-              className="nx-vars__link"
-              disabled={counter.busy}
-              onClick={counter.run}
-            >
-              {countNowWords(counter)}
-            </button>
-            {" · "}
-          </>
-        )}
-        <a
-          className="nx-vars__link"
-          href={BACKGROUND_JOBS_DOCS_HREF}
-          target="_blank"
-          rel="noreferrer"
-        >
-          How background jobs run
-        </a>
-      </p>
-      {/* What the last count found, said as it changes. */}
+    <p className="nx-vars__note">
+      {"Pages are counted by the site's background jobs. "}
       {counter === undefined ? null : (
-        <p className="nx-vars__note" role="status">
-          {counter.said ?? ""}
-        </p>
+        <>
+          {/* What the last count found, said as it changes, in the line
+              its next count is offered in. */}
+          <span role="status">{counter.said ?? ""}</span>
+          {counter.said === undefined ? null : " "}
+          <button
+            type="button"
+            className="nx-vars__link"
+            disabled={counter.busy}
+            onClick={counter.run}
+          >
+            {countNowWords(counter)}
+          </button>
+          {" · "}
+        </>
       )}
-    </>
+      <a
+        className="nx-vars__link"
+        href={BACKGROUND_JOBS_DOCS_HREF}
+        target="_blank"
+        rel="noreferrer"
+      >
+        How background jobs run
+      </a>
+    </p>
   );
 }
 
