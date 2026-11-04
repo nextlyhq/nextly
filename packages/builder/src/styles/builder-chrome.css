@@ -7663,6 +7663,24 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * An aspect ratio: the menu, and under it a custom ratio's width and height
+ * on one line, split by a colon as the ratio is written.
+ */
+.nx-style-inspector__ratio {
+  display: grid;
+  row-gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__ratio-custom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.375rem;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
  * Opacity: the slider across the row for "more or less", then the number for
  * an exact value, holding three digits, and its percent sign.
  */

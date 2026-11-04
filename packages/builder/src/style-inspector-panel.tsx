@@ -80,6 +80,7 @@ import {
 import { ChevronDown, RotateCcw } from "lucide-react";
 import * as React from "react";
 
+import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
@@ -4992,6 +4993,20 @@ function ValueField({
         id={id}
         labelledBy={labelledBy}
         group={alignment}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  // A ratio from a menu of the ones an author reaches for, where the stored
+  // value is one it can draw; any other spelling keeps the text field.
+  if (control.leaf.cssProperty === "aspect-ratio" && drawsAspectRatio(stored)) {
+    return (
+      <AspectRatioField
+        id={id}
+        labelledBy={labelledBy}
         stored={stored}
         actionName={actionName}
         describedBy={describedBy}

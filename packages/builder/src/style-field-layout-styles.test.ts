@@ -264,3 +264,16 @@ describe("opacity's slider and field", () => {
     );
   });
 });
+
+describe("a custom aspect ratio", () => {
+  it("puts its width and height on one line under the menu", () => {
+    const ratio = ruleBody(CHROME, ".nx-style-inspector__ratio");
+    expect(ratio).toContain("display: grid");
+    expect(ratio).toContain("row-gap: 0.375rem");
+    const custom = ruleBody(CHROME, ".nx-style-inspector__ratio-custom");
+    expect(custom).toContain("display: grid");
+    expect(custom).toContain(
+      "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)"
+    );
+  });
+});

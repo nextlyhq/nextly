@@ -4688,6 +4688,27 @@ describe("opacity in percent", () => {
   });
 });
 
+describe("an aspect ratio", () => {
+  it("is a menu of ratios by name where the stored ratio is one it can draw", () => {
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { aspectRatio: "16 / 9" } } }
+    );
+    expect(fieldsOf("aspectRatio").getByRole("combobox").textContent).toBe(
+      "16:9"
+    );
+  });
+
+  it("keeps the text field for a ratio the menu cannot draw", () => {
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { aspectRatio: "auto 4 / 3" } } }
+    );
+    expect(fieldsOf("aspectRatio").queryByRole("combobox")).toBeNull();
+    expect(fieldsOf("aspectRatio").getByRole("textbox")).toBeDefined();
+  });
+});
+
 describe("letter case", () => {
   it("is named in plain words, its CSS name in the label's tooltip", () => {
     // "Text transform" says how CSS does it; "Letter case" says what it is.
