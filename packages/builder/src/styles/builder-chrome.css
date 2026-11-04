@@ -5172,7 +5172,9 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-inspector__field:focus-within .nx-style-inspector__provenance-text {
-  display: block;
+  /* Held back (none) by a row that has just committed a value, until the
+     field is focused again; see `--nx-provenance-caption` on the row. */
+  display: var(--nx-provenance-caption, block);
   position: absolute;
   z-index: 2;
   inset-block-end: 100%;
@@ -5248,7 +5250,7 @@ fieldset.nx-inspector__fields {
  * one line and the action (Reset, Move to) on its own line under them, so no
  * separator is left ending a line.
  */
-.nx-style-inspector .nx-inspector__field > .nx-style-inspector__shared-line {
+.nx-style-inspector__shared-line {
   grid-column: 2 / -1;
   display: flex;
   flex-direction: column;
@@ -5256,12 +5258,6 @@ fieldset.nx-inspector__fields {
   gap: 0.125rem;
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
-}
-
-/* The provenance caption held back after a commit, until the field is focused again. */
-.nx-inspector__field[data-provenance-quiet]:focus-within
-  .nx-style-inspector__provenance-text {
-  display: none;
 }
 
 /*
@@ -5501,19 +5497,6 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   padding: 0.25rem 0.5rem;
   font-size: var(--text-xs);
   cursor: pointer;
-}
-
-/*
- * A style's name in the interface's own type, its class name in mono; each
- * cut short with an ellipsis rather than broken mid-word, the whole of it in
- * the row's tooltip. The name gives way first.
- */
-.nx-classes__option-name,
-.nx-classes__option-class {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The name keeps its own width while the row has room; the class name gives
@@ -6974,7 +6957,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   text-align: start;
 }
 
-.nx-inspector__relation-title {
+/*
+ * Text cut short on one line with an ellipsis rather than wrapped or broken
+ * mid-word, the whole of it in a tooltip: a relation's title, and a shared
+ * style's name and class name in the picker.
+ */
+.nx-inspector__relation-title,
+.nx-classes__option-name,
+.nx-classes__option-class {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

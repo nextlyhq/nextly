@@ -59,6 +59,29 @@ export interface SaveSharedStyleDialogProps {
   readonly onClose: () => void;
 }
 
+/**
+ * Store the new style, then move the block onto it: the refusal in words, or
+ * `undefined` once both are done. The block's half is built from the block
+ * as it stands once the style is stored, so a value it gained meanwhile is
+ * kept, where the plan's ops would drop it.
+ */
+async function storeAndApply(
+  entry: NamedClass,
+  onAdd: (entry: NamedClass) => Promise<string | undefined>,
+  live: () => EditorState,
+  nodeId: string
+): Promise<string | undefined> {
+  const refused = await onAdd(entry);
+  if (refused !== undefined) return refused;
+  const now = live();
+  const block = findNode(now.document.nodes, nodeId);
+  const ops = block === undefined ? null : saveAsSharedStyleOps(block, entry);
+  if (ops === null || now.applyAll(ops) === null) {
+    return `${entry.label ?? entry.slug} was saved, but this block could not be changed to use it.`;
+  }
+  return undefined;
+}
+
 /** The dialog that saves a block's look as a new shared style. */
 export function SaveSharedStyleDialog({
   editor,
@@ -104,21 +127,14 @@ export function SaveSharedStyleDialog({
     }
     setSaving(true);
     try {
-      const refused = await onAdd(plan.entry);
+      const refused = await storeAndApply(
+        plan.entry,
+        onAdd,
+        () => live.current,
+        nodeId
+      );
       if (refused !== undefined) {
         setProblem(refused);
-        return;
-      }
-      // From the block as it stands now: a value it gained while the style
-      // was being stored is kept, where the plan's ops would drop it.
-      const now = live.current;
-      const block = findNode(now.document.nodes, nodeId);
-      const ops =
-        block === undefined ? null : saveAsSharedStyleOps(block, plan.entry);
-      if (ops === null || now.applyAll(ops) === null) {
-        setProblem(
-          `${plan.entry.label ?? plan.entry.slug} was saved, but this block could not be changed to use it.`
-        );
         return;
       }
       onSaved?.(plan.entry.label ?? plan.entry.slug);

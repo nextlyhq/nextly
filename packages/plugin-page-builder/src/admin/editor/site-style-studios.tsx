@@ -65,6 +65,7 @@ import {
   useFontCatalogueClient,
   useHeldSiteStyle,
   useSaveSiteStyle,
+  type SiteStyleReplayed,
 } from "../site-style-client";
 import { useShown } from "../use-shown";
 
@@ -636,6 +637,36 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
   );
 }
 
+/**
+ * One style's change applied to the stored classes as a replay finds them:
+ * the classes with that style changed, nothing to write, or nothing it can do
+ * once the style is no longer stored (it is not recreated).
+ */
+function classChangeOn(
+  held: unknown,
+  classId: string,
+  change: SharedStyleChange
+): SiteStyleReplayed {
+  const entries: readonly unknown[] = Array.isArray(held) ? held : [];
+  const at = entries.findIndex(
+    entry =>
+      typeof entry === "object" &&
+      entry !== null &&
+      (entry as { id?: unknown }).id === classId
+  );
+  const entry = entries[at] as NamedClass | undefined;
+  if (entry === undefined) return { kind: "gone" };
+  const out = change(entry.styles);
+  if (out.kind === "refused") return { kind: "gone" };
+  if (out.kind === "unchanged") return { kind: "unchanged" };
+  return {
+    kind: "write",
+    value: entries.map((each, index) =>
+      index === at ? { ...entry, styles: out.styles } : each
+    ),
+  };
+}
+
 /** A section save's refusal in words, or the fallback when it gave none. */
 function refusalOf(
   result: { saved: boolean; issues: Record<string, string> },
@@ -757,7 +788,17 @@ function useWriteClassStyles(
         const next = existing.map(each =>
           each.id === classId ? { ...each, styles: changed.styles } : each
         );
-        const result = await slot.save(classOverrideOf(configured, next));
+        /*
+         * Undone and redone as a change to this one style, composed against
+         * the stored classes as they stand then: a whole earlier library
+         * written back would also undo what changed elsewhere meanwhile, such
+         * as a style removed through the Shared styles tab.
+         */
+        const undo = change.invert(entry.styles);
+        const result = await slot.save(classOverrideOf(configured, next), {
+          undo: held => classChangeOn(held, classId, undo),
+          redo: held => classChangeOn(held, classId, change),
+        });
         const refused = refusalOf(
           result,
           "This shared style could not be changed."

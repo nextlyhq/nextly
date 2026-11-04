@@ -23,6 +23,7 @@ import {
   planRemoveSharedStyle,
   planSaveAsSharedStyle,
   saveAsSharedStyleRefusal,
+  sharedStyleChange,
   sharedStyleMoveSummary,
   sharedStyleWrite,
   NO_DESIGN_RIGHT,
@@ -552,6 +553,22 @@ describe("Move to", () => {
         },
       },
     ]);
+  });
+
+  it("knows its own inverse: the address's previous value, or cleared", () => {
+    const change = sharedStyleChange(address, "#000001");
+    const before = { base: { base: { color: "#445566", opacity: 0.5 } } };
+    // Applied later to a style that has since gained a value elsewhere, the
+    // inverse puts back only this address.
+    const now = { base: { base: { color: "#000001", opacity: 0.9 } } };
+    expect(change.invert(before)(now)).toEqual({
+      kind: "write",
+      styles: { base: { base: { color: "#445566", opacity: 0.9 } } },
+    });
+    expect(change.invert({})(now)).toEqual({
+      kind: "write",
+      styles: { base: { base: { opacity: 0.9 } } },
+    });
   });
 
   it("refuses when the block sets nothing there", () => {

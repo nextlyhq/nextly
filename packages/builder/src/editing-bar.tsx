@@ -311,20 +311,11 @@ function TargetChip({
       className="nx-editing-bar__chip"
       data-tone={tone}
       data-target-chip={id ?? ""}
-      // The active target alone names the target for a test or a reader
-      // looking for it, whichever chip it is.
-      data-edit-target={active ? (id === null ? "block" : "shared") : undefined}
+      {...chipWords({ id, name, className, locked, active })}
       aria-pressed={active}
-      // A locked style's chip says so in its name, as one phrase.
-      aria-label={locked ? `${name}, locked` : undefined}
       // One tab stop for the group: the target. The arrows reach the rest.
       tabIndex={active ? 0 : -1}
       disabled={onSelect === undefined && !active}
-      title={
-        id === null
-          ? "Edit this block only"
-          : `Edit shared style ${name}, ${className ?? ""}`
-      }
       onClick={() => {
         if (!active) onSelect?.(id);
       }}
@@ -334,6 +325,39 @@ function TargetChip({
       {locked ? <Lock aria-hidden="true" size={11} /> : null}
     </button>
   );
+}
+
+/**
+ * What a chip says about itself: which target it marks when it is the target
+ * (for a test or a reader looking for it), its name with the lock as one
+ * phrase, and its tooltip naming the class the page carries.
+ */
+function chipWords({
+  id,
+  name,
+  className,
+  locked,
+  active,
+}: {
+  id: string | null;
+  name: string;
+  className: string | undefined;
+  locked: boolean;
+  active: boolean;
+}): {
+  "data-edit-target": string | undefined;
+  "aria-label": string | undefined;
+  title: string;
+} {
+  const target = id === null ? "block" : "shared";
+  return {
+    "data-edit-target": active ? target : undefined,
+    "aria-label": locked ? `${name}, locked` : undefined,
+    title:
+      id === null
+        ? "Edit this block only"
+        : `Edit shared style ${name}, ${className ?? ""}`,
+  };
 }
 
 /** A shared style chip's menu: Detach and Remove, or why they are held. */

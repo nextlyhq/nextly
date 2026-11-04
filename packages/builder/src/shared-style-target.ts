@@ -692,7 +692,17 @@ export function planRemoveSharedStyle(
  * host stores it: an edit is a change at one address, never a whole envelope,
  * so two edits made before the first is stored both survive.
  */
-export type SharedStyleChange = (styles: NodeStyles) => SharedStyleWrite;
+export interface SharedStyleChange {
+  (styles: NodeStyles): SharedStyleWrite;
+  /**
+   * The change that puts back what this one replaced, given the styles it was
+   * applied to: the same address, its previous value (or cleared, where it
+   * held none). An undo is then a change at that address too, applied to the
+   * style as it stands when undone, so nothing else changed meanwhile is
+   * put back with it.
+   */
+  readonly invert: (before: NodeStyles) => SharedStyleChange;
+}
 
 /** The change that sets (or with `null`, clears) one control's value. */
 export function sharedStyleChange(
@@ -700,7 +710,17 @@ export function sharedStyleChange(
   value: StyleValue | null,
   policy?: StylePolicy
 ): SharedStyleChange {
-  return styles => sharedStyleWrite(styles, address, value, policy);
+  return Object.assign(
+    (styles: NodeStyles) => sharedStyleWrite(styles, address, value, policy),
+    {
+      invert: (before: NodeStyles) =>
+        sharedStyleChange(
+          address,
+          readStyleValue(before, address) ?? null,
+          policy
+        ),
+    }
+  );
 }
 
 /** A style write's answer: the styles to store, no change, or the refusal. */

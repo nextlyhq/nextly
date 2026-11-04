@@ -3187,7 +3187,11 @@ function useFieldTarget({
   issue: string | null;
   setIssue: (message: string | null) => void;
   /** The field's caption hold, spread onto its row. */
-  caption: { "data-provenance-quiet": string | undefined; onFocus: () => void };
+  caption: {
+    "data-provenance-quiet": string | undefined;
+    style: React.CSSProperties | undefined;
+    onFocus: () => void;
+  };
   commit: (value: StyleValue | null) => CommitOutcome;
   resetBlock: () => void;
   moveTo: (shared: Extract<StyleTarget, { kind: "shared" }>) => void;
@@ -3246,6 +3250,10 @@ function useFieldTarget({
     setIssue,
     caption: {
       "data-provenance-quiet": quiet ? "" : undefined,
+      // Read by the caption's reveal rule, which then draws nothing.
+      style: quiet
+        ? ({ "--nx-provenance-caption": "none" } as React.CSSProperties)
+        : undefined,
       onFocus: () => setQuiet(false),
     },
     commit: value => {

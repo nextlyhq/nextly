@@ -302,23 +302,31 @@ function openEditor(): void {
 /** Styles as the tests write them: a state, a breakpoint, its values. */
 type Styles = { base?: { base?: Record<string, unknown> } };
 /** A change the Style tab hands the host: applied to the latest styles. */
-type Change = (
+type Change = ((
   styles: Styles
-) => { kind: "write"; styles: Styles } | { kind: "unchanged" };
+) => { kind: "write"; styles: Styles } | { kind: "unchanged" }) & {
+  readonly invert: (before: Styles) => Change;
+};
 
 /** A change that sets one base value, keeping every other. */
-const setting =
-  (property: string, value: unknown): Change =>
-  styles => ({
-    kind: "write",
-    styles: {
-      ...styles,
-      base: {
-        ...styles.base,
-        base: { ...styles.base?.base, [property]: value },
+const setting = (property: string, value: unknown): Change =>
+  Object.assign(
+    (styles: Styles) => ({
+      kind: "write" as const,
+      styles: {
+        ...styles,
+        base: {
+          ...styles.base,
+          base: { ...styles.base?.base, [property]: value },
+        },
       },
-    },
-  });
+    }),
+    {
+      // What puts back the value this one replaces in `before`.
+      invert: (before: Styles) =>
+        setting(property, before.base?.base?.[property]),
+    }
+  );
 
 /** What the inspector was handed for the class surface. */
 function classProps(): {
@@ -637,6 +645,72 @@ describe("writing a shared style's styles while it is the target", () => {
       await recorded[0]?.undo();
     });
     expect(saved.at(-1)).toEqual({ classes: [stored] });
+  });
+});
+
+describe("undoing a shared style's edit after the library changed elsewhere", () => {
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#111111" } } },
+  };
+  const unused = { id: "c-unused", slug: "unused", orderIndex: 1, styles: {} };
+
+  it("takes back only that style's change, leaving a style removed since removed", async () => {
+    storedRead = {
+      data: { classes: [card, unused] },
+      isPending: false,
+      error: null,
+    };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-card",
+        setting("color", "#222222")
+      );
+    });
+    // The unused style is removed through the Shared styles route, which
+    // writes on the server; the editor reads the library again.
+    storedRead = {
+      data: {
+        classes: [
+          { ...card, styles: { base: { base: { color: "#222222" } } } },
+        ],
+      },
+      isPending: false,
+      error: null,
+    };
+    rerender(<Host />);
+
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+
+    expect(saved.at(-1)).toEqual({ classes: [card] });
+  });
+
+  it("does nothing, and says so, once the style itself is gone", async () => {
+    storedRead = { data: { classes: [card] }, isPending: false, error: null };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-card",
+        setting("color", "#222222")
+      );
+    });
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    rerender(<Host />);
+    const writes = saved.length;
+
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await recorded[0]?.undo();
+    });
+
+    expect(undone).toBe(false);
+    expect(saved).toHaveLength(writes);
   });
 });
 
