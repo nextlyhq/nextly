@@ -4,9 +4,13 @@
  * The block stores sort keys as one string, comma-separated, each a field
  * name with a leading `-` for descending: `-publishedAt,title`. The controls
  * edit the FIRST key, the one that decides the order an author sees, and keep
- * every further key exactly as stored. Those were written on purpose (by code
- * or the API) to break ties, and a field pick or a direction change must not
- * quietly drop them: the page would reorder in ways nobody asked for.
+ * every further key the chosen collection can still sort by, as stored.
+ * Those were written on purpose (by code or the API) to break ties, and a
+ * field pick or a direction change must not quietly drop them: the page
+ * would reorder in ways nobody asked for. A further key the collection
+ * cannot sort by is dropped at the next write instead, because the reader
+ * refuses a sort naming one and lists in id order, so keeping it would undo
+ * the very order the author just chose.
  *
  * Pure, so each rule is tested without a panel.
  *
@@ -56,16 +60,22 @@ function keyText(key: SortKey): string {
 
 /**
  * What the controls store for `first` over what `stored` holds: the new
- * first key, then every further key unchanged. `undefined` for no first key,
- * which removes the sort, further keys and all: "Default order" means the
- * reader's own order, not a sort by whatever tie-breakers were left.
+ * first key, then every further key whose field `sortable` accepts,
+ * unchanged. `undefined` for no first key, which removes the sort, further
+ * keys and all: "Default order" means the reader's own order, not a sort by
+ * whatever tie-breakers were left.
  */
 export function writeSort(
   stored: StoredSort,
-  first: SortKey | undefined
+  first: SortKey | undefined,
+  sortable: (field: string) => boolean
 ): string | undefined {
   if (first === undefined) return undefined;
-  return [keyText(first), ...stored.rest].join(",");
+  const kept = stored.rest.filter(part => {
+    const key = keyOf(part);
+    return key !== undefined && sortable(key.field);
+  });
+  return [keyText(first), ...kept].join(",");
 }
 
 /** A further key as its field and direction, for the line that names them. */

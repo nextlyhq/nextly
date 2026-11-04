@@ -19,6 +19,7 @@
  * @module image-controls
  */
 
+import { isAuthoredText } from "@nextlyhq/blocks-engine";
 import {
   Button,
   Label,
@@ -345,8 +346,8 @@ function LibraryAltNote({
   if (mediaId === undefined) {
     return (
       <p className="nx-inspector__note">
-        There is no library file to take alt text from, so screen readers get
-        none.
+        No library file is chosen, so there is no library alt text and screen
+        readers get none. Choose Custom to describe the image.
       </p>
     );
   }
@@ -480,9 +481,22 @@ export function ImageAltField({
   const own = storedAlt(group, values);
   const changesFor = (next: AltMode) =>
     altModeChanges(group, next, values, libraryAlt);
-  const pickable = (next: AltMode) =>
+  const allowed = (next: AltMode) =>
     next === mode || allWritable(changesFor(next), writable);
-  const held = ALT_MODES.every(next => next === mode || !pickable(next));
+  // Custom starts from the library's words where the page stores none, so it
+  // waits for them: chosen before they arrive, it would store an empty alt
+  // and silence a description the image was being read with.
+  const libraryPending =
+    mediaId !== undefined &&
+    services?.readMedia !== undefined &&
+    summary === undefined;
+  const waiting = (next: AltMode) =>
+    next === "custom" && libraryPending && !isAuthoredText(values[group.alt]);
+  const pickable = (next: AltMode) =>
+    next === mode || (allowed(next) && !waiting(next));
+  // Held is a lock's doing alone: a choice only waiting for the library is
+  // not one a lock refuses.
+  const held = ALT_MODES.every(next => !allowed(next) || next === mode);
   return (
     <div className="nx-image-group" data-image-group="alt">
       <HeldByLock reasonId={held ? reasonId : undefined}>

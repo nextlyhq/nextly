@@ -1321,7 +1321,26 @@ function ContentFields({
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
         const group = leads.get(prop.name);
-        if (group === undefined && grouped.has(prop.name)) return null;
+        if (group === undefined && grouped.has(prop.name)) {
+          // Drawn inside its group, but in a component's view still a prop of
+          // its own to expose: named, with its icon, as a prop the inspector
+          // leaves out is, so a placement may still set it.
+          return fields === undefined ? null : (
+            <div
+              key={`${inspection.nodeId}:${prop.name}`}
+              className="nx-inspector__prop"
+            >
+              <p className="nx-inspector__note">
+                {propLabel(prop.name, prop.schema)}
+              </p>
+              <PropExposeControl
+                binding={fields}
+                nodeId={inspection.nodeId}
+                prop={prop}
+              />
+            </div>
+          );
+        }
         const groupField =
           group === undefined ? undefined : (
             <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>

@@ -26,16 +26,30 @@
  *
  * ## Which fields it offers to sort by
  *
- * Top-level fields holding one scalar value, judged by the engine's binding
- * vocabulary (`bindingKindOf`), the one place a field type's kind of value is
- * named: text, a URL, a number, a yes-or-no, a date or a choice. Never a
- * container, a list, a relation, rich text or a password, which hold nothing
- * an author could mean to order by, nor a field with a read rule of its own,
- * which core refuses to order a reader by when they may not read it. Then the
- * timestamps every collection keeps, unless it turned them off.
+ * Two questions, each asked of the one place that answers it:
  *
- * A field offered here is not a promise: the loop's read still asks core, and
- * a sort core refuses lists in id order (see `core/collection-loop`).
+ * - Which fields hold something an author could mean to order by: top-level
+ *   fields holding one scalar value, judged by the engine's binding
+ *   vocabulary (`bindingKindOf`), the one place a field type's kind of value
+ *   is named: text, a URL, a number, a yes-or-no, a date or a choice. Never
+ *   a container, a list, a relation, rich text or a password. Then the
+ *   timestamps every collection keeps, unless it turned them off.
+ * - Which of those this caller may sort by: core's, asked by sorting a read
+ *   by all of them as the caller, with unknown keys refused rather than
+ *   dropped. Core refuses before it reads, naming every key it will not order
+ *   by (a field with a read rule this caller fails, a withheld column, a
+ *   password), and those are left out. The registry's records cannot answer
+ *   this: a code-first collection's read rules are functions, which the
+ *   records do not carry.
+ *
+ * That read is the smallest core judges: one row, its id alone, so it costs
+ * one ordered lookup per collection, more only while core still refuses
+ * keys. A large collection sorted by an unindexed field pays for that order
+ * here as the page's own read would.
+ *
+ * A field offered here is not a promise: the loop's read on a published page
+ * asks core again as whoever views it, and a sort core refuses there lists
+ * in id order (see `core/collection-loop`).
  *
  * @module loop-collections-route
  */
@@ -45,11 +59,12 @@ import {
   type BindingValueKind,
   type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
-import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta } from "nextly";
 import { humanizeFieldName } from "nextly/field-label";
 
 import { PAGES_SLUG } from "./collections/pages";
+import { findAsCaller } from "./entry-reads";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 import {
   LOOP_COLLECTIONS_ROUTE_PATH,
@@ -87,17 +102,6 @@ interface DeclaredField {
   readonly label?: unknown;
   readonly hasMany?: unknown;
   readonly storage?: unknown;
-  readonly access?: unknown;
-}
-
-/** Whether a field declares a read rule of its own. */
-function hasReadRule(field: DeclaredField): boolean {
-  const access = field.access;
-  return (
-    typeof access === "object" &&
-    access !== null &&
-    (access as { read?: unknown }).read !== undefined
-  );
 }
 
 /** Whether a declared storage primitive is one the engine knows. */
@@ -114,7 +118,7 @@ function sortFieldOf(value: unknown): LoopSortFieldItem | undefined {
   const field = value as DeclaredField;
   if (typeof field.name !== "string" || field.name === "") return undefined;
   if (typeof field.type !== "string") return undefined;
-  if (field.hasMany === true || hasReadRule(field)) return undefined;
+  if (field.hasMany === true) return undefined;
   // A plugin's own field type is judged by the storage primitive it declares,
   // read against the engine's table of them rather than a list kept here.
   const kind = bindingKindOf({
@@ -169,6 +173,71 @@ export interface LoopCollectionsReads {
   internal(): ReadonlySet<string>;
   /** Whether the caller may read this collection. */
   mayRead(slug: string): Promise<boolean>;
+  /**
+   * One read of the collection AS THE CALLER, sorted by `keys`, refusing
+   * every key core will not sort by; resolves when core accepts them all.
+   */
+  sortedRead(slug: string, keys: readonly string[]): Promise<void>;
+}
+
+/**
+ * The fields core refused to sort by, when `error` is that refusal and
+ * nothing else: every problem it names is a sort key. `undefined` for any
+ * other failure.
+ */
+function refusedSortKeys(error: unknown): ReadonlySet<string> | undefined {
+  if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return undefined;
+  const problems = (error.publicData as { errors?: unknown } | undefined)
+    ?.errors;
+  if (!Array.isArray(problems) || problems.length === 0) return undefined;
+  const keys = new Set<string>();
+  for (const problem of problems) {
+    const { code, path } = (problem ?? {}) as {
+      code?: unknown;
+      path?: unknown;
+    };
+    if (
+      code !== "FIELD_NOT_SORTABLE" ||
+      typeof path !== "string" ||
+      !path.startsWith("sort.")
+    ) {
+      return undefined;
+    }
+    keys.add(path.slice("sort.".length));
+  }
+  return keys;
+}
+
+/**
+ * The keys of `candidates` core lets this caller sort `slug` by.
+ *
+ * Asked with all of them, then again without each key core named, until it
+ * accepts the rest: core refuses in stages (passwords, then fields it does
+ * not know or withholds, then fields the caller may not read), naming every
+ * key of a stage at once, so this ends within a few reads. Any other failure
+ * offers no field rather than one core might refuse.
+ */
+export async function sortableKeys(
+  slug: string,
+  candidates: readonly string[],
+  reads: Pick<LoopCollectionsReads, "sortedRead">
+): Promise<ReadonlySet<string>> {
+  let keys = [...candidates];
+  while (keys.length > 0) {
+    try {
+      await reads.sortedRead(slug, keys);
+      return new Set(keys);
+    } catch (error) {
+      const refused = refusedSortKeys(error);
+      const left =
+        refused === undefined ? [] : keys.filter(key => !refused.has(key));
+      // A refusal that names none of the keys asked would ask the same
+      // question forever: it is a failure like any other.
+      if (left.length === keys.length) return new Set();
+      keys = left;
+    }
+  }
+  return new Set();
 }
 
 /** The meta of an answer that is the whole list on one page. */
@@ -208,13 +277,23 @@ export async function readLoopCollections(
   const readable = await Promise.all(
     candidates.map(candidate => reads.mayRead(candidate.slug))
   );
-  const items: LoopCollectionItem[] = candidates
-    .filter((_, index) => readable[index] === true)
-    .map(({ slug, record }) => ({
-      slug,
-      label: pluralLabelOf(record).pluralLabel ?? labelOf(record, slug),
-      sortFields: sortFieldsOf(record),
-    }));
+  const items: LoopCollectionItem[] = await Promise.all(
+    candidates
+      .filter((_, index) => readable[index] === true)
+      .map(async ({ slug, record }) => {
+        const offered = sortFieldsOf(record);
+        const sortable = await sortableKeys(
+          slug,
+          offered.map(field => field.name),
+          reads
+        );
+        return {
+          slug,
+          label: pluralLabelOf(record).pluralLabel ?? labelOf(record, slug),
+          sortFields: offered.filter(field => sortable.has(field.name)),
+        };
+      })
+  );
   return { items, meta: onePage(items.length) };
 }
 
@@ -254,6 +333,17 @@ function directLoopCollectionsReads(
       ctx.caller === null
         ? Promise.resolve(false)
         : ctx.caller.can("read", slug),
+    // The shared as-caller read, so core judges the sort for exactly the
+    // caller every other editor read is judged for.
+    sortedRead: async (slug, keys) => {
+      await findAsCaller(ctx, {
+        collection: slug,
+        select: { id: true },
+        sort: keys,
+        limit: 1,
+        unknownSort: "refuse",
+      });
+    },
   };
 }
 

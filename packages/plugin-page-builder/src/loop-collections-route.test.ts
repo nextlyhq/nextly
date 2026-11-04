@@ -8,33 +8,70 @@
  * - A collection is named by its plural name, then its name, then its slug.
  * - Sortable: a top-level field holding one scalar value, judged by the
  *   engine's binding vocabulary, including a plugin type by its storage
- *   primitive; never a relation, a list, a container, rich text, a password
- *   or a field with a read rule. The timestamps follow, unless turned off.
+ *   primitive; never a relation, a list, a container, rich text or a
+ *   password. The timestamps follow, unless turned off. Of those, only the
+ *   keys core accepts for this caller, asked by one sorted read: a field
+ *   whose read rule the records do not carry is still left out.
  * - The route is contributed, authenticated, and answers the list envelope.
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import { LOOP_COLLECTIONS_ROUTE_PATH } from "./loop-collections-contract";
 import {
   internalCollections,
   readLoopCollections,
+  sortableKeys,
   type LoopCollectionsReads,
 } from "./loop-collections-route";
 import { pageBuilder } from "./plugin";
+
+/** Core's refusal of a sort, naming each key, as a sorted read throws it. */
+function sortRefusal(keys: readonly string[]): NextlyError {
+  return NextlyError.validation({
+    errors: keys.map(key => ({
+      path: `sort.${key}`,
+      code: "FIELD_NOT_SORTABLE",
+      message: `"${key}" is not a field this list can be sorted by.`,
+    })),
+  });
+}
+
+/**
+ * A sorted read that refuses, as core does, every asked key in `refused`,
+ * one stage per entry in the order core checks them.
+ */
+function sortedReadRefusing(stages: ReadonlyArray<readonly string[]> = []) {
+  return vi.fn(async (_slug: string, keys: readonly string[]) => {
+    for (const stage of stages) {
+      const named = keys.filter(key => stage.includes(key));
+      if (named.length > 0) throw sortRefusal(named);
+    }
+  });
+}
 
 function readsOf(
   records: readonly unknown[],
   {
     internal = [],
     readable,
-  }: { internal?: readonly string[]; readable?: readonly string[] } = {}
-): LoopCollectionsReads & { mayRead: ReturnType<typeof vi.fn> } {
+    refused,
+  }: {
+    internal?: readonly string[];
+    readable?: readonly string[];
+    refused?: ReadonlyArray<readonly string[]>;
+  } = {}
+): LoopCollectionsReads & {
+  mayRead: ReturnType<typeof vi.fn>;
+  sortedRead: ReturnType<typeof vi.fn>;
+} {
   return {
     collections: async () => records,
     internal: () => new Set(internal),
     mayRead: vi.fn(async (slug: string) =>
       readable === undefined ? true : readable.includes(slug)
     ),
+    sortedRead: sortedReadRefusing(refused),
   };
 }
 
@@ -54,7 +91,7 @@ const POSTS = {
     { name: "views", type: "number" },
     { name: "secret", type: "password" },
     { name: "seo", type: "group" },
-    { name: "internalScore", type: "number", access: { read: "admins" } },
+    { name: "internalScore", type: "number" },
     { name: "rating", type: "acme-stars", storage: "number" },
     { name: "widget", type: "acme-widget" },
   ],
@@ -131,8 +168,12 @@ describe("the collections a loop is offered", () => {
 });
 
 describe("the fields a loop may sort by", () => {
-  it("offers scalar top-level fields, a plugin type by its primitive, then the timestamps", async () => {
-    const answer = await readLoopCollections(readsOf([POSTS]));
+  it("offers scalar top-level fields, a plugin type by its primitive, then the timestamps, as core accepts them", async () => {
+    // `internalScore` carries a read rule this caller fails; a code-first
+    // rule is a function the records never hold, so only core can say.
+    const answer = await readLoopCollections(
+      readsOf([POSTS], { refused: [["internalScore"]] })
+    );
     expect(answer.items[0]?.sortFields).toEqual([
       { name: "title", label: "Title", date: false },
       { name: "publishedAt", label: "Published At", date: true },
@@ -167,6 +208,55 @@ describe("the fields a loop may sort by", () => {
       { name: "createdAt", label: "Written", date: true },
       { name: "updatedAt", label: "Updated", date: true },
     ]);
+  });
+});
+
+describe("asking core which keys this caller may sort by", () => {
+  it("asks once with every key where core accepts them all", async () => {
+    const reads = { sortedRead: sortedReadRefusing() };
+    expect([...(await sortableKeys("posts", ["a", "b"], reads))]).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(reads.sortedRead).toHaveBeenCalledTimes(1);
+    expect(reads.sortedRead).toHaveBeenCalledWith("posts", ["a", "b"]);
+  });
+
+  it("asks again without each key core names, stage by stage", async () => {
+    const reads = { sortedRead: sortedReadRefusing([["b"], ["c"]]) };
+    expect([
+      ...(await sortableKeys("posts", ["a", "b", "c", "d"], reads)),
+    ]).toEqual(["a", "d"]);
+    expect(reads.sortedRead.mock.calls.map(call => call[1])).toEqual([
+      ["a", "b", "c", "d"],
+      ["a", "c", "d"],
+      ["a", "d"],
+    ]);
+  });
+
+  it("offers nothing for a failure that is not a sort refusal", async () => {
+    const reads = {
+      sortedRead: vi.fn(async () => {
+        throw NextlyError.forbidden();
+      }),
+    };
+    expect([...(await sortableKeys("posts", ["a"], reads))]).toEqual([]);
+  });
+
+  it("stops at a refusal naming no key it asked, rather than asking forever", async () => {
+    const reads = {
+      sortedRead: vi.fn(async () => {
+        throw sortRefusal(["elsewhere"]);
+      }),
+    };
+    expect([...(await sortableKeys("posts", ["a"], reads))]).toEqual([]);
+    expect(reads.sortedRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks nothing for a collection with no candidate field", async () => {
+    const reads = { sortedRead: sortedReadRefusing() };
+    expect([...(await sortableKeys("posts", [], reads))]).toEqual([]);
+    expect(reads.sortedRead).not.toHaveBeenCalled();
   });
 });
 

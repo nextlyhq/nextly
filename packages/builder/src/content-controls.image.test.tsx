@@ -13,6 +13,7 @@
  * - Both are named for a screen reader and held by a lock.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -272,6 +273,48 @@ describe("what a screen reader is given for an image", () => {
   it("writes Custom from the library's words", async () => {
     const editor = mount({ mediaId: "m-1" });
     await screen.findByText("The team at launch");
+    fireEvent.click(menu());
+    fireEvent.click(screen.getByRole("option", { name: "Custom" }));
+    expect(written(editor)).toEqual({
+      mediaId: "m-1",
+      alt: "The team at launch",
+    });
+  });
+
+  it("waits for the library's words before offering Custom, then starts from them", async () => {
+    // Chosen before the words arrive, Custom would store an empty alt and
+    // silence the description the image was being read with.
+    let settle: (summary: { alt: string }) => void = () => undefined;
+    const editor = mount(
+      { mediaId: "m-1" },
+      {
+        services: {
+          ...SERVICES,
+          readMedia: () =>
+            new Promise(resolve => {
+              settle = resolve;
+            }),
+        },
+      }
+    );
+    fireEvent.click(menu());
+    expect(
+      screen
+        .getByRole("option", { name: "Custom" })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
+    // Not a lock: the other choices stay open meanwhile.
+    expect(
+      screen
+        .getByRole("option", { name: "Decorative" })
+        .getAttribute("aria-disabled")
+    ).not.toBe("true");
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await act(async () => {
+      settle({ alt: "The team at launch" });
+    });
     fireEvent.click(menu());
     fireEvent.click(screen.getByRole("option", { name: "Custom" }));
     expect(written(editor)).toEqual({

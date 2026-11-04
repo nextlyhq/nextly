@@ -342,6 +342,24 @@ describe("the order a loop's entries come in", () => {
     });
   });
 
+  it("drops a further key the collection cannot sort by at the next change, and says so first", async () => {
+    const editor = mount({
+      collection: "posts",
+      sort: "-publishedAt,rating,title",
+    });
+    await screen.findByRole("button", { name: "Sort by Published date" });
+    expect(
+      screen.getByText(
+        "Then by rating · not in this collection, Title. A key not in this collection is dropped at the next change."
+      )
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Descending" }));
+    expect(written(editor)).toEqual({
+      collection: "posts",
+      sort: "publishedAt,title",
+    });
+  });
+
   it("removes the sort, further keys and all, for Default order", async () => {
     const editor = mount({ collection: "posts", sort: "-publishedAt,title" });
     fireEvent.click(

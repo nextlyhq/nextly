@@ -461,7 +461,11 @@ function DirectionToggle({
   );
 }
 
-/** The line naming the stored keys after the first, which are kept as they are. */
+/**
+ * The line naming the stored keys after the first: kept as they are where
+ * the collection can sort by them, and marked where it cannot, since the
+ * next change drops those (see `loop-sort`).
+ */
 function FurtherKeys({
   keys,
   fields,
@@ -470,11 +474,21 @@ function FurtherKeys({
   fields: readonly LoopSortField[];
 }): React.JSX.Element | null {
   if (keys.length === 0) return null;
+  let lost = false;
   const words = keys.map(key => {
-    const field = fieldWords(key.field, fields) ?? key.field;
+    const known = fieldWords(key.field, fields);
+    if (known === undefined) lost = true;
+    const field = known ?? `${key.field} · not in this collection`;
     return key.descending ? `${field} (descending)` : field;
   });
-  return <p className="nx-inspector__note">Then by {words.join(", ")}.</p>;
+  return (
+    <p className="nx-inspector__note">
+      Then by {words.join(", ")}.
+      {lost
+        ? " A key not in this collection is dropped at the next change."
+        : null}
+    </p>
+  );
 }
 
 /** The sort menu and its direction, once the host's list can be drawn from. */
@@ -495,7 +509,9 @@ function SortField({
   const waiting = listed.kind === "loading";
   const shown = sortShown(waiting, first, collection, fields);
   const commit = (next: SortKey | undefined) => {
-    const written = writeSort(stored, next);
+    const written = writeSort(stored, next, field =>
+      fields.some(each => each.name === field)
+    );
     if (written !== storedName(prop.value)) onCommit(prop.name, written);
   };
   const choices: LoopChoice[] = [

@@ -246,7 +246,12 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     },
     caption: { label: "Caption", role: "content", type: "text" },
   },
-  defaultProps: { alt: "", loading: "lazy" },
+  // No `alt`: an image placed with none takes its library file's alt text,
+  // which is what an author picking a described file expects. A stored `""`
+  // would say "decorative" instead and silence that description, so it is
+  // left to an author to choose. Only what new blocks are placed with
+  // changes; a stored alt, empty or not, reads exactly as before.
+  defaultProps: { loading: "lazy" },
   // Both candidates, in the order the render prefers them: the resolved media
   // first, the directly-typed URL as the fallback the render itself falls back
   // to when the record is missing.
@@ -265,7 +270,10 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
       ],
     };
   },
-  example: { props: { src: "/example.jpg", alt: "An example image" } },
+  // The address only, for the same reason: blocks are placed with their
+  // example, and an example alt would be stored as the page's own words in
+  // place of the library's.
+  example: { props: { src: "/example.jpg" } },
   supports: {
     spacing: true,
     dimensions: true,
