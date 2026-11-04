@@ -9,6 +9,7 @@ import {
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginDefinition,
+  type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
@@ -127,6 +128,7 @@ import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
+import { retiredPins, type RetiredPins } from "./retired-pins";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
@@ -980,6 +982,10 @@ export const pageBuilder = (
   // What deriving retired ids from component history has read so far, shared
   // by the repair after a failed record and the editor's facts read.
   const retiredHistory = retiredHistoryMemo();
+  // The versions a lost removal is derived from, held until a repair records
+  // it. Set by `init`, which holds the context pins are made through; read by
+  // the facts route's repair, which releases them.
+  let heldRemovals: RetiredPins | undefined;
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -1235,6 +1241,20 @@ export const pageBuilder = (
           COMPONENT_RETIRED_SLUG,
       });
       if (opts.componentReadiness !== false) {
+        // Registered on first use rather than here: a context without
+        // version history (a test's, a host's stand-in) still installs.
+        let holder: PluginVersionPinHolder | undefined;
+        heldRemovals = retiredPins({
+          holder: () =>
+            (holder ??= ctx.services.versions.pins.registerHolder({
+              name: "retired-fields",
+              label: "Page Builder removed fields",
+            })),
+          transaction: work => ctx.db.transaction(work),
+          history: () => ctx.services.versions,
+          componentCollection: composition.store.collection,
+          componentField: composition.store.field,
+        });
         registerRetiredExposures({
           ctx,
           componentCollection: composition.store.collection,
@@ -1248,6 +1268,7 @@ export const pageBuilder = (
           }),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           memo: retiredHistory,
+          pins: heldRemovals,
         });
       }
       // A blocks field below the top level has no Page Builder to open, and the
@@ -1498,6 +1519,9 @@ export const pageBuilder = (
                     componentField: componentStoreOf(opts).field,
                     lifecycle,
                     memo: retiredHistory,
+                    ...(heldRemovals === undefined
+                      ? {}
+                      : { pins: heldRemovals }),
                     store: retiredStore({
                       nextly: () => requireInstalled().nextly(),
                       collection:

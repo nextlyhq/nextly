@@ -454,6 +454,68 @@ describe("the repair", () => {
     expect(log.errors[0]!.message).toContain('"hero"');
   });
 
+  it("releases the held versions after a whole read whose ids are recorded", async () => {
+    const { history } = memoryHistory([published(["title"]), published([])]);
+    const { store } = memoryStore();
+    const released: string[] = [];
+
+    await reconcileRetired(
+      {
+        ...args(history),
+        store,
+        pins: { release: async id => void released.push(id) },
+        ...logger(),
+      },
+      "hero"
+    );
+
+    expect(released).toEqual(["hero"]);
+  });
+
+  it("keeps them held when the record fails", async () => {
+    const { history } = memoryHistory([published(["title"]), published([])]);
+    const { store } = memoryStore();
+    const released: string[] = [];
+
+    await reconcileRetired(
+      {
+        ...args(history),
+        store: {
+          ...store,
+          retire: async () => {
+            throw new Error("database down");
+          },
+        },
+        pins: { release: async id => void released.push(id) },
+        ...logger(),
+      },
+      "hero"
+    );
+
+    expect(released).toEqual([]);
+  });
+
+  it("keeps them held when history was not read whole", async () => {
+    const { history } = memoryHistory(
+      Array.from({ length: 501 }, () => published([]))
+    );
+    const { store } = memoryStore();
+    const released: string[] = [];
+
+    await expect(
+      reconcileRetired(
+        {
+          ...args(history),
+          store,
+          pins: { release: async id => void released.push(id) },
+          ...logger(),
+        },
+        "hero"
+      )
+    ).rejects.toThrow();
+    expect(released).toEqual([]);
+  });
+
   it("fails when history cannot be read, so nothing mints on a partial answer", async () => {
     const { store } = memoryStore();
     const history: ComponentHistory = {

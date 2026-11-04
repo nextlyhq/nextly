@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import type { ComponentHistory } from "./retired-history";
+import type { RetiredPins } from "./retired-pins";
 import type { RetiredStore } from "./retired-store";
 
 type Row = Record<string, unknown>;
@@ -118,6 +119,7 @@ function harness(
     history?: Row[];
     /** A history read in place of `history`'s. */
     versions?: ComponentHistory;
+    pins?: RetiredPins;
   } = {}
 ) {
   const handlers = new Map<string, Handler>();
@@ -172,6 +174,7 @@ function harness(
     componentField: "content",
     store,
     limits: () => LIMITS,
+    ...(options.pins === undefined ? {} : { pins: options.pins }),
   });
   const run = (phase: string, collection: string, context: Row) =>
     handlers.get(`${phase} ${collection}`)!({
@@ -375,6 +378,107 @@ describe("recording retired ids at publish", () => {
       componentId: "hero",
       retired: { properties: ["title"], slots: [] },
     });
+  });
+
+  /** Pins that record what they are asked to do. */
+  function recordingPins() {
+    const calls: string[] = [];
+    const pins: RetiredPins = {
+      hold: async (componentId, dropped, lifecycle) => {
+        calls.push(
+          `hold ${componentId} ${dropped.properties.join(",")} ${lifecycle}`
+        );
+        return true;
+      },
+      release: async componentId => {
+        calls.push(`release ${componentId}`);
+      },
+    };
+    return { pins, calls };
+  }
+
+  it("holds the removal's versions when the record and its repair both fail", async () => {
+    const { pins, calls } = recordingPins();
+    const failing: RetiredStore = {
+      of: async () => new Map(),
+      retire: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run } = harness({
+      store: failing,
+      pins,
+      history: [definition(["title", "body"]), definition(["body"])],
+    });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title", "body"]), definition(["body"]))
+    );
+
+    expect(calls).toEqual(["hold hero title true"]);
+  });
+
+  it("releases the held versions once the repair records the ids", async () => {
+    const { pins, calls } = recordingPins();
+    const { store } = memoryStore();
+    let attempts = 0;
+    const failingOnce: RetiredStore = {
+      ...store,
+      retire: async (componentId, ids) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("database down");
+        await store.retire(componentId, ids);
+      },
+    };
+    const { run } = harness({
+      store: failingOnce,
+      pins,
+      history: [definition(["title", "body"]), definition(["body"])],
+    });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title", "body"]), definition(["body"]))
+    );
+
+    expect(calls).toEqual(["hold hero title true", "release hero"]);
+  });
+
+  it("holds nothing when the record succeeds", async () => {
+    const { pins, calls } = recordingPins();
+    const { run } = harness({ pins });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title", "body"]), definition(["body"]))
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("holds nothing inside a caller's transaction, and says so", async () => {
+    const { pins, calls } = recordingPins();
+    const failing: RetiredStore = {
+      of: async () => new Map(),
+      retire: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run, warnings } = harness({ store: failing, pins });
+
+    await run("afterUpdate", COMPONENTS, {
+      ...published(definition(["title"]), definition([])),
+      executor: {},
+    });
+
+    expect(calls.filter(call => call.startsWith("hold"))).toEqual([]);
+    expect(warnings.some(warning => warning.message.includes('"hero"'))).toBe(
+      true
+    );
   });
 
   it("repairs a failed record from the component's history", async () => {

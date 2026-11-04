@@ -66,6 +66,7 @@ import {
   type ReconcileArgs,
   type RetiredHistoryMemo,
 } from "./retired-history";
+import type { RetiredPins } from "./retired-pins";
 import type { RetiredStore } from "./retired-store";
 import { requestContextFor, SINGLE_HOOK_NAMESPACE } from "./write-target";
 
@@ -109,6 +110,11 @@ export interface RetiredExposureHooksArgs {
   limits: () => DocumentLimits;
   /** What the repair has read of each component's history already. */
   memo?: RetiredHistoryMemo;
+  /**
+   * The versions a lost removal is derived from, held against retention
+   * until a repair records it (`retired-pins`).
+   */
+  pins?: RetiredPins;
 }
 
 /**
@@ -171,7 +177,48 @@ async function recordRetirements(
         "values until they are recorded, and the ids could be minted again.",
       { componentId, retired, error }
     );
+    if (live?.live === true && componentId !== undefined) {
+      await hold(args, context, componentId, retired, live.lifecycle);
+    }
     await repair(args, live, componentId);
+  }
+}
+
+/**
+ * Pin the versions either side of the removal before the repair, so that if
+ * the repair fails too, retention cannot prune the only record of it before
+ * a later one is made. The repair releases them when it records the ids.
+ *
+ * Not inside a caller's transaction: the pin takes the component's write
+ * lock, which that transaction holds. The repair still runs, and the next
+ * one reads history while it holds the removal.
+ */
+async function hold(
+  args: RetiredExposureHooksArgs,
+  context: HookContext<unknown>,
+  componentId: string,
+  retired: RetiredExposures,
+  lifecycle: boolean
+): Promise<void> {
+  if (args.pins === undefined) return;
+  if ((context as { executor?: unknown }).executor !== undefined) {
+    args.ctx.logger.warn(
+      `[page-builder] the versions behind component "${componentId}"'s lost ` +
+        "retirement were not held against retention, as its write ran inside " +
+        "a transaction; a repair records them while history still has them.",
+      { componentId, retired }
+    );
+    return;
+  }
+  try {
+    await args.pins.hold(componentId, retired, lifecycle);
+  } catch (error) {
+    args.ctx.logger.error(
+      `[page-builder] the versions behind component "${componentId}"'s lost ` +
+        "retirement could not be held against retention; a repair records it " +
+        "while history still has them.",
+      { componentId, retired, error }
+    );
   }
 }
 
@@ -216,6 +263,7 @@ function repairArgs(
     store: args.store,
     logger: args.ctx.logger,
     ...(args.memo === undefined ? {} : { memo: args.memo }),
+    ...(args.pins === undefined ? {} : { pins: args.pins }),
   };
 }
 
