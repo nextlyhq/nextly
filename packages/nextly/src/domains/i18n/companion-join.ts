@@ -17,6 +17,7 @@ import { and, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { batches } from "../../auth/access/retired-manage-permissions";
 import { isMissingNamedColumnError } from "../../database/missing-column";
+import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
@@ -272,9 +273,13 @@ interface JoinableDb {
         table: unknown,
         on: SQL
       ) => {
-        where: (
-          where: SQL | SQLWrapper | undefined
-        ) => Promise<Record<string, Record<string, unknown> | null>[]>;
+        where: (where: SQL | SQLWrapper | undefined) => Promise<
+          {
+            entry: Record<string, unknown> | null;
+            translation: Record<string, unknown> | null;
+            revision: unknown;
+          }[]
+        >;
       };
     };
   };
@@ -300,7 +305,14 @@ export async function selectEntryWithCompanion(args: {
   const main = args.mainTable as Record<string, unknown>;
   const companion = args.companionTable as CompanionTable;
   const joined = await (args.db as JoinableDb)
-    .select({ entry: args.mainTable, translation: args.companionTable })
+    .select({
+      entry: args.mainTable,
+      translation: args.companionTable,
+      // Each translation row's version counter, named here because the
+      // translation table's runtime model does not declare it: the version a
+      // read returns comes out of this one statement too.
+      revision: sql`${args.companionTable}.${sql.identifier(DOCUMENT_REVISION_COLUMN)}`,
+    })
     .from(args.mainTable)
     .leftJoin(
       args.companionTable,
@@ -313,7 +325,9 @@ export async function selectEntryWithCompanion(args: {
   return {
     entry: joined[0]?.entry ?? undefined,
     companionRows: joined.flatMap(row =>
-      row.translation ? [row.translation] : []
+      row.translation
+        ? [{ ...row.translation, [DOCUMENT_REVISION_COLUMN]: row.revision }]
+        : []
     ),
   };
 }
