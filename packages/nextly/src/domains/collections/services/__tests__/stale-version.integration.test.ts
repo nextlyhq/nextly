@@ -820,5 +820,51 @@ describe.each(getConfiguredTestDialects())(
       expect(unknown.publicData).not.toHaveProperty("changedBy");
       expect(unknown.publicData).not.toHaveProperty("changedAt");
     });
+
+    it("gives the newest recorded version to compare against where the entry keeps history, and none where it keeps none", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: POSTS, overrideAccess: true },
+        { title: "first", status: "draft" }
+      );
+      const id = idOf(created);
+      await update(t, POSTS, id, { title: "theirs" }, { user: ANA });
+      const refused = await update(t, POSTS, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+
+      const versions = t.getService("versionsService") as unknown as {
+        listPartVersions(
+          ref: object
+        ): Promise<{ versionNo: number; locale: string | null }[]>;
+        get(ref: object, versionNo: number): Promise<{ snapshot: unknown }>;
+      };
+      const ref = { scopeKind: "collection", scopeSlug: POSTS, entryId: id };
+      const newest = Math.max(
+        ...(await versions.listPartVersions(ref)).map(v => v.versionNo)
+      );
+      const history = refused.publicData?.historyVersion as {
+        version: number;
+        locale: string | null;
+      };
+      expect(history.version).toBe(newest);
+      // The version named is the save that came in between.
+      const snapshot = (await versions.get(ref, history.version)).snapshot;
+      expect(JSON.stringify(snapshot)).toContain("theirs");
+
+      const note = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "a" }
+      );
+      await update(t, NOTES, idOf(note), { title: "b" });
+      const unversioned = await update(t, NOTES, idOf(note), {
+        title: "c",
+        _rev: revOf(note),
+      });
+      expect(unversioned).toMatchObject({ code: "STALE_VERSION" });
+      expect(unversioned.publicData).not.toHaveProperty("historyVersion");
+    });
   }
 );

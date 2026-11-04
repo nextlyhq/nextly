@@ -521,6 +521,11 @@ async function staleVersionRefusal(args: {
   mayRead: () => Promise<boolean>;
   /** Whether a person may be looked up by name (a pooled read). */
   namePeople: boolean;
+  /**
+   * The newest recorded version of the part the save writes, where the caller
+   * may read that part's history; asked only once `mayRead` allows.
+   */
+  historyVersion?: () => Promise<StaleVersionPublicData["historyVersion"]>;
   logContext: Record<string, unknown>;
 }): Promise<NextlyError> {
   const data: StaleVersionPublicData = { currentVersion: args.currentVersion };
@@ -531,6 +536,8 @@ async function staleVersionRefusal(args: {
       : undefined;
     if (changedBy) data.changedBy = changedBy;
     if (changer?.at) data.changedAt = changer.at.toISOString();
+    const history = await args.historyVersion?.();
+    if (history) data.historyVersion = history;
   }
   return NextlyError.staleVersion({
     data,
@@ -816,6 +823,19 @@ export async function staleVersionErrorFor(
             ...args.reader,
           }),
     namePeople: !args.inSharedTransaction,
+    // History is read on the pool, so not inside a shared transaction.
+    ...(args.inSharedTransaction
+      ? {}
+      : {
+          historyVersion: () =>
+            newestHistoryVersion({
+              scopeKind: args.scopeKind,
+              slug: args.slug,
+              id: args.id,
+              locale: locale ?? null,
+              reader: args.reader,
+            }),
+        }),
     logContext: {
       reason: "stale-version",
       scopeKind: args.scopeKind,
@@ -823,4 +843,59 @@ export async function staleVersionErrorFor(
       id: args.id,
     },
   });
+}
+
+/**
+ * The newest recorded version of one part of a document's history, for a
+ * client to compare against what it holds: what the comparison routes take
+ * (`compareDocumentVersions`, by version number, within one part). Undefined
+ * where the document keeps no history, the part has no version yet, or the
+ * caller may not read that part's history, which is asked as the history
+ * routes ask it (`assertHistoryLocalesReadable`).
+ */
+async function newestHistoryVersion(args: {
+  scopeKind: "collection" | "single";
+  slug: string;
+  id: string;
+  locale: string | null;
+  reader: Omit<
+    Parameters<typeof callerMayReadDocument>[0],
+    "scopeKind" | "slug" | "entryId"
+  >;
+}): Promise<StaleVersionPublicData["historyVersion"]> {
+  if (!args.reader.trusted) {
+    if (!args.reader.user) return undefined;
+    // Loaded when a refusal is built, as the read gate is.
+    const { assertHistoryLocalesReadable } = await import(
+      "../../api/versions-access"
+    );
+    try {
+      await assertHistoryLocalesReadable(
+        args.scopeKind,
+        args.slug,
+        args.id,
+        args.reader.user,
+        args.reader.authenticatedScope,
+        args.reader.hookInputs ?? {},
+        [args.locale]
+      );
+    } catch (error) {
+      if (NextlyError.is(error) && error.code === "NOT_FOUND") return undefined;
+      throw error;
+    }
+  }
+  const { getService } = await import("../../di");
+  const versions = await getService("versionsService").listPartVersions({
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.id,
+  });
+  const newest = versions
+    .filter(version => version.locale === args.locale)
+    .reduce<
+      number | undefined
+    >((max, version) => (max === undefined || version.versionNo > max ? version.versionNo : max), undefined);
+  return newest === undefined
+    ? undefined
+    : { version: newest, locale: args.locale };
 }
