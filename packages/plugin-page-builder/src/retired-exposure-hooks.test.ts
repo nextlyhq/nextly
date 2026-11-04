@@ -385,18 +385,21 @@ describe("recording retired ids at publish", () => {
    * Pins that record what they are asked to do. `shows` answers, look by
    * look, whether the removal is in history yet; true from then on.
    */
-  function recordingPins(shows: boolean[] = []) {
+  function recordingPins(shows: (boolean | "fails")[] = []) {
     const calls: string[] = [];
     let looks = 0;
     const pins: RetiredPins = {
-      hold: async (componentId, dropped, lifecycle) => {
+      hold: async (componentId, dropped, lifecycle, newerThan) => {
         calls.push(
-          `hold ${componentId} ${dropped.properties.join(",")} ${lifecycle}`
+          `hold ${componentId} ${dropped.properties.join(",")} ${lifecycle}` +
+            (newerThan === undefined ? "" : ` >${newerThan}`)
         );
         const shown = shows[looks] ?? true;
         looks += 1;
+        if (shown === "fails") throw new Error("database down");
         return shown;
       },
+      newestVersion: async () => 7,
       release: async componentId => {
         calls.push(`release ${componentId}`);
       },
@@ -483,7 +486,29 @@ describe("recording retired ids at publish", () => {
     });
 
     await vi.waitFor(() => expect(calls).toHaveLength(3));
-    expect(new Set(calls)).toEqual(new Set(["hold hero title true"]));
+    // Only a removal newer than what history showed before the commit.
+    expect(new Set(calls)).toEqual(new Set(["hold hero title true >7"]));
+  });
+
+  it("keeps looking after a look that fails", async () => {
+    const { pins, calls } = recordingPins(["fails", true]);
+    const failing: RetiredStore = {
+      of: async () => new Map(),
+      retire: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run, errors } = harness({ store: failing, pins });
+
+    await run("afterUpdate", COMPONENTS, {
+      ...published(definition(["title"]), definition([])),
+      executor: {},
+    });
+
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(
+      errors.some(error => error.message.includes("looked for again"))
+    ).toBe(true);
   });
 
   it("holds nothing for a transaction's removal that never shows, and says so", async () => {

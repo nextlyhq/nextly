@@ -250,27 +250,48 @@ async function holdOnceCommitted(
   lifecycle: boolean
 ): Promise<void> {
   const wait = args.commitWait ?? aSecond;
-  try {
-    for (let look = 0; look < COMMIT_LOOKS; look += 1) {
-      await wait();
-      if (await pins.hold(componentId, retired, lifecycle)) {
-        await repair(args, { live: true, lifecycle }, componentId);
-        return;
-      }
-    }
-    args.ctx.logger.warn(
-      `[page-builder] component "${componentId}"'s removal, written in a ` +
-        "transaction, never showed in its history, so nothing was held for " +
-        "it; a transaction that rolled back made no removal.",
-      { componentId, retired }
+  // What history showed before the transaction committed: the removal is
+  // newer, and an earlier removal of the same id must not end the wait.
+  const visible = await lookOrNull(args, componentId, retired, () =>
+    pins.newestVersion(componentId)
+  );
+  for (let look = 0; look < COMMIT_LOOKS; look += 1) {
+    await wait();
+    const held = await lookOrNull(args, componentId, retired, () =>
+      pins.hold(componentId, retired, lifecycle, visible ?? 0)
     );
+    if (held === true) {
+      await repair(args, { live: true, lifecycle }, componentId);
+      return;
+    }
+  }
+  args.ctx.logger.warn(
+    `[page-builder] component "${componentId}"'s removal, written in a ` +
+      "transaction, was not held: it never showed in its history, as when " +
+      "the transaction rolled back, or every look failed.",
+    { componentId, retired }
+  );
+}
+
+/**
+ * One look of the wait, its failure logged and answered as `null`, so one
+ * failed read does not end the wait.
+ */
+async function lookOrNull<T>(
+  args: RetiredExposureHooksArgs,
+  componentId: string,
+  retired: RetiredExposures,
+  look: () => Promise<T>
+): Promise<T | null> {
+  try {
+    return await look();
   } catch (error) {
     args.ctx.logger.error(
-      `[page-builder] the versions behind component "${componentId}"'s lost ` +
-        "retirement could not be held against retention; a repair records it " +
-        "while history still has them.",
+      `[page-builder] a look for component "${componentId}"'s removal in its ` +
+        "history failed; it is looked for again.",
       { componentId, retired, error }
     );
+    return null;
   }
 }
 

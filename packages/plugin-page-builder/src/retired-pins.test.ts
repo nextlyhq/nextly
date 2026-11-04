@@ -165,7 +165,7 @@ describe("holding a lost removal", () => {
     expect(memory.slots.size).toBe(2);
   });
 
-  it("pins nothing when the newest definition exposes the ids again", async () => {
+  it("finds a removal behind a publish that exposes the id again", async () => {
     const memory = memoryHolder();
     const pins = pinsOver(
       memoryHistory([
@@ -176,8 +176,27 @@ describe("holding a lost removal", () => {
       memory
     );
 
-    expect(await pins.hold("hero", TITLE, true)).toBe(false);
+    expect(await pins.hold("hero", TITLE, true)).toBe(true);
+    expect(Object.fromEntries(memory.slots)).toEqual({
+      "removal-2-before": 1,
+      "removal-2": 2,
+    });
+  });
+
+  it("takes only a removal newer than the version it is given", async () => {
+    const memory = memoryHolder();
+    const pins = pinsOver(
+      memoryHistory([
+        { status: "published", fields: ["title"] },
+        { status: "published", fields: [] },
+        { status: "published", fields: ["title"] },
+      ]),
+      memory
+    );
+
+    expect(await pins.hold("hero", TITLE, true, 3)).toBe(false);
     expect(memory.slots.size).toBe(0);
+    expect(await pins.newestVersion("hero")).toBe(3);
   });
 
   it("pins nothing where pins are not offered", async () => {

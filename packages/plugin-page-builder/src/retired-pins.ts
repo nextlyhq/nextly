@@ -56,15 +56,20 @@ export interface RetiredPinHolder<Tx> {
 /** Pinning and releasing the versions a component's lost removals need. */
 export interface RetiredPins {
   /**
-   * Pin the published versions either side of the removal that dropped these
-   * ids: the newest published version that does not expose one of them, and
-   * the published version before it that does. Answers whether it pinned.
+   * Pin the published versions either side of the newest removal of one of
+   * these ids: a published version exposing it, and the next published one,
+   * which does not. A later publish exposing it again does not hide the
+   * removal behind it. Only a removal made by a version newer than
+   * `newerThan` counts. Answers whether it pinned.
    */
   hold(
     componentId: string,
     dropped: RetiredExposures,
-    lifecycle: boolean
+    lifecycle: boolean,
+    newerThan?: number
   ): Promise<boolean>;
+  /** The newest version number the component's history shows, or 0. */
+  newestVersion(componentId: string): Promise<number>;
   /**
    * Free the slots of the removals a repair has read and recorded: those made
    * by a version no newer than `through`.
@@ -102,7 +107,7 @@ export function retiredPins<Tx>(args: {
     entryId: componentId,
   });
   return {
-    hold: async (componentId, dropped, lifecycle) => {
+    hold: async (componentId, dropped, lifecycle, newerThan = 0) => {
       const holder = args.holder();
       if (holder === undefined) return false;
       const ref = refOf(componentId);
@@ -113,7 +118,7 @@ export function retiredPins<Tx>(args: {
         dropped,
         lifecycle
       );
-      if (pair === undefined) return false;
+      if (pair === undefined || pair.after <= newerThan) return false;
       await args.transaction(async tx => {
         await holder.pin(
           ref,
@@ -127,6 +132,10 @@ export function retiredPins<Tx>(args: {
         );
       });
       return true;
+    },
+    newestVersion: async componentId => {
+      const rows = await args.history().list(refOf(componentId), { limit: 1 });
+      return rows[0]?.versionNo ?? 0;
     },
     release: async (componentId, through) => {
       const holder = args.holder();
@@ -163,17 +172,17 @@ async function removalOf(
   dropped: RetiredExposures,
   lifecycle: boolean
 ): Promise<{ before: number; after: number } | undefined> {
-  let after: number | undefined;
+  let newer: { versionNo: number; exposure: RetiredExposures } | undefined;
   for await (const versionNo of servedVersions(history, ref, lifecycle)) {
     const exposure = exposedIn(
       (await history.get(ref, versionNo)).snapshot,
       field
     );
     if (typeof exposure === "string") continue;
-    if (exposesAny(exposure, dropped)) {
-      return after === undefined ? undefined : { before: versionNo, after };
+    if (newer !== undefined && dropsAny(exposure, newer.exposure, dropped)) {
+      return { before: versionNo, after: newer.versionNo };
     }
-    after = versionNo;
+    newer = { versionNo, exposure };
   }
   return undefined;
 }
@@ -234,13 +243,16 @@ function oldestIn(
   return numbers.at(-1);
 }
 
-/** Whether a definition exposes any of these ids. */
-function exposesAny(
-  exposure: RetiredExposures,
+/** Whether going from `before` to `after` drops any of these ids. */
+function dropsAny(
+  before: RetiredExposures,
+  after: RetiredExposures,
   ids: RetiredExposures
 ): boolean {
   return (
-    ids.properties.some(id => exposure.properties.includes(id)) ||
-    ids.slots.some(id => exposure.slots.includes(id))
+    ids.properties.some(
+      id => before.properties.includes(id) && !after.properties.includes(id)
+    ) ||
+    ids.slots.some(id => before.slots.includes(id) && !after.slots.includes(id))
   );
 }
