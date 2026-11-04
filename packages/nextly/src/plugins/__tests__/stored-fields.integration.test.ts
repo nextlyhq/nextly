@@ -73,6 +73,13 @@ type Writer = "author" | "plugin";
 const writerOf = new AsyncLocalStorage<Writer>();
 
 /**
+ * Every seam's release, run after each test: a writer that failed before its
+ * transaction never releases the paused one, which would otherwise hold its
+ * lock (on SQLite, the one writer) through every test after it.
+ */
+const releases: (() => void)[] = [];
+
+/**
  * Pauses `pausing`'s first transaction after its callback, holding its lock,
  * until `releasing` enters a transaction of its own. Records, for each
  * writer, whether its first transaction took a row lock: the content write's
@@ -93,6 +100,7 @@ function raceSeam(t: TestNextly, pausing: Writer, releasing: Writer) {
   const mayCommit = new Promise<void>(resolve => {
     letCommit = resolve;
   });
+  releases.push(() => letCommit());
   let signalPaused = (): void => undefined;
   const paused = new Promise<void>(resolve => {
     signalPaused = resolve;
@@ -260,6 +268,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     afterEach(() => {
+      for (const release of releases.splice(0)) release();
       vi.restoreAllMocks();
     });
 
@@ -333,7 +342,7 @@ describe.each(getConfiguredTestDialects())(
 
         const seam = raceSeam(t, "author", "plugin");
         const author = authorSaves("pages", id, { body: { v: "author" } });
-        await seam.paused;
+        await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
           writerOf.run("plugin", () =>
             updateIfUnchanged(editor, {
@@ -343,6 +352,7 @@ describe.each(getConfiguredTestDialects())(
             })
           )
         );
+        seam.letCommit();
         await author;
 
         expect(seam.state).toEqual({ paused: true, released: true });
@@ -368,8 +378,10 @@ describe.each(getConfiguredTestDialects())(
             expect: { field: "body", form: "published", hash },
           })
         );
-        await seam.paused;
-        await authorSaves("pages", id, { title: "author" });
+        await Promise.race([seam.paused, plugin.catch(() => undefined)]);
+        await authorSaves("pages", id, { title: "author" }).finally(
+          seam.letCommit
+        );
         await plugin;
 
         expect(seam.state).toEqual({ paused: true, released: true });
@@ -416,7 +428,7 @@ describe.each(getConfiguredTestDialects())(
 
         const seam = raceSeam(t, "author", "plugin");
         const author = authorSaves("drafted", id, { body: { v: "author" } });
-        await seam.paused;
+        await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
           writerOf.run("plugin", () =>
             updateIfUnchanged(editor, {
@@ -426,6 +438,7 @@ describe.each(getConfiguredTestDialects())(
             })
           )
         );
+        seam.letCommit();
         await author;
 
         expect(seam.state).toEqual({ paused: true, released: true });
@@ -453,8 +466,10 @@ describe.each(getConfiguredTestDialects())(
             expect: { field: "body", form: "draft", hash },
           })
         );
-        await seam.paused;
-        await authorSaves("drafted", id, { title: "author" });
+        await Promise.race([seam.paused, plugin.catch(() => undefined)]);
+        await authorSaves("drafted", id, { title: "author" }).finally(
+          seam.letCommit
+        );
         await plugin;
 
         expect(seam.state).toEqual({ paused: true, released: true });
@@ -487,7 +502,7 @@ describe.each(getConfiguredTestDialects())(
         // The author's draft leaves `body` alone, so the live hash still holds.
         const seam = raceSeam(t, "author", "plugin");
         const author = authorSaves("drafted", id, { title: "draft title" });
-        await seam.paused;
+        await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
           writerOf.run("plugin", () =>
             updateIfUnchanged(editor, {
@@ -502,6 +517,7 @@ describe.each(getConfiguredTestDialects())(
             })
           )
         );
+        seam.letCommit();
         await author;
 
         expect(seam.state).toEqual({ paused: true, released: true });

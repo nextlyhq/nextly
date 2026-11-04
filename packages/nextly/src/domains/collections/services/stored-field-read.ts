@@ -25,18 +25,16 @@
  * the caller of this module, as a {@link FieldScope}; nothing here widens it.
  *
  * It is also where a conditional write is judged. A writer that read a stored
- * value and computed a replacement from it pins what it read
- * ({@link runWithStoredExpectation}), and the write path reads the value again
- * HERE, on its own transaction, once it holds the entry's row lock
- * ({@link storedExpectationRefusal}). The read the writer made and the read
+ * value and computed a replacement from it registers what it read against the
+ * context object it hands its write ({@link expectStoredValue}), and the write
+ * path reads the value again HERE, on its own transaction, once it holds the
+ * entry's row lock ({@link holdStoredExpectation}). The read the writer made and the read
  * the write path makes are the same read, and both are hashed by
  * {@link storedValueHash}, so the two can only disagree when the stored value
  * did.
  *
  * @module domains/collections/services/stored-field-read
  */
-import { AsyncLocalStorage } from "node:async_hooks";
-
 import { and, eq } from "drizzle-orm";
 
 import type {
@@ -865,66 +863,84 @@ export interface StoredExpectation {
   readonly noPendingDraft?: boolean;
 }
 
-/** The document a pinned expectation is for. */
+/** The document an expectation is for. */
 export interface ExpectedDocument {
   readonly kind: "collection" | "single";
   readonly slug: string;
-  /**
-   * The entry, for a collection document. A Single is one document per slug,
-   * so it is matched on the slug alone, as a write receipt is.
-   */
+  /** The entry, for a collection document; a Single has one document per slug. */
   readonly id?: string;
 }
 
-/** One conditional write's expectation, pinned for the length of the write. */
+/** One conditional write's expectation, and whether its write path judged it. */
 export interface PinnedExpectation {
   readonly document: ExpectedDocument;
   readonly expect: StoredExpectation;
-  /**
-   * Set by the first write to the document made while pinned. A later one in
-   * the same call (a hook writing the document it reacts to, say) is not the
-   * write the expectation was made for, and is not judged by it.
-   */
-  claimed: boolean;
   /** Set once the expectation held under the row lock of the write's own transaction. */
   checked: boolean;
 }
 
 /**
- * Pinned expectations, one per conditional write. `AsyncLocalStorage`, as a
- * write receipt is pinned: writes run concurrently, and a module variable
- * would judge an author's own save by what a plugin read.
+ * Expectations by the context object of the one write each is for.
+ *
+ * Keyed by the object's identity: the writer hands its write a context object
+ * of its own, and every write path hands its hooks a copy of the context it
+ * was called with, so no other write, a hook's own write to the same document
+ * among them, ever carries it. Concurrent writes each carry their own, so an
+ * author's save is never judged by what a plugin read. Weak, so a write that
+ * never reaches its path leaves nothing behind.
  */
-const expectationScope = new AsyncLocalStorage<PinnedExpectation>();
+const expectations = new WeakMap<object, PinnedExpectation>();
 
-/** Run `write` with `pin` as what its write path must find stored. */
-export function runWithStoredExpectation<T>(
-  pin: PinnedExpectation,
-  write: () => Promise<T>
-): Promise<T> {
-  return expectationScope.run(pin, write);
+/** Register `pin` as what the write called with `context` must find stored. */
+export function expectStoredValue(
+  context: Record<string, unknown>,
+  pin: PinnedExpectation
+): void {
+  expectations.set(context, pin);
 }
 
 /**
- * The expectation pinned for a write to `document`, claimed for it; or
- * `undefined` where none is pinned for that document or it is already
- * claimed. A write path claims before anything it runs can write, and checks
- * the claimed expectation under its row lock.
+ * Refuse, by throwing, a write whose caller registered an expectation for
+ * `context` that no longer holds; nothing happens for any other write. Called
+ * by a write path inside its transaction, once it holds the entry's row lock
+ * and before it writes, with the context it was called with. The refusal is
+ * also kept on `refused`, for a path whose adapter wraps what is thrown out of
+ * its transaction.
  */
-export function claimStoredExpectation(
-  document: ExpectedDocument
-): PinnedExpectation | undefined {
-  const pin = expectationScope.getStore();
-  if (pin === undefined || pin.claimed) return undefined;
-  const pinned = pin.document;
-  if (pinned.kind !== document.kind || pinned.slug !== document.slug) {
-    return undefined;
-  }
-  if (document.kind === "collection" && pinned.id !== document.id) {
-    return undefined;
-  }
-  pin.claimed = true;
-  return pin;
+export async function holdStoredExpectation(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  on: {
+    readonly tx: VersionsDbApi & { getDrizzle(): unknown };
+    readonly localization: { readonly defaultLocale: string } | undefined;
+    readonly locale: string | undefined;
+  },
+  refused: { refusal?: NextlyError } = {}
+): Promise<void> {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin === undefined || !sameDocument(pin.document, document)) return;
+  refused.refusal = await storedExpectationRefusal(
+    pin,
+    {
+      db: on.tx,
+      executor: on.tx.getDrizzle(),
+      defaultLocale: on.localization?.defaultLocale ?? null,
+    },
+    on.locale
+  );
+  if (refused.refusal !== undefined) throw refused.refusal;
+}
+
+/** Whether a write is to the document an expectation was made for. */
+function sameDocument(
+  expected: ExpectedDocument,
+  written: ExpectedDocument
+): boolean {
+  return (
+    expected.kind === written.kind &&
+    expected.slug === written.slug &&
+    (written.kind === "single" || expected.id === written.id)
+  );
 }
 
 /**
@@ -943,7 +959,7 @@ export function claimStoredExpectation(
  * that leaves this field alone reads the same here and would still be put
  * live by the publish.
  */
-export async function storedExpectationRefusal(
+async function storedExpectationRefusal(
   pin: PinnedExpectation,
   connection: StoredFieldConnection,
   locale: string | undefined

@@ -30,10 +30,9 @@ import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { requireNextly } from "../direct-api/nextly";
 import {
+  expectStoredValue,
   readStoredFieldsOn,
-  runWithStoredExpectation,
   type FieldScope,
-  type PinnedExpectation,
 } from "../domains/collections/services/stored-field-read";
 import { appLocalization } from "../domains/i18n/configured-locales";
 import { EVERY_LOCALE } from "../domains/i18n/locale-selector";
@@ -226,40 +225,39 @@ export async function updateIfUnchanged(
     ...inLocale,
   });
 
-  const pin: PinnedExpectation = {
-    document,
-    expect: update.expect,
-    claimed: false,
-    checked: false,
-  };
+  // The expectation travels with this one write: registered against a
+  // context object no other call is handed, which the write path receives
+  // as its own and its hooks only as a copy.
+  const context: Record<string, unknown> = {};
+  const pin = { document, expect: update.expect, checked: false };
+  expectStoredValue(context, pin);
   const as = {
     user: identity.user,
     overrideAccess: false as const,
+    context,
     ...(identity.authenticatedScope === undefined
       ? {}
       : { actor: identity.authenticatedScope }),
   };
   const nextly = requireNextly();
-  await runWithStoredExpectation(pin, async () => {
-    if (document.kind === "single") {
-      await nextly.updateSingle({
-        slug: document.slug,
-        data: update.data,
-        depth: 0,
-        ...inLocale,
-        ...as,
-      });
-    } else {
-      await nextly.update({
-        collection: document.slug,
-        id: document.id,
-        data: update.data,
-        depth: 0,
-        ...inLocale,
-        ...as,
-      });
-    }
-  });
+  if (document.kind === "single") {
+    await nextly.updateSingle({
+      slug: document.slug,
+      data: update.data,
+      depth: 0,
+      ...inLocale,
+      ...as,
+    });
+  } else {
+    await nextly.update({
+      collection: document.slug,
+      id: document.id,
+      data: update.data,
+      depth: 0,
+      ...inLocale,
+      ...as,
+    });
+  }
   // A write that succeeded without its write path judging the expectation
   // was not conditional: said loudly rather than reported as one that was.
   if (!pin.checked) {

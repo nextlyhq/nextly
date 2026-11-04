@@ -355,11 +355,7 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
-import {
-  claimStoredExpectation,
-  entryWriteContext,
-  storedExpectationRefusal,
-} from "./stored-field-read";
+import { entryWriteContext, holdStoredExpectation } from "./stored-field-read";
 import {
   prepareWriteMatch,
   writeMatchOf,
@@ -10040,13 +10036,6 @@ export class CollectionMutationService extends BaseService {
     const params = sweepAllLocales
       ? { ...rawParams, locale: undefined }
       : rawParams;
-    // What a conditional write read, when this is one: claimed here, before
-    // any hook can write this entry, and judged under the row lock below.
-    const expectation = claimStoredExpectation({
-      kind: "collection",
-      slug: params.collectionName,
-      id: params.entryId,
-    });
 
     // The wildcard moves a LIFECYCLE and nothing else.
     //
@@ -10129,14 +10118,10 @@ export class CollectionMutationService extends BaseService {
     let outOfDateShared:
       | { fields: string[]; live: Record<string, unknown> }
       | undefined;
-    // A promotion refused under the row lock, for what its stored relations
-    // hold once locked; read after the transaction, as the adapter wraps
-    // what is thrown out of it.
+    // A write refused under the row lock: a promotion, for what its stored
+    // relations hold once locked, or a conditional write, for a value no
+    // longer the one its writer read; read after the transaction, as above.
     const lockedPromotion: { refusal?: NextlyError } = {};
-    // A conditional write refused under the row lock because what its writer
-    // read is no longer stored; read after the transaction, for the same
-    // reason.
-    const staleRead: { refusal?: NextlyError } = {};
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
     // the event step so each real transition is reported once.
@@ -11045,22 +11030,19 @@ export class CollectionMutationService extends BaseService {
               writeFilters
             )
           );
-
           // A conditional write is judged here, under the lock and after the
           // access it owes, against the value as committed now; a refused one
           // writes nothing.
-          if (expectation !== undefined) {
-            staleRead.refusal = await storedExpectationRefusal(
-              expectation,
-              {
-                db: tx,
-                executor: tx.getDrizzle(),
-                defaultLocale: this.localization?.defaultLocale ?? null,
-              },
-              params.locale
-            );
-            if (staleRead.refusal !== undefined) throw staleRead.refusal;
-          }
+          await holdStoredExpectation(
+            params.context,
+            {
+              kind: "collection",
+              slug: params.collectionName,
+              id: params.entryId,
+            },
+            { tx, localization: this.localization, locale: params.locale },
+            lockedPromotion
+          );
 
           // The status event uses the true prior value even after a conflict
           // retry. Only recorded for versioned collections (the only ones that
@@ -12935,13 +12917,6 @@ export class CollectionMutationService extends BaseService {
       if (lockedPromotion.refusal) {
         return errorToServiceResult(
           lockedPromotion.refusal,
-          { defaultMessage: "Failed to update entry" },
-          this.dialect
-        );
-      }
-      if (staleRead.refusal) {
-        return errorToServiceResult(
-          staleRead.refusal,
           { defaultMessage: "Failed to update entry" },
           this.dialect
         );

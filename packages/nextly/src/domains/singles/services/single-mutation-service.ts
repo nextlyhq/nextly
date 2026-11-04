@@ -106,11 +106,7 @@ import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
-import {
-  claimStoredExpectation,
-  entryWriteContext,
-  storedExpectationRefusal,
-} from "../../collections/services/stored-field-read";
+import * as storedFieldRead from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
   recordTransitionEvents,
@@ -1626,7 +1622,7 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
         // Before the transaction opens, so on the pool.
-        write: entryWriteContext({
+        write: storedFieldRead.entryWriteContext({
           kind: "single",
           slug,
           ...(args.writeLocale === undefined
@@ -1684,9 +1680,6 @@ export class SingleMutationService extends BaseService {
     const options: UpdateSingleOptions = sweepAllLocales
       ? { ...rawOptions, locale: undefined }
       : rawOptions;
-    // What a conditional write read, when this is one: claimed here, before
-    // any hook can write this Single, and judged under the row lock below.
-    const expectation = claimStoredExpectation({ kind: "single", slug });
 
     // Not the options themselves: they carry the request, whose headers hold
     // the caller's credentials.
@@ -2738,24 +2731,14 @@ export class SingleMutationService extends BaseService {
             // way; the adapter no-ops where row locking is unsupported (SQLite
             // already serializes writers via BEGIN IMMEDIATE).
             await tx.lockRow(singleMeta.tableName, existingDoc.id);
-
             // A conditional write is judged here, under the lock, against the
             // value as committed now; a refused one writes nothing. Thrown as
             // it is, and recovered from the adapter's wrapping below.
-            if (expectation !== undefined) {
-              const refusal = await storedExpectationRefusal(
-                expectation,
-                {
-                  db: tx,
-                  executor: tx.getDrizzle(),
-                  defaultLocale: this.localization?.defaultLocale ?? null,
-                },
-                // The language as the caller named it, which is the one its
-                // writer read in.
-                options.locale
-              );
-              if (refusal !== undefined) throw refusal;
-            }
+            await storedFieldRead.holdStoredExpectation(
+              options.context,
+              { kind: "single", slug },
+              { tx, localization: this.localization, locale: options.locale }
+            );
 
             // Read the pre-write main row on THIS transaction before the update
             // overwrites it, so the outbox `previous` reports the prior state
@@ -3669,7 +3652,7 @@ export class SingleMutationService extends BaseService {
               // reads the same language's stored values and sees the save's
               // status as the Single's own fields do.
               write: {
-                ...entryWriteContext({
+                ...storedFieldRead.entryWriteContext({
                   kind: "single",
                   slug,
                   ...(writeLocale === undefined ? {} : { locale: writeLocale }),
