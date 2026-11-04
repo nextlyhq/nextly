@@ -279,7 +279,16 @@ export function RemoveLayoutAction({
           else close();
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          // Wider while it offers a move: its buttons name the count and what
+          // follows the move, and three of them side by side do not fit the
+          // dialog's usual width.
+          className={
+            state.kind === "checked" && movable(state.check)
+              ? "max-w-2xl"
+              : undefined
+          }
+        >
           {state.kind === "checked" && movable(state.check) ? (
             <MovePagesDialog
               entryId={entryId}
