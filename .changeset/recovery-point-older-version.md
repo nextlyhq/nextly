@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The offer to restore unsaved changes knows when the document has been written since the recovery point began. The server keeps where the document stood when each recovery point was first recorded, and says whether it has moved since and whose the newer write was. An editor no longer offers a point its own author wrote over, and offers any other with a warning that restoring it replaces changes made since. This covers pages, components, Layouts and Singles.
+The offer to restore unsaved changes knows when the document has been written since the recovery point began. The server keeps where the document stood when each recovery point was first recorded, and says whether it has moved since and whose the newer write was. An editor no longer offers a point its own author wrote over, and offers any other with a warning that restoring it replaces changes made since. This covers pages, components, Layouts and Singles. A save also waits, for up to 5 seconds, for a recovery point already on its way, so one sent just before the save can no longer land after it and be offered as current.
