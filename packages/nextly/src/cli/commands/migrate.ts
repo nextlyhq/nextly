@@ -884,10 +884,17 @@ export async function previewMigrate(args: {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
   }
-  for (const m of pendingFiles) {
+  for (const [at, m] of pendingFiles.entries()) {
     previewPendingFile(m, dialect, logger);
-    // The required columns a real run would refuse it over, from the same count.
-    await previewRequiredColumns(db, dialect, m, logger);
+    // The required columns a real run would refuse it over, from the same count: only for the
+    // first migration the run applies, since nothing before a later one is run here.
+    await previewRequiredColumns(
+      db,
+      dialect,
+      m,
+      logger,
+      at > 0 || pendingModules.length > 0
+    );
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`

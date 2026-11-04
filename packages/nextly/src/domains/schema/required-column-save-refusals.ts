@@ -29,6 +29,7 @@ import {
 } from "./required-column-refusal";
 import {
   fieldProducesColumn,
+  getColumnDescriptor,
   toSnakeCase,
   usesJunctionTable,
 } from "./services/field-column-descriptor";
@@ -39,23 +40,39 @@ function hasOwnColumn(field: FieldDefinition): boolean {
 }
 
 /**
+ * Whether the save writes the field's column NOT NULL, as the descriptor builds it: a required
+ * relationship's foreign key stays nullable, its requiredness enforced when an entry is saved.
+ */
+function columnIsNotNull(
+  field: FieldDefinition,
+  dialect: SupportedDialect
+): boolean {
+  const descriptor = getColumnDescriptor(field, dialect, "collection");
+  return descriptor !== null && !descriptor.nullable;
+}
+
+/**
  * What a field the save makes required has in its way: its column as the live table holds it
  * (before any rename in this save), `null` for a column created now (every row), or undefined
- * when nothing can be in its way: not required, no column of its own, already required, a column
- * the table does not have yet (left to its own refusal), or one created holding a value.
+ * when nothing can be in its way: a column the save leaves nullable (not required, or a
+ * relationship's), no column of its own, one already NOT NULL, a column the table does not have
+ * yet (left to its own refusal), or one created holding a value.
  */
 function columnToCount(
   field: FieldDefinition,
   args: {
+    dialect: SupportedDialect;
     previousOf: (field: FieldDefinition) => FieldDefinition | undefined;
     addedColumnBackfill: (field: FieldDefinition) => string | null;
     presentColumns: ReadonlySet<string>;
   }
 ): { column: string | null } | undefined {
-  if (field.required !== true || !hasOwnColumn(field)) return undefined;
+  if (!hasOwnColumn(field) || !columnIsNotNull(field, args.dialect)) {
+    return undefined;
+  }
   const previous = args.previousOf(field);
   if (previous !== undefined && hasOwnColumn(previous)) {
-    if (previous.required === true) return undefined;
+    if (columnIsNotNull(previous, args.dialect)) return undefined;
     const held = toSnakeCase(previous.name);
     return args.presentColumns.has(held) ? { column: held } : undefined;
   }

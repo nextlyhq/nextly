@@ -493,14 +493,29 @@ export async function refuseRequiredColumnsOverNulls(
  * What `migrate --dry-run` says of a pending file: each column a real run would refuse it over
  * before running it, from the same count. A change the file fills first is counted only at its
  * statement, when the run gets there.
+ *
+ * Counted only for the first migration a run applies: a later one meets the database the
+ * migrations before it leave, which a preview runs none of, so a count against the database as it
+ * is now would refuse a file whose rows an earlier file fills, or miss a column an earlier file
+ * adds. A later file that makes a column required says so instead, with no count.
  */
 export async function previewRequiredColumns(
   db: unknown,
   dialect: SupportedDialect,
   file: { upSql: string; transaction: boolean },
-  logger: { info(message: string): void }
+  logger: { info(message: string): void },
+  /** Migrations run before this one: plugin modules, or earlier pending files. */
+  afterEarlier: boolean
 ): Promise<void> {
   const statements = splitSqlStatements(file.upSql, dialect, file);
+  if (afterEarlier) {
+    if (readNotNullChanges(statements, dialect).length > 0) {
+      logger.info(
+        "    • its required columns are counted when the run reaches it, after the migrations before it"
+      );
+    }
+    return;
+  }
   let breaks: RequiredColumnBreak[];
   try {
     breaks = await requiredColumnBreaksBeforeRun(db, dialect, statements);

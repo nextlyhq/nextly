@@ -429,7 +429,8 @@ describe("previewRequiredColumns", () => {
           upSql: `ALTER TABLE "dc_posts" ADD COLUMN "slug" text NOT NULL;`,
           transaction: true,
         },
-        { info: message => lines.push(message) }
+        { info: message => lines.push(message) },
+        false
       );
     } finally {
       sqlite.close();

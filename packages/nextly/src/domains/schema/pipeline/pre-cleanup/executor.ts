@@ -91,6 +91,8 @@ export function assertPreCleanupAccepted(args: {
     seenEventIds.add(r.eventId);
   }
 
+  assertResolutionsOffered(args);
+
   const threshold = readDeleteThreshold();
   for (const { resolution, event } of sideEffectResolutions(args)) {
     if (resolution.kind === "provide_default") {
@@ -130,6 +132,39 @@ function fieldTypeOf(
  * delete_nonconforming against a not-null event — each with its event.
  * A resolution naming an unknown event id is skipped defensively.
  */
+/**
+ * Refuses an answer its event does not offer, before any statement. A dispatcher shows only the
+ * offered answers, but a browser request names its own, so a stale or hand-made one could attach
+ * any: deleting the nonconforming rows of a column this apply adds, whose every row is null, would
+ * empty the table, which is why that event never offers it. An event that lists no answers
+ * (a type change) has none that acts on it.
+ */
+function assertResolutionsOffered(args: {
+  resolutions: Resolution[];
+  events: ClassifierEvent[];
+}): void {
+  const eventById = new Map(args.events.map(e => [e.id, e]));
+  for (const resolution of args.resolutions) {
+    const event = eventById.get(resolution.eventId);
+    if (event === undefined || !("applicableResolutions" in event)) continue;
+    if (event.applicableResolutions.includes(resolution.kind)) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `fields.${event.columnName}`,
+          code: "RESOLUTION_NOT_OFFERED",
+          message: `Table '${event.tableName}': column '${event.columnName}' cannot be answered with ${resolution.kind}, which this change does not offer (it offers ${event.applicableResolutions.join(", ")}). Nothing was changed.`,
+        },
+      ],
+      logContext: {
+        reason: "resolution-not-offered",
+        eventId: event.id,
+        resolution: resolution.kind,
+      },
+    });
+  }
+}
+
 function sideEffectResolutions(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];

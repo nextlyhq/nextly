@@ -248,10 +248,10 @@ function plainName(item: readonly StatementToken[]): string | undefined {
   return name !== undefined && cursor.peek() === undefined ? name : undefined;
 }
 
-/** A word of a column definition outside any parentheses, with the token after it. */
+/** A word of a column definition outside any parentheses, with the tokens after it. */
 interface DefinitionWord {
   word: string;
-  next: StatementToken | undefined;
+  after: readonly StatementToken[];
   /** The definition's first token: its type. */
   first: boolean;
 }
@@ -264,18 +264,37 @@ function topLevelWords(rest: readonly StatementToken[]): DefinitionWord[] {
     if (token === "(") depth += 1;
     else if (token === ")") depth -= 1;
     else if (depth === 0 && typeof token === "string") {
-      words.push({ word: token, next: rest[i + 1], first: i === 0 });
+      words.push({ word: token, after: rest.slice(i + 1), first: i === 0 });
     }
   });
   return words;
 }
 
+/** Whether tokens start with the constant NULL, bare or in parentheses: `NULL`, `(NULL)`. */
+function startsWithNull(tokens: readonly StatementToken[]): boolean {
+  if (tokens[0] === "NULL") return true;
+  const inner = parenthesised(tokens);
+  return inner !== undefined && inner.length > 0 && isNullConstant(inner);
+}
+
+/** Whether tokens are the constant NULL and nothing else, however parenthesised. */
+function isNullConstant(tokens: readonly StatementToken[]): boolean {
+  if (tokens.length === 1) return tokens[0] === "NULL";
+  const inner = parenthesised(tokens);
+  return (
+    inner !== undefined &&
+    inner.length + 2 === tokens.length &&
+    isNullConstant(inner)
+  );
+}
+
 /**
  * Whether a word gives the column a value no row has to write: a default other than NULL (which
- * leaves every row null), a generated value, a sequence-backed type.
+ * leaves every row null, written `DEFAULT NULL` or `DEFAULT (NULL)`), a generated value, a
+ * sequence-backed type.
  */
-function givesValue({ word, next, first }: DefinitionWord): boolean {
-  if (word === "DEFAULT") return next !== "NULL";
+function givesValue({ word, after, first }: DefinitionWord): boolean {
+  if (word === "DEFAULT") return !startsWithNull(after);
   return VALUE_WORDS.has(word) || (first && SERIAL_TYPES.has(word));
 }
 
@@ -286,7 +305,7 @@ function readDefinition(
 ): ColumnDefinition {
   const words = topLevelWords(rest);
   const pair = (word: string, next: string) =>
-    words.some(w => w.word === word && w.next === next);
+    words.some(w => w.word === word && w.after[0] === next);
   // SQLite's `INTEGER PRIMARY KEY` is the rowid, which every row gets.
   const rowid = rest[0] === "INTEGER" && pair("PRIMARY", "KEY");
   return {
@@ -495,13 +514,22 @@ class UnitReader {
     }
   }
 
-  /** `CREATE TABLE [IF NOT EXISTS] t (...)`: t made by the unit, with its columns. */
+  /**
+   * `CREATE TABLE [IF NOT EXISTS] t (...)`: t made by the unit, with its columns. With IF NOT
+   * EXISTS it may be the table already there, which the statement leaves as it is, rows and all.
+   */
   private readCreateTable(cursor: StatementCursor): void {
     cursor.acceptCondition();
     const table = cursor.name();
     if (table === undefined) return;
     const rest = cursor.rest();
     const columns = bodyColumns(rest);
+    if (columns !== undefined) this.created.set(table, columns);
+    if (cursor.conditional) {
+      // `CREATE TABLE IF NOT EXISTS t AS SELECT ...` writes rows only when it creates t.
+      if (rest.includes("SELECT")) this.state(table).written = true;
+      return;
+    }
     this.tables.set(table, {
       origin: null,
       columns: new Map(),
@@ -510,7 +538,6 @@ class UnitReader {
       // `CREATE TABLE t AS SELECT ...` writes the rows it creates.
       written: rest.includes("SELECT"),
     });
-    if (columns !== undefined) this.created.set(table, columns);
   }
 
   /** `DROP TABLE [IF EXISTS] a[, b...]`: each gone, kept for a twin renamed back onto it. */

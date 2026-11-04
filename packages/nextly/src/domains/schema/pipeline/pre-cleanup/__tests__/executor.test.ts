@@ -6,6 +6,7 @@ import type { NextlySchemaSnapshot, Operation } from "../../diff/types";
 import { PromptCancelledError } from "../../prompt-dispatcher/errors";
 import type { ClassifierEvent, Resolution } from "../../resolution/types";
 import {
+  assertPreCleanupAccepted,
   RealPreCleanupExecutor,
   withAddedColumnsLeftToTighten,
 } from "../executor";
@@ -235,11 +236,6 @@ describe("RealPreCleanupExecutor", () => {
         { kind: "provide_default", eventId: addedEvent.id, value: "anon" },
         `UPDATE "dc_users" SET "nickname" = $1 WHERE "nickname" IS NULL`,
       ],
-      [
-        "delete_nonconforming",
-        { kind: "delete_nonconforming", eventId: addedEvent.id },
-        `DELETE FROM "dc_users" WHERE "nickname" IS NULL`,
-      ],
     ] as const)(
       "%s: adds the column nullable before the statement that needs it",
       async (_kind, resolution, fill) => {
@@ -323,6 +319,47 @@ describe("RealPreCleanupExecutor", () => {
           )
         ).toEqual([addNickname, addBio]);
       }
+    });
+
+    // Every row of a column this apply adds is null, so deleting the nonconforming rows would
+    // delete the table's every row: the event does not offer it, and a request carrying it
+    // (a stale or hand-made browser payload) is refused before any statement.
+    it("refuses an answer its event does not offer, before any statement", async () => {
+      const execute = vi.fn();
+      const resolutions: Resolution[] = [
+        { kind: "delete_nonconforming", eventId: addedEvent.id },
+      ];
+      await expect(
+        new RealPreCleanupExecutor().execute({
+          tx: { execute },
+          desiredSnapshot: addedSnapshot,
+          resolutions,
+          events: [addedEvent],
+          fields: [{ name: "nickname", type: "text" }],
+          dialect: "postgresql",
+        })
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "fields.nickname",
+              code: "RESOLUTION_NOT_OFFERED",
+              message:
+                "Table 'dc_users': column 'nickname' cannot be answered with delete_nonconforming, which this change does not offer (it offers provide_default, make_optional, abort). Nothing was changed.",
+            },
+          ],
+        },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      // The same precondition the pipeline runs before anything else.
+      expect(() =>
+        assertPreCleanupAccepted({
+          resolutions,
+          events: [addedEvent],
+          fields: [{ name: "nickname", type: "text" }],
+        })
+      ).toThrow();
     });
 
     it("refuses a column the desired schema does not describe, before any statement", async () => {

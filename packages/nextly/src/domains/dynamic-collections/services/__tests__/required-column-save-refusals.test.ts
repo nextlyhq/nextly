@@ -19,11 +19,11 @@ import { refusalsForCollectionSave } from "../save-preconditions";
 const text = (name: string, required: boolean): FieldDefinition =>
   ({ name, type: "text", required }) as unknown as FieldDefinition;
 
-const relationship = (name: string): FieldDefinition =>
+const relationship = (name: string, required = true): FieldDefinition =>
   ({
     name,
     type: "relationship",
-    required: true,
+    required,
     options: { target: "authors", relationType: "manyToOne" },
   }) as unknown as FieldDefinition;
 
@@ -50,6 +50,8 @@ async function refusals(args: {
   tableName: string;
   oldFields: FieldDefinition[];
   newFields: FieldDefinition[];
+  /** The value an added column gives existing rows; the generator's own unless a test says. */
+  backfill?: (field: FieldDefinition) => string | null;
 }) {
   const columns = sqlite
     .prepare(`SELECT name FROM pragma_table_info('${args.tableName}')`)
@@ -64,7 +66,8 @@ async function refusals(args: {
     oldFields: args.oldFields,
     newFields: args.newFields,
     rename: schema.detectFieldRename(args.oldFields, args.newFields),
-    addedColumnBackfill: field => schema.addedColumnBackfill(field),
+    addedColumnBackfill:
+      args.backfill ?? (field => schema.addedColumnBackfill(field)),
     presentColumns: new Set(columns.map(c => c.name)),
     requiredColumns: { db: drizzle({ client: sqlite }), entity: args.entity },
   });
@@ -104,7 +107,11 @@ describe("a schema save making columns required over rows holding no value", () 
         entity: { kind: "single", slug: "home" },
         tableName: "single_home",
         oldFields: [text("tagline", false)],
-        newFields: [text("tagline", true), relationship("author")],
+        newFields: [text("tagline", true), text("headline", true)],
+        // A column the ALTER generator gives existing rows no value in, as a contributed field
+        // type's can be (every built-in NOT NULL type has one; a relationship's stays nullable).
+        backfill: field =>
+          field.name === "headline" ? null : schema.addedColumnBackfill(field),
       })
     ).toEqual([
       {
@@ -114,12 +121,26 @@ describe("a schema save making columns required over rows holding no value", () 
           "Single 'home': field 'tagline' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the field optional.",
       },
       {
-        path: "fields.author",
+        path: "fields.headline",
         code: "REQUIRED_COLUMN_HAS_NULLS",
         message:
-          "Single 'home': field 'author' cannot be added as required without a default while 1 row exists, which would hold no value in it. Give it a default, or add it as optional.",
+          "Single 'home': field 'headline' cannot be added as required without a default while 1 row exists, which would hold no value in it. Give it a default, or add it as optional.",
       },
     ]);
+  });
+
+  // A relationship's foreign key stays nullable however required the field is: its requiredness is
+  // enforced when an entry is saved (`getColumnDescriptor`), so the save writes no NOT NULL.
+  it("refuses no relationship made required, or added as required, over rows holding none", async () => {
+    sqlite.exec(`ALTER TABLE dc_posts ADD COLUMN editor TEXT`);
+    expect(
+      await refusals({
+        entity: posts,
+        tableName: "dc_posts",
+        oldFields: [relationship("editor", false)],
+        newFields: [relationship("editor"), relationship("author")],
+      })
+    ).toEqual([]);
   });
 
   it("counts a renamed field under the column the table still has", async () => {

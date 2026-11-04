@@ -113,6 +113,14 @@ describe("readNotNullChanges: the forms that make a column NOT NULL", () => {
         "postgresql",
         `ALTER TABLE "dc_posts" ADD COLUMN "code" text DEFAULT NULL NOT NULL`,
       ],
+      [
+        "postgresql",
+        `ALTER TABLE "dc_posts" ADD COLUMN "code" text DEFAULT (NULL) NOT NULL`,
+      ],
+      [
+        "postgresql",
+        `ALTER TABLE "dc_posts" ADD COLUMN "code" text NOT NULL DEFAULT ((NULL))`,
+      ],
       ["mysql", "ALTER TABLE `dc_posts` ADD `code` text NOT NULL DEFAULT NULL"],
     ] as const) {
       expect(read(dialect, sql)).toMatchObject([
@@ -292,6 +300,23 @@ describe("readNotNullChanges: what the statements before a change did", () => {
         `ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
       )
     ).toMatchObject([{ before: { table: "dc_posts", column: "subtitle" } }]);
+  });
+
+  // `CREATE TABLE IF NOT EXISTS` creates nothing over a table already there, which keeps its rows.
+  it("a table created IF NOT EXISTS may be the one already there", () => {
+    expect(
+      read(
+        "postgresql",
+        `CREATE TABLE IF NOT EXISTS "dc_posts" ("id" text PRIMARY KEY, "subtitle" text)`,
+        `ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
+      )
+    ).toMatchObject([
+      {
+        statement: 1,
+        before: { table: "dc_posts", column: "subtitle" },
+        writtenEarlier: false,
+      },
+    ]);
   });
 
   it("a statement whose reach is not read counts every later change at its statement", () => {
