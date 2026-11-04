@@ -1013,8 +1013,8 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Its `transaction` runs on a client this adapter checks out and returns
    * itself (`pinDrizzleTransactions`): node-postgres destroys a client
    * released with `true`, which is what happens when no ROLLBACK could be
-   * confirmed on it. And it joins a transaction the calling flow is inside,
-   * as the adapter's `transaction()` does (`trackFlowTransactions`).
+   * confirmed on it. And it counts for `transactionOpenInFlow`, as the
+   * adapter's does.
    */
   private poolDrizzle(pool: Pool, relations?: AnyRelations) {
     const onClient = (client: Pool | PoolClient) =>
@@ -1022,6 +1022,9 @@ export class PostgresAdapter extends DrizzleAdapter {
     // The handle's own queries go to the pool, so it is handed a view of the
     // pool that reports them (`observedPool`).
     const reported = this.observedPool(pool, ["query"]);
+    // Its transactions join the one the calling flow is inside, as the
+    // adapter's `transaction()` does, and open one of this adapter's
+    // otherwise (`joiningHandle`).
     return this.joiningHandle(
       onClient(reported),
       async () => {

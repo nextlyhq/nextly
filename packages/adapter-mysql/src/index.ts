@@ -887,9 +887,8 @@ export class MySqlAdapter extends DrizzleAdapter {
    *
    * Its `transaction` runs on a connection this adapter checks out and
    * returns itself (`pinDrizzleTransactions`): destroyed rather than pooled
-   * when no ROLLBACK could be confirmed on it. And it joins a transaction
-   * the calling flow is inside, as the adapter's `transaction()` does
-   * (`trackFlowTransactions`).
+   * when no ROLLBACK could be confirmed on it. And it counts for
+   * `transactionOpenInFlow`, as the adapter's does.
    */
   private poolDrizzle(pool: Pool, relations?: AnyRelations) {
     // drizzle v1's mysql2 driver takes the CALLBACK pool and connection,
@@ -904,6 +903,9 @@ export class MySqlAdapter extends DrizzleAdapter {
       (pool as unknown as { pool: CallbackPool }).pool,
       ["query", "execute", "getConnection"]
     );
+    // Its transactions join the one the calling flow is inside, as the
+    // adapter's `transaction()` does, and open one of this adapter's
+    // otherwise (`joiningHandle`).
     return this.joiningHandle(
       onClient(callbackPool),
       async () => {
