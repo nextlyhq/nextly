@@ -18,6 +18,7 @@ import { variablesFor } from "./style-colour";
 import {
   lengthInPx,
   tokenForTypedName,
+  variableValueText,
   variableSample,
 } from "./style-variables";
 
@@ -260,5 +261,36 @@ describe("what a field offers: only what it accepts", () => {
   it("does not take a refused variable's name as typed", () => {
     expect(tokenForTypedName(PADDING_START, VALUES, "pull")).toBeUndefined();
     expect(tokenForTypedName(MARGIN_START, VALUES, "pull")).toBe("space.pull");
+  });
+});
+
+describe("a fluid variable", () => {
+  const FLUID: SiteTokenSet = {
+    tokens: [
+      {
+        name: "space.gutter-fluid",
+        kind: "dimension",
+        values: { light: "clamp(1rem, 4vw, 3rem)" },
+      },
+    ],
+  };
+  const fluid = () => {
+    const found = variablesFor(WIDTH, FLUID).find(
+      token => token.name === "space.gutter-fluid"
+    );
+    if (found === undefined) throw new Error("not offered");
+    return found;
+  };
+
+  it("is drawn as a fluid bar, having no one length to scale to", () => {
+    expect(variableSample(fluid())).toEqual({ kind: "fluid" });
+  });
+
+  it("reads 'Fluid' in a list, where its whole value would not fit", () => {
+    expect(variableValueText(fluid())).toBe("Fluid");
+    const [one] = variablesFor(WIDTH, TOKENS).filter(
+      token => token.name === "space.sm"
+    );
+    expect(one === undefined ? "" : variableValueText(one)).toBe("8px");
   });
 });

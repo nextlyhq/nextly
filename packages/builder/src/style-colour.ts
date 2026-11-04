@@ -233,13 +233,21 @@ export function variablesFor(
  * field writes as its length form) is the other form's to judge.
  */
 function valueFits(token: SiteVariable, leaf: StyleLeaf): boolean {
-  if (token.value.includes("(")) return true;
+  if (isFluidValue(token.value)) return true;
   if (!judgedAt(token.kind, leaf.kind)) return true;
   const text = trimCssWhitespace(token.value);
   // A number variable holds its number as text; the leaf takes a number.
   const value =
     leaf.kind === "number" && CSS_NUMBER.test(text) ? Number(text) : text;
   return leafAcceptsValue(leaf, value);
+}
+
+/**
+ * Whether a value goes through a function (`clamp()`, `calc()`, `min()`,
+ * `var()`), so what it comes to depends on the page it is drawn on.
+ */
+export function isFluidValue(value: string): boolean {
+  return value.includes("(");
 }
 
 /** Whether a variable of this kind is written in the form this leaf judges. */

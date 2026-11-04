@@ -109,3 +109,45 @@ describe("a field's source, after a value is committed", () => {
     ).toBe(true);
   });
 });
+
+describe("a variable's name before its value", () => {
+  it("keeps the name whole and lets the value give way, in the list and the chip", () => {
+    expect(declares(".nx-variable-choice__option", "display: flex")).toBe(true);
+    for (const name of [
+      ".nx-variable-choice__name",
+      ".nx-variable-chip__name",
+    ]) {
+      expect(declares(name, "flex: 0 1 auto")).toBe(true);
+    }
+    // In the list a value takes what is left and is cut there.
+    expect(declares(".nx-variable-choice__value", "flex: 1 1 0")).toBe(true);
+    expect(
+      declares(".nx-variable-choice__value", "text-overflow: ellipsis")
+    ).toBe(true);
+    // On the chip it is whole or wraps out of sight: one line, held.
+    expect(declares(".nx-variable-chip__value", "flex: 0 0 auto")).toBe(true);
+    expect(declares(".nx-variable-chip__text", "flex-wrap: wrap")).toBe(true);
+    expect(declares(".nx-variable-chip__text", "overflow: hidden")).toBe(true);
+  });
+
+  it("draws a fluid value's bar dashed", () => {
+    expect(
+      declares(".nx-variable-choice__bar[data-fluid]", "border-style: dashed")
+    ).toBe(true);
+  });
+
+  it("leaves a gap between a side's name and its clear", () => {
+    expect(
+      declares(
+        ".nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button",
+        "border-inline-start:"
+      )
+    ).toBe(true);
+  });
+
+  it("draws a unitless field and its ◇ as one box, as a field with a unit is", () => {
+    const box =
+      ".nx-inspector__field:not([data-side]) > .nx-style-inspector__numeric:has(> input + .nx-variable-choice)";
+    expect(declares(box, "border: 1px solid var(--nx-input)")).toBe(true);
+  });
+});

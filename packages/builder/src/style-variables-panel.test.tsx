@@ -283,11 +283,11 @@ describe("a field holding a variable", () => {
     const chip = fontSize.getByRole("group", { name: "Font size" });
     expect(chip.textContent).toBe("Display 48px");
     // The name the author gave it, never the code path it is stored under,
-    // and the whole name on hover where a narrow field cuts it short.
+    // and the whole name and value on hover where the field cuts them short.
     expect(fontSize.queryByText(/font-size\.display/)).toBeNull();
     expect(
       (chip.querySelector(".nx-variable-chip__text") as HTMLElement).title
-    ).toBe("Display");
+    ).toBe("Display 48px");
     fireEvent.click(
       within(chip).getByRole("button", {
         name: "Clear Font size",

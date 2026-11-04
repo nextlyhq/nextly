@@ -432,3 +432,55 @@ describe("the unit menu's item", () => {
     expect(screen.queryByRole("menuitem")).toBeNull();
   });
 });
+
+describe("a fluid variable in the list and on the chip", () => {
+  const FLUID: SiteTokenSet = {
+    tokens: [
+      {
+        name: "space.gutter-fluid",
+        kind: "dimension",
+        values: { light: "clamp(1rem, 4vw, 3rem)" },
+      },
+    ],
+  };
+
+  it("lists it as Fluid with a fluid bar, its whole value on hover", () => {
+    render(
+      <VariableChoice
+        leaf={WIDTH}
+        tokens={FLUID}
+        bound={false}
+        current={undefined}
+        label="Width"
+        onPick={vi.fn()}
+      />
+    );
+    fireEvent.click(trigger("Width"));
+    const row = screen.getByRole("option", { name: "Gutter fluid Fluid" });
+    expect(
+      (row.querySelector(".nx-variable-choice__value") as HTMLElement).title
+    ).toBe("clamp(1rem, 4vw, 3rem)");
+    expect(
+      row.querySelector(".nx-variable-choice__bar[data-fluid]")
+    ).not.toBeNull();
+  });
+
+  it("puts the whole name and value in the chip's tooltip", () => {
+    render(
+      <VariableChip
+        leaf={FONT_SIZE}
+        tokens={TOKENS}
+        identity="font-size.display"
+        label="Font size"
+        onClear={vi.fn()}
+      />
+    );
+    expect(
+      (
+        screen
+          .getByRole("group", { name: "Font size" })
+          .querySelector(".nx-variable-chip__text") as HTMLElement
+      ).title
+    ).toBe("Display 48px");
+  });
+});

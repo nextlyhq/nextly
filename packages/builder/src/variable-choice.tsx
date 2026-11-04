@@ -42,7 +42,7 @@ import {
   variablesFor,
   type SiteVariable,
 } from "./style-colour";
-import { variableSample } from "./style-variables";
+import { variableSample, variableValueText } from "./style-variables";
 import {
   variableGroupHeadings,
   variableGroupOf,
@@ -359,6 +359,10 @@ function VariableRow({ entry }: { entry: VariableEntry }): React.JSX.Element {
             style={{ inlineSize: `${String(sample.px)}px` }}
           />
         ) : null}
+        {sample.kind === "fluid" ? (
+          // No one size to scale to: a bar of its own, dashed.
+          <span className="nx-variable-choice__bar" data-fluid="" />
+        ) : null}
         {sample.kind === "shadow" ? (
           <span
             className="nx-vars__shadow"
@@ -377,7 +381,9 @@ function VariableRow({ entry }: { entry: VariableEntry }): React.JSX.Element {
       >
         {entry.label}
       </span>{" "}
-      <span className="nx-variable-choice__value">{entry.variable.value}</span>
+      <span className="nx-variable-choice__value" title={entry.variable.value}>
+        {variableValueText(entry.variable)}
+      </span>
     </>
   );
 }
@@ -420,7 +426,10 @@ export function VariableChip({
     >
       {/* One line, cut with an ellipsis where the field is narrow, with the
           whole name on hover. */}
-      <span className="nx-variable-chip__text" title={name}>
+      <span
+        className="nx-variable-chip__text"
+        title={variable === undefined ? name : `${name} ${variable.value}`}
+      >
         {onPick === undefined || offered.length === 0 ? (
           <span className="nx-variable-chip__name">{name}</span>
         ) : (
@@ -437,7 +446,9 @@ export function VariableChip({
         {variable === undefined ? null : (
           <>
             {" "}
-            <span className="nx-variable-chip__value">{variable.value}</span>
+            <span className="nx-variable-chip__value">
+              {variableValueText(variable)}
+            </span>
           </>
         )}
       </span>

@@ -18,7 +18,12 @@ import type {
   TokenMode,
 } from "@nextlyhq/blocks-engine";
 
-import { variableLabel, variablesFor, type SiteVariable } from "./style-colour";
+import {
+  isFluidValue,
+  variableLabel,
+  variablesFor,
+  type SiteVariable,
+} from "./style-colour";
 import { typeScaleProperty } from "./tokens-studio";
 
 /**
@@ -97,6 +102,15 @@ export function lengthInPx(value: string): number | undefined {
   return unit === "px" ? amount : amount * ROOT_PX;
 }
 
+/**
+ * A variable's value in words short enough for a row: the value itself, or
+ * "Fluid" for one through a function, whose whole text crowded the name out
+ * of a list row. The whole value stays in the row's tooltip.
+ */
+export function variableValueText(variable: SiteVariable): string {
+  return isFluidValue(variable.value) ? "Fluid" : variable.value;
+}
+
 /** What a list draws beside a variable's name to show its value. */
 export type VariableSample =
   /** The name itself, drawn at the type size, within {@link TYPE_SAMPLE_PX}. */
@@ -105,6 +119,8 @@ export type VariableSample =
   | { readonly kind: "bar"; readonly px: number }
   /** A small box casting the shadow. */
   | { readonly kind: "shadow"; readonly value: string }
+  /** A length through a function, such as `clamp()`, with no one size here. */
+  | { readonly kind: "fluid" }
   /** Nothing drawn; the value beside the name says it in words. */
   | { readonly kind: "none" };
 
@@ -133,6 +149,7 @@ export function variableSample(variable: SiteVariable): VariableSample {
     return { kind: "shadow", value: variable.value };
   }
   if (variable.kind !== "dimension") return { kind: "none" };
+  if (isFluidValue(variable.value)) return { kind: "fluid" };
   const px = lengthInPx(variable.value);
   if (px === undefined) return { kind: "none" };
   if (typeScaleProperty(variable) === "font-size") {
