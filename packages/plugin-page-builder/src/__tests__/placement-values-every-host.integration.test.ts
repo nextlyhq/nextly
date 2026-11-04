@@ -376,6 +376,10 @@ describe.each(getConfiguredTestDialects())(
         const changed = await save({ headline: "Edited", gone: "Changed" });
         expect(changed.status).toBe(400);
         expect(changed.text).toContain('sets \\"gone\\"');
+        expect(await host.stored()).toEqual({
+          headline: "Edited",
+          gone: "Held before",
+        });
       });
     });
 
@@ -415,9 +419,12 @@ describe.each(getConfiguredTestDialects())(
         status: "all",
         overrideAccess: true,
       });
-      expect((found.items as Row[]).map(item => item.slug).sort()).toEqual([
-        "imported",
-      ]);
+      const items = found.items as Row[];
+      expect(items.map(item => item.slug)).toEqual(["imported"]);
+      // Stored as sent, not merely created.
+      expect(overridesIn(items[0]?.content)).toEqual({
+        headline: "Acme launch",
+      });
     });
   }
 );
