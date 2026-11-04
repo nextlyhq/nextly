@@ -40,6 +40,10 @@ const canConnect = async (url: string): Promise<boolean> => {
   }
 };
 
+/** A serialization failure raised on purpose, as a lost race reports one. */
+const FORCED_CONFLICT =
+  "DO $$ BEGIN RAISE EXCEPTION 'a forced conflict' USING ERRCODE = '40001'; END $$";
+
 /** Runs one statement in whatever transaction handle it was made for. */
 type Exec = (text: string) => Promise<Record<string, unknown>[]>;
 
@@ -268,14 +272,84 @@ describe("PostgreSQL: a transaction opened inside another joins it", async () =>
         const at = attempt;
         await adapter.afterCommit(() => ran.push(`commit ${String(at)}`));
         if (at === 1) {
-          await ctx.execute(
-            "DO $$ BEGIN RAISE EXCEPTION 'a forced conflict' USING ERRCODE = '40001'; END $$"
-          );
+          await ctx.execute(FORCED_CONFLICT);
         }
       },
       { retryCount: 1, retryDelayMs: 1 }
     );
 
     expect(ran).toEqual(["commit 2"]);
+  });
+
+  it("drops a retried attempt's rollback callback when a later attempt commits", async () => {
+    let attempt = 0;
+    const ran: string[] = [];
+    await adapter.transaction(
+      async ctx => {
+        attempt += 1;
+        const at = attempt;
+        await adapter.afterRollback(() => ran.push(`rollback ${String(at)}`));
+        await adapter.afterCommit(() => ran.push(`commit ${String(at)}`));
+        if (at === 1) await ctx.execute(FORCED_CONFLICT);
+      },
+      { retryCount: 1, retryDelayMs: 1 }
+    );
+
+    expect(ran).toEqual(["commit 2"]);
+  });
+
+  it("runs a rollback callback once, after the last attempt has rolled back", async () => {
+    let attempt = 0;
+    const ran: string[] = [];
+    let ranBeforeTheEnd: string[] = [];
+    const outcome = await adapter
+      .transaction(
+        async ctx => {
+          attempt += 1;
+          const at = attempt;
+          ranBeforeTheEnd = [...ran];
+          await adapter.afterRollback(() => ran.push(`rollback ${String(at)}`));
+          await ctx.execute(FORCED_CONFLICT);
+        },
+        { retryCount: 1, retryDelayMs: 1 }
+      )
+      .then(
+        () => "committed",
+        () => "rolled back"
+      );
+
+    expect(outcome).toBe("rolled back");
+    expect(attempt).toBe(2);
+    expect(ranBeforeTheEnd).toEqual([]);
+    expect(ran).toEqual(["rollback 2"]);
+  });
+
+  it("retries an application error when retryWhen accepts it, before passing it through", async () => {
+    // Branded as the application's own refusal, which is otherwise never retried.
+    const conflict = Object.assign(new Error("a version conflict"), {
+      [Symbol.for("nextly/NextlyError")]: true,
+    });
+    let attempt = 0;
+    const result = await adapter.transaction(
+      async () => {
+        attempt += 1;
+        if (attempt === 1) throw conflict;
+        return "second attempt";
+      },
+      { retryCount: 2, retryDelayMs: 1, retryWhen: error => error === conflict }
+    );
+    const refused = await adapter
+      .transaction(
+        async () => {
+          throw conflict;
+        },
+        { retryCount: 2, retryDelayMs: 1 }
+      )
+      .catch((error: unknown) => error);
+
+    expect(result).toBe("second attempt");
+    expect(attempt).toBe(2);
+    // Without retryWhen the same error arrives as thrown, untried again.
+    expect(refused).toBe(conflict);
   });
 });
