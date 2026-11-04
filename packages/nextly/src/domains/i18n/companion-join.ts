@@ -227,7 +227,13 @@ function inLocaleChain(companionTable: unknown, localeChain: string[]): SQL {
     : inArray(localeCol, localeChain);
 }
 
-/** A Drizzle-select surface with a left join, as a detail read takes its companion rows. */
+/** A Drizzle-select surface with a left join, as a read takes its rows' companion rows with them. */
+interface JoinableQuery
+  extends PromiseLike<Record<string, Record<string, unknown> | null>[]> {
+  orderBy: (
+    ...columns: unknown[]
+  ) => PromiseLike<Record<string, Record<string, unknown> | null>[]>;
+}
 interface JoinableDb {
   select: (projection: Record<string, unknown>) => {
     from: (table: unknown) => {
@@ -235,19 +241,72 @@ interface JoinableDb {
         table: unknown,
         on: SQL
       ) => {
-        where: (
-          where: SQL | SQLWrapper | undefined
-        ) => Promise<Record<string, Record<string, unknown> | null>[]>;
+        where: (where: SQL | SQLWrapper | undefined) => JoinableQuery;
       };
     };
   };
 }
 
 /**
- * One entry and its companion rows for `localeChain`, in one statement: the entry left-joined to
- * its translations in the chain's languages, so a detail read that read them after the entry
- * makes one round trip instead of two. `where` selects at most one entry; the join gives one row
- * per language it has a translation in, or one with none.
+ * Rows and their companion rows for `localeChain`, in one statement: each row left-joined to its
+ * translations in the chain's languages, so a read that took them after the rows makes one round
+ * trip instead of two. The join gives one result per language a row has a translation in, or one
+ * with none; the rows come back once each, in the order the statement returned them first.
+ *
+ * `projection` is what is selected of the main table: the table itself, or its columns with any
+ * computed ones the caller needs beside them.
+ */
+export async function selectRowsWithCompanion(args: {
+  db: unknown;
+  mainTable: unknown;
+  projection?: Record<string, unknown>;
+  where: SQL | SQLWrapper | undefined;
+  orderBy?: unknown[];
+  companionTable: unknown;
+  localeChain: string[];
+  idKey?: string;
+}): Promise<{
+  rows: Record<string, unknown>[];
+  companionRows: Record<string, unknown>[];
+}> {
+  const idKey = args.idKey ?? "id";
+  const main = args.mainTable as Record<string, unknown>;
+  const companion = args.companionTable as CompanionTable;
+  const query = (args.db as JoinableDb)
+    .select({
+      entry: args.projection ?? args.mainTable,
+      translation: args.companionTable,
+    })
+    .from(args.mainTable)
+    .leftJoin(
+      args.companionTable,
+      and(
+        eq(companion._parent as never, main[idKey] as never),
+        inLocaleChain(args.companionTable, args.localeChain)
+      ) as SQL
+    )
+    .where(args.where);
+  const joined = await (args.orderBy && args.orderBy.length > 0
+    ? query.orderBy(...args.orderBy)
+    : query);
+
+  const rows: Record<string, unknown>[] = [];
+  const seen = new Set<unknown>();
+  const companionRows: Record<string, unknown>[] = [];
+  for (const result of joined) {
+    const entry = result.entry;
+    if (entry && !seen.has(entry[idKey])) {
+      seen.add(entry[idKey]);
+      rows.push(entry);
+    }
+    if (result.translation) companionRows.push(result.translation);
+  }
+  return { rows, companionRows };
+}
+
+/**
+ * One entry and its companion rows for `localeChain`, in one statement, as
+ * {@link selectRowsWithCompanion} reads any number of rows. `where` selects at most one entry.
  */
 export async function selectEntryWithCompanion(args: {
   db: unknown;
@@ -260,25 +319,8 @@ export async function selectEntryWithCompanion(args: {
   entry: Record<string, unknown> | undefined;
   companionRows: Record<string, unknown>[];
 }> {
-  const main = args.mainTable as Record<string, unknown>;
-  const companion = args.companionTable as CompanionTable;
-  const joined = await (args.db as JoinableDb)
-    .select({ entry: args.mainTable, translation: args.companionTable })
-    .from(args.mainTable)
-    .leftJoin(
-      args.companionTable,
-      and(
-        eq(companion._parent as never, main[args.idKey ?? "id"] as never),
-        inLocaleChain(args.companionTable, args.localeChain)
-      ) as SQL
-    )
-    .where(args.where);
-  return {
-    entry: joined[0]?.entry ?? undefined,
-    companionRows: joined.flatMap(row =>
-      row.translation ? [row.translation] : []
-    ),
-  };
+  const { rows, companionRows } = await selectRowsWithCompanion(args);
+  return { entry: rows[0], companionRows };
 }
 
 /**

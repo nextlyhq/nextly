@@ -15,6 +15,7 @@ import {
 } from "./field-group-mutation-service";
 import {
   FieldGroupQueryService,
+  type InstanceTables,
   type PopulateComponentDataParams,
   type PopulateComponentDataManyParams,
 } from "./field-group-query-service";
@@ -37,14 +38,17 @@ export class FieldGroupDataService {
     relationshipService?: CollectionRelationshipService,
     // i18n: threaded to the query/mutation services so a localized embedded component
     // resolves/writes its translatable fields via `comp_<slug>_locales` per language.
-    localization?: LocalizationSource
+    localization?: LocalizationSource,
+    // The registered tables, so instances are read with their translations in one statement.
+    tables?: InstanceTables
   ) {
     this.queryService = new FieldGroupQueryService(
       adapter,
       logger,
       registryService,
       relationshipService,
-      localization
+      localization,
+      tables
     );
     this.mutationService = new FieldGroupMutationService(
       adapter,

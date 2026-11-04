@@ -1,4 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { and, asc, eq, getColumns, type SQL } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
@@ -17,9 +18,11 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  fillCompanionFields,
   type LocalizedFieldRef,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  selectRowsWithCompanion,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -84,6 +87,25 @@ export type ComponentFallbackLocale =
  * declaration of it.
  */
 export type ComponentReadAccess = RelatedRowReadContext;
+
+/** The registered tables, by physical name: the schema registry the adapter resolves through. */
+export interface InstanceTables {
+  hasTable(tableName: string): boolean;
+  getTable(tableName: string): unknown;
+}
+
+/** What reading one language of a component's translations takes (`translationPlan`). */
+interface TranslationPlan {
+  companion: NonNullable<ReturnType<typeof buildCompanionSchema>>;
+  localeChain: string[];
+  readiness: CompanionReadiness | undefined;
+}
+
+/** A component's translations, read in the same statement as its instances. */
+interface JoinedTranslations {
+  plan: TranslationPlan;
+  rows: Record<string, unknown>[];
+}
 
 export interface PopulateComponentDataParams {
   /** The entry to populate with component data */
@@ -275,7 +297,10 @@ export class FieldGroupQueryService extends BaseService {
     relationshipService?: CollectionRelationshipService,
     // i18n: when set and an embedded component is localized, its translatable fields
     // resolve/write per language via the component's companion `comp_<slug>_locales` table.
-    private readonly localizationSource?: LocalizationSource
+    private readonly localizationSource?: LocalizationSource,
+    // The tables registered for this database, so a component's instances can be read with their
+    // translations in one statement. Without it they are read first and translated after.
+    private readonly tables?: InstanceTables
   ) {
     super(adapter, logger);
     this.registryService = registryService;
@@ -331,7 +356,9 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: ComponentFallbackLocale,
     executor?: unknown,
     /** A failed translation read propagates rather than returning shared values. */
-    strict = false
+    strict = false,
+    // The translations the instances were read with, when they came in the same statement.
+    joined?: JoinedTranslations | null
   ): Promise<void> {
     if (
       !this.localization ||
@@ -394,6 +421,87 @@ export class FieldGroupQueryService extends BaseService {
       return;
     }
 
+    const plan =
+      joined?.plan ??
+      (await this.translationPlan(meta, locale, fallbackLocale, executor));
+    if (!plan) return;
+    if (joined) {
+      // Read with the instances, so there is nothing left to query.
+      fillCompanionFields({
+        rows: dataArray,
+        companionRows: joined.rows,
+        localizedFields: plan.companion.localizedFields,
+        localeChain: plan.localeChain,
+        idKey: "id",
+      });
+    } else {
+      const overlay = () =>
+        populateCompanionFields({
+          db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+            typeof populateCompanionFields
+          >[0]["db"],
+          companionTable: plan.companion.table,
+          localizedFields: plan.companion.localizedFields,
+          rows: dataArray,
+          localeChain: plan.localeChain,
+          idKey: "id",
+          readiness: plan.readiness,
+          // Within the database's limit on a statement's parameters, in as many reads as that
+          // takes; the rows are filled only once every read has succeeded.
+          maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
+        });
+      const ran = await this.runContainedOverlay(
+        meta.slug,
+        plan.companion.companionTableName,
+        executor,
+        strict,
+        overlay
+      );
+      if (!ran) return;
+    }
+    this.decodeJsonLocalizedValues(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      false
+    );
+    await this.stripOverlaidPasswords(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      false,
+      executor
+    );
+  }
+
+  /**
+   * What reading one language of a component's translations takes: its companion, the language
+   * chain the read falls back through, and whether the companion is there to read. Null when there
+   * is nothing to read in one language: localization is off, the component keeps no translatable
+   * value per language, or the read asks for every translation at once.
+   */
+  private async translationPlan(
+    meta: DynamicFieldGroupRecord,
+    locale: string | undefined,
+    fallbackLocale: ComponentFallbackLocale | undefined,
+    executor: unknown
+  ): Promise<TranslationPlan | null> {
+    if (
+      !this.localization ||
+      !storesPerLanguage(meta) ||
+      locale === EVERY_TRANSLATION
+    ) {
+      return null;
+    }
+    const companion = buildCompanionSchema({
+      slug: meta.slug,
+      tableName: meta.tableName,
+      fields: meta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      // Components are never Draft/Published — companion has no `_status`.
+      status: false,
+    });
+    if (!companion) return null;
     // Resolve an absent `locale` to the default (the parent read treats no explicit `?locale` as
     // the default locale), so a default-locale read still overlays the component's companion
     // values instead of returning the omitted main-table columns.
@@ -414,48 +522,10 @@ export class FieldGroupQueryService extends BaseService {
       : (resolveLocaleChain(this.localization, requested, fallbackLocale) ?? [
           requested,
         ]);
-    // Resolved before the overlay runs, because inside a transaction it can only be read and the
-    // read itself must not be what fails.
+    // Resolved before anything reads the companion, because inside a transaction it can only be
+    // read and the read itself must not be what fails.
     const readiness = await this.companionReadiness(companion, executor);
-    // Within the database's limit on a statement's parameters, in as many
-    // reads as that takes; the rows are filled only once every read has
-    // succeeded, so a contained failure leaves none half translated, with a
-    // raw value or a password the strip below never saw.
-    const overlay = () =>
-      populateCompanionFields({
-        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-          typeof populateCompanionFields
-        >[0]["db"],
-        companionTable: companion.table,
-        localizedFields: companion.localizedFields,
-        rows: dataArray,
-        localeChain,
-        idKey: "id",
-        readiness,
-        maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
-      });
-
-    const ran = await this.runContainedOverlay(
-      meta.slug,
-      companion.companionTableName,
-      executor,
-      strict,
-      overlay
-    );
-    if (!ran) return;
-    this.decodeJsonLocalizedValues(
-      meta,
-      companion.localizedFields,
-      dataArray,
-      false
-    );
-    await this.stripOverlaidPasswords(
-      meta,
-      companion.localizedFields,
-      dataArray,
-      false,
-      executor
-    );
+    return { companion, localeChain, readiness };
   }
 
   /**
@@ -808,13 +878,15 @@ export class FieldGroupQueryService extends BaseService {
       executor
     );
     const componentFields = meta.fields;
-    const rows = await this.getExistingInstances(
+    // Read with its translations when it has any in one language.
+    const { rows, joined } = await this.getExistingInstances(
       meta.tableName,
       parentId,
       parentTable,
       fieldName,
       executor,
-      strict
+      strict,
+      await this.translationPlan(meta, locale, fallbackLocale, executor)
     );
 
     if (rows.length === 0) return null;
@@ -832,7 +904,8 @@ export class FieldGroupQueryService extends BaseService {
       locale,
       fallbackLocale,
       executor,
-      strict
+      strict,
+      joined
     );
     data = await this.expandComponentRelationships(
       data,
@@ -864,13 +937,15 @@ export class FieldGroupQueryService extends BaseService {
       executor
     );
     const componentFields = meta.fields;
-    const rows = await this.getExistingInstances(
+    // Read with their translations when they have any in one language.
+    const { rows, joined } = await this.getExistingInstances(
       meta.tableName,
       parentId,
       parentTable,
       fieldName,
       executor,
-      strict
+      strict,
+      await this.translationPlan(meta, locale, fallbackLocale, executor)
     );
 
     const reach = await this.passwordReach(componentFields, executor);
@@ -885,7 +960,8 @@ export class FieldGroupQueryService extends BaseService {
       locale,
       fallbackLocale,
       executor,
-      strict
+      strict,
+      joined
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -923,7 +999,8 @@ export class FieldGroupQueryService extends BaseService {
     for (const slug of allowedSlugs) {
       try {
         const meta = await this.registryService.getComponent(slug, executor);
-        const rows = await this.getExistingInstances(
+        // Read alone: each component type's translations are read per row below.
+        const { rows } = await this.getExistingInstances(
           meta.tableName,
           parentId,
           parentTable,
@@ -1281,7 +1358,99 @@ export class FieldGroupQueryService extends BaseService {
     // When true, only a MISSING component table is tolerated; any other read
     // failure propagates so a durable webhook/version payload is not built from
     // a component silently read as empty.
-    strict = false
+    strict = false,
+    // Reading the instances' translations in one language, when there are any to read.
+    plan: TranslationPlan | null = null
+  ): Promise<{ rows: ComponentRow[]; joined: JoinedTranslations | null }> {
+    const joined = await this.instancesWithTranslations(
+      tableName,
+      instanceKey(parentId, parentTable, fieldName),
+      plan,
+      executor
+    );
+    if (joined) return joined;
+    return {
+      rows: await this.instancesAlone(
+        tableName,
+        parentId,
+        parentTable,
+        fieldName,
+        executor,
+        strict
+      ),
+      joined: null,
+    };
+  }
+
+  /**
+   * One parent field's instances and their translations in `plan`'s languages, in one statement,
+   * where reading the translations after the instances took two. Null when the read cannot be
+   * joined: nothing to translate, a companion not there yet, or a table the registry does not
+   * hold. A joined read that fails off a transaction is logged and answered null, so the caller
+   * reads the instances alone and translates them after, with that read's own containment; on a
+   * transaction's connection it propagates, because the failure has already aborted it.
+   */
+  private async instancesWithTranslations(
+    tableName: string,
+    key: Record<string, string>,
+    plan: TranslationPlan | null,
+    executor: unknown
+  ): Promise<{ rows: ComponentRow[]; joined: JoinedTranslations } | null> {
+    if (
+      !plan ||
+      plan.readiness !== "ready" ||
+      !this.tables?.hasTable(tableName)
+    ) {
+      return null;
+    }
+    const table = this.tables.getTable(tableName);
+    const columns = Object.values(getColumns(table as never)) as {
+      name: string;
+    }[];
+    const column = (name: string) => columns.find(c => c.name === name);
+    const conditions = Object.entries(key).map(([name, value]) => {
+      const found = column(name);
+      return found ? eq(found as never, value) : undefined;
+    });
+    const order = INSTANCE_ORDER.map(({ column: name }) => column(name));
+    if (conditions.some(c => c === undefined) || order.some(c => !c)) {
+      return null;
+    }
+    try {
+      const read = await selectRowsWithCompanion({
+        db: executor ?? this.adapter.getDrizzle(),
+        mainTable: table,
+        where: and(...(conditions as SQL[])),
+        orderBy: order.map(c => asc(c as never)),
+        companionTable: plan.companion.table,
+        localeChain: plan.localeChain,
+      });
+      return {
+        rows: this.withoutServerOnlyColumns(
+          read.rows as ComponentRow[],
+          tableName
+        ),
+        joined: { plan, rows: read.companionRows },
+      };
+    } catch (error) {
+      if (executor !== undefined) throw error;
+      this.logger.error(
+        `Could not read component instances with their translations from ` +
+          `${plan.companion.companionTableName}; reading them alone: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    }
+  }
+
+  /** One parent field's instances, read alone. */
+  private async instancesAlone(
+    tableName: string,
+    parentId: string,
+    parentTable: string,
+    fieldName: string,
+    executor: unknown,
+    strict: boolean
   ): Promise<ComponentRow[]> {
     try {
       const rows = await this.adapter.select<ComponentRow>(
