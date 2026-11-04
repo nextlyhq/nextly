@@ -9760,8 +9760,9 @@ export class CollectionMutationService extends BaseService {
     // for a document with no languages, the one the request named. Instance
     // rows and the library they read are kept per language whether or not
     // the host is, so the request's language is the one an ordinary update
-    // and the draft's snapshot use; without it they read the default.
-    const judgedIn = draftLocale ?? params.locale;
+    // and the draft's snapshot use; without it they read the default. An
+    // empty one is no language, as the write's own locale check reads it.
+    const judgedIn = draftLocale ?? (params.locale || undefined);
     await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
       parentId: params.entryId,
       parentTable: collectionTableName(collection, params.collectionName),

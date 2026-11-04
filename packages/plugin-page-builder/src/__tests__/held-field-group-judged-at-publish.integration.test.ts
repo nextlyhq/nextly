@@ -470,6 +470,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await heldIn("de")).toEqual(["de"]);
     });
 
+    it("judges one that names an empty language in the default", async () => {
+      // An empty language is no language, as the write's locale check reads it.
+      expect(await heldIn("")).toEqual([undefined]);
+    });
+
     it("judges one that names no language in the default", async () => {
       // CONTROL: absent, which a reader takes as the default language.
       expect(await heldIn()).toEqual([undefined]);
