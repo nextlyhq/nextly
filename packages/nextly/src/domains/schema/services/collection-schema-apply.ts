@@ -831,20 +831,24 @@ async function refuseIndexNamesTaken(
   ]);
   const declared =
     desiredCollectionTable(collection, adapter.dialect).indexes ?? [];
-  const taken = declared.flatMap(index => {
-    if (index.columns.length === 0 || !uniqueness.has(index.name)) return [];
-    // An index under the name that does not stand on whole columns (partial, on an expression,
-    // a MySQL prefix, or invalid) is not described by its columns, but it still holds the name:
-    // the push's CREATE INDEX IF NOT EXISTS would skip it and enforce nothing.
-    const live = covers.get(index.name) ?? null;
-    if (live === null) return [{ index, live }];
-    const sameColumns =
-      live.length === index.columns.length &&
-      live.every((column, i) => column === index.columns[i]);
-    const sameUniqueness =
-      (uniqueness.get(index.name)?.unique === true) === index.unique;
-    return sameColumns && sameUniqueness ? [] : [{ index, live }];
-  });
+  // One element type for every branch: `live` is null for an index not on whole columns, and the
+  // two returns otherwise infer as two array types the compiler cannot join.
+  const taken = declared.flatMap(
+    (index): Array<{ index: typeof index; live: string[] | null }> => {
+      if (index.columns.length === 0 || !uniqueness.has(index.name)) return [];
+      // An index under the name that does not stand on whole columns (partial, on an expression,
+      // a MySQL prefix, or invalid) is not described by its columns, but it still holds the name:
+      // the push's CREATE INDEX IF NOT EXISTS would skip it and enforce nothing.
+      const live = covers.get(index.name) ?? null;
+      if (live === null) return [{ index, live }];
+      const sameColumns =
+        live.length === index.columns.length &&
+        live.every((column, i) => column === index.columns[i]);
+      const sameUniqueness =
+        (uniqueness.get(index.name)?.unique === true) === index.unique;
+      return sameColumns && sameUniqueness ? [] : [{ index, live }];
+    }
+  );
   if (taken.length === 0) return;
   throw NextlyError.validation({
     errors: taken.map(({ index, live }) => ({
