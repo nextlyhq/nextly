@@ -25,6 +25,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
+import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
   coerceBuilderMaxPerDoc,
@@ -313,22 +314,37 @@ export const PATCH = withErrorHandler(
       }
     }
 
-    if (Object.keys(adminOverrides).length > 0) {
-      const existing = await registry.getCollection(slug);
-      updateData.admin = {
-        ...(existing.admin || {}),
-        ...adminOverrides,
-      };
-    }
-
     if (body.hooks !== undefined) {
       updateData.hooks = body.hooks;
     }
 
-    // Update collection (source: "ui" to enforce locking rules)
-    const updated = await registry.updateCollection(slug, updateData, {
-      source: "ui",
-    });
+    // The read of the stored admin settings and the row write hold the schema lock together,
+    // refused at once while a migration holds it: the row describes storage a migration could be
+    // moving. Everything above reads the request alone and is decided before the lock is taken.
+    const updated = await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `update collection "${slug}"`,
+        // This route writes the registry row alone; any table change comes from the next migrate.
+        // It issues no DDL, so it must not create the lock table on a role without DDL rights.
+        issuesDdl: false,
+      },
+      async () => {
+        if (Object.keys(adminOverrides).length > 0) {
+          const existing = await registry.getCollection(slug);
+          updateData.admin = {
+            ...(existing.admin || {}),
+            ...adminOverrides,
+          };
+        }
+
+        // Update collection (source: "ui" to enforce locking rules)
+        return registry.updateCollection(slug, updateData, {
+          source: "ui",
+        });
+      }
+    );
 
     // Update endpoint: canonical mutation envelope so consumers receive a
     // server-authored toast message alongside the refreshed collection.
@@ -360,10 +376,25 @@ export const DELETE = withErrorHandler(
 
     const { slug } = await context.params;
 
-    // The registry row's removal is followed by a drop of the collection's
-    // table, so it is refused while anything still depends on the collection.
-    await registry.assertNothingDependsOn([slug]);
-    await registry.deleteCollection(slug);
+    // The dependents check and the row removal hold the schema lock together, refused at once
+    // while a migration holds it: the check reads storage a migration could be moving, and the
+    // removal acts on what it found.
+    await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `delete collection "${slug}"`,
+        // This route removes rows alone; the table drop comes from the next migrate. It issues no
+        // DDL, so it must not create the lock table on a role without DDL rights.
+        issuesDdl: false,
+      },
+      async () => {
+        // The registry row's removal is followed by a drop of the collection's
+        // table, so it is refused while anything still depends on the collection.
+        await registry.assertNothingDependsOn([slug]);
+        await registry.deleteCollection(slug);
+      }
+    );
 
     return new Response(null, { status: 204 });
   }

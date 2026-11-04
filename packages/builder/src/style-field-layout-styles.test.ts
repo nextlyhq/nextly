@@ -173,3 +173,76 @@ describe("the field stacks before a control runs out of room", () => {
     );
   });
 });
+
+describe("a segmented choice's selected state", () => {
+  it("is told by its words' weight and colour, not by its fill alone", () => {
+    // The accent fill alone measured about 1.7:1 against the unselected
+    // background in dark, under 3:1: "This tab" and "New tab" could not be
+    // told apart.
+    const button = ruleBody(CHROME, ".nx-style-inspector__toggle > button");
+    expect(button).toContain("font-weight: 500");
+    expect(button).toContain("color: var(--nx-muted-foreground)");
+    const chosen = ruleBody(
+      CHROME,
+      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"]'
+    );
+    expect(chosen).toContain("font-weight: 600");
+    expect(chosen).toContain("color: var(--nx-foreground)");
+  });
+
+  it("is a step lighter in dark, its fill told from the panel's black", () => {
+    expect(
+      ruleBody(
+        CHROME,
+        '.dark .nx-style-inspector__toggle > button[aria-pressed="true"],\n.dark .nx-style-inspector__toggle > button[aria-checked="true"]'
+      )
+    ).toContain(
+      "background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground))"
+    );
+  });
+});
+
+describe("Visible on", () => {
+  it("is separate toggles, a gap between them, each with its own edge", () => {
+    // A joined strip reads as "pick one"; this is "pick any".
+    expect(ruleBody(CHROME, ".nx-visible-on")).toContain("gap: 0.375rem");
+    const button = ruleBody(CHROME, ".nx-visible-on > button");
+    expect(button).toContain("border-inline-start-width: 1px");
+    expect(button).toContain("border-radius: var(--radius-md)");
+  });
+
+  it("marks the device being edited with a dot, not a line", () => {
+    const marker = ruleBody(
+      CHROME,
+      ".nx-visible-on > button[data-editing]::before"
+    );
+    expect(marker).toContain("border-radius: 50%");
+    expect(marker).toContain("background: var(--nx-ring)");
+    expect(
+      ruleBody(CHROME, ".nx-visible-on > button[data-editing]")
+    ).not.toContain("box-shadow");
+  });
+});
+
+describe("an inspector switch", () => {
+  it("is a 24px target, with no other target needed out of its way", () => {
+    // The shared switch is 18px tall. A target under 24px passes only when no
+    // other target sits within 12px of its centre, and an on/off row ends
+    // directly above "Visible on", so the switch is sized to pass alone.
+    const root = ruleBody(
+      CHROME,
+      ':is(.nx-inspector, .nx-style-inspector) [data-slot="switch"]'
+    );
+    expect(root).toContain("block-size: 1.5rem");
+    expect(root).toContain("inline-size: 2.5rem");
+    // Its thumb grows with it, so the track's inset stays one pixel a side:
+    // 2.5rem less a 1px border each side, less the thumb, is the 18px that
+    // the thumb's `calc(100% - 2px)` travel covers.
+    expect(
+      ruleBody(
+        CHROME,
+        ':is(.nx-inspector, .nx-style-inspector) [data-slot="switch-thumb"]'
+      )
+    ).toContain("block-size: 1.25rem");
+  });
+});

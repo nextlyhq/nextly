@@ -1,0 +1,24 @@
+---
+title: INIT_ANSWERS_REQUIRED
+description: "`nextly init` has questions to ask, and no terminal is attached to ask them, so it wrote nothing."
+---
+
+## Cause
+
+`nextly init` has questions to ask, and no terminal is attached to ask them, so it wrote nothing.
+
+`nextly init` asks where collections go and whether to add an example collection. With no terminal attached, as in CI or a script, or with `--non-interactive` given or `CI` set, it cannot ask, and `--yes` was not given to skip the questions. It stopped before writing any file.
+
+## Fix
+
+- Run `nextly init --yes` to use the defaults.
+- Or run `nextly init` in a terminal and answer the questions.
+
+## Example
+
+```text
+✗ Nextly was not initialized, and nothing was written.
+  Why:  `nextly init` asks where collections go and whether to add an example, and no terminal is attached to ask (or `--non-interactive` was given, or `CI` is set).
+  Next: Run `nextly init --yes` to use the defaults.
+  Docs: https://nextlyhq.com/docs/cli/errors/init-answers-required  (INIT_ANSWERS_REQUIRED)
+```

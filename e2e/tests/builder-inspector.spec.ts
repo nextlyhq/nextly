@@ -1,0 +1,420 @@
+/**
+ * The inspector's anatomy, in the real editor.
+ *
+ * - Selecting a heading shows its card (icon, type, description, menu), two
+ *   tabs, and on Style a bar naming the target, the device and the state; the
+ *   bar follows a change of state.
+ * - The Style tab orders its sections Layout to Effects and places each
+ *   property as the placement table says, for a section, a heading and an
+ *   image: the common controls show, the rest wait behind "+ More".
+ * - A block stored with a CSS id and attributes reopens with them under
+ *   Content → Advanced, and an edit there survives a save and a reload.
+ * - Locking from the card's menu makes every control read-only and says so;
+ *   Unlock from the same menu gives them back.
+ * - With the inspector open on each tab, axe finds nothing at WCAG 2.2 AA.
+ *
+ * Each test makes its own page, named uniquely, so no lock is needed.
+ */
+import AxeBuilder from "@axe-core/playwright";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
+
+import { pressSave } from "./canvas/editor-driver";
+import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
+import { storedPageNodes } from "./support/stored-page";
+import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
+
+// Reads the site's devices, which a spec storing breakpoints changes.
+test.describe.configure({ lock: [LOCK.siteStyle] });
+
+const ENTRIES = "/admin/api/collections/pages/entries";
+const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+const HEADING = "00000000-0000-4000-8000-00000000a001";
+const IMAGE = "00000000-0000-4000-8000-00000000a002";
+const SECTION = "00000000-0000-4000-8000-00000000a003";
+
+/** The page this spec edits: a heading with an id and attributes, an image, a section. */
+function document(): unknown {
+  const pad = "24px";
+  return {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: HEADING,
+        type: "core/heading",
+        version: 1,
+        props: { text: "Inspector heading", level: "h2" },
+        cssId: "intro",
+        attributes: { "data-track": "hero" },
+      },
+      {
+        id: IMAGE,
+        type: "core/image",
+        version: 1,
+        props: { src: "/example.jpg", alt: "An example image" },
+        // A size of its own: the file is not served, and an image that never
+        // loads has no box to click.
+        styles: { base: { base: { width: "240px", height: "160px" } } },
+      },
+      {
+        id: SECTION,
+        type: "core/section",
+        version: 1,
+        props: { as: "section", contained: true },
+        // Padding, so the section has a surface of its own to click.
+        styles: {
+          base: {
+            base: {
+              padding: {
+                blockStart: pad,
+                blockEnd: pad,
+                inlineStart: pad,
+                inlineEnd: pad,
+              },
+            },
+          },
+        },
+        slots: { children: [] },
+      },
+    ],
+  };
+}
+
+/** A draft page of its own, holding the document above, and its id. */
+async function createPage(request: APIRequestContext): Promise<string> {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const created = await request.post(ENTRIES, {
+    data: {
+      title: `Inspector ${stamp}`,
+      slug: `inspector-${stamp}`,
+      status: "draft",
+      content: document(),
+    },
+  });
+  if (!created.ok()) {
+    throw new Error(
+      `creating a page failed: ${created.status()} ${await created.text()}`
+    );
+  }
+  const body = (await created.json()) as { item?: { id?: string } };
+  const id = body.item?.id;
+  if (typeof id !== "string") throw new Error("the new page has no id");
+  return id;
+}
+
+/** The page's stored nodes, read back through the API. */
+async function storedNodes(
+  request: APIRequestContext,
+  id: string
+): Promise<Record<string, unknown>[]> {
+  return await storedPageNodes(request, ENTRIES, id);
+}
+
+async function openBuilder(page: Page, id: string): Promise<void> {
+  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+    timeout: 60_000,
+  });
+}
+
+/**
+ * Select one block by clicking it on the canvas: at its centre, or near its
+ * top-left corner for a container, whose centre holds its empty slot.
+ */
+async function select(
+  page: Page,
+  id: string,
+  at: "centre" | "corner" = "centre"
+): Promise<void> {
+  // Cleared first: the selected block's toolbar is drawn over the canvas, and
+  // over the block below it, so a click aimed there would land on the toolbar.
+  await page.keyboard.press("Escape");
+  await canvasFrame(page)
+    .locator(`.nx-canvas [data-nx-node="${id}"]`)
+    .first()
+    .click(at === "corner" ? { position: { x: 4, y: 4 } } : {});
+  await expect(page.locator("[data-block-card]")).toBeVisible();
+}
+
+async function saveDraft(page: Page): Promise<void> {
+  const saved = page.waitForResponse(
+    response =>
+      response.url().includes("/collections/pages/entries") &&
+      ["PATCH", "PUT", "POST"].includes(response.request().method()) &&
+      response.ok()
+  );
+  await pressSave(page);
+  await saved;
+}
+
+/** The Style tab's section labels, in order, without the "has values" words. */
+async function sectionLabels(page: Page): Promise<string[]> {
+  // The dot sits inside the label, beside the name, and carries its own
+  // words for a screen reader; the name is the label without it.
+  return page
+    .locator(
+      ".nx-style-inspector [data-section] .nx-style-inspector__section-label"
+    )
+    .evaluateAll(labels =>
+      labels.map(label => {
+        const name = label.cloneNode(true) as HTMLElement;
+        name.querySelector(".nx-style-inspector__section-dot")?.remove();
+        return name.textContent ?? "";
+      })
+    );
+}
+
+/** The properties a section draws at once, by catalog key. */
+async function shownProperties(page: Page, section: string): Promise<string[]> {
+  const item = page.locator(`.nx-style-inspector [data-section="${section}"]`);
+  if ((await item.getAttribute("data-state")) !== "open") {
+    await item.locator("button").first().click();
+  }
+  return item
+    .locator("[data-property]")
+    .evaluateAll(nodes =>
+      nodes.map(node => node.getAttribute("data-property") ?? "")
+    );
+}
+
+/** What a section's "+ More" lists. */
+async function moreProperties(page: Page, label: string): Promise<string[]> {
+  await page
+    .getByRole("button", { name: `More ${label.toLowerCase()} properties` })
+    .click();
+  // Read once the menu is drawn: reading at once can find none yet.
+  await expect(page.getByRole("menuitem").first()).toBeVisible();
+  const items = await page.getByRole("menuitem").allTextContents();
+  await page.keyboard.press("Escape");
+  return items;
+}
+
+async function axe(page: Page): Promise<unknown[]> {
+  const results = await new AxeBuilder({ page })
+    .include(".nx-inspector")
+    .withTags(AA_TAGS)
+    .analyze();
+  // A scan that reached nothing passes exactly as a clean one does.
+  expect(results.passes.length).toBeGreaterThan(5);
+  return results.violations.map(violation => ({
+    id: violation.id,
+    help: violation.help,
+    targets: violation.nodes.flatMap(node => node.target.map(String)),
+    // axe's own account of each node, so a contrast finding names its colours.
+    detail: violation.nodes.map(node => node.failureSummary ?? ""),
+  }));
+}
+
+test.describe("the inspector", () => {
+  test.describe.configure({ timeout: 180_000 });
+
+  test("shows the card, two tabs, and a bar that follows the state and device", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await select(page, HEADING);
+
+    const card = page.locator("[data-block-card]");
+    await expect(card.getByRole("heading", { level: 2 })).toHaveText("Heading");
+    await expect(card).toContainText("A title for a page or section.");
+    await expect(card.locator(".nx-block-icon")).toBeVisible();
+    await expect(
+      card.getByRole("button", { name: "Actions for Heading" })
+    ).toBeVisible();
+
+    const tabs = page.locator(".nx-inspector").getByRole("tab");
+    await expect(tabs).toHaveText(["Content", "Style"]);
+
+    await page.getByRole("tab", { name: "Style" }).click();
+    const bar = page.getByRole("region", { name: "What you're editing" });
+    await expect(bar.locator("[data-edit-target]")).toHaveText("This block");
+    await expect(bar.locator("[data-edit-state]")).toHaveText("Normal");
+    // The device is the canvas's own, said as the devices an edit there
+    // reaches. Moving the canvas to a device moves the bar with it.
+    await expect(bar.locator("[data-edit-device]")).toHaveText("All devices");
+    const widths = page.getByRole("radiogroup", { name: "Device" });
+    for (const [device, reach] of [
+      ["Mobile", "Mobile"],
+      ["Tablet", "Tablet and smaller"],
+    ]) {
+      await widths
+        .getByRole("radio", { name: new RegExp(`^${device}`) })
+        .click();
+      await expect(bar.locator("[data-edit-device]")).toHaveText(reach);
+    }
+
+    // The state is a compact menu named State on the bar's second line.
+    await bar.getByRole("button", { name: /^State: / }).click();
+    await page.getByRole("menuitemradio", { name: /^Hover/ }).click();
+    await expect(bar.locator("[data-edit-state]")).toHaveText("Hover");
+  });
+
+  test("places sections and properties as the catalogue states", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+
+    // A heading: no Layout, Typography's common controls first.
+    await select(page, HEADING);
+    await page.getByRole("tab", { name: "Style" }).click();
+    await expect
+      .poll(() => sectionLabels(page))
+      .toEqual([
+        "Spacing",
+        "Size",
+        "Position",
+        "Typography",
+        "Border",
+        "Effects",
+      ]);
+    expect(await shownProperties(page, "typography")).toEqual([
+      "fontFamily",
+      "fontWeight",
+      "fontSize",
+      "lineHeight",
+      "color",
+      "textAlign",
+    ]);
+    expect(await moreProperties(page, "Typography")).toContain(
+      "Letter spacing"
+    );
+
+    // An image: the media fit controls show at once in Size.
+    await select(page, IMAGE);
+    await expect
+      .poll(() => sectionLabels(page))
+      .toEqual(["Spacing", "Size", "Position", "Border", "Effects"]);
+    const size = await shownProperties(page, "size");
+    expect(size).toEqual(expect.arrayContaining(["aspectRatio", "objectFit"]));
+
+    // A section: Layout first; the container query and box sizing wait in More.
+    await select(page, SECTION, "corner");
+    await expect
+      .poll(() => sectionLabels(page))
+      .toEqual([
+        "Layout",
+        "Spacing",
+        "Size",
+        "Position",
+        "Background",
+        "Border",
+        "Effects",
+      ]);
+    expect(await shownProperties(page, "layout")).toEqual(["display"]);
+    expect(await moreProperties(page, "Layout")).toContain("Container type");
+    await shownProperties(page, "size");
+    expect(await moreProperties(page, "Size")).toContain("Box sizing");
+    // And no style section is called Advanced.
+    expect(await sectionLabels(page)).not.toContain("Advanced");
+  });
+
+  test("keeps a stored CSS id and attributes under Content → Advanced, through a save and reload", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await select(page, HEADING);
+
+    await page.getByText("Advanced", { exact: true }).click();
+    const cssId = page.getByRole("textbox", { name: "CSS id" });
+    await expect(cssId).toHaveValue("intro");
+    await expect(
+      page.getByRole("textbox", { name: "Name of attribute 1" })
+    ).toHaveValue("data-track");
+    const value = page.getByRole("textbox", { name: "Value of attribute 1" });
+    await expect(value).toHaveValue("hero");
+
+    await cssId.fill("intro-two");
+    await cssId.press("Enter");
+    await value.fill("hero-two");
+    await value.press("Tab");
+
+    await saveDraft(page);
+    await expect
+      .poll(async () => {
+        const heading = (await storedNodes(page.request, id)).find(
+          node => node.id === HEADING
+        );
+        return [heading?.cssId, heading?.attributes];
+      })
+      .toEqual(["intro-two", { "data-track": "hero-two" }]);
+
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await select(page, HEADING);
+    await page.getByText("Advanced", { exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "CSS id" })).toHaveValue(
+      "intro-two"
+    );
+    await expect(
+      page.getByRole("textbox", { name: "Value of attribute 1" })
+    ).toHaveValue("hero-two");
+  });
+
+  test("locks from the card's menu, reads as locked with every control read-only, and unlocks", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await select(page, HEADING);
+
+    const content = page.getByRole("tabpanel", { name: "Content" });
+    await expect(content.getByLabel("Text")).toBeEnabled();
+
+    await page.getByRole("button", { name: "Actions for Heading" }).click();
+    await page.getByRole("menuitem", { name: "Lock", exact: true }).click();
+
+    await expect(page.locator('[data-lock="layers"]')).toContainText("Locked");
+    await expect(content.getByLabel("Text")).toBeDisabled();
+    await page.getByRole("tab", { name: "Style" }).click();
+    await expect(page.locator("[data-read-only]")).toContainText("Locked");
+
+    await page.getByRole("button", { name: "Actions for Heading" }).click();
+    await page.getByRole("menuitem", { name: "Unlock", exact: true }).click();
+    await expect(page.locator('[data-lock="layers"]')).toHaveCount(0);
+    await page.getByRole("tab", { name: "Content" }).click();
+    await expect(content.getByLabel("Text")).toBeEnabled();
+  });
+
+  test("renames from a double-click on the title, shown in the card", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await select(page, HEADING);
+
+    await page
+      .locator("[data-block-card]")
+      .getByRole("heading", { level: 2 })
+      .dblclick();
+    const label = page.getByRole("textbox", { name: "Label" });
+    await expect(label).toBeFocused();
+    await label.fill("Hero title");
+    await label.press("Enter");
+
+    await expect(
+      page.locator("[data-block-card]").getByRole("heading", { level: 2 })
+    ).toHaveText("Hero title · Heading");
+  });
+
+  test("has no WCAG 2.2 AA violations with the inspector open on each tab", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await select(page, HEADING);
+
+    expect(await axe(page), "Content").toEqual([]);
+    await page.getByText("Advanced", { exact: true }).click();
+    expect(await axe(page), "Content with Advanced open").toEqual([]);
+    await page.getByRole("tab", { name: "Style" }).click();
+    expect(await axe(page), "Style").toEqual([]);
+  });
+});

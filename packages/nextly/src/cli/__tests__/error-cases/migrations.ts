@@ -25,6 +25,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { refusalOf } from "../../commands/migrate-down";
 import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
+  coreDestructiveNeedsTerminal,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
@@ -33,6 +34,7 @@ import {
   settingsChangeWithoutMigration,
   snapshotWithoutMigration,
 } from "../../errors/areas/migrations";
+import { requireConsented } from "../../utils/data-loss-consent";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 
 import { PROJECT, type ErrorCase, type ErrorCases } from "./types";
@@ -106,6 +108,7 @@ function resolving(
     repo: {
       findFileApplies: () => Promise.resolve([]),
       findFileRollbacks: () => Promise.resolve([]),
+      recordChecksum: () => Promise.resolve(),
       insertEvent: () => Promise.resolve("evt_2"),
       supersede: () => Promise.resolve(),
       markRolledBack: () => Promise.resolve(),
@@ -113,6 +116,7 @@ function resolving(
     fileExists: () => Promise.resolve(true),
     loadTargetSnapshot: () => Promise.resolve(null),
     marksNoTransaction: () => Promise.resolve(false),
+    fileChecksum: () => Promise.resolve("a".repeat(64)),
     introspectLive: () => Promise.resolve(POSTS),
     ...overrides,
   }).then(
@@ -170,6 +174,15 @@ export const MIGRATION_CASES = {
       return error;
     }
     throw new Error("expected the consent to be refused");
+  },
+  // As `requireConsented` ends a run whose deletion prompt was answered no.
+  DATA_LOSS_DECLINED: () => {
+    try {
+      requireConsented({ kind: "declined" });
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the declined deletion to end the run");
   },
   // Reserved for `nextly migrate`'s check of applied files, which the guides document; nothing
   // raises them yet, so each case is the error as that check is to raise it.
@@ -253,6 +266,9 @@ export const MIGRATION_CASES = {
         "drops column 'nextly_users.legacy_role'" +
         ".",
     }),
+  // As `upgradeAction` in `cli/commands/upgrade.ts` throws it with no terminal to confirm on.
+  CORE_DESTRUCTIVE_NEEDS_TERMINAL: () =>
+    coreDestructiveNeedsTerminal(["drops column 'nextly_users.legacy_role'"]),
   // As `reconcileCore` throws it when the core apply fails.
   CORE_SCHEMA_APPLY_FAILED: () =>
     new NextlyError({

@@ -86,7 +86,7 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
-`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
+`TreeView` and its `TREE_INDENT_PX`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
 `PageShell`, `Bleed`, `PageHeader`, `SHELL_MEASURE`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
@@ -97,6 +97,9 @@ fields, so the page cannot cap the two together — needs the same value as a CS
 The alternative is a second table naming the same tokens, which drifts silently because
 each copy reads correctly beside its own neighbours. Exported so there is one answer
 rather than two that happen to agree.
+
+`TREE_INDENT_PX` is exported for the same reason: an editor that reads a dragged row's
+depth from the pointer steps by the tree's own indent, and draws its drop line there.
 
 `Slider` (with `SliderThumbProps`) joins them for the inspector: a bounded numeric property — opacity, blur radius,
 letter spacing, a colour's alpha — is the single most repeated control in an editing surface,

@@ -6,6 +6,24 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// Which Layout a page is drawn inside: the one rule the render, the editor
+// and the tests share.
+export { resolvePageLayout } from "./resolve-layout";
+export type {
+  LayoutResolution,
+  LayoutSite,
+  PageLayoutChoice,
+} from "./resolve-layout";
+// The regions a Layout fills around a page, and the document each is drawn
+// from: one reading of a stored Layout, shared by the route, the editor and
+// the plugin.
+export {
+  layoutRelationId,
+  regionDocument,
+  regionsOf,
+  REGION_AREAS,
+} from "./layout-regions";
+export type { LayoutRegion, RegionArea } from "./layout-regions";
 export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {
@@ -343,6 +361,9 @@ export {
   // own value. Two implementations of that order agree until a variant rule
   // changes in one of them.
   instanceExposure,
+  // A component's own tree as one of its variants draws it, ids kept, for
+  // the editor's canvas to preview the variant open in the component's view.
+  variantPreview,
   // What a supplied definition has to be before the resolver inlines it.
   // Published because the editor's inspector draws from the same lookup the
   // canvas resolves against, and must refuse exactly what the canvas refuses.
@@ -365,6 +386,7 @@ export type {
   InstanceExposure,
   OverriddenBy,
   ResolveComponentOptions,
+  PropExposure,
   ResolvedBlockNode,
   ResolvedComposition,
   ResolvedDocument,
@@ -387,6 +409,64 @@ export type {
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
 export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
+// The one placement rule over the nesting rule above: declared slots, the
+// HTML content model a block's settings give it, and component placements'
+// exposed slots. Every placement path asks it, editor and server alike, and
+// one wording says its refusals in both.
+export {
+  CONTENT_KINDS,
+  UNDECLARED_CONTENT_MODEL,
+  contentModelKey,
+  resolveContentModel,
+} from "./content-model";
+export type {
+  ContentKind,
+  ContentModel,
+  ResolvedContentModel,
+} from "./content-model";
+export {
+  canPlace,
+  canPlaceIn,
+  contentModelKeyOf,
+  declaredSlotNames,
+  placementSiteIn,
+  placementTracker,
+} from "./placement";
+export type {
+  ContentRefuser,
+  PlacedNode,
+  PlacementPosition,
+  PlacementRefusal,
+  PlacementRefused,
+  PlacementSite,
+  PlacementSources,
+  PlacementTracker,
+  PlacementVerdict,
+  TrackedPlacement,
+} from "./placement";
+export { placementBreaksIn, placementRefusal } from "./placement-breaks";
+// What a write may store as a placement's own values: ids its component
+// exposes, with values of the type each field takes. Judged by the write path
+// against the definitions it composes with, and by the inspector before a
+// commit.
+export {
+  exposedValueFits,
+  neededFor,
+  placementValueIssues,
+} from "./placement-values";
+export type {
+  PlacementValueIssue,
+  PlacementValueProblem,
+} from "./placement-values";
+export type { LocatedPlacementBreak } from "./placement-breaks";
+export {
+  asPermittedList,
+  blockLabelFrom,
+  permittedLabel,
+  placementRefusalMessage,
+  placementRefusalWording,
+} from "./placement-wording";
+export type { PlacementWording, WordingContext } from "./placement-wording";
 // What a composed document breaks that no stored document breaks alone: the
 // nesting rule across a placement, and depth counted from the document's own
 // root. Exported for the write path, which has to refuse what the renderer
@@ -403,6 +483,60 @@ export type {
 // designer meets the lock where the exposure is made, not on every page.
 export { contentOnlyExposures, nodeLocks } from "./content-only-exposures";
 export type { LockedExposure, NodeLock } from "./content-only-exposures";
+// Editing an existing component's exposed fields, for its own view: expose,
+// rename, point elsewhere, remove. And the one rule for taking a removed
+// field's values out of every document that places the component. Both
+// `@experimental` until the component editor that consumes them ships.
+export {
+  exposureTypeForProp,
+  planExposeProperty,
+  planRemoveExposedSlot,
+  planRemoveExposure,
+  planRenameExposure,
+  planRetargetExposure,
+  VISIBILITY_PROP_PATH,
+} from "./exposure-planners";
+export type {
+  ExposeRequest,
+  ExposureEdit,
+  ExposureEditProblem,
+  ExposureEditRefusal,
+  ExposureEditResult,
+  ExposureSources,
+  ExposureTarget,
+  PrunedVariant,
+} from "./exposure-planners";
+// Defining, renaming and deleting a component's variants, and the values each
+// presets, as the designer does in the component's own view. A variant's key
+// is its stable id; its name is unique per component. `@experimental` until the
+// component editor that uses them ships.
+export {
+  planAddVariant,
+  planDeleteVariant,
+  planRenameVariant,
+  planResetVariantValue,
+  planSetVariantValue,
+  variantOptions,
+} from "./variant-planners";
+export type {
+  NewVariantSources,
+  VariantEdit,
+  VariantEditProblem,
+  VariantEditRefusal,
+  VariantEditResult,
+  VariantOption,
+} from "./variant-planners";
+export { variantLabelKey } from "./variant-labels";
+// A placement's variant key, judged against its component on every write: a
+// key the write newly sets must name one of the component's variants.
+export { placementVariantIssues } from "./placement-variants";
+export type { PlacementVariantIssue } from "./placement-variants";
+export { stripRetiredExposures } from "./retired-exposures";
+export type {
+  RetiredByComponent,
+  RetiredExposures,
+  StrippedDocument,
+} from "./retired-exposures";
 // The lock judgement as the editor asks it before an action: every break a
 // document holds, located, and the one an edit would add, by the rules a save
 // applies. And the one repair planner, run as a list of rules so a later rule
@@ -410,7 +544,22 @@ export type { LockedExposure, NodeLock } from "./content-only-exposures";
 // the editor that consumes them ships.
 export { lockBreaksIn, lockRefusal } from "./lock-breaks";
 export type { LocatedLockBreak, LockSources } from "./lock-breaks";
+// Turning every copy of a component in one document into plain blocks, and
+// asking whether a document still references it, for deleting a component that
+// is in use. `@experimental` until the delete that consumes them ships.
+export { inlineComponentInstances, stillReferences } from "./component-inline";
+export type {
+  InlinedDocument,
+  InlineProblem,
+  InlineRefusal,
+  InlineResult,
+  ReferenceAnswer,
+} from "./component-inline";
 export { lockRepairRule, planRepair } from "./repair-plan";
+// The placement rule's repair, appended after the lock rule when planning, so
+// a page holding blocks where the placement rule refuses them is offered a
+// move to the nearest place it allows.
+export { placementRepairRule } from "./placement-repair";
 export type {
   RepairContext,
   RepairPlan,
@@ -430,6 +579,7 @@ export type { ActiveSlotLock } from "./slot-lock";
 export type { ByteMeasurement } from "./measure-bytes";
 export {
   componentEnvelopeIssues,
+  isErrorIssue,
   validate,
   validateDocument,
   ISSUE_CODES,
@@ -461,6 +611,20 @@ export { isPlainRecord } from "./plain-record";
  */
 export { authoredText, isAuthoredText } from "./authored-text";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
+// Per-device visibility as an author works with it: each device's resolved
+// state, a hide that stays on one device, and the stored values carried across
+// a change of the site's breakpoints. Public because the editor writes the eye
+// and the breakpoint flows rewrite documents, and both must resolve devices as
+// the compiler does.
+export {
+  carryDeviceVisibility,
+  carryDocumentDeviceVisibility,
+  deviceVisibility,
+  hiddenOnDevice,
+  revealDeviceHidden,
+  setDeviceVisibility,
+} from "./device-visibility";
+export type { CarriedVisibility, DeviceVisibility } from "./device-visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
   BlockTypeLookup,
@@ -474,7 +638,14 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock } from "./block";
+export {
+  BLOCK_ICONS,
+  defineBlock,
+  ITEM_SCHEMA_MAX_DEPTH,
+  // What a select's option is called. Public because the builder names a
+  // choice with it as the engine's exposure planner does.
+  optionLabel,
+} from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
@@ -583,6 +754,7 @@ export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";
 export {
   validateStyleValues,
+  leafAcceptsValue,
   newStyleIssueBudget,
   MAX_STYLE_ISSUES,
   MAX_STYLE_ISSUE_PATH_BYTES,
@@ -651,6 +823,11 @@ export {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
+  // A variable's plain name: the optional label, its check, and the label
+  // derived from the code name when none is stored.
+  MAX_TOKEN_LABEL_LENGTH,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to
@@ -669,12 +846,30 @@ export type {
   SiteTokenSet,
   TokenMode,
 } from "./style/site-tokens";
+// Light and dark across files: the DTCG theme (resolver) file, and one file
+// per mode as Figma imports and exports variables.
+export {
+  RESOLVER_VERSION,
+  modeFilesToTokens,
+  resolverToTokens,
+  tokensToFigma,
+  tokensToResolver,
+} from "./style/dtcg-modes";
+export type { ModeFile } from "./style/dtcg-modes";
+// Whether two tokens say the same thing: one answer for a stored override and
+// for an editor's Reset.
+export { sameJsonValue, sameSiteToken } from "./style/same-token";
+// A colour written as a value rather than through a variable, which the
+// inspector marks as not adapted to dark mode.
+export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {
+  GENERIC_FONT_FAMILIES,
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,
+  resolveAliases,
   tokensToDtcg,
   familyPartKind,
   readFamilyList,
@@ -734,6 +929,10 @@ export {
   // one and a literal in the other would be one contract with two spellings,
   // and the half that drifted would simply stop matching rather than fail.
   CONTENT_WIDTH_CLASS,
+  // The marker a container spacing its children wears: the compiler keys the
+  // gap's rules on it, a block repeating its slot puts it on each wrapper, and
+  // an editor takes it off to ask whether a margin is the gap.
+  CHILD_GAP_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
@@ -794,6 +993,8 @@ export {
   // the later entry, which is four separate rules to get right by hand.
   usableNamedClasses,
   usableNamedClassPositions,
+  // The part of a library the compiler reads, before those rules run.
+  namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";
@@ -904,11 +1105,47 @@ export {
   sameStyleValue,
   type AppliedOp,
   type AppliedOps,
+  type ApplyOptions,
   type BuilderOp,
+  type EnvelopeField,
+  type EnvelopePatch,
   type NodePatch,
   type OpPosition,
   type SlotAddress,
 } from "./ops";
+
+// The Layers lock's rule, stated once: for one op, which the apply asks of
+// every edit and an editing surface asks before offering one; and for a whole
+// write, judged against the document it would replace, which a save asks
+// because a write through the API carries no ops to judge.
+export {
+  layersLockBreak,
+  lockedAncestorOf,
+  type LayersLockBreak,
+} from "./layers-lock";
+export {
+  layersLockChanges,
+  type LayersLockChange,
+  type LayersLockChangeKind,
+} from "./layers-lock-stored";
+export {
+  variantLockChanges,
+  type VariantDrawing,
+  type VariantLockChange,
+} from "./layers-lock-variants";
+export {
+  componentLayersLocks,
+  heldBaselines,
+  keptForSameComponents,
+  placedLockChanges,
+  placementsAsComponentsHoldThem,
+  type ComponentLayersLock,
+  type ComposedHeldBaseline,
+  type HeldBaseline,
+  type PlacedLockChange,
+} from "./component-layers-locks";
+// How every copy into a document keeps the Layers locks it carries.
+export { insertKeepingLocks, type Placed } from "./locked-insert";
 
 /**
  * The stored shape of rich text.

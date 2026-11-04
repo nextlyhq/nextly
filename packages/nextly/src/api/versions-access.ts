@@ -501,9 +501,11 @@ async function canUpdateLiveSingle(
  * normal read path uses so the collection's own gate applies identically.
  *
  * A denial (403) and a missing document (404) both mean "no history for you".
- * Any other failure is a real server-side fault — a component/relationship load
- * error, a throwing afterRead hook — and is re-thrown so the route reports it
- * as a 5xx instead of disguising an outage as missing content.
+ * Any other failure is the read failing rather than refusing — a database not
+ * migrated for the collection, a component/relationship load error, a throwing
+ * afterRead hook — and is re-thrown with the read's own error, so the route
+ * answers what the document read would instead of disguising it as missing
+ * content.
  */
 async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
@@ -609,24 +611,23 @@ export { resolveSingleDocumentId };
 
 /**
  * Collapse a live-read result into "may the caller see this document".
- * Only 403/404 mean no; anything else non-successful is a genuine fault,
- * except a rule that could not run, which ends the request with its own
- * answer rather than an internal error.
+ * Only 403/404 mean no; anything else non-successful is a genuine fault.
+ *
+ * The fault keeps the code and status the read gave it, rebuilt through the
+ * shared converter: a database not migrated for the collection answers
+ * ENTITY_NOT_MIGRATED, as the caller's own read of the document does, rather
+ * than an opaque 500, and a rule that could not run answers RULE_COULD_NOT_RUN
+ * rather than an internal error. The read ran as the caller, so its answer
+ * names only what the caller may be told.
  */
 function interpretReadResult(
-  result: ServiceErrorEnvelope & { success: boolean; statusCode: number }
+  read: ServiceErrorEnvelope & { success: boolean; statusCode: number }
 ): boolean {
-  if (result.success) return true;
-  const { statusCode } = result;
-  if (statusCode === 403 || statusCode === 404) return false;
-  if (result.code === "RULE_COULD_NOT_RUN") {
-    throw errorFromServiceEnvelope(result);
-  }
-  throw NextlyError.internal({
-    logContext: {
-      reason: "version-live-read-failed",
-      statusCode,
-    },
+  if (read.success) return true;
+  if (read.statusCode === 403 || read.statusCode === 404) return false;
+  throw errorFromServiceEnvelope(read, {
+    reason: "version-live-read-failed",
+    statusCode: read.statusCode,
   });
 }
 

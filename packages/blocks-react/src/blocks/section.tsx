@@ -11,8 +11,14 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_CHILD_GAP,
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -22,8 +28,11 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
   defineBlock({
     name: "core/section",
     version: 1,
-    description:
-      "A page region. Renders a landmark element, and opts into the site's content width once the site stylesheet defines it.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A page region.
+    // Renders a landmark element, and opts into the site's content width once
+    // the site stylesheet defines it.
+    description: "A full-width band of the page.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -34,8 +43,8 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["container", "wrapper", "band", "region"],
     },
     props: {
-      as: { type: "select", options: ["section", "header", "footer", "main"] },
-      contained: { type: "checkbox" },
+      as: htmlTagProp(["section", "header", "footer", "main"]),
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "section", contained: true },
     example: { props: { as: "section", contained: true } },
@@ -47,6 +56,24 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       // container rather than only the ones that thought to declare a default.
       children: {},
     },
+    // A band pads itself: room above and below its content and a gutter beside
+    // it, each a site token so a site retunes every section in one place. The
+    // values grow with the viewport (see `space.section-y` and `space.gutter`).
+    baseStyles: {
+      base: {
+        base: {
+          padding: {
+            blockStart: { $token: "space.section-y" },
+            blockEnd: { $token: "space.section-y" },
+            inlineStart: { $token: "space.gutter" },
+            inlineEnd: { $token: "space.gutter" },
+          },
+        },
+      },
+    },
+    childGap: CONTAINER_CHILD_GAP,
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   });

@@ -94,7 +94,7 @@ vi.mock("../../../init/build-service-config", () => ({
   buildServiceConfig: () => ({}),
 }));
 
-import { loadCliEnvironment } from "../../environment";
+import { loadProgramEnvironment } from "../../environment";
 import { createProgram } from "../../program";
 
 let dir: string;
@@ -370,11 +370,13 @@ describe("nextly media orphans, as the CLI runs it", () => {
       "media",
       "orphans",
     ];
-    // The entry point's environment step; it sets `NODE_ENV` for the run.
+    // The program as the entry point builds it: its environment step runs
+    // before the action, and sets `NODE_ENV` for the run.
     const nodeEnv = process.env.NODE_ENV;
     try {
-      loadCliEnvironment(argv);
-      await createProgram().parseAsync(argv);
+      await createProgram({
+        beforeAction: loadProgramEnvironment,
+      }).parseAsync(argv);
     } finally {
       Object.assign(process.env, { NODE_ENV: nodeEnv });
       delete process.env.MEDIA_ENV_FILES_PROBE;

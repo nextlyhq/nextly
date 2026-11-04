@@ -7,7 +7,7 @@ description: "The package manager could not install the package `nextly add` was
 
 The package manager could not install the package `nextly add` was given.
 
-`nextly add` installs a plugin with the project's package manager (pnpm, yarn or npm) and ends with its exit code when that install fails. The package manager's own output, printed just above, says why.
+`nextly add` installs a plugin with the project's package manager (pnpm, yarn or npm). When that install fails, `nextly add` exits 1, like every other failed command, and names the package manager's own exit code in the message (`pnpm exited 254`). The package manager's own output, printed just above, says why.
 
 ## Fix
 

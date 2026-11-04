@@ -64,11 +64,13 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
+import { createPortal } from "react-dom";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
-import { canvasPointerPoints, canvasRootFrom } from "./geometry-dom";
+import { canvasPointerPoints, overlaySpaceOf } from "./geometry-dom";
 import type { SideOrientation } from "./side-orientation";
 import type {
   EdgeLengths,
@@ -174,8 +176,18 @@ export interface SpacingHandlesProps {
   readonly onGestureChange?: (held: boolean) => void;
 }
 
-/** How thick a handle's hit area is, in canvas pixels. */
-const HANDLE_PX = 9;
+/**
+ * How thick a handle's hit area is, in the author's pixels: 24, the minimum
+ * target WCAG 2.2 asks of a pointer control, where its band has the room.
+ */
+const HANDLE_SCREEN_PX = 24;
+
+/**
+ * The least a handle's hit area is, in the author's pixels, on a band thinner
+ * than this: centred on the band, so it reaches past it by a few pixels at
+ * most. The Style panel's spacing fields edit the same values at full size.
+ */
+const HANDLE_FLOOR_PX = 9;
 
 /** A gesture in flight. */
 interface Gesture {
@@ -267,28 +279,124 @@ function applied(editor: EditorState, result: StyleWrite): string | undefined {
     : undefined;
 }
 
-/** Whether two bands would put their handles on the very same pixels. */
-function sameEdge(
-  one: SpacingBand,
-  other: SpacingBand,
-  outwardOf: (band: SpacingBand) => boolean
-): boolean {
-  if (one.side !== other.side) return false;
-  const a = handleRect(one, outwardOf(one));
-  const b = handleRect(other, outwardOf(other));
-  return a.x === b.x && a.y === b.y;
+/** Whether two rectangles share any pixels. */
+function overlaps(a: Rect, b: Rect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/**
+ * Where every band's handle sits, in the bands' order.
+ *
+ * Each is placed alone first, and a handle whose strip would overlap another
+ * on its side is placed again, splitting the stretch the two share. Both
+ * passes at the one `scale`: at a zoom the least size grows in the bands'
+ * units, so two strips that clear each other at 100% can overlap at 50%, and
+ * a check made at another scale than the placement would miss it.
+ *
+ * @param edgeOf - whether a band's moving edge is its outward one
+ * @param scale - the canvas's painted zoom, 1 outside a frame
+ * @internal
+ */
+export function placeHandles(
+  bands: readonly SpacingBand[],
+  edgeOf: (band: SpacingBand) => boolean,
+  scale: number
+): Rect[] {
+  const alone = bands.map(band =>
+    handleRect(band, edgeOf(band), undefined, scale)
+  );
+  return bands.map((band, index) => {
+    const own = alone[index];
+    if (own === undefined) throw new Error("a band without a handle");
+    const partner = bands.findIndex((other, at) => {
+      const theirs = alone[at];
+      return (
+        at !== index &&
+        other.side === band.side &&
+        theirs !== undefined &&
+        overlaps(own, theirs)
+      );
+    });
+    const other = bands[partner];
+    return other === undefined
+      ? own
+      : handleRect(band, edgeOf(band), shareWith(band, other), scale);
+  });
+}
+
+/**
+ * The stretch two overlapping handles split between them: the union of their
+ * bands along the side's axis, and which half this one takes.
+ */
+interface HandleShare {
+  readonly low: number;
+  readonly room: number;
+  /** This handle takes the half at the block's outside: the margin's. */
+  readonly outer: boolean;
+}
+
+/** The share of `band`'s handle beside `other`'s, which it overlaps. */
+function shareWith(band: SpacingBand, other: SpacingBand): HandleShare {
+  const across = band.side === "top" || band.side === "bottom";
+  const from = (rect: Rect) => (across ? rect.y : rect.x);
+  const to = (rect: Rect) =>
+    across ? rect.y + rect.height : rect.x + rect.width;
+  const low = Math.min(from(band.rect), from(other.rect));
+  const high = Math.max(to(band.rect), to(other.rect));
+  return { low, room: high - low, outer: band.box === "margin" };
 }
 
 /**
  * Where a handle's strip sits on its band.
  *
- * `nudged` shifts it clear of another handle occupying the same pixels, by one
- * thickness INTO the band — never out of it, so the control stays over the
- * space it edits.
+ * INSIDE the band, flush with the edge that moves. The band is the one place a
+ * press can only mean this control: past its outer edge is the neighbour the
+ * margin spaces the block from, and past its inner edge are the block's own
+ * children, and a press on either has to select what is there. A centred
+ * strip reached half its thickness into both.
+ *
+ * A band thinner than the strip is the strip, all of it; one thinner than
+ * {@link HANDLE_FLOOR_PX} gets that much, centred on it.
+ *
+ * `share` splits the stretch two handles would overlap on. A negative
+ * margin's band is laid inside the border edge, where padding's is, so the two
+ * start at one edge; the padding's, drawn later, would otherwise take every
+ * press there. The margin takes the half at the block's outside and the
+ * padding the half inside it, the order the two boxes have, so both strips
+ * take pointer events.
  */
-function handleRect(band: SpacingBand, outward: boolean, nudged = false): Rect {
+function handleRect(
+  band: SpacingBand,
+  outward: boolean,
+  share?: HandleShare,
+  scale = 1
+): Rect {
   const { rect, side } = band;
+  const across = side === "top" || side === "bottom";
   const far = side === "bottom" || side === "right";
+  const size = HANDLE_SCREEN_PX / scale;
+  const floor = HANDLE_FLOOR_PX / scale;
+  const at = (from: number, thickness: number): Rect =>
+    across
+      ? { x: rect.x, y: from, width: rect.width, height: thickness }
+      : { x: from, y: rect.y, width: thickness, height: rect.height };
+
+  if (share !== undefined) {
+    const { low, room } = share;
+    const thickness = Math.max(Math.min(size, room / 2), floor);
+    // Centred as a pair where the two need more room than there is.
+    const centring = thickness * 2 > room ? (room - thickness * 2) / 2 : 0;
+    // The block's outside is the low end on the top and left, the high end on
+    // the bottom and right.
+    const offset = centring + (share.outer ? 0 : thickness);
+    return at(far ? low + room - offset - thickness : low + offset, thickness);
+  }
+
   /*
    * The edge that MOVES when the value grows, which is where the control
    * belongs. `outward` says which one that is, and it is a property of neither
@@ -296,25 +404,12 @@ function handleRect(band: SpacingBand, outward: boolean, nudged = false): Rect {
    * are measured. See `spacingBandDrawnOutward` and `spacing-response.ts`.
    */
   const atMax = far === outward;
-  const half = HANDLE_PX / 2;
-  // Into the band, which is the direction away from its moving edge.
-  const shift = nudged ? (atMax ? -HANDLE_PX : HANDLE_PX) : 0;
-  if (side === "top" || side === "bottom") {
-    const edge = atMax ? rect.y + rect.height : rect.y;
-    return {
-      x: rect.x,
-      y: edge - half + shift,
-      width: rect.width,
-      height: HANDLE_PX,
-    };
-  }
-  const edge = atMax ? rect.x + rect.width : rect.x;
-  return {
-    x: edge - half + shift,
-    y: rect.y,
-    width: HANDLE_PX,
-    height: rect.height,
-  };
+  const low = across ? rect.y : rect.x;
+  const room = across ? rect.height : rect.width;
+  const thickness = Math.max(Math.min(size, room), floor);
+  // A band thinner than the floor: the strip centred on it.
+  const inset = thickness > room ? (room - thickness) / 2 : 0;
+  return at(atMax ? low + room - inset - thickness : low + inset, thickness);
 }
 
 /** The words an author reads for one side of one box. */
@@ -430,6 +525,14 @@ export function SpacingHandles({
     scale: string;
   }>({ styles: undefined, nodeId: "", tier: "", scale: "" });
   const [preview, setPreview] = React.useState<string | null>(null);
+  /*
+   * Over a frame the handles are drawn in the editor's document, scaled with
+   * the page, while the preview has to reach the page in the frame's.
+   */
+  const canvas = useCanvasFrame();
+  const handleScale = canvas.frame === null ? 1 : canvas.scale;
+  const previewHost =
+    canvas.frame === null ? null : (canvas.document?.head ?? null);
   /**
    * The band a gesture is holding, kept alive for the gesture's lifetime.
    *
@@ -893,9 +996,18 @@ export function SpacingHandles({
        * The canvas root, so pointer travel can be expressed in the SAME space
        * the bands were measured in.
        */
-      const root = canvasRootFrom(host, CANVAS_ROOT_CLASS);
+      const space = overlaySpaceOf(host, CANVAS_ROOT_CLASS);
+      const root = space?.root ?? null;
+      /*
+       * A pointer on a handle drawn over a frame is reported in the EDITOR's
+       * client coordinates, and the root's rectangles are read in the frame's:
+       * carried across first, through the one mapping every gesture uses.
+       */
+      const inCanvas = (x: number, y: number): { x: number; y: number } =>
+        space === null ? { x, y } : space.pointInCanvas({ x, y });
+      const pressed = inCanvas(originX, originY);
       const origin =
-        root === null ? null : canvasPointerPoints(originX, originY, root);
+        root === null ? null : canvasPointerPoints(pressed.x, pressed.y, root);
 
       /**
        * How far the pointer has moved, in both spaces, because the two answer
@@ -929,7 +1041,8 @@ export function SpacingHandles({
           dy: moved.clientY - originY,
         };
         if (root === null || origin === null) return { hand, canvas: hand };
-        const now = canvasPointerPoints(moved.clientX, moved.clientY, root);
+        const at = inCanvas(moved.clientX, moved.clientY);
+        const now = canvasPointerPoints(at.x, at.y, root);
         return {
           hand,
           canvas: {
@@ -1179,37 +1292,29 @@ export function SpacingHandles({
     return region;
   }
 
+  /*
+   * Split with another handle where the two would overlap.
+   *
+   * A negative margin's band is laid inside the border edge, where padding's
+   * is — so `margin-top: -16px` beside `padding-top: 20px` gives two bands
+   * from one edge. Padding is drawn later, so its handle would take every
+   * press there and the margin's control would be advertised and unreachable.
+   */
+  /*
+   * No handle where the block's author did not offer the property. The band
+   * still draws — it reports what the page renders, which is true either way —
+   * but a control that wrote it would bypass a capability declaration the
+   * Style panel honours. Left out BEFORE the handles are placed, so a handle
+   * with no partner drawn beside it keeps its whole band.
+   */
+  const handled = drawn.filter(band => writable.has(band.box));
+  const placed = placeHandles(handled, drawnEdgeOf, handleScale);
+
   return (
     <>
-      {drawn.map((band, index) => {
-        /*
-         * No handle where the block's author did not offer the property. The
-         * band still draws — it reports what the page renders, which is true
-         * either way — but a control that wrote it would bypass a capability
-         * declaration the Style panel honours.
-         */
-        if (!writable.has(band.box)) return null;
-        /*
-         * Nudged aside where two handles would land on the same pixels.
-         *
-         * A negative margin's band is laid inside the border edge, exactly where
-         * padding's is — so `margin-top: -16px` with `padding-top: 16px` gives
-         * two bands with identical rectangles and therefore two identical
-         * handles. Same stacking, and padding is drawn later, so it takes every
-         * press and the margin's control is advertised and unreachable.
-         *
-         * The EARLIER band moves, by its own thickness, into the band both of
-         * them occupy. Both strips then take pointer events and neither leaves
-         * the space it describes.
-         */
-        const outward = drawnEdgeOf(band);
-        const rect = handleRect(
-          band,
-          outward,
-          drawn
-            .slice(index + 1)
-            .some(later => sameEdge(band, later, drawnEdgeOf))
-        );
+      {handled.map((band, index) => {
+        const rect = placed[index];
+        if (rect === undefined) return null;
         return (
           <div
             key={`${band.box}-${band.side}`}
@@ -1285,7 +1390,11 @@ export function SpacingHandles({
           />
         );
       })}
-      {preview === null ? null : <style>{preview}</style>}
+      {preview === null ? null : previewHost === null ? (
+        <style>{preview}</style>
+      ) : (
+        createPortal(<style>{preview}</style>, previewHost)
+      )}
       {region}
     </>
   );

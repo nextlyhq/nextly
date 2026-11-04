@@ -606,6 +606,10 @@ export class CollectionsHandler {
     collectionName: string;
     /** Page number (1-indexed, default: 1) */
     page?: number;
+    /** Rows to skip before the first returned, instead of a page. */
+    offset?: number;
+    /** Refuse a sort key that names no sortable field instead of dropping it. */
+    unknownSort?: "drop" | "refuse";
     /** Number of documents per page (default: 10, max: 500) */
     limit?: number;
     /** Search query to filter entries by searchable fields */
@@ -628,7 +632,8 @@ export class CollectionsHandler {
      * Prefix with `-` for descending.
      * @example '-createdAt' for descending, 'title' for ascending
      */
-    sort?: string;
+    /** One key or several, in order; see the query service's `sort`. */
+    sort?: string | readonly string[];
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */
@@ -1067,6 +1072,21 @@ export class CollectionsHandler {
     actor?: RequestActor;
   }) {
     return this.entryService.unpublishAllLocales(this.resolveUserParam(params));
+  }
+
+  /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   */
+  // Reached through the dispatcher's method table, handed the handler the DI
+  // container resolves, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async previewPublishAllLocales(
+    params: Parameters<CollectionsHandler["publishAllLocales"]>[0]
+  ) {
+    return this.entryService.previewPublishAllLocales(
+      this.resolveUserParam(params)
+    );
   }
 
   /**

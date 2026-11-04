@@ -12,17 +12,26 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearBlocks,
   registerBlocks,
+  registryBlockSource,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
 import {
+  designLockOf,
+  fieldLabel,
   inspectSelection,
   lockOp,
+  propIsWritable,
   propPatch,
   renameOp,
   SUPPORTED_PROP_TYPES,
   lockStateOf,
+  layersLockChangeable,
+  lockStatusOf,
+  designIsWritable,
+  designReadOnlyReason,
+  blockIsReadOnly,
 } from "./inspector";
 
 const base = {
@@ -115,7 +124,8 @@ describe("inspectSelection", () => {
           name: "acme/gallery",
           props: {
             caption: { type: "text" },
-            images: { type: "array" },
+            // A type no control exists for. (Arrays have one now.)
+            images: { type: "acme-gallery-images" },
           },
         },
       ] as never,
@@ -148,6 +158,10 @@ describe("inspectSelection", () => {
       "number",
       "checkbox",
       "select",
+      "media",
+      "richText",
+      "array",
+      "relation",
     ]);
   });
 
@@ -179,6 +193,188 @@ describe("inspectSelection", () => {
 
     expect(inspection).not.toBeNull();
     expect(inspection?.props).toEqual([]);
+  });
+});
+
+describe("a block inside an area locked to its content", () => {
+  // A headline whose text is content and whose alignment is design, held by
+  // blocks whose slots are locked in each way a lock can read.
+  function withLockedAreas() {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/headline",
+          editor: { label: "Headline" },
+          props: {
+            text: { type: "text", role: "content" },
+            align: { type: "select", options: ["left", "right"] },
+          },
+        },
+        {
+          ...base,
+          name: "acme/hero",
+          editor: { label: "Hero" },
+          slots: {
+            body: {
+              defaultBlock: [{ type: "acme/headline" }],
+              lock: "contentOnly",
+            },
+          },
+        },
+        // A slot that declares no lock of its own, inside the hero's area.
+        {
+          ...base,
+          name: "acme/card",
+          slots: { inner: { defaultBlock: [{ type: "acme/headline" }] } },
+        },
+        {
+          ...base,
+          name: "acme/row",
+          slots: {
+            items: { defaultBlock: [{ type: "acme/headline" }], lock: "all" },
+          },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+  }
+
+  const headline = (id: string): BlockNode =>
+    ({
+      id,
+      type: "acme/headline",
+      version: 1,
+      props: { text: "Title", align: "left" },
+    }) as BlockNode;
+
+  const holder = (id: string, type: string, slot: string, child: BlockNode) =>
+    ({
+      id,
+      type,
+      version: 1,
+      props: {},
+      slots: { [slot]: [child] },
+    }) as BlockNode;
+
+  it("keeps its content editable and shows the rest read-only", () => {
+    withLockedAreas();
+    const inspection = inspectSelection(
+      documentOf([holder("h", "acme/hero", "body", headline("t"))]),
+      "t"
+    );
+
+    expect(inspection?.props.map(prop => [prop.name, prop.readOnly])).toEqual([
+      ["text", false],
+      ["align", true],
+    ]);
+  });
+
+  it("gives the reason in the words every lock refusal uses", () => {
+    withLockedAreas();
+    const inspection = inspectSelection(
+      documentOf([holder("h", "acme/hero", "body", headline("t"))]),
+      "t"
+    );
+
+    expect(inspection?.designLock).toEqual({
+      headline: "This area of Hero is locked to its content.",
+      remedy: "Headline's design and settings can't change here.",
+    });
+  });
+
+  it("names the area by its outermost locked block, two slots down", () => {
+    // The card's slot declares no lock, so the hero's passes through it: the
+    // headline is held, and the area an author meets is the hero's.
+    withLockedAreas();
+    const inspection = inspectSelection(
+      documentOf([
+        holder(
+          "h",
+          "acme/hero",
+          "body",
+          holder("c", "acme/card", "inner", headline("t"))
+        ),
+      ]),
+      "t"
+    );
+
+    expect(inspection?.designLock?.headline).toBe(
+      "This area of Hero is locked to its content."
+    );
+    expect(
+      inspection?.props.find(prop => prop.name === "align")?.readOnly
+    ).toBe(true);
+  });
+
+  it("holds nothing read-only where no lock fixes the design", () => {
+    // Locked "all" fixes which blocks the row holds, not how they look; and a
+    // block at the top level sits in no slot at all.
+    withLockedAreas();
+    for (const document of [
+      documentOf([holder("r", "acme/row", "items", headline("t"))]),
+      documentOf([headline("t")]),
+    ]) {
+      const inspection = inspectSelection(document, "t");
+      expect(inspection?.designLock).toBeUndefined();
+      expect(inspection?.props.map(prop => prop.readOnly)).toEqual([
+        false,
+        false,
+      ]);
+    }
+  });
+
+  it("reads the locks from the editor's own source, not only the registry", () => {
+    withLockedAreas();
+    // A host judging edits by its own definitions: in them the card's slot
+    // is locked to its content, which the registry's card does not say.
+    const registered = registryBlockSource();
+    const definitions = {
+      get: (type: string) =>
+        type === "acme/card"
+          ? {
+              version: 1,
+              slots: {
+                inner: {
+                  defaultBlock: [{ type: "acme/headline" }],
+                  lock: "contentOnly" as const,
+                },
+              },
+            }
+          : registered.get(type),
+    };
+    const page = documentOf([holder("c", "acme/card", "inner", headline("t"))]);
+
+    // CONTROL: by the registry nothing holds it.
+    expect(designLockOf(page, "t")).toBeUndefined();
+    expect(designLockOf(page, "t", { definitions })).toBeDefined();
+    expect(propIsWritable(page, "t", "align", { definitions })).toBe(false);
+  });
+
+  it("holds a block a placement puts under a component's lock, which only the composed page shows", () => {
+    withLockedAreas();
+    // On the page the headline is placement content, under no lock of the
+    // page's own; composed, it sits in the component's hero, locked to its
+    // content, and keeps its id.
+    const page = documentOf([headline("t")]);
+    const composed = documentOf([
+      holder("cx-h", "acme/hero", "body", headline("t")),
+    ]);
+
+    // CONTROL: the page alone holds nothing read-only.
+    expect(designLockOf(page, "t")).toBeUndefined();
+    expect(designLockOf(page, "t", { composed })).toBeDefined();
+    expect(propIsWritable(page, "t", "align", { composed })).toBe(false);
+    expect(propIsWritable(page, "t", "text", { composed })).toBe(true);
+    expect(
+      inspectSelection(page, "t", { composed })?.props.map(prop => [
+        prop.name,
+        prop.readOnly,
+      ])
+    ).toEqual([
+      ["text", false],
+      ["align", true],
+    ]);
   });
 });
 
@@ -356,5 +552,324 @@ describe("lockStateOf", () => {
 
   it("reads an empty set as unlocked", () => {
     expect(lockStateOf(docWith([]), [])).toBe("unlocked");
+  });
+});
+
+describe("lockStatusOf and designIsWritable", () => {
+  /** A frame whose one slot carries the given lock, holding one text block. */
+  function framed(
+    lock: "all" | "insert" | "contentOnly",
+    child: Partial<BlockNode> = {}
+  ) {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/text",
+          editor: { label: "Text" },
+          props: {
+            body: { type: "text", role: "content" },
+            tone: { type: "text" },
+          },
+        },
+        {
+          ...base,
+          name: "acme/frame",
+          editor: { label: "Frame" },
+          props: {},
+          slots: { children: { lock, defaultBlock: [{ type: "acme/text" }] } },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    return documentOf([
+      {
+        id: "frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            {
+              id: "t",
+              type: "acme/text",
+              version: 1,
+              props: {},
+              ...child,
+            } as BlockNode,
+          ],
+        },
+      } as BlockNode,
+    ]);
+  }
+
+  it("reports no lock for a free block, and its design writable", () => {
+    const doc = withHeading();
+    expect(lockStatusOf(doc, "a")).toEqual({ layers: false, slot: undefined });
+    expect(designIsWritable(doc, "a")).toBe(true);
+  });
+
+  it("reports the Layers lock, and the design read-only under it", () => {
+    const doc = documentOf([
+      {
+        id: "a",
+        type: "acme/heading",
+        version: 1,
+        props: {},
+        locked: true,
+      } as BlockNode,
+    ]);
+    withHeading();
+    expect(lockStatusOf(doc, "a").layers).toBe(true);
+    expect(designIsWritable(doc, "a")).toBe(false);
+  });
+
+  it("reports a Layers lock held from the block around it, read-only, naming that block", () => {
+    // A lock covers everything inside the block: the child is not locked
+    // itself, yet nothing about it may change, and the inspector says which
+    // block holds the lock so the author knows where to lift it.
+    withHeading();
+    const doc = documentOf([
+      {
+        id: "outer",
+        type: "acme/heading",
+        version: 1,
+        props: {},
+        locked: true,
+        name: "Hero",
+        slots: {
+          children: [{ id: "a", type: "acme/heading", version: 1, props: {} }],
+        },
+      } as BlockNode,
+    ]);
+    expect(lockStatusOf(doc, "a")).toEqual({
+      layers: false,
+      inheritedFrom: "Hero",
+      slot: undefined,
+    });
+    expect(blockIsReadOnly(doc, "a")).toBe(true);
+    expect(propIsWritable(doc, "a", "text")).toBe(false);
+    expect(designReadOnlyReason(doc, "a")).toBe(
+      "Locked by Hero: this block is inside it, so it can't be moved, deleted or edited. Unlock Hero to change it."
+    );
+    // The block holding the lock reports its own, not an inherited one.
+    expect(lockStatusOf(doc, "outer").inheritedFrom).toBeUndefined();
+  });
+
+  it("names the block whose slot fixes a contentOnly area, and keeps its design read-only", () => {
+    const doc = framed("contentOnly");
+    expect(lockStatusOf(doc, "t")).toEqual({
+      layers: false,
+      slot: {
+        lock: "contentOnly",
+        holder: "Frame",
+        // The lock refusal's own wording: one sentence for the read-only
+        // reason and a refused edit.
+        reason:
+          "This area of Frame is locked to its content. Text's design and settings can't change here.",
+      },
+    });
+    expect(designIsWritable(doc, "t")).toBe(false);
+    expect(designReadOnlyReason(doc, "t")).toBe(
+      "This area of Frame is locked to its content. Text's design and settings can't change here."
+    );
+  });
+
+  it("leaves the design writable in a slot locked all or insert, and still names the holder", () => {
+    for (const lock of ["all", "insert"] as const) {
+      clearBlocks();
+      const doc = framed(lock);
+      expect(lockStatusOf(doc, "t").slot).toMatchObject({
+        lock,
+        holder: "Frame",
+      });
+      expect(lockStatusOf(doc, "t").slot?.reason).toMatch(
+        /^Frame fixes which blocks it holds/
+      );
+      expect(designIsWritable(doc, "t")).toBe(true);
+    }
+  });
+
+  it("keeps both locks apart when a block carries its own and sits in a locked slot", () => {
+    const doc = framed("contentOnly", { locked: true });
+    expect(lockStatusOf(doc, "t")).toMatchObject({
+      layers: true,
+      slot: { lock: "contentOnly", holder: "Frame" },
+    });
+  });
+
+  it("answers for the frame itself as unlocked: its own slot holds its children, not it", () => {
+    const doc = framed("contentOnly");
+    expect(lockStatusOf(doc, "frame").slot).toBeUndefined();
+  });
+  it("prefers a contentOnly area the composed page adds over the page's own arrangement lock", () => {
+    // On the page the text sits in a row locked `all`; composed, a component
+    // places it in a frame locked to its content. The design is held, so the
+    // card must say the contentOnly lock and hold the Layers lock with it.
+    framed("contentOnly");
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/row",
+          editor: { label: "Row" },
+          props: {},
+          slots: {
+            children: { lock: "all", defaultBlock: [{ type: "acme/text" }] },
+          },
+        },
+      ] as never,
+      { source: "inspector-test-row" }
+    );
+    const text = {
+      id: "t",
+      type: "acme/text",
+      version: 1,
+      props: {},
+    } as BlockNode;
+    const page = documentOf([
+      {
+        id: "row",
+        type: "acme/row",
+        version: 1,
+        props: {},
+        slots: { children: [text] },
+      } as BlockNode,
+    ]);
+    const composed = documentOf([
+      {
+        id: "cx-frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: { children: [text] },
+      } as BlockNode,
+    ]);
+
+    // CONTROL: the page alone says the arrangement lock.
+    expect(lockStatusOf(page, "t").slot?.lock).toBe("all");
+    const status = lockStatusOf(page, "t", { composed });
+    expect(designIsWritable(page, "t", { composed })).toBe(false);
+    expect(status.slot).toMatchObject({ lock: "contentOnly", holder: "Frame" });
+    expect(layersLockChangeable(status)).toBe(false);
+  });
+});
+
+describe("what the card shows", () => {
+  it("carries the block's own description and icon from its definition", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/quote",
+          description: "A quotation with its source.",
+          editor: { label: "Quote", icon: "quote" },
+          props: {},
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    const doc = documentOf([
+      { id: "q", type: "acme/quote", version: 1, props: {} } as BlockNode,
+    ]);
+    const inspection = inspectSelection(doc, "q");
+    expect(inspection?.description).toBe("A quotation with its source.");
+    expect(inspection?.icon).toBe("quote");
+  });
+
+  it("leaves the icon unset for a block that names none", () => {
+    const inspection = inspectSelection(withHeading(), "a");
+    expect(inspection?.icon).toBeUndefined();
+    expect(inspection?.description).toBe("A block.");
+  });
+});
+
+describe("a key as an author reads it", () => {
+  it("spells colour the one way the editor does", () => {
+    // "Color" beside "Colour for Color" and the Colour form: one word,
+    // spelled two ways in one panel.
+    expect(fieldLabel("color")).toBe("Colour");
+    expect(fieldLabel("backgroundColor")).toBe("Background colour");
+    expect(fieldLabel("linkColorHover")).toBe("Link colour hover");
+    // A word only containing the letters is left alone.
+    expect(fieldLabel("colorful")).toBe("Colorful");
+  });
+});
+
+describe("which choices a block's inspector offers", () => {
+  /** A button-like block: a link, an entry link, and what it acts as. */
+  function withButton(props: Record<string, unknown>) {
+    // Registered afresh for each document a case builds.
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/button",
+          editor: { label: "Button" },
+          props: {
+            href: { type: "url" },
+            entryCollection: { type: "text" },
+            entryId: { type: "text" },
+            type: {
+              type: "select",
+              options: ["button", "submit", "reset"],
+              onlyWithout: ["href", ["entryCollection", "entryId"]],
+            },
+            as: { type: "select", options: ["div"] },
+          },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    return documentOf([
+      { id: "b", type: "acme/button", version: 1, props } as BlockNode,
+    ]);
+  }
+  /** The props the inspector draws a control for. */
+  const names = (document: BlockDocument) =>
+    inspectSelection(document, "b")
+      ?.props.filter(prop => prop.offered)
+      .map(prop => prop.name);
+
+  it("leaves out a prop that only applies without another, once that one is set", () => {
+    // "Acts as" means nothing on a button that is a link.
+    expect(names(withButton({}))).toContain("type");
+    expect(names(withButton({ href: "/pricing" }))).not.toContain("type");
+  });
+
+  it("leaves it out once any of the props it applies without is set", () => {
+    // An entry link is as much a link as a typed URL, once it names both the
+    // collection and the entry: the renderer resolves no link from half of one.
+    expect(
+      names(withButton({ entryCollection: "pages", entryId: "e1" }))
+    ).not.toContain("type");
+    expect(names(withButton({ entryId: "e1" }))).toContain("type");
+  });
+
+  it("counts a link as set only when it is one a page can follow", () => {
+    // A refused URL renders no link, so the button is still a button.
+    expect(names(withButton({ href: "javascript:alert(1)" }))).toContain(
+      "type"
+    );
+    expect(names(withButton({ href: "   " }))).toContain("type");
+  });
+
+  it("leaves out a choice with only one option, which offers nothing to pick", () => {
+    expect(names(withButton({}))).not.toContain("as");
+    expect(names(withButton({ as: "div" }))).not.toContain("as");
+  });
+
+  it("keeps a one-option choice whose stored value is not that option, so it can be repaired", () => {
+    // An imported `section` still renders; the choice is how it goes back.
+    expect(names(withButton({ as: "section" }))).toContain("as");
+  });
+
+  it("still lists a left-out prop, so a component can expose it", () => {
+    const type = inspectSelection(
+      withButton({ href: "/pricing" }),
+      "b"
+    )?.props.find(prop => prop.name === "type");
+    expect(type?.offered).toBe(false);
   });
 });

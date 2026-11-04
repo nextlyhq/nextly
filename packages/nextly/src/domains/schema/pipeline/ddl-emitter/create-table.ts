@@ -17,10 +17,12 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { TableSpec } from "../diff/types";
-import { createIndexSql } from "../sql-templates/create-index";
+import {
+  createIndexSql,
+  tableColumnTypes,
+} from "../sql-templates/create-index";
 import {
   createTableBody,
-  renderedType,
   resolvePrimaryKey,
   type QuoteIdentifier,
 } from "../sql-templates/create-table-body";
@@ -80,9 +82,7 @@ export function tableIndexStatements(
   dialect: SupportedDialect,
   q: QuoteIdentifier
 ): string[] {
-  const columnTypes = new Map(
-    table.columns.map(c => [c.name, renderedType(c)])
-  );
+  const columnTypes = tableColumnTypes(table);
   return (table.indexes ?? []).map(index =>
     createIndexSql(table.name, index, dialect, q, { columnTypes })
   );

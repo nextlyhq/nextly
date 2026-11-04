@@ -17,8 +17,9 @@
  * @module admin/site-style-client.test
  */
 import type { ValidationIssue } from "@nextlyhq/plugin-sdk/admin";
-import { renderHook, act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import type * as React from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** What the stubbed read answers with for the test in hand. */
 let readAnswer: {
@@ -50,12 +51,42 @@ let writeBehaviour: () => Promise<unknown> = async () => ({ id: "1" });
  */
 let issuesAnswer: readonly ValidationIssue[] = [];
 const writes: Record<string, unknown>[] = [];
+/** What reached Settings' route, and how often the document was read again. */
+const routeWrites: unknown[] = [];
+let refetches = 0;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
 
+// The stored style arrives through the editor's one read of the plugin's
+// route; that read's own request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    ...readAnswer,
+    refetch: async () => {
+      refetches += 1;
+      return { isError: false };
+    },
+  }),
+}));
+
+// No `useSingleDocument` here: the editor must not read the Single, which an
+// author without Design's permission is refused, so a read of it fails.
+// The admin's own sentence for a refusal, as a surface reads it.
+const { apiErrorMessage } =
+  await vi.importActual<typeof import("@nextlyhq/admin")>("@nextlyhq/admin");
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  useSingleDocument: () => readAnswer,
+  apiErrorMessage,
+  // The site's breakpoints go through Settings' route, answered like the
+  // Single's own update so one switch drives both.
+  writePluginRoute: async (write: unknown) => {
+    routeWrites.push(write);
+    return writeBehaviour();
+  },
   validationIssues: () => issuesAnswer,
+  // The form's storing gate, absent here: nothing is tracked.
+  useTrackedWrite: () => () => {},
+  readPluginRoute: async () => undefined,
   useUpdateSingleDocument: (
     _slug: string,
     _locale?: string,
@@ -72,7 +103,15 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
 }));
 
-const { useSaveSiteStyle, useSiteStyle } = await import("./site-style-client");
+const {
+  SITE_STYLE_PAUSE_MS,
+  SiteStyleHistoryContext,
+  extendHeldSiteStyle,
+  releaseHeldSiteStyle,
+  useFontCatalogueClient,
+  useSaveSiteStyle,
+  useSiteStyle,
+} = await import("./site-style-client");
 
 /** A defaults tier a host states in code. */
 const DEFAULTS = {
@@ -90,6 +129,8 @@ beforeEach(() => {
   writeBehaviour = async () => ({ id: "1" });
   issuesAnswer = [];
   writes.length = 0;
+  routeWrites.length = 0;
+  refetches = 0;
   writeOptions = undefined;
 });
 
@@ -165,6 +206,47 @@ describe("writing one section", () => {
 
     expect(writes).toHaveLength(1);
     expect(Object.keys(writes[0] ?? {})).toEqual(["tokens"]);
+  });
+
+  it("writes the breakpoints through Settings' route, and reads the document again", async () => {
+    // The one write the site style lets change them; the Single's own update
+    // would be refused.
+    const { result } = renderHook(() => useSaveSiteStyle());
+    const set = {
+      viewport: [{ id: "tablet", label: "Tablet", maxWidth: 900 }],
+      container: [],
+    };
+
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("breakpoints", set);
+    });
+
+    expect(verdict).toEqual({ saved: true, issues: {} });
+    expect(writes).toEqual([]);
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/breakpoints",
+        body: { breakpoints: set },
+        // Unload-safe, as every site style write is: the browser finishes it
+        // if the page goes before it answers.
+        keepalive: true,
+      },
+    ]);
+    expect(refetches).toBe(1);
+  });
+
+  it("sends every other section to the Single, not the route", async () => {
+    const { result } = renderHook(() => useSaveSiteStyle());
+    await act(async () => {
+      await result.current.save("fonts", []);
+    });
+    expect(routeWrites).toEqual([]);
+    expect(writes).toEqual([{ fonts: [] }]);
+    // Nothing invalidates the route's read for a Single write, so the writer
+    // asks it again, or the canvas would keep drawing the old style.
+    expect(refetches).toBe(1);
   });
 
   it("serializes against the other studios through one mutation scope", () => {
@@ -266,5 +348,581 @@ describe("writing one section", () => {
     });
 
     expect(verdict?.saved).toBe(true);
+  });
+});
+
+describe("a save inside the editor, as a step of its history", () => {
+  type Step = {
+    undo: () => Promise<{ stored: boolean }>;
+    redo: () => Promise<{ stored: boolean }>;
+  };
+
+  /** The editor's side: what was recorded, and what each section last held. */
+  function editorHistory() {
+    const steps: Step[] = [];
+    const value = {
+      record: (step: Step) => {
+        steps.push(step);
+        return () => {
+          steps.splice(steps.indexOf(step), 1);
+        };
+      },
+      settled: new Map(),
+    };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={value}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    return { steps, wrapper };
+  }
+
+  it("records a step that writes the section back to what was stored, and forward again", async () => {
+    readAnswer = {
+      data: { tokens: { tokens: [{ name: "brand", kind: "color" }] } },
+      isPending: false,
+      error: null,
+    };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toHaveLength(1);
+
+    let undone: { stored: boolean } | undefined;
+    await act(async () => {
+      undone = await steps[0]?.undo();
+    });
+    expect(undone?.stored).toBe(true);
+    expect(writes.at(-1)).toEqual({
+      tokens: { tokens: [{ name: "brand", kind: "color" }] },
+    });
+
+    await act(async () => {
+      await steps[0]?.redo();
+    });
+    expect(writes.at(-1)).toEqual({ tokens: { tokens: [] } });
+  });
+
+  it("undoes a first write to a section by clearing it", async () => {
+    // Nothing was stored: taking the change back stores nothing again, so the
+    // site's own defaults show through.
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("classes", [{ id: "c1", slug: "card" }]);
+    });
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: null });
+  });
+
+  it("builds each step on the write before it, not on a read that has not caught up", async () => {
+    // Two saves before the read refreshes: undoing the second must return
+    // the section to the first, not to what the stale read still holds.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const first = [{ id: "c1", slug: "card" }];
+    const second = [...first, { id: "c2", slug: "hero" }];
+    await act(async () => {
+      await result.current.save("classes", first);
+      await result.current.save("classes", second);
+    });
+    await act(async () => {
+      await steps[1]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: first });
+  });
+
+  it("records nothing for a refused save", async () => {
+    writeBehaviour = async () => {
+      throw new Error("refused");
+    };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toEqual([]);
+  });
+
+  it("answers false when the write taking the change back is refused", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    writeBehaviour = async () => {
+      throw new Error("refused");
+    };
+    let undone: { stored: boolean } | undefined;
+    await act(async () => {
+      undone = await steps[0]?.undo();
+    });
+    expect(undone?.stored).toBe(false);
+  });
+
+  it("records nothing outside an editor", async () => {
+    // The admin's own screens save without a history to join.
+    const { result } = renderHook(() => useSaveSiteStyle());
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    expect(writes).toHaveLength(1);
+  });
+
+  it("builds each step on the save before it, even while that save is still in flight", async () => {
+    // The studios save without waiting, so two edits can both be in flight.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const first = [{ id: "c1", slug: "card" }];
+    const second = [...first, { id: "c2", slug: "hero" }];
+    await act(async () => {
+      await Promise.all([
+        result.current.save("classes", first),
+        result.current.save("classes", second),
+      ]);
+    });
+    await act(async () => {
+      await steps[1]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: first });
+  });
+
+  it("takes its place in the history when the change is made, not when it is stored", async () => {
+    // A page edit made while the save is in flight comes after it.
+    let land: (value: unknown) => void = () => {};
+    writeBehaviour = () =>
+      new Promise(resolve => {
+        land = resolve;
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toHaveLength(1);
+    // The write starts once the writes before it have answered.
+    await waitFor(() => expect(writes).toHaveLength(1));
+    await act(async () => {
+      land({ id: "1" });
+      await saving;
+    });
+    expect(steps).toHaveLength(1);
+  });
+
+  it("withdraws the step it recorded when the save is refused", async () => {
+    let refuse: (reason: unknown) => void = () => {};
+    writeBehaviour = () =>
+      new Promise((_, reject) => {
+        refuse = reject;
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toHaveLength(1);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    await act(async () => {
+      refuse(new Error("refused"));
+      await saving;
+    });
+    expect(steps).toEqual([]);
+  });
+
+  it("builds on the newest save still in flight when an older one lands", async () => {
+    // A and B are in flight; A lands, then C is made while B is still
+    // pending. Undoing C must return the section to B, not to A.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const pending: Array<(value: unknown) => void> = [];
+    writeBehaviour = () =>
+      new Promise(resolve => {
+        pending.push(resolve);
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const a = [{ id: "a", slug: "a" }];
+    const b = [...a, { id: "b", slug: "b" }];
+    const c = [...b, { id: "c", slug: "c" }];
+    let saves: Promise<unknown>[] = [];
+    act(() => {
+      saves = [
+        result.current.save("classes", a),
+        result.current.save("classes", b),
+      ];
+    });
+    // Writes go one at a time: A's lands, then B's starts and stays pending.
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => {
+      pending[0]?.({ id: "1" });
+      await saves[0];
+    });
+    await waitFor(() => expect(pending).toHaveLength(2));
+    act(() => {
+      saves.push(result.current.save("classes", c));
+    });
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      pending[1]?.({ id: "1" });
+      await Promise.all(saves);
+    });
+    await act(async () => {
+      await steps[2]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: b });
+  });
+
+  it("undoes a later save to what was stored, when the save before it was refused", async () => {
+    // A is refused and B is stored: what stood before B is the section from
+    // before A, so undoing B must not store the refused A after all.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const answers: Array<{
+      ok: (v: unknown) => void;
+      no: (r: unknown) => void;
+    }> = [];
+    writeBehaviour = () =>
+      new Promise((ok, no) => {
+        answers.push({ ok, no });
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const a = [{ id: "a", slug: "a" }];
+    const b = [{ id: "b", slug: "b" }];
+    let saves: Promise<unknown>[] = [];
+    act(() => {
+      saves = [
+        result.current.save("classes", a),
+        result.current.save("classes", b),
+      ];
+    });
+    await waitFor(() => expect(answers).toHaveLength(1));
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      answers[0]?.no(new Error("refused"));
+      await Promise.all(saves);
+    });
+    expect(steps).toHaveLength(1);
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: [] });
+  });
+
+  it("records no step for a save that leaves the section as it was", async () => {
+    // Pressing Save on an unchanged set changes nothing: no Undo to take,
+    // and the redo branch is left alone.
+    readAnswer = {
+      data: { classes: [{ id: "a", slug: "a" }] },
+      isPending: false,
+      error: null,
+    };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("classes", [{ id: "a", slug: "a" }]);
+    });
+    expect(steps).toEqual([]);
+  });
+
+  it("builds on a newer read once its own saves have settled", async () => {
+    // Another tab changes the section after this editor's save: the next
+    // step must take back to that, not to this editor's older value.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { steps, wrapper } = editorHistory();
+    const { result, rerender } = renderHook(() => useSaveSiteStyle(), {
+      wrapper,
+    });
+    const mine = [{ id: "a", slug: "a" }];
+    const theirs = [{ id: "t", slug: "theirs" }];
+    await act(async () => {
+      await result.current.save("classes", mine);
+    });
+    readAnswer = { data: { classes: theirs }, isPending: false, error: null };
+    rerender();
+    await act(async () => {
+      await result.current.save("classes", [...theirs, { id: "b", slug: "b" }]);
+    });
+    await act(async () => {
+      await steps[1]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: theirs });
+  });
+
+  it("drops an undo and redo queued behind a save that is then refused", async () => {
+    // Undone and redone while the save was in flight: once it is refused,
+    // neither may store anything, or a change would land with no step left
+    // to take it back.
+    let refuse: (reason: unknown) => void = () => {};
+    writeBehaviour = () =>
+      new Promise((_, no) => {
+        refuse = no;
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.save("tokens", { tokens: [] });
+    });
+    const [step] = steps;
+    let undoing: Promise<unknown> = Promise.resolve();
+    let redoing: Promise<unknown> = Promise.resolve();
+    act(() => {
+      undoing = step?.undo() ?? undoing;
+      redoing = step?.redo() ?? redoing;
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      refuse(new Error("refused"));
+      await Promise.all([saving, undoing, redoing]);
+    });
+    expect(writes).toHaveLength(1);
+  });
+});
+
+describe("a save held for the author's pause", () => {
+  type Step = {
+    undo: () => Promise<{ stored: boolean }>;
+    redo: () => Promise<{ stored: boolean }>;
+  };
+
+  function editorHistory() {
+    const steps: Step[] = [];
+    const value = {
+      record: (step: Step) => {
+        steps.push(step);
+        return () => {
+          steps.splice(steps.indexOf(step), 1);
+        };
+      },
+      settled: new Map(),
+      preview: vi.fn(),
+    };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={value}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    return { steps, value, wrapper };
+  }
+
+  const set = (n: number) => ({ tokens: [{ name: `brand-${String(n)}` }] });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("writes a burst of saves once, as one step, after the pause", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const answers: Promise<unknown>[] = [];
+    act(() => {
+      for (let n = 1; n <= 10; n += 1) {
+        answers.push(result.current.save("tokens", set(n), { hold: true }));
+      }
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS - 1);
+    });
+    expect(writes).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // The last value only, once, and one step to take the whole burst back.
+    expect(writes).toEqual([{ tokens: set(10) }]);
+    expect(steps).toHaveLength(1);
+    // Every save of the burst answers with the write that stored it.
+    expect(await Promise.all(answers)).toEqual(
+      answers.map(() => ({ saved: true, issues: {} }))
+    );
+
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ tokens: null });
+    await act(async () => {
+      await steps[0]?.redo();
+    });
+    expect(writes.at(-1)).toEqual({ tokens: set(10) });
+  });
+
+  it("waits again for each save, and while the author is still at work", async () => {
+    const { value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    act(() => {
+      void result.current.save("tokens", set(2), { hold: true });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // Typing in a field, with nothing committed yet, is still work.
+    act(() => extendHeldSiteStyle(value));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(writes).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS);
+    });
+    expect(writes).toEqual([{ tokens: set(2) }]);
+  });
+
+  it("writes at once when released, without waiting for the pause", async () => {
+    const { steps, value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+      void result.current.save("tokens", set(2), { hold: true });
+    });
+    await act(async () => {
+      await releaseHeldSiteStyle(value);
+    });
+    expect(writes).toEqual([{ tokens: set(2) }]);
+    expect(steps).toHaveLength(1);
+    // Nothing is left to write when the pause would have ended.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS * 2);
+    });
+    expect(writes).toHaveLength(1);
+  });
+
+  it("writes a held change before a save that is not held, as the same write", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    await act(async () => {
+      await result.current.save("tokens", set(2));
+    });
+    expect(writes).toEqual([{ tokens: set(2) }]);
+    expect(steps).toHaveLength(1);
+  });
+
+  it("draws each held value, and says how the write that stores it went", async () => {
+    const { value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    // Joined by a save that is not held: what is drawn is what is written.
+    await act(async () => {
+      await result.current.save("tokens", set(2));
+    });
+    expect(value.preview.mock.calls).toEqual([
+      ["tokens", set(1), "held"],
+      ["tokens", set(2), "held"],
+      ["tokens", set(2), "stored"],
+    ]);
+  });
+
+  it("draws nothing for a held save that changes nothing, which is not held", async () => {
+    readAnswer = {
+      data: { tokens: set(1) },
+      isPending: false,
+      error: null,
+    };
+    const { value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("tokens", set(1), { hold: true });
+    });
+    expect(value.preview).not.toHaveBeenCalled();
+    expect(writes).toEqual([{ tokens: set(1) }]);
+  });
+
+  it("writes a held change before undoing it", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes).toEqual([{ tokens: set(1) }, { tokens: null }]);
+  });
+
+  it("tells every save of the burst why its write was refused, and keeps no step", async () => {
+    writeBehaviour = () => Promise.reject(new Error("Validation failed."));
+    issuesAnswer = [
+      { path: "tokens", code: "CUSTOM", message: "That value is refused." },
+    ];
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const answers: Promise<unknown>[] = [];
+    act(() => {
+      answers.push(result.current.save("tokens", set(1), { hold: true }));
+      answers.push(result.current.save("tokens", set(2), { hold: true }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS);
+    });
+    const refused = {
+      saved: false,
+      issues: { tokens: "That value is refused." },
+    };
+    expect(await Promise.all(answers)).toEqual([refused, refused]);
+    expect(writes).toHaveLength(1);
+    expect(steps).toEqual([]);
+  });
+});
+
+describe("adding a catalogue font", () => {
+  const LORA = {
+    id: "lora",
+    weights: [400, 700],
+    styles: ["normal" as const],
+    subsets: ["latin"],
+  };
+
+  it("asks the server's route to add it, then reads the style again", async () => {
+    const { result } = renderHook(() => useFontCatalogueClient());
+    let refusal: string | undefined = "not answered";
+    await act(async () => {
+      refusal = await result.current.add(LORA);
+    });
+    expect(refusal).toBeUndefined();
+    expect(writes).toEqual([]);
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/fonts",
+        body: LORA,
+      },
+    ]);
+    expect(refetches).toBe(1);
+  });
+
+  it("says why the server refused, and reads nothing again", async () => {
+    writeBehaviour = async () => {
+      throw new Error(
+        "Google Fonts didn\u2019t answer in time. Nothing was added; try again."
+      );
+    };
+    const { result } = renderHook(() => useFontCatalogueClient());
+    let refusal: string | undefined;
+    await act(async () => {
+      refusal = await result.current.add(LORA);
+    });
+    expect(refusal).toContain("didn\u2019t answer in time");
+    expect(refetches).toBe(0);
   });
 });

@@ -15,12 +15,14 @@
 import * as clack from "@clack/prompts";
 import type { Command } from "commander";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { createContext, type CommandContext } from "../context";
 import { exitWithError } from "../errors";
 import {
   widgetGenerateCancelled,
   widgetNotGenerated,
 } from "../errors/areas/commands";
+import { answered as answeredOrCancelled } from "../utils/prompt-cancelled";
 
 import type { WidgetViewKind } from "./generate-widget/files";
 import {
@@ -31,15 +33,12 @@ import {
 } from "./generate-widget/run";
 
 /**
- * A cancelled prompt stops the command; nothing has been written by then. The prompts are asked
- * only inside the action's `try`, so the throw ends the command through its catch, in the shape.
+ * A cancelled prompt stops the command; nothing has been written by then. It says so in the
+ * shape, under its own code, and the run ends as interrupted, exit 130 (`promptCancelled`).
  */
-function answered<T>(value: T | symbol): T {
-  if (clack.isCancel(value)) {
-    clack.cancel("Nothing written.");
-    throw widgetGenerateCancelled();
-  }
-  return value;
+function answered<T>(value: T | symbol): Promise<T> {
+  if (clack.isCancel(value)) clack.cancel("Nothing written.");
+  return answeredOrCancelled(value, widgetGenerateCancelled());
 }
 
 /** Asks on a terminal through @clack/prompts, as the CLI's other questions do. */
@@ -71,10 +70,6 @@ const terminalPrompter: WidgetPrompter = {
   },
 };
 
-/** Whether to ask: only on a terminal, and never under CI. */
-const interactive = (): boolean =>
-  Boolean(process.stdin.isTTY && process.stdout.isTTY) && !process.env.CI;
-
 function report(
   result: Extract<GenerateWidgetResult, { ok: true }>,
   { logger }: CommandContext
@@ -98,55 +93,46 @@ interface GenerateWidgetFlags {
   collection?: boolean;
   site?: boolean;
   plugin?: boolean;
+  overwrite?: boolean;
+  /** The earlier spelling of `--overwrite`, honoured with a notice. */
   force?: boolean;
   dryRun?: boolean;
 }
 
-export function registerGenerateWidgetCommand(program: Command): void {
-  program
-    .command("generate:widget [id]")
-    .description(
-      "Scaffold a dashboard widget, with its test, in this site or plugin"
-    )
-    .option(
-      "--view <kind>",
-      "figure, list, table, bars, series, or component (its own)"
-    )
-    .option("--collection", "Read from a collection the reader chooses")
-    .option("--no-collection", "Read no collection")
-    .option("--site", "Generate into the site, whatever is detected")
-    .option("--plugin", "Generate into the plugin, whatever is detected")
-    .option("--force", "Overwrite files that already exist")
-    .option("--dry-run", "Print the files and edits; write nothing")
-    .action(
-      async (
-        id: string | undefined,
-        flags: GenerateWidgetFlags,
-        cmd: Command
-      ) => {
-        const context = createContext(cmd.optsWithGlobals());
-        const options: GenerateWidgetOptions = {
-          id,
-          view: flags.view,
-          collection: flags.collection,
-          target: flags.site ? "site" : flags.plugin ? "plugin" : undefined,
-          force: flags.force,
-          dryRun: flags.dryRun,
-          // The root CLI's `-c, --config`, which names the site's config.
-          configPath: context.configPath,
-        };
-        try {
-          const result = await runGenerateWidget(
-            context.cwd,
-            options,
-            interactive() ? terminalPrompter : undefined
-          );
-          // A refusal of what it was given; the catch prints it as the CLI's error shape.
-          if (!result.ok) throw widgetNotGenerated(result.reason);
-          report(result, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
+/** The action of `nextly generate:widget`, loaded when it runs. */
+export async function generateWidgetAction(
+  id: string | undefined,
+  flags: GenerateWidgetFlags,
+  cmd: Command
+) {
+  const context = createContext(cmd.optsWithGlobals());
+  if (flags.force) {
+    context.logger.warn(
+      "generate:widget's --force is deprecated and will be removed: use --overwrite."
     );
+  }
+  const options: GenerateWidgetOptions = {
+    id,
+    view: flags.view,
+    collection: flags.collection,
+    target: flags.site ? "site" : flags.plugin ? "plugin" : undefined,
+    overwrite: flags.overwrite === true || flags.force === true,
+    dryRun: flags.dryRun,
+    // The root CLI's `-c, --config`, which names the site's config.
+    configPath: context.configPath,
+  };
+  try {
+    const result = await runGenerateWidget(
+      context.cwd,
+      options,
+      // Asked only where a person can answer: a terminal, `CI` unset, and no
+      // `--non-interactive`.
+      canPrompt() ? terminalPrompter : undefined
+    );
+    // A refusal of what it was given; the catch prints it as the CLI's error shape.
+    if (!result.ok) throw widgetNotGenerated(result.reason);
+    report(result, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

@@ -219,6 +219,9 @@ export type {
   BulkDeleteArgs,
   DuplicateArgs,
   FindSingleArgs,
+  // What `findSingle` resolves to, `null` included only for a call that may
+  // pass `createIfMissing: false`.
+  FoundSingle,
   UpdateSingleArgs,
   CountResult,
   GroupResult,
@@ -581,6 +584,7 @@ export {
   type HookPointValue,
   type PluginRoute,
   type PluginRouteCaller,
+  type PluginRouteCanOptions,
   type PluginRouteIdentity,
   type PluginRouteContext,
   type PluginRouteHandler,

@@ -58,6 +58,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { INTERACTIVE } from "./categories";
+import { CONTAINER_CHILD_GAP } from "./container";
 
 /** This block's registered name, so the tests and its parent name it once. */
 export const ACCORDION_ITEM_BLOCK = "core/accordion-item";
@@ -129,8 +130,11 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
   defineBlock({
     name: ACCORDION_ITEM_BLOCK,
     version: 1,
-    description:
-      "One section of an accordion: a title that is always visible and children the browser reveals when it is open.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: One section of an
+    // accordion: a title that is always visible and children the browser
+    // reveals when it is open.
+    description: "One part of an accordion, with a title that opens it.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -141,8 +145,8 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
       keywords: ["disclosure", "panel", "faq"],
     },
     props: {
-      title: { role: "content", type: "text" },
-      open: { type: "checkbox" },
+      title: { label: "Title", role: "content", type: "text" },
+      open: { label: "Open by default", type: "checkbox" },
     },
     defaultProps: { title: "Section", open: false },
     example: { props: { title: "What is included?", open: false } },
@@ -156,6 +160,16 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
       // than none.
       children: {},
     },
+    // Every block after the `<summary>` is spaced from what precedes it, the
+    // first one from the title included.
+    childGap: CONTAINER_CHILD_GAP,
     supports: ACCORDION_ITEM_SUPPORTS,
+    // A `<details>` is interactive content, so nothing that refuses
+    // interactive content may hold one, and like any element but a plain box it
+    // refuses a main beneath it.
+    contentModel: () => ({
+      is: ["flow", "interactive"],
+      accepts: { without: ["main"] },
+    }),
     render: renderAccordionItem,
   });

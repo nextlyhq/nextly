@@ -174,6 +174,7 @@ export const NEXTLY_ERROR_STATUS = {
   // and an operator command resolves.
   PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
   PLUGIN_HAS_DEPENDENTS: 409,
+  PLUGIN_UNINSTALL_WOULD_DROP_OTHERS: 409,
   PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
   // A full uninstall that would drop tables, run without `--yes`.
   PLUGIN_UNINSTALL_UNCONFIRMED: 409,
