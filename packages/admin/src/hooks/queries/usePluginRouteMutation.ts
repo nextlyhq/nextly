@@ -24,6 +24,7 @@ import {
 import { useCallback, useRef, useState } from "react";
 
 import { csrfTokenForWrite } from "@admin/lib/api/csrf";
+import { keepaliveOptions } from "@admin/lib/api/keepalive";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
 /**
@@ -291,6 +292,10 @@ interface PluginWrite<TBody> {
  * rejects with the admin's parsed error. Nothing is cached or invalidated.
  *
  * Answers `undefined` for a route that answered with nothing.
+ *
+ * `keepalive` asks for a write that outlives the page: sent so the browser
+ * finishes it after the page is hidden or closed, while its body fits the
+ * 64 KB browsers allow such a request, and as an ordinary request otherwise.
  */
 export function writePluginRoute<TResult extends object | null>({
   plugin,
@@ -298,25 +303,32 @@ export function writePluginRoute<TResult extends object | null>({
   mount,
   method = "POST",
   body,
+  keepalive,
 }: Pick<PluginRouteWrite, "plugin" | "path" | "method" | "mount"> & {
   body?: unknown;
+  keepalive?: boolean;
 }): Promise<TResult | undefined> {
   return sendTo<TResult>(
     method,
     pluginRouteFullPath(plugin, path, mount),
-    body
+    body,
+    keepalive
   );
 }
 
 async function sendTo<TResult>(
   method: PluginRouteMethod,
   route: string,
-  body: unknown
+  body: unknown,
+  keepalive?: boolean
 ): Promise<TResult | undefined> {
   const token = await csrfTokenForWrite();
   // Left off when no token could be had: an empty header reads as a token
   // that was sent, and the server's refusal names a missing one.
-  const options = token === "" ? {} : { headers: { "x-csrf-token": token } };
+  const options = {
+    ...(token === "" ? {} : { headers: { "x-csrf-token": token } }),
+    ...keepaliveOptions(body, keepalive),
+  };
   const senders: Record<PluginRouteMethod, () => Promise<TResult | undefined>> =
     {
       POST: () => protectedApi.post<TResult>(route, body, options),

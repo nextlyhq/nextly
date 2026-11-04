@@ -41,6 +41,12 @@ import {
 import { withAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  judgeDataLossAtTerminal,
+  readDataLossConsent,
+  requireConsented,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 
 export interface I18nRestoreCommandOptions {
   /** Entity slug to restore, as recorded in the archive's `collection` column. */
@@ -56,6 +62,8 @@ export interface I18nRestoreCommandOptions {
   field?: string;
   /** Delete the replayed rows from the archive once written. */
   purge?: boolean;
+  /** The data-loss consent `--purge` needs, which deletes from the archive. */
+  acceptDataLoss?: AcceptDataLossOption;
   config?: string;
   cwd?: string;
   verbose?: boolean;
@@ -118,6 +126,23 @@ export async function runI18nRestore(
   logger.keyValue("Companion", companionTableName);
   if (options.locale) logger.keyValue("Locale", options.locale);
   if (options.field) logger.keyValue("Field", options.field);
+
+  // `--purge` deletes the replayed rows from the archive, so it takes the
+  // data-loss consent, decided before the database is reached: without it, a
+  // person is asked where one can be, and otherwise nothing changes, not even
+  // the restore, and the run names the consent.
+  if (options.purge) {
+    requireConsented(
+      await judgeDataLossAtTerminal({
+        deletions: [{ kind: "rows", table: "nextly_i18n_archive" }],
+        consent: readDataLossConsent({
+          flag: options.acceptDataLoss,
+          warn: message => logger.warn(message),
+        }),
+        print: line => logger.info(line),
+      })
+    );
+  }
 
   await withAdapter(
     async adapter => {

@@ -28,7 +28,7 @@ export function registerGenerateTypesCommand(program: Command): void {
     .option("--no-zod", "Skip Zod schema generation")
     .option(
       "--check",
-      "Only check that the committed component map agrees with the config, writing nothing (exit 1 when it does not, 2 when it cannot be checked)"
+      "Only check that the committed component map agrees with the config, writing nothing"
     )
     .action(
       lazyAction(

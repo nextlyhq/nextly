@@ -176,8 +176,10 @@ describe("the page's Layout picker", () => {
     const why = document.getElementById(
       trigger.getAttribute("aria-describedby") ?? ""
     );
-    expect(why?.textContent).toBe("Site default: Main");
-    expect(trigger.textContent).toContain("Site default (Main)");
+    expect(why?.textContent).toBe(
+      "Follows the site default, Main, because this page doesn't choose its own Layout."
+    );
+    expect(trigger.textContent).toContain("Site default · Main");
   });
 
   it("writes the Layout and clears the switch when a Layout is chosen", async () => {
@@ -389,7 +391,7 @@ describe("the page's Layout picker", () => {
     // The trigger still says what is chosen.
     expect(
       screen.getByRole("combobox", { name: "Layout" }).textContent
-    ).toContain("Site default (Layout 0)");
+    ).toContain("Site default · Layout 0");
   });
 
   it("keeps the rows the server matched, however their titles compare here", async () => {
@@ -632,5 +634,69 @@ describe("the regions the editor draws from the choice", () => {
     expect(
       regionsFor({ layout: "landing", noHeaderFooter: true }).canvas
     ).toEqual([]);
+  });
+});
+
+describe("a save refused for its Layout", () => {
+  it("shows the server's reason under the picker, tied to the control", async () => {
+    let setError: ((message: string) => void) | undefined;
+    function Refused() {
+      const form = useForm({
+        defaultValues: { layout: "landing", noHeaderFooter: false },
+      });
+      setError = message =>
+        form.setError("layout", { type: "server", message });
+      return <PageLayoutPicker control={form.control} />;
+    }
+    render(<Refused />);
+    await screen.findByRole("combobox", { name: "Layout" });
+
+    act(() =>
+      setError?.(
+        "This Layout is being removed, so pages can't choose it. Choose another Layout."
+      )
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "This Layout is being removed, so pages can't choose it. Choose another Layout."
+    );
+    const control = screen.getByRole("combobox", { name: "Layout" });
+    expect(control.getAttribute("aria-invalid")).toBe("true");
+    expect(control.getAttribute("aria-describedby")).toContain(alert.id);
+  });
+});
+
+describe("a Layout behind Remove Layout's fence in the list", () => {
+  it("shows its name and a muted short reason, with the whole reason as its tooltip and description", async () => {
+    answering({
+      ...choices,
+      items: [
+        ...choices.items,
+        {
+          id: "retired",
+          title: "Campaign",
+          published: false,
+          draftChangesNotLive: false,
+          regions: [],
+          removal: "unpublished",
+        },
+      ],
+    });
+    renderPicker();
+    const trigger = screen.getByRole("combobox", { name: "Layout" });
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+
+    const option = screen.getByRole("option", { name: /Campaign/ });
+    expect(option.textContent).toBe(
+      "Campaign · Unpublished. Publish it again to choose it."
+    );
+    const reason =
+      "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.";
+    expect(option.getAttribute("title")).toBe(reason);
+    expect(option.getAttribute("aria-description")).toBe(reason);
+    expect(option.getAttribute("aria-disabled")).toBe("true");
   });
 });

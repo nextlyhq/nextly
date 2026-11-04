@@ -37,15 +37,16 @@ Both settings are one choice, made in one place. The **Layout** picker sits at t
 of the editor's **Settings** and on the page's Page Builder card in the entry form. It
 offers:
 
-- **Site default (Main)**: the site's default Layout, named. It reads **Site default
-  (none set)** when the site has no published default.
+- **Site default**, with the default Layout's name beside it in grey, such as
+  "Main". It reads **Site default (none set)** when the site has no published default.
 - Each published Layout, by its title.
 - Each Layout that is not published yet, marked "(not published: the site default
   shows until it is)".
 - **No header or footer**.
 
-The line under the picker says which Layout is in effect and why, for example "Site
-default: Main" or "Landing (not published, so the site default shows)". A page whose
+The line under the picker says which Layout is in effect and why, for example "Follows
+the site default, Main, because this page doesn't choose its own Layout." or "Landing
+(not published, so the site default shows)". A page whose
 Layout was deleted shows "Site default (the chosen Layout was deleted)". An author who
 may not read Layouts sees the choice but cannot change it.
 
@@ -69,12 +70,14 @@ are told that the site default shows until that Layout is published.
 ## The default Layout
 
 Your site always has exactly one default Layout. On a new site the plugin creates a
-published Layout called **Default (site)**, with no areas filled in, and makes it the
-default. Fill in its areas, or make another Layout the default.
+published Layout called **Site layout**, with no areas filled in, and makes it the
+default. Fill in its areas, or make another Layout the default. A site set up on an
+earlier version keeps the name it was given then, **Default (site)**; the plugin never
+renames it.
 
-If you already have a Layout called "Default (site)", or one at the address
-`default-site`, the plugin never takes it over. It gives its own Layout the next free
-name or address instead, such as "Default (site) 2" or `default-site-2`.
+If you already have a Layout called "Site layout", or one at the address `site-layout`,
+the plugin never takes it over. It gives its own Layout the next free name or address
+instead, such as "Site layout 2" or `site-layout-2`.
 
 ### Make another Layout the default
 
@@ -104,7 +107,8 @@ the API with access checks turned off.
 
 If the default disappears another way, such as an import that skips hooks, the plugin
 repairs it. A background job checks the default every time the jobs runner runs, and
-points the default back at the **Default (site)** Layout, creating it again if needed.
+points the default back at the Layout the plugin created (**Site layout**), creating it
+again if needed.
 
 ### Components a Layout uses are protected
 
@@ -116,6 +120,68 @@ of a published Layout.
 
 Inside a batch write the check can't run safely, so deleting or unpublishing a component
 there is refused. Delete or unpublish it on its own instead.
+
+## Removing a Layout
+
+Delete or unpublish a Layout with **Remove Layout…**, in the bar at the top of the Layout's
+edit screen, beside **History**. The Layout's own delete and unpublish are refused with
+"Use Remove Layout… on the Layout's screen to take it down safely.", from the admin's
+menu, the Layouts list and the API alike, and so is a scheduled release that would
+unpublish a Layout.
+
+Remove Layout first checks what stands in the way:
+
+- **The site's default** can't be removed. Make another Layout the default first.
+- **Pages that use the Layout** stop the removal: published pages, unpublished pages, and
+  unpublished edits of published pages. The dialog lists them, each a link that opens the
+  page, so you can choose another Layout for each one. Pages you can't view are counted but
+  not named.
+- **A site with many pages**: one removal checks up to 2,000 pages. Past that it says "at
+  least" how many it found and refuses, rather than guessing that the rest are clear.
+
+With nothing in the way, choose **Unpublish** or **Delete Layout**.
+
+While a removal runs, which takes moments:
+
+- the Layout can't be made the default;
+- the Layout can't be edited ("This Layout is being removed. Try again in a moment.");
+- no page can be put on it ("This Layout is being removed, so pages can't choose it.
+  Choose another Layout."). A page that already uses it can still be saved.
+
+A Layout unpublished with Remove Layout can't be made the default, or chosen for a page,
+until it is published again. A page's Layout picker shows such a Layout greyed out, with
+the reason beside its name. If a page save lands at the very moment its Layout is removed,
+the page's choice is cleared and it uses the site's default Layout; a published page's live
+version keeps its choice and draws the default until it is next published.
+
+The same action is a route, for scripts and other tools. It runs as the caller: the route
+admits anyone who may read Layouts, and the delete or unpublish itself is judged by the
+caller's own rights over that Layout:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
+Content-Type: application/json
+
+{ "action": "delete", "dryRun": true }
+```
+
+`action` is `delete` or `unpublish`. A dry run changes nothing. Its `item.check` holds
+`isDefault`, `pages` (`{ id, title }`), `unreadable` and `complete`. A real removal that
+something stops answers `409 CONFLICT`, with the reason in the message.
+
+If a Layout is made the default at the very moment it is being deleted, the delete loses:
+the Layout comes back from a copy taken just before, under a new id, and the default
+points at it. Unpublishing in that race leaves the default to the background repair,
+which points it back at the Layout the plugin created.
+
+Some writes skip collection hooks: a batch write with hooks turned off, and publishing or
+unpublishing every language at once (`POST
+/admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`). None of
+the checks above reach them, so unpublishing every language of a Layout takes it down
+without Remove Layout's checks. This is a known limit until core runs collection hooks
+there. Two things are repaired afterwards: the background repair points the site's default
+back at a published Layout if the default was taken down this way, and a Layout published
+again this way can be made the default once the next background check has run.
 
 ## Existing sites: run a migration
 
@@ -129,6 +195,10 @@ npx nextly migrate
 ```
 
 In development you can use `npx nextly db:sync` instead.
+
+Remove Layout keeps its records in a table of the plugin's own,
+`page_builder__layout_removals`. The plugin ships the migration that creates it, and
+`npx nextly migrate` applies it with your app's own migrations.
 
 ## Draw pages inside their Layout
 

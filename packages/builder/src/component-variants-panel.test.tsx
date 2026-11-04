@@ -246,7 +246,7 @@ describe("a component's variants in its own view", () => {
     });
     await waitFor(() =>
       expect(dialog.textContent).toContain(
-        "Used by at least 3 placements in at least 2 documents."
+        "Used at least 3 times in at least 2 documents."
       )
     );
     expect(variantsOf(editor())).toBeDefined();

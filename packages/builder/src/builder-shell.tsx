@@ -25,9 +25,16 @@ import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { isHTMLElement } from "./dom-kind";
-import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
+import {
+  EditorRail,
+  PANEL_KEYS_LAYER,
+  panelKeyShortcuts,
+  panelLabel,
+  type EditorRailProps,
+} from "./editor-rail";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
-import { HelpDialog } from "./help-dialog";
+import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
+import { HoveredBlockProvider } from "./hovered-block";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
   BUILDER_CHROME_CLASS,
@@ -550,6 +557,7 @@ const SCALAR_PREFERENCES = [
   "inspectorHidden",
   "leftPinned",
   "showEmptyElements",
+  "panelKeys",
   "editingBreakpoint",
 ] as const satisfies readonly (keyof ShellPreferences)[];
 
@@ -598,6 +606,15 @@ const REQUIRED_HOST_TOKEN = "--nx-background";
  * ARE being applied, and the other one's absence means what it says.
  */
 const OWN_STYLESHEET_TOKEN = "--nx-builder-surface";
+
+/**
+ * The one surface both sides of the editor sit on, the rail's own: the left
+ * panels and the Inspector read as one frame around the canvas, divided from it
+ * by the resize handle's single line, and a panel paints nothing of its own
+ * behind its content. One class, so the two sides cannot drift apart.
+ */
+const SIDE_PANEL_CLASS =
+  "bg-[color:var(--nx-builder-surface)] h-full overflow-auto";
 
 /**
  * Tell a developer when the design system's stylesheet has not been loaded.
@@ -891,11 +908,19 @@ function railDialogItems(
 function RailAndDialogs({
   active,
   renderSettings,
+  panelKeys,
   ...rail
-}: Omit<EditorRailProps, "onHelp" | "onSettings" | "settingsOpen"> & {
+}: Omit<
+  EditorRailProps,
+  "onHelp" | "onSettings" | "settingsOpen" | "keysOn"
+> & {
   active: boolean;
   renderSettings: BuilderShellProps["renderSettings"];
+  panelKeys: Pick<PanelKeysSetting, "on" | "onChange">;
 }): React.JSX.Element {
+  // This editor's own panel-key layer, so Help can find its keys among a
+  // second editor's on the same page.
+  const keysLayer = `${PANEL_KEYS_LAYER} ${React.useId()}`;
   const help = useRailDialog(active);
   const settings = useRailDialog(active);
   useSettingsRequest(
@@ -907,12 +932,20 @@ function RailAndDialogs({
     <>
       <EditorRail
         {...rail}
+        keysOn={panelKeys.on}
+        keysLayer={keysLayer}
         {...railDialogItems(help, settings, renderSettings)}
       />
       <HelpDialog
         open={help.open}
         onOpenChange={help.setOpen}
         returnFocus={() => help.opener.current}
+        panelKeys={{
+          ...panelKeys,
+          shortcuts: panelKeyShortcuts(rail.isAvailable, keysLayer),
+          layer: keysLayer,
+          family: PANEL_KEYS_LAYER,
+        }}
       />
       <HostSettings render={renderSettings} dialog={settings} />
     </>
@@ -1030,7 +1063,8 @@ function ShellTopBar({
       // Three columns, the outer two equal, so the centre column (the
       // devices and the zoom) sits in the middle of the editor whatever the
       // sides hold. A container, so controls inside can give way by width.
-      className="border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
+      // `nx-builder-topbar` sets every control inside at the editor's density.
+      className="nx-builder-topbar border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
       aria-label="Editor actions"
     >
       <div data-topbar="start" className="flex min-w-0 items-center gap-2">
@@ -1060,7 +1094,8 @@ function ShellTopBar({
              */
             aria-label="Exit editor"
             title="Exit editor"
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
+            // A square at the editor's control height, as the bar's others are.
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded-md border focus-visible:ring-2 focus-visible:outline-none"
           >
             <ArrowLeft className="size-4" aria-hidden="true" />
           </button>
@@ -1239,7 +1274,10 @@ function useSidePanels(
   const inspectorShown = !preferences.inspectorHidden;
   // From the rail. While the left side is hidden, choosing a panel shows it
   // rather than toggling: the author asked to see that panel.
-  const selectPanel = (panel: LeftPanel) =>
+  const selectPanel = (panel: LeftPanel) => {
+    // Closing the open panel, by its item or its key, unmounts what may hold
+    // focus: it goes to the canvas, as hiding a side sends it.
+    if (openPanel === panel) keepFocusInShell(regionRefs.current, ["panel"]);
     update(current =>
       current.leftPanelHidden
         ? { ...current, leftPanel: panel, leftPanelHidden: false }
@@ -1248,6 +1286,7 @@ function useSidePanels(
             leftPanel: panelAfterRailClick(current.leftPanel, panel),
           }
     );
+  };
   /*
    * The top bar's left-panel button. Showing it with no panel chosen opens
    * the first panel the host offers, Add where it offers that.
@@ -1623,6 +1662,16 @@ function ShellRegions({
           openPanel={openPanel}
           isAvailable={isAvailable}
           onSelect={selectPanel}
+          // The panel keys answer only for the shell that is showing and that
+          // the author is in, the check F6 and mod+\ already make, and only
+          // while the author has not turned them off in Help.
+          claimsKeys={() => active && claimsKeys()}
+          panelKeys={{
+            // On unless turned off, as a preference written before there
+            // was a switch reads.
+            on: preferences.panelKeys !== false,
+            onChange: on => update(current => ({ ...current, panelKeys: on })),
+          }}
         />
 
         <ResizablePanelGroup
@@ -1682,9 +1731,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label={panelLabel(openPanel)}
-                  // The one surface every left panel sits on, the rail's own:
-                  // a panel paints nothing of its own behind its content.
-                  className="bg-[color:var(--nx-builder-surface)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {/* Keyed by the panel, because the prop's contract says the
                       result is keyed by the panel and React's default
@@ -1747,7 +1794,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label="Inspector"
-                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {inspector}
                 </aside>
@@ -1995,7 +2042,7 @@ export function BuilderShell({
   const notices = supplied ?? own;
 
   return (
-    <ShortcutProvider>
+    <ShellProviders>
       {/* The same manager, listening in the canvas's frame as well, so a key
           pressed with focus inside the page reaches every binding above. */}
       <CanvasFrameShortcuts />
@@ -2217,6 +2264,23 @@ export function BuilderShell({
           </div>
         </div>
       </TooltipProvider>
+    </ShellProviders>
+  );
+}
+
+/**
+ * What every shell provides to everything inside it: the shortcut manager,
+ * and one hovered block for its panels and its canvas, so a Layers row the
+ * pointer is over outlines its block on the page.
+ */
+function ShellProviders({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <ShortcutProvider>
+      <HoveredBlockProvider>{children}</HoveredBlockProvider>
     </ShortcutProvider>
   );
 }

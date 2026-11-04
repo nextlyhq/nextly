@@ -115,7 +115,7 @@ function problemSentence(
     case "unknown-variant":
       return "That variant is no longer on this component.";
     case "unknown-exposure":
-      return "That field is no longer exposed on this component.";
+      return "That field is no longer on this component.";
     case "not-a-component":
       return "Variants belong to components, and this is not one.";
     case "exceeds-limits":
@@ -274,20 +274,20 @@ export function valuesSummary(option: VariantOption): string {
  */
 export function deleteSentence(use: VariantUse | null | undefined): string {
   const after =
-    "They will show the component’s defaults, and keep their own changes.";
-  if (use === undefined) return "Counting the placements that use it…";
+    "Each use of this variant will show the component’s defaults, and keep its own changes.";
+  if (use === undefined) return "Counting where it is used…";
   if (use === null) {
-    return `Its placements could not be counted. ${after}`;
+    return `Where it is used could not be counted. ${after}`;
   }
   if (use.placements === 0) {
     return use.complete
-      ? "No placement uses this variant."
-      : "No placement was found using this variant, though not every page could be checked.";
+      ? "Nothing uses this variant."
+      : "Nothing was found using this variant, though not every page could be checked.";
   }
   const floor = use.complete ? "" : "at least ";
-  const placements = `${floor}${String(use.placements)} ${use.placements === 1 ? "placement" : "placements"}`;
+  const times = `${floor}${String(use.placements)} ${use.placements === 1 ? "time" : "times"}`;
   const documents = `${floor}${String(use.documents)} ${use.documents === 1 ? "document" : "documents"}`;
-  return `Used by ${placements} in ${documents}. ${after}`;
+  return `Used ${times} in ${documents}. ${after}`;
 }
 
 /**
