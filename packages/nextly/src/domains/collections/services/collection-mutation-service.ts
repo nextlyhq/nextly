@@ -312,6 +312,7 @@ import {
   judgedLanguage,
   judgeLanguageRow,
   judgeMainRow,
+  type PartState,
   poolRevisionReader,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
@@ -11433,6 +11434,9 @@ export class CollectionMutationService extends BaseService {
             { table: tableName, id: params.entryId },
             staleWrite
           );
+          // The save's language row as it stood before this save wrote it,
+          // for an overwrite's history; set where the row is written below.
+          let languageBefore: { locale: string; state: PartState } | undefined;
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -12218,7 +12222,7 @@ export class CollectionMutationService extends BaseService {
           ) {
             // The language's version, judged by the save's first write of its
             // row: a refusal here rolls the whole save back.
-            const { claimed } = await refuseIfLanguageMoved(
+            const { claimed, before } = await refuseIfLanguageMoved(
               tx,
               this.dialect,
               versionCheck,
@@ -12232,6 +12236,9 @@ export class CollectionMutationService extends BaseService {
               actorForWrite(params.actor, params.user),
               staleWrite
             );
+            if (before && judgedLocale === localizedUpdate.writeLocale) {
+              languageBefore = { locale: judgedLocale, state: before };
+            }
             await upsertCompanionRow(
               companionWriteVia(tx, this.dialect),
               localizedUpdate.companionTableName,
@@ -13036,7 +13043,10 @@ export class CollectionMutationService extends BaseService {
                 actor: actorForWrite(params.actor, params.user),
                 personName: params.user?.name ?? null,
                 locale: judgedLocale ?? null,
-                ...overwriteRecordOf(versionCheck, { main: mainBefore?.main }),
+                ...overwriteRecordOf(versionCheck, {
+                  main: mainBefore?.main,
+                  language: languageBefore,
+                }),
               }
             );
           }
@@ -17241,6 +17251,27 @@ export class CollectionMutationService extends BaseService {
               : []),
           ]
         );
+      }
+
+      // An overwrite is recorded whatever the collection keeps, on the
+      // caller's transaction, from the rows as this item found them before
+      // writing: so a batch that cannot record it keeps nothing of it.
+      if (versionCheck.kind === "overwrite") {
+        await this.recordOverwriteHistory(tx, params.collectionName, entryId, {
+          actor: actorForWrite(params.actor, params.user),
+          personName: params.user?.name ?? null,
+          locale: localizedUpdate?.writeLocale ?? null,
+          ...overwriteRecordOf(versionCheck, {
+            main: mainJudged.before?.main,
+            language:
+              localizedUpdate && languageJudged.before
+                ? {
+                    locale: localizedUpdate.writeLocale,
+                    state: languageJudged.before,
+                  }
+                : undefined,
+          }),
+        });
       }
 
       // What this update wrote, as the single-entry update reports it: a held
