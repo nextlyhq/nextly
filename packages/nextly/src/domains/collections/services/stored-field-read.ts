@@ -322,6 +322,31 @@ export async function readStoredFieldsOn(
   };
 }
 
+/**
+ * Settle on `connection`, a pooled one, what a read inside a transaction can
+ * only remember: whether the entity's language store is ready. Inside a
+ * transaction the read consults the remembered verdict and never resolves
+ * it, since resolving queries and on PostgreSQL a query against a missing
+ * relation aborts the transaction; so a read about to run in one asks here
+ * first. Refuses what the read itself would refuse about the entity.
+ */
+export async function prepareStoredRead(
+  connection: StoredFieldConnection,
+  scope: FieldScope,
+  target: StoredFieldsTarget
+): Promise<void> {
+  const entity = await storedEntity(
+    connection,
+    registryRecords(connection),
+    target,
+    scope
+  );
+  const companion = companionOf(entity);
+  if (companion !== null) {
+    await resolveCompanionSchemaReadiness(getService("adapter"), companion);
+  }
+}
+
 /** One field a read is asked for, with where it is stored. */
 interface PlacedField {
   readonly field: string;

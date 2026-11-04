@@ -1009,6 +1009,163 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("one snapshot, one language", () => {
+      it("never shows a reader a value committed as a draft between its row's state and its language row", async () => {
+        const id = await created("stagedwords", {
+          body: { v: "published" },
+          status: "published",
+        });
+        const adapter = t.adapter as unknown as {
+          select(table: string, ...rest: unknown[]): Promise<unknown>;
+          transaction<T>(
+            work: (tx: {
+              select(table: string, ...rest: unknown[]): Promise<unknown>;
+            }) => Promise<T>,
+            ...rest: unknown[]
+          ): Promise<T>;
+        };
+        // The author's save of a new value as a draft, made once the reader
+        // has read the main row's state and before it reads the language row.
+        // On SQLite the reader's transaction holds the one writer, so the
+        // save can only begin there, and commits after the read.
+        let interleaved = false;
+        let save: Promise<unknown> = Promise.resolve();
+        let letEnter = (): void => undefined;
+        const saveEntered = new Promise<void>(resolve => {
+          letEnter = resolve;
+        });
+        const interleave = async () => {
+          if (interleaved) return;
+          interleaved = true;
+          save = writerOf.run("author", () =>
+            t.nextly.update({
+              collection: "stagedwords",
+              id,
+              data: { body: { v: "draft" }, status: "draft" },
+              overrideAccess: true,
+            } as never)
+          );
+          await (dialect === "sqlite"
+            ? Promise.race([saveEntered, save])
+            : save);
+        };
+        const mainRow = (table: string) =>
+          table.endsWith("stagedwords") && !table.includes("locales");
+        const select = adapter.select.bind(adapter);
+        vi.spyOn(adapter, "select").mockImplementation(
+          async (table, ...rest) => {
+            const out = await select(table, ...rest);
+            if (writerOf.getStore() === "plugin" && mainRow(table)) {
+              await interleave();
+            }
+            return out;
+          }
+        );
+        const transaction = adapter.transaction.bind(adapter);
+        vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
+          const who = writerOf.getStore();
+          if (who === "author") letEnter();
+          return transaction(
+            async tx => {
+              if (who === "plugin") {
+                const txSelect = tx.select.bind(tx);
+                tx.select = async (table, ...more) => {
+                  const out = await txSelect(table, ...more);
+                  if (mainRow(table)) await interleave();
+                  return out;
+                };
+              }
+              return work(tx);
+            },
+            ...rest
+          );
+        });
+
+        const read = await writerOf.run("plugin", () =>
+          readStoredFields(reader, {
+            collection: "stagedwords",
+            id,
+            fields: ["body"],
+            form: "published",
+          })
+        );
+        letEnter();
+        await save;
+        vi.restoreAllMocks();
+
+        expect(interleaved).toBe(true);
+        expect(read).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "published" } } },
+        });
+        // The control: the save did land, and its draft is hidden from them.
+        expect(
+          await readStoredFields(reader, {
+            collection: "stagedwords",
+            id,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toEqual({ kind: "absent" });
+      });
+
+      it("reads the language an unknown code resolves to, and refuses a selector", async () => {
+        const id = await created("worded", { body: { v: "en" } });
+        await t.nextly.update({
+          collection: "worded",
+          id,
+          locale: "de",
+          data: { body: { v: "de" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "worded", id };
+        const asked = {
+          ...entry,
+          fields: ["body"],
+          form: "published",
+        } as const;
+
+        // A language the site does not configure resolves to its default, as
+        // an ordinary read resolves it, and that language's value is read.
+        expect(
+          await readStoredFields(editor, { ...asked, locale: "xx" })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "en" } } },
+        });
+        expect(
+          await readStoredFields(editor, { ...asked, locale: "de" })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "de" } } },
+        });
+        for (const locale of ["all", "*"]) {
+          expect(
+            NextlyError.isCode(
+              await rejectionOf(readStoredFields(editor, { ...asked, locale })),
+              "INVALID_INPUT"
+            )
+          ).toBe(true);
+        }
+        const refusal = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            locale: "all",
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({
+                kind: "value",
+                value: { v: "en" },
+              }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+      });
+    });
+
     describe("access", () => {
       it("refuses the conditional write to a person who may read but not update, and changes nothing", async () => {
         const id = await created("pages", { title: "t", body: { v: 0 } });

@@ -29,6 +29,7 @@ import {
   registeredReadLanguagesFor,
   registeredWriteLanguagesFor,
   withRuleLanguage,
+  type RuleLanguage,
 } from "../auth/access/rule-language";
 import { readAccessCaller, entityReadFor } from "../auth/entity-read-access";
 import type { FieldConfig } from "../collections/fields/types";
@@ -36,11 +37,13 @@ import { getService } from "../di";
 import { requireNextly } from "../direct-api/nextly";
 import {
   expectStoredValue,
+  prepareStoredRead,
   readStoredFieldsOn,
+  type StoredFieldsRead,
   type FieldScope,
 } from "../domains/collections/services/stored-field-read";
 import { appLocalization } from "../domains/i18n/configured-locales";
-import { EVERY_LOCALE } from "../domains/i18n/locale-selector";
+import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { getFieldType } from "../domains/schema/field-types/field-type-registry";
 import { singleDocumentEditable } from "../domains/singles/services/single-document-access";
 import { fieldsCarryingReadRules } from "../domains/versions/component-read-access";
@@ -80,8 +83,10 @@ export type PluginStoredFieldsRequest = PluginStoredDocument & {
   readonly form: "published" | "draft";
   /**
    * The language to read, for a field stored per language; the default
-   * language where none is named. A language that stores nothing for the
-   * field reads as absent, never as another language's value.
+   * language where none is named, or where the site configures no such
+   * language, as an ordinary read resolves it. One language: a selector
+   * such as `all` is refused. A language that stores nothing for the field
+   * reads as absent, never as another language's value.
    */
   readonly locale?: string;
 };
@@ -182,28 +187,84 @@ export async function readStoredFields(
     });
   }
   const document = documentOf(request);
-  await assertMayRead(identity, document, request);
+  // The language is resolved once, as the gate's own reads resolve it, and
+  // that one code is what the gate is told and what the read queries.
+  const language = oneLanguage(request.locale);
+  const asked = inLanguage(request, language.locale);
+  await assertMayRead(identity, document, asked, language.rule);
 
-  const read = await readStoredFieldsOn(
-    {
-      db: getService("adapter"),
-      executor: undefined,
-      defaultLocale: appLocalization()?.defaultLocale ?? null,
-    },
-    PLUGIN_JSON_FIELDS,
-    {
-      ...targetOf(document),
-      fields: request.fields,
-      form: request.form,
-      ...(request.locale === undefined ? {} : { locale: request.locale }),
-    },
-    { askState: request.form === "published" }
-  );
+  const read = await storedSnapshot(document, asked);
   if (!read.found) return { kind: "absent" };
-  if (!(await liveFormShown(identity, document, request, read.liveState))) {
+  if (!(await liveFormShown(identity, document, asked, read.liveState))) {
     return { kind: "absent" };
   }
   return { kind: "found", values: Object.fromEntries(read.values) };
+}
+
+/**
+ * The one language a stored read or a conditional write is made in, resolved
+ * as an ordinary read resolves it (`registeredReadLanguagesFor`, with no
+ * fallback): a language the site does not configure resolves to its default.
+ * A selector naming several languages (`all`, `*`) is refused, since this
+ * reads and writes one.
+ */
+function oneLanguage(requested: string | undefined): {
+  readonly rule: RuleLanguage;
+  readonly locale: string | undefined;
+} {
+  if (requested !== undefined && isLocaleSelector(requested)) {
+    throw NextlyError.invalidInput({
+      message: `A stored read or a conditional write is made in one language, and '${requested}' names more than one.`,
+    });
+  }
+  const rule = registeredReadLanguagesFor(requested, false);
+  return { rule, locale: rule.locale };
+}
+
+/** `request` in the resolved language, or in none where the site keeps none. */
+function inLanguage(
+  request: PluginStoredFieldsRequest,
+  locale: string | undefined
+): PluginStoredFieldsRequest {
+  const { locale: _named, ...rest } = request;
+  return locale === undefined ? rest : { ...rest, locale };
+}
+
+/**
+ * The read itself, in one snapshot: the live row's state and every value are
+ * read inside one read-only transaction, at REPEATABLE READ on PostgreSQL and
+ * MySQL and in SQLite's one transaction at a time, so a write committing
+ * between the main row and its language row cannot pair one's state with the
+ * other's value. What a read inside a transaction can only remember is
+ * settled on the pool first.
+ */
+async function storedSnapshot(
+  document: ReturnType<typeof documentOf>,
+  request: PluginStoredFieldsRequest
+): Promise<StoredFieldsRead> {
+  const adapter = getService("adapter");
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
+  const target = {
+    ...targetOf(document),
+    fields: request.fields,
+    form: request.form,
+    ...(request.locale === undefined ? {} : { locale: request.locale }),
+  };
+  await prepareStoredRead(
+    { db: adapter, executor: undefined, defaultLocale },
+    PLUGIN_JSON_FIELDS,
+    target
+  );
+  return adapter.transaction(
+    tx =>
+      readStoredFieldsOn(
+        { db: tx, executor: tx.getDrizzle(), defaultLocale },
+        PLUGIN_JSON_FIELDS,
+        target,
+        { askState: request.form === "published" }
+      ),
+    { isolationLevel: "repeatable read", readOnly: true }
+  );
 }
 
 /**
@@ -255,18 +316,17 @@ export async function updateIfUnchanged(
   identity: PluginRouteIdentity,
   update: PluginConditionalUpdate
 ): Promise<void> {
-  if (update.locale === EVERY_LOCALE) {
-    throw NextlyError.invalidInput({
-      message: `A conditional write is made in one language, not '${EVERY_LOCALE}'.`,
-    });
-  }
+  const language = oneLanguage(update.locale);
   if (update.expect.field.includes(".")) {
     throw NextlyError.invalidInput({
       message: `A conditional write expects a top-level field, and "${update.expect.field}" is inside a group: an update writes the group's whole value, so an expectation on one field of it would not guard the rest.`,
     });
   }
   const document = documentOf(update);
-  const inLocale = update.locale === undefined ? {} : { locale: update.locale };
+  // The resolved code, for the read and the update alike, so the update is
+  // judged in the very language its expectation was read in.
+  const inLocale =
+    language.locale === undefined ? {} : { locale: language.locale };
   // The read half first: a precondition, so before anything is written.
   await readStoredFields(identity, {
     ...targetOf(document),
@@ -358,15 +418,15 @@ function targetOf(
 async function assertMayRead(
   identity: PluginRouteIdentity,
   document: ReturnType<typeof documentOf>,
-  request: PluginStoredFieldsRequest
+  request: PluginStoredFieldsRequest,
+  language: RuleLanguage
 ): Promise<void> {
   // Each gate is told the languages its ordinary counterpart is: a read in
   // the one language named, with no fallback, as this read makes none; an
   // update as an update in that language. A rule answering by language then
   // answers here as it does there.
-  const read = await withRuleLanguage(
-    registeredReadLanguagesFor(request.locale, false),
-    () => entityReadFor(document.slug, readAccessCaller(identity))
+  const read = await withRuleLanguage(language, () =>
+    entityReadFor(document.slug, readAccessCaller(identity))
   );
   const refuse = (reason: string) =>
     NextlyError.forbidden({
