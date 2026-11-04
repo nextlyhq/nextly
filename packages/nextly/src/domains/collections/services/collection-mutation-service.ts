@@ -13558,20 +13558,18 @@ export class CollectionMutationService extends BaseService {
           );
           // A sweep of every language moves each language's status, so each
           // must still be as the version gave it.
-          if (sweepCompanion && judgedLanguages) {
-            await refuseIfLanguagesMoved(
-              tx,
-              this.dialect,
-              versionCheck,
-              {
-                table: tableName,
-                id: params.entryId,
-                languagesTable: judgedLanguages.table,
-                locales: judgedLanguages.locales,
-              },
-              staleWrite
-            );
-          }
+          await refuseIfLanguagesMoved(
+            tx,
+            this.dialect,
+            versionCheck,
+            {
+              table: tableName,
+              id: params.entryId,
+              sweep: sweepCompanion !== null,
+              languages: judgedLanguages,
+            },
+            staleWrite
+          );
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the

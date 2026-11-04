@@ -2896,20 +2896,18 @@ export class SingleMutationService extends BaseService {
             );
             // A sweep of every language moves each language's status, so each
             // must still be as the version gave it.
-            if (sweepAllLocales && judgedLanguages) {
-              await refuseIfLanguagesMoved(
-                tx,
-                this.adapter.dialect,
-                versionCheck,
-                {
-                  table: singleMeta.tableName,
-                  id: existingDoc.id,
-                  languagesTable: judgedLanguages.table,
-                  locales: judgedLanguages.locales,
-                },
-                staleWrite
-              );
-            }
+            await refuseIfLanguagesMoved(
+              tx,
+              this.adapter.dialect,
+              versionCheck,
+              {
+                table: singleMeta.tableName,
+                id: existingDoc.id,
+                sweep: sweepAllLocales,
+                languages: judgedLanguages,
+              },
+              staleWrite
+            );
 
             // Read the pre-write main row on THIS transaction before the update
             // overwrites it, so the outbox `previous` reports the prior state

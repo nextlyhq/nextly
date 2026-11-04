@@ -23,16 +23,15 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, inArray } from "drizzle-orm";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 import type { StaleVersionPublicData } from "../../errors/public-data";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
-import {
-  claimCompanionRevision,
-  companionWriteVia,
-} from "../i18n/runtime/companion-io";
+import { claimCompanionRevision } from "../i18n/runtime/companion-io";
+import { languageRevisionTable } from "../schema/services/runtime-schema-generator";
 import type { UserContext } from "../singles/types";
 
 import { peopleById } from "./author-hydration";
@@ -42,6 +41,7 @@ import {
   DOCUMENT_REVISION_COLUMN,
   encodeDocumentVersion,
   revisionOf,
+  type SelectsRows,
 } from "./document-revision";
 
 /** A version as its parts: the main counter, and each language's it names. */
@@ -255,30 +255,16 @@ function textOrNull(value: unknown): string | null {
  * the counter, so a save that moves the counter and not `updated_at` (a held
  * draft, a discard, publishing every language) is still dated. Null for a row
  * not saved since the column was added, which a refusal then gives no time.
- *
- * Read through a table's runtime model it is already a `Date`; read raw, as
- * a translation row is, SQLite answers its whole seconds.
+ * Read through a model that declares the column, so it arrives as a `Date`.
  */
-function changedAtOf(
-  row: Record<string, unknown>,
-  dialect: SupportedDialect
-): Date | null {
+function changedAtOf(row: Record<string, unknown>): Date | null {
   const value = row[CHANGED_AT_COLUMN];
   if (value === null || value === undefined) return null;
-  const at =
-    value instanceof Date
-      ? value
-      : typeof value === "number" && dialect === "sqlite"
-        ? new Date(value * 1000)
-        : new Date(value as string | number);
+  const at = value instanceof Date ? value : new Date(value as string | number);
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
-function stateOf(
-  part: string,
-  row: Record<string, unknown>,
-  dialect: SupportedDialect
-): PartState {
+function stateOf(part: string, row: Record<string, unknown>): PartState {
   return {
     part,
     counter: revisionOf(row[DOCUMENT_REVISION_COLUMN]),
@@ -287,7 +273,7 @@ function stateOf(
       id: textOrNull(row._changed_by_id),
       principalKind: textOrNull(row._changed_by_principal_kind),
     },
-    at: changedAtOf(row, dialect),
+    at: changedAtOf(row),
   };
 }
 
@@ -317,7 +303,7 @@ function absentPart(part: string): PartState {
  * Undefined when the document is gone.
  */
 export async function readDocumentRevision(
-  db: Pick<TransactionContext, "select" | "execute">,
+  db: RevisionReader,
   args: {
     dialect: SupportedDialect;
     table: string;
@@ -334,36 +320,42 @@ export async function readDocumentRevision(
   });
   if (!row) return undefined;
   const state: DocumentRevisionState = {
-    main: stateOf("main", row, args.dialect),
+    main: stateOf("main", row),
     languages: {},
   };
   const locales = args.languages?.locales ?? [];
   if (!args.languages || locales.length === 0) return state;
-  // Named in the statement: a translation table's runtime model does not
-  // declare the per-document columns, since the same model serves field-group
-  // translation tables, which are no documents.
-  const q = (name: string) =>
-    args.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-  const p = (n: number) => (args.dialect === "postgresql" ? `$${n}` : "?");
-  const columns = [
-    "_locale",
-    DOCUMENT_REVISION_COLUMN,
-    ...CHANGER_COLUMNS,
-    CHANGED_AT_COLUMN,
-  ];
-  const rows = (await db.execute(
-    `SELECT ${columns.map(q).join(", ")} FROM ${q(args.languages.table)} WHERE ${q("_parent")} = ${p(1)} AND ${q("_locale")} IN (${locales.map((_, i) => p(i + 2)).join(", ")})`,
-    [args.id, ...locales]
-  )) as Record<string, unknown>[];
+  // Through the translation table's revision model: its runtime model does
+  // not declare the per-document columns, since the same model serves
+  // field-group translation tables, which are no documents.
+  const table = languageRevisionTable(args.dialect, args.languages.table);
+  const rows = await db
+    .getDrizzle<SelectsRows>()
+    .select({
+      _locale: table._locale,
+      [DOCUMENT_REVISION_COLUMN]: table[DOCUMENT_REVISION_COLUMN],
+      ...Object.fromEntries(CHANGER_COLUMNS.map(name => [name, table[name]])),
+      [CHANGED_AT_COLUMN]: table[CHANGED_AT_COLUMN],
+    })
+    .from(table as never)
+    .where(
+      and(
+        eq(table._parent as never, args.id),
+        inArray(table._locale as never, [...locales])
+      )
+    );
   const byLocale = new Map(rows.map(r => [String(r._locale), r]));
   for (const locale of locales) {
     const found = byLocale.get(locale);
     state.languages[locale] = found
-      ? stateOf(locale, found, args.dialect)
+      ? stateOf(locale, found)
       : absentPart(locale);
   }
   return state;
 }
+
+/** What `readDocumentRevision` reads through: a transaction, or the pool. */
+export type RevisionReader = Pick<TransactionContext, "select" | "getDrizzle">;
 
 /**
  * The language a save judges, or undefined where it judges none: a document
@@ -612,13 +604,10 @@ export interface StaleWriteHolder {
 }
 
 /** The pool, as `readDocumentRevision` reads it outside a transaction. */
-export function poolRevisionReader(adapter: {
-  select: TransactionContext["select"];
-  executeQuery: TransactionContext["execute"];
-}): Pick<TransactionContext, "select" | "execute"> {
+export function poolRevisionReader(adapter: RevisionReader): RevisionReader {
   return {
     select: (table, options) => adapter.select(table, options),
-    execute: (statement, params) => adapter.executeQuery(statement, params),
+    getDrizzle: () => adapter.getDrizzle(),
   };
 }
 
@@ -628,7 +617,7 @@ export function poolRevisionReader(adapter: {
  * certainly out of date. Any other is left for the row lock to decide.
  */
 export async function certainlyStale(
-  db: Pick<TransactionContext, "select" | "execute">,
+  db: RevisionReader,
   args: {
     dialect: SupportedDialect;
     table: string;
@@ -653,7 +642,7 @@ export async function certainlyStale(
  * it saves over is in the state returned.
  */
 export async function judgeMainRow(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader,
   dialect: SupportedDialect,
   check: VersionCheck,
   row: { table: string; id: string }
@@ -674,7 +663,7 @@ export async function judgeMainRow(
 
 /** {@link judgeMainRow}, refusing a stale save by throwing, for a write whose refusal rolls everything back. */
 export async function refuseIfMainMoved(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader,
   dialect: SupportedDialect,
   check: VersionCheck,
   row: {
@@ -722,7 +711,7 @@ export interface LanguageWrite {
  *   follows must not move it again.
  */
 export async function judgeLanguageRow(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader & Pick<TransactionContext, "execute">,
   dialect: SupportedDialect,
   check: VersionCheck,
   row: LanguageWrite,
@@ -745,7 +734,8 @@ export async function judgeLanguageRow(
     };
   }
   const claimed = await claimCompanionRevision(
-    companionWriteVia(tx, dialect),
+    tx,
+    dialect,
     row.languagesTable,
     row.id,
     row.written,
@@ -757,7 +747,7 @@ export async function judgeLanguageRow(
 
 /** {@link judgeLanguageRow}, refusing a stale save by throwing, for a write whose refusal rolls everything back. */
 export async function refuseIfLanguageMoved(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader & Pick<TransactionContext, "execute">,
   dialect: SupportedDialect,
   check: VersionCheck,
   row: LanguageWrite,
@@ -782,33 +772,33 @@ export async function refuseIfLanguageMoved(
  * still have no row.
  */
 export async function refuseIfLanguagesMoved(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader,
   dialect: SupportedDialect,
   check: VersionCheck,
   row: {
     table: string;
     id: string;
-    languagesTable: string;
-    locales: readonly string[];
+    /** Whether the write sweeps every language; nothing is judged here otherwise. */
+    sweep: boolean;
+    languages: StaleWrite["languages"];
   },
   holder: StaleWriteHolder
 ): Promise<void> {
-  if (check.kind !== "judge" || row.locales.length === 0) return;
+  const languages = row.languages;
+  if (!row.sweep || check.kind !== "judge" || !languages) return;
+  if (languages.locales.length === 0) return;
   const read = await readDocumentRevision(tx, {
     dialect,
     table: row.table,
     id: row.id,
-    languages: { table: row.languagesTable, locales: row.locales },
+    languages,
   });
   if (!read) return;
   const stale = staleParts(check.given, {
-    languages: row.locales.map(locale => read.languages[locale]),
+    languages: languages.locales.map(locale => read.languages[locale]),
   });
   if (stale.length === 0) return;
-  holder.at = {
-    table: row.table,
-    languages: { table: row.languagesTable, locales: row.locales },
-  };
+  holder.at = { table: row.table, languages };
   throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
 }
 
@@ -818,7 +808,7 @@ export async function refuseIfLanguagesMoved(
  * that came in between, never the refused one.
  */
 export async function staleVersionErrorFor(
-  db: Pick<TransactionContext, "select" | "execute">,
+  db: RevisionReader,
   args: {
     dialect: SupportedDialect;
     scopeKind: "collection" | "single";

@@ -14,7 +14,9 @@
 import type {
   SqlParam,
   SupportedDialect,
+  TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
@@ -29,7 +31,10 @@ import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoti
 import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
+import { languageRevisionTable } from "../../schema/services/runtime-schema-generator";
 import {
+  CHANGED_AT_COLUMN,
+  changerColumns,
   DOCUMENT_REVISION_COLUMN,
   translationChangeColumns,
 } from "../../versions/document-revision";
@@ -474,54 +479,65 @@ export async function upsertCompanionRow(
  * @returns Whether the row was claimed; false when it is out of date.
  */
 export async function claimCompanionRevision(
-  adapter: CompanionWriteAdapter,
+  tx: Pick<TransactionContext, "getDrizzle" | "execute">,
+  dialect: SupportedDialect,
   companionTableName: string,
   parentId: string,
   locale: string,
   expected: number,
   savedBy: RequestActor
 ): Promise<boolean> {
-  const { dialect } = adapter;
+  if (expected > 0) {
+    // Through the translation table's revision model, which declares the
+    // counter, the changer and its time; it encodes the time as the row's
+    // other writes store it.
+    const table = languageRevisionTable(dialect, companionTableName);
+    const update = tx
+      .getDrizzle<ClaimsRows>()
+      .update(table as never)
+      .set({
+        [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
+        ...changerColumns(savedBy),
+        [CHANGED_AT_COLUMN]: new Date(),
+      })
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale),
+          eq(table[DOCUMENT_REVISION_COLUMN] as never, expected)
+        )
+      );
+    // MySQL answers how many rows changed; the others return them.
+    if (dialect === "mysql") {
+      const result: unknown = await update;
+      const header = (Array.isArray(result) ? result[0] : result) as {
+        affectedRows?: number;
+      };
+      return header?.affectedRows === 1;
+    }
+    const rows = await update.returning({ parent: table._parent });
+    return rows.length === 1;
+  }
+
+  // The bare row, named in the statement as the upsert above names its
+  // columns: its values follow in that upsert, on the same transaction.
   const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
   const p = (n: number) => (dialect === "postgresql" ? `$${n}` : "?");
   // Who and when, encoded as the row's other writes encode them.
   const changer = translationChangeColumns(savedBy, dialect);
   const changerNames = Object.keys(changer);
-  const table = q(companionTableName);
-  // How many rows the statement just run changed: PostgreSQL answers with
-  // the rows it returns; SQLite and MySQL by asking the same connection.
-  const changed = async (rows: unknown[]): Promise<number> => {
-    if (dialect === "postgresql") return rows.length;
-    const [row] = await adapter.executeQuery<{ n: unknown }>(
-      dialect === "mysql" ? "SELECT ROW_COUNT() AS n" : "SELECT changes() AS n",
-      []
-    );
-    return Number(row?.n ?? 0);
-  };
-  const returning =
-    dialect === "postgresql" ? ` RETURNING ${q("_parent")}` : "";
-
-  if (expected > 0) {
-    const sets = [
-      `${q(DOCUMENT_REVISION_COLUMN)} = ${q(DOCUMENT_REVISION_COLUMN)} + 1`,
-      ...changerNames.map((name, i) => `${q(name)} = ${p(i + 1)}`),
-    ];
-    const at = changerNames.length;
-    const rows = await adapter.executeQuery(
-      `UPDATE ${table} SET ${sets.join(", ")} WHERE ${q("_parent")} = ${p(at + 1)} AND ${q("_locale")} = ${p(at + 2)} AND ${q(DOCUMENT_REVISION_COLUMN)} = ${p(at + 3)}${returning}`,
-      [...changerNames.map(name => changer[name]), parentId, locale, expected]
-    );
-    return (await changed(rows)) === 1;
-  }
-
   const columns = ["_parent", "_locale", ...changerNames];
-  const values = [parentId, locale, ...changerNames.map(name => changer[name])];
-  const insert = `INSERT INTO ${table} (${columns.map(q).join(", ")}) VALUES (${columns.map((_, i) => p(i + 1)).join(", ")})`;
+  const values = [
+    parentId,
+    locale,
+    ...changerNames.map(name => changer[name]),
+  ] as SqlParam[];
+  const insert = `INSERT INTO ${q(companionTableName)} (${columns.map(q).join(", ")}) VALUES (${columns.map((_, i) => p(i + 1)).join(", ")})`;
   if (dialect === "mysql") {
     // A duplicate fails this statement alone: MySQL keeps the transaction,
     // which the rest of a batch goes on with.
     try {
-      await adapter.executeQuery(insert, values);
+      await tx.execute(insert, values);
       return true;
     } catch (error) {
       if (isUniqueViolation(dialect, error)) return false;
@@ -529,12 +545,23 @@ export async function claimCompanionRevision(
     }
   }
   // PostgreSQL would abort the whole transaction on a failed insert, so the
-  // conflict is answered by the statement itself.
-  const rows = await adapter.executeQuery(
-    `${insert} ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO NOTHING${returning}`,
+  // conflict is answered by the statement itself, with the row it inserted.
+  const rows = await tx.execute(
+    `${insert} ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO NOTHING RETURNING ${q("_parent")}`,
     values
   );
-  return (await changed(rows)) === 1;
+  return rows.length === 1;
+}
+
+/** A Drizzle handle that updates rows, as `getDrizzle()` answers it. */
+interface ClaimsRows {
+  update(table: never): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): PromiseLike<unknown> & {
+        returning(fields: Record<string, unknown>): PromiseLike<unknown[]>;
+      };
+    };
+  };
 }
 
 /**
