@@ -1040,8 +1040,9 @@ export class DynamicCollectionSchemaService {
       // A stated date is bound as the moment it names, in whatever form it was
       // typed ("2026-01-02", an offset time): a Date, which every driver binds
       // as one, or on SQLite, which keeps a date as its epoch seconds, those, as
-      // `formatDefaultValue` writes it into the migration file.
-      if (field.type === "date") {
+      // `formatDefaultValue` writes it into the migration file. A plugin type is judged by what it
+      // stores, so one stored as a timestamp is bound as a date too.
+      if (storageTypeToken(field) === "date") {
         const at =
           value instanceof Date
             ? value
