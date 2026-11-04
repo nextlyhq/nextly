@@ -1166,5 +1166,61 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(english).toMatchObject({ code: "STALE_VERSION" });
     });
+
+    it("names the refused save's own language when it is refused under the row lock, and accepts that version", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      const everyLanguage = String(
+        (
+          (await t.nextly.findByID({
+            collection: DOCS as never,
+            id,
+            locale: "*",
+            overrideAccess: true,
+          } as never)) as { _rev: string }
+        )._rev
+      );
+      // An English and a Spanish save that both change a shared field, from
+      // the same version, at once: both pass the check before the hooks, so
+      // whichever loses is refused under the row lock, on the main row.
+      const saves = [
+        { locale: "en", data: { note: "shared" } },
+        { locale: "es", data: { title: "hola otra vez", note: "compartido" } },
+      ];
+      const results = await Promise.all(
+        saves.map(save =>
+          update(
+            t,
+            DOCS,
+            id,
+            { ...save.data, _rev: everyLanguage },
+            { locale: save.locale }
+          )
+        )
+      );
+      const refusedAt = results.findIndex(r => r.code === "STALE_VERSION");
+      expect(
+        results.filter(r => r.success).length,
+        JSON.stringify(results)
+      ).toBe(1);
+      expect(refusedAt).toBeGreaterThanOrEqual(0);
+      const lost = saves[refusedAt];
+      const current = String(results[refusedAt].publicData?.currentVersion);
+      // Spelled as a read in that save's language spells it.
+      expect(current).toMatch(new RegExp(`^\\d+\\.${lost.locale}:\\d+$`));
+      const again = await update(
+        t,
+        DOCS,
+        id,
+        { ...lost.data, _rev: current },
+        { locale: lost.locale }
+      );
+      expect(again.success, JSON.stringify(again)).toBe(true);
+    });
   }
 );
