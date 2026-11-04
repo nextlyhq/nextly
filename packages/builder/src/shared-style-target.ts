@@ -245,7 +245,9 @@ export function saveAsSharedStyleOps(
   return [
     nodeStylesAndClassesOp(
       node.id,
-      uncoveredStyles(node.styles ?? {}, entry.styles),
+      // Only what still equals what the style took: a value the author has
+      // set since, at the same place, is the block's own now.
+      uncoveredStyles(node.styles ?? {}, entry.styles, true),
       [...(node.classes ?? []), entry.id]
     ),
   ];
@@ -464,15 +466,21 @@ function editableNode(
  */
 function uncoveredValue(
   under: StyleValue,
-  over: StyleValue | undefined
+  over: StyleValue | undefined,
+  onlyEqual: boolean
 ): StyleValue | undefined {
   if (over === undefined) return under;
-  if (!isComposite(under) || !isComposite(over)) return undefined;
+  if (!isComposite(under) || !isComposite(over)) {
+    // Taken out where `over` sets it, or, asked for equal values only, where
+    // it sets the very same value (the op layer's own comparison).
+    return onlyEqual && !sameStyleValue(under, over) ? under : undefined;
+  }
   let left: Record<string, StyleValue> = {};
   for (const [key, value] of ownEntries<StyleValue>(under)) {
     const kept = uncoveredValue(
       value,
-      Object.hasOwn(over, key) ? over[key] : undefined
+      Object.hasOwn(over, key) ? over[key] : undefined,
+      onlyEqual
     );
     if (kept !== undefined) left = withKey(left, key, kept);
   }
@@ -490,13 +498,15 @@ function ownRecord<T>(record: unknown, key: string): Record<string, T> {
 /** One breakpoint's values with what another sets taken out, property by property. */
 function uncoveredValues(
   under: object,
-  over: Record<string, StyleValue>
+  over: Record<string, StyleValue>,
+  onlyEqual: boolean
 ): Record<string, StyleValue> {
   let left: Record<string, StyleValue> = {};
   for (const [property, value] of ownEntries<StyleValue>(under)) {
     const kept = uncoveredValue(
       value,
-      Object.hasOwn(over, property) ? over[property] : undefined
+      Object.hasOwn(over, property) ? over[property] : undefined,
+      onlyEqual
     );
     if (kept !== undefined) left = withKey(left, property, kept);
   }
@@ -504,36 +514,25 @@ function uncoveredValues(
 }
 
 /**
- * Whether a value `over` sets at one breakpoint covers what `under` sets at
- * another. By default only the same breakpoint does.
- */
-type Covers = (at: string, by: string) => boolean;
-
-const SAME_BREAKPOINT: Covers = (at, by) => at === by;
-
-/**
- * An envelope with every value another envelope sets at the same state and
- * property, at a breakpoint that covers it, taken out: what `under` still
- * shows once `over`, coming after it, has applied.
+ * An envelope with every value another envelope sets at the same state,
+ * breakpoint and property taken out: what `under` still shows once `over`,
+ * coming after it, has applied. With `onlyEqual`, only the values `over` sets
+ * to the very same value are taken out.
  */
 function uncoveredStyles(
   under: NodeStyles,
   over: NodeStyles,
-  covers: Covers = SAME_BREAKPOINT
+  onlyEqual = false
 ): NodeStyles {
   let left: Record<string, Record<string, Record<string, StyleValue>>> = {};
   for (const [state, byBreakpoint] of ownEntries<object>(under)) {
     const overBreakpoints = ownRecord<Record<string, StyleValue>>(over, state);
     for (const [breakpoint, values] of ownEntries<object>(byBreakpoint)) {
-      // Every value `over` sets at a breakpoint covering this one, laid
-      // together, is what this breakpoint's values lose to.
-      const covering = ownEntries<object>(overBreakpoints)
-        .filter(([by]) => covers(breakpoint, by))
-        .reduce<Record<string, StyleValue>>(
-          (laid, [, set]) => overlaidValues(laid, set),
-          {}
-        );
-      const set = uncoveredValues(values, covering);
+      const set = uncoveredValues(
+        values,
+        ownRecord<StyleValue>(overBreakpoints, breakpoint),
+        onlyEqual
+      );
       if (Object.keys(set).length === 0) continue;
       left = withKey(
         left,
@@ -545,31 +544,91 @@ function uncoveredStyles(
   return left;
 }
 
+/** One value kept only where a mask sets something, side by side for a composite. */
+function maskedValue(
+  value: StyleValue,
+  mask: StyleValue | undefined
+): StyleValue | undefined {
+  if (mask === undefined) return undefined;
+  if (!isComposite(value) || !isComposite(mask)) return value;
+  let kept: Record<string, StyleValue> = {};
+  for (const [key, inner] of ownEntries<StyleValue>(value)) {
+    const left = maskedValue(
+      inner,
+      Object.hasOwn(mask, key) ? mask[key] : undefined
+    );
+    if (left !== undefined) kept = withKey(kept, key, left);
+  }
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
+/** One breakpoint's values kept only where a mask sets them, property by property. */
+function maskedValues(
+  values: object,
+  mask: Record<string, StyleValue>
+): Record<string, StyleValue> {
+  let set: Record<string, StyleValue> = {};
+  for (const [property, value] of ownEntries<StyleValue>(values)) {
+    const left = maskedValue(
+      value,
+      Object.hasOwn(mask, property) ? mask[property] : undefined
+    );
+    if (left !== undefined) set = withKey(set, property, left);
+  }
+  return set;
+}
+
 /**
- * Which later values a detached value must give way to, by breakpoint. The
- * block's own values are emitted after every shared style, so a value copied
- * onto the block at one breakpoint beats a later style's value at that
- * breakpoint AND at every narrower one, where that style wins today. So a
- * later style's value at the same or a narrower breakpoint covers it. Widths
- * are ranked in the engine's own order (`breakpointContexts`: the base, then
- * each axis widest first); one the site does not define ranks as narrowest.
+ * The later styles' values at narrower breakpoints that the block must hold
+ * too once a detached value is copied onto it at a wider one.
+ *
+ * The block's own values are emitted after every shared style, so a value
+ * copied onto the block at a wide breakpoint would beat, at every narrower
+ * one, a later style's value that wins there today. Copying that later value
+ * onto the block at its own breakpoint keeps the same result at every width.
+ * Widths are ranked in the engine's order (`breakpointContexts`: the base,
+ * then each axis widest first); one the site does not define ranks narrowest.
  */
-function widthCovers(breakpoints: BreakpointSet | undefined): Covers {
+function narrowerWins(
+  copied: NodeStyles,
+  later: NodeStyles,
+  breakpoints: BreakpointSet | undefined
+): NodeStyles {
   const rank = new Map(
     breakpointContexts(breakpoints).map((context, index) => [context.id, index])
   );
   const rankOf = (id: string): number => rank.get(id) ?? Infinity;
-  return (at, by) => at === by || rankOf(by) >= rankOf(at);
+  let kept: Record<string, Record<string, Record<string, StyleValue>>> = {};
+  for (const [state, byBreakpoint] of ownEntries<object>(later)) {
+    const copiedTiers = ownEntries<object>(ownRecord(copied, state));
+    for (const [breakpoint, values] of ownEntries<object>(byBreakpoint)) {
+      // What the block will hold for this state at every wider breakpoint.
+      const wider = copiedTiers
+        .filter(([at]) => rankOf(at) < rankOf(breakpoint))
+        .reduce<
+          Record<string, StyleValue>
+        >((laid, [, set]) => overlaidValues(laid, set), {});
+      const set = maskedValues(values, wider);
+      if (Object.keys(set).length === 0) continue;
+      kept = withKey(
+        kept,
+        state,
+        withKey(ownRecord(kept, state), breakpoint, set)
+      );
+    }
+  }
+  return kept;
 }
 
 /**
  * "Detach": keep the look on this block only. The style is taken off the
  * block, and the values it gives the block today are copied onto it, under
  * the block's own. A value a style later in library order sets at the same
- * place, or at a narrower breakpoint, is not the detached style's to give
- * there (that style wins it now, and the block's own value would beat it), so
- * it is left out. A page edit, so a locked style
- * may be detached; the block's own lock refuses.
+ * place is not the detached style's to give (that style wins it now), so it is
+ * left out; where a later style sets the property at a narrower breakpoint,
+ * its value there is copied too, since the block's own copy would otherwise
+ * beat it. So the block looks the same at every width. A page edit, so a
+ * locked style may be detached; the block's own lock refuses.
  *
  * @param worn - every shared style the block wears, in library order
  */
@@ -584,11 +643,16 @@ export function planDetachSharedStyle(
   const held = editableNode(document, nodeId, view);
   if (!held.ok) return held;
   const node = held.node;
-  const later = worn.slice(worn.findIndex(row => row.id === style.id) + 1);
-  const covers = widthCovers(breakpoints);
-  const winning = later.reduce(
-    (left, row) => uncoveredStyles(left, row.styles, covers),
-    style.styles
+  // The later styles' values as they apply together, a later one winning.
+  const later = worn
+    .slice(worn.findIndex(row => row.id === style.id) + 1)
+    .reduce<NodeStyles>((laid, row) => overlaidStyles(laid, row.styles), {});
+  // What the detached style wins at its own breakpoints, and the later
+  // values the block must then hold at narrower ones to keep the same look.
+  const copied = uncoveredStyles(style.styles, later);
+  const winning = overlaidStyles(
+    copied,
+    narrowerWins(copied, later, breakpoints)
   );
   return {
     ok: true,

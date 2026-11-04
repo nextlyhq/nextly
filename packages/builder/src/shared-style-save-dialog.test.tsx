@@ -191,6 +191,50 @@ describe("saving", () => {
     ]);
   });
 
+  it("keeps a new value given to a moved control while the style was being stored", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const onAdd = vi.fn(
+      (_entry: NamedClass) =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        })
+    );
+    const first = editorWith();
+    const props = {
+      nodeId: "a",
+      offer: { library: [card], mayChange: true },
+      onAdd,
+      onClose: vi.fn(),
+    };
+    const view = render(<SaveSharedStyleDialog editor={first} {...props} />);
+    fireEvent.change(name(), { target: { value: "Promo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save shared style" }));
+
+    // The author changes the base colour (moved into the style) meanwhile.
+    const later = editorWith({
+      base: { base: { color: "#999999" }, md: { color: "#654321" } },
+      hover: { base: { color: "#000000" } },
+    });
+    view.rerender(<SaveSharedStyleDialog editor={later} {...props} />);
+    await act(async () => {
+      store(undefined);
+    });
+
+    const entry = onAdd.mock.calls[0]?.[0];
+    // The new colour is the block's own now and stays; only what still equals
+    // what the style took is cleared.
+    expect(later.applyAll).toHaveBeenCalledWith([
+      {
+        kind: "update",
+        id: "a",
+        patch: {
+          styles: { base: { base: { color: "#999999" } } },
+          classes: [entry?.id],
+        },
+      },
+    ]);
+  });
+
   it("leaves the block untouched when the style is refused, and says why", async () => {
     const { editor, onClose } = open(vi.fn(async () => "The site refused it."));
     fireEvent.change(name(), { target: { value: "Promo" } });

@@ -300,6 +300,46 @@ describe("a stored envelope that is malformed at some level", () => {
   );
 });
 
+/**
+ * The value a block shows for one property at one viewport width, read off the
+ * compiled sheet as the browser's cascade would: every rule whose selector the
+ * block carries and whose `max-width` admits the width, the last one winning
+ * (every rule here has one specificity, so source order decides).
+ */
+function shown(
+  document: BlockDocument,
+  library: NamedClass[],
+  property: string,
+  width: number
+): string | undefined {
+  const { css, classes } = compilePageCss(document, {
+    breakpoints: BREAKPOINTS,
+    namedClasses: library,
+  });
+  const tokens = new Set((classes.get("a") ?? "").split(" "));
+  let value: string | undefined;
+  let limit = Infinity;
+  for (const line of css.split("\n")) {
+    const media = /@media \(max-width: (\d+)px\)/.exec(line);
+    if (media) {
+      limit = Number(media[1]);
+      continue;
+    }
+    if (line.trim() === "}") {
+      limit = Infinity;
+      continue;
+    }
+    const rule = /\.([\w-]+)(?::where\([^)]*\))? \{ (.*) \}/.exec(line);
+    if (!rule || !tokens.has(rule[1] ?? "") || width > limit) continue;
+    if (line.includes(":where(")) continue;
+    for (const declaration of (rule[2] ?? "").split(";")) {
+      const [name, ...rest] = declaration.split(":");
+      if (name?.trim() === property) value = rest.join(":").trim();
+    }
+  }
+  return value;
+}
+
 describe("detaching and removing a block's style", () => {
   it("keeps the look on the block: the style's values under its own", () => {
     const style = {
@@ -386,40 +426,47 @@ describe("detaching and removing a block's style", () => {
     });
   });
 
-  it("leaves a later style's narrower breakpoint winning, since the block's own values come after every style", () => {
-    const earlier = {
+  it("keeps the look at every width when a later style wins at a narrower breakpoint", () => {
+    const early: NamedClass = {
       id: "c-early",
-      styles: {
-        base: { base: { color: "#aa0000", opacity: 0.5 } },
-      } as NodeStyles,
+      slug: "early",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#aa0000", opacity: 0.5 } } },
     };
     // Later in library order, and set only at the tablet width.
-    const later = {
+    const late: NamedClass = {
       id: "c-late",
-      styles: { base: { md: { color: "#0000aa" } } } as NodeStyles,
+      slug: "late",
+      orderIndex: 1,
+      styles: { base: { md: { color: "#0000aa" } } },
     };
+    const before = page({ classes: ["c-early", "c-late"] });
+    const look = (document: BlockDocument, library: NamedClass[]) => ({
+      desktop: shown(document, library, "color", 1280),
+      tablet: shown(document, library, "color", 800),
+      opacity: shown(document, library, "opacity", 1280),
+    });
+    expect(look(before, [early, late])).toEqual({
+      desktop: "#aa0000",
+      tablet: "#0000aa",
+      opacity: "0.5",
+    });
+
     const plan = planDetachSharedStyle(
-      page({ classes: ["c-early", "c-late"] }),
+      before,
       "a",
-      earlier,
-      [earlier, later],
+      early,
+      [early, late],
       undefined,
       BREAKPOINTS
     );
-    expect(plan).toEqual({
-      ok: true,
-      ops: [
-        {
-          kind: "update",
-          id: "a",
-          // The base colour would beat the later style's tablet colour from
-          // the block's own tier, so it is not copied; the opacity is.
-          patch: {
-            styles: { base: { base: { opacity: 0.5 } } },
-            classes: ["c-late"],
-          },
-        },
-      ],
+    if (!plan.ok) throw new Error(plan.reason);
+
+    // The block's own values now give what the two styles gave, at each width.
+    expect(look(applied(before, plan.ops), [late])).toEqual({
+      desktop: "#aa0000",
+      tablet: "#0000aa",
+      opacity: "0.5",
     });
   });
 
