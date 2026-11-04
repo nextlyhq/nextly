@@ -9497,7 +9497,10 @@ export class CollectionMutationService extends BaseService {
             // publish left it and as it stood before. The default locale is
             // included: its companion event replaces the untagged main event
             // suppressed above.
-            // Every told language as the publish left it, in one read.
+            // Every told language, and every promoted change's own slot, as
+            // the publish left it, in one read. An unlocalized collection's
+            // change is keyed by no language and tells none, so it is read
+            // under its own key rather than found among the told ones.
             const storedAfter = await this.languageDocumentsOnTx(tx, {
               row: publishedParentRow ?? preImageRow,
               collectionName: params.collectionName,
@@ -9505,16 +9508,25 @@ export class CollectionMutationService extends BaseService {
               tableName,
               fields,
               manyToManyFields,
-              locales: told.map(language => language.locale),
+              locales: [
+                ...told.map(language => language.locale),
+                ...promotions.map(promoted => promoted.locale),
+              ],
             });
-            // What a publish of each promoted language alone hands its update
-            // hooks: that language's durable document, against how it stood.
+            // What a publish of each promoted change alone hands its update
+            // hooks: its durable document, against how it stood, both read
+            // under the change's own key (`storedBefore` holds every pending
+            // change's).
             promotedForHooks = promotions.flatMap(promoted => {
-              const locale = promoted.locale ?? defaultLocale ?? "";
-              const data = storedAfter.get(locale);
+              const data = storedAfter.get(promoted.locale);
               return data === undefined
                 ? []
-                : [{ data, originalData: storedBefore.get(locale) ?? null }];
+                : [
+                    {
+                      data,
+                      originalData: storedBefore.get(promoted.locale) ?? null,
+                    },
+                  ];
             });
             for (const language of told) {
               const data = storedAfter.get(language.locale) ?? {};
