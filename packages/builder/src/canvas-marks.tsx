@@ -50,6 +50,7 @@ import {
   onScreenOf,
   overlaySpaceOf,
   renderedScale,
+  screenScrollTargets,
   usedRadiiOf,
   visiblePartOf,
   type OverlaySpace,
@@ -702,6 +703,25 @@ export function CanvasMarks({
     () => watchCanvasFor(() => layer.current, measure),
     [measure, canvasFrame]
   );
+
+  // And the scrolls that move what of the canvas is on screen, which the tags
+  // keep to: the host's scroller around a zoomed frame among them, which no
+  // listener in the frame hears.
+  React.useEffect(() => {
+    const element = layer.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    const sources = screenScrollTargets(space);
+    for (const source of sources) {
+      source.addEventListener("scroll", measure, { passive: true });
+    }
+    return () => {
+      for (const source of sources) {
+        source.removeEventListener("scroll", measure);
+      }
+    };
+  }, [measure, canvasFrame]);
 
   return (
     // Hidden from assistive technology: the selection is announced by the
