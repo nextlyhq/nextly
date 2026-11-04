@@ -1093,10 +1093,17 @@ export function LinkGroupField({
               disabled={!writable(group.target)}
               checked={values[group.target] === "_blank"}
               // Off clears the target rather than storing `_self`: the same
-              // tab is what a link does with none.
+              // tab is what a link does with none. Unless the block's own
+              // default is a new tab, which a cleared target falls back to:
+              // then off is stored as `_self`, or it would not stay off.
               onCheckedChange={on => {
-                if (group.target === undefined) return;
-                onCommitMany({ [group.target]: on ? "_blank" : undefined });
+                const target = group.target;
+                if (target === undefined) return;
+                const fallsBackToNewTab =
+                  props.find(prop => prop.name === target)?.defaultValue ===
+                  "_blank";
+                const off = fallsBackToNewTab ? "_self" : undefined;
+                onCommitMany({ [target]: on ? "_blank" : off });
               }}
             />
           </div>

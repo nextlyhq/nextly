@@ -706,6 +706,14 @@ describe("what the group reads of the block", () => {
     expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeNull();
   });
 
+  it("stores this tab when switched off over a new-tab default", () => {
+    // Cleared, the target would fall back to the default and the switch
+    // would come straight back on.
+    const editor = mountExtra("acme/new-tab-heading", { href: "/x" });
+    fireEvent.click(screen.getByRole("switch", { name: "Open in new tab" }));
+    expect(written(editor)).toEqual({ href: "/x", target: "_self" });
+  });
+
   it("shows the block's default target while none is stored", () => {
     mountExtra("acme/new-tab-heading", { href: "/x" });
     expect(
