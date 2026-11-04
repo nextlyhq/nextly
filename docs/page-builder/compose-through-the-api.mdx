@@ -84,7 +84,9 @@ Content-Type: application/json
 { "action": { "kind": "add-variant", "label": "Dark" }, "dryRun": true }
 ```
 
-The caller needs **update** on components. Each edit is held to the rules of the
+The caller needs **update** on components; where `componentReadiness` names a collection
+of the site's own for them, the route edits that collection's document field and needs
+**update** there. Each edit is held to the rules of the
 component's own view: a variant's label is unique, ids are stable and never handed out
 twice, a removed field's id is never reused, and a value must fit its field.
 

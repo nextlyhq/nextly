@@ -13,6 +13,10 @@
  * published, as in the view. The write is judged as any save of the
  * component is: a dry run makes it and rolls it back (`judged-writes`).
  *
+ * The component may live in the plugin's own store or in a host collection
+ * named by `componentReadiness`: an edit changes only the configured document
+ * field, so it needs none of the title and slug fields a new component does.
+ *
  * @experimental Settles when the composition API ships.
  * @module definition-actions-route
  */
@@ -60,7 +64,6 @@ import {
   blocksDocumentOf,
   readBodyWith,
   readOrNull,
-  requirePluginStore,
   savesLive,
   storeOf,
   type CompositionRouteContext,
@@ -139,7 +142,6 @@ async function runDefinitionAction(
   ctx: PluginRouteContext,
   setup: DefinitionActionsSetup
 ): Promise<Response> {
-  requirePluginStore(ctx, setup);
   const store = storeOf(ctx, setup);
   const body = await readBodyWith(
     req,
