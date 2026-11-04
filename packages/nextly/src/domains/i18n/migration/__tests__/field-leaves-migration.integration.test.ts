@@ -49,6 +49,7 @@ import {
 import { createLogger } from "../../../../cli/utils/logger";
 import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
 import { loadDialectTables } from "../../../../database/dialect-tables";
+import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
 import { reconcileCore } from "../../../schema/migrate/core-reconcile";
 import { marksNoTransaction } from "../../../schema/migrate/split-sql";
 import {
@@ -844,22 +845,85 @@ for (const entry of DIALECTS) {
         }
       );
 
-      it("refuses Required at migrate while an entry has no English value, keeping the values", async () => {
-        // migrate:create has no database to ask, so the database refuses the setting, after the
-        // copy and before the drop: the companion keeps its column and every value.
+      it.each([
+        {
+          setting: "Required",
+          flags: { required: true },
+          // A second entry whose English row has no body.
+          english: "NULL",
+          refusal:
+            /REQUIRED_FIELD_LEAVES_WITHOUT_VALUES: 1 entry has no English body[\s\S]*then run `nextly migrate` again/,
+        },
+        {
+          setting: "Unique",
+          flags: { unique: true },
+          // A second entry whose English body is the first one's.
+          english: "'Hello'",
+          refusal:
+            /UNIQUE_FIELD_LEAVES_OVER_DUPLICATES: 2 entries would share a value for body[\s\S]*then run `nextly migrate` again/,
+        },
+      ])(
+        "refuses $setting at migrate before the move's first file runs, then runs it once the values can take it",
+        async ({ flags, english, refusal }) => {
+          await migrateCreate(constrained(translated, flags));
+          await migrate();
+          await seed();
+          await adapter.executeQuery(
+            `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e2', 'Two', 'two')`
+          );
+          await adapter.executeQuery(
+            `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e2', 'en', ${english})`
+          );
+          const before = new Set(await readdir(migrationsDir));
+          await migrateCreate(constrained(shared, flags));
+          const move = (await readdir(migrationsDir)).filter(
+            f => f.endsWith(".sql") && !before.has(f)
+          );
+          expect(move).toHaveLength(3);
+
+          // Named with the field and the count, never a value.
+          const error = await migrate().catch((thrown: unknown) => thrown);
+          expect((error as Error).message).toMatch(refusal);
+          expect((error as Error).message).not.toContain("Hello");
+
+          // Nothing of the move ran: no archive rows, no shared column on main, the companion as it
+          // was, and no file of the move in the ledger, not even as an attempt.
+          expect(await archived()).toEqual([]);
+          expect(await columnsOf(table)).not.toContain("body");
+          expect(await columnsOf(companion)).toContain("body");
+          const ledger = await new SchemaEventsRepository(
+            adapter.getDrizzle(),
+            dialect
+          ).listFileApplies();
+          expect(ledger.filter(row => move.includes(row.filename))).toEqual([]);
+
+          // Once the second entry has its own English body, a plain run makes the move.
+          await adapter.executeQuery(
+            `UPDATE ${q(companion)} SET ${q("body")} = 'Two body' WHERE ${q("_parent")} = 'e2' AND ${q("_locale")} = 'en'`
+          );
+          await migrate();
+
+          await expectShared();
+        }
+      );
+
+      it("refuses Required at the shared file of a run that stopped after the main file", async () => {
+        // The values were fine when the move started; an entry written between the runs has no
+        // English body. The shared file checks again before its copy.
         await migrateCreate(constrained(translated, { required: true }));
         await migrate();
         await seed();
+        await migrateCreate(constrained(shared, { required: true }));
+        await migrateStoppingBefore(f => f.includes("_shared_localization_"));
         await adapter.executeQuery(
           `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e2', 'Two', 'two')`
         );
-        await adapter.executeQuery(
-          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e2', 'en', NULL)`
+
+        await expect(migrate()).rejects.toThrow(
+          /REQUIRED_FIELD_LEAVES_WITHOUT_VALUES: 1 entry has no English body/
         );
-        await migrateCreate(constrained(shared, { required: true }));
 
-        await expect(migrate()).rejects.toThrow();
-
+        // Refused before the shared file's copy: the companion keeps every value.
         expect(await columnsOf(companion)).toContain("body");
         const [en] = await adapter.executeQuery<{ body: string | null }>(
           `SELECT ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
