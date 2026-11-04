@@ -11,6 +11,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
 import { AspectRatioField, aspectRatioChoice } from "./aspect-ratio-field";
+import { InheritedValue } from "./inherited-value";
 
 beforeAll(() => {
   // Radix's select measures and scrolls, which jsdom does not do.
@@ -22,22 +23,36 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-function mount(stored?: string) {
-  const onCommit = vi.fn(() => "applied" as const);
-  render(
-    <>
+function field(
+  stored: string | undefined,
+  onCommit: () => "applied",
+  options: { inherited?: string; describedBy?: string } = {}
+) {
+  return (
+    <InheritedValue.Provider value={options.inherited}>
       <span id="ratio-label">Aspect ratio</span>
       <AspectRatioField
         id="ratio"
         labelledBy="ratio-label"
         stored={stored}
         actionName="Aspect ratio"
-        describedBy={undefined}
+        describedBy={options.describedBy}
         onCommit={onCommit}
       />
-    </>
+    </InheritedValue.Provider>
   );
-  return onCommit;
+}
+
+function mount(
+  stored?: string,
+  options: { inherited?: string; describedBy?: string } = {}
+) {
+  const onCommit = vi.fn(() => "applied" as const);
+  const view = render(field(stored, onCommit, options));
+  return Object.assign(onCommit, {
+    rerender: (next: string | undefined) =>
+      view.rerender(field(next, onCommit, options)),
+  });
 }
 
 describe("aspectRatioChoice", () => {
@@ -119,5 +134,52 @@ describe("AspectRatioField", () => {
     fireEvent.change(height, { target: { value: "0" } });
     fireEvent.blur(height);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("shows the ratio a stored change brings, not the numbers it opened on", () => {
+    // An undo or a shared style's update moves one custom ratio to another
+    // while the field stays mounted; blurring stale numbers would write the
+    // old ratio back.
+    const onCommit = mount("5 / 4");
+    onCommit.rerender("8 / 3");
+    const width = screen.getByRole("textbox", { name: "Aspect ratio width" });
+    expect((width as HTMLInputElement).value).toBe("8");
+    fireEvent.blur(width);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a number CSS does not read, rather than storing another one", () => {
+    // `Number("0x10")` is 16; CSS reads no hex number.
+    const onCommit = mount("5 / 4");
+    const width = screen.getByRole("textbox", { name: "Aspect ratio width" });
+    fireEvent.change(width, { target: { value: "0x10" } });
+    fireEvent.blur(width);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("shows an inherited ratio in place of Not set, marked as inherited", () => {
+    mount(undefined, { inherited: "16 / 9" });
+    const trigger = screen.getByRole("combobox", { name: "Aspect ratio" });
+    expect(trigger.textContent).toBe("16:9");
+    expect(trigger.hasAttribute("data-inherited")).toBe(true);
+  });
+
+  it("points a custom ratio's width and height at a refusal", () => {
+    mount("5 / 4", { describedBy: "ratio-error" });
+    for (const name of ["Aspect ratio width", "Aspect ratio height"]) {
+      const input = screen.getByRole("textbox", { name });
+      expect(input.getAttribute("aria-describedby")).toBe("ratio-error");
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+    }
+  });
+
+  it("writes any ratio CSS takes as text, for one the menu has no words for", () => {
+    const onCommit = mount();
+    fireEvent.click(screen.getByRole("combobox", { name: "Aspect ratio" }));
+    fireEvent.click(screen.getByRole("option", { name: "Write as CSS…" }));
+    const css = screen.getByRole("textbox", { name: "Aspect ratio as CSS" });
+    fireEvent.change(css, { target: { value: "auto 4 / 3" } });
+    fireEvent.blur(css);
+    expect(onCommit).toHaveBeenCalledWith("auto 4 / 3");
   });
 });

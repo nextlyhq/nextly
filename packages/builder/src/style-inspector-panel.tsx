@@ -5058,10 +5058,14 @@ function ValueField({
 }
 
 /**
- * A number typed as text, with only the whitespace CSS trims around it: not
- * JavaScript's `\s`, which also takes a no-break space the engine refuses.
+ * A number written as text, as CSS reads one (`0.5`, `1e-7`), with only the
+ * whitespace CSS trims around it: not JavaScript's `\s`, which also takes a
+ * no-break space the engine refuses. `undefined` for anything else.
  */
-const PLAIN_NUMBER = /^[ \t\n\r\f]*-?\d+(\.\d+)?[ \t\n\r\f]*$/;
+function textNumber(text: string): number | undefined {
+  const trimmed = trimCssWhitespace(text);
+  return CSS_NUMBER.test(trimmed) ? Number(trimmed) : undefined;
+}
 
 /**
  * Whether the section a field sits in is held read-only. Its fieldset holds
@@ -5088,8 +5092,8 @@ function fromPercent(value: StyleValue | null): StyleValue | null {
   const number =
     typeof value === "number"
       ? value
-      : typeof value === "string" && PLAIN_NUMBER.test(value)
-        ? Number(value)
+      : typeof value === "string"
+        ? textNumber(value)
         : undefined;
   return number === undefined ? value : Math.round(number * 100) / 10000;
 }
@@ -5107,50 +5111,26 @@ function fromPercent(value: StyleValue | null): StyleValue | null {
 function OpacityField(
   props: React.ComponentProps<typeof NumericField>
 ): React.JSX.Element {
-  const { control, stored, actionName, onCommit } = props;
-  const inherited = React.useContext(InheritedValue);
-  const shown = toPercent(stored);
-  const inheritedShown =
-    inherited !== undefined && PLAIN_NUMBER.test(inherited)
-      ? String(percentOf(Number(inherited)))
-      : inherited;
+  const { control, stored, actionName, describedBy, onCommit } = props;
+  const { shown, inheritedShown, resting } = opacityReading(
+    stored,
+    React.useContext(InheritedValue)
+  );
   const leaf = control.leaf;
   const percentControl =
     leaf.kind === "number"
       ? { ...control, leaf: { ...leaf, min: 0, max: 100 } }
       : control;
-  // While dragging, the thumb follows the pointer; the value is written once
-  // the drag settles.
-  const [preview, setPreview] = React.useState<number | undefined>(undefined);
-  const resting =
-    typeof shown === "number"
-      ? shown
-      : inheritedShown !== undefined && /^[\d.]+$/.test(inheritedShown)
-        ? Number(inheritedShown)
-        : 100;
-  // Held with its section, as the fieldset holds the form controls; a
-  // slider's thumb is not one, so it is told.
-  const held = React.useContext(SectionHeld);
   return (
     <div className="nx-style-inspector__opacity">
-      <Slider
-        value={[preview ?? resting]}
-        min={0}
-        max={100}
-        step={1}
-        disabled={held}
-        onValueChange={([next]) => setPreview(next)}
-        onValueCommit={([next]) => {
-          setPreview(undefined);
-          if (next !== undefined) onCommit(Math.round(next * 100) / 10000);
-        }}
-        thumbs={[
-          {
-            "aria-label": `${actionName} slider`,
-            "aria-valuetext": `${preview ?? resting} percent`,
-          },
-        ]}
-      />
+      {resting === undefined ? null : (
+        <OpacitySlider
+          resting={resting}
+          actionName={actionName}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+      )}
       <InheritedValue.Provider value={inheritedShown}>
         <NumericField
           {...props}
@@ -5163,6 +5143,90 @@ function OpacityField(
         %
       </span>
     </div>
+  );
+}
+
+/**
+ * An opacity as the field shows it: the stored value in percent, the
+ * inherited one in percent as its hint, and where the slider's thumb rests.
+ *
+ * The thumb rests on the value set here, else the one inherited, else the
+ * 100% of an unset opacity. A keyword (`inherit`) is none of these, so it has
+ * no resting place and no slider: no position stands for it, and a nudge
+ * would replace it with a number built from a position it never had.
+ */
+function opacityReading(
+  stored: StyleValue | undefined,
+  inherited: string | undefined
+): {
+  shown: StyleValue | undefined;
+  inheritedShown: string | undefined;
+  resting: number | undefined;
+} {
+  const shown = toPercent(stored);
+  const inheritedNumber =
+    inherited === undefined ? undefined : textNumber(inherited);
+  const inheritedPercent =
+    inheritedNumber === undefined ? undefined : percentOf(inheritedNumber);
+  const unsetResting =
+    inheritedPercent ?? (inherited === undefined ? 100 : undefined);
+  return {
+    shown,
+    inheritedShown:
+      inheritedPercent === undefined ? inherited : String(inheritedPercent),
+    resting:
+      typeof shown === "number"
+        ? shown
+        : shown === undefined
+          ? unsetResting
+          : undefined,
+  };
+}
+
+/**
+ * Opacity's slider, 0 to 100: the thumb follows a drag, and the value is
+ * written once it settles.
+ */
+function OpacitySlider({
+  resting,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  resting: number;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const [preview, setPreview] = React.useState<number | undefined>(undefined);
+  // Held with its section, as the fieldset holds the form controls; a
+  // slider's thumb is not one, so it is told.
+  const held = React.useContext(SectionHeld);
+  const at = preview ?? resting;
+  return (
+    <Slider
+      value={[at]}
+      min={0}
+      max={100}
+      step={1}
+      disabled={held}
+      onValueChange={([next]) => setPreview(next)}
+      onValueCommit={([next]) => {
+        setPreview(undefined);
+        if (next !== undefined) onCommit(Math.round(next * 100) / 10000);
+      }}
+      thumbs={[
+        {
+          "aria-label": `${actionName} slider`,
+          "aria-valuetext": `${at} percent`,
+          // A refusal said for the field is said for the slider too, which
+          // may hold the focus when it arrives.
+          ...(describedBy === undefined
+            ? {}
+            : { "aria-describedby": describedBy }),
+        },
+      ]}
+    />
   );
 }
 

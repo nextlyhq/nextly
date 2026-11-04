@@ -2747,6 +2747,16 @@ describe("where a control's value came from", () => {
     expect(sourceIn("color")).toBe("From .card");
   });
 
+  it("shows an inherited opacity in percent, however small its number is written", () => {
+    // `0.0000001` arrives as `1e-7`, which is a number CSS reads.
+    mountCarded([fromCard({ property: "opacity", value: "1e-7" })], {
+      effects: true,
+    });
+    // By the label's start: the label also holds the source caption.
+    const field = screen.getByRole("textbox", { name: /^Opacity/ });
+    expect(field.getAttribute("placeholder")).toBe("0");
+  });
+
   it("leaves the swatch unpainted for an inherited colour it cannot resolve here", () => {
     // A site variable or currentcolor resolves against the canvas, not this
     // panel: painted raw, it showed the admin's colour or none.
@@ -4673,6 +4683,30 @@ describe("opacity in percent", () => {
     expect(JSON.stringify(editor.applyAll.mock.calls)).toContain(
       '"opacity":0.49'
     );
+  });
+
+  it("points the slider at a refusal, as the number beside it is", () => {
+    mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "lots" } });
+    fireEvent.blur(field);
+    const alert = screen.getByRole("alert");
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .getAttribute("aria-describedby")
+    ).toBe(alert.id);
+  });
+
+  it("draws no slider over a keyword, which no position on it stands for", () => {
+    // A slider at 100% over `inherit` would show a value that is not there,
+    // and a nudge would replace the keyword with one built from it.
+    mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } }
+    );
+    expect(screen.queryByRole("slider", { name: "Opacity slider" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Opacity" })).toBeDefined();
   });
 
   it("passes a CSS-wide keyword through, unscaled", () => {

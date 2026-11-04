@@ -14,7 +14,7 @@
  * @module aspect-ratio-field
  */
 
-import type { StyleValue } from "@nextlyhq/blocks-engine";
+import { trimCssWhitespace, type StyleValue } from "@nextlyhq/blocks-engine";
 import {
   Input,
   Select,
@@ -25,6 +25,9 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import * as React from "react";
+
+import { InheritedValue } from "./inherited-value";
+import { CSS_NUMBER } from "./style-numeric";
 
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
@@ -42,6 +45,23 @@ const PRESETS: readonly { value: string; label: string }[] = [
 
 /** The menu's value for a custom ratio, apart from every CSS ratio. */
 const CUSTOM = "custom";
+
+/** The menu's value for a ratio written as CSS, for one it has no words for. */
+const AS_CSS = "css";
+
+/** A positive number as CSS reads one, or `undefined`: never `0x10` or `Infinity`. */
+function cssNumber(text: string): number | undefined {
+  const trimmed = trimCssWhitespace(text);
+  if (!CSS_NUMBER.test(trimmed)) return undefined;
+  const number = Number(trimmed);
+  return number > 0 && Number.isFinite(number) ? number : undefined;
+}
+
+/** What a ratio is called in the menu: its preset's name, or `5:4`. */
+function choiceLabel(choice: AspectRatioChoice): string {
+  if (choice.kind === "custom") return `${choice.width}:${choice.height}`;
+  return PRESETS.find(preset => preset.value === choice.value)?.label ?? "";
+}
 
 /** A positive number as CSS writes one, and no more of the text. */
 const NUMBER = String.raw`(\d+(?:\.\d+)?|\.\d+)`;
@@ -92,6 +112,36 @@ export function drawsAspectRatio(stored: StyleValue | undefined): boolean {
   );
 }
 
+/** Which part of the field is open: the menu alone, a custom ratio, or CSS. */
+type RatioMode = "menu" | "custom" | "css";
+
+/**
+ * What the menu shows: the stored ratio as the field draws it; a ratio
+ * reaching this block from another tier, shown where Not set would and marked
+ * as inherited; whether the custom numbers are open; and the menu's value.
+ */
+function ratioMenu(
+  stored: StyleValue | undefined,
+  inherited: string | undefined,
+  mode: RatioMode
+): {
+  choice: AspectRatioChoice | undefined;
+  inheritedChoice: AspectRatioChoice | undefined;
+  custom: boolean;
+  value: string;
+} {
+  const choice =
+    typeof stored === "string" ? aspectRatioChoice(stored) : undefined;
+  const inheritedChoice =
+    stored === undefined && inherited !== undefined
+      ? aspectRatioChoice(inherited)
+      : undefined;
+  const custom = choice?.kind === "custom" || mode === "custom";
+  const preset = choice?.kind === "preset" ? choice.value : "";
+  const value = mode === "css" ? AS_CSS : custom ? CUSTOM : preset;
+  return { choice, inheritedChoice, custom, value };
+}
+
 export function AspectRatioField({
   id,
   labelledBy,
@@ -107,23 +157,26 @@ export function AspectRatioField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  const choice =
-    typeof stored === "string" ? aspectRatioChoice(stored) : undefined;
-  // Custom is chosen before its numbers are typed, so it is the field's own
-  // state until a ratio is stored.
-  const [customOpen, setCustomOpen] = React.useState(false);
-  const custom = choice?.kind === "custom" || customOpen;
-  const value = custom ? CUSTOM : choice?.kind === "preset" ? choice.value : "";
+  const inherited = React.useContext(InheritedValue);
+  // Custom and CSS are chosen before anything is typed, so each is the
+  // field's own state until a ratio is stored.
+  const [mode, setMode] = React.useState<RatioMode>("menu");
+  const { choice, inheritedChoice, custom, value } = ratioMenu(
+    stored,
+    inherited,
+    mode
+  );
+  const invalid = describedBy === undefined ? undefined : true;
   return (
     <div className="nx-style-inspector__ratio">
       <Select
         value={value}
         onValueChange={next => {
-          if (next === CUSTOM) {
-            setCustomOpen(true);
+          if (next === CUSTOM || next === AS_CSS) {
+            setMode(next === CUSTOM ? "custom" : "css");
             return;
           }
-          setCustomOpen(false);
+          setMode("menu");
           onCommit(next);
         }}
       >
@@ -131,9 +184,18 @@ export function AspectRatioField({
           id={id}
           aria-labelledby={labelledBy}
           aria-describedby={describedBy}
-          aria-invalid={describedBy === undefined ? undefined : true}
+          aria-invalid={invalid}
+          {...(value === "" && inheritedChoice !== undefined
+            ? { "data-inherited": "" }
+            : {})}
         >
-          <SelectValue placeholder="Not set" />
+          <SelectValue
+            placeholder={
+              inheritedChoice === undefined
+                ? "Not set"
+                : choiceLabel(inheritedChoice)
+            }
+          />
         </SelectTrigger>
         <SelectContent>
           {PRESETS.map(preset => (
@@ -143,16 +205,56 @@ export function AspectRatioField({
           ))}
           <SelectSeparator />
           <SelectItem value={CUSTOM}>Custom…</SelectItem>
+          <SelectItem value={AS_CSS}>Write as CSS…</SelectItem>
         </SelectContent>
       </Select>
-      {custom ? (
+      {mode === "css" ? (
+        <CssRatio
+          actionName={actionName}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+      ) : custom ? (
         <CustomRatio
           actionName={actionName}
           stored={choice?.kind === "custom" ? choice : undefined}
+          describedBy={describedBy}
           onCommit={onCommit}
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A ratio written as CSS, for one the menu has no words for (`auto 4 / 3`),
+ * written once the author leaves the field; the engine judges it.
+ */
+function CssRatio({
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const [text, setText] = React.useState("");
+  const commit = () => {
+    if (trimCssWhitespace(text) !== "") onCommit(text);
+  };
+  return (
+    <Input
+      aria-label={`${actionName} as CSS`}
+      aria-describedby={describedBy}
+      aria-invalid={describedBy === undefined ? undefined : true}
+      value={text}
+      onChange={event => setText(event.target.value)}
+      onBlur={commit}
+      onKeyDown={event => {
+        if (event.key === "Enter") commit();
+      }}
+    />
   );
 }
 
@@ -163,10 +265,12 @@ export function AspectRatioField({
 function CustomRatio({
   actionName,
   stored,
+  describedBy,
   onCommit,
 }: {
   actionName: string;
   stored: { width: number; height: number } | undefined;
+  describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const [width, setWidth] = React.useState(
@@ -175,22 +279,36 @@ function CustomRatio({
   const [height, setHeight] = React.useState(
     stored === undefined ? "" : String(stored.height)
   );
+  // A stored change (an undo, a shared style's update) moves the numbers
+  // with it, so blurring the field never writes back the ratio it replaced.
+  const storedWidth = stored?.width;
+  const storedHeight = stored?.height;
+  React.useEffect(() => {
+    if (storedWidth === undefined || storedHeight === undefined) return;
+    setWidth(String(storedWidth));
+    setHeight(String(storedHeight));
+  }, [storedWidth, storedHeight]);
   const commit = () => {
-    const w = Number(width);
-    const h = Number(height);
-    if (width.trim() === "" || height.trim() === "") return;
-    if (!(w > 0 && h > 0)) return;
-    const next = `${w} / ${h}`;
+    const w = cssNumber(width);
+    const h = cssNumber(height);
+    if (w === undefined || h === undefined) return;
     if (stored !== undefined && stored.width === w && stored.height === h) {
       return;
     }
-    onCommit(next);
+    onCommit(`${w} / ${h}`);
   };
+  // A refusal said for the field is said for both numbers, either of which
+  // may hold the focus when it arrives.
+  const refusal = {
+    "aria-describedby": describedBy,
+    "aria-invalid": describedBy === undefined ? undefined : true,
+  } as const;
   return (
     <div className="nx-style-inspector__ratio-custom">
       <Input
         aria-label={`${actionName} width`}
         inputMode="decimal"
+        {...refusal}
         value={width}
         onChange={event => setWidth(event.target.value)}
         onBlur={commit}
@@ -202,6 +320,7 @@ function CustomRatio({
       <Input
         aria-label={`${actionName} height`}
         inputMode="decimal"
+        {...refusal}
         value={height}
         onChange={event => setHeight(event.target.value)}
         onBlur={commit}
