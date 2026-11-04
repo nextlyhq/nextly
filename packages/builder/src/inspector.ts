@@ -19,6 +19,7 @@ import {
   contentPropsOf,
   getBlock,
   findNode,
+  isLinkableUrl,
   locateNode,
   nodeLocks,
   registryBlockSource,
@@ -290,6 +291,49 @@ function optionsOf(schema: PropSchema): readonly string[] {
 export type LockState = "locked" | "unlocked" | "mixed";
 
 /**
+ * Whether a prop is offered at all.
+ *
+ * Left out: a prop that applies only while others are empty
+ * (`onlyWithout`, one prop's name or several), once any of them is set, as a
+ * button's "Acts as" means nothing once the button links to a URL or an
+ * entry; and a choice with fewer than two options, which offers nothing to
+ * pick, as a column's one HTML tag.
+ */
+function offered(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>>,
+  options: readonly string[]
+): boolean {
+  const without = schema.onlyWithout;
+  const names =
+    typeof without === "string"
+      ? [without]
+      : Array.isArray(without)
+        ? without
+        : [];
+  if (
+    names.some(
+      name => typeof name === "string" && isSet(declared[name], values[name])
+    )
+  ) {
+    return false;
+  }
+  return !(schema.type === "select" && options.length < 2);
+}
+
+/**
+ * Whether a stored prop value is there: anything but absent or empty text,
+ * and for a URL, only one a page can follow. The engine's rule, the one the
+ * renderer reads, so a refused `javascript:` link that renders no link
+ * leaves the block offering what it does without one.
+ */
+function isSet(schema: PropSchema | undefined, value: unknown): boolean {
+  if (schema?.type === "url") return isLinkableUrl(value);
+  return value !== undefined && value !== null && value !== "";
+}
+
+/**
  * The lock across a set.
  *
  * Ids the document no longer holds are skipped rather than counted as
@@ -297,29 +341,6 @@ export type LockState = "locked" | "unlocked" | "mixed";
  * missing one as unlocked would report `mixed` for a set that is entirely
  * locked.
  */
-/**
- * Whether a prop is offered at all.
- *
- * Left out: a prop that applies only while another is empty
- * (`onlyWithout`), once that one is set, as a button's "Acts as" means nothing
- * once the button is a link; and a choice with fewer than two options, which
- * offers nothing to pick, as a column's one HTML tag.
- */
-function offered(
-  schema: PropSchema,
-  values: Readonly<Record<string, unknown>>,
-  options: readonly string[]
-): boolean {
-  const without = schema.onlyWithout;
-  if (typeof without === "string" && isSet(values[without])) return false;
-  return !(schema.type === "select" && options.length < 2);
-}
-
-/** Whether a stored prop value is there: anything but absent or empty text. */
-function isSet(value: unknown): boolean {
-  return value !== undefined && value !== null && value !== "";
-}
-
 export function lockStateOf(
   document: BlockDocument,
   ids: readonly string[]
@@ -378,7 +399,7 @@ export function inspectSelection(
   const props = Object.entries(declared).flatMap<EditableProp>(
     ([name, schema]) => {
       if (schema === undefined) return [];
-      if (!offered(schema, node.props, optionsOf(schema))) return [];
+      if (!offered(schema, node.props, declared, optionsOf(schema))) return [];
       return [
         {
           name,

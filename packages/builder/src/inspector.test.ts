@@ -797,8 +797,8 @@ describe("a key as an author reads it", () => {
 });
 
 describe("which choices a block's inspector offers", () => {
-  /** A button-like block inside an optional form-like container. */
-  function withButton(props: Record<string, unknown>, insideForm: boolean) {
+  /** A button-like block: a link, an entry link, and what it acts as. */
+  function withButton(props: Record<string, unknown>) {
     // Registered afresh for each document a case builds.
     clearBlocks();
     registerBlocks(
@@ -809,55 +809,45 @@ describe("which choices a block's inspector offers", () => {
           editor: { label: "Button" },
           props: {
             href: { type: "url" },
+            entryId: { type: "text" },
             type: {
               type: "select",
               options: ["button", "submit", "reset"],
-              onlyWithout: "href",
+              onlyWithout: ["href", "entryId"],
             },
             as: { type: "select", options: ["div"] },
           },
         },
-        {
-          ...base,
-          name: "acme/form",
-          editor: { label: "Form" },
-          slots: { children: {} },
-        },
       ] as never,
       { source: "inspector-test" }
     );
-    const button = {
-      id: "b",
-      type: "acme/button",
-      version: 1,
-      props,
-    } as BlockNode;
-    return documentOf(
-      insideForm
-        ? [
-            {
-              id: "f",
-              type: "acme/form",
-              version: 1,
-              props: {},
-              slots: { children: [button] },
-            } as BlockNode,
-          ]
-        : [button]
-    );
+    return documentOf([
+      { id: "b", type: "acme/button", version: 1, props } as BlockNode,
+    ]);
   }
   const names = (document: BlockDocument) =>
     inspectSelection(document, "b")?.props.map(prop => prop.name);
 
   it("leaves out a prop that only applies without another, once that one is set", () => {
     // "Acts as" means nothing on a button that is a link.
-    expect(names(withButton({}, false))).toContain("type");
-    expect(names(withButton({ href: "/pricing" }, false))).not.toContain(
+    expect(names(withButton({}))).toContain("type");
+    expect(names(withButton({ href: "/pricing" }))).not.toContain("type");
+  });
+
+  it("leaves it out once any of the props it applies without is set", () => {
+    // An entry link is as much a link as a typed URL.
+    expect(names(withButton({ entryId: "e1" }))).not.toContain("type");
+  });
+
+  it("counts a link as set only when it is one a page can follow", () => {
+    // A refused URL renders no link, so the button is still a button.
+    expect(names(withButton({ href: "javascript:alert(1)" }))).toContain(
       "type"
     );
+    expect(names(withButton({ href: "   " }))).toContain("type");
   });
 
   it("leaves out a choice with only one option, which offers nothing to pick", () => {
-    expect(names(withButton({}, false))).not.toContain("as");
+    expect(names(withButton({}))).not.toContain("as");
   });
 });
