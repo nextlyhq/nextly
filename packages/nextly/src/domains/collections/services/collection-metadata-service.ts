@@ -448,7 +448,7 @@ export class CollectionMetadataService extends BaseService {
         // An index name the new table takes may already be held elsewhere, where the create's
         // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
         try {
-          await refuseNewCollectionIndexNamesTaken({
+          await refuseNewCollectionIndexNamesTaken(this.adapter, {
             slug: data.name,
             tableName: artifacts.tableName,
             fields: artifacts.metadata.fields,

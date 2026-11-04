@@ -9,7 +9,9 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { clearServices } from "../../../../di/register";
 import { describeEachDialect } from "../../../../plugins/__tests__/helpers/dialect-matrix";
+import { ServiceContainer } from "../../../../services/index";
 import { companionUniqueIndexName } from "../../../i18n/migration/companion-unique-indexes";
 import {
   createTestNextly,
@@ -160,6 +162,32 @@ describeEachDialect(
         );
 
         const refused = await handler().createCollection({
+          name: "posts",
+          label: "posts",
+          fields: withUniqueCode,
+        });
+
+        expect(refused.success, JSON.stringify(refused)).toBe(false);
+        expect(JSON.stringify(refused)).toContain(blocking);
+        expect(await columnsOf("dc_posts")).toEqual([]);
+      }
+    );
+
+    // A standalone container, built over an adapter with nothing registered in the global one,
+    // creates through its own handler: the check reads that adapter, not the global one.
+    it.skipIf(dialect === "mysql")(
+      "refuses a new collection's held index name through a standalone container",
+      async () => {
+        await collectionWith("notes", ["Note"]);
+        const blocking = uniqueIndexNameForColumn("dc_posts", "code");
+        await query(
+          `CREATE INDEX ${q(blocking)} ON ${q("dc_notes")} (${q("id")})`
+        );
+        clearServices();
+
+        const refused = await new ServiceContainer(
+          current.adapter
+        ).collections.createCollection({
           name: "posts",
           label: "posts",
           fields: withUniqueCode,

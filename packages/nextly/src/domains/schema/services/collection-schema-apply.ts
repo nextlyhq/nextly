@@ -822,16 +822,18 @@ function expectedCollectionColumns(
  * Refuse creating a Builder collection whose indexes would take a name held elsewhere
  * (`refuseIndexNamesTaken`). Its table doesn't exist yet, so only names held beyond it can be in
  * the way, and the create's `CREATE ... IF NOT EXISTS` would skip them. A precondition the create
- * asks before its migration runs.
+ * asks before its migration runs, against the adapter the create itself runs on (a standalone
+ * container's, say), never one looked up elsewhere.
  */
-export async function refuseNewCollectionIndexNamesTaken(collection: {
-  slug: string;
-  tableName: string;
-  fields: readonly unknown[];
-  localized?: boolean;
-}): Promise<void> {
-  const adapter = getAdapterFromDI();
-  if (!adapter) return;
+export async function refuseNewCollectionIndexNamesTaken(
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
+  collection: {
+    slug: string;
+    tableName: string;
+    fields: readonly unknown[];
+    localized?: boolean;
+  }
+): Promise<void> {
   await refuseIndexNamesTaken(adapter, {
     slug: collection.slug,
     tableName: collection.tableName,
