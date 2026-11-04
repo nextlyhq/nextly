@@ -980,7 +980,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
-  const { done } = useHostCommit({
+  const { done, publishOffer } = useHostCommit({
     name,
     control,
     editor,
@@ -1216,6 +1216,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             onClose={makeComponent.close}
             returnFocusTo={makeComponent.returnFocusTo}
           />
+          {publishOffer}
           {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>
