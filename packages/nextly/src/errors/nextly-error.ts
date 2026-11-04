@@ -16,6 +16,7 @@ import type {
   ReleaseProblemsPublicData,
   SharedFieldsConflictPublicData,
   ValidationPublicData,
+  WorkflowRefusalPublicData,
 } from "./public-data";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
 
@@ -321,10 +322,16 @@ export class NextlyError extends Error {
   static forbidden(opts?: {
     cause?: Error;
     logContext?: Record<string, unknown>;
+    /**
+     * What the caller needs to act on the refusal, where saying it leaks nothing they may not
+     * know: for a workflow step, the permission it needs. Absent, the refusal carries no data.
+     */
+    publicData?: PublicData;
   }): NextlyError {
     return new NextlyError({
       code: "FORBIDDEN",
       publicMessage: "You don't have permission to perform this action.",
+      publicData: opts?.publicData,
       cause: opts?.cause,
       logContext: opts?.logContext,
     });
@@ -587,12 +594,14 @@ export class NextlyError extends Error {
      * What a caller needs to act on the conflict: for a release refused over
      * its documents, the problems by code and member; for a release that
      * cannot be deleted, the reason; for a pending change refused over the
-     * fields every language shares, why and which fields.
+     * fields every language shares, why and which fields; for a workflow
+     * step, the parts it could not move and why.
      */
     data?:
       | ReleaseProblemsPublicData
       | ReleaseNotDeletablePublicData
-      | SharedFieldsConflictPublicData;
+      | SharedFieldsConflictPublicData
+      | WorkflowRefusalPublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
