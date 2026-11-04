@@ -413,6 +413,9 @@ const GUARDED = "guardedpending";
 const HEROES = "heropending";
 const REMOVED = "removedpending";
 const SEALED = "sealedpending";
+const SEALED_BOX = "sealedboxpending";
+const HOOKED = "hookedpending";
+const SEALED_BOX_COMPONENT = "sealedboxlabel";
 const PUBLISHER = "publisher";
 
 /** A version snapshot as stored, read back as the document it records. */
@@ -688,6 +691,173 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe("Live");
       expect(await pendingLocales(id)).toEqual(["fr"]);
+    });
+
+    // A change kept for a language the app no longer configures is judged
+    // against that language's own stored components, read exactly as stored.
+    // The plausible broken implementation resolves the removed language to
+    // the default and compares the change with the default's components: a
+    // protected value equal to the default's then reads as no edit, and the
+    // publish writes it into the removed language's components.
+    it("judges a removed language's pending change against that language's own stored components", async () => {
+      const entries = await bootWith(
+        dialect,
+        defineCollection({
+          slug: SEALED_BOX,
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title", localized: true }),
+            // No caller judged by the field rules may change it.
+            fieldGroup({
+              name: "box",
+              component: SEALED_BOX_COMPONENT,
+              access: { update: () => false },
+            }),
+          ],
+        }),
+        [
+          defineFieldGroup({
+            slug: SEALED_BOX_COMPONENT,
+            localized: true,
+            fields: [text({ name: "label" })],
+          }),
+        ]
+      );
+      await userWhoMay(current!, PUBLISHER, "publish", [SEALED_BOX]);
+      const created = await entries.createEntry(
+        { collectionName: SEALED_BOX, overrideAccess: true, locale: "en" },
+        { title: "Hello", box: { label: "Default" }, status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      // Spanish live with its own label, then a change held for it that sets
+      // the label back to the default's.
+      const live = await entries.updateEntry(at(id, "es", SEALED_BOX), {
+        title: "Hola",
+        box: { label: "Spanish" },
+        status: "published",
+      });
+      expect(live.success, JSON.stringify(live)).toBe(true);
+      const held = await entries.updateEntry(at(id, "es", SEALED_BOX), {
+        box: { label: "Default" },
+      });
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      // The site has since removed that language: its stored components and
+      // its pending change are kept under French, which it does not configure.
+      await current!.adapter.executeQuery(
+        `UPDATE comp_${SEALED_BOX_COMPONENT}_locales SET _locale = 'fr' WHERE _locale = 'es'`
+      );
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: SEALED_BOX,
+        entryId: id,
+      };
+      const drafts = new VersionsRepository(current!.adapter);
+      const spanish = await drafts.findWorkingDraft(ref, "es");
+      await drafts.upsertWorkingDraft({
+        ref,
+        locale: "fr",
+        snapshot: snapshotOf(spanish?.snapshot),
+      });
+      await drafts.deleteWorkingDraft(ref, "es");
+      expect(await pendingLocales(id)).toEqual(["fr"]);
+
+      const every = await entries.publishAllLocales({
+        collectionName: SEALED_BOX,
+        entryId: id,
+        overrideAccess: false,
+        user: { id: PUBLISHER },
+      });
+
+      // French's stored label is "Spanish": the change edits the protected
+      // field, and the publish refuses it rather than writing "Default" there.
+      expect(every.success).toBe(false);
+      expect((every as { publicData?: unknown }).publicData).toMatchObject({
+        errors: [expect.objectContaining({ code: "FORBIDDEN" })],
+      });
+      const labels = await current!.adapter.executeQuery<{ label: string }>(
+        `SELECT label FROM comp_${SEALED_BOX_COMPONENT}_locales WHERE _locale = 'fr'`
+      );
+      expect(labels.map(row => row.label)).toEqual(["Spanish"]);
+      expect(await pendingLocales(id)).toEqual(["fr"]);
+    });
+
+    // A publish of every language that puts a pending change live runs the
+    // update hooks a publish of that language alone runs, with the durable
+    // document. The plausible broken implementation writes the promoted
+    // content directly and emits only status events, so a hook that ignores
+    // the working-draft save never sees the content that went live.
+    it("runs the update hooks a publish of one language runs, with the promoted document", async () => {
+      const seen: { title: unknown; draft: unknown }[] = [];
+      const fieldValues: unknown[] = [];
+      const entries = await bootWith(
+        dialect,
+        defineCollection({
+          slug: HOOKED,
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          hooks: {
+            // Config `afterChange` is the runtime `afterUpdate` phase.
+            afterChange: [
+              ctx => {
+                const data = (ctx.data ?? {}) as Record<string, unknown>;
+                seen.push({ title: data.title, draft: data._isWorkingDraft });
+              },
+            ],
+          },
+          fields: [
+            text({
+              name: "title",
+              localized: true,
+              hooks: {
+                afterChange: [
+                  ({ value }: { value: unknown }) => {
+                    fieldValues.push(value);
+                    return value;
+                  },
+                ],
+              },
+            }),
+          ],
+        })
+      );
+      const heldIn = async (): Promise<string> => {
+        const created = await entries.createEntry(
+          { collectionName: HOOKED, overrideAccess: true, locale: "en" },
+          { title: "Hello", status: "published" }
+        );
+        const id = (created.data as { id: string }).id;
+        const held = await entries.updateEntry(at(id, "en", HOOKED), {
+          title: "Hello again",
+        });
+        expect(held.success, JSON.stringify(held)).toBe(true);
+        return id;
+      };
+      const alone = await heldIn();
+      const every = await heldIn();
+      const durable = () =>
+        seen.filter(call => call.draft !== true).map(call => call.title);
+
+      seen.length = 0;
+      fieldValues.length = 0;
+      const one = await entries.updateEntry(at(alone, "en", HOOKED), {
+        status: "published",
+      });
+      expect(one.success, JSON.stringify(one)).toBe(true);
+      const byOne = { hook: durable(), field: [...fieldValues] };
+      expect(byOne.hook).toContain("Hello again");
+
+      seen.length = 0;
+      fieldValues.length = 0;
+      const all = await entries.publishAllLocales({
+        collectionName: HOOKED,
+        entryId: every,
+        overrideAccess: true,
+      });
+      expect(all.success, JSON.stringify(all)).toBe(true);
+      expect({ hook: durable(), field: [...fieldValues] }).toEqual(byOne);
     });
 
     it("consumes pending changes the schema no longer lets it promote, putting none of them live", async () => {

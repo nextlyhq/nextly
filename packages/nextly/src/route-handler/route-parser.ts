@@ -740,7 +740,7 @@ function parseCollectionEntryDuplicateRoute(
 }
 
 /**
- * Parse the publish-all-languages routes for a collection entry (i18n M7).
+ * Parse the publish-all-languages routes for a collection entry.
  * POST /api/collections/{slug}/entries/{id}/publish-all
  * GET /api/collections/{slug}/entries/{id}/publish-all
  */

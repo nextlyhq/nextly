@@ -956,13 +956,8 @@
     "digests": ["75133300085c5b1d"]
   },
   "packages/nextly/src/route-handler/route-parser.ts": {
-    "count": 4,
-    "digests": [
-      "618413b00a8fa802",
-      "acaed4e94a6b99c0",
-      "d1938ae75e12cb5f",
-      "f5ffbbe2b158e4dd"
-    ]
+    "count": 3,
+    "digests": ["618413b00a8fa802", "d1938ae75e12cb5f", "f5ffbbe2b158e4dd"]
   },
   "packages/nextly/src/routeHandler.ts": {
     "count": 3,

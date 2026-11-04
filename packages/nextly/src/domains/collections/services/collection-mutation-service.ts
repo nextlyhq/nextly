@@ -6068,7 +6068,9 @@ export class CollectionMutationService extends BaseService {
     parentTable: string,
     fields: FieldDefinition[],
     manyToManyFields: FieldDefinition[],
-    locales: readonly (string | undefined)[]
+    locales: readonly (string | undefined)[],
+    /** Each language read exactly as stored, a removed one included. */
+    exactLanguage = false
   ): Promise<{
     componentsByLocale: Map<string | undefined, Record<string, unknown>>;
     manyToMany: Record<string, string[]>;
@@ -6086,6 +6088,7 @@ export class CollectionMutationService extends BaseService {
       // default component locale and the snapshot records values this write
       // never touched.
       locales,
+      exactLanguage,
       reason: "version-snapshot-component-read",
       logContext: { collection: collectionName, entryId },
       onReadFailure: (err: unknown) =>
@@ -8099,6 +8102,10 @@ export class CollectionMutationService extends BaseService {
         manyToManyFields: args.manyToManyFields,
         localizedUpdate,
         locales: locales.map(locale => locale ?? undefined),
+        // A pending change kept for a language the app no longer configures
+        // is judged and told against that language's own components, not
+        // the default's it would otherwise resolve to.
+        exactLanguage: true,
       });
       return new Map(locales.map((locale, i) => [locale, stored[i].document]));
     } catch (err) {
@@ -8670,6 +8677,13 @@ export class CollectionMutationService extends BaseService {
       // transaction, replayed to the in-process workflow subscribers after it
       // commits — the durable event and the reaction event must not diverge on
       // which locales published. The closure rebuilds it each attempt.
+      // Each language whose pending change this publish put live, as the
+      // publish left it and as it stood before, for the update hooks run once
+      // the publish is durable. The closure rebuilds it each attempt.
+      let promotedForHooks: {
+        data: Record<string, unknown>;
+        originalData: Record<string, unknown> | null;
+      }[] = [];
       let perLocaleTransitions: {
         locale: string;
         from: string | null;
@@ -8724,6 +8738,7 @@ export class CollectionMutationService extends BaseService {
           lockedPreviousStatus = previousStatus;
           publishFirstPublishedAt = undefined;
           perLocaleTransitions = [];
+          promotedForHooks = [];
           defaultCompanionTransitions = false;
           publishedParentRow = undefined;
           eventRecorded = false;
@@ -9338,6 +9353,15 @@ export class CollectionMutationService extends BaseService {
               manyToManyFields,
               locales: told.map(language => language.locale),
             });
+            // What a publish of each promoted language alone hands its update
+            // hooks: that language's durable document, against how it stood.
+            promotedForHooks = promotions.flatMap(promoted => {
+              const locale = promoted.locale ?? defaultLocale ?? "";
+              const data = storedAfter.get(locale);
+              return data === undefined
+                ? []
+                : [{ data, originalData: storedBefore.get(locale) ?? null }];
+            });
             for (const language of told) {
               const data = storedAfter.get(language.locale) ?? {};
               const previous = storedBefore.get(language.locale) ?? null;
@@ -9636,6 +9660,54 @@ export class CollectionMutationService extends BaseService {
             emitStatusChanged: true,
             locale: transition.locale,
           });
+        }
+
+        // The update hooks a publish of each promoted language alone runs, with
+        // its durable document: the collection's code-registered and stored
+        // `afterUpdate` hooks, then the fields' `afterChange`. A publish that
+        // puts a pending change live writes content, not only a status, so an
+        // integration that skips the earlier working-draft save sees it here.
+        if (promotedForHooks.length > 0) {
+          const storedHooks = this.hookService.getStoredHooks(
+            publishCollection as Record<string, unknown>
+          );
+          const requestFacts = resolveRequestFacts(undefined);
+          for (const promoted of promotedForHooks) {
+            const sharedContext: Record<string, unknown> = {};
+            await this.hookService.hookRegistry.execute(
+              "afterUpdate",
+              this.hookService.buildHookContext({
+                collection: params.collectionName,
+                operation: "update" as const,
+                data: promoted.data,
+                originalData: promoted.originalData ?? undefined,
+                user: params.user,
+                context: sharedContext,
+                req: requestFacts,
+              })
+            );
+            await this.hookService.storedHookExecutor.execute(
+              "afterUpdate",
+              storedHooks,
+              this.hookService.buildPrebuiltHookContext({
+                collection: params.collectionName,
+                operation: "update",
+                data: promoted.data,
+                queryDatabase: this.queryDatabaseFn,
+                user: params.user,
+                sharedContext,
+                req: requestFacts,
+              })
+            );
+            await runFieldHooks({
+              kind: "collection",
+              slug: params.collectionName,
+              phase: "afterChange",
+              data: promoted.data,
+              operation: "update",
+              user: params.user,
+            });
+          }
         }
 
         // emit the post-commit "updated" reaction event so cache
@@ -10452,6 +10524,11 @@ export class CollectionMutationService extends BaseService {
         ReturnType<CollectionMutationService["splitLocalizedWriteData"]>
       >;
       locales: readonly (string | undefined)[];
+      /**
+       * Each named language's components read exactly as stored, without
+       * resolving one the app no longer configures to the default.
+       */
+      exactLanguage?: boolean;
     }
   ): Promise<StoredDocument[]> {
     const { localizedUpdate } = args;
@@ -10533,7 +10610,8 @@ export class CollectionMutationService extends BaseService {
         args.fields,
         args.manyToManyFields,
         // The resolved write locale — see the create path.
-        languages
+        languages,
+        args.exactLanguage === true
       );
     return languages.map(locale => {
       const localizedValues =
@@ -10702,6 +10780,10 @@ export class CollectionMutationService extends BaseService {
       locale: args.draftLocale ?? args.requestLocale ?? null,
       componentSchemas,
     });
+    // The document as judged, kept before the parts below rewrite it in
+    // place: the split moves its translated values out, so a later judgement
+    // of it, such as relations re-read under the lock, needs this copy.
+    const judgedDocument = { ...promotedDocument };
     const draftParts = this.shapeWriteParts(
       promotedDocument,
       fields,
@@ -10752,6 +10834,7 @@ export class CollectionMutationService extends BaseService {
     });
     return {
       finalData: promotedDocument,
+      judgedDocument,
       componentFieldData: draftParts.componentFieldData,
       manyToManyData: draftParts.manyToManyData,
       localizedUpdate,
@@ -13424,7 +13507,7 @@ export class CollectionMutationService extends BaseService {
                   user: params.user,
                   reader: params,
                 },
-                folded.finalData,
+                folded.judgedDocument,
                 lockedPromotion
               );
               finalData = folded.finalData;

@@ -308,7 +308,9 @@ describe("the allowlist", () => {
   // all three entries remain.
   // 449 -> 446: three recorded offences in `collection-mutation-service.ts`,
   // each naming a roadmap milestone, no longer exist; its entry remains.
-  const EXPECTED_TOTAL = 446;
+  // 446 -> 445: one recorded offence in `route-parser.ts`, naming a roadmap
+  // milestone, no longer exists; its entry remains.
+  const EXPECTED_TOTAL = 445;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
