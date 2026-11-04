@@ -123,6 +123,43 @@ function takeoverSentence(event: DocumentEvent): string {
     : "Took over (previous editor unavailable)";
 }
 
+/** Who or what made the changes an overwrite replaced, as words, when not a person. */
+const REPLACED_KIND_WORDS: Readonly<Record<string, string>> = {
+  principal: "a member",
+  apiKey: "an API key",
+  release: "a scheduled release",
+  system: "the system",
+  agent: "an agent",
+};
+
+/**
+ * An overwrite, from what it replaced: "Overwrote changes by Ben". The server
+ * names a person when history is read, by name only; one it cannot name, or a
+ * change whose maker was never recorded, is said to be unavailable, as a
+ * takeover's previous editor is. A plugin's signed-in person is a member, by
+ * kind alone. An overwrite that gave no version, or the current one, replaced
+ * nobody it can name, and says only that it was an overwrite.
+ */
+function overwriteSentence(event: DocumentEvent): string {
+  const payload = event.payload ?? {};
+  if (payload.given !== "stale") {
+    return payload.given === "none"
+      ? "Saved as an overwrite (no version given)"
+      : "Saved as an overwrite";
+  }
+  const replaced = payload.replaced as { kind?: unknown } | null | undefined;
+  const kind = typeof replaced?.kind === "string" ? replaced.kind : null;
+  if (kind === "person") {
+    const name = payload.replacedName;
+    if (typeof name === "string" && name !== "") {
+      return `Overwrote changes by ${name}`;
+    }
+  } else if (kind !== null && REPLACED_KIND_WORDS[kind]) {
+    return `Overwrote changes by ${REPLACED_KIND_WORDS[kind]}`;
+  }
+  return "Overwrote changes (previous editor unavailable)";
+}
+
 /** What an event that is a row of its own says happened. */
 export function eventSentence(
   event: DocumentEvent,
@@ -139,6 +176,8 @@ export function eventSentence(
       return `Discarded the draft${parts ? ` of ${parts}` : ""}`;
     case "taken-over":
       return takeoverSentence(event);
+    case "overwritten":
+      return overwriteSentence(event);
     default: {
       // A kind a plugin registered: its name, read as words, then what it
       // applied to, set apart since the name is not a verb we can phrase.
