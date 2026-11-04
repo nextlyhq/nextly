@@ -4312,6 +4312,20 @@ describe("the Baseline gate on the panel", () => {
     expect(option.getAttribute("title")).toBe("inline-flex");
   });
 
+  it("offers a stored spelling once, in words, in the place of the keyword it spells", () => {
+    // The validator stores `INLINE-FLEX` as the inline-flex it is, so the menu
+    // names it once in words rather than adding a second item read as code.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "INLINE-FLEX" } },
+    } as NodeStyles;
+    mount({ layout: true }, styles);
+    fireEvent.click(screen.getByLabelText("Display"));
+    const options = screen.getAllByRole("option", { name: "Inline flex" });
+    expect(options).toHaveLength(1);
+    expect(options[0]?.getAttribute("title")).toBe("INLINE-FLEX");
+    expect(screen.queryByRole("option", { name: "INLINE FLEX" })).toBeNull();
+  });
+
   it("shows a stored withheld value clear-only, and says why", () => {
     const styles = {
       base: { [BASE_BREAKPOINT]: { display: "contents" } },

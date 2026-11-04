@@ -14,6 +14,7 @@
  *
  * @module style-keyword-labels
  */
+import { asciiLower, trimCssWhitespace } from "@nextlyhq/blocks-engine";
 
 const SIZE_KEYWORDS: Readonly<Record<string, string>> = {
   auto: "Auto",
@@ -186,11 +187,50 @@ const SHARED_LABELS: Readonly<Record<string, string>> = {
  * between"), so no keyword is ever shown in its CSS spelling.
  */
 export function keywordLabel(cssProperty: string, keyword: string): string {
-  return (
-    KEYWORD_LABELS[cssProperty]?.[keyword] ??
-    SHARED_LABELS[keyword] ??
-    inWords(keyword)
+  // Looked up as CSS reads a keyword: case-folded the ASCII way, with its CSS
+  // whitespace trimmed and collapsed, since the validator stores `INLINE-FLEX`
+  // and `row  dense` as the keywords they spell. Only the lookup is folded;
+  // the stored value and its tooltip keep the spelling they were given.
+  const folded = asciiLower(trimCssWhitespace(keyword)).replace(
+    /[ \t\n\r\f]+/g,
+    " "
   );
+  return (
+    KEYWORD_LABELS[cssProperty]?.[folded] ??
+    SHARED_LABELS[folded] ??
+    inWords(folded)
+  );
+}
+
+/**
+ * The keywords a menu offers, one item per choice.
+ *
+ * Two spellings of one value read the same in words (`row dense` and `dense
+ * row`), and a menu holding both shows two items an author cannot tell apart,
+ * the second recording an edit that changes nothing. So a menu keeps the
+ * first spelling of each, or the stored one in its place. A stored keyword the
+ * list lacks (`inherit`) is offered first, so the menu never shows empty over
+ * a value that is doing something.
+ */
+export function menuKeywords(
+  cssProperty: string,
+  values: readonly string[],
+  stored: string
+): readonly string[] {
+  const words = (keyword: string): string => keywordLabel(cssProperty, keyword);
+  const storedWords = stored === "" ? undefined : words(stored);
+  const placed = values.map(value =>
+    storedWords !== undefined && words(value) === storedWords ? stored : value
+  );
+  const all =
+    stored !== "" && !placed.includes(stored) ? [stored, ...placed] : placed;
+  const seen = new Set<string>();
+  return all.filter(keyword => {
+    const said = words(keyword);
+    if (seen.has(said)) return false;
+    seen.add(said);
+    return true;
+  });
 }
 
 /** A CSS keyword as words: its hyphens as spaces, its first letter capital. */

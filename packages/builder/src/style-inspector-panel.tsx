@@ -151,7 +151,7 @@ import {
   type StyleSection,
   type StyleInspection,
 } from "./style-inspector";
-import { keywordLabel } from "./style-keyword-labels";
+import { keywordLabel, menuKeywords } from "./style-keyword-labels";
 import {
   CSS_NUMBER,
   measurementOf,
@@ -2847,11 +2847,13 @@ function SelectField({
   // whitespace and escapes, and accepts the CSS-wide keywords everywhere — so
   // a stored `Bold` or `inherit` is live and compiles while matching no item
   // here, and the select would render empty over a value that is doing
-  // something. Offered VERBATIM as its own item rather than normalised: any
-  // rule written here to fold spellings would be a second copy of the
-  // engine's, and the stored string is the one thing that needs no rule.
-  const extra =
-    current !== "" && !control.leaf.values.includes(current) ? current : null;
+  // something. Offered VERBATIM rather than normalised, in the place of the
+  // item it reads the same as, so the stored string needs no rule of its own.
+  const offered = menuKeywords(
+    control.leaf.cssProperty,
+    control.leaf.values,
+    current
+  );
   return (
     <div className="nx-style-inspector__select">
       <Select value={current} onValueChange={value => onCommit(value)}>
@@ -2864,12 +2866,7 @@ function SelectField({
         </SelectTrigger>
         <SelectContent>
           {/* In words, the CSS spelling in the tooltip; see style-keyword-labels. */}
-          {extra === null ? null : (
-            <SelectItem value={extra} title={extra}>
-              {keywordLabel(control.leaf.cssProperty, extra)}
-            </SelectItem>
-          )}
-          {control.leaf.values.map(option => (
+          {offered.map(option => (
             <SelectItem key={option} value={option} title={option}>
               {keywordLabel(control.leaf.cssProperty, option)}
             </SelectItem>

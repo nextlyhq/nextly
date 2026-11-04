@@ -7,7 +7,36 @@
 import { STYLE_CATALOG } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { keywordLabel } from "./style-keyword-labels";
+import { keywordLabel, menuKeywords } from "./style-keyword-labels";
+
+/** Every keyword the catalog offers, by the CSS property it is read for. */
+function catalogKeywords(): { property: string; words: readonly string[] }[] {
+  const found: { property: string; words: readonly string[] }[] = [];
+  const listOf = (node: Record<string, unknown>): unknown =>
+    node.kind === "keyword"
+      ? node.values
+      : node.kind === "dimension"
+        ? node.keywords
+        : undefined;
+  const walk = (leaf: unknown, css: string): void => {
+    if (leaf === null || typeof leaf !== "object") return;
+    const node = leaf as Record<string, unknown>;
+    const property =
+      typeof node.cssProperty === "string" ? node.cssProperty : css;
+    const words = listOf(node);
+    if (Array.isArray(words)) {
+      found.push({
+        property,
+        words: words.filter(
+          (word): word is string => typeof word === "string" && word !== ""
+        ),
+      });
+    }
+    for (const value of Object.values(node)) walk(value, property);
+  };
+  for (const entry of STYLE_CATALOG) walk(entry, entry.property);
+  return found;
+}
 
 describe("a style keyword's words", () => {
   it("names the keywords an author meets in human words", () => {
@@ -35,24 +64,11 @@ describe("a style keyword's words", () => {
   });
 
   it("never shows a keyword in its CSS spelling", () => {
-    // Every keyword the catalog offers, walked from the catalog itself, so a
-    // keyword added later is covered without being listed here.
+    // Walked from the catalog itself, so a keyword added later is covered
+    // without being listed here.
     const spelled: string[] = [];
-    const walk = (leaf: unknown, css: string): void => {
-      if (leaf === null || typeof leaf !== "object") return;
-      const node = leaf as Record<string, unknown>;
-      const property =
-        typeof node.cssProperty === "string" ? node.cssProperty : css;
-      const words = [
-        ...(node.kind === "keyword" && Array.isArray(node.values)
-          ? (node.values as string[])
-          : []),
-        ...(node.kind === "dimension" && Array.isArray(node.keywords)
-          ? (node.keywords as string[])
-          : []),
-      ];
+    for (const { property, words } of catalogKeywords()) {
       for (const word of words) {
-        if (word === "") continue;
         const label = keywordLabel(property, word);
         // Raw if it is the keyword as spelled, or still carries a hyphen. A
         // lowercase label is allowed: "a, b, c" shows the markers it draws.
@@ -60,9 +76,65 @@ describe("a style keyword's words", () => {
           spelled.push(`${property}: ${word} -> ${label}`);
         }
       }
-      for (const value of Object.values(node)) walk(value, property);
-    };
-    for (const entry of STYLE_CATALOG) walk(entry, entry.property);
+    }
     expect(spelled).toEqual([]);
+  });
+
+  it("reads a keyword however the validator accepts it spelled", () => {
+    // Case and spacing are not part of a CSS keyword, so a stored
+    // `INLINE-FLEX` reads as the inline-flex it is.
+    expect(keywordLabel("display", "INLINE-FLEX")).toBe("Inline flex");
+    expect(keywordLabel("grid-auto-flow", " Row   Dense ")).toBe(
+      "Row, fill gaps"
+    );
+    expect(keywordLabel("unknown-property", "SOME-WORD")).toBe("Some word");
+  });
+});
+
+describe("the keywords a menu offers", () => {
+  it("offers one item per choice: only the second spelling of a value goes", () => {
+    // Walked from the catalog, so a keyword added later that reads the same
+    // as another is caught here rather than shown twice.
+    const dropped: string[] = [];
+    for (const { property, words } of catalogKeywords()) {
+      const offered = menuKeywords(property, words, "");
+      for (const word of words) {
+        if (!offered.includes(word)) dropped.push(`${property}: ${word}`);
+      }
+    }
+    expect(dropped).toEqual([
+      "grid-auto-flow: dense row",
+      "grid-auto-flow: dense column",
+    ]);
+  });
+
+  it("puts a stored spelling in the place of the item it reads the same as", () => {
+    const values = [
+      "row",
+      "column",
+      "dense",
+      "row dense",
+      "column dense",
+      "dense row",
+      "dense column",
+    ];
+    expect(menuKeywords("grid-auto-flow", values, "dense row")).toEqual([
+      "row",
+      "column",
+      "dense",
+      "dense row",
+      "column dense",
+    ]);
+    expect(
+      menuKeywords("display", ["block", "inline-flex"], "INLINE-FLEX")
+    ).toEqual(["block", "INLINE-FLEX"]);
+  });
+
+  it("offers a stored keyword the list lacks first, so the menu is never empty over it", () => {
+    expect(menuKeywords("display", ["block", "flex"], "inherit")).toEqual([
+      "inherit",
+      "block",
+      "flex",
+    ]);
   });
 });
