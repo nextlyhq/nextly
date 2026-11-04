@@ -38,6 +38,7 @@ import { titleFieldIn } from "./entries-route";
 import { entryOf, findAsCaller } from "./entry-reads";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import {
+  SHARED_STYLE_COUNT_ROUTE_PATH,
   SHARED_STYLE_ID_PARAM,
   SHARED_STYLE_IN_USE_CODE,
   SHARED_STYLE_LOCK_ROUTE_PATH,
@@ -50,6 +51,7 @@ import {
   SHARED_STYLE_WHERE_USED_ROUTE_PATH,
   type SharedStyleLockRequest,
   type SharedStyleRemoveRequest,
+  type SharedStylesCountResponse,
   type SharedStylesUsageResponse,
   type SharedStyleUsage,
   type SharedStyleUsageKind,
@@ -73,6 +75,7 @@ import {
   sharedStyleName,
 } from "./site-style-storage";
 import { readStoredJson } from "./stored-json";
+import { USAGE_BACKFILL_JOB } from "./usage-backfill-job";
 import { documentCountOf, type DocumentsUsing } from "./usage-count";
 import {
   indexIsWhole,
@@ -271,7 +274,7 @@ function usageOf(
  */
 export async function readSharedStyleUsage(
   req: Request,
-  ctx: Pick<PluginRouteContext, "caller">,
+  ctx: Pick<PluginRouteContext, "caller" | "self">,
   usage: SharedStyleUsageSource
 ): Promise<SharedStylesUsageResponse> {
   const ids = usageIds(req.url);
@@ -298,6 +301,7 @@ export async function readSharedStyleUsage(
     // From the same health reading, so it cannot disagree with `whole`.
     counting: indexStillCounting(health),
     mayLock,
+    mayCount: await mayCountSharedStyleUsage(ctx),
     styles,
   };
 }
@@ -831,6 +835,56 @@ export async function mayReadSharedStyleUsage(
   return caller.can(LOCK_SHARED_STYLES.action, LOCK_SHARED_STYLES.resource);
 }
 
+/**
+ * Whether this caller may ask for the pages to be counted now: whoever may
+ * change Design, the same people who may remove a style, which is what a
+ * whole count is for. The route declares the same permission, so this is
+ * the panel's hint and the route is the decision.
+ */
+async function mayCountSharedStyleUsage(
+  ctx: Pick<PluginRouteContext, "caller" | "self">
+): Promise<boolean> {
+  if (ctx.caller === null) return false;
+  const style = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
+  return ctx.caller.can("update", style);
+}
+
+/**
+ * The most the count route spends starting the usage backfill: long enough
+ * to count a small site in one go, and well inside a serverless request's
+ * limit. A site larger than one pass is counted further on the next ask, or
+ * by a scheduler; the backfill's progress is durable either way.
+ */
+export const SHARED_STYLE_COUNT_MS = 10_000;
+
+/**
+ * Count the site's pages now: run the usage backfill, this plugin's own
+ * sweep, for at most {@link SHARED_STYLE_COUNT_MS}, then answer the index's
+ * health as it stands after. On a site no scheduler drains, this is the only
+ * way the counts ever become exact.
+ */
+export async function countSharedStyleUsage(
+  jobs: Pick<PluginRouteContext["services"]["jobs"], "runSweepNow">,
+  usage: Pick<SharedStyleUsageSource, "health">
+): Promise<Response> {
+  const { ran } = await jobs.runSweepNow(USAGE_BACKFILL_JOB, {
+    maxDurationMs: SHARED_STYLE_COUNT_MS,
+  });
+  // Read after the run, so the answer says how far this run got.
+  const health = await usage.health();
+  const item: SharedStylesCountResponse = {
+    ran,
+    whole: indexIsWhole(health),
+    counting: indexStillCounting(health),
+  };
+  return respondMutation(
+    item.whole
+      ? "Every page has been counted."
+      : "Some pages are still to count.",
+    item
+  );
+}
+
 /** Refuse a caller who may not read shared styles' usage, before any read. */
 async function admitUsageReader(
   ctx: Pick<PluginRouteContext, "caller" | "self">
@@ -857,7 +911,7 @@ const siteStylePermission =
     single(SITE_STYLE_SLUG, action);
 
 /**
- * The four shared-style routes. Lock and remove declare their permission; the
+ * The five shared-style routes. Lock, count and remove declare their permission; the
  * two usage reads are authenticated and decide in the handler, since one
  * permission cannot say "Design's read, or the lock".
  */
@@ -901,6 +955,14 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
           namedDocumentsReader(ctx)
         );
       },
+    },
+    {
+      method: "POST",
+      path: SHARED_STYLE_COUNT_ROUTE_PATH,
+      // Design's update: whoever a whole count lets remove a style.
+      requiredPermission: siteStylePermission("update"),
+      handler: async (_req, ctx) =>
+        countSharedStyleUsage(ctx.services.jobs, setup.usage(ctx)),
     },
     {
       method: "POST",

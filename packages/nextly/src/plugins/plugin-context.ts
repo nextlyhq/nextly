@@ -25,10 +25,6 @@ import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
-import {
-  createJobsNamespace,
-  type JobsNamespace,
-} from "../direct-api/namespaces/jobs";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
@@ -80,6 +76,10 @@ import type {
   HookPointValue,
 } from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
+import {
+  pluginJobsNamespace,
+  type PluginJobsNamespace,
+} from "./jobs/plugin-jobs";
 import { createPluginLimits } from "./limits/plugin-limits";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
@@ -548,12 +548,13 @@ export interface PluginContext {
      */
     singles: PluginSinglesService;
     /**
-     * @experimental Queue background work — `ctx.services.jobs.queue({...})`.
+     * @experimental Queue background work — `ctx.services.jobs.queue({...})` —
+     * and run one of the plugin's own sweeps now, `runSweepNow(slug)`.
      *
      * Declaring a job type is `defineJob` in `contributes.jobs`; this is how a
      * plugin asks for one of them to happen.
      */
-    jobs: JobsNamespace;
+    jobs: PluginJobsNamespace;
     /**
      * @experimental Services contributed by plugins, keyed by plugin name
      * then service name. Lazily resolved (instantiated on first access). Runtime
@@ -2156,8 +2157,11 @@ export function createPluginContext(
       // needs somewhere to ASK for one; without this the only route was
       // importing the core `nextly` entry directly, crossing the boundary the
       // SDK exists to draw.
+      //
+      // Built for THIS plugin, so running a sweep now is limited to the sweeps
+      // it contributes; see `plugin-jobs`.
       get jobs() {
-        return createJobsNamespace();
+        return pluginJobsNamespace(plugin);
       },
       plugins: buildPluginServicesNamespace(),
     },

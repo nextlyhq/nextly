@@ -601,6 +601,7 @@ export type {
   SharedStyleKind,
   SharedStyleReach,
   SharedStyleRefusal,
+  SharedStylesCount,
   SharedStylesUsage,
   SharedStyleUse,
   SharedStyleUsesPage,

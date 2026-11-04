@@ -84,6 +84,7 @@ import {
   type SharedStyleFilter,
   type SharedStyleReach,
   type SharedStyleRefusal,
+  type SharedStylesCount,
   type SharedStyleRow,
   type SharedStyleTile,
   type SharedStylesUsage,
@@ -123,6 +124,14 @@ export interface SharedStylesAccess {
   readonly removeWithReason?: (
     ids: readonly string[]
   ) => Promise<SharedStyleRefusal | undefined>;
+  /**
+   * Count the site's pages now, for a bounded time, rather than waiting for
+   * the site's background jobs. Optional: without it the tab only says the
+   * jobs count them.
+   *
+   * @experimental Settles with the Shared styles tab.
+   */
+  readonly count?: () => Promise<SharedStylesCount>;
 }
 
 /** The blocks on the open page carrying each style, by id. */

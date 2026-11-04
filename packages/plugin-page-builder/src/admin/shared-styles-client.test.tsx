@@ -13,6 +13,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  SHARED_STYLE_COUNT_ROUTE_PATH,
   SHARED_STYLE_LOCK_ROUTE_PATH,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
   sharedStyleUsagePath,
@@ -81,7 +82,7 @@ describe("reading how widely shared styles are used", () => {
     // Parsed from JSON, as the transport parses it, so `__proto__` arrives
     // as an own key: an id naming a prototype key is still a style.
     readAnswer = JSON.parse(
-      `{"whole":false,"counting":true,"mayLock":true,"styles":{"c-card":${JSON.stringify(reach(2))},"__proto__":${JSON.stringify(reach(1))}}}`
+      `{"whole":false,"counting":true,"mayLock":true,"mayCount":true,"styles":{"c-card":${JSON.stringify(reach(2))},"__proto__":${JSON.stringify(reach(1))}}}`
     );
     const { result } = renderHook(() => useSharedStylesClient());
     const usage = await result.current.usage(["c-card", "__proto__"], signal);
@@ -93,6 +94,8 @@ describe("reading how widely shared styles are used", () => {
     // Whether a floor may still become whole travels with the answer.
     expect(usage.counting).toBe(true);
     expect(usage.mayLock).toBe(true);
+    // Whether this author may count the pages now travels with it too.
+    expect(usage.mayCount).toBe(true);
     expect(usage.styles.get("c-card")?.documents).toBe(2);
     expect(usage.styles.get("__proto__")?.documents).toBe(1);
   });
@@ -129,6 +132,47 @@ describe("reading where a shared style is used", () => {
       hidden: 3,
       hasNext: false,
       complete: false,
+    });
+  });
+});
+
+describe("counting the pages now", () => {
+  it("asks the count route, and answers how far the counting got", async () => {
+    // The mutation envelope, as the route answers it.
+    writeBehaviour = async () => ({
+      message: "Some pages are still to count.",
+      item: { ran: true, whole: false, counting: true },
+    });
+    const { result } = renderHook(() => useSharedStylesClient());
+    const counted = await result.current.count?.();
+
+    expect(writes).toEqual([{ path: SHARED_STYLE_COUNT_ROUTE_PATH, body: {} }]);
+    expect(counted).toEqual({ kind: "counted", whole: false, counting: true });
+    // Counting writes no site style, so none is read again.
+    expect(refetches).toBe(0);
+  });
+
+  it("answers a refusal in its own words", async () => {
+    writeBehaviour = async () => {
+      throw Object.assign(new Error("Forbidden"), {
+        code: "FORBIDDEN",
+        status: 403,
+      });
+    };
+    const { result } = renderHook(() => useSharedStylesClient());
+    const counted = await result.current.count?.();
+
+    expect(counted?.kind).toBe("refused");
+  });
+
+  it("refuses an answer that says nothing of how far it got", async () => {
+    writeBehaviour = async () => ({ message: "done" });
+    const { result } = renderHook(() => useSharedStylesClient());
+    const counted = await result.current.count?.();
+
+    expect(counted).toEqual({
+      kind: "refused",
+      reason: expect.any(String),
     });
   });
 });
