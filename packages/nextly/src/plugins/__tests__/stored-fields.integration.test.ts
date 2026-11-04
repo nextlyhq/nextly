@@ -238,6 +238,20 @@ describe.each(getConfiguredTestDialects())(
             fields: [{ name: "body", type: "doc", localized: true }],
           } as unknown as CollectionConfig,
           {
+            // A lifecycle with no working drafts: an entry is draft until it
+            // is published, and its live row is that draft.
+            slug: "staged",
+            status: true,
+            fields: [{ name: "body", type: "doc" }],
+          } as unknown as CollectionConfig,
+          {
+            // A lifecycle kept per language: a translation has its own state.
+            slug: "stagedwords",
+            localized: true,
+            status: true,
+            fields: [{ name: "body", type: "doc", localized: true }],
+          } as unknown as CollectionConfig,
+          {
             slug: "grouped",
             fields: [
               {
@@ -286,6 +300,8 @@ describe.each(getConfiguredTestDialects())(
         "worded",
         "germanless",
         "grouped",
+        "staged",
+        "stagedwords",
       ];
       const editorId = await person("editor");
       for (const action of ["read", "update", "publish"]) {
@@ -921,6 +937,74 @@ describe.each(getConfiguredTestDialects())(
             note: { kind: "value", value: { n: "de" } },
             extra: { kind: "value", value: { e: "shared" } },
           },
+        });
+      });
+    });
+
+    describe("lifecycle", () => {
+      it("answers a live row an ordinary read would not show its reader as absent", async () => {
+        const draftOnly = await created("staged", {
+          body: { v: "unreleased" },
+          status: "draft",
+        });
+        const published = await created("staged", {
+          body: { v: "released" },
+          status: "published",
+        });
+        const ask = (id: string) =>
+          ({
+            collection: "staged",
+            id,
+            fields: ["body"],
+            form: "published",
+          }) as const;
+
+        // A reader who may not update sees the published entry and not the
+        // draft, as their ordinary read would; an editor sees both.
+        expect(await readStoredFields(reader, ask(published))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "released" } } },
+        });
+        expect(await readStoredFields(reader, ask(draftOnly))).toEqual({
+          kind: "absent",
+        });
+        expect(await readStoredFields(editor, ask(draftOnly))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "unreleased" } } },
+        });
+      });
+
+      it("judges a translation by its own state, not the live row's", async () => {
+        const id = await created("stagedwords", {
+          body: { v: "en" },
+          status: "published",
+        });
+        await t.nextly.update({
+          collection: "stagedwords",
+          id,
+          locale: "de",
+          data: { body: { v: "de" }, status: "draft" },
+          overrideAccess: true,
+        } as never);
+        const ask = (locale: string) =>
+          ({
+            collection: "stagedwords",
+            id,
+            fields: ["body"],
+            form: "published",
+            locale,
+          }) as const;
+
+        expect(await readStoredFields(reader, ask("en"))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "en" } } },
+        });
+        expect(await readStoredFields(reader, ask("de"))).toEqual({
+          kind: "absent",
+        });
+        expect(await readStoredFields(editor, ask("de"))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "de" } } },
         });
       });
     });

@@ -211,6 +211,14 @@ export interface StoredFieldsRead {
    * only of a `draft` read, or of one made with `askDraft`; `false` otherwise.
    */
   readonly workingDraft: boolean;
+  /**
+   * The live row's lifecycle state in the language read, asked only with
+   * `askState`: the main row's `status`, or the language row's own `_status`
+   * for a language other than the default where translations keep one.
+   * `undefined` where not asked or the entity has no lifecycle; `null` where
+   * it has one and the row stores no state.
+   */
+  readonly liveState?: string | null;
 }
 
 /**
@@ -265,7 +273,11 @@ export async function readStoredFieldsOn(
   connection: StoredFieldConnection,
   scope: FieldScope,
   target: StoredFieldsTarget,
-  options: { records?: RegistryRecords; askDraft?: boolean } = {}
+  options: {
+    records?: RegistryRecords;
+    askDraft?: boolean;
+    askState?: boolean;
+  } = {}
 ): Promise<StoredFieldsRead> {
   const records = options.records ?? registryRecords(connection);
   const fields = [...new Set(target.fields)];
@@ -287,14 +299,16 @@ export async function readStoredFieldsOn(
         : undefined,
   }));
 
-  const row = await storedRow(
-    connection,
-    entity,
-    target,
-    placed
+  const state =
+    options.askState === true
+      ? stateSource(entity, locale, connection.defaultLocale)
+      : undefined;
+  const row = await storedRow(connection, entity, target, [
+    ...placed
       .filter(({ perLanguage }) => perLanguage === undefined)
-      .map(({ path }) => path.column)
-  );
+      .map(({ path }) => path.column),
+    ...(state === "row" ? ["status"] : []),
+  ]);
   if (row === undefined) {
     return {
       found: false,
@@ -312,17 +326,19 @@ export async function readStoredFieldsOn(
   // field kept per language that it does not carry is read from, in one query
   // however many such fields are asked for.
   const shownDraft = target.form === "draft" ? draft : undefined;
-  const translated = await languageValues(
+  const language = await languageRow(
     connection,
-    placed.flatMap(({ field, path, perLanguage }) =>
-      perLanguage === undefined || draftCarries(shownDraft, path.column)
-        ? []
-        : [{ field, kept: perLanguage }]
-    ),
-    id,
-    locale,
-    target
+    {
+      fields: placed.flatMap(({ field, path, perLanguage }) =>
+        perLanguage === undefined || draftCarries(shownDraft, path.column)
+          ? []
+          : [{ field, kept: perLanguage }]
+      ),
+      state: state === "language" ? companionOf(entity) : null,
+    },
+    { id, locale, target }
   );
+  const translated = language.values;
 
   const values = new Map<string, PluginStoredValue>();
   for (const { field, path, perLanguage } of placed) {
@@ -351,7 +367,38 @@ export async function readStoredFieldsOn(
           }
     );
   }
-  return { found: true, values, workingDraft: draft !== undefined };
+  return {
+    found: true,
+    values,
+    workingDraft: draft !== undefined,
+    ...(state === undefined
+      ? {}
+      : { liveState: state === "row" ? stateOf(row.status) : language.state }),
+  };
+}
+
+/**
+ * Where the live state of a read's language is stored: the main row, or the
+ * language row for a language other than the default where translations keep
+ * a state of their own, as every write path stamps it. `undefined` for an
+ * entity with no lifecycle.
+ */
+function stateSource(
+  entity: StoredEntity,
+  locale: string | null,
+  defaultLocale: string | null
+): "row" | "language" | undefined {
+  if (!entity.status) return undefined;
+  const ownLanguage =
+    entity.localized && locale !== null && locale !== defaultLocale;
+  return ownLanguage && companionOf(entity)?.hasStatus === true
+    ? "language"
+    : "row";
+}
+
+/** A stored state as a string, or `null` where nothing names one. */
+function stateOf(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 /**
@@ -615,18 +662,26 @@ function companionFieldOf(
   entity: StoredEntity,
   name: string
 ): CompanionField | undefined {
-  if (!entity.localized) return undefined;
-  const companion = buildCompanionSchema({
+  const companion = companionOf(entity);
+  const field = companion?.localizedFields.find(entry => entry.name === name);
+  return companion === null || field === undefined
+    ? undefined
+    : { companion, field };
+}
+
+/**
+ * The entity's companion schema, built as every localized write splits by;
+ * `null` for an entity that keeps nothing per language.
+ */
+function companionOf(entity: StoredEntity): CompanionSchema | null {
+  if (!entity.localized) return null;
+  return buildCompanionSchema({
     slug: entity.slug,
     tableName: entity.tableName,
     fields: entity.fields as unknown as { name: string; type: string }[],
     dialect: getService("adapter").dialect,
     status: entity.status,
   });
-  const field = companion?.localizedFields.find(entry => entry.name === name);
-  return companion === null || field === undefined
-    ? undefined
-    : { companion, field };
 }
 
 /**
@@ -655,14 +710,78 @@ async function storedRow(
   return rows[0];
 }
 
+/** What one read of a language row is asked for. */
+interface LanguageRowAsk {
+  /** The fields kept per language to read from it. */
+  readonly fields: readonly {
+    readonly field: string;
+    readonly kept: CompanionField;
+  }[];
+  /** The companion whose `_status` is the language's state, where it is asked. */
+  readonly state: CompanionSchema | null;
+}
+
+/** What one read of a language row found. */
+interface LanguageRow {
+  /** The fields that language stores a value for, by field name. */
+  readonly values: ReadonlyMap<string, unknown>;
+  /** The language's own state, where asked; `null` where none is stored. */
+  readonly state: string | null;
+}
+
+const NO_LANGUAGE_ROW: LanguageRow = { values: new Map(), state: null };
+
 /**
- * The values of `fields`, each kept per language, in one language as its
- * companion row holds them, with no fallback to another language: by field
- * name, and without the fields that language stores nothing for. One query
- * for the row, however many fields are read; none where none is asked for.
+ * One language's row of the companion table, read once: the values of the
+ * fields kept per language asked for, with no fallback to another language,
+ * and the language's own state where it is asked. None is read where neither
+ * is asked for.
  *
  * Every field read here belongs to one entity, so to one companion table and
  * one row of it for this entry and language.
+ */
+async function languageRow(
+  connection: StoredFieldConnection,
+  ask: LanguageRowAsk,
+  at: {
+    readonly id: string;
+    readonly locale: string | null;
+    readonly target: StoredFieldsTarget;
+  }
+): Promise<LanguageRow> {
+  const companion = ask.fields[0]?.kept.companion ?? ask.state;
+  if (companion === null || companion === undefined) return NO_LANGUAGE_ROW;
+  const locale = await readableLanguage(connection, companion, ask, at);
+  // Only the columns asked for, of the one row for this entry and language: a
+  // translation row can hold every other large value of the page, and a save
+  // reads this for each stored form. Read as stored, whatever the language's
+  // status, as the main row is for a field kept there. Each column is selected
+  // under its position, so no field name can collide with another's key.
+  const table = companion.table as Record<string, unknown>;
+  const projection = {
+    ...Object.fromEntries(
+      ask.fields.map(({ kept }, index) => [
+        `c${index}`,
+        table[kept.field.column],
+      ])
+    ),
+    ...(ask.state === null ? {} : { s: table._status }),
+  };
+  const rows = await (
+    (connection.executor ??
+      getService("adapter").getDrizzle()) as CompanionSelect
+  )
+    .select(projection)
+    .from(companion.table)
+    .where(
+      and(eq(table._parent as never, at.id), eq(table._locale as never, locale))
+    )
+    .limit(1);
+  return { values: languageValuesOf(ask, rows[0]), state: stateOf(rows[0]?.s) };
+}
+
+/**
+ * The language a row is read in, once its store can answer.
  *
  * Inside a write's transaction the remembered readiness verdict is read and
  * never resolved: resolving queries, and on PostgreSQL a query against a
@@ -670,57 +789,50 @@ async function storedRow(
  * is refused rather than answered as empty, which a caller could not tell from
  * a language that stores nothing.
  */
-async function languageValues(
+async function readableLanguage(
   connection: StoredFieldConnection,
-  fields: readonly { readonly field: string; readonly kept: CompanionField }[],
-  id: string,
-  locale: string | null,
-  target: StoredFieldsTarget
-): Promise<ReadonlyMap<string, unknown>> {
-  const first = fields[0];
-  if (first === undefined) return new Map();
-  const named: RefusedTarget = { ...target, field: first.field };
-  if (locale === null) {
-    throw refused(named, "", "is kept per language, and no language is set");
+  companion: CompanionSchema,
+  ask: LanguageRowAsk,
+  at: { readonly locale: string | null; readonly target: StoredFieldsTarget }
+): Promise<string> {
+  const field = ask.fields[0]?.field ?? "status";
+  if (at.locale === null) {
+    throw refused(
+      { ...at.target, field },
+      "",
+      "is kept per language, and no language is set"
+    );
   }
-  const { companion } = first.kept;
   const adapter = getService("adapter");
   const readiness =
     connection.executor === undefined
       ? await resolveCompanionSchemaReadiness(adapter, companion)
       : cachedCompanionReadiness(adapter, companion.companionTableName);
   if (readiness !== "ready") {
-    const document = "single" in target ? target.single : target.collection;
+    const document =
+      "single" in at.target ? at.target.single : at.target.collection;
     throw NextlyError.serviceUnavailable({
       // Not a refusal of the caller's request: the language store is still
       // being set up, so a reader can tell "cannot read yet" from an error.
       publicMessage: "This language's content can't be read yet.",
-      logMessage: `"${document}.${first.field}" is kept per language, and that store is not ready.`,
+      logMessage: `"${document}.${field}" is kept per language, and that store is not ready.`,
     });
   }
-  // Only the fields asked for, of the one row for this entry and language: a
-  // translation row can hold every other large value of the page, and a save
-  // reads this for each stored form. Read as stored, whatever the language's
-  // status, as the main row is for a field kept there. Each column is selected
-  // under its position, so no field name can collide with another's key.
-  const table = companion.table as Record<string, unknown>;
-  const projection = Object.fromEntries(
-    fields.map(({ kept }, index) => [`c${index}`, table[kept.field.column]])
-  );
-  const rows = await (
-    (connection.executor ?? adapter.getDrizzle()) as CompanionSelect
-  )
-    .select(projection)
-    .from(companion.table)
-    .where(
-      and(eq(table._parent as never, id), eq(table._locale as never, locale))
-    )
-    .limit(1);
-  // No row, or a row holding nothing for a field: either way the language
-  // stores nothing for it.
+  return at.locale;
+}
+
+/**
+ * The values a language row holds for the fields asked, by field name. No row,
+ * or a row holding nothing for a field: either way the language stores
+ * nothing for it.
+ */
+function languageValuesOf(
+  ask: LanguageRowAsk,
+  row: Record<string, unknown> | undefined
+): ReadonlyMap<string, unknown> {
   const values = new Map<string, unknown>();
-  fields.forEach(({ kept }, index) => {
-    const value = rows[0]?.[`c${index}`];
+  ask.fields.forEach(({ kept }, index) => {
+    const value = row?.[`c${index}`];
     if (value !== null && value !== undefined) {
       values.set(kept.field.name, value);
     }
@@ -880,7 +992,10 @@ function canonicalJson(value: unknown): string {
     if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
       return inner;
     }
-    const sorted: Record<string, unknown> = {};
+    // A null prototype, so a key spelt `__proto__` is kept as the own key it
+    // is: on an ordinary object its assignment would set the prototype
+    // instead, and the key would vanish from the JSON.
+    const sorted = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(inner).sort()) {
       sorted[key] = (inner as Record<string, unknown>)[key];
     }
@@ -1001,39 +1116,67 @@ async function storedExpectationRefusal(
   connection: StoredFieldConnection,
   locale: string | undefined
 ): Promise<NextlyError | undefined> {
-  const { document, expect } = pin;
   const read = await readStoredFieldsOn(
     connection,
     EVERY_FIELD,
-    {
-      ...(document.kind === "single"
-        ? { single: document.slug }
-        : { collection: document.slug, id: document.id ?? "" }),
-      fields: [expect.field],
-      form: expect.form,
-      ...(locale === undefined ? {} : { locale }),
-    },
-    { askDraft: expect.noPendingDraft === true }
+    expectedRead(pin, locale),
+    { askDraft: pin.expect.noPendingDraft === true }
   );
-  const now = await storedValueHash(
-    read.values.get(expect.field) ?? { kind: "absent" }
-  );
-  const changed =
-    now !== expect.hash
-      ? "stored-value-changed"
-      : expect.noPendingDraft === true && read.workingDraft
-        ? "working-draft-pending"
-        : undefined;
-  if (changed === undefined) {
+  const cause = await stalenessOf(pin.expect, read);
+  if (cause === undefined) {
     pin.checked = true;
     return undefined;
   }
+  return staleConflict(pin, cause, locale);
+}
+
+/** Why a write's writer read something other than what is stored now. */
+type StaleCause = "stored-value-changed" | "working-draft-pending";
+
+/** The read an expectation is judged by: its one field, form and language. */
+function expectedRead(
+  { document, expect }: PinnedExpectation,
+  locale: string | undefined
+): StoredFieldsTarget {
+  return {
+    ...(document.kind === "single"
+      ? { single: document.slug }
+      : { collection: document.slug, id: document.id ?? "" }),
+    fields: [expect.field],
+    form: expect.form,
+    ...(locale === undefined ? {} : { locale }),
+  };
+}
+
+/**
+ * Whether what is stored now still answers the expectation: the field's
+ * hash, then, where it was asked, the absence of a pending working draft.
+ */
+async function stalenessOf(
+  expect: StoredExpectation,
+  read: StoredFieldsRead
+): Promise<StaleCause | undefined> {
+  const now = await storedValueHash(
+    read.values.get(expect.field) ?? { kind: "absent" }
+  );
+  if (now !== expect.hash) return "stored-value-changed";
+  return expect.noPendingDraft === true && read.workingDraft
+    ? "working-draft-pending"
+    : undefined;
+}
+
+/** The conflict a stale write is refused with, naming what it expected. */
+function staleConflict(
+  { document, expect }: PinnedExpectation,
+  cause: StaleCause,
+  locale: string | undefined
+): NextlyError {
   return NextlyError.conflict({
     reason: "state",
     message:
       "This content changed after it was read, so the write was not made. Read it again and decide again.",
     logContext: {
-      cause: changed,
+      cause,
       kind: document.kind,
       slug: document.slug,
       ...(document.id === undefined ? {} : { id: document.id }),

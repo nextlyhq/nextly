@@ -39,6 +39,17 @@ describe("storedValueHash", () => {
     );
   });
 
+  it("hashes an own __proto__ key as the key it is", async () => {
+    const one = JSON.parse('{"__proto__":{"x":1}}') as unknown;
+    const two = JSON.parse('{"__proto__":{"x":2}}') as unknown;
+    expect(await storedValueHash(value(one))).not.toBe(
+      await storedValueHash(value(two))
+    );
+    expect(await storedValueHash(value(one))).toBe(
+      createHash("sha256").update('{"__proto__":{"x":1}}').digest("hex")
+    );
+  });
+
   it("tells a value's type apart: a string from the number it spells", async () => {
     expect(await storedValueHash(value("1"))).not.toBe(
       await storedValueHash(value(1))

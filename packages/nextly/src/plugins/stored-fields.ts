@@ -45,6 +45,7 @@ import { getFieldType } from "../domains/schema/field-types/field-type-registry"
 import { singleDocumentEditable } from "../domains/singles/services/single-document-access";
 import { fieldsCarryingReadRules } from "../domains/versions/component-read-access";
 import { NextlyError } from "../errors";
+import { resolveStatusFilter } from "../lib/status-filter";
 
 import type { PluginStoredValue } from "./contributions";
 import type { PluginRouteIdentity } from "./routes/route-types";
@@ -166,7 +167,10 @@ const PLUGIN_JSON_FIELDS: FieldScope = {
  * `readAccessCaller`, with a key judged on its own scope. A read rule that
  * allows only the entries a filter matches is refused rather than matched
  * here. The `draft` form shows unpublished work, so it is read only by a
- * person who may update the document, as a preview is.
+ * person who may update the document, as a preview is. So does a `published`
+ * read whose live row, in the language read, is in a state an ordinary read
+ * would not show them (one the workflow does not call public): to anyone else
+ * it answers `absent`, as the ordinary read answers not found.
  */
 export async function readStoredFields(
   identity: PluginRouteIdentity,
@@ -192,10 +196,39 @@ export async function readStoredFields(
       fields: request.fields,
       form: request.form,
       ...(request.locale === undefined ? {} : { locale: request.locale }),
-    }
+    },
+    { askState: request.form === "published" }
   );
   if (!read.found) return { kind: "absent" };
+  if (!(await liveFormShown(identity, document, request, read.liveState))) {
+    return { kind: "absent" };
+  }
   return { kind: "found", values: Object.fromEntries(read.values) };
+}
+
+/**
+ * Whether the live row, in the language read, is one this person would be
+ * shown. An ordinary read that names no status shows an untrusted reader the
+ * workflow's public states alone, as core's status filter decides; a row in
+ * any other state (a draft never published, a translation not yet released)
+ * is not found for them. The same holds here, unless the person may update
+ * the document, as an editor's own reads may show it. The `draft` form has
+ * required that already.
+ */
+async function liveFormShown(
+  identity: PluginRouteIdentity,
+  document: ReturnType<typeof documentOf>,
+  request: PluginStoredFieldsRequest,
+  liveState: string | null | undefined
+): Promise<boolean> {
+  if (request.form !== "published" || liveState === undefined) return true;
+  const shown = resolveStatusFilter({
+    collectionHasStatus: true,
+    overrideAccess: false,
+  });
+  if (shown === null) return true;
+  if (liveState !== null && shown.values.includes(liveState)) return true;
+  return mayEdit(identity, document, request.locale);
 }
 
 /**
@@ -346,27 +379,39 @@ async function assertMayRead(
     });
   if (!read.allowed) throw refuse("stored-read-not-readable");
   if (request.form !== "draft") return;
-  const editable = await withRuleLanguage(
-    registeredWriteLanguagesFor(request.locale),
-    () =>
-      document.kind === "single"
-        ? singleDocumentEditable(document.slug, {
-            user: identity.user,
-            routeAuthorized: false,
-            ...(identity.authenticatedScope === undefined
-              ? {}
-              : { actor: identity.authenticatedScope }),
-            ...(request.locale === undefined ? {} : { locale: request.locale }),
-          })
-        : getService("collectionsHandler").canUpdateEntry({
-            collectionName: document.slug,
-            entryId: document.id,
-            user: identity.user,
-            ...(identity.authenticatedScope === undefined
-              ? {}
-              : { authenticatedScope: identity.authenticatedScope }),
-            ...(request.locale === undefined ? {} : { locale: request.locale }),
-          })
+  if (!(await mayEdit(identity, document, request.locale))) {
+    throw refuse("stored-draft-not-editable");
+  }
+}
+
+/**
+ * Whether the person may update the document, asked of the gate the update
+ * itself asks, in the language an update in `locale` is judged in.
+ */
+function mayEdit(
+  identity: PluginRouteIdentity,
+  document: ReturnType<typeof documentOf>,
+  locale: string | undefined
+): Promise<boolean> {
+  const inLocale = locale === undefined ? {} : { locale };
+  return withRuleLanguage(registeredWriteLanguagesFor(locale), () =>
+    document.kind === "single"
+      ? singleDocumentEditable(document.slug, {
+          user: identity.user,
+          routeAuthorized: false,
+          ...(identity.authenticatedScope === undefined
+            ? {}
+            : { actor: identity.authenticatedScope }),
+          ...inLocale,
+        })
+      : getService("collectionsHandler").canUpdateEntry({
+          collectionName: document.slug,
+          entryId: document.id,
+          user: identity.user,
+          ...(identity.authenticatedScope === undefined
+            ? {}
+            : { authenticatedScope: identity.authenticatedScope }),
+          ...inLocale,
+        })
   );
-  if (!editable) throw refuse("stored-draft-not-editable");
 }
