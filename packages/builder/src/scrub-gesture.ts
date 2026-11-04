@@ -168,8 +168,13 @@ export function followScrub(
 
   function onKey(pressed: KeyboardEvent): void {
     // A modifier is how the drag is steered, and its state reaches the
-    // gesture on the pointer events, so its own key is left alone.
+    // gesture on the pointer events, so its own key is left alone. A Control
+    // or Meta chord is the editor's (Undo among them), which a surface folds
+    // into its release, and never a keystroke a focused field would type.
     if (MODIFIER_KEYS.has(pressed.key)) return;
+    if (pressed.key !== "Escape" && (pressed.ctrlKey || pressed.metaKey)) {
+      return;
+    }
     // Every other key is stopped here, in the capture phase, before anything
     // else hears it. The pointer owns the value until it is released: an
     // arrow or Enter on a focused field would write mid-drag, and the

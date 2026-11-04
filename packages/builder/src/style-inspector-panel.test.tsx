@@ -2349,6 +2349,47 @@ describe("dragging a number field's label", () => {
     expect(written(editor)).toEqual(['"32px"']);
   });
 
+  it("ends a drag unwritten when another block is selected under it", () => {
+    // The drag's value came from the old block, so neither block is
+    // written and the field shows the new one's, whether the row is drawn
+    // afresh for it (sections are keyed by block) or reused.
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: withPadding("12px"),
+        },
+        {
+          id: "b",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: withPadding("40px"),
+        },
+      ],
+    } as unknown as BlockDocument;
+    const first = editorFor(document, "a");
+    const { rerender } = render(<StyleInspectorPanel editor={first} />);
+    drag(side("Block start").label, [10], {}, false);
+    expect(side("Block start").field.value).toBe("22");
+
+    const second = editorFor(document, "b");
+    rerender(<StyleInspectorPanel editor={second} />);
+    act(() => {
+      window.document.dispatchEvent(pointer("pointerup", { clientX: 110 }));
+    });
+
+    expect(first.applyAll).not.toHaveBeenCalled();
+    expect(second.applyAll).not.toHaveBeenCalled();
+    expect(side("Block start").field.value).toBe("40");
+  });
+
   it("does not scrub on touch, so a tap still reaches the field", () => {
     const editor = mount({ spacing: true }, withPadding("12px"));
     const { label } = side("Block start");

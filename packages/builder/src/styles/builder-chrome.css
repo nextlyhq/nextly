@@ -5520,6 +5520,9 @@ fieldset.nx-inspector__fields {
 .nx-style-inspector .nx-inspector__field > label[data-scrub] {
   cursor: ew-resize !important;
   user-select: none;
+  /* A pen's horizontal drag is the scrub's, where the browser would take it
+     and cancel the pointer; a finger still scrolls the panel and taps. */
+  touch-action: pan-y;
 }
 
 .nx-style-inspector

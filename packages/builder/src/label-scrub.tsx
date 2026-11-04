@@ -59,6 +59,8 @@ export interface LabelScrubField {
   readonly show: (text: string) => void;
   /** Writes the value, once, on release. */
   readonly commit: (value: ScrubbedValue) => void;
+  /** Shows the field's stored value, for a drag its subject changed under. */
+  readonly reset: () => void;
 }
 
 /** The row's slot between its label and its field. */
@@ -89,11 +91,18 @@ export interface LabelScrubProps {
  * drawn inside it.
  */
 export function LabelScrubRow({
+  subject,
   children,
 }: {
+  /**
+   * What the row edits: the block and the style target. A drag began on one
+   * subject ends, unwritten, when the row is reused for another, as selecting
+   * another block does — its value came from the subject it started on.
+   */
+  readonly subject: string;
   readonly children: React.ReactNode;
 }): React.JSX.Element {
-  const row = useLabelScrubSlot();
+  const row = useLabelScrubSlot(subject);
   return (
     <LabelScrubContext.Provider value={row}>
       {children}
@@ -111,7 +120,7 @@ export function useLabelScrubProps(): LabelScrubProps | undefined {
 }
 
 /** The row's state: a slot for its field, and the props its label takes. */
-function useLabelScrubSlot(): LabelScrubRowValue {
+function useLabelScrubSlot(subject: string): LabelScrubRowValue {
   const field = React.useRef<LabelScrubField | null>(null);
   const [enabled, setEnabled] = React.useState(false);
   const [dragging, setDragging] = React.useState(false);
@@ -122,9 +131,19 @@ function useLabelScrubSlot(): LabelScrubRowValue {
     () => ({ field, setEnabled, owning }),
     []
   );
-  // A drag does not outlive the row: taken away mid-drag, as selecting another
-  // block does, it ends without writing.
-  React.useEffect(() => () => session.current?.end(), []);
+  // Set when a drag ends because its subject changed, so the field shows its
+  // new subject's value rather than the old one's text.
+  const superseded = React.useRef(false);
+  // A drag does not outlive its row or its subject: taken away mid-drag, or
+  // reused for another block, it ends without writing.
+  React.useEffect(
+    () => () => {
+      superseded.current = true;
+      session.current?.end();
+      superseded.current = false;
+    },
+    [subject]
+  );
 
   const onPointerDown = (event: React.PointerEvent<HTMLElement>): void => {
     // A click only ever follows a press, so a flag a drag released elsewhere
@@ -194,7 +213,9 @@ function useLabelScrubSlot(): LabelScrubRowValue {
           owning.current = false;
           session.current = null;
           setDragging(false);
-          if (previewing) field.current?.show(before);
+          if (!previewing) return;
+          if (superseded.current) field.current?.reset();
+          else field.current?.show(before);
         },
       }
     );

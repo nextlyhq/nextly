@@ -157,6 +157,7 @@ import {
   foldedControlFor,
   lineHeightFromText,
   lineHeightLeafFor,
+  lineHeightScrubOrigin,
   storedKey,
   type FoldedControl,
   type FoldedOption,
@@ -1888,7 +1889,7 @@ function StyleControlField({
       {...writes.caption}
     >
       {/* The label drags the value the number field below offers it. */}
-      <LabelScrubRow>
+      <LabelScrubRow subject={`${nodeId} ${targetKey(writes.target)}`}>
         <StyleFieldLabel
           id={labelId}
           htmlFor={id}
@@ -3086,21 +3087,16 @@ function useLineHeightLabelScrub({
   stored: StyleValue | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): () => boolean {
-  const typed = lineHeightFromText(draft);
-  const typedLeaf = lineHeightLeafFor(draft);
+  const inherited = React.useContext(InheritedValue);
   return useLabelScrub({
-    origin:
-      (typeof typed === "string" || typeof typed === "number") &&
-      typedLeaf !== undefined &&
-      steppedValue(typedLeaf, typed, 0) !== undefined
-        ? typed
-        : undefined,
+    origin: lineHeightScrubOrigin(draft, inherited),
     at: (from, delta) => {
       const leaf = lineHeightLeafFor(String(from));
       return leaf === undefined ? undefined : scrubbedValue(leaf, from, delta);
     },
     draft,
     show: setDraft,
+    reset: () => setDraft(storedText(stored)),
     commit: value => {
       if (onCommit(value) === "unchanged") setDraft(storedText(stored));
     },
@@ -5420,6 +5416,10 @@ function useNumericLabelScrub({
       // Shown as a value, not as typing, so the unit stays beside it.
       setTyping(false);
       setDraft(text);
+    },
+    reset: () => {
+      setTyping(false);
+      setDraft(storedText(stored));
     },
     commit: value =>
       commitDraft({

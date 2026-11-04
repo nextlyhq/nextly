@@ -177,6 +177,27 @@ describe("followScrub", () => {
     expect(on.onEnd).not.toHaveBeenCalled();
   });
 
+  it("lets a Control or Meta chord through, so the editor's Undo still works mid-drag", () => {
+    const on = handlers();
+    followScrub({ pointerId: 1, clientX: 0, clientY: 0, host: host() }, on);
+    document.dispatchEvent(pointer("pointermove", { clientX: 40 }));
+    const heard = vi.fn();
+    document.body.addEventListener("keydown", heard);
+
+    for (const chord of [{ ctrlKey: true }, { metaKey: true }]) {
+      const undo = new KeyboardEvent("keydown", {
+        key: "z",
+        bubbles: true,
+        cancelable: true,
+        ...chord,
+      });
+      document.body.dispatchEvent(undo);
+      expect(undo.defaultPrevented).toBe(false);
+    }
+    expect(heard).toHaveBeenCalledTimes(2);
+    expect(on.onEnd).not.toHaveBeenCalled();
+  });
+
   it("ends without a release on a cancel, and end() is safe twice", () => {
     const on = handlers();
     const session = followScrub(
