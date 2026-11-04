@@ -318,6 +318,7 @@ import {
   type PartState,
   poolRevisionReader,
   refuseIfAnyLanguageMoved,
+  refuseIfDocumentMoved,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
@@ -1517,6 +1518,19 @@ function sentFields(
   delete sent.updatedAt;
   return sent;
 }
+
+/**
+ * How a rewrite of one language's pending change is judged: the version its
+ * request gave, the entry's row and translation table, and the language it
+ * is judged on (none where the entry keeps no translations).
+ */
+type PendingChangeJudging = {
+  check: VersionCheck;
+  table: string;
+  id: string;
+  languagesTable: string | null;
+  locale: string | undefined;
+};
 
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
@@ -5279,6 +5293,12 @@ export class CollectionMutationService extends BaseService {
      * authorization stays the caller's concern.
      */
     updateUnderLock?: { authenticatedScope?: AuthenticatedScope };
+    /**
+     * The version the pending change was read at (`_rev`) and the overwrite
+     * choice (`_overwrite`): discarding a colleague's newer change from an
+     * old view would lose it, so a discard is judged as a save of it is.
+     */
+    version?: Readonly<Record<string, unknown>>;
   }): Promise<number> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -5287,6 +5307,9 @@ export class CollectionMutationService extends BaseService {
       params.collectionName
     );
     const tableName = collectionTableName(collection, params.collectionName);
+    const judging = await this.pendingChangeJudging(params, collection);
+    // Set by a refusal inside the transaction, answered once it rolls back.
+    const staleWrite: StaleWriteHolder = {};
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter
       .transaction(async tx => {
@@ -5331,6 +5354,13 @@ export class CollectionMutationService extends BaseService {
         await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the document's history only when there was a draft to discard.
         if (removed > 0) {
+          // Judged only when there was a change to lose, and under the lock:
+          // out of date, the throw rolls the delete back.
+          const before = await this.refuseIfPendingChangeMoved(
+            tx,
+            judging,
+            staleWrite
+          );
           // A reader of the pending change now sees the live entry, so the
           // version they hold no longer describes what they would read.
           await bumpDocumentRevision(
@@ -5338,6 +5368,18 @@ export class CollectionMutationService extends BaseService {
             tableName,
             { id: params.entryId },
             actorForWrite(params.actor, params.user)
+          );
+          // Discarded over a change since the read, by choice: recorded.
+          await this.recordOverwriteIfAsked(
+            tx,
+            judging.check,
+            {
+              collection: params.collectionName,
+              id: params.entryId,
+              actor: params.actor,
+              user: params.user,
+            },
+            { ...before, locale: judging.locale }
           );
           await this.recordHistoryEvent(
             tx,
@@ -5354,6 +5396,12 @@ export class CollectionMutationService extends BaseService {
         return removed;
       })
       .catch(async (error: unknown) => {
+        // Out of date: answered after the rollback, from the entry as it is now.
+        const refused = await this.refusalAfterRollback(
+          { params, check: judging.check, holder: staleWrite },
+          undefined
+        );
+        if (refused) throw errorFromServiceEnvelope(refused);
         // A discard the database is not migrated for answers as such. Its
         // transaction rolls back whole, so a failure never follows a kept write.
         throw await asNotMigrated(
@@ -5390,10 +5438,19 @@ export class CollectionMutationService extends BaseService {
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The version the pending change was read at (`_rev`) and the overwrite
+     * choice (`_overwrite`): taking the live values saves the change, so it is
+     * judged as a save of it is.
+     */
+    version?: Readonly<Record<string, unknown>>;
   }): Promise<CollectionServiceResult<TakenLiveValues>> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // Set by a refusal inside the transaction, answered once it rolls back.
+    const staleWrite: StaleWriteHolder = {};
+    let judging: PendingChangeJudging | undefined;
     try {
       // An update of this entry: a rule that answers a filter allows it only
       // where the filter matches the entry as it is stored, in the language
@@ -5433,8 +5490,13 @@ export class CollectionMutationService extends BaseService {
         params.user,
         params.authenticatedScope
       );
+      judging = await this.pendingChangeJudging(params, collection);
+      const judged = judging;
       const took = await this.adapter.transaction(tx =>
-        this.takeLiveInTx(tx, collection, params, grants)
+        this.takeLiveInTx(tx, collection, params, grants, {
+          judging: judged,
+          holder: staleWrite,
+        })
       );
       if (!took) {
         throw NextlyError.notFound({
@@ -5461,6 +5523,16 @@ export class CollectionMutationService extends BaseService {
         data: await takenLiveValues(reader, took),
       };
     } catch (error: unknown) {
+      // Out of date: answered after the rollback, from the entry as it is now.
+      const refused = await this.refusalAfterRollback(
+        {
+          params,
+          check: judging?.check ?? { kind: "unjudged" },
+          holder: staleWrite,
+        },
+        undefined
+      );
+      if (refused) return refused as CollectionServiceResult<TakenLiveValues>;
       return errorToServiceResult(
         // A write the database is not migrated for answers as such.
         await asNotMigrated(
@@ -5483,7 +5555,8 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     collection: Awaited<ReturnType<DynamicCollectionService["getCollection"]>>,
     params: Parameters<CollectionMutationService["takeLiveSharedValues"]>[0],
-    grants: () => Promise<CallerGrants>
+    grants: () => Promise<CallerGrants>,
+    version: { judging: PendingChangeJudging; holder: StaleWriteHolder }
   ): Promise<{
     taken: string[];
     remaining: string[];
@@ -5528,6 +5601,12 @@ export class CollectionMutationService extends BaseService {
       params.locale ?? undefined
     );
     if (deniedUnderLock) throw errorFromServiceEnvelope(deniedUnderLock);
+    // Judged under the lock, before the change is written.
+    const before = await this.refuseIfPendingChangeMoved(
+      tx,
+      version.judging,
+      version.holder
+    );
     const pending = await new VersionsRepository(tx).findWorkingDraft(
       ref,
       draftLocale
@@ -5591,6 +5670,18 @@ export class CollectionMutationService extends BaseService {
         tableName,
         { id: params.entryId },
         actorForWrite(params.actor, params.user)
+      );
+      // Saved over a change since the read, by choice: recorded with it.
+      await this.recordOverwriteIfAsked(
+        tx,
+        version.judging.check,
+        {
+          collection: params.collectionName,
+          id: params.entryId,
+          actor: params.actor,
+          user: params.user,
+        },
+        { ...before, locale: version.judging.locale }
       );
     }
     await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
@@ -8211,25 +8302,19 @@ export class CollectionMutationService extends BaseService {
           // Judged under the lock, before anything is written: the entry's own
           // row, then every language it moves. A refusal throws, rolling back
           // whatever this transaction would have moved.
-          const mainBefore = await refuseIfMainMoved(
-            tx,
-            this.dialect,
-            versionCheck,
-            { table: tableName, id: params.entryId },
-            staleWrite
-          );
-          const languagesBefore = await refuseIfAnyLanguageMoved(
-            tx,
-            this.dialect,
-            versionCheck,
-            {
-              table: tableName,
-              id: params.entryId,
-              languagesTable,
-              judged: judgedLocales,
-            },
-            staleWrite
-          );
+          const { main: mainBefore, languages: languagesBefore } =
+            await refuseIfDocumentMoved(
+              tx,
+              this.dialect,
+              versionCheck,
+              {
+                table: tableName,
+                id: params.entryId,
+                languagesTable,
+                judged: judgedLocales,
+              },
+              staleWrite
+            );
           const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
           lockedPreviousStatus =
             typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
@@ -10392,6 +10477,82 @@ export class CollectionMutationService extends BaseService {
         locale: EVERY_LOCALE,
       })
     );
+  }
+
+  /**
+   * How a rewrite of one language's pending change is judged (taking the live
+   * values into it, or discarding it): from the version its request carries,
+   * on the entry's own row and the pending change's language. Decided before
+   * the transaction, so a version that names another language is refused as
+   * the validation error it is before anything is read under the lock.
+   *
+   * @throws The validation error of a version that is not one, or that
+   *   names no version of the pending change's language.
+   */
+  private async pendingChangeJudging(
+    params: {
+      collectionName: string;
+      entryId: string;
+      locale?: string | null;
+      version?: Readonly<Record<string, unknown>>;
+    },
+    collection: Awaited<ReturnType<DynamicCollectionService["getCollection"]>>
+  ): Promise<PendingChangeJudging> {
+    const check = this.versionCheckOf(params, { ...params.version });
+    if ("success" in check) throw errorFromServiceEnvelope(check);
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    const languagesTable = translationTableOf(
+      companion,
+      await companionTableReady(this.adapter, companion)
+    );
+    const draftLocale = workingDraftLocale({
+      documentLocalized:
+        (collection as { localized?: boolean }).localized === true,
+      requestLocale: params.locale ?? null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    return {
+      check,
+      table: collectionTableName(collection, params.collectionName),
+      id: params.entryId,
+      languagesTable,
+      locale: judgedLanguage(
+        givenOf(check),
+        languagesTable === null ? undefined : (draftLocale ?? undefined)
+      ),
+    };
+  }
+
+  /**
+   * Judge a rewrite of a pending change under the entry's lock, before it
+   * writes: the entry's own row, which every save of the change moves, and
+   * the change's language, read as the save of it would be. Throws when out
+   * of date, rolling the rewrite back; returns the rows as they stood, for an
+   * overwrite's record of whom it replaced.
+   */
+  private async refuseIfPendingChangeMoved(
+    tx: TransactionContext,
+    judging: PendingChangeJudging,
+    holder: StaleWriteHolder
+  ): Promise<{
+    main: DocumentRevisionState | undefined;
+    language: PartState | undefined;
+  }> {
+    const { main, languages } = await refuseIfDocumentMoved(
+      tx,
+      this.dialect,
+      judging.check,
+      {
+        table: judging.table,
+        id: judging.id,
+        languagesTable: judging.languagesTable,
+        judged: judging.locale === undefined ? undefined : [judging.locale],
+      },
+      holder
+    );
+    return { main, language: languages?.[0] };
   }
 
   /**

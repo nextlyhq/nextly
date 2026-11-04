@@ -29,6 +29,24 @@ const VersionInput = z
   .strip();
 
 /**
+ * `_rev` and `_overwrite` from a request's query, for a route whose request
+ * carries no body to read them from: a discard is a DELETE, whose body has no
+ * defined meaning and which some clients and proxies drop. A query value is
+ * text, so `_overwrite=true` and `_overwrite=false` are read as the choice they
+ * spell; any other value is left for the write path to refuse.
+ */
+export function versionInputOfQuery(
+  query: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  const overwrite = query[DOCUMENT_OVERWRITE_KEY];
+  return versionInputOf({
+    [DOCUMENT_VERSION_KEY]: query[DOCUMENT_VERSION_KEY],
+    [DOCUMENT_OVERWRITE_KEY]:
+      overwrite === "true" ? true : overwrite === "false" ? false : overwrite,
+  });
+}
+
+/**
  * `_rev` and `_overwrite` from a request body, as data the write path judges.
  * No body is the same as an empty one; a body that is not an object is
  * refused, since it cannot say which version it was made from.

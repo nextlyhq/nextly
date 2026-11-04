@@ -77,6 +77,11 @@ export interface DiscardWorkingDraftArgs {
   /** The request and context the caller's own read carries, for read hooks. */
   request?: Request;
   context?: Record<string, unknown>;
+  /**
+   * The version the pending change was read at (`_rev`) and the overwrite
+   * choice (`_overwrite`): a discard is judged as a save of the change is.
+   */
+  version?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -176,6 +181,7 @@ export async function discardWorkingDraft(
           locale: args.locale ?? null,
           actor: args.actor,
           user: args.user,
+          version: args.version,
         })
       : await getService("collectionsHandler").discardWorkingDraftCounted({
           collectionName: args.slug,
@@ -186,6 +192,7 @@ export async function discardWorkingDraft(
           // The update this discard was authorized for, asked again under the
           // lock the delete holds.
           updateUnderLock: { authenticatedScope: args.authenticatedScope },
+          version: args.version,
         });
 
   return { document: result.data, removed };

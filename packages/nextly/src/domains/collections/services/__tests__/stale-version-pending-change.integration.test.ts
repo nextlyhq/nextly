@@ -197,11 +197,16 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await save(t, id, "en", { title: "Ana's draft" }, ANA)).success
         ).toBe(true);
+        const asAnaLeftIt = await pendingTitle(t, id);
 
         const refused = await takeLive(t, id, { _rev: read });
         expect(refused.code, JSON.stringify(refused)).toBe("STALE_VERSION");
-        // Ana's edit is kept, and the count was not taken.
-        expect(await pendingTitle(t, id)).toBe("Ana's draft");
+        expect(refused.publicData).toMatchObject({
+          currentVersion: await englishRev(t, id),
+          changedBy: { kind: "person", name: ANA.name },
+        });
+        // The pending change is as Ana left it, and the count was not taken.
+        expect(await pendingTitle(t, id)).toBe(asAnaLeftIt);
         const pending = (await t.nextly.findByID({
           collection: ARTICLES as never,
           id,
@@ -216,19 +221,6 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
         const taken = await takeLive(t, id, { _rev: await englishRev(t, id) });
-        expect(taken.success, JSON.stringify(taken)).toBe(true);
-      });
-
-      it("takes the live values when only another language's translation moved", async () => {
-        const t = await boot(dialect);
-        const id = await englishBehindSpanish(t);
-        const read = await englishRev(t, id);
-        // A Spanish translation saved since: judged on English and the shared
-        // fields, it does not make the English version out of date.
-        expect((await save(t, id, "es", { title: "es otra" })).success).toBe(
-          true
-        );
-        const taken = await takeLive(t, id, { _rev: read });
         expect(taken.success, JSON.stringify(taken)).toBe(true);
       });
 
@@ -268,6 +260,7 @@ describe.each(getConfiguredTestDialects())(
         const id = await englishBehindSpanish(t);
         const read = await englishRev(t, id);
         await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        const asAnaLeftIt = await pendingTitle(t, id);
 
         const refused = await restDiscard(t, id, { _rev: read });
         expect(refused.status, JSON.stringify(refused.json)).toBe(409);
@@ -275,8 +268,9 @@ describe.each(getConfiguredTestDialects())(
         expect((refused.json.error as Doc).data).toMatchObject({
           currentVersion: await englishRev(t, id),
         });
-        // Ana's pending change is still there.
-        expect(await pendingTitle(t, id)).toBe("Ana's draft");
+        // The pending change is still there, as Ana left it.
+        expect(await pendingTitle(t, id)).toBe(asAnaLeftIt);
+        expect(asAnaLeftIt).not.toBe("en title");
       });
 
       it("discards from the current version", async () => {

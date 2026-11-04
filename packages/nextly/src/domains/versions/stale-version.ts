@@ -940,6 +940,65 @@ export async function refuseIfAnyLanguageMoved(
 }
 
 /**
+ * Judge a write over a document's own row and the languages named in
+ * `row.judged` together, inside its transaction, for a write that owns its
+ * transaction and writes no translation row of its own before it is judged:
+ * a publish of every language, or a rewrite of a pending change.
+ *
+ * The document's row is read under its lock (`judgeMainRow`), then each
+ * language without one, as `refuseIfAnyLanguageMoved` reads them. Out of date
+ * on either, it throws, and the refusal it leaves names every language judged,
+ * so its current version is one the caller can save from: a version naming
+ * only the document's own counter would be refused next as naming no
+ * language. An overwrite is never refused; the rows read are returned so what
+ * it replaced can be told.
+ */
+export async function refuseIfDocumentMoved(
+  tx: Pick<TransactionContext, "select" | "execute">,
+  dialect: SupportedDialect,
+  check: VersionCheck,
+  row: EveryLanguageWrite,
+  holder: StaleWriteHolder
+): Promise<{
+  main: DocumentRevisionState | undefined;
+  languages: PartState[] | undefined;
+}> {
+  const main = await judgeMainRow(tx, dialect, check, {
+    table: row.table,
+    id: row.id,
+  });
+  const judged = check.kind === "unjudged" ? undefined : row.judged;
+  // Each language read without a lock, after the document's own row lock:
+  // every writer of its translation rows takes that lock first.
+  const read =
+    judged && row.languagesTable !== null
+      ? await readDocumentRevision(tx, {
+          dialect,
+          table: row.table,
+          id: row.id,
+          languages: { table: row.languagesTable, locales: judged },
+        })
+      : undefined;
+  const languages = read && judged?.map(locale => read.languages[locale]);
+  const languageMoved =
+    check.kind === "judge" &&
+    languages !== undefined &&
+    staleParts(check.given, { languages }).length > 0;
+  if (main.stale || languageMoved) {
+    holder.at = {
+      table: row.table,
+      ...(row.judged && row.languagesTable !== null
+        ? {
+            everyLanguage: { table: row.languagesTable, locales: row.judged },
+          }
+        : {}),
+    };
+    throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
+  }
+  return { main: main.before, languages };
+}
+
+/**
  * The refusal of an update found out of date, read from the document as it
  * now is, once the write's transaction has rolled back: so it names the save
  * that came in between, never the refused one.

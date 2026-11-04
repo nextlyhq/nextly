@@ -846,6 +846,8 @@ export async function takeLiveSharedValuesForDocument(args: {
   user: UserContext;
   /** The language whose pending change takes them; none means the default. */
   locale?: string | null;
+  /** `_rev` and `_overwrite`: taking the live values saves the change. */
+  version?: Readonly<Record<string, unknown>>;
 }): Promise<TakenLiveValues> {
   const authenticatedScope = await assertDocumentWriteAllowed(
     args,
@@ -860,6 +862,7 @@ export async function takeLiveSharedValuesForDocument(args: {
     overrideAccess: false,
     routeAuthorized: true,
     authenticatedScope,
+    version: args.version,
   };
   const result =
     args.scopeKind === "single"
@@ -914,6 +917,8 @@ export async function discardWorkingDraftForDocument(
      * language — the admin omits `?locale=` when editing that one.
      */
     locale?: string | null;
+    /** `_rev` and `_overwrite`: a discard is judged as a save of the change. */
+    version?: Readonly<Record<string, unknown>>;
   }
 ): Promise<unknown> {
   const authenticatedScope = await assertDocumentWriteAllowed(
@@ -929,6 +934,7 @@ export async function discardWorkingDraftForDocument(
     locale: args.locale ?? null,
     authenticatedScope,
     actor: readAuthenticatedActor(),
+    version: args.version,
   });
   return document;
 }

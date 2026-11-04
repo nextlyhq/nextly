@@ -363,9 +363,16 @@ describe.each(getConfiguredTestDialects())(
             { note: "changed" },
             { locale: "en" }
           );
-          expect(
-            (await publishEvery(t, page.id, { _rev: page.every })).code
-          ).toBe("STALE_VERSION");
+          const sharedMoved = await publishEvery(t, page.id, {
+            _rev: page.every,
+          });
+          expect(sharedMoved.code).toBe("STALE_VERSION");
+          // The current version names every language, as a read of every
+          // language spells it, though only the entry's own row moved: a
+          // version naming no language could not be published from.
+          expect(sharedMoved.publicData).toMatchObject({
+            currentVersion: await readRev(t, PAGES, page.id, "*"),
+          });
 
           const again = await readRev(t, PAGES, page.id, "*");
           await update(t, PAGES, page.id, { title: "hi" }, { locale: "en" });
