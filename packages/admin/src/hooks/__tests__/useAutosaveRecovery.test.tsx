@@ -634,6 +634,49 @@ describe("after a save", () => {
       expect(result.current.form.getValues()).toEqual(STORED);
     });
 
+    it("runs a caller's own restore steps only once the offer is confirmed", async () => {
+      // A view's steps change what it shows; run before the answer, they
+      // would act on an offer that is then refused.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockResolvedValueOnce({ ...CURRENT, superseded: "by-another" });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+      const apply = vi.fn();
+
+      act(() => result.current.recovery.restore(apply));
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(true)
+      );
+      expect(apply).not.toHaveBeenCalled();
+
+      // Now shown as older: confirmed without asking, so the steps run.
+      act(() => result.current.recovery.restore(apply));
+      await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+      // In place of the take: the caller's steps write the form themselves.
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("draws the offer again from a point rewritten since, rather than restoring the old one", async () => {
+      // Another tab of the same author recorded newer work into the point.
+      getSpy.mockResolvedValueOnce(CURRENT).mockResolvedValueOnce({
+        ...CURRENT,
+        snapshot: { title: "newer" },
+        updatedAt: "2026-08-17T10:05:00.000Z",
+      });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.snapshot).toEqual({
+          title: "newer",
+        })
+      );
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
     it("restores it when it is still current, which is the control", async () => {
       getSpy.mockResolvedValue(CURRENT);
       const { result } = renderRecovery(SCOPE);

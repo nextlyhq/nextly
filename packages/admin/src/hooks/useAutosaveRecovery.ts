@@ -273,9 +273,14 @@ export interface UseAutosaveRecoveryResult {
    * An offer read as current is asked about again first, since the read is
    * not repeated while the editor stays open: a write since then makes it an
    * older version, and it is then shown as one rather than restored, so the
-   * author decides with the warning in front of them.
+   * author decides with the warning in front of them. So the restore happens
+   * later, when the answer is in: a caller with steps of its own around it
+   * passes them as `apply`, which runs in place of `take` once the offer is
+   * confirmed, and calls `take` itself.
    */
-  restore: () => void;
+  restore: (apply?: () => void) => void;
+  /** Write the offered values into the form now, unasked: see `restore`. */
+  take: () => void;
 }
 
 /**
@@ -287,6 +292,7 @@ export interface UseAutosaveRecoveryResult {
  */
 async function askedAgain(
   offer: AutosaveRecoveryOffer,
+  point: AutosaveDetail,
   scope: VersionScope | null
 ): Promise<
   { stillCurrent: true } | { stillCurrent: false; fresh: AutosaveDetail | null }
@@ -294,7 +300,11 @@ async function askedAgain(
   if (offer.olderVersion || !scope) return { stillCurrent: true };
   try {
     const fresh = await versionApi.getAutosave(scope);
-    return fresh !== null && fresh.superseded === undefined
+    // The same point, still current: a rewrite since, from another tab, is
+    // newer work, and the offer is drawn again from it.
+    const same =
+      fresh !== null && pointIdentity(fresh) === pointIdentity(point);
+    return same && fresh.superseded === undefined
       ? { stillCurrent: true }
       : { stillCurrent: false, fresh };
   } catch {
@@ -308,19 +318,22 @@ async function askedAgain(
  */
 function useRestoreOffer({
   offer,
+  point,
   scope,
   form,
   queryKey,
   setDismissed,
 }: {
   offer: AutosaveRecoveryOffer | null;
+  /** The stored point the offer was drawn from. */
+  point: AutosaveDetail | null | undefined;
   scope: VersionScope | null;
   form: UseFormReturn<Record<string, unknown>>;
   queryKey: readonly unknown[];
   setDismissed: (dismissed: boolean) => void;
-}): () => void {
+}): Pick<UseAutosaveRecoveryResult, "restore" | "take"> {
   const queryClient = useQueryClient();
-  const takeOffer = useCallback(() => {
+  const take = useCallback(() => {
     if (!offer) return;
     /*
      * `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
@@ -338,12 +351,16 @@ function useRestoreOffer({
     (fresh: AutosaveDetail | null) => queryClient.setQueryData(queryKey, fresh),
     [queryClient, queryKey]
   );
-  return useCallback(() => {
-    if (!offer) return;
-    void askedAgain(offer, scope).then(answer =>
-      answer.stillCurrent ? takeOffer() : redraw(answer.fresh)
-    );
-  }, [offer, scope, takeOffer, redraw]);
+  const restore = useCallback(
+    (apply?: () => void) => {
+      if (!offer || !point) return;
+      void askedAgain(offer, point, scope).then(answer =>
+        answer.stillCurrent ? (apply ?? take)() : redraw(answer.fresh)
+      );
+    },
+    [offer, point, scope, take, redraw]
+  );
+  return { restore, take };
 }
 
 /**
@@ -445,8 +462,9 @@ export function useAutosaveRecovery({
     };
   }, [dismissed, data, stored, locale, isPutOff]);
 
-  const restore = useRestoreOffer({
+  const { restore, take } = useRestoreOffer({
     offer,
+    point: data,
     scope,
     form,
     queryKey,
@@ -454,5 +472,5 @@ export function useAutosaveRecovery({
     setDismissed,
   });
 
-  return { offer, isResolved, dismiss, restore };
+  return { offer, isResolved, dismiss, restore, take };
 }
