@@ -65,6 +65,28 @@ const registerServicesOnce = [...walk(registerAst.program.body)].find(
 const within = (inner: Node, outer: Node): boolean =>
   inner.start >= outer.start && inner.end <= outer.end;
 
+/** Whether `call` is the operand of an `await` itself, not merely started inside one's reach. */
+const awaited = (call: Node, root: unknown): boolean =>
+  [...walk(root)].some(
+    node =>
+      node.type === "AwaitExpression" &&
+      (node.argument as Node | undefined)?.start === call.start &&
+      (node.argument as Node | undefined)?.end === call.end
+  );
+
+const FUNCTION_TYPES = new Set([
+  "ArrowFunctionExpression",
+  "FunctionExpression",
+  "FunctionDeclaration",
+]);
+
+/** The innermost function under `root` that contains `node`. */
+function innermostFunction(node: Node, root: unknown): Node | undefined {
+  return [...walk(root)]
+    .filter(fn => FUNCTION_TYPES.has(fn.type) && within(node, fn))
+    .sort((a, b) => a.end - a.start - (b.end - b.start))[0];
+}
+
 describe("the development start's schema sync in registerServicesOnce", () => {
   it("is read from the function itself", () => {
     expect(registerServicesOnce).toBeDefined();
@@ -93,6 +115,32 @@ describe("the development start's schema sync in registerServicesOnce", () => {
       const calls = callsTo(registerServicesOnce, step);
       expect(calls, step).toHaveLength(1);
       for (const call of calls) expect(within(call, work), step).toBe(true);
+    }
+  });
+
+  it("awaits the lock, and each step inside the locked work itself", () => {
+    // Inside the lock's reach is not enough: an un-awaited lock lets registration go on while the
+    // sync runs, and a step started without an await, or from a function nested in the work, can
+    // still be writing when the work returns and the lock is released.
+    const [lock] = callsTo(
+      registerServicesOnce,
+      "withDevelopmentStartSchemaLock"
+    );
+    expect(lock).toBeDefined();
+    if (lock === undefined) return;
+    expect(awaited(lock, registerServicesOnce)).toBe(true);
+    const work = ((lock.arguments ?? []) as Node[]).at(-1);
+    if (work === undefined) return;
+
+    for (const step of ["reconcileBuilderTargets", "syncCodeFirstEntities"]) {
+      const [call] = callsTo(work, step);
+      expect(call, step).toBeDefined();
+      if (call === undefined) continue;
+      expect(awaited(call, work), `${step} is awaited`).toBe(true);
+      expect(
+        innermostFunction(call, work),
+        `${step} runs in the work itself`
+      ).toBe(work);
     }
   });
 });
