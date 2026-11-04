@@ -435,14 +435,28 @@ describe("the shared style target", () => {
     );
   });
 
-  it("holds the shared style chips while the block's design is held, and every field with them", () => {
+  it("holds the shared style chips while the block's design is held, and every field with them", async () => {
     // A locked or contentOnly block's design is fixed on this page. Editing
     // the shared style it wears from here would change that design all the
     // same, so the chip says why it is held and the target stays the block.
     mountTarget({ classes: ["c-card"], locked: true });
     const card = chip("Card");
     expect(card.getAttribute("aria-disabled")).toBe("true");
-    expect(card.title).toMatch(/Locked: it can't be moved, deleted or edited/);
+    // Why, as its description, heard without opening anything.
+    const why = document.getElementById(
+      card.getAttribute("aria-describedby") ?? ""
+    );
+    expect(why?.textContent).toMatch(
+      /Locked: it can't be moved, deleted or edited/
+    );
+    // And shown: the editor's tooltip on focus, as on hover, not a native
+    // title, which focus never shows.
+    expect(card.getAttribute("title")).toBeNull();
+    fireEvent.focus(card);
+    expect((await screen.findByRole("tooltip")).textContent).toMatch(
+      /Locked: it can't be moved, deleted or edited/
+    );
+    fireEvent.blur(card);
 
     fireEvent.click(card);
     expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
