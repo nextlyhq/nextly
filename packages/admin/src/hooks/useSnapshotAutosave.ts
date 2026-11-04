@@ -171,16 +171,41 @@ export async function recordingsSettled(
 }
 
 /**
- * Run a write of `document` once its recordings in flight have landed, for a
+ * Run a write of a document once its recordings in flight have landed, for a
  * write that does not go through a save: publishing every language. It must
  * not be overtaken by a recording sent before it either: see
  * `recordingsSettled`.
+ *
+ * `pending` is true from the ask until the write has finished (`writing`,
+ * the write's own pending state, covers the second half), so the action shows
+ * busy throughout, and a second ask while it waits is dropped: two would both
+ * run once the recordings land.
  */
-export function afterRecordings(
+export function useAfterRecordings(
   document: string | null,
-  write: () => void
-): void {
-  void recordingsSettled(document).then(write);
+  writing: boolean
+): {
+  run: (write: () => void) => void;
+  pending: boolean;
+} {
+  const [waiting, setWaiting] = useState(false);
+  // The latch itself, read synchronously: two asks inside one render both
+  // see the state as it was before either.
+  const waitingRef = useRef(false);
+  const run = useCallback(
+    (write: () => void) => {
+      if (waitingRef.current) return;
+      waitingRef.current = true;
+      setWaiting(true);
+      void recordingsSettled(document).then(() => {
+        waitingRef.current = false;
+        setWaiting(false);
+        write();
+      });
+    },
+    [document]
+  );
+  return { run, pending: waiting || writing };
 }
 
 /**

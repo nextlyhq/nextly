@@ -589,4 +589,62 @@ describe("after a save", () => {
 
     await waitFor(() => expect(result.current.offer).not.toBeNull());
   });
+
+  describe("a current offer is asked about again before it is restored", () => {
+    const CURRENT = {
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    };
+
+    it("shows it as older instead, when the document was written since", async () => {
+      // Read once when the editor opened; a write since then, here or in
+      // another tab, made it an older version.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockResolvedValueOnce({ ...CURRENT, superseded: "by-another" });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(false)
+      );
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(true)
+      );
+      expect(result.current.form.getValues()).toEqual(STORED);
+
+      // Asked again with the warning in front of them: taken, unasked.
+      act(() => result.current.recovery.restore());
+      await waitFor(() =>
+        expect(result.current.form.getValues()).toEqual({ title: "recovered" })
+      );
+      expect(getSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("withdraws it when the point is gone", async () => {
+      getSpy.mockResolvedValueOnce(CURRENT).mockResolvedValueOnce(null);
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() => expect(result.current.recovery.offer).toBeNull());
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("restores it when it is still current, which is the control", async () => {
+      getSpy.mockResolvedValue(CURRENT);
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.form.getValues()).toEqual({ title: "recovered" })
+      );
+      expect(getSpy).toHaveBeenCalledTimes(2);
+    });
+  });
 });

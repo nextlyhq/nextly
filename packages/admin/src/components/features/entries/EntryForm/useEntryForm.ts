@@ -761,11 +761,7 @@ export function useEntryForm({
           stillShown: () => scopeNow.current === startedIn,
           // This entry's recovery points, addressed as its recorder does.
           recordingsFor: documentRecordingKey(
-            autosaveScopeFor(
-              "collection",
-              collection.name,
-              entry?.id === undefined ? undefined : String(entry.id)
-            )
+            autosaveScopeFor("collection", collection.name, entry?.id)
           ),
           // Why: intent → payload mapping is the core PR-3 bug fix —
           // extracted to mapIntentToPayload above so the contract is
