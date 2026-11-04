@@ -44,10 +44,28 @@ export interface LinkGroup {
 const LINK_NAMES = ["href", "link"] as const;
 
 /**
+ * Whether a `target` prop is exactly "this tab or a new tab": a select whose
+ * options are `_self` and `_blank` and nothing else, in either order. Only
+ * then does a switch say all it can hold; a target offering `_parent` or a
+ * named frame keeps its own menu, since a switch would hide those choices.
+ */
+function isNewTabTarget(schema: EditableProp["schema"] | undefined): boolean {
+  if (schema?.type !== "select" || !Array.isArray(schema.options)) return false;
+  const options = new Set(schema.options);
+  return (
+    schema.options.length === 2 &&
+    options.size === 2 &&
+    options.has("_self") &&
+    options.has("_blank")
+  );
+}
+
+/**
  * The link group of a block's props, or `undefined` when it declares no link.
  *
  * Each sibling joins only with the type its control writes: a `target` that
- * cannot be `_blank` is not one a new-tab switch can set, and an entry
+ * is not exactly this tab or a new tab is not one a switch can stand for
+ * (see {@link isNewTabTarget}), and an entry
  * reference missing either half is not one a pick can complete. A sibling
  * that does not join keeps its own row.
  */
@@ -57,13 +75,7 @@ export function linkGroupOf(
   const schemas = new Map(props.map(prop => [prop.name, prop.schema]));
   const link = LINK_NAMES.find(name => schemas.get(name)?.type === "url");
   if (link === undefined) return undefined;
-  const targetSchema = schemas.get("target");
-  const target =
-    targetSchema?.type === "select" &&
-    Array.isArray(targetSchema.options) &&
-    targetSchema.options.includes("_blank")
-      ? "target"
-      : undefined;
+  const target = isNewTabTarget(schemas.get("target")) ? "target" : undefined;
   const rel = schemas.get("rel")?.type === "text" ? "rel" : undefined;
   const entry =
     schemas.get("entryCollection")?.type === "text" &&

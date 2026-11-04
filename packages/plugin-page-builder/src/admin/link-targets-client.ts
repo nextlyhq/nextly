@@ -42,6 +42,8 @@ export interface FindLinkTargetsQuery {
   readonly limit?: number;
   /** Abandons the read, as a newer question replaces this one. */
   readonly signal?: AbortSignal;
+  /** The language being edited, so pages are searched and named in it. */
+  readonly locale?: string;
 }
 
 /** One page or entry, as the link control lists it. */
@@ -73,10 +75,24 @@ export async function findLinkTargets(
         ? {}
         : { limit: Math.min(query.limit, PAGES_SEARCH_LIMIT_MAX) }),
       order: "collection",
+      ...(query.locale === undefined ? {} : { locale: query.locale }),
     }),
     ...(query.signal === undefined ? {} : { signal: query.signal }),
   });
   return targetsOf(body);
+}
+
+/**
+ * {@link findLinkTargets} bound to the language being edited, as the editor
+ * lends it: every search it makes reads and names pages in `locale`, and in
+ * the default locale when there is none. One binding, so the language cannot
+ * be forgotten at a call site.
+ */
+export function findLinkTargetsIn(
+  locale: string | undefined
+): (query: FindLinkTargetsQuery) => Promise<readonly FoundLinkTarget[]> {
+  return query =>
+    findLinkTargets(locale === undefined ? query : { ...query, locale });
 }
 
 /**

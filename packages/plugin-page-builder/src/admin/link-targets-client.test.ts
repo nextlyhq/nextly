@@ -16,7 +16,7 @@ const readPluginRoute = vi.hoisted(() => vi.fn());
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ readPluginRoute }));
 
 import { PAGES_SEARCH_LIMIT_MAX } from "../pages-search-contract";
-import { findLinkTargets } from "./link-targets-client";
+import { findLinkTargets, findLinkTargetsIn } from "./link-targets-client";
 
 beforeEach(() => {
   readPluginRoute.mockReset();
@@ -96,6 +96,22 @@ describe("findLinkTargets", () => {
         title: "Promo",
       },
     ]);
+  });
+
+  it("searches in the language being edited when bound to one", async () => {
+    readPluginRoute.mockResolvedValue({ items: [], meta: {} });
+    await findLinkTargetsIn("fr")({ search: "prix" });
+    expect(queryOf(asked().path)).toEqual({
+      q: "prix",
+      order: "collection",
+      locale: "fr",
+    });
+
+    // Unbound to a language, the search names none and the route reads the
+    // default locale.
+    readPluginRoute.mockClear();
+    await findLinkTargetsIn(undefined)({ search: "prix" });
+    expect(queryOf(asked().path)).not.toHaveProperty("locale");
   });
 
   it("rejects when the route fails or answers something else", async () => {

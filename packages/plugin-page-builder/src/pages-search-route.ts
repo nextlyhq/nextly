@@ -87,6 +87,7 @@ import {
   PAGES_SEARCH_EXCLUDE_SEPARATOR,
   PAGES_SEARCH_LIMIT_DEFAULT,
   PAGES_SEARCH_LIMIT_MAX,
+  PAGES_SEARCH_LOCALE_MAX,
   PAGES_SEARCH_MAX,
   PAGES_SEARCH_PARAMS,
   PAGES_SEARCH_ROUTE_PATH,
@@ -124,6 +125,8 @@ export interface PagesSearchRequest {
   readonly before?: PagesCursor;
   /** How the pages are ordered: by title, or by collection. */
   readonly order: PagesSearchOrder;
+  /** The language each page is searched and named in, when the request names one. */
+  readonly locale?: string;
 }
 
 /**
@@ -210,6 +213,7 @@ const querySchema = z.object({
     .pipe(cursorShape)
     .optional(),
   [PAGES_SEARCH_PARAMS.order]: z.enum(["title", "collection"]).optional(),
+  [PAGES_SEARCH_PARAMS.locale]: optionalText(PAGES_SEARCH_LOCALE_MAX),
 });
 
 /**
@@ -227,12 +231,14 @@ export function parsePagesSearchQuery(url: string | URL): PagesSearchRequest {
   const search = query[PAGES_SEARCH_PARAMS.q];
   const exclude = query[PAGES_SEARCH_PARAMS.exclude];
   const before = query[PAGES_SEARCH_PARAMS.before];
+  const locale = query[PAGES_SEARCH_PARAMS.locale];
   return {
     ...(search === undefined ? {} : { search }),
     limit: query[PAGES_SEARCH_PARAMS.limit] ?? PAGES_SEARCH_LIMIT_DEFAULT,
     ...(exclude === undefined ? {} : { exclude }),
     ...(before === undefined ? {} : { before }),
     order: query[PAGES_SEARCH_PARAMS.order] ?? "title",
+    ...(locale === undefined ? {} : { locale }),
   };
 }
 
@@ -922,6 +928,10 @@ function unorderedRead(
     // Where the cursor left this collection; the first read of a search
     // starts at the first row and names none.
     ...(start === 0 ? {} : { offset: start }),
+    // In the language being edited, so a localized title is matched, ordered
+    // and named as the author sees it. Every later page of the search repeats
+    // this read, so it keeps the language too.
+    ...(request.locale === undefined ? {} : { locale: request.locale }),
   };
 }
 

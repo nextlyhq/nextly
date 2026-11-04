@@ -44,6 +44,7 @@ import type {
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import { commitLinkChanges } from "./link-control";
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<
@@ -449,5 +450,164 @@ describe("the link group", () => {
     fireEvent.change(search(), { target: { value: "example.com" } });
     fireEvent.keyDown(search(), { key: "Enter" });
     expect(written(editor)).toEqual({ link: "https://example.com" });
+  });
+});
+
+describe("a stored link the host cannot name", () => {
+  it("shows an entry reference as itself without a search, and still clears it", () => {
+    const editor = mount(
+      "acme/button",
+      { label: "Go", entryCollection: "landing", entryId: "l-1" },
+      undefined
+    );
+    expect(trigger().getAttribute("aria-label")).toBe(
+      "Link: An entry in landing, l-1. Change"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+    expect(written(editor)).toEqual({ label: "Go" });
+  });
+
+  it("says a failed lookup failed, and asks again once when the link is next focused", async () => {
+    let failing = true;
+    const findLinkTargets = vi.fn(async (): Promise<readonly LinkTarget[]> => {
+      if (failing) throw new Error("offline");
+      return TARGETS;
+    });
+    mount(
+      "acme/button",
+      { entryCollection: "landing", entryId: "l-1" },
+      { findLinkTargets }
+    );
+    await screen.findByRole("button", {
+      name: "Link: The linked entry couldn't be loaded, landing. Change",
+    });
+    const asked = findLinkTargets.mock.calls.length;
+    // Not asked again on its own, however often the panel draws.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+    expect(findLinkTargets).toHaveBeenCalledTimes(asked);
+
+    failing = false;
+    fireEvent.focus(trigger());
+    await screen.findByRole("button", {
+      name: "Link: Pricing promo, Landing pages. Change",
+    });
+    expect(findLinkTargets.mock.calls.length).toBeGreaterThan(asked);
+  });
+});
+
+describe("collections that share a name", () => {
+  it("lists each collection's pages under its own heading", async () => {
+    const shared: readonly LinkTarget[] = [
+      { id: "a-1", collection: "pages", group: "Pages", title: "Pricing" },
+      { id: "b-1", collection: "docs", group: "Pages", title: "Pricing API" },
+    ];
+    mount("acme/button", {}, { findLinkTargets: vi.fn(async () => shared) });
+    await typeInto("pric");
+    const groups = screen.getAllByRole("group", { name: "Pages" });
+    expect(groups).toHaveLength(2);
+    expect(groups.map(group => group.textContent)).toEqual([
+      expect.stringContaining("Pricing"),
+      expect.stringContaining("Pricing API"),
+    ]);
+  });
+});
+
+/**
+ * A button whose entry id is not content, inside a `contentOnly` area: its
+ * address may change there and half of its entry reference may not.
+ */
+function registerHeld(): void {
+  register();
+  registerBlocks(
+    [
+      {
+        name: "acme/half-button",
+        version: 1,
+        description: "A button whose entry id is fixed by an area.",
+        example: { props: {} },
+        editor: { label: "Half button" },
+        props: {
+          label: { label: "Label", role: "content", type: "text" },
+          href: { label: "Link", role: "content", type: "url" },
+          entryCollection: { role: "content", type: "text" },
+          entryId: { type: "text" },
+        },
+        render: () => null,
+      },
+      {
+        name: "acme/frame",
+        version: 1,
+        description: "A frame whose children keep their design.",
+        example: { props: {} },
+        editor: { label: "Frame" },
+        props: {},
+        slots: { children: { lock: "contentOnly" } },
+        render: () => null,
+      },
+    ] as never,
+    { source: "link-control-held-test" }
+  );
+}
+
+/** An editor over one block, selected, inside a `contentOnly` frame. */
+function heldEditorFor(type: string, props: Record<string, unknown>) {
+  const editor = editorFor(type, props);
+  const document = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: { children: [{ id: "a", type, version: 1, props }] },
+      },
+    ],
+  } as unknown as BlockDocument;
+  Object.assign(editor, {
+    document,
+    apply: vi.fn(() => document),
+  });
+  return editor;
+}
+
+describe("a link inside a contentOnly area", () => {
+  it("holds a destination the area holds in part, and writes nothing", () => {
+    registerHeld();
+    const editor = heldEditorFor("acme/half-button", { href: "/x" });
+    render(<InspectorPanel editor={editor} />);
+    const control = trigger();
+    expect(control.matches(":disabled")).toBe(true);
+    expect(control.closest("fieldset[aria-describedby]")).not.toBeNull();
+    // Asked directly, the write refuses the whole destination rather than
+    // storing the address without the entry reference it replaces.
+    expect(
+      commitLinkChanges(editor, "a", {
+        href: "/pricing",
+        entryCollection: undefined,
+        entryId: undefined,
+      })
+    ).toBeNull();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("still clears a link the area lets change, leaving its held target and rel", () => {
+    registerHeld();
+    const editor = heldEditorFor("acme/heading", {
+      text: "Hi",
+      href: "/x",
+      target: "_blank",
+      rel: "nofollow",
+    });
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+    expect(written(editor)).toEqual({
+      text: "Hi",
+      target: "_blank",
+      rel: "nofollow",
+    });
   });
 });

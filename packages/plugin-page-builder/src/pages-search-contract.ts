@@ -17,7 +17,11 @@
  */
 import type { PaginationMeta } from "nextly";
 
-import { ENTRIES_SEARCH_MAX, ENTRIES_UNTITLED } from "./entries-contract";
+import {
+  ENTRIES_LOCALE_MAX,
+  ENTRIES_SEARCH_MAX,
+  ENTRIES_UNTITLED,
+} from "./entries-contract";
 
 /** Where the editor searches the site's pages, under this plugin's namespace. */
 export const PAGES_SEARCH_ROUTE_PATH = "/pages/search";
@@ -52,6 +56,13 @@ export const PAGES_SEARCH_MAX: typeof ENTRIES_SEARCH_MAX = ENTRIES_SEARCH_MAX;
 export const PAGES_UNTITLED: typeof ENTRIES_UNTITLED = ENTRIES_UNTITLED;
 
 /**
+ * The longest locale code the route accepts. The entries route's figure,
+ * derived rather than restated: both name the language an editor reads in.
+ */
+export const PAGES_SEARCH_LOCALE_MAX: typeof ENTRIES_LOCALE_MAX =
+  ENTRIES_LOCALE_MAX;
+
+/**
  * The query parameter names, spelled once for the client that writes them and
  * the route that reads them.
  */
@@ -61,6 +72,7 @@ export const PAGES_SEARCH_PARAMS = {
   exclude: "exclude",
   before: "before",
   order: "order",
+  locale: "locale",
 } as const;
 
 /**
@@ -181,6 +193,11 @@ export interface PagesSearchQuery {
   readonly before?: string;
   /** How the pages are ordered; by title when absent. */
   readonly order?: PagesSearchOrder;
+  /**
+   * The language to search and name the pages in: the one being edited, so a
+   * localized title reads as the author sees it. The default locale when absent.
+   */
+  readonly locale?: string;
 }
 
 /**
@@ -209,6 +226,9 @@ export function pagesSearchPath(query: PagesSearchQuery = {}): string {
   // The default is left out, as an absent value is.
   if (query.order === "collection") {
     params.set(PAGES_SEARCH_PARAMS.order, query.order);
+  }
+  if (query.locale !== undefined && query.locale !== "") {
+    params.set(PAGES_SEARCH_PARAMS.locale, query.locale);
   }
   const search = params.toString();
   return search === ""

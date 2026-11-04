@@ -96,6 +96,22 @@ describe("linkGroupOf", () => {
     expect(linkGroupOf(propsOf({ href: { type: "text" } }))).toBeUndefined();
   });
 
+  it("folds a target into the switch only when it is exactly this tab or a new tab", () => {
+    const withTarget = (options: string[]) =>
+      linkGroupOf(
+        propsOf({
+          href: { type: "url" },
+          target: { type: "select", options },
+        })
+      )?.target;
+    expect(withTarget(["_self", "_blank"])).toBe("target");
+    expect(withTarget(["_blank", "_self"])).toBe("target");
+    // A choice the switch could not show keeps the target's own menu.
+    expect(withTarget(["_self", "_blank", "_parent"])).toBeUndefined();
+    expect(withTarget(["_blank", "preview"])).toBeUndefined();
+    expect(withTarget(["_blank"])).toBeUndefined();
+  });
+
   it("leaves a sibling out when its type is not one the group writes", () => {
     const group = linkGroupOf(
       propsOf({

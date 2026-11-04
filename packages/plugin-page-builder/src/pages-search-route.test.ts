@@ -117,6 +117,7 @@ describe("the client's path", () => {
       limit: 3,
       exclude: { collection: "pages", id: "p:1" },
       order: "collection",
+      locale: "fr",
     });
     // Round-tripped through the route's own parser, so the two spellings are
     // held together by behaviour rather than by a second copy of the names.
@@ -125,6 +126,7 @@ describe("the client's path", () => {
       limit: 3,
       exclude: { collection: "pages", id: "p:1" },
       order: "collection",
+      locale: "fr",
     });
   });
 });
@@ -225,6 +227,32 @@ const request = (
 /** The collections a run read, in the order it read them. */
 const readCollections = (find: ReturnType<typeof vi.fn>) =>
   find.mock.calls.map(call => (call[0] as PagesFindArgs).collection);
+
+describe("the language a search reads in", () => {
+  it("reads every page of the search in the locale the request names", async () => {
+    const { reads, find } = readsOver([record("pages")], async () =>
+      rows([{ id: "p-1", title: "Tarifs" }])
+    );
+
+    await readPagesSearch(request({ locale: "fr", search: "tar" }), reads);
+
+    expect(find).toHaveBeenCalled();
+    for (const [args] of find.mock.calls) {
+      expect((args as PagesFindArgs).locale).toBe("fr");
+    }
+  });
+
+  it("names no locale when the request names none, so core reads the default", async () => {
+    const { reads, find } = readsOver([record("pages")], async () => rows([]));
+
+    await readPagesSearch(request(), reads);
+
+    expect(find).toHaveBeenCalled();
+    for (const [args] of find.mock.calls) {
+      expect(args).not.toHaveProperty("locale");
+    }
+  });
+});
 
 describe("which collections are searched", () => {
   it("reads only a collection with a Page Builder field, never another", async () => {

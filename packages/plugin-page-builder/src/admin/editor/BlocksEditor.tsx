@@ -63,7 +63,7 @@ import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
-import { findLinkTargets } from "../link-targets-client";
+import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
@@ -375,8 +375,8 @@ function borrowedServices(): ContentServices {
 /**
  * The borrowed services with this editor's open-passage registry and its
  * language, one object per registry and language so the panel sees the same
- * one on every render. A relation search reads titles in the language being
- * edited.
+ * one on every render. A relation search and a link's search read titles in
+ * the language being edited.
  */
 const servicesByPassages = new WeakMap<
   OpenPassages,
@@ -402,6 +402,9 @@ function servicesFor(
       readMedia,
       findEntries: query =>
         findEntries(locale === undefined ? query : { ...query, locale }),
+      // The same language for a link's search, so a page is found and named
+      // as the author reads it.
+      findLinkTargets: findLinkTargetsIn(locale),
     };
     byLocale.set(key, services);
   }

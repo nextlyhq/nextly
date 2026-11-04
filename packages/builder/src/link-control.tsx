@@ -90,12 +90,14 @@ const LOOKUP_LIMIT = 20;
 type FindLinkTargets = NonNullable<ContentServices["findLinkTargets"]>;
 
 /**
- * Write the props `changes` names on one block, as one edit.
+ * Write the props `changes` names on one block, as one edit, or none of them.
  *
- * Each prop is asked whether it may change where the block sits, as a single
- * prop's commit asks: inside a `contentOnly` area a link may change while its
- * target may not, and that change still goes through without the props the
- * area holds. Nothing writable, nothing is written.
+ * Every prop is asked whether it may change where the block sits, as a single
+ * prop's commit asks, and one that may not refuses the whole edit. A pick
+ * changes a destination across props (an address and the entry reference it
+ * replaces), and writing only the ones a `contentOnly` area allows would leave
+ * a destination half saved. The group asks first and sends only what may
+ * change; this holds the rule for whatever calls it.
  *
  * @returns the document after the edit, or `null` when it was not applied
  */
@@ -106,18 +108,17 @@ export function commitLinkChanges(
 ): BlockDocument | null {
   const document = editor.document;
   const view = lockViewOf(editor);
-  const allowed = Object.fromEntries(
-    Object.entries(changes).filter(([name]) =>
-      propIsWritable(document, nodeId, name, view)
-    )
-  );
-  if (Object.keys(allowed).length === 0) return null;
+  const names = Object.keys(changes);
+  if (names.length === 0) return null;
+  if (!names.every(name => propIsWritable(document, nodeId, name, view))) {
+    return null;
+  }
   const node = findNode(document.nodes, nodeId);
   if (node === undefined) return null;
   return editor.apply({
     kind: "update",
     id: nodeId,
-    patch: { props: withChanges(node.props, allowed) },
+    patch: { props: withChanges(node.props, changes) },
   });
 }
 
@@ -183,22 +184,43 @@ function linkKey(value: LinkValue): string | undefined {
 }
 
 /**
+ * What is known of the page or entry a stored link names.
+ *
+ * - `none`: nothing can be looked up, because the link is a typed address,
+ *   or because the host lends no search to look it up with.
+ * - `loading`, then `found` or `missing`: the lookup ran, and either named it
+ *   or found nothing the author can open.
+ * - `failed`: the lookup itself failed, which says nothing about the entry,
+ *   so it is kept apart from `missing` and tried again.
+ */
+type StoredLookup =
+  | { readonly kind: "none" }
+  | { readonly kind: "loading" }
+  | { readonly kind: "found"; readonly target: LinkTarget }
+  | { readonly kind: "missing" }
+  | { readonly kind: "failed" };
+
+/**
  * The page or entry the stored link names, looked up once per link: an entry
  * by its collection and id, and a path by its address, first among the pages
  * whose title reads like its last part, then among the first pages listed,
- * since a slug need not read like its page's title. `undefined` while it is
- * read or when there is nothing to look up; `null` when nothing the author can
- * open matches, which the chip says by showing the address itself.
+ * since a slug need not read like its page's title.
+ *
+ * A failed lookup is not repeated on its own, so a host that is down is not
+ * asked again on every render. `retry` asks again, once, after a failure: the
+ * control calls it when the author comes back to the link.
  */
 function useStoredTarget(
   find: FindLinkTargets | undefined,
   value: LinkValue
-): LinkTarget | null | undefined {
+): { lookup: StoredLookup; retry: () => void } {
   const key = linkKey(value);
   const [found, setFound] = React.useState<{
     key: string;
-    target: LinkTarget | null;
+    lookup: StoredLookup;
   }>();
+  // Bumped by `retry`, so the effect below runs again for the same link.
+  const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     if (key === undefined || find === undefined) return;
     const controller = new AbortController();
@@ -207,8 +229,8 @@ function useStoredTarget(
       kind === "entry"
         ? `${target.collection}:${target.id}` === rest.join(":")
         : target.path === rest.join(":");
-    const settle = (target: LinkTarget | null): void => {
-      if (!controller.signal.aborted) setFound({ key, target });
+    const settle = (lookup: StoredLookup): void => {
+      if (!controller.signal.aborted) setFound({ key, lookup });
     };
     const words = kind === "entry" ? "" : searchWordsOf(rest.join(":"));
     const searches = words === "" ? [""] : [words, ""];
@@ -224,13 +246,28 @@ function useStoredTarget(
       }
       return null;
     };
-    lookUp().then(settle, () => settle(null));
+    lookUp().then(
+      target =>
+        settle(
+          target === null ? { kind: "missing" } : { kind: "found", target }
+        ),
+      () => settle({ kind: "failed" })
+    );
     return () => controller.abort();
-  }, [find, key]);
-  if (key === undefined || found === undefined || found.key !== key) {
-    return undefined;
-  }
-  return found.target;
+  }, [find, key, attempt]);
+  const lookup: StoredLookup =
+    key === undefined || find === undefined
+      ? { kind: "none" }
+      : found === undefined || found.key !== key
+        ? { kind: "loading" }
+        : found.lookup;
+  const retry = (): void => {
+    if (lookup.kind !== "failed") return;
+    // Shown as loading while it is asked again, and read again only once.
+    setFound(undefined);
+    setAttempt(at => at + 1);
+  };
+  return { lookup, retry };
 }
 
 /** One row of the open list. */
@@ -310,34 +347,50 @@ interface ChipWords {
   readonly detail?: string;
 }
 
+/** The stored entry reference in words, from what is known of it. */
+function entryWords(
+  value: { readonly collection: string; readonly id: string },
+  lookup: StoredLookup
+): ChipWords {
+  const as = (title: string, detail: string): ChipWords => ({
+    page: true,
+    kind: "web",
+    title,
+    detail,
+  });
+  switch (lookup.kind) {
+    case "found":
+      return as(lookup.target.title, lookup.target.group);
+    case "loading":
+      return { page: true, kind: "web", title: "Loading the linked entry…" };
+    case "missing":
+      return as("An entry you can't open here", value.collection);
+    case "failed":
+      return as("The linked entry couldn't be loaded", value.collection);
+    case "none":
+      // No search to name it with: the reference as it is stored, which
+      // still says where the link goes and can still be cleared.
+      return as(`An entry in ${value.collection}`, value.id);
+  }
+}
+
 /** The stored link in words, from what is known of it. */
 function chipWords(
   value: LinkValue,
-  target: LinkTarget | null | undefined
+  lookup: StoredLookup
 ): ChipWords | undefined {
   if (value.kind === "none") return undefined;
-  if (value.kind === "entry") {
-    if (target === undefined) {
-      return { page: true, kind: "web", title: "Loading the linked entry…" };
-    }
-    return target === null
-      ? {
-          page: true,
-          kind: "web",
-          title: "An entry you can't open here",
-          detail: value.collection,
-        }
-      : { page: true, kind: "web", title: target.title, detail: target.group };
-  }
-  if (target !== undefined && target !== null) {
+  if (value.kind === "entry") return entryWords(value, lookup);
+  if (lookup.kind === "found") {
     return {
       page: true,
       kind: "path",
-      title: target.title,
+      title: lookup.target.title,
       detail: value.href,
     };
   }
-  // An address that names no page the author can open is shown as itself.
+  // An address that names no page the author can open, or that could not be
+  // looked up, is shown as itself.
   return {
     page: false,
     kind: linkKindOf(value.href) ?? "web",
@@ -412,6 +465,7 @@ function useChipWords(
 ): {
   words: ChipWords | undefined;
   remember: (key: string | undefined, target: LinkTarget) => void;
+  retry: () => void;
 } {
   const [picked, setPicked] = React.useState<{
     key: string | undefined;
@@ -423,13 +477,17 @@ function useChipWords(
     picked !== null && picked.key !== undefined && picked.key === key
       ? picked.target
       : undefined;
-  const looked = useStoredTarget(
+  const { lookup, retry } = useStoredTarget(
     pickedHere === undefined ? find : undefined,
     value
   );
   return {
-    words: chipWords(value, pickedHere ?? looked),
+    words: chipWords(
+      value,
+      pickedHere === undefined ? lookup : { kind: "found", target: pickedHere }
+    ),
     remember: (at, target) => setPicked({ key: at, target }),
+    retry,
   };
 }
 
@@ -460,12 +518,14 @@ function LinkControl({
 }: LinkControlProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const [typed, setTyped] = React.useState("");
-  const { words, remember } = useChipWords(find, value);
+  const { words, remember, retry } = useChipWords(find, value);
 
   const openWith = (next: boolean): void => {
     // Opened on a typed address, the field starts from it, so a typo is
     // fixed rather than typed again; on a page or an entry it starts empty.
+    // A lookup of the stored link that failed is tried again as it opens.
     if (next) {
+      retry();
       setTyped(
         value.kind === "address" && words?.page !== true ? value.href : ""
       );
@@ -496,6 +556,8 @@ function LinkControl({
               aria-haspopup="listbox"
               aria-expanded={open}
               aria-label={triggerLabel(label, words)}
+              // Coming back to a link whose lookup failed asks again, once.
+              onFocus={retry}
               onKeyDown={event => {
                 // Down opens the list, as on any combobox.
                 if (event.key === "ArrowDown" && !open) {
@@ -542,6 +604,9 @@ function LinkControl({
 
 /** One collection's rows, under its heading. */
 interface OptionGroup {
+  /** The collection's slug, which tells two collections apart. */
+  readonly key: string;
+  /** Its heading: the collection's name, which two collections may share. */
   readonly name: string;
   readonly options: LinkOption[];
 }
@@ -554,10 +619,13 @@ function groupsOf(options: readonly LinkOption[]): OptionGroup[] {
   const groups: OptionGroup[] = [];
   for (const option of options) {
     if (option.kind !== "target") continue;
-    const name = option.target.group;
-    const group = groups.find(each => each.name === name);
-    if (group === undefined) groups.push({ name, options: [option] });
-    else group.options.push(option);
+    const key = option.target.collection;
+    const group = groups.find(each => each.key === key);
+    if (group === undefined) {
+      groups.push({ key, name: option.target.group, options: [option] });
+    } else {
+      group.options.push(option);
+    }
   }
   return groups;
 }
@@ -765,8 +833,8 @@ function LinkList({
         {addressFirst ? row(address) : null}
         {groups.map(group => (
           <OptionGroupList
-            key={group.name}
-            id={`${listId}-group-${group.name.replace(/[^a-z0-9-]/gi, "_")}`}
+            key={group.key}
+            id={`${listId}-group-${group.key.replace(/[^a-z0-9-]/gi, "_")}`}
             group={group}
             row={row}
           />
@@ -954,9 +1022,19 @@ export function LinkGroupField({
   const value = linkValueOf(group, values);
   const held = (name: string | undefined): string | undefined =>
     name === undefined || writable(name) ? undefined : reasonId;
+  // The destination is the link and, on a button, the entry reference that
+  // replaces it: a pick writes them together, so it may change only when all
+  // of them may. Otherwise the link is drawn held, pointing at the reason.
+  const destination = [
+    group.link,
+    ...(group.entry === undefined
+      ? []
+      : [group.entry.collection, group.entry.id]),
+  ];
+  const destinationWritable = destination.every(writable);
   return (
     <div className="nx-link-group" data-link-group={group.link}>
-      <HeldByLock reasonId={held(group.link)}>
+      <HeldByLock reasonId={destinationWritable ? undefined : reasonId}>
         <div className="nx-inspector__field" data-content-control="link">
           <Label htmlFor={id}>{label}</Label>
           <LinkControl
@@ -964,14 +1042,28 @@ export function LinkGroupField({
             label={label}
             value={value}
             entryLinks={group.entry !== undefined}
-            disabled={!writable(group.link)}
+            disabled={!destinationWritable}
             find={services?.findLinkTargets}
             onPick={pick => {
               const changes = pickChanges(group, pick);
-              if (changes !== undefined) onCommitMany(changes);
+              if (changes !== undefined && destinationWritable) {
+                onCommitMany(changes);
+              }
             }}
             // Clears the target and the rel with the link: see `clearChanges`.
-            onClear={() => onCommitMany(clearChanges(group))}
+            // Where an area holds the target or the rel, the link still
+            // clears and they stay as the area keeps them; the destination
+            // itself is never cleared in part.
+            onClear={() => {
+              if (!destinationWritable) return;
+              onCommitMany(
+                Object.fromEntries(
+                  Object.entries(clearChanges(group)).filter(
+                    ([name]) => destination.includes(name) || writable(name)
+                  )
+                )
+              );
+            }}
           />
         </div>
       </HeldByLock>
