@@ -34,6 +34,8 @@ const DOCS = "docs";
 const LANGUAGES = `dc_${DOCS}_locales`;
 /** No languages: the plainest entry there is. */
 const NOTES = "notes";
+/** Draft and published, so a published entry holds an edit as a working draft. */
+const POSTS = "posts";
 /** A person whose saves are named in a refusal. */
 const ANA = {
   id: "user-ana",
@@ -65,6 +67,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineCollection({
         slug: NOTES,
         access: OPEN,
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: POSTS,
+        status: true,
+        versions: { drafts: true },
+        access: { ...OPEN, publish: () => true, unpublish: () => true },
         fields: [text({ name: "title" })],
       }),
     ],
@@ -767,6 +776,49 @@ describe.each(getConfiguredTestDialects())(
           }
         }
       );
+    });
+
+    it("dates the change by when the counter moved, a held draft included, and gives no time for a row never saved since", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: POSTS, overrideAccess: true },
+        { title: "live", status: "published" }
+      );
+      const id = idOf(created);
+      // Past SQLite's whole second, so the held draft's moment is not the
+      // row's last update.
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      // A published entry holds this edit as a working draft: the counter and
+      // its time move, `updated_at` does not.
+      const held = await update(t, POSTS, id, { title: "held" }, { user: ANA });
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      const row = await stored(t, `dc_${POSTS}`, id);
+      expect(new Date(row._changed_at as Date).getTime()).toBeGreaterThan(
+        new Date(row.updated_at as Date).getTime()
+      );
+
+      const refused = await update(t, POSTS, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(refused.publicData).toMatchObject({
+        changedBy: { kind: "person", name: ANA.name },
+        changedAt: new Date(row._changed_at as Date).toISOString(),
+      });
+
+      // A row from before the column existed: who and when are unknown.
+      await t.adapter.executeQuery(
+        `UPDATE ${q(t, `dc_${POSTS}`)} SET ${q(t, "_changed_at")} = NULL, ${q(t, "_changed_by_kind")} = NULL, ${q(t, "_changed_by_id")} = NULL WHERE ${q(t, "id")} = ${t.adapter.dialect === "postgresql" ? "$1" : "?"}`,
+        [id]
+      );
+      const unknown = await update(t, POSTS, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(unknown).toMatchObject({ code: "STALE_VERSION" });
+      expect(unknown.publicData).not.toHaveProperty("changedBy");
+      expect(unknown.publicData).not.toHaveProperty("changedAt");
     });
   }
 );

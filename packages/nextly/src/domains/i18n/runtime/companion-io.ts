@@ -484,7 +484,8 @@ export async function claimCompanionRevision(
   const { dialect } = adapter;
   const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
   const p = (n: number) => (dialect === "postgresql" ? `$${n}` : "?");
-  const changer = changerColumns(savedBy);
+  // Who and when, encoded as the row's other writes encode them.
+  const changer = translationChangeColumns(savedBy, dialect);
   const changerNames = Object.keys(changer);
   const table = q(companionTableName);
   // How many rows the statement just run changed: PostgreSQL answers with

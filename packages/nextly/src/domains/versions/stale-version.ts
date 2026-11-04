@@ -29,7 +29,6 @@ import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 import type { StaleVersionPublicData } from "../../errors/public-data";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
-import { COMPANION_UPDATED_AT_COLUMN } from "../i18n/companion-columns";
 import {
   claimCompanionRevision,
   companionWriteVia,
@@ -38,6 +37,7 @@ import type { UserContext } from "../singles/types";
 
 import { peopleById } from "./author-hydration";
 import {
+  CHANGED_AT_COLUMN,
   DOCUMENT_OVERWRITE_KEY,
   DOCUMENT_REVISION_COLUMN,
   encodeDocumentVersion,
@@ -248,24 +248,35 @@ function textOrNull(value: unknown): string | null {
 }
 
 /**
- * When a row last changed, as every judgement and every picker orders it: the
- * one source of "when", so no two callers can disagree about which change
- * came last. The row's own update time.
+ * When a row's counter last moved, as every judgement and every picker
+ * orders it: the one source of "when", so no two callers can disagree about
+ * which change came last. Its `_changed_at`, set in the same statement as
+ * the counter, so a save that moves the counter and not `updated_at` (a held
+ * draft, a discard, publishing every language) is still dated. Null for a row
+ * not saved since the column was added, which a refusal then gives no time.
+ *
+ * Read through a table's runtime model it is already a `Date`; read raw, as
+ * a translation row is, SQLite answers its whole seconds.
  */
 function changedAtOf(
   row: Record<string, unknown>,
-  column: string
+  dialect: SupportedDialect
 ): Date | null {
-  const value = row[column];
+  const value = row[CHANGED_AT_COLUMN];
   if (value === null || value === undefined) return null;
-  const at = value instanceof Date ? value : new Date(value as string | number);
+  const at =
+    value instanceof Date
+      ? value
+      : typeof value === "number" && dialect === "sqlite"
+        ? new Date(value * 1000)
+        : new Date(value as string | number);
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
 function stateOf(
   part: string,
   row: Record<string, unknown>,
-  atColumn: string
+  dialect: SupportedDialect
 ): PartState {
   return {
     part,
@@ -275,7 +286,7 @@ function stateOf(
       id: textOrNull(row._changed_by_id),
       principalKind: textOrNull(row._changed_by_principal_kind),
     },
-    at: changedAtOf(row, atColumn),
+    at: changedAtOf(row, dialect),
   };
 }
 
@@ -315,14 +326,14 @@ export async function readDocumentRevision(
   }
 ): Promise<DocumentRevisionState | undefined> {
   const [row] = await db.select<Record<string, unknown>>(args.table, {
-    columns: [DOCUMENT_REVISION_COLUMN, ...CHANGER_COLUMNS, "updated_at"],
+    columns: [DOCUMENT_REVISION_COLUMN, ...CHANGER_COLUMNS, CHANGED_AT_COLUMN],
     where: { and: [{ column: "id", op: "=", value: args.id }] },
     limit: 1,
     ...(args.forUpdate ? { forUpdate: true } : {}),
   });
   if (!row) return undefined;
   const state: DocumentRevisionState = {
-    main: stateOf("main", row, "updated_at"),
+    main: stateOf("main", row, args.dialect),
     languages: {},
   };
   const locales = args.languages?.locales ?? [];
@@ -337,7 +348,7 @@ export async function readDocumentRevision(
     "_locale",
     DOCUMENT_REVISION_COLUMN,
     ...CHANGER_COLUMNS,
-    COMPANION_UPDATED_AT_COLUMN,
+    CHANGED_AT_COLUMN,
   ];
   const rows = (await db.execute(
     `SELECT ${columns.map(q).join(", ")} FROM ${q(args.languages.table)} WHERE ${q("_parent")} = ${p(1)} AND ${q("_locale")} IN (${locales.map((_, i) => p(i + 2)).join(", ")})`,
@@ -347,7 +358,7 @@ export async function readDocumentRevision(
   for (const locale of locales) {
     const found = byLocale.get(locale);
     state.languages[locale] = found
-      ? stateOf(locale, found, COMPANION_UPDATED_AT_COLUMN)
+      ? stateOf(locale, found, args.dialect)
       : absentPart(locale);
   }
   return state;

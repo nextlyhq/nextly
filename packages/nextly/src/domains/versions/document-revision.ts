@@ -138,7 +138,7 @@ export function changerColumns(
 }
 
 /** The column holding when a row's counter last moved. */
-const CHANGED_AT_COLUMN = "_changed_at";
+export const CHANGED_AT_COLUMN = "_changed_at";
 
 /**
  * What one save adds to the UPDATE of a document's own row: the counter
