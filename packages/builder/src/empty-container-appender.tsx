@@ -46,11 +46,12 @@
  * against: unscaled, it is wrong by `(1 - scale) * inset`, exactly zero at
  * 100% and invisible in precisely the configuration most testing happens in.
  *
- * ## A fixed, centred square rather than a rectangle sized to the container
+ * ## A fixed, centred control rather than a rectangle sized to the container
  *
  * The button does not stretch to the measured rectangle's own width and
- * height. It is a fixed {@link APPENDER_SIZE_PX} square centred inside it,
- * and that is a correction rather than a style choice.
+ * height. It is a fixed {@link APPENDER_WIDTH_PX} by {@link APPENDER_SIZE_PX}
+ * control centred inside it, wide enough for its words, and that is a
+ * correction rather than a style choice.
  *
  * `emptySlotOf` names which SLOT is empty, but there is no DOM address for
  * "slot X of node Y" to measure — `NODE_ID_ATTRIBUTE` marks a node's whole
@@ -381,8 +382,17 @@ function controlRectFor(
 const APPENDER_SIZE_PX = 44;
 
 /**
- * A {@link APPENDER_SIZE_PX} square centred inside a rectangle, never larger
- * than the rectangle itself.
+ * The control's width, in the canvas's content pixels: room for the "+" and
+ * its words. A narrower container clamps it, and the words then shorten.
+ */
+const APPENDER_WIDTH_PX = 320;
+
+/** What the control says, beside its "+". */
+const APPENDER_WORDS = "Drop a block here, or click to add one";
+
+/**
+ * A control of the given size centred inside a rectangle, never larger than
+ * the rectangle itself.
  *
  * See the module docblock ("A fixed, centred square") for why the button is
  * not sized to the measured rectangle, and ("Never outside its own container")
@@ -396,9 +406,13 @@ const APPENDER_SIZE_PX = 44;
  * unclamped one; there is no `min-width`, so a legitimately narrow empty
  * container — a column a few pixels wide — is the case that needs it.
  */
-export function centeredControlRect(rect: Rect, size: number): Rect {
-  const width = Math.min(size, rect.width);
-  const height = Math.min(size, rect.height);
+export function centeredControlRect(
+  rect: Rect,
+  controlWidth: number,
+  controlHeight: number
+): Rect {
+  const width = Math.min(controlWidth, rect.width);
+  const height = Math.min(controlHeight, rect.height);
   return {
     x: rect.x + (rect.width - width) / 2,
     y: rect.y + (rect.height - height) / 2,
@@ -698,7 +712,11 @@ export function EmptyContainerAppenders({
       const measured = space.place(canvasContentRect(target, root));
       next.set(container.id, {
         kind: "measured",
-        rect: centeredControlRect(measured, APPENDER_SIZE_PX),
+        rect: centeredControlRect(
+          measured,
+          APPENDER_WIDTH_PX,
+          APPENDER_SIZE_PX
+        ),
       });
     }
     setPlacements(next);
@@ -787,6 +805,11 @@ export function EmptyContainerAppenders({
             onClick={() => onAppend(container.id)}
           >
             <Plus size={16} aria-hidden="true" />
+            {/* The words the editor's design gives an empty box, so the "+"
+                says what a drop or a press here does. */}
+            <span className="nx-empty-container-appenders__words">
+              {APPENDER_WORDS}
+            </span>
           </button>
         );
       })}

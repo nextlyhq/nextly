@@ -374,6 +374,8 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  */
 export { EmptyContainerAppenders } from "./empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+export { PageInserters } from "./page-inserters";
+export type { PageInsertersProps } from "./page-inserters";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook

@@ -29,6 +29,7 @@ import {
   DropIndicator,
   DropRefusal,
   EmptyContainerAppenders,
+  PageInserters,
   InspectorPanel,
   RepairNotice,
   OnboardingChecklist,
@@ -711,6 +712,23 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     // inside, so a click on a selected block adds after it.
                     editor.select(nodeId);
                     openInsertPanel(nodeId);
+                  }}
+                />
+                {/*
+                  The empty page's start card and the "+" between sections.
+                  The "+" selects the section above its gap and opens Add,
+                  which adds after the selected block and names the place;
+                  the start card opens Add on a page with nothing to select.
+                  Hidden mid-drag, when the drag's own line says where a block
+                  lands.
+                */}
+                <PageInserters
+                  document={editor.document}
+                  hidden={dragging}
+                  onStart={() => openInsertPanel()}
+                  onAddAfter={nodeId => {
+                    editor.select(nodeId);
+                    openInsertPanel();
                   }}
                 />
               </>
