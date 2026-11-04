@@ -2590,6 +2590,20 @@ export class CollectionQueryService extends BaseService {
   // had already diverged on where the owner column is cleared.
   // fallow-ignore-next-line complexity
   /**
+   * A translated collection's translation table when it is there to read;
+   * null for one that keeps no translations or whose table is not there yet,
+   * whose translated values then live on its own rows.
+   */
+  private async translationTableIfReady(
+    localized: boolean,
+    tableName: string
+  ): Promise<string | null> {
+    if (!localized || this.localization === undefined) return null;
+    const table = `${tableName}_locales`;
+    return (await isCompanionReady(this.adapter, table)) ? table : null;
+  }
+
+  /**
    * The translation counters of `rows`, read before their translated content
    * (`languageCountersBeforeContent`); undefined for a collection that keeps
    * no translations or whose table is not there yet.
@@ -2599,19 +2613,15 @@ export class CollectionQueryService extends BaseService {
     collection: unknown,
     collectionName: string
   ) {
-    const table = `${collectionTableName(collection, collectionName)}_locales`;
-    const translated =
-      (collection as { localized?: boolean }).localized === true &&
-      this.localization !== undefined;
     return languageCountersBeforeContent(
       (statement, values) =>
         this.adapter.executeQuery<Record<string, unknown>>(statement, values),
       {
         dialect: this.dialect,
-        languagesTable:
-          translated && (await isCompanionReady(this.adapter, table))
-            ? table
-            : null,
+        languagesTable: await this.translationTableIfReady(
+          (collection as { localized?: boolean }).localized === true,
+          collectionTableName(collection, collectionName)
+        ),
         localization: this.localization,
         ids: rows.flatMap(row => (typeof row.id === "string" ? [row.id] : [])),
       }
@@ -2930,12 +2940,10 @@ export class CollectionQueryService extends BaseService {
       dialect: this.dialect,
       // A translated collection whose table is not there yet keeps its
       // translated values on its own row, and its versions name none.
-      languagesTable:
-        params.localized &&
-        this.localization &&
-        (await isCompanionReady(this.adapter, `${tableName}_locales`))
-          ? `${tableName}_locales`
-          : null,
+      languagesTable: await this.translationTableIfReady(
+        params.localized,
+        tableName
+      ),
       localization: this.localization,
       locale: params.locale,
       known: params.knownLanguages,
