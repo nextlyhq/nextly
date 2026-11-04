@@ -11,7 +11,7 @@ Before anything runs, the configuration's plugins are resolved: their dependenci
 
 ## Fix
 
-Fix what the Why line names: add or update the plugin a `dependsOn` names, install a release whose `nextly` range includes the installed Nextly, list a capability the plugin declares (such as `db.rawSqlPlugins`), or correct the declaration. See [Plugin error reference](/docs/plugins/error-reference).
+Fix what the Why line names: add or update the plugin a `dependsOn` names, install a release whose `nextly` range includes the installed Nextly, list a capability the plugin declares (such as `db.rawSqlPlugins` or `auth.loginPlugins`), or correct the declaration. A capability a `setup` transformer added — `rawSql`, or the login capability in either spelling (`capabilities.auth.login`, a `determineUser` hook) — is declared in the manifest of the plugin the app configures, not granted from a transformer. See [Plugin error reference](/docs/plugins/error-reference).
 
 ## Example
 

@@ -121,8 +121,18 @@ async function boot(
   plugins: PluginDefinition[] = []
 ): Promise<TestNextly> {
   captured = undefined;
+  // This test is the app, and it lists the login-capable plugins it installs:
+  // an unlisted one refuses the boot (D13), which is not what these cases exercise.
+  const consent = {
+    rawSql: [] as string[],
+    login: plugins
+      .filter(plugin => plugin.capabilities?.auth?.login === true)
+      .map(plugin => plugin.name),
+  };
   handle = await createTestNextly(
-    dialect === "sqlite" ? { plugins } : { dialect, plugins }
+    dialect === "sqlite"
+      ? { plugins, pluginConsent: consent }
+      : { dialect, plugins, pluginConsent: consent }
   );
   if (dialect === "sqlite") {
     // The SQLite runtime auto-sync does not create the core auth tables.
