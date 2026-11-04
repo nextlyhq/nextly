@@ -50,7 +50,7 @@ import {
   prepareDocumentAsDrawn,
   type BlockResolver,
 } from "@nextlyhq/blocks-react";
-import { layerLabel } from "@nextlyhq/builder";
+import { layerLabel, type ComponentTitleOf } from "@nextlyhq/builder";
 
 import type { PageRenderInputs } from "./page-render-inputs";
 import { documentNodes } from "./page-summary";
@@ -68,7 +68,7 @@ export interface PageSection {
   target: string;
   /** Its place on the page, counting from 1. */
   number: number;
-  /** Its name: the author's, or its block's. */
+  /** Its name: the author's, else its component's title or its block's. */
   label: string;
   /** Its first heading, or its first line of prose; empty when it has none. */
   firstLine: string;
@@ -80,12 +80,15 @@ export interface PageSection {
  * @param value - the field's value, which may not be a document at all
  * @param resolver - where block definitions come from, the preview's own
  * @param render - the site's rendering inputs, the preview's own
+ * @param componentTitle - a placed component's title by id, so its section
+ *   reads as what the author placed, as it does in Layers
  * @returns the sections in page order, or none when nothing would be drawn
  */
 export function pageSections(
   value: unknown,
   resolver: BlockResolver,
-  render: Pick<PageRenderInputs, "limits" | "styleContext" | "definitions">
+  render: Pick<PageRenderInputs, "limits" | "styleContext" | "definitions">,
+  componentTitle?: ComponentTitleOf
 ): PageSection[] {
   // The pipeline expects a document; anything without a node list draws
   // nothing, which is what the preview shows for it too.
@@ -118,7 +121,7 @@ export function pageSections(
       parts: nodes.map(node => node.id),
       target,
       number: index + 1,
-      label: layerLabel(stored.get(target) ?? first, lookup),
+      label: layerLabel(stored.get(target) ?? first, lookup, componentTitle),
       firstLine: text.title ?? text.description ?? "",
     };
   });

@@ -46,9 +46,11 @@ import {
   contentModelKeyOf,
   nodeLocks,
   placementValueIssues,
+  placementVariantIssues,
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
+  variantLockChanges,
   variantNamesIn,
   type BlockDocument,
   type BlockNode,
@@ -88,7 +90,11 @@ import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import { isForest } from "./blocks-document";
-import { LAYERS_LOCK_CHANGED, placedLockMessage } from "./layers-lock-wording";
+import {
+  LAYERS_LOCK_CHANGED,
+  placedLockMessage,
+  variantLockMessage,
+} from "./layers-lock-wording";
 import {
   composedFormsRead,
   lockBaselines,
@@ -203,6 +209,12 @@ export interface CompositionSetup {
    * fence is installed.
    */
   readonly fencedComponents?: () => Promise<FencedComponents>;
+  /**
+   * The ids of the classes the site defines, its code's and its stored ones,
+   * read per write. A write adding a reference to any other is refused.
+   * Absent where the site style cannot be read, and then nothing is refused.
+   */
+  readonly siteClassIds?: () => Promise<ReadonlySet<string>>;
 }
 
 /** Which document a write is to: a collection or a single, its slug, an id. */
@@ -293,6 +305,13 @@ export async function compositionIssues(
   await judgeHostRewrite(document, args, write, setup, report);
   if (savesComponent(write, args.path, setup.store)) {
     await judgeLockedExposures(document, write, setup, report);
+    await judgeVariantLocks({
+      document,
+      args,
+      setup,
+      read: documentReader(source, true),
+      report,
+    });
   }
   // ONE allowance for every composition this save performs, the loop check
   // included, so the bound is on the save rather than on each check.
@@ -405,6 +424,77 @@ function savesComponent(
     write.slug === store.collection &&
     path === store.field
   );
+}
+
+/**
+ * Refuse a component save whose variant changes a block the component locks
+ * in Layers (`variantLockChanges`), naming the block and the variant.
+ *
+ * Judged against the WRITTEN component's locks, so a lock this save adds holds
+ * over a variant already stored, and a create is judged as well as an update.
+ * Drawn with the library a full composition reads, surveyed through every
+ * component the written and stored forms place, so a variant reaching a block
+ * locked inside a nested component is seen. A variant the stored component
+ * already drew the same way is kept. A localized field whose language store
+ * is not ready is kept unjudged, as the page's own locks are.
+ */
+async function judgeVariantLocks(args: {
+  document: BlockDocument;
+  args: Pick<PluginFieldValidateArgs, "path" | "write"> &
+    Partial<Pick<PluginFieldValidateArgs, "field">>;
+  setup: CompositionSetup;
+  read: BoundedReader;
+  report: Report;
+}): Promise<void> {
+  const { document, setup, read, report } = args;
+  const { path, write, field } = args.args;
+  if ((variantNamesIn(document) ?? []).length === 0) return;
+  const stored = await readStoredForms(write, path, [true], isLocalized(field));
+  if (!stored.readable) return;
+  const [newest] = stored.forms;
+  const library = await placedLibrary(
+    [document, ...(newest === undefined ? [] : [newest])],
+    read,
+    setup.limits
+  );
+  const changes = variantLockChanges(document, newest, {
+    limits: setup.limits,
+    components: lookupOf(library),
+  });
+  const label = fieldLabel(field, path);
+  for (const change of changes) {
+    report.add(LAYERS_LOCK_CHANGED, `${label}: ${variantLockMessage(change)}`);
+  }
+}
+
+/** Whether a field is kept per language. */
+function isLocalized(
+  field: Partial<Pick<PluginFieldValidateArgs, "field">>["field"]
+): boolean {
+  return (field as { localized?: unknown } | undefined)?.localized === true;
+}
+
+/** A field's label for an issue, or its path where it has none. */
+function fieldLabel(
+  field: Partial<Pick<PluginFieldValidateArgs, "field">>["field"],
+  path: string
+): string {
+  return typeof field?.label === "string" && field.label !== ""
+    ? field.label
+    : path;
+}
+
+/** Every component the documents place, read into one library. */
+async function placedLibrary(
+  documents: readonly BlockDocument[],
+  read: BoundedReader,
+  limits: DocumentLimits
+): Promise<HeldLibrary> {
+  const library = heldLibrary();
+  for (const placing of documents) {
+    await readEveryPlacedDefinition(placing, library, read, limits);
+  }
+  return library;
 }
 
 /**
@@ -594,6 +684,13 @@ async function judgeOwnComposition(args: {
     stored: args.stored,
     report,
   });
+  await judgePlacementVariants({
+    document,
+    components: lookupOf(library),
+    limits: setup.limits,
+    stored: args.stored,
+    report,
+  });
 }
 
 /**
@@ -735,6 +832,41 @@ async function judgePlacementValues(args: {
   );
   for (const issue of issues) {
     report.add(PLACEMENT_VALUE_CODES[issue.problem], issue.message);
+  }
+}
+
+/**
+ * Refuse a variant the write newly sets on a placement that its component does
+ * not define. Judged against the definitions this form composes with, so every
+ * write path that validates the field, an import included, is held to what the
+ * picker can choose.
+ *
+ * A key the stored document already holds at that placement is kept: a
+ * deleted variant leaves its key on placements, which render the defaults. The
+ * stored forms are read only once something is found; where they cannot be
+ * read (a localized field whose language is not ready), any key found may be
+ * one the stored document already held, so none is refused.
+ */
+async function judgePlacementVariants(args: {
+  document: BlockDocument;
+  components: ComponentLookup;
+  limits: DocumentLimits;
+  stored: () => Promise<StoredRead>;
+  report: Report;
+}): Promise<void> {
+  const { document, components, limits, report } = args;
+  if (placementVariantIssues(document, components, [], limits).length === 0) {
+    return;
+  }
+  const stored = await args.stored();
+  if (!stored.readable) return;
+  for (const issue of placementVariantIssues(
+    document,
+    components,
+    stored.forms,
+    limits
+  )) {
+    report.add("PLACEMENT_VARIANT_UNKNOWN", issue.message);
   }
 }
 
@@ -1332,7 +1464,7 @@ function describeHost(host: HostRef): string {
  */
 interface Footprint {
   readonly complete: boolean;
-  /** Keyed by variant name; the default selection under "". */
+  /** Keyed by variant id; the default selection under "". */
   readonly selections: ReadonlyMap<string, SelectionFootprint>;
   /** Each exposed slot, as the holder type, its slot and its depth. */
   readonly slots: ReadonlyMap<string, string>;

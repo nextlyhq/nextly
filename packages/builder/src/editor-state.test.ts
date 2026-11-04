@@ -1146,6 +1146,277 @@ describe("the locks an edit is held to", () => {
     expect(bare.result.current.composed()).toBeUndefined();
   });
 
+  it("refuses a placement's value on a block its component locks, naming the component", () => {
+    // The component locks "Hero" in Layers and exposes its text; the page
+    // cannot unlock it, so a value for it is refused before it is applied,
+    // as the save would refuse it, and a value for the free block applies.
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { ...headline("hero"), locked: true, name: "Hero" },
+        headline("free"),
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "hero",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "free",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    } as unknown as BlockDocument;
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+          } as BlockNode,
+        ]),
+        definitions: new Map([["promo", promo]]),
+        componentName: id => (id === "promo" ? "Promo" : undefined),
+        onLockRefused,
+      })
+    );
+    const give = (overrides: Record<string, string>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "promo", overrides } },
+    });
+
+    expect(result.current.lockRefusalFor([give({ title: "Changed" })])).toEqual(
+      {
+        code: "layers-locked",
+        label: "Promo",
+        relation: "component",
+        verb: "change",
+      }
+    );
+    act(() => {
+      expect(result.current.apply(give({ title: "Changed" }))).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sentence:
+          "Set by the component Promo. Change it where the component is edited.",
+      })
+    );
+    expect(
+      result.current.lockRefusalFor([give({ strap: "Sale" })])
+    ).toBeUndefined();
+    act(() => {
+      expect(result.current.apply(give({ strap: "Sale" }))).not.toBeNull();
+    });
+  });
+
+  it("refuses an edit that hides a block its component locks, by a value or by a variant", () => {
+    // Hidden, the block leaves no lock on the page after the edit; it is
+    // judged against the page as its components hold it, where it is drawn.
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { ...headline("hero"), locked: true, name: "Hero" },
+        headline("free"),
+      ],
+      exposed: [
+        {
+          id: "heroShown",
+          label: "Hero shown",
+          nodeId: "hero",
+          propPath: "visibility",
+          type: "visibility",
+        },
+        {
+          id: "freeShown",
+          label: "Free shown",
+          nodeId: "free",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+      variants: { quiet: { label: "Quiet", overrides: { heroShown: false } } },
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+          } as BlockNode,
+        ]),
+        definitions: new Map([["promo", promo]]),
+        componentName: () => "Promo",
+      })
+    );
+    const set = (props: Record<string, unknown>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "promo", ...props } },
+    });
+    const refused = {
+      code: "layers-locked",
+      label: "Promo",
+      relation: "component",
+      verb: "change",
+    };
+
+    expect(
+      result.current.lockRefusalFor([set({ overrides: { heroShown: false } })])
+    ).toEqual(refused);
+    expect(result.current.lockRefusalFor([set({ variant: "quiet" })])).toEqual(
+      refused
+    );
+    // CONTROL: hiding the free block is the placement's to decide.
+    expect(
+      result.current.lockRefusalFor([set({ overrides: { freeShown: false } })])
+    ).toBeUndefined();
+  });
+
+  /** A component locking "Hero" and exposing its text, and a free block's. */
+  const lockingPromo = (heroText = "hero") =>
+    ({
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          ...headline("hero"),
+          props: { text: heroText, align: "left" },
+          locked: true,
+          name: "Hero",
+        },
+        headline("free"),
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "hero",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "free",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    }) as unknown as BlockDocument;
+
+  it("refuses a value on a block locked by a component placed in another's slot", () => {
+    // The promo is the page's own placement, inside the frame's exposed row:
+    // the frame's baseline drops it with the row's content, so it is held at
+    // a level of its own.
+    const frame = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [holding("acme/fixed-row", "items", [])],
+      slots: { body: { label: "Body", nodeId: "holder", slot: "items" } },
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "o1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "frame" },
+            slots: {
+              body: [
+                {
+                  id: "i1",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: "promo" },
+                } as BlockNode,
+              ],
+            },
+          } as BlockNode,
+        ]),
+        definitions: new Map([
+          ["frame", frame],
+          ["promo", lockingPromo()],
+        ]),
+        componentName: id => (id === "promo" ? "Promo" : "Frame"),
+      })
+    );
+    const give = (overrides: Record<string, string>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "promo", overrides } },
+    });
+
+    expect(result.current.lockRefusalFor([give({ title: "Changed" })])).toEqual(
+      {
+        code: "layers-locked",
+        label: "Promo",
+        relation: "component",
+        verb: "change",
+      }
+    );
+    // CONTROL: the free block's value is the placement's to give.
+    expect(
+      result.current.lockRefusalFor([give({ strap: "Sale" })])
+    ).toBeUndefined();
+  });
+
+  it("refuses switching a placement to another component while keeping the first one's value", () => {
+    // The copy's locked block shares the first one's id; the value the page
+    // gave it was given under the first component's lock, not the copy's.
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo", overrides: { strap: "Sale" } },
+          } as BlockNode,
+        ]),
+        definitions: new Map([
+          ["promo", lockingPromo()],
+          ["copy", lockingPromo("Held by the copy")],
+        ]),
+        componentName: id => (id === "copy" ? "Promo copy" : "Promo"),
+      })
+    );
+    const switchTo = (overrides: Record<string, string>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "copy", overrides } },
+    });
+
+    expect(
+      result.current.lockRefusalFor([switchTo({ title: "hero" })])
+    ).toEqual({
+      code: "layers-locked",
+      label: "Promo copy",
+      relation: "component",
+      verb: "change",
+    });
+    // CONTROL: switched with no value for the locked block, it draws as the
+    // copy holds it.
+    expect(
+      result.current.lockRefusalFor([switchTo({ strap: "Sale" })])
+    ).toBeUndefined();
+  });
+
   it("refuses content a placement gives a component's locked slot, judged on the composed page", () => {
     // The component exposes its own row, locked "all", for each placement to
     // fill. One headline is what the row starts with; a second is a block the
@@ -1651,6 +1922,164 @@ describe("a step recorded from outside the document", () => {
       undone = await result.current.undo();
     });
     expect(undone).toBe(false);
+  });
+
+  it("gives back the redo branch it ended when withdrawn before anything follows it", async () => {
+    // A held style change that came back to where it started changed
+    // nothing, so the redo it cut off is the author's again.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    expect(result.current.canRedo).toBe(true);
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "back to start"));
+    });
+    expect(result.current.canRedo).toBe(false);
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+    expect(calls).toEqual([]);
+  });
+
+  it("gives back the redo branch when a step undone before its change answered is withdrawn", async () => {
+    // An earlier edit undone, a held style change recorded, and that change
+    // undone before its save answers. The save is then refused, so the
+    // change never took effect: the earlier Redo is still the author's.
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    let answer: (took: boolean) => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep({
+        undo: () =>
+          new Promise<boolean>(resolve => {
+            answer = resolve;
+          }),
+        redo: () => Promise.resolve(true),
+      });
+    });
+    let undoing: Promise<boolean> | boolean = false;
+    act(() => {
+      undoing = result.current.undo();
+    });
+    act(() => withdraw());
+    await act(async () => {
+      answer(false);
+      await undoing;
+    });
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("ends the redo branch for good once undoing the step took effect", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("gives back the redo branch once every one of several unanswered steps is withdrawn", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let first: () => void = () => {};
+    let second: () => void = () => {};
+    act(() => {
+      first = result.current.recordStep(step(calls, "first"));
+      second = result.current.recordStep(step(calls, "second"));
+    });
+    act(() => first());
+    // One of them may still have taken effect: no redo yet.
+    expect(result.current.canRedo).toBe(false);
+    act(() => second());
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("keeps the redo branch ended when one of several unanswered steps stays", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let second: () => void = () => {};
+    act(() => {
+      result.current.recordStep(step(calls, "first"));
+      second = result.current.recordStep(step(calls, "second"));
+    });
+    act(() => second());
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("keeps the redo branch ended once another edit has followed it", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+      result.current.apply(insert("c", 1));
+    });
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(false);
   });
 
   it("is withdrawn wherever it sits, even after it was undone", async () => {

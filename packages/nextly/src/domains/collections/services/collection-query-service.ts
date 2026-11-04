@@ -733,7 +733,7 @@ interface FilteredReadParams {
    */
   status?: StatusOption;
   /**
-   * Requested content locale (i18n M4). Kept in parity with listEntries so a locale-scoped
+   * Requested content locale. Kept in parity with listEntries so a locale-scoped
    * filter (M4c EXISTS) counts the same rows the page returns. For plain reads it has no
    * effect on the count (localized display resolution is post-query).
    */
@@ -1055,7 +1055,7 @@ export class CollectionQueryService extends BaseService {
     private readonly hookService: CollectionHookService,
     private readonly fieldGroupDataService?: FieldGroupDataService,
     /**
-     * Normalized localization config (i18n M4). When set and a collection is localized,
+     * Normalized localization config. When set and a collection is localized,
      * reads resolve translatable fields from the companion `_locales` table for the
      * requested locale with fallback. Absent → non-localized behavior (unchanged).
      */
@@ -1116,7 +1116,7 @@ export class CollectionQueryService extends BaseService {
   }
 
   // ============================================================
-  // i18n (M4) — companion-aware read helpers
+  // Companion-aware read helpers for localized collections
   // ============================================================
 
   /**
@@ -1183,7 +1183,7 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Translation-status overview populate (i18n M7): attach a per-locale `_translations` map
+   * Translation-status overview populate: attach a per-locale `_translations` map
    * (which languages are translated + each one's draft/published status) to each row, for the
    * admin's completeness badges / per-language pills / language filter. One batched query over
    * the page. No-op when localization is off or the collection isn't localized.
@@ -1270,7 +1270,7 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Pull the reserved `_translated` key (i18n M7 language filter) out of a where object, returning
+   * Pull the reserved `_translated` key (the language filter) out of a where object, returning
    * the validated filter and a cleaned where without it (so the generic where-builder never sees
    * it). Shape: `{ _translated: { locale, state } }`, state ∈ missing|translated|draft|published.
    */
@@ -1540,7 +1540,7 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Build the SQL condition for a `_translated` filter (i18n M7). Loads the companion (reusing a
+   * Build the SQL condition for a `_translated` filter. Loads the companion (reusing a
    * preloaded one) and delegates to {@link buildTranslationStatusCondition}. Returns `undefined`
    * for non-localized collections or no-op filters.
    */
@@ -1601,7 +1601,7 @@ export class CollectionQueryService extends BaseService {
     preloaded?: CompanionSchema | null,
     /**
      * Resolved status the read is scoped to (`"published"` / `"draft"`), or `null` for `all`.
-     * When the companion has per-locale status (i18n M6), a companion row whose `_status` differs
+     * When the companion has per-locale status, a companion row whose `_status` differs
      * is filtered out so a draft translation never leaks — the field falls back to the published
      * default.
      */
@@ -3227,14 +3227,14 @@ export class CollectionQueryService extends BaseService {
      */
     status?: StatusOption;
     /**
-     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * Requested content locale. For a localized collection, translatable fields are
      * resolved to this language (with fallback) from the companion `_locales` table.
      */
     locale?: string;
     /** Fallback control. `false`/`"none"` disables fallback (raw requested language). */
     fallbackLocale?: string | false;
     /**
-     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to each
+     * When true, attach a per-locale `_translations` map (translated + status) to each
      * row for the admin translation-status overview. No-op for non-localized collections.
      */
     translationStatus?: boolean;
@@ -3280,7 +3280,7 @@ export class CollectionQueryService extends BaseService {
         params.collectionName
       );
 
-      // i18n M4: resolve the locale chain + load the companion once, so both the sort
+      // Resolve the locale chain + load the companion once, so both the sort
       // block (in-query ORDER BY on a localized column) and the post-query populate reuse
       // it. `null` when localization is off or the collection isn't localized.
       const localeChain = resolveLocaleChain(
@@ -3343,7 +3343,7 @@ export class CollectionQueryService extends BaseService {
         | { kind: "withheld" }
         | { kind: "unknown" } => {
         const sortFieldSnake = toSnakeCase(sortField);
-        // i18n M4: a localized sort field lives in the companion table (absent
+        // A localized sort field lives in the companion table (absent
         // from the main schema), ordered by a correlated subquery below.
         const localizedSortField =
           companion && localeChain
@@ -3654,7 +3654,7 @@ export class CollectionQueryService extends BaseService {
             : 0;
       }
 
-      // i18n M4: resolve localized fields for the whole page from the companion table
+      // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
       await this.overlayLocalized(
@@ -3666,7 +3666,7 @@ export class CollectionQueryService extends BaseService {
             entries,
             localeChain,
             companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // the per-locale published filter
           )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
@@ -3679,10 +3679,10 @@ export class CollectionQueryService extends BaseService {
             entries,
             params.locale,
             companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // the per-locale published filter
           )
       );
-      // i18n M7: per-locale translation-status map for the admin overview (opt-in).
+      // A per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
           params.collectionName,
@@ -3692,7 +3692,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               entries,
               companion,
-              statusFilter?.values ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // the per-locale published filter
             )
         );
       }
@@ -4768,7 +4768,7 @@ export class CollectionQueryService extends BaseService {
      */
     status?: StatusOption;
     /**
-     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * Requested content locale. For a localized collection, translatable fields are
      * resolved to this language (with fallback) from the companion `_locales` table. Ignored
      * for non-localized collections. Defaults to the configured default locale.
      */
@@ -4779,7 +4779,7 @@ export class CollectionQueryService extends BaseService {
      */
     fallbackLocale?: string | false;
     /**
-     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to the
+     * When true, attach a per-locale `_translations` map (translated + status) to the
      * entry for the admin translation-status pills. No-op for non-localized collections.
      */
     translationStatus?: boolean;
@@ -5038,7 +5038,7 @@ export class CollectionQueryService extends BaseService {
 
       // `localeChain` and `companion` were resolved above the access predicate,
       // which needs the same pair to judge a rule naming a localized field.
-      // i18n M4: resolve localized fields from the companion `_locales` table for the
+      // Resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
       // Already done when the translations came with the entry.
@@ -5053,7 +5053,7 @@ export class CollectionQueryService extends BaseService {
               [read],
               localeChain,
               companion,
-              statusFilter?.values ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // the per-locale published filter
             )
         );
       }
@@ -5067,10 +5067,10 @@ export class CollectionQueryService extends BaseService {
             [entry],
             params.locale,
             companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // the per-locale published filter
           )
       );
-      // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
+      // A per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
           params.collectionName,
@@ -5080,7 +5080,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               [entry],
               companion,
-              statusFilter?.values ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // the per-locale published filter
             )
         );
       }

@@ -319,6 +319,7 @@ export default function EditEntryPage({
     document: entry,
     isLoading: isLoadingEntry,
     error: entryError,
+    latest: entryLatest,
   } = useWithStoredReferences({
     // The fields the form renders, so the merge and the form read one list.
     fields: collection
@@ -450,11 +451,14 @@ export default function EditEntryPage({
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,
+    latest: entryLatest,
     // 🔴 The same prerequisites the custom branch renders under, not merely a
     // resolved component. A claim taken while the entry is still loading, or
     // after it failed, heartbeats a document the editor is not looking at - and
     // on a load failure that leaves the lock endpoint reachable, colleagues are
-    // told this person is editing a page that never appeared for them.
+    // told this person is editing a page that never appeared for them. A failed
+    // re-read of the entry on screen is not such a failure: `error` stays
+    // empty, the view stays, and so does its claim.
     enabled: Boolean(
       CustomEditView &&
         slug &&
@@ -561,7 +565,8 @@ export default function EditEntryPage({
     );
   }
 
-  // Error state
+  // Error state: no entry to show. A failed re-read of the entry on screen
+  // keeps the editor, read-only until a read succeeds.
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
@@ -699,6 +704,7 @@ export default function EditEntryPage({
             notice={customViewLock.notice}
             onTakeOver={customViewLock.takeOver}
             onRequestAccess={customViewLock.requestAccess}
+            onRetry={customViewLock.retryLoad}
           />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
@@ -706,8 +712,11 @@ export default function EditEntryPage({
               generated element box. A view rooted in bare text, or in an
               element with `display: contents`, produces none and is
               auto-placed into a gutter. The registry imposes no root-element
-              contract, so the page provides the box. */}
-          <div>
+              contract, so the page provides the box. Keyed on the loads of
+              the latest version, since a view may read `initialData` once, as
+              it mounts: one that gains the document starts again from the
+              copy just loaded rather than unlocking over the one before. */}
+          <div key={customViewLock.reloads}>
             <PluginSlot path={customEditViewPath} props={customViewProps} />
           </div>
         </MeasuredPageFrame>
@@ -847,6 +856,7 @@ export default function EditEntryPage({
             onDelete={handleDelete}
             onCancel={handleCancel}
             documentView={documentView}
+            latest={entryLatest}
           />
           {afterEditPath && (
             <div

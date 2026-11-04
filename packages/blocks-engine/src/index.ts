@@ -361,6 +361,9 @@ export {
   // own value. Two implementations of that order agree until a variant rule
   // changes in one of them.
   instanceExposure,
+  // A component's own tree as one of its variants draws it, ids kept, for
+  // the editor's canvas to preview the variant open in the component's view.
+  variantPreview,
   // What a supplied definition has to be before the resolver inlines it.
   // Published because the editor's inspector draws from the same lookup the
   // canvas resolves against, and must refuse exactly what the canvas refuses.
@@ -383,6 +386,7 @@ export type {
   InstanceExposure,
   OverriddenBy,
   ResolveComponentOptions,
+  PropExposure,
   ResolvedBlockNode,
   ResolvedComposition,
   ResolvedDocument,
@@ -502,6 +506,31 @@ export type {
   ExposureTarget,
   PrunedVariant,
 } from "./exposure-planners";
+// Defining, renaming and deleting a component's variants, and the values each
+// presets, as the designer does in the component's own view. A variant's key
+// is its stable id; its name is unique per component. `@experimental` until the
+// component editor that uses them ships.
+export {
+  planAddVariant,
+  planDeleteVariant,
+  planRenameVariant,
+  planResetVariantValue,
+  planSetVariantValue,
+  variantOptions,
+} from "./variant-planners";
+export type {
+  NewVariantSources,
+  VariantEdit,
+  VariantEditProblem,
+  VariantEditRefusal,
+  VariantEditResult,
+  VariantOption,
+} from "./variant-planners";
+export { variantLabelKey } from "./variant-labels";
+// A placement's variant key, judged against its component on every write: a
+// key the write newly sets must name one of the component's variants.
+export { placementVariantIssues } from "./placement-variants";
+export type { PlacementVariantIssue } from "./placement-variants";
 export { stripRetiredExposures } from "./retired-exposures";
 export type {
   RetiredByComponent,
@@ -582,6 +611,20 @@ export { isPlainRecord } from "./plain-record";
  */
 export { authoredText, isAuthoredText } from "./authored-text";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
+// Per-device visibility as an author works with it: each device's resolved
+// state, a hide that stays on one device, and the stored values carried across
+// a change of the site's breakpoints. Public because the editor writes the eye
+// and the breakpoint flows rewrite documents, and both must resolve devices as
+// the compiler does.
+export {
+  carryDeviceVisibility,
+  carryDocumentDeviceVisibility,
+  deviceVisibility,
+  hiddenOnDevice,
+  revealDeviceHidden,
+  setDeviceVisibility,
+} from "./device-visibility";
+export type { CarriedVisibility, DeviceVisibility } from "./device-visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
   BlockTypeLookup,
@@ -814,6 +857,7 @@ export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {
+  GENERIC_FONT_FAMILIES,
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,
@@ -877,6 +921,10 @@ export {
   // one and a literal in the other would be one contract with two spellings,
   // and the half that drifted would simply stop matching rather than fail.
   CONTENT_WIDTH_CLASS,
+  // The marker a container spacing its children wears: the compiler keys the
+  // gap's rules on it, a block repeating its slot puts it on each wrapper, and
+  // an editor takes it off to ask whether a margin is the gap.
+  CHILD_GAP_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
@@ -937,6 +985,8 @@ export {
   // the later entry, which is four separate rules to get right by hand.
   usableNamedClasses,
   usableNamedClassPositions,
+  // The part of a library the compiler reads, before those rules run.
+  namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";
@@ -1049,6 +1099,8 @@ export {
   type AppliedOps,
   type ApplyOptions,
   type BuilderOp,
+  type EnvelopeField,
+  type EnvelopePatch,
   type NodePatch,
   type OpPosition,
   type SlotAddress,
@@ -1068,6 +1120,22 @@ export {
   type LayersLockChange,
   type LayersLockChangeKind,
 } from "./layers-lock-stored";
+export {
+  variantLockChanges,
+  type VariantDrawing,
+  type VariantLockChange,
+} from "./layers-lock-variants";
+export {
+  componentLayersLocks,
+  heldBaselines,
+  keptForSameComponents,
+  placedLockChanges,
+  placementsAsComponentsHoldThem,
+  type ComponentLayersLock,
+  type ComposedHeldBaseline,
+  type HeldBaseline,
+  type PlacedLockChange,
+} from "./component-layers-locks";
 // How every copy into a document keeps the Layers locks it carries.
 export { insertKeepingLocks, type Placed } from "./locked-insert";
 

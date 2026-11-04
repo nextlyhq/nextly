@@ -17,14 +17,20 @@ export type {
   BlockHostPolicy,
   BlockRenderArgs,
   BlocksDataProvider,
+  BlocksDataProviderFactory,
+  BlocksFilter,
+  BlocksFilterOp,
+  BlocksPublicReader,
   BlocksQuery,
   BlocksResult,
+  DefaultDataProviderOptions,
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
   ResolvedMedia,
 } from "./context";
 export {
+  createDefaultDataProvider,
   createStandaloneContext,
   defineBlock,
   emptyDataProvider,
@@ -295,6 +301,8 @@ export type {
   // cannot write these down cannot annotate the call it is required to make.
   ComponentUnresolvedReason,
   DefinitionsById,
+  // A resolved node maps each exposed prop to the placement exposure feeding it.
+  PropExposure,
   ResolvedBlockNode,
   ResolvedDocument,
   UnresolvedInstance,
@@ -304,6 +312,10 @@ export type {
   ExposedPropertyType,
   ResolveComponentOptions,
   WorkAllowance,
+  // Named by the engine's insert of a locked subtree, which types above reach:
+  // where a block lands, and the block that lands there.
+  OpPosition,
+  Placed,
   StyleCompileContext,
   StyleOrigin,
   StyleState,

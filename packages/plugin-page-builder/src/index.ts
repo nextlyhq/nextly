@@ -28,6 +28,10 @@
  */
 export { pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
+export type {
+  FontAddLimits,
+  PageBuilderFontOptions,
+} from "./site-fonts/options";
 
 // The blocks field type and the document it stores. `BlockDocument` is
 // re-exported here because generated types name it: an app depends on this

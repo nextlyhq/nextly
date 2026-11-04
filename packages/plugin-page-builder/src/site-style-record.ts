@@ -30,6 +30,7 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isUsableNamedClass,
+  namedClassesRead,
   newStyleIssueBudget,
   resolveSiteTokens,
   tokenLabelIssue,
@@ -418,12 +419,31 @@ export function unreadableStoredFonts(doc: unknown): readonly string[] {
 
 /** One face's shape, or nothing. Value rules stay `validateFontFace`'s. */
 function readFontFace(entry: unknown): FontFaceDef | undefined {
-  if (!isPlainRecord(entry)) return undefined;
-  if (typeof entry.family !== "string" || !Array.isArray(entry.src)) {
+  if (!isPlainRecord(entry) || typeof entry.family !== "string") {
     return undefined;
   }
+  const src = readFontSources(entry.src);
+  const source = readFontOrigin(entry.source);
+  if (src === undefined || source === null || !descriptorsAreWords(entry)) {
+    return undefined;
+  }
+  return {
+    family: entry.family,
+    src,
+    ...optionalField("weight", entry.weight),
+    ...optionalField("style", entry.style),
+    ...optionalField("display", entry.display),
+    ...optionalField("unicodeRange", entry.unicodeRange),
+    // Kept, so a writer appending to what it read stores it back unchanged.
+    ...(source === undefined ? {} : { source }),
+  };
+}
+
+/** A face's files as `{ url, format? }` records, or nothing when one is not. */
+function readFontSources(raw: unknown): FontFaceDef["src"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
   const src: FontFaceDef["src"][number][] = [];
-  for (const source of entry.src) {
+  for (const source of raw) {
     const record: unknown = source;
     if (
       !isPlainRecord(record) ||
@@ -432,28 +452,53 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
     ) {
       return undefined;
     }
-    src.push({
-      url: record.url,
-      ...(record.format === undefined ? {} : { format: record.format }),
-    });
+    src.push({ url: record.url, ...optionalField("format", record.format) });
   }
+  return src;
+}
+
+/** Whether a face's descriptors are each absent or a string. */
+function descriptorsAreWords(entry: Record<string, unknown>): boolean {
+  return [entry.weight, entry.style, entry.display, entry.unicodeRange].every(
+    optionalString
+  );
+}
+
+/** `{ [key]: value }` when the value is there, and nothing when it is not. */
+function optionalField<K extends string>(
+  key: K,
+  value: unknown
+): Partial<Record<K, string>> {
+  const field: Partial<Record<K, string>> = {};
+  if (typeof value === "string") field[key] = value;
+  return field;
+}
+
+/**
+ * Where a face came from, read for its shape: `undefined` when it says
+ * nothing, `null` when it is not one of the two kinds with words beside it.
+ * How long those words may be stays `validateFontFace`'s.
+ */
+function readFontOrigin(
+  raw: unknown
+): NonNullable<FontFaceDef["source"]> | undefined | null {
+  if (raw === undefined) return undefined;
   if (
-    !optionalString(entry.weight) ||
-    !optionalString(entry.style) ||
-    !optionalString(entry.display) ||
-    !optionalString(entry.unicodeRange)
+    !isPlainRecord(raw) ||
+    (raw.kind !== "google" && raw.kind !== "upload") ||
+    !optionalString(raw.id) ||
+    !optionalString(raw.licence) ||
+    !optionalString(raw.category) ||
+    !optionalString(raw.subset)
   ) {
-    return undefined;
+    return null;
   }
   return {
-    family: entry.family,
-    src,
-    ...(entry.weight === undefined ? {} : { weight: entry.weight }),
-    ...(entry.style === undefined ? {} : { style: entry.style }),
-    ...(entry.display === undefined ? {} : { display: entry.display }),
-    ...(entry.unicodeRange === undefined
-      ? {}
-      : { unicodeRange: entry.unicodeRange }),
+    kind: raw.kind,
+    ...(raw.id === undefined ? {} : { id: raw.id }),
+    ...(raw.licence === undefined ? {} : { licence: raw.licence }),
+    ...(raw.category === undefined ? {} : { category: raw.category }),
+    ...(raw.subset === undefined ? {} : { subset: raw.subset }),
   };
 }
 
@@ -602,8 +647,8 @@ function mergedLibraryIssues(
   // The cap is applied BEFORE resolution, as an array prefix on the whole
   // library, so it is applied that way here too.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
-  const before = renderedIds(policy.defaults?.classes ?? []);
-  const after = renderedIds(merged);
+  const before = referableClassIds(policy.defaults?.classes ?? []);
+  const after = referableClassIds(merged);
 
   const issues: string[] = [];
   // A class the site used to render and no longer does. This write caused it,
@@ -628,13 +673,57 @@ function mergedLibraryIssues(
   return issues;
 }
 
-/** The ids a library actually renders, as the compiler resolves it. */
-function renderedIds(library: readonly NamedClass[]): Set<string> {
-  const read =
-    library.length > MAX_NAMED_CLASSES
-      ? library.slice(0, MAX_NAMED_CLASSES)
-      : library;
-  return new Set(usableNamedClasses(read).map(entry => entry.id));
+/**
+ * The ids a library actually renders, as the compiler resolves it: the part
+ * the compiler reads (its capped prefix), then the ordering and claim rules.
+ * These are also the classes a page may add a reference to.
+ */
+export function referableClassIds(
+  library: readonly NamedClass[]
+): ReadonlySet<string> {
+  return new Set(
+    usableNamedClasses(namedClassesRead(library)).map(entry => entry.id)
+  );
+}
+
+/**
+ * A class entry with its shared-style marks checked: the name an author gave
+ * it and its lock. Each mark that cannot be used adds an issue, which refuses
+ * a write, and is left out of the entry a read keeps.
+ */
+function withUsableMarks(
+  entry: NamedClass,
+  index: number,
+  issues: string[]
+): NamedClass {
+  // Read as unknown: the type states what a usable entry holds, while a
+  // stored one may hold anything under these keys.
+  const record: { readonly label?: unknown; readonly locked?: unknown } = entry;
+  // The name is display text, judged by the engine's one rule for a label, so
+  // a shared style's name and a variable's are held to the same line.
+  const labelIssue = tokenLabelIssue(record.label);
+  // Present or absent, never `false`: one spelling for "unlocked", so a lock
+  // comparison cannot read `false` and absent as a change.
+  const lockUsable = record.locked === undefined || record.locked === true;
+  if (labelIssue !== undefined) {
+    issues.push(
+      `classes[${index}] has a name that cannot be used. ${labelIssue}`
+    );
+  }
+  if (!lockUsable) {
+    issues.push(
+      `classes[${index}] has a lock that cannot be read: it is true while the class is locked, and absent otherwise.`
+    );
+  }
+  if (labelIssue === undefined && lockUsable) return entry;
+  // A read keeps the class and drops only the mark it cannot use; the write
+  // was refused by the issues above.
+  const { label, locked, ...rest } = entry;
+  return {
+    ...rest,
+    ...(labelIssue === undefined && label !== undefined ? { label } : {}),
+    ...(lockUsable && locked !== undefined ? { locked } : {}),
+  };
 }
 
 /**
@@ -697,7 +786,7 @@ export function checkStoredClasses(
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
-    classes.push(entry);
+    classes.push(withUsableMarks(entry, index, issues));
   });
   issues.push(...mergedLibraryIssues(classes, policy));
   return { value: classes, issues };

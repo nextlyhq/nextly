@@ -21,7 +21,9 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
 
 // Reads the site's devices, which a spec storing breakpoints changes.
 test.describe.configure({ lock: [LOCK.siteStyle] });
@@ -108,11 +110,7 @@ async function storedNodes(
   request: APIRequestContext,
   id: string
 ): Promise<Record<string, unknown>[]> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: Record<string, unknown>[] } }[];
-  };
-  return body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  return await storedPageNodes(request, ENTRIES, id);
 }
 
 async function openBuilder(page: Page, id: string): Promise<void> {
@@ -131,7 +129,10 @@ async function select(
   id: string,
   at: "centre" | "corner" = "centre"
 ): Promise<void> {
-  await page
+  // Cleared first: the selected block's toolbar is drawn over the canvas, and
+  // over the block below it, so a click aimed there would land on the toolbar.
+  await page.keyboard.press("Escape");
+  await canvasFrame(page)
     .locator(`.nx-canvas [data-nx-node="${id}"]`)
     .first()
     .click(at === "corner" ? { position: { x: 4, y: 4 } } : {});
@@ -151,11 +152,19 @@ async function saveDraft(page: Page): Promise<void> {
 
 /** The Style tab's section labels, in order, without the "has values" words. */
 async function sectionLabels(page: Page): Promise<string[]> {
+  // The dot sits inside the label, beside the name, and carries its own
+  // words for a screen reader; the name is the label without it.
   return page
     .locator(
       ".nx-style-inspector [data-section] .nx-style-inspector__section-label"
     )
-    .allTextContents();
+    .evaluateAll(labels =>
+      labels.map(label => {
+        const name = label.cloneNode(true) as HTMLElement;
+        name.querySelector(".nx-style-inspector__section-dot")?.remove();
+        return name.textContent ?? "";
+      })
+    );
 }
 
 /** The properties a section draws at once, by catalog key. */

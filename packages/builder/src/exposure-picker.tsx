@@ -2,7 +2,7 @@
 
 /**
  * Which values of a selection each placement of a new component may change:
- * the picker a "Save as component" or "Convert to component" form shows.
+ * the picker a "Turn into component" form shows.
  *
  * It lists every block in the selection with the props a placement could set
  * (text, rich text, an image, a link, a choice) and a switch to let a
@@ -36,18 +36,8 @@ import {
 import { Checkbox, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { fieldLabel } from "./inspector";
+import { propLabel } from "./inspector";
 import { layerLabel } from "./layers";
-
-/** What a picked value is called beside its name. */
-const TYPE_LABEL: Readonly<Record<ExposedPropertyType, string>> = {
-  text: "Text",
-  richText: "Rich text",
-  image: "Image",
-  link: "Link",
-  select: "Choice",
-  visibility: "Shown or hidden",
-};
 
 /** Why a pick was refused, as an author reads it. */
 const REFUSAL: Readonly<Record<ExposureEditProblem, string>> = {
@@ -55,11 +45,11 @@ const REFUSAL: Readonly<Record<ExposureEditProblem, string>> = {
   "unknown-exposure": "That value is no longer in this selection.",
   "unknown-node": "That block is no longer in this selection.",
   "unknown-prop": "That block no longer has this value.",
-  "not-exposable": "Placements have no control for this value.",
+  "not-exposable": "Pages have no control for this value.",
   "content-only":
-    "This block is in an area locked to its content, and this isn’t content, so placements couldn’t change it.",
+    "This block is in an area locked to its content, and this isn’t content, so pages couldn’t change it.",
   "invalid-label": "Give the field a name.",
-  "invalid-exposure": "This value can’t be offered to placements.",
+  "invalid-exposure": "This value can’t be changed per use.",
   "exceeds-limits": "This selection is too large to offer more values.",
 };
 
@@ -172,12 +162,12 @@ export function ExposurePicker({
       disabled={disabled}
     >
       <legend className="nx-expose-picker__legend">
-        What each placement can change
+        What each use can change
       </legend>
       <p id={hintId} className="nx-expose-picker__hint">
         {offered.length === 0
-          ? "Nothing in this selection can be changed per placement, so the component looks the same wherever it is placed."
-          : "Everything else stays as designed in every placement. You can change this later in the component’s own view."}
+          ? "Nothing in this selection can change from one use to another, so the component looks the same everywhere it is used."
+          : "Anything left unticked looks the same everywhere it is used. You can change this later in the component’s own view."}
       </p>
       {offered.length === 0 ? null : (
         <ul className="nx-expose-picker__blocks">
@@ -253,15 +243,12 @@ function CandidateRow({
         <Label htmlFor={boxId} className="nx-expose-picker__name">
           {candidate.name}
         </Label>
-        <span className="nx-expose-picker__type">
-          {TYPE_LABEL[candidate.type]}
-        </span>
       </div>
       {entry === undefined ? null : (
         <Input
           className="nx-expose-picker__label"
           value={entry.label}
-          aria-label={`Name placements see for ${candidate.name} of ${blockName}`}
+          aria-label={`Name pages see for ${candidate.name} of ${blockName}`}
           onChange={event => onRename(entry, event.target.value)}
         />
       )}
@@ -328,12 +315,13 @@ function candidatesOf(
   const candidates: Candidate[] = [];
   for (const [name, schema] of Object.entries(props)) {
     const type = exposureTypeForProp(schema);
-    if (type === undefined) continue;
+    if (type === undefined || schema === undefined) continue;
     candidates.push({
       key: `${node.id}\u0000${name}`,
       nodeId: node.id,
       prop: name,
-      name: fieldLabel(name),
+      // The block's own word for the property ("HTML tag"), not its name.
+      name: propLabel(name, schema),
       type,
     });
   }

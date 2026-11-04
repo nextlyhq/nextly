@@ -133,6 +133,15 @@ async function recordRetirements(
   if (before === null || after === null) return;
   const retired = droppedExposures(before, after);
   if (retired.properties.length === 0 && retired.slots.length === 0) return;
+  // A working draft puts nothing live, so it retires nothing; answered before
+  // any read, as the hook may run inside the caller's transaction, where a
+  // read on the pool would wait on the connection that transaction holds.
+  if (
+    (fields.data as { _isWorkingDraft?: unknown } | undefined)
+      ?._isWorkingDraft === true
+  ) {
+    return;
+  }
   try {
     if (!(await goesLive(args, context, componentId, retired))) return;
     if (componentId === undefined) {

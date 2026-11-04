@@ -308,6 +308,32 @@ export interface FontSource {
   format?: string;
 }
 
+/**
+ * Where a self-hosted face came from, for the editor to say so.
+ *
+ * Metadata only: the stylesheet never reads it, so a face loads the same with
+ * or without it. `google` is a face the server downloaded from the Google
+ * Fonts catalogue into the site's media; `upload` is a file an author uploaded.
+ */
+export interface FontFaceOrigin {
+  kind: "google" | "upload";
+  /** The catalogue's id for the family, such as `inter`. */
+  id?: string;
+  /** The licence as the catalogue names it, such as `OFL-1.1`. */
+  licence?: string;
+  /**
+   * The catalogue's category: `sans-serif`, `serif`, `display`,
+   * `handwriting` or `monospace`. The generic family a picker stores after
+   * the name comes from it.
+   */
+  category?: string;
+  /**
+   * The catalogue's script the file covers, such as `latin`, so the editor
+   * can tell a face the site has from the same cut in another script.
+   */
+  subset?: string;
+}
+
 /** A `@font-face` a site self-hosts. */
 export interface FontFaceDef {
   family: string;
@@ -317,6 +343,8 @@ export interface FontFaceDef {
   /** Defaults to `swap`: text is readable while the file loads. */
   display?: string;
   unicodeRange?: string;
+  /** Where the face came from. Never emitted. */
+  source?: FontFaceOrigin;
 }
 
 /**
@@ -927,7 +955,94 @@ export function defaultSiteTokens(): SiteToken[] {
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ...SPACING_DEFAULTS.map(
+      ({ name, value, description }): SiteToken => ({
+        name,
+        kind: "dimension",
+        values: { light: spacingValue(value) },
+        description,
+      })
+    ),
   ];
+}
+
+/**
+ * A spacing default: one length, or a fluid one that grows with the viewport
+ * from `min` to `max` along `preferred`.
+ */
+type SpacingValue =
+  | string
+  | { readonly min: string; readonly preferred: string; readonly max: string };
+
+/** One row of {@link SPACING_DEFAULTS}. */
+interface SpacingDefault {
+  readonly name: string;
+  readonly value: SpacingValue;
+  readonly description: string;
+}
+
+/**
+ * The spacing every block starts from, in ONE table.
+ *
+ * Blocks carry no outer margin: the space between two blocks is their
+ * container's gap, and the space inside a band is its padding. Each row is a
+ * site token, so the blocks reference it by name and a site changing one value
+ * moves every block reading it, with no block changed.
+ *
+ * Responsive through `clamp()` rather than per breakpoint, because a token has
+ * one value per colour mode and none per width. `vw` resolves against the
+ * device being previewed in the editor too, since the canvas is its own frame.
+ * What each row resolves to at a phone, tablet and desktop width is pinned in
+ * `site-tokens.test.ts`.
+ */
+const SPACING_DEFAULTS: readonly SpacingDefault[] = [
+  {
+    name: "space.stack",
+    value: { min: "1rem", preferred: "0.875rem + 0.5vw", max: "1.25rem" },
+    description: "The space a container puts between the blocks it holds.",
+  },
+  {
+    name: "space.section-y",
+    value: { min: "3rem", preferred: "2rem + 4vw", max: "5rem" },
+    description: "A section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A section's padding beside its content.",
+  },
+  {
+    name: "space.columns",
+    value: { min: "1rem", preferred: "0.5rem + 2vw", max: "2rem" },
+    description: "The space between columns, and between gallery images.",
+  },
+  {
+    name: "space.card",
+    value: { min: "1rem", preferred: "0.75rem + 1vw", max: "1.5rem" },
+    description: "A card's padding around its content.",
+  },
+  {
+    name: "space.paragraph",
+    value: "1em",
+    description: "The space between the paragraphs of rich text.",
+  },
+  {
+    name: "button.padding-y",
+    value: "0.75rem",
+    description: "A button's padding above and below its label.",
+  },
+  {
+    name: "button.padding-x",
+    value: "1.25rem",
+    description: "A button's padding beside its label.",
+  },
+];
+
+/** A spacing default as the CSS a token stores. */
+function spacingValue(value: SpacingValue): string {
+  return typeof value === "string"
+    ? value
+    : `clamp(${value.min}, ${value.preferred}, ${value.max})`;
 }
 
 /**
@@ -993,6 +1108,12 @@ export function validateFontFace(
     }
   }
 
+  if (face.source !== undefined && !usableOrigin(face.source)) {
+    fail(
+      `"${face.family}" says where it came from in a way that cannot be read.`
+    );
+  }
+
   for (const source of face.src) {
     const rejection = checkUrlValue(source.url, "raw");
     if (rejection !== null) {
@@ -1007,6 +1128,22 @@ export function validateFontFace(
   }
 
   return issues;
+}
+
+/**
+ * The longest word a face's origin may carry. A catalogue id, a licence name
+ * and a category are all short; this only stops data that is already wrong.
+ */
+const MAX_FONT_ORIGIN_LENGTH = 100;
+
+/** Whether a face's origin is one of the two kinds, with short words. */
+function usableOrigin(origin: FontFaceOrigin): boolean {
+  if (origin.kind !== "google" && origin.kind !== "upload") return false;
+  return [origin.id, origin.licence, origin.category, origin.subset].every(
+    word =>
+      word === undefined ||
+      (typeof word === "string" && word.length <= MAX_FONT_ORIGIN_LENGTH)
+  );
 }
 
 /**
@@ -1099,7 +1236,7 @@ export type TokenNamingProblem =
  * grammar decides what those keys may contain and its DEPTH decides how far the
  * reader has to descend to find the token underneath them.
  */
-export function labelProblem(name: unknown): TokenNamingProblem | undefined {
+function labelProblem(name: unknown): TokenNamingProblem | undefined {
   // Persisted settings reach here unvalidated, and `RegExp.test` COERCES: a
   // stored `123` becomes "123" and satisfies the grammar, after which the value
   // travels on as a number and throws where a string was assumed.
@@ -1128,7 +1265,7 @@ export function labelProblem(name: unknown): TokenNamingProblem | undefined {
  * subjects take different rules and a caller holding a bare string cannot be
  * relied on to say which it has.
  */
-export function identityProblem(
+function identityProblem(
   identity: unknown,
   field: "name" | "id"
 ): TokenNamingProblem | undefined {

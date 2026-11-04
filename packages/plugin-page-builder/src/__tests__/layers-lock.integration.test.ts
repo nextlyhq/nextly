@@ -358,20 +358,38 @@ describe.each(getConfiguredTestDialects())(
        * A published component holding a locked "Hero" heading and a free one,
        * each exposed to its placements through a text field.
        */
-      async function promo(t: TestNextly): Promise<string> {
+      async function promo(
+        t: TestNextly,
+        { slug = "promo", heroText = "hero", exposeHeroVisibility = false } = {}
+      ): Promise<string> {
         const created = await t.nextly.create({
           collection: COMPONENTS_SLUG,
           data: {
             title: "Promo",
-            slug: "promo",
+            slug,
             content: {
               formatVersion: DOCUMENT_FORMAT_VERSION,
               kind: "component",
               nodes: [
-                heading("hero", { locked: true, name: "Hero" }),
+                heading("hero", {
+                  locked: true,
+                  name: "Hero",
+                  props: { text: heroText, level: 2 },
+                }),
                 heading("sub"),
               ],
               exposed: [
+                ...(exposeHeroVisibility
+                  ? [
+                      {
+                        id: "showHero",
+                        label: "Show hero",
+                        nodeId: "hero",
+                        propPath: "visibility",
+                        type: "visibility",
+                      },
+                    ]
+                  : []),
                 {
                   id: "title",
                   label: "Title",
@@ -429,6 +447,102 @@ describe.each(getConfiguredTestDialects())(
         await expectRefusedNamingHero(
           save([placing(id, { title: "Changed" })])
         );
+      });
+
+      /** A page created with `nodes`, for a test that only creates pages. */
+      const created = (t: TestNextly, nodes: Node[]) =>
+        t.nextly.create({
+          collection: "pages",
+          data: {
+            title: "Home",
+            slug: `home-${String(Math.random()).slice(2, 8)}`,
+            content: pageOf(nodes),
+          },
+          overrideAccess: true,
+        });
+
+      it("refuses a placement's value that hides every block the component locks", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const id = await promo(t, { exposeHeroVisibility: true });
+
+        // CONTROL: shown, as the component holds it, the page saves. Hidden,
+        // the locked block is gone from what the page composes, which is the
+        // change the lock refuses.
+        await expect(
+          created(t, [placing(id, { showHero: true })])
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(
+          created(t, [placing(id, { showHero: false })])
+        );
+      });
+
+      it("refuses a value reaching the locked block of a component placed in another's slot", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const inner = await promo(t);
+        // An outer component exposing one region, which the page fills with
+        // the promo: the promo is the page's own placement, nested in the
+        // outer one's slot.
+        const frame = await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Frame",
+            slug: "frame",
+            content: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [box("well", [])],
+              slots: {
+                body: { label: "Body", nodeId: "well", slot: "children" },
+              },
+            },
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        const framing = (nested: Node): Node => ({
+          id: "o1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: String(frame.item.id) },
+          slots: { body: [nested] },
+        });
+
+        await expect(
+          created(t, [framing(placing(inner, { subtitle: "Spring sale" }))])
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(
+          created(t, [framing(placing(inner, { title: "Changed" }))])
+        );
+      });
+
+      it("refuses a placement switched to another component keeping the first one's value", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        // Two components whose locked blocks share an id, as a copy of one
+        // does, and differ in what they hold.
+        const first = await promo(t);
+        const second = await promo(t, {
+          slug: "promo-copy",
+          heroText: "Held by the copy",
+        });
+        const saved = await created(t, [placing(first)]);
+        const update = (nodes: Node[]) =>
+          t.nextly.update({
+            collection: "pages",
+            id: String(saved.item.id),
+            data: { content: pageOf(nodes) },
+            overrideAccess: true,
+          });
+
+        // The first component's value, given to the second: the stored page
+        // drew it on a block of the same id, but under the first component's
+        // lock, so it keeps nothing for the second.
+        await expectRefusedNamingHero(
+          update([placing(second, { title: "hero" })])
+        );
+        await expect(update([placing(second)])).resolves.toBeDefined();
       });
 
       it("refuses it on a placement a condition gates, which the page does not compose", async () => {
@@ -525,6 +639,170 @@ describe.each(getConfiguredTestDialects())(
         await expectRefusedNamingHero(
           save([placing(outerId, { headline: "Changed" })])
         );
+      });
+
+      it("refuses a variant of the component that sets a value on the locked block", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const id = await promo(t);
+        const stored = (await t.nextly.findByID({
+          collection: COMPONENTS_SLUG,
+          id,
+          overrideAccess: true,
+        })) as unknown as { content: Record<string, unknown> };
+        const withVariant = (overrides: Record<string, string>) =>
+          t.nextly.update({
+            collection: COMPONENTS_SLUG,
+            id,
+            data: {
+              content: {
+                ...stored.content,
+                variants: { dark: { label: "Dark", overrides } },
+              },
+            },
+            overrideAccess: true,
+          });
+
+        // CONTROL: a variant setting the free block's value saves.
+        await expect(
+          withVariant({ subtitle: "Spring sale" })
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(withVariant({ title: "Changed" }));
+      });
+
+      /** The promo's content, with `edit` applied, for a create or an update. */
+      function promoContent(
+        variants: Record<string, Record<string, string>>,
+        heroLocked = true
+      ) {
+        return {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: [
+            heading("hero", {
+              name: "Hero",
+              ...(heroLocked ? { locked: true } : {}),
+            }),
+            heading("sub"),
+          ],
+          exposed: [
+            {
+              id: "title",
+              label: "Title",
+              nodeId: "hero",
+              propPath: "text",
+              type: "text",
+            },
+            {
+              id: "subtitle",
+              label: "Subtitle",
+              nodeId: "sub",
+              propPath: "text",
+              type: "text",
+            },
+          ],
+          variants: Object.fromEntries(
+            Object.entries(variants).map(([name, overrides]) => [
+              name,
+              { label: name, overrides },
+            ])
+          ),
+        };
+      }
+
+      it("refuses creating a component whose variant sets a value on a block it locks", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const create = (slug: string, overrides: Record<string, string>) =>
+          t.nextly.create({
+            collection: COMPONENTS_SLUG,
+            data: {
+              title: slug,
+              slug,
+              content: promoContent({ dark: overrides }),
+              status: "published",
+            },
+            overrideAccess: true,
+          });
+
+        await expect(
+          create("free", { subtitle: "Sale" })
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(create("held", { title: "Changed" }));
+      });
+
+      it("refuses an update that locks a block an existing variant sets", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const created = await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Promo",
+            slug: "promo",
+            content: promoContent({ dark: { title: "Changed" } }, false),
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+
+        await expectRefusedNamingHero(
+          t.nextly.update({
+            collection: COMPONENTS_SLUG,
+            id: String(created.item.id),
+            data: { content: promoContent({ dark: { title: "Changed" } }) },
+            overrideAccess: true,
+          })
+        );
+      });
+
+      it("refuses a variant reaching the locked block through a component it places", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const inner = await promo(t);
+        const outer = (overrides: Record<string, string>, slug: string) =>
+          t.nextly.create({
+            collection: COMPONENTS_SLUG,
+            data: {
+              title: slug,
+              slug,
+              content: {
+                formatVersion: DOCUMENT_FORMAT_VERSION,
+                kind: "component",
+                nodes: [
+                  {
+                    id: "nested",
+                    type: COMPONENT_INSTANCE_TYPE,
+                    version: 1,
+                    props: { componentId: inner },
+                  },
+                ],
+                exposed: [
+                  {
+                    id: "headline",
+                    label: "Headline",
+                    nodeId: "nested",
+                    propPath: "overrides.title",
+                    type: "text",
+                  },
+                  {
+                    id: "strap",
+                    label: "Strap",
+                    nodeId: "nested",
+                    propPath: "overrides.subtitle",
+                    type: "text",
+                  },
+                ],
+                variants: { loud: { label: "Loud", overrides } },
+              },
+              status: "published",
+            },
+            overrideAccess: true,
+          });
+
+        await expect(
+          outer({ strap: "Sale" }, "free-banner")
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(outer({ headline: "Changed" }, "banner"));
       });
 
       it("refuses it on an update too", async () => {

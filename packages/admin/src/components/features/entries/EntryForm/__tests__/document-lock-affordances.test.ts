@@ -232,3 +232,60 @@ describe("what a lock state means for the editor", () => {
     }
   });
 });
+
+describe("a copy of the document that may be out of date", () => {
+  // Every state that lets the editor type, notices that withhold nothing
+  // included: a save from any of them would write the copy on screen.
+  it.each<[string, DocumentLockState, DocumentLockHolder | null]>([
+    ["idle", { status: "idle" }, null],
+    ["acquiring", { status: "acquiring" }, null],
+    [
+      "held by this editor",
+      { status: "held-by-me", someoneWaiting: false },
+      null,
+    ],
+    [
+      "held, with a colleague waiting",
+      { status: "held-by-me", someoneWaiting: true },
+      null,
+    ],
+    ["unchecked, nobody ever reported", { status: "unavailable" }, null],
+  ])("holds the editor back while %s", (_name, state, holder) => {
+    const failed = documentLockAffordances(state, holder, "failed");
+    expect(failed).toMatchObject({ readOnly: true, actionsDisabled: true });
+    expect(failed.notice).toMatchObject({
+      tone: "unloaded",
+      retryLabel: "Try again",
+    });
+    expect(failed.notice?.message).toMatch(/couldn't load the latest version/);
+
+    const loading = documentLockAffordances(state, holder, "loading");
+    expect(loading).toMatchObject({ readOnly: true, actionsDisabled: true });
+    expect(loading.notice?.tone).toBe("loading");
+  });
+
+  // Already read-only: the notice keeps its place, with the way back it offers.
+  it.each<[string, DocumentLockState, DocumentLockHolder | null, string]>([
+    [
+      "held by a colleague",
+      { status: "held-by-other", holder: bob, requestSent: false },
+      null,
+      "Take over",
+    ],
+    ["taken over", { status: "taken-over", holder: bob }, null, "Take it back"],
+    ["lost", { status: "lost" }, null, "Take it back"],
+    [
+      "unchecked, a colleague reported before",
+      { status: "unavailable" },
+      bob,
+      "Take over",
+    ],
+  ])(
+    "leaves the notice of a form already withheld while %s",
+    (_name, state, holder, label) => {
+      const affordances = documentLockAffordances(state, holder, "failed");
+      expect(affordances).toEqual(documentLockAffordances(state, holder));
+      expect(affordances.notice?.takeOverLabel).toBe(label);
+    }
+  );
+});

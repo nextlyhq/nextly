@@ -1,5 +1,5 @@
 /**
- * Refusing to delete a component a Layout still names.
+ * Refusing to delete or unpublish a component a Layout still names.
  *
  * The delete is REFUSED, and the refusal names where the component is used. A
  * Layout wraps every page assigned to it, so a component missing from one is a
@@ -62,6 +62,7 @@ import {
   type LayoutReader,
   type LayoutRecord,
 } from "./layout-component-usage";
+import { unpublishes } from "./unpublish-write";
 
 /** How many Layouts one page of the scan asks for. */
 const SCAN_PAGE_SIZE = 100;
@@ -97,11 +98,11 @@ export interface LayoutGuardContext {
 }
 
 /**
- * Refuse a component delete while a Layout still names it.
+ * Refuse deleting or unpublishing a component while a Layout still names it.
  *
  * Registered on the COMPONENTS collection by name rather than on the wildcard:
  * this asks one question about one collection, and a wildcard registration
- * would run a Layout scan on every delete the site performs.
+ * would run a Layout scan on every delete and update the site performs.
  */
 export function registerLayoutComponentGuard(args: {
   ctx: LayoutGuardContext;
@@ -111,14 +112,55 @@ export function registerLayoutComponentGuard(args: {
   layoutsCollection: string;
 }): void {
   args.ctx.hooks.on("beforeDelete", args.componentsCollection, context =>
-    refuseWhileALayoutNamesIt(args, context)
+    refuseWhileALayoutNamesIt(args, context, DELETING)
+  );
+  // Unpublishing takes the component off the site as surely as deleting it:
+  // a reader is served only published components, so every page drawn inside
+  // a Layout using it would show the gap. Every other save is let through
+  // without a scan.
+  //
+  // `beforeChange`, not `beforeUpdate`: it runs after every `beforeUpdate`
+  // hook, the app's and those configured in the admin, so a status one of
+  // them sets is the status judged. It still runs before the write. A hook
+  // a plugin cannot follow (an admin-configured `beforeChange`, or a field's
+  // own hook on `status`) is judged by no plugin guard today.
+  args.ctx.hooks.on(
+    "beforeChange",
+    args.componentsCollection,
+    async context => {
+      if (!unpublishes(context)) return;
+      await refuseWhileALayoutNamesIt(args, context, UNPUBLISHING);
+    }
   );
 }
 
-/** One delete, refused or allowed to proceed. */
+/** How a refusal names the write it refuses. */
+interface Removal {
+  /** "This component cannot be ___". */
+  readonly done: string;
+  /** "Delete it on its own", as the bulk refusal advises. */
+  readonly alone: string;
+  /** What the write does to the component, for the reason given. */
+  readonly doing: string;
+}
+
+const DELETING: Removal = {
+  done: "deleted",
+  alone: "Delete it",
+  doing: "removing",
+};
+
+const UNPUBLISHING: Removal = {
+  done: "unpublished",
+  alone: "Unpublish it",
+  doing: "unpublishing",
+};
+
+/** One delete or unpublish, refused or allowed to proceed. */
 async function refuseWhileALayoutNamesIt(
   args: Parameters<typeof registerLayoutComponentGuard>[0],
-  context: unknown
+  context: unknown,
+  removal: Removal
 ): Promise<void> {
   // A caller-owned TRANSACTION. The bulk paths run this hook inside one and
   // hand it an executor so reads reuse that connection — the bulk service says
@@ -134,9 +176,9 @@ async function refuseWhileALayoutNamesIt(
   // singly; the other direction destroys Layouts on every page.
   if (isInsideACallerTransaction(context)) {
     throw refusal(
-      `This component cannot be deleted in a bulk operation, because whether a ` +
-        `Layout still uses it cannot be checked safely there. Delete it on its ` +
-        `own and the check will run.`
+      `This component cannot be ${removal.done} in a bulk operation, because ` +
+        `whether a Layout still uses it cannot be checked safely there. ` +
+        `${removal.alone} on its own and the check will run.`
     );
   }
 
@@ -161,8 +203,8 @@ async function refuseWhileALayoutNamesIt(
   // direction is not.
   if (!usage.complete) {
     throw refusal(
-      `This component cannot be deleted: there are too many Layouts to check, ` +
-        `so whether one still uses it could not be established.`
+      `This component cannot be ${removal.done}: there are too many Layouts ` +
+        `to check, so whether one still uses it could not be established.`
     );
   }
 
@@ -170,9 +212,9 @@ async function refuseWhileALayoutNamesIt(
 
   const named = layoutsNamed(usage.references);
   throw refusal(
-    `This component cannot be deleted because ${describeLayouts(named)}. ` +
-      `A Layout appears on every page assigned to it, so removing a component ` +
-      `it uses would leave a gap on all of them. Remove it from ${
+    `This component cannot be ${removal.done} because ${describeLayouts(named)}. ` +
+      `A Layout appears on every page assigned to it, so ${removal.doing} a ` +
+      `component it uses would leave a gap on all of them. Remove it from ${
         named.length === 1 ? "that Layout" : "those Layouts"
       } first.`
   );
@@ -279,12 +321,21 @@ function describeLayouts(named: readonly string[]): string {
     : `${String(named.length)} Layouts use it: ${named.map(n => `"${n}"`).join(", ")}`;
 }
 
-/** The id being deleted, or null when the context does not carry one. */
+/**
+ * The id being deleted or unpublished, or null when the context does not carry
+ * one. A delete names it in `data`; an update may send only the changed fields,
+ * so the row as stored names it there.
+ */
 function componentIdOf(context: unknown): string | null {
   if (typeof context !== "object" || context === null) return null;
-  const data = (context as { data?: unknown }).data;
-  if (typeof data !== "object" || data === null) return null;
-  const id = (data as { id?: unknown }).id;
+  const hook = context as { data?: unknown; originalData?: unknown };
+  return idIn(hook.data) ?? idIn(hook.originalData);
+}
+
+/** A row's non-empty string `id`, or null. */
+function idIn(row: unknown): string | null {
+  if (typeof row !== "object" || row === null) return null;
+  const id = (row as { id?: unknown }).id;
   return typeof id === "string" && id !== "" ? id : null;
 }
 

@@ -210,6 +210,42 @@ describe("pageSections", () => {
     expect(sections[0]?.target).toBe("intro");
   });
 
+  it("names a placed component's section by the component's title", () => {
+    const instance = {
+      id: "i1",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "header" },
+    } as BlockNode;
+    const withHeader = pageRenderInputs({
+      siteStyle: undefined,
+      clientConfig: undefined,
+      previewContainer: undefined,
+      limits: DEFAULT_LIMITS,
+      definitions: new Map([
+        [
+          "header",
+          {
+            ...page([block("d1", "core/heading", { text: "Site header" })]),
+            kind: "component",
+          },
+        ],
+      ]) as never,
+    });
+    const document = page([instance]);
+    const titleOf = (id: string) =>
+      id === "header" ? "Header with logo" : undefined;
+
+    expect(
+      pageSections(document, entryBlockResolver(), withHeader, titleOf)[0]
+        ?.label
+    ).toBe("Header with logo");
+    // With no title to read, it is a component, not the engine's word for one.
+    expect(
+      pageSections(document, entryBlockResolver(), withHeader)[0]?.label
+    ).toBe("Component");
+  });
+
   it("lists a placed component with several top-level parts as one section", () => {
     // The author placed ONE thing. Listed per drawn root, it showed as several
     // sections that all opened the same instance, and the list's numbers no

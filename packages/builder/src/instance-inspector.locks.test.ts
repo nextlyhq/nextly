@@ -195,7 +195,7 @@ describe("the sentence a double-click on unexposed text raises", () => {
     const inspection = inspect(placed({ variant: "v1" }));
     if (inspection === null) throw new Error("expected an inspection");
     expect(partOfComponentSentence({ ...inspection, label: "Header" })).toBe(
-      "Part of Header, Dark variant. Its exposed fields are in the panel; the rest is edited on the component itself."
+      "Part of Header, Dark variant. Its fields are in the panel; the rest is edited on the component itself."
     );
   });
 
@@ -203,5 +203,57 @@ describe("the sentence a double-click on unexposed text raises", () => {
     expect(partOfComponentSentence({ label: "Footer", rows: [] })).toBe(
       "Part of Footer. Its content is edited on the component itself."
     );
+  });
+});
+
+describe("rows a component's Layers lock holds", () => {
+  /** The same quote and an outside block, the quote locked in Layers. */
+  const LOCKED = {
+    ...SEALED,
+    nodes: [
+      {
+        ...SEALED.nodes[0],
+        type: "acme/quote",
+        slots: undefined,
+        id: "q",
+        locked: true,
+        name: "Hero",
+      },
+      SEALED.nodes[1],
+    ],
+    variants: undefined,
+  } as unknown as ComponentDocument;
+  const outside = {
+    id: "outside",
+    label: "Outside",
+    nodeId: "free",
+    propPath: "words",
+    type: "text",
+  };
+
+  it("holds a row driving the locked block, naming the component, and leaves the free block's row", () => {
+    const document = pageOf(placed());
+    const definition = {
+      ...LOCKED,
+      exposed: [...(LOCKED.exposed ?? []), outside],
+    } as unknown as BlockDocument;
+    const lookup = new Map([["sealed", definition]]);
+    const composed = resolveComponentInstances(document, lookup, {
+      exposures: true,
+    }).document;
+    const rows =
+      inspectInstance(
+        document,
+        "p",
+        lookup,
+        [{ id: "sealed", title: "Promo" } as never],
+        { definitions: BLOCKS, composed }
+      )?.rows ?? [];
+
+    expect(rows.find(row => row.id === "words")?.heldBy).toEqual({
+      headline: "Set by the component Promo.",
+      remedy: "Change it where the component is edited.",
+    });
+    expect(rows.find(row => row.id === "outside")?.heldBy).toBe(undefined);
   });
 });

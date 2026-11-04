@@ -28,11 +28,16 @@
  */
 
 import {
+  componentLayersLocks,
   componentUsageIn,
   compositionFaults,
   DEFAULT_LIMITS,
+  findNode,
+  heldBaselines,
+  keptForSameComponents,
   lockRefusal,
   lockRepairRule,
+  placedLockChanges,
   placementRefusal,
   placementRepairRule,
   planRepair as planDocumentRepair,
@@ -56,7 +61,7 @@ import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import {
   layersLockRefusalFor,
   lockRefusalWording,
-  savedLockRemovedBy,
+  savedLockBrokenBy,
   type LockEditRefusal,
   type LockRefusalFacts,
 } from "./lock-refusal";
@@ -256,6 +261,12 @@ export interface UseEditorStateArgs {
    */
   onLockRefused?: (refusal: LockEditRefusal) => void;
   /**
+   * A component's name by its id, for the refusal of an edit to a block the
+   * component locks: the page cannot unlock it, so the author is told whose
+   * it is. Absent, the refusal names no component.
+   */
+  componentName?: (componentId: string) => string | undefined;
+  /**
    * Where the locks an edit is held to are read: the block definitions and
    * nesting rules. Defaults to the live registry, so every host's editor holds
    * the locks its saves enforce.
@@ -387,6 +398,8 @@ interface LockJudgement {
   readonly limits: DocumentLimits;
   /** The composed page, for the locks a placement reaches inside a component. */
   readonly compose: Composer | undefined;
+  /** A component's name, for a refusal of a block it locks. */
+  readonly componentName: UseEditorStateArgs["componentName"];
 }
 
 /**
@@ -433,6 +446,68 @@ function lockBreakAdded(
 }
 
 /**
+ * A block a placed component locks in Layers that the edit changes through a
+ * placement, judged as a save judges it (`placedLockChanges`): the composed
+ * page against the same page with every placement as its component holds it,
+ * keeping a value the page already gave the block, before this edit or as
+ * last saved. Named by the component, since the page cannot unlock it.
+ */
+function componentLockAdded(
+  after: BlockDocument,
+  composedAfter: BlockDocument,
+  kept: readonly BlockDocument[],
+  {
+    compose,
+    limits,
+    componentName,
+  }: Pick<LockJudgement, "limits" | "componentName"> & { compose: Composer }
+): LockRefusalFacts | undefined {
+  // Asked of the as-held baseline, not of the page after the edit: an edit
+  // that hides or removes the locked block leaves no lock after it to find,
+  // but the page before it, or as saved, still draws one. A page none of
+  // whose forms draws a component lock composes nothing more.
+  const drawsLock = [composedAfter, ...kept].some(
+    form => componentLayersLocks(form.nodes, limits).size > 0
+  );
+  if (!drawsLock) return undefined;
+  const held = heldBaselines(after, limits).map(level => ({
+    form: compose(level.document).document,
+    placements: level.placements,
+  }));
+  const [change] = placedLockChanges(composedAfter, held, kept, limits);
+  if (change === undefined) return undefined;
+  return componentLockFacts(
+    componentNameOf(after, change.placementId, componentName)
+  );
+}
+
+/** The name of the component a page's placement draws, or "" when none is known. */
+function componentNameOf(
+  page: BlockDocument,
+  placementId: string | undefined,
+  componentName: LockJudgement["componentName"]
+): string {
+  const placement =
+    placementId === undefined ? undefined : findNode(page.nodes, placementId);
+  const componentId = (
+    placement?.props as { componentId?: unknown } | undefined
+  )?.componentId;
+  return typeof componentId === "string"
+    ? (componentName?.(componentId) ?? "")
+    : "";
+}
+
+/** A refusal for a block a component locks, named by the component. */
+function componentLockFacts(name: string): LockRefusalFacts {
+  return {
+    code: "layers-locked",
+    label: name,
+    relation: "component",
+    verb: "change",
+  };
+}
+
+/**
  * The lock break an edit adds to the composed page, judged by the engine's
  * `compositionFaults`, the check a save runs over the same composition.
  *
@@ -445,7 +520,7 @@ function composedLockAdded(
   after: BlockDocument,
   stored: BlockDocument,
   sources: LockSources,
-  { compose, limits }: LockJudgement
+  { compose, limits, componentName }: LockJudgement
 ): LockRefusalFacts | undefined {
   if (compose === undefined) return undefined;
   // A page placing no component has no composed break to add.
@@ -453,6 +528,19 @@ function composedLockAdded(
   if (placed.complete && placed.ids.length === 0) return undefined;
   const composedBefore = compose(before);
   const baselines = [composedBefore.document, compose(stored).document];
+  const composedAfter = compose(after);
+  // A value is kept only under the component that gave it: a placement this
+  // edit switches to another component is left out of the forms it keeps.
+  const kept = [before, stored].map((form, index) => {
+    const same = keptForSameComponents(after, form, limits);
+    return same === form ? baselines[index] : compose(same).document;
+  });
+  const held = componentLockAdded(after, composedAfter.document, kept, {
+    compose,
+    limits,
+    componentName,
+  });
+  if (held !== undefined) return held;
   const lockFaults = (host: BlockDocument, composition: ResolvedComposition) =>
     compositionFaults(host, composition, {
       definitions: sources.definitions,
@@ -461,7 +549,7 @@ function composedLockAdded(
       baselines,
     }).filter(fault => fault.lock !== undefined);
   const had = new Set(lockFaults(before, composedBefore).map(composedBreakKey));
-  const added = lockFaults(after, compose(after)).find(
+  const added = lockFaults(after, composedAfter).find(
     fault => !had.has(composedBreakKey(fault))
   );
   if (added?.lock === undefined) return undefined;
@@ -486,6 +574,7 @@ interface AtApply
     | "onLockRefused"
     | "locks"
     | "onPlacementRefused"
+    | "componentName"
   > {
   /** The document as last saved; the document as opened when none is given. */
   readonly stored: BlockDocument;
@@ -500,10 +589,12 @@ function atApply(
     | "locks"
     | "stored"
     | "onPlacementRefused"
+    | "componentName"
   >,
   opened: BlockDocument
 ): AtApply {
   return {
+    componentName: host.componentName,
     definitions: host.definitions,
     onRefused: host.onRefused,
     onLockRefused: host.onLockRefused,
@@ -553,14 +644,27 @@ function useLockQuestions(
   const definitions = locks?.definitions;
   const nesting = locks?.nesting;
   const lockRefusalFor = useCallback(
-    (ops: readonly BuilderOp[]): LockRefusalFacts | undefined =>
-      lockAnswerFor(latestDocument.current, ops, baseline, {
+    (ops: readonly BuilderOp[]): LockRefusalFacts | undefined => {
+      // Read at the question, as the apply reads it.
+      const componentName = composition.current.componentName;
+      return lockAnswerFor(latestDocument.current, ops, baseline, {
         locks: hostLocksOf(definitions, nesting),
         limits,
         compose: composerNow(),
-      }),
-    [latestDocument, limits, composerNow, baseline, definitions, nesting]
+        componentName,
+      });
+    },
+    [
+      latestDocument,
+      composition,
+      limits,
+      composerNow,
+      baseline,
+      definitions,
+      nesting,
+    ]
   );
+
   const planRepair = useCallback(
     (): RepairPlan =>
       // The lock rule first and the placement rule after it, so a block a
@@ -632,7 +736,7 @@ function refusedAsFresh(
     stored: BlockDocument;
     current: Pick<
       UseEditorStateArgs,
-      "definitions" | "onRefused" | "onLockRefused" | "locks"
+      "definitions" | "onRefused" | "onLockRefused" | "locks" | "componentName"
     >;
     limits: DocumentLimits;
     compose: Composer | undefined;
@@ -690,7 +794,7 @@ function lockAnswerFor(
  * Tell the host which Layers lock refused an edit, and answer whether one did.
  *
  * With `after` and `stored`, the edit applied and only the saved page's lock
- * on a block it deletes is asked (`savedLockRemovedBy`); without them, the
+ * on a block it deletes is asked (`savedLockBrokenBy`); without them, the
  * edit was refused by the op layer and the lock it broke is found again.
  */
 function reportLayersLock(
@@ -703,7 +807,7 @@ function reportLayersLock(
   const found =
     after === undefined || stored === undefined
       ? layersLockRefusalFor(before, ops)
-      : savedLockRemovedBy(before, after, stored, ops);
+      : savedLockBrokenBy(before, after, stored, ops);
   if (found === undefined) return false;
   onLockRefused?.({
     reason: "locked",
@@ -715,11 +819,16 @@ function reportLayersLock(
 
 /** The lock judgement from what the store reads at apply time. */
 function judgementOf(
-  current: Pick<UseEditorStateArgs, "locks">,
+  current: Pick<UseEditorStateArgs, "locks" | "componentName">,
   limits: DocumentLimits,
   compose: Composer | undefined
 ): LockJudgement {
-  return { locks: current.locks, limits, compose };
+  return {
+    locks: current.locks,
+    limits,
+    compose,
+    componentName: current.componentName,
+  };
 }
 
 /**
@@ -786,6 +895,8 @@ function useHistoryStacks(): {
   pop: (from: "undo" | "redo") => HistoryEntry | undefined;
   remove: (entry: HistoryEntry) => void;
   withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
+  /** A replay of the step took effect; the branch it ended is gone. */
+  settle: (origin: HistoryStep) => void;
 } {
   const undoStack = useRef<HistoryEntry[]>([]);
   const redoStack = useRef<HistoryEntry[]>([]);
@@ -808,9 +919,26 @@ function useHistoryStacks(): {
       document: documentEntries(undoStack.current) + forgotten.current,
     });
   }, []);
+  /*
+   * The redo branch a run of recorded steps ended, with those steps and the
+   * entry below the first, so that withdrawing every one of them before
+   * anything else follows gives the branch back: changes that never took
+   * effect must not cost the author their redo either. Kept while the steps
+   * are recorded one after another, and while any of them only moves between
+   * the stacks unanswered, since each change may still be refused; dropped
+   * once a replay of one takes effect or any other entry is pushed.
+   */
+  const endedBranch = useRef<StepRun | null>(null);
   const push = useCallback(
     (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
       let dropped: HistoryEntry | undefined;
+      endedBranch.current = runAfterPush(
+        endedBranch.current,
+        entry,
+        into,
+        undoStack.current.at(-1),
+        redoStack.current
+      );
       if (into === "redo") {
         redoStack.current.push(entry);
       } else {
@@ -860,8 +988,21 @@ function useHistoryStacks(): {
     (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
       const kept = (held: HistoryEntry) =>
         held.kind !== "step" || held.origin !== origin;
+      // With the last step of the run gone, the history as it was before it
+      // began (nothing made since, and nothing else undone): the redo branch
+      // the run ended comes back with that withdrawal. While others of the
+      // run remain, one of them may yet take effect, so the branch waits.
+      const ended = endedBranch.current;
+      ended?.steps.delete(origin);
+      const last = ended !== null && ended.steps.size === 0;
+      if (last) endedBranch.current = null;
       undoStack.current = undoStack.current.filter(kept);
-      redoStack.current = redoStack.current.filter(kept);
+      const redo = redoStack.current.filter(kept);
+      const restore =
+        last && undoStack.current.at(-1) === ended.below && redo.length === 0
+          ? ended.branch
+          : [];
+      redoStack.current = [...redo, ...restore];
       if (dropped !== undefined && undoStack.current.length < MAX_HISTORY) {
         undoStack.current.unshift(dropped);
         if (dropped.kind === "ops") forgotten.current -= 1;
@@ -870,7 +1011,42 @@ function useHistoryStacks(): {
     },
     [sync]
   );
-  return { depths, push, pop, remove, withdraw };
+  /*
+   * A replay of a step of the run took effect: its change and its undo are
+   * both real, so the branch the run ended is gone for good.
+   */
+  const settle = useCallback((origin: HistoryStep) => {
+    if (endedBranch.current?.steps.has(origin) === true) {
+      endedBranch.current = null;
+    }
+  }, []);
+  return { depths, push, pop, remove, withdraw, settle };
+}
+
+/** A run of recorded steps, the redo branch it ended, and what lay below it. */
+interface StepRun {
+  steps: Set<HistoryStep>;
+  below: HistoryEntry | undefined;
+  branch: HistoryEntry[];
+}
+
+/**
+ * The run of recorded steps once `entry` is pushed: a new step joins the run
+ * or starts one (keeping the branch it ends and what lay below), a step of
+ * the run moving between the stacks keeps it, and anything else ends it.
+ */
+function runAfterPush(
+  run: StepRun | null,
+  entry: HistoryEntry,
+  into: "undo" | "redo" | "new",
+  below: HistoryEntry | undefined,
+  branch: HistoryEntry[]
+): StepRun | null {
+  if (entry.kind !== "step") return null;
+  if (into !== "new") return run?.steps.has(entry.origin) === true ? run : null;
+  if (run === null) return { steps: new Set([entry.origin]), below, branch };
+  run.steps.add(entry.origin);
+  return run;
 }
 
 /**
@@ -883,13 +1059,15 @@ function replayStep(
   { step, origin }: { step: HistoryStep; origin: HistoryStep },
   into: "undo" | "redo",
   push: (entry: HistoryEntry, into: "undo" | "redo") => void,
-  remove: (entry: HistoryEntry) => void
+  remove: (entry: HistoryEntry) => void,
+  settle: (origin: HistoryStep) => void
 ): Promise<boolean> {
   const moved: HistoryEntry = { kind: "step", step: reversed(step), origin };
   push(moved, into);
   return step.undo().then(
     took => {
-      if (!took) remove(moved);
+      if (took) settle(origin);
+      else remove(moved);
       return took;
     },
     () => {
@@ -916,6 +1094,7 @@ export function useEditorState({
   locks,
   stored,
   onPlacementRefused,
+  componentName,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
@@ -929,6 +1108,7 @@ export function useEditorState({
     locks,
     stored,
     onPlacementRefused,
+    componentName,
   };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
@@ -970,7 +1150,7 @@ export function useEditorState({
     );
   latestDocument.current = document;
 
-  const { depths, push, pop, remove, withdraw } = useHistoryStacks();
+  const { depths, push, pop, remove, withdraw, settle } = useHistoryStacks();
 
   /**
    * Run an op and record its inverse on the given stack.
@@ -1135,11 +1315,11 @@ export function useEditorState({
       if (entry === undefined) return false;
       const into = from === "undo" ? "redo" : "undo";
       if (entry.kind === "step") {
-        return replayStep(entry, into, push, remove);
+        return replayStep(entry, into, push, remove, settle);
       }
       return run(entry.ops, into) !== null;
     },
-    [pop, push, remove, run]
+    [pop, push, remove, run, settle]
   );
   const undo = useCallback(() => replay("undo"), [replay]);
   const redo = useCallback(() => replay("redo"), [replay]);

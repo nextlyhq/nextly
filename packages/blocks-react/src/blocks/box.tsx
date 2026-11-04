@@ -16,6 +16,7 @@ import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
 import {
+  CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
   LINKABLE_BASE_STYLE,
   linkableContentModel,
@@ -46,7 +47,8 @@ export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
   },
   props: {
     as: {
-      label: "HTML tag",
+      label: "Element type",
+      display: "menu",
       type: "select",
       options: ["div", "article", "aside"],
     },
@@ -69,6 +71,7 @@ export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     children: {},
   },
   baseStyles: { base: { base: LINKABLE_BASE_STYLE } },
+  childGap: CONTAINER_CHILD_GAP,
   supports: CONTAINER_SUPPORTS,
   // A linked box is an `<a>`, so what may sit inside it follows its link.
   contentModel: linkableContentModel,

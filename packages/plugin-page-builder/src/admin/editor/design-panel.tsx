@@ -20,7 +20,10 @@ import { EDITOR_WORDS } from "@nextlyhq/builder/shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { RemountOnStyleReplay } from "./site-style-history";
+import {
+  RemountOnStyleReplay,
+  StyleRevisionContext,
+} from "./site-style-history";
 
 /**
  * The panel's tabs, in the order the rail's Design item shows them, named
@@ -49,9 +52,9 @@ export function designViewOf(view: string | null): DesignView {
 }
 
 /**
- * Where the open tab may put controls of its own, in the panel's header beside
- * the title: the Variables tab's preview switch and import-and-export menu.
- * `null` until the header has mounted.
+ * Where controls go in the panel's header, beside the title: the preview
+ * switch and the import-and-export menu, drawn there by the panel's frame so
+ * they stay whichever tab is open. `null` until the header has mounted.
  */
 const DesignHeaderSlot = React.createContext<HTMLElement | null>(null);
 
@@ -60,15 +63,30 @@ export function useDesignHeaderSlot(): HTMLElement | null {
   return React.useContext(DesignHeaderSlot);
 }
 
+/** The tabs as they are, for a panel with nothing around them. */
+function noFrame(tabs: React.ReactNode): React.ReactNode {
+  return tabs;
+}
+
 export function DesignPanel({
   view,
   tabs,
+  frame = noFrame,
 }: {
   view: PanelView;
   /** What fills each tab. Only the open tab's content is mounted. */
   tabs: Record<DesignView, () => React.ReactNode>;
+  /**
+   * What surrounds every tab, mounted for as long as the panel is: the place
+   * for state the header and the tabs share, so changing tab neither drops
+   * the header's controls nor resets them.
+   */
+  frame?: (tabs: React.ReactNode) => React.ReactNode;
 }): React.JSX.Element {
   const current = designViewOf(view.current);
+  // Read here because the header's controls are drawn into the slot from
+  // inside the frame, outside the element the replay holds inert.
+  const { settling } = React.useContext(StyleRevisionContext);
   // State rather than a ref, so a tab reading the slot renders again once the
   // header element exists.
   const [slot, setSlot] = React.useState<HTMLElement | null>(null);
@@ -88,7 +106,11 @@ export function DesignPanel({
         <div className="nx-pb-design__head">
           <div className="nx-pb-design__title-row">
             <h2 className="nx-pb-design__title">{EDITOR_WORDS.design}</h2>
-            <div className="nx-pb-design__actions" ref={setSlot} />
+            <div
+              className="nx-pb-design__actions"
+              ref={setSlot}
+              inert={settling}
+            />
           </div>
           <TabsList
             aria-label={EDITOR_WORDS.design}
@@ -106,19 +128,21 @@ export function DesignPanel({
           </TabsList>
         </div>
         <DesignHeaderSlot.Provider value={slot}>
-          {DESIGN_VIEWS.map(entry => (
-            <TabsContent
-              key={entry.value}
-              value={entry.value}
-              className="nx-pb-design__body"
-            >
-              {/* A style change undone or redone is written behind the open
-                  tab's back, so the tab is mounted afresh to read it. */}
-              {entry.value === current ? (
-                <RemountOnStyleReplay>{open}</RemountOnStyleReplay>
-              ) : null}
-            </TabsContent>
-          ))}
+          {/* A style change undone or redone is written behind the frame's
+              and the open tab's back, so both are mounted afresh to read it. */}
+          <RemountOnStyleReplay>
+            {frame(
+              DESIGN_VIEWS.map(entry => (
+                <TabsContent
+                  key={entry.value}
+                  value={entry.value}
+                  className="nx-pb-design__body"
+                >
+                  {entry.value === current ? open : null}
+                </TabsContent>
+              ))
+            )}
+          </RemountOnStyleReplay>
         </DesignHeaderSlot.Provider>
       </Tabs>
     </section>

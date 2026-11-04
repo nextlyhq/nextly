@@ -52,6 +52,7 @@ import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
 import type { Rect } from "./geometry";
+import { placedComponentId } from "./instance-inspector";
 import {
   keyboardMovePosition,
   type KeyboardMove,
@@ -113,8 +114,8 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
-  | "save-as-component"
-  | "convert-to-component"
+  | "edit-component"
+  | "turn-into-component"
   | "detach-component"
   | "duplicate-component"
   | "update-pattern"
@@ -187,39 +188,28 @@ const MAKE_COMPONENT_GRANT_REFUSAL =
 const PLANNED_COMPONENT_ID = "planned-component";
 
 /**
- * "Save as component" and "Convert to component", each enabled or dimmed with
- * the reason, both asked of the planners rather than restated. Save shares
- * the pattern save's selection rules; convert is planned in full, and the
- * ops it would apply are put to the editor's lock question, since a slot's
- * lock can refuse the placement that replaces the run.
+ * What "Turn into component…" may do with a selection: replace the blocks
+ * with a placement of the new component, or keep them and save a copy. Each
+ * way is asked of its planner rather than restated: keeping shares the
+ * pattern save's selection rules; replacing is planned in full, and the ops
+ * it would apply are put to the editor's lock question, since a slot's lock
+ * can refuse the placement that replaces the run. A way that is refused
+ * carries its reason; both open, the object is empty.
  */
-function componentActions(
+export interface TurnIntoChoice {
+  /** Why the blocks cannot be replaced, so only a copy can be saved. */
+  readonly replaceRefused?: string;
+  /** Why no copy can be saved leaving them, so only replacing is open. */
+  readonly keepRefused?: string;
+}
+
+/** Each way "Turn into component…" may go, and why not where it may not. */
+export function turnIntoChoice(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
-): ToolbarAction[] {
-  if (offer === undefined) return [];
-  const save: ToolbarAction = {
-    id: "save-as-component",
-    label: "Save as component",
-    enabled: true,
-    inMenu: true,
-  };
-  const convert: ToolbarAction = {
-    id: "convert-to-component",
-    label: "Convert to component",
-    enabled: true,
-    inMenu: true,
-  };
-  if (!offer.mayCreate) {
-    const reason = MAKE_COMPONENT_GRANT_REFUSAL;
-    return [
-      { ...save, enabled: false, reason },
-      { ...convert, enabled: false, reason },
-    ];
-  }
+  ask?: LockQuestion
+): TurnIntoChoice {
   const saving = saveAsPatternRefusal(document, ids, nesting);
   const converting = planConvertToComponent(
     document,
@@ -229,18 +219,47 @@ function componentActions(
     {},
     nesting
   );
-  return [
-    saving === undefined
-      ? save
-      : { ...save, enabled: false, reason: compositionRefusalReason(saving) },
-    converting.problem === undefined
-      ? heldByLock(convert, ask, converting.pageOps)
-      : {
-          ...convert,
-          enabled: false,
-          reason: compositionRefusalReason(converting),
-        },
-  ];
+  const replaceRefused =
+    converting.problem !== undefined
+      ? compositionRefusalReason(converting)
+      : converting.pageOps === undefined
+        ? undefined
+        : lockReason(ask, converting.pageOps);
+  return {
+    ...(replaceRefused === undefined ? {} : { replaceRefused }),
+    ...(saving === undefined
+      ? {}
+      : { keepRefused: compositionRefusalReason(saving) }),
+  };
+}
+
+/**
+ * "Turn into component…": ONE item for both ways of making a component from
+ * the selection, the choice between them made in its dialog. Offered while
+ * either way is open; dimmed, with the reason, when neither is.
+ */
+function componentActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const turn: ToolbarAction = {
+    id: "turn-into-component",
+    label: "Turn into component…",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    return [{ ...turn, enabled: false, reason: MAKE_COMPONENT_GRANT_REFUSAL }];
+  }
+  const choice = turnIntoChoice(document, ids, nesting, ask);
+  if (choice.replaceRefused !== undefined && choice.keepRefused !== undefined) {
+    return [{ ...turn, enabled: false, reason: choice.replaceRefused }];
+  }
+  return [turn];
 }
 
 /**
@@ -700,7 +719,13 @@ export function toolbarActions(
    * What the host offers for making components, or nothing where it has no
    * component library: then neither verb appears.
    */
-  components?: ComponentVerbsOffer
+  components?: ComponentVerbsOffer,
+  /**
+   * Whether the host opens a placed component in its own view. Offered only
+   * for one selected placement, and only by a host that answers it; the host
+   * also withholds it from an author who may not update components.
+   */
+  offersEditComponent: boolean = false
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -761,6 +786,7 @@ export function toolbarActions(
       duplication?.ops
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...editComponentAction(document, selectedId, offersEditComponent),
     ...compositionActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined
       ? heldByLock(
@@ -783,6 +809,24 @@ export function toolbarActions(
           reason: lockedBy(deleteLock, selectedId, "delete"),
         },
   ];
+}
+
+/**
+ * "Edit component" for a selected placement, where the host offers it; nothing
+ * for any other block, so a bar over a heading does not grow a dimmed button
+ * that could never apply to it.
+ */
+function editComponentAction(
+  document: BlockDocument,
+  selectedId: string,
+  offered: boolean
+): ToolbarAction[] {
+  // Asked as the verb asks: a placement naming no component has nothing to
+  // open, so it is not offered a control that would do nothing.
+  if (!offered || placedComponentId(document, selectedId) === undefined) {
+    return [];
+  }
+  return [{ id: "edit-component", label: "Edit component", enabled: true }];
 }
 
 /**

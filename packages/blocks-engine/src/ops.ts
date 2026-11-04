@@ -47,9 +47,11 @@
 import {
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   isBlockOrigin,
+  isComponentDocument,
 } from "./document";
 import {
   layersLockBreak,
@@ -982,20 +984,21 @@ function isSlotMap(value: unknown): boolean {
 }
 
 /**
- * One edit to the NODE TREE. The four shapes below are the whole vocabulary
- * for that, and deliberately not for the document as a whole.
+ * One edit to the NODE TREE, or to a component's envelope. The four node
+ * shapes below are the whole vocabulary for the tree; the fifth, `envelope`,
+ * writes only what a component offers its placements (`exposed`, `slots`,
+ * `variants`), and deliberately nothing else of the document.
  *
  * `BlockDocument.settings` — page-scoped styles, `customCss` — has no op here:
  * `update` addresses a node by id and `NodePatch` is read off `updateNode`'s
- * signature, which excludes the envelope. So an editor changing page settings
- * has to write them outside this module, and that change is absent from undo,
- * autosave, crash replay and review.
+ * signature, which excludes the envelope, and `envelope` names its three
+ * fields. So an editor changing page settings has to write them outside this
+ * module, and that change is absent from undo, autosave, crash replay and
+ * review.
  *
- * Stated rather than quietly true. Adding a fifth op widens the PERSISTED
- * format, which every later version has to keep reading, so its shape wants its
- * own design pass rather than being appended to whichever change notices the
- * gap. Nothing bypasses undo in practice yet, because nothing consumes this
- * module.
+ * Stated rather than quietly true. A further op widens the PERSISTED format,
+ * which every later version has to keep reading, so its shape wants its own
+ * design pass rather than being appended to whichever change notices the gap.
  */
 /**
  * Where an op places a node: at the top level, or inside a named slot.
@@ -1094,7 +1097,47 @@ export type BuilderOp =
        * in place. A list of names survives the round trip because it is data.
        */
       readonly unset?: readonly RemovableField[];
+    }
+  | {
+      /**
+       * An edit to a COMPONENT's envelope: the fields, slots and variants its
+       * placements may set, which no node op can reach.
+       *
+       * A whole field is written at once, never a part of one. An exposure
+       * edit renames, adds and prunes across `exposed` and `variants` together
+       * (see `exposure-planners`), and one op carrying both is one undo step
+       * for what the designer did as one act.
+       *
+       * Only the SHAPE is judged here: what the fields hold is the envelope
+       * check's question, which every save of the definition asks.
+       *
+       * A fifth member of a published union: code that builds ops or applies
+       * them is unaffected, and an exhaustive `switch` over `kind` handles it
+       * with a case of its own or a default.
+       *
+       * @experimental Settles when the component editor ships.
+       */
+      readonly kind: "envelope";
+      readonly patch: EnvelopePatch;
+      /** Envelope fields to REMOVE, named for the reason `update`'s are. */
+      readonly unset?: readonly EnvelopeField[];
     };
+
+/**
+ * The envelope fields an `envelope` op may write: what a component offers its
+ * placements. Its kind, format and settings are not among them.
+ */
+const ENVELOPE_FIELDS = ["exposed", "slots", "variants"] as const;
+
+/** One of {@link ENVELOPE_FIELDS}. */
+export type EnvelopeField = (typeof ENVELOPE_FIELDS)[number];
+
+/** The values an `envelope` op writes, by field. */
+export type EnvelopePatch = Partial<Pick<ComponentDocument, EnvelopeField>>;
+
+function isEnvelopeField(key: string): key is EnvelopeField {
+  return (ENVELOPE_FIELDS as readonly string[]).includes(key);
+}
 
 /**
  * A field's value, but only when the record OWNS it.
@@ -2839,7 +2882,7 @@ export interface ApplyOptions {
  * unlock.
  */
 function layersLockRefusal(
-  op: BuilderOp,
+  op: Exclude<BuilderOp, { readonly kind: "envelope" }>,
   lockedId: string,
   where: LayersLockBreak["where"]
 ): string {
@@ -2891,6 +2934,9 @@ function assertKeepsLayersLocks(
   options: ApplyOptions
 ): void {
   if (options.layersLocks === "ignore") return;
+  // An envelope edit changes what placements may set, not a block, so no
+  // Layers lock stands in its way.
+  if (op.kind === "envelope") return;
   // Refused rather than exempting the inverse from the lock: see the insert
   // branch of `applyOp`. With the lock ignored, the inverse is a remove the
   // same option lets through, so the round trip still holds.
@@ -3563,6 +3609,9 @@ export function applyOp(
       };
     }
 
+    case "envelope":
+      return applyEnvelope(document, op, limits);
+
     default: {
       // The discriminant is exhausted above, so TypeScript never reaches this.
       // A JavaScript caller, a queued agent edit and a buffer written by a
@@ -3577,6 +3626,125 @@ export function applyOp(
       );
     }
   }
+}
+
+/**
+ * Apply an `envelope` op: write or remove whole envelope fields of a component.
+ *
+ * Held to what `update` holds a node patch to, for the same reasons: the op is
+ * persisted, so every name it carries is one this op may write and every value
+ * one JSON writes unchanged; an op that changes nothing is refused rather than
+ * recorded as an undo with no effect; and the result is judged against the
+ * document's caps. The inverse is read from the document, never declared.
+ */
+function applyEnvelope(
+  document: BlockDocument,
+  op: Extract<BuilderOp, { kind: "envelope" }>,
+  limits: DocumentLimits
+): AppliedOp {
+  // A page has no placements to offer anything to, and a field written onto
+  // one would be refused by its next save as an envelope a page cannot hold.
+  if (!isComponentDocument(document)) {
+    throw new OpError(
+      `envelope: only a component offers fields, slots and variants to its ` +
+        `placements, and this document is a ${describe(document.kind)}.`
+    );
+  }
+  const removed = assertEnvelopeOp(op);
+  const touched = [...Object.keys(op.patch), ...removed];
+  const held = document as unknown as Record<string, unknown>;
+  const written = op.patch as Record<string, unknown>;
+  const changesSomething = touched.some(key =>
+    removed.includes(key as EnvelopeField)
+      ? ownValue(held, key) !== undefined
+      : !equalWithin(ownValue(held, key), written[key], COMPARISON_BUDGET)
+  );
+  if (!changesSomething) {
+    throw new OpError(
+      `envelope: the component already holds every value this op would ` +
+        `write, so it changes nothing. A history entry for it would undo to ` +
+        `no visible effect.`
+    );
+  }
+
+  const prior: Record<string, unknown> = {};
+  const absent: EnvelopeField[] = [];
+  for (const key of touched as EnvelopeField[]) {
+    const value = ownValue(held, key);
+    if (value === undefined) absent.push(key);
+    // Detached, as `update`'s prior values are: the inverse must restore the
+    // field as it stood, whatever later touches the old document's copy.
+    else prior[key] = snapshot(value);
+  }
+
+  const next: Record<string, unknown> = { ...held, ...snapshot(op.patch) };
+  // Deleted rather than left holding `undefined`, which JSON cannot write and
+  // this module's own value check would refuse on the next edit.
+  for (const key of removed) delete next[key];
+  const result = next as unknown as BlockDocument;
+  assertFitsCaps(document, result, "envelope", limits);
+  return {
+    document: result,
+    inverse: {
+      kind: "envelope",
+      patch: prior,
+      ...(absent.length > 0 ? { unset: absent } : {}),
+    },
+  };
+}
+
+/**
+ * The names an `envelope` op carries, judged: a record of envelope fields
+ * whose values JSON writes unchanged, and a list of envelope fields to remove,
+ * none of them also written. Answers the fields to remove.
+ */
+function assertEnvelopeOp(
+  op: Extract<BuilderOp, { kind: "envelope" }>
+): readonly EnvelopeField[] {
+  if (!isPlainRecord(op.patch) || !hasOnlyJsonOwnKeys(op.patch)) {
+    throw new OpError(
+      `envelope: a patch of ${describe(op.patch)} names no fields. An ` +
+        `envelope op carries a record of the fields to write.`
+    );
+  }
+  const unset: unknown = op.unset ?? [];
+  // The JSON domain FIRST, as `update`'s list is judged: reading an index of a
+  // list holding an accessor would run it before anything refused the list.
+  if (!Array.isArray(unset) || !isJsonValue(unset) || !unset.every(isString)) {
+    throw new OpError(
+      `envelope: \`unset\` of ${describe(unset)} is not a list of field names.`
+    );
+  }
+  for (const key of [...Object.keys(op.patch), ...(unset as string[])]) {
+    if (!isEnvelopeField(key)) {
+      throw new OpError(
+        `envelope: ${describe(key)} is not a field this op may write. It ` +
+          `writes only ${ENVELOPE_FIELDS.join(", ")}.`
+      );
+    }
+  }
+  for (const key of unset as EnvelopeField[]) {
+    if (Object.hasOwn(op.patch, key)) {
+      throw new OpError(
+        `envelope: ${describe(key)} is both written and removed, so the op ` +
+          `says two things about one field.`
+      );
+    }
+  }
+  const values = Object.values(op.patch);
+  if (values.some(value => value === undefined)) {
+    throw new OpError(
+      `envelope: a field set to undefined disappears when the op is stored; ` +
+        `name it in \`unset\` instead.`
+    );
+  }
+  if (!areJsonValues(values)) {
+    throw new OpError(
+      `envelope: the patch holds a value JSON cannot carry unchanged, so the ` +
+        `edit would replay as something else, or not at all.`
+    );
+  }
+  return unset as EnvelopeField[];
 }
 
 /**
