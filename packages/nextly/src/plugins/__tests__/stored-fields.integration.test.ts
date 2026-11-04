@@ -107,6 +107,11 @@ function raceSeam(t: TestNextly, pausing: Writer, releasing: Writer) {
   });
   const state = { paused: false, released: false };
   vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
+    // A read-only transaction (a stored read's snapshot) is not the write the
+    // seam is about, and passes through untouched.
+    if ((rest[0] as { readOnly?: boolean } | undefined)?.readOnly === true) {
+      return original(work, ...rest);
+    }
     const who = writerOf.getStore();
     const first = who !== undefined && !locked.has(who);
     if (who !== undefined && first) locked.set(who, false);
@@ -906,19 +911,56 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         } as never);
         const entry = { collection: "worded", id };
-        const db = t.adapter.getDrizzle() as {
-          select: (...a: never[]) => unknown;
+        // Every select on a Drizzle executor the read is handed: the pool's,
+        // and the one its snapshot transaction hands it.
+        let selects = 0;
+        const counted = (db: object) =>
+          new Proxy(db, {
+            get(target, property, receiver) {
+              const value: unknown = Reflect.get(target, property, receiver);
+              if (property !== "select" || typeof value !== "function") {
+                return value;
+              }
+              return (...args: unknown[]) => {
+                selects += 1;
+                return (value as (...a: unknown[]) => unknown).apply(
+                  target,
+                  args
+                );
+              };
+            },
+          });
+        const adapter = t.adapter as unknown as {
+          getDrizzle(...a: unknown[]): object;
+          transaction<T>(
+            work: (tx: { getDrizzle(...a: unknown[]): object }) => Promise<T>,
+            ...rest: unknown[]
+          ): Promise<T>;
         };
-        const selects = vi.spyOn(db, "select");
+        const getDrizzle = adapter.getDrizzle.bind(adapter);
+        vi.spyOn(adapter, "getDrizzle").mockImplementation((...a) =>
+          counted(getDrizzle(...a))
+        );
+        const transaction = adapter.transaction.bind(adapter);
+        vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) =>
+          transaction(
+            tx => {
+              const txDrizzle = tx.getDrizzle.bind(tx);
+              tx.getDrizzle = (...a) => counted(txDrizzle(...a));
+              return work(tx);
+            },
+            ...rest
+          )
+        );
         const countFor = async (fields: string[]) => {
-          selects.mockClear();
+          selects = 0;
           const read = await readStoredFields(editor, {
             ...entry,
             fields,
             form: "published",
             locale: "de",
           });
-          return { read, count: selects.mock.calls.length };
+          return { read, count: selects };
         };
         // Once to settle what a first read resolves and remembers.
         await countFor(["body", "note", "extra"]);
@@ -1030,6 +1072,9 @@ describe.each(getConfiguredTestDialects())(
         // save can only begin there, and commits after the read.
         let interleaved = false;
         let save: Promise<unknown> = Promise.resolve();
+        // Captured here, before the read begins, so the save runs as its own
+        // flow rather than inside the reader's transaction.
+        const outside = AsyncLocalStorage.snapshot();
         let letEnter = (): void => undefined;
         const saveEntered = new Promise<void>(resolve => {
           letEnter = resolve;
@@ -1037,13 +1082,15 @@ describe.each(getConfiguredTestDialects())(
         const interleave = async () => {
           if (interleaved) return;
           interleaved = true;
-          save = writerOf.run("author", () =>
-            t.nextly.update({
-              collection: "stagedwords",
-              id,
-              data: { body: { v: "draft" }, status: "draft" },
-              overrideAccess: true,
-            } as never)
+          save = outside(() =>
+            writerOf.run("author", () =>
+              t.nextly.update({
+                collection: "stagedwords",
+                id,
+                data: { body: { v: "draft" }, status: "draft" },
+                overrideAccess: true,
+              } as never)
+            )
           );
           await (dialect === "sqlite"
             ? Promise.race([saveEntered, save])
