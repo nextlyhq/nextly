@@ -142,10 +142,17 @@ import { originStore, type OriginStore } from "./origin-store";
 import { pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
+import {
+  registerRetiredCleanupCheck,
+  RETIRED_CLEANUP_SERVICE,
+  retiredCleanupService,
+  type RetiredCleanupService,
+} from "./retired-cleanup";
+import { retiredCleanupJob } from "./retired-cleanup-job";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredPins, type RetiredPins } from "./retired-pins";
-import { retiredStore } from "./retired-store";
+import { allRetired, retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
   pageBuilderSchema,
@@ -1209,6 +1216,18 @@ export const pageBuilder = (
   // it. Set by `init`, which holds the context pins are made through; read by
   // the facts route's repair, which releases them.
   let heldRemovals: RetiredPins | undefined;
+  // The cleanup of retired values still stored, published by `init` for the
+  // reason `rewriteInstall` is: its service and sweep are contributed before
+  // `init` runs and called long after it.
+  let retiredCleanup: RetiredCleanupService | null = null;
+  const requireRetiredCleanup = (): RetiredCleanupService => {
+    if (retiredCleanup === null) {
+      throw new Error(
+        "[page-builder] the cleanup of removed component fields ran before the plugin was installed"
+      );
+    }
+    return retiredCleanup;
+  };
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -1508,21 +1527,44 @@ export const pageBuilder = (
           componentCollection: composition.store.collection,
           componentField: composition.store.field,
         });
+        // RESOLVED, for the reason every own table is: a host may rename it.
+        const retiredTable = {
+          nextly: () => requireInstalled().nextly(),
+          collection:
+            ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+            COMPONENT_RETIRED_SLUG,
+        };
+        const retired = retiredStore(retiredTable);
         registerRetiredExposures({
           ctx,
           componentCollection: composition.store.collection,
           componentField: composition.store.field,
-          store: retiredStore({
-            nextly: () => requireInstalled().nextly(),
-            // RESOLVED, for the reason every own table is: a host may rename it.
-            collection:
-              ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-              COMPONENT_RETIRED_SLUG,
-          }),
+          store: retired,
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           memo: retiredHistory,
           pins: heldRemovals,
         });
+        // The values already stored when a field was retired: walked out of
+        // every document by the sweep below, and walked again when a write
+        // committed after the walk passed its document puts one back.
+        const cleanup = retiredCleanupService({
+          install: requireRewriteInstall,
+          retired: () => allRetired(retiredTable),
+          logger: ctx.logger,
+        });
+        retiredCleanup = cleanup;
+        registerRetiredCleanupCheck({
+          ctx,
+          retired: ids => retired.of(ids),
+          cleanup: () => cleanup,
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        });
+      } else {
+        // Nothing is retired without the readiness hooks, so nothing is owed.
+        retiredCleanup = {
+          advance: () => Promise.resolve({ walked: [], finished: true }),
+          walkAgain: () => Promise.resolve(),
+        };
       }
       // A write that keeps a reference to a component being deleted, committed
       // after the deletion converted that document, sends the document back to
@@ -1588,6 +1630,9 @@ export const pageBuilder = (
         // host as the person who started it, and its progress.
         [COMPONENT_DELETE_REWRITE_SERVICE]: () =>
           componentDeleteRewriteService(requireRewriteInstall),
+        // Taking a component's retired field values out of every document
+        // still holding them; the sweep below drives it.
+        [RETIRED_CLEANUP_SERVICE]: () => requireRetiredCleanup(),
         // The site's spacing model, for a render that holds only the Direct
         // API: `loadSiteStyle` reads it through this service. Resolved per
         // call, so a read before `init` refuses rather than answering a
@@ -1624,6 +1669,10 @@ export const pageBuilder = (
         // The spacing-model step, retried on every pass until a model is
         // recorded; then one indexed read per pass.
         spacingModeJob(spacingModeDeps),
+        // The cleanup of retired field values, owed whenever a component's
+        // retired ids hold more than its last walk was for. A pass with none
+        // owed reads the retired table and each such component's run.
+        retiredCleanupJob(requireRetiredCleanup),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
