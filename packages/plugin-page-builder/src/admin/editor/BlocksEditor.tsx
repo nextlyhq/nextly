@@ -65,7 +65,10 @@ import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
-import { SiteStyleHistoryContext } from "../site-style-client";
+import {
+  SiteStyleHistoryContext,
+  SiteStylePreviewContext,
+} from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
 import {
@@ -872,19 +875,22 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
   const style = useSiteStyleHistory();
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
-      <StyleRevisionContext.Provider value={style.replay}>
-        <ConnectStyleHistoryContext.Provider value={style.connect}>
-          {/*
+      {/* Held style edits, drawn before they are stored. */}
+      <SiteStylePreviewContext.Provider value={style.preview}>
+        <StyleRevisionContext.Provider value={style.replay}>
+          <ConnectStyleHistoryContext.Provider value={style.connect}>
+            {/*
             The canvas's frame, provided above the whole editor: the canvas
             registers it here, and the inspector, the toolbar, inline editing
             and the keys outside the canvas all ask it which document and
             window the page is drawn in.
           */}
-          <CanvasFrameProvider>
-            <EditorBody {...props} />
-          </CanvasFrameProvider>
-        </ConnectStyleHistoryContext.Provider>
-      </StyleRevisionContext.Provider>
+            <CanvasFrameProvider>
+              <EditorBody {...props} />
+            </CanvasFrameProvider>
+          </ConnectStyleHistoryContext.Provider>
+        </StyleRevisionContext.Provider>
+      </SiteStylePreviewContext.Provider>
     </SiteStyleHistoryContext.Provider>
   );
 }

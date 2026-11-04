@@ -292,6 +292,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveIndicator: () => null,
@@ -850,6 +852,8 @@ describe("what the breakpoint manager is told", () => {
             container: [],
           },
         },
+        // Sent to outlive the page, as every site style write is.
+        keepalive: true,
       },
     ]);
   });

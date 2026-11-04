@@ -707,6 +707,33 @@ describe("two options the control once spelled alike", () => {
   });
 });
 
+describe("a placement's row", () => {
+  it("is one row, its source a note under its label and Reset in its own slot", () => {
+    // Label, field, then "Set on this page" stacked made each row about 68px
+    // beside the 28px Style rows.
+    mount(instance({ overrides: { title: "Hello" } }));
+    const note = screen.getByText("Set on this page");
+    const name = note.closest(".nx-inspector__exposed-name");
+    expect(name?.querySelector("label")?.textContent).toBe("Title");
+    const reset = screen.getByRole("button", { name: "Reset Title" });
+    const slot = reset.parentElement;
+    expect(slot?.className).toBe("nx-inspector__exposed-reset-slot");
+    expect(slot?.parentElement?.className).toContain(
+      "nx-inspector__field--exposed"
+    );
+  });
+
+  it("keeps the reset slot when there is nothing to reset", () => {
+    // So every control ends at one edge, set or not.
+    mount(instance());
+    expect(
+      document.querySelectorAll(
+        ".nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot"
+      ).length
+    ).toBeGreaterThan(0);
+  });
+});
+
 describe("the panel's words", () => {
   it("gives the card's name, cut short on screen, whole in its tooltip", () => {
     mount({
@@ -1226,7 +1253,10 @@ describe("a row a lock the component sets holds", () => {
     const free = rowOf("Strap");
     const heldRow = rowOf("Title");
     expect(heldRow?.className).toBe(free?.className);
-    expect(heldRow?.firstElementChild?.tagName).toBe("LABEL");
+    // The label leads the row's name cell, which leads the row.
+    expect(heldRow?.firstElementChild?.firstElementChild?.tagName).toBe(
+      "LABEL"
+    );
     // The cell beside it starts with the field, held or free, so the field
     // stays level with its label and the reason follows it.
     const leads = (row: Element | null | undefined, name: string) =>

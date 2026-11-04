@@ -429,6 +429,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveIndicator: () => null,
