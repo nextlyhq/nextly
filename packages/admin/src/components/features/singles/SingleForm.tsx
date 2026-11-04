@@ -136,6 +136,7 @@ import {
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
+import { singleApi } from "@admin/services/singleApi";
 import type { SingleAdminOptions } from "@admin/types/entities";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
@@ -1232,6 +1233,8 @@ export function SingleForm({
       // After this Single's recordings in flight land, as a save waits.
       publish: () => afterRecordings.run(publishAllSingleLanguages.mutate),
       pending: afterRecordings.pending,
+      preview: () => singleApi.previewPublishAllLocales(schema.slug),
+      previewKey: ["publish-all-preview", "single", schema.slug],
     },
   });
 

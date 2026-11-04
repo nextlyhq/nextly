@@ -292,6 +292,11 @@ describe("choices drawn as icons whatever the flow", () => {
   it("says what each fit does, in a line for the value that applies", () => {
     const group = alignmentGroupFor("object-fit", keywordsOf("objectFit"), ROW);
     expect(group?.help?.["cover"]).toBe("Fills the box; edges may be cut.");
+    // The row fits a video, an embed or a canvas as well as an image, so no
+    // line names the image.
+    for (const line of Object.values(group?.help ?? {})) {
+      expect(line).not.toMatch(/image/i);
+    }
     for (const value of ["cover", "contain", "fill", "none", "scale-down"]) {
       expect(group?.help?.[value]).toMatch(/\.$/);
     }

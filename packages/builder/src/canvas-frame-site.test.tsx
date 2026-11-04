@@ -630,17 +630,15 @@ describe("the canvas frame on a page the site serves", () => {
     const root = frameDocument(frame).documentElement;
     // The site switches its own mode after hydrating, from a preference.
     root.setAttribute("data-nx-theme", "light");
-    // An unrelated change re-runs the editor's markers.
+    // An unrelated change, the page's language, re-runs the editor's markers.
     rerender(
-      <CanvasFrame
-        width={1280}
-        title="Home"
-        source={source}
-        showEmptyElements={false}
-      >
+      <CanvasFrame width={1280} title="Home" source={source} lang="fr">
         <Page />
       </CanvasFrame>
     );
+    // The language landing shows the markers really ran again, so the theme
+    // left alone below is the editor declining to write it, not a skipped run.
+    expect(root.getAttribute("lang")).toBe("fr");
     expect(root.getAttribute("data-nx-theme")).toBe("light");
   });
 

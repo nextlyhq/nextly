@@ -143,9 +143,14 @@ import {
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pageActionsRoute } from "./page-actions-route";
-import { pagesSearchRoute } from "./pages-search-route";
+import { pageAddressRoute, pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
+import {
+  publishDependenciesRoute,
+  publishReadinessRoute,
+  type PublishReadinessSetup,
+} from "./publish-readiness";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredPins, type RetiredPins } from "./retired-pins";
@@ -333,12 +338,26 @@ function registerReadinessNotice(
     // document the page draws from rather than every blocks field the store
     // happens to have.
     componentField: componentStoreOf(opts).field,
+    // Layouts name their area components in a repeater; read through it, a
+    // Layout published with an unpublished header is reported as a page is.
+    layoutCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
     // The SAME bounds the renderer draws under, asked per call. A notice
     // derived under different ones names components inside a document the page
     // never renders.
     limits: () => opts.limits ?? DEFAULT_LIMITS,
     ...optionalScope(readiness),
   });
+}
+
+/** What the publish-readiness routes read, from the same options the notice does. */
+function publishReadinessSetup(
+  opts: PageBuilderOptions
+): PublishReadinessSetup {
+  return {
+    store: componentStoreOf(opts),
+    enabled: opts.componentReadiness !== false,
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+  };
 }
 
 /**
@@ -1769,6 +1788,11 @@ export const pageBuilder = (
         // component or updating a pattern from a selection, and opening a
         // component in its own view from the store definitions live in.
         patternCapabilityRoute(componentStoreOf(opts)),
+        // What a publish would leave unpublished, asked by the editor before
+        // it, and the offer's write: each chosen component or Layout
+        // published as the author.
+        publishReadinessRoute(publishReadinessSetup(opts)),
+        publishDependenciesRoute(publishReadinessSetup(opts)),
         // What the component editor needs beside the component's own
         // document: the ids its live definition uses, and the count of
         // documents placing it, read from the usage index the installed host
@@ -1894,6 +1918,9 @@ export const pageBuilder = (
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
         pagesSearchRoute(componentStoreOf(opts), opts.pagePreviewPath),
+        // Where one page is served as it is saved, for Settings' address
+        // line, resolved as the search resolves each page's path.
+        pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.

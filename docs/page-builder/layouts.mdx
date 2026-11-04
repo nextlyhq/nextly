@@ -64,8 +64,13 @@ Layout or one of its components has changes that are not published yet, the tag 
 "Draft changes not live" and names which. Layers lists the regions as locked rows
 above and below the page's blocks; selecting one shows it on the canvas.
 
-Publishing a page that names an unpublished Layout publishes the page only, and you
-are told that the site default shows until that Layout is published.
+Publishing a page that names an unpublished Layout asks first: **Publish page only**
+leaves the Layout as it is, and the site default shows until it is published;
+**Publish both** publishes the Layout too, if you may update and publish Layouts. See
+[Publishing a page whose parts aren't published](/docs/page-builder/editor#publishing-a-page-whose-parts-arent-published).
+
+Publishing a Layout whose header or footer component isn't published tells you so
+afterwards, the same way a page is told.
 
 ## The default Layout
 
@@ -92,6 +97,10 @@ Only a published Layout can be the default. The caller needs three permissions:
 - **Manage page builder site settings** (`manage-page-builder-site`),
 - **update** on Layouts, and
 - **publish** on Layouts.
+
+In the editor, choose it under **Settings**, **Site**, **Default Layout**. If the
+Layout's header or footer is a component that isn't published, you're asked first:
+**Make default anyway**, or publish it, then make the Layout the default.
 
 The default changes every page that names no Layout, so it is treated like publishing.
 Send `{ "dryRun": true }` to see what would change without changing it. The answer is

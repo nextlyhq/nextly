@@ -270,9 +270,7 @@ describe("IconChoiceField", () => {
       </InheritedValue.Provider>
     );
     expect(screen.queryByText("Fills the box; edges may be cut.")).toBeNull();
-    expect(
-      screen.getByText("Shows the whole image inside the box.")
-    ).toBeDefined();
+    expect(screen.getByText("Shows all of it inside the box.")).toBeDefined();
   });
 
   it("shows a stored spelling neither the icons nor the list carry, in More", () => {

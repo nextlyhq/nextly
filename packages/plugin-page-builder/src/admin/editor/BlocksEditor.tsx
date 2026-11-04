@@ -47,6 +47,7 @@ import {
   DocumentSaveIndicator,
   loadInlineRichTextEditor,
   MediaPickerDialog,
+  useDocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { useEffect, useState, type ComponentProps, type JSX } from "react";
@@ -87,6 +88,11 @@ import {
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { useReveal, type Reveal } from "./reveal-hidden";
+import {
+  settingsAddressOf,
+  useSavedRevision,
+  type SettingsAddress,
+} from "./settings-address";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -139,23 +145,6 @@ type EditorView = EditorMount &
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
   };
-
-/**
- * Whether the empty-container appender should be suppressed right now.
- *
- * Two independent reasons collapse into one boolean here, named, rather than
- * inlined at the JSX call site: a drag in progress, where the document is
- * mid-change, and the author having turned empty-container chrome off, where
- * the container this control would sit over has collapsed to zero height. A
- * bare `||` at the call site reads as one condition; naming it is what says
- * these are two unrelated causes that happen to share an operator.
- */
-function emptyContainerAppenderHidden(
-  dragging: boolean,
-  showEmptyElements: boolean
-): boolean {
-  return dragging || !showEmptyElements;
-}
 
 /**
  * What stands where the canvas will be, while a read it cannot draw without is
@@ -570,7 +559,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     spacingScrub,
     slots,
     blocks,
-    showEmptyElements,
     openInsertPanel,
     locale,
     canvasSource,
@@ -652,7 +640,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
-            showEmptyElements={showEmptyElements}
             overlay={
               <>
                 <VariantPreviewTag name={view.preview.previewing} />
@@ -699,19 +686,14 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 />
                 {/*
                   Suppressed during a drag for the same reason the toolbar and
-                  the bands are, and while the author has turned empty-container
-                  chrome off: the placeholder box collapses to zero height under
-                  the same preference, and a "+" left floating over nothing
-                  would make the preference lie about what a visitor sees.
+                  the bands are. Shown otherwise: empty containers always draw
+                  their placeholder box, so the "+" over it always has one.
                 */}
                 <EmptyContainerAppenders
                   document={editor.document}
                   slots={slots}
                   blocks={blocks}
-                  hidden={emptyContainerAppenderHidden(
-                    dragging,
-                    showEmptyElements
-                  )}
+                  hidden={dragging}
                   onAppend={nodeId => {
                     // Select the container and open Add to add INSIDE it,
                     // said explicitly: selecting a container never implies
@@ -784,18 +766,41 @@ interface PageFacts {
   title: string | undefined;
   /** The SEO plugin's fields, where the document has them. */
   seo: ShareSeoFields | undefined;
+  /**
+   * The page whose saved address Settings reads, and whether its slug has
+   * changed since the save, or null for a document never saved.
+   */
+  address: Omit<SettingsAddress, "locale"> | null;
 }
+
+/** The field a page's address is made from, where the collection has one. */
+const SLUG_FIELD = "slug";
 
 function usePageFacts<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
 ): PageFacts {
-  const [title, seo]: unknown[] = useWatch({
+  const [title, seo, slug]: unknown[] = useWatch({
     control,
-    name: ["title", "seo"] as Path<TFieldValues>[],
+    name: ["title", "seo", SLUG_FIELD] as Path<TFieldValues>[],
   });
+  // The form's defaults are what the last load or save stored, so the slug
+  // there is the saved one, the slug the server's address is read for.
+  const { defaultValues } = useFormState({
+    control,
+    name: SLUG_FIELD as Path<TFieldValues>,
+  });
+  const saved: unknown = (
+    defaultValues as Record<string, unknown> | undefined
+  )?.[SLUG_FIELD];
   return {
     title: typeof title === "string" ? title : undefined,
     seo: seo !== null && typeof seo === "object" ? seo : undefined,
+    address: settingsAddressOf(
+      useDocumentIdentity(),
+      slug,
+      saved,
+      useSavedRevision(defaultValues)
+    ),
   };
 }
 
@@ -859,6 +864,15 @@ function editorSettings(
         // The SEO plugin's group, where the page has one: its fields are then
         // among the page's own, and the preview is not all there is.
         seoFields={page.seo !== undefined}
+        // Read in the language being edited, as a localized slug is.
+        address={
+          page.address === null
+            ? null
+            : {
+                ...page.address,
+                ...(view.locale === undefined ? {} : { locale: view.locale }),
+              }
+        }
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
@@ -980,7 +994,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
-  const { done } = useHostCommit({
+  const { done, publishOffer } = useHostCommit({
     name,
     control,
     editor,
@@ -1056,7 +1070,6 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentVerbs,
     availablePanels,
     openPanelRequest,
-    setShowEmptyElements,
     setZoom,
     appliedScale,
     deviceRequest,
@@ -1078,10 +1091,6 @@ function EditorBody<TFieldValues extends FieldValues>({
         // which lives on the canvas below rather than beside the rail that
         // normally opens a panel.
         openPanelRequest={openPanelRequest}
-        // The read half of the same gap: mirrors the shell's own preference
-        // so the appender below can be suppressed by the SAME switch that
-        // already suppresses the placeholder box it sits over.
-        onShowEmptyElementsChange={setShowEmptyElements}
         onZoomChange={setZoom}
         // The device being edited: chosen here, held and stored by the shell,
         // and reported back so the canvas and the inspector follow it.
@@ -1216,6 +1225,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             onClose={makeComponent.close}
             returnFocusTo={makeComponent.returnFocusTo}
           />
+          {publishOffer}
           {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>

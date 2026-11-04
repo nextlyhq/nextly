@@ -230,6 +230,7 @@ export type {
   BeforeDocumentAction,
   DocumentActionOutcome,
   DocumentSaveState,
+  StoreReadiness,
 } from "./components/features/entries/EntryForm/useDocumentActionBindings";
 export type {
   ActionGroup,
