@@ -4709,6 +4709,21 @@ describe("an aspect ratio", () => {
   });
 });
 
+describe("an image's fit", () => {
+  it("is named Image fit, its CSS name in the label's tooltip", () => {
+    // "Object fit" is how CSS names it; on an image the author is fitting
+    // the image.
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
+    );
+    expect(screen.getByRole("radiogroup", { name: "Image fit" })).toBeDefined();
+    expect(screen.getByText("Image fit").closest("label")?.title).toMatch(
+      /^Object fit/
+    );
+  });
+});
+
 describe("letter case", () => {
   it("is named in plain words, its CSS name in the label's tooltip", () => {
     // "Text transform" says how CSS does it; "Letter case" says what it is.
