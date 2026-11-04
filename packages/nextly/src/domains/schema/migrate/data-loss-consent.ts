@@ -264,7 +264,7 @@ export function deprecationNotices(consent: DataLossConsent): string[] {
 }
 
 /** A key that names one deletion, for telling two listings' entries apart. */
-function deletionKey(deletion: Deletion): string {
+export function deletionKey(deletion: Deletion): string {
   switch (deletion.kind) {
     case "table":
       return `table:${deletion.table}`;

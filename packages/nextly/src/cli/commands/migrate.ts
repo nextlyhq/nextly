@@ -166,7 +166,10 @@ import {
 } from "../utils/command-prerequisites";
 import {
   askToDeleteInTerminal,
+  deletionSource,
   judgeRunDeletions,
+  type Agreement,
+  type DeletionSource,
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
@@ -1959,8 +1962,8 @@ export async function refuseUnresolvedAppAttempts(args: {
  */
 async function judgeFileDeletions(
   deps: MigrateCoreDeps,
-  agreed?: readonly Deletion[]
-): Promise<Deletion[]> {
+  agreed?: Agreement
+): Promise<Agreement> {
   const consent =
     deps.consent ??
     resolveDataLossConsent({
@@ -1975,18 +1978,20 @@ async function judgeFileDeletions(
     deps.logger
   );
   const plan = fileRunPlan(listed, deps.step);
-  // Each deletion keeps the file it comes from, by identity, for the listing.
-  const sources = new Map<Deletion, string>();
+  // Each deletion keeps the file it comes from, by identity, for the listing
+  // and for binding an agreement to the file as it stands.
+  const sources = new Map<Deletion, DeletionSource>();
   for (const { file, deletions } of await pendingRunDeletions(
     listed.flatMap(({ file }) => (plan.runs.has(file) ? [file] : [])),
     deps.db,
     deps.dialect
   )) {
-    for (const deletion of deletions) sources.set(deletion, `${file.name}.sql`);
+    const source = deletionSource(`${file.name}.sql`, file.upSql);
+    for (const deletion of deletions) sources.set(deletion, source);
   }
   // A refusal, or a no at the terminal (`DATA_LOSS_DECLINED`, exit 1),
   // throws before anything changes.
-  await judgeRunDeletions({
+  return judgeRunDeletions({
     sources,
     consent,
     agreed,
@@ -1994,7 +1999,6 @@ async function judgeFileDeletions(
     askToDelete: deps.askToDelete,
     warn: line => deps.logger.warn(line),
   });
-  return [...(agreed ?? []), ...sources.keys()];
 }
 
 /**

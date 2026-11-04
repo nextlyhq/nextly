@@ -169,6 +169,85 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     120_000
   );
 
+  it.runIf(dialect === "postgresql")(
+    "follows a cascade to a child in another schema by its identity, never to a same-named table the search path shows",
+    async () => {
+      const parentOf = `${P}_sp`;
+      const schema = `${P}_s`;
+      const dup = `${P}_dup`;
+      for (const statement of [
+        `CREATE TABLE ${parentOf} (id integer PRIMARY KEY)`,
+        `CREATE SCHEMA ${schema}`,
+        // The real child, in a schema the search path does not show.
+        `CREATE TABLE ${schema}.${dup} (id integer PRIMARY KEY, sp_id integer REFERENCES ${parentOf} (id) ON DELETE CASCADE)`,
+        // A same-named table the search path shows, which references nothing.
+        `CREATE TABLE ${dup} (id integer PRIMARY KEY)`,
+      ]) {
+        await adapter.executeQuery(statement);
+      }
+      const facts = await readDeletionFacts(adapter.getDrizzle(), dialect, [
+        `DELETE FROM ${parentOf}`,
+      ]);
+      expect(facts.cascadeFrom(parentOf)).toEqual([`${schema}.${dup}`]);
+    },
+    120_000
+  );
+
+  it("reads whether removing rows from a table fires a DELETE trigger", async () => {
+    const triggered = `${P}_tr`;
+    const plain = `${P}_plain`;
+    await adapter.executeQuery(
+      `CREATE TABLE ${triggered} (id integer PRIMARY KEY)`
+    );
+    await adapter.executeQuery(
+      `CREATE TABLE ${plain} (id integer PRIMARY KEY)`
+    );
+    const trigger = {
+      postgresql: [
+        `CREATE FUNCTION ${P}_keep() RETURNS trigger AS 'BEGIN RETURN OLD; END' LANGUAGE plpgsql`,
+        `CREATE TRIGGER ${P}_trg BEFORE DELETE ON ${triggered} FOR EACH ROW EXECUTE FUNCTION ${P}_keep()`,
+      ],
+      mysql: [
+        `CREATE TRIGGER ${P}_trg BEFORE DELETE ON ${triggered} FOR EACH ROW SET @${P}_seen = 1`,
+      ],
+      sqlite: [
+        `CREATE TRIGGER ${P}_trg AFTER DELETE ON ${triggered} BEGIN SELECT 1; END`,
+      ],
+    }[dialect];
+    for (const statement of trigger) await adapter.executeQuery(statement);
+    const facts = await readDeletionFacts(adapter.getDrizzle(), dialect, [
+      `DELETE FROM ${triggered}`,
+      `DELETE FROM ${plain}`,
+    ]);
+    expect(facts.deleteTriggered(triggered, "delete")).toBe(true);
+    expect(facts.deleteTriggered(plain, "delete")).toBe(false);
+  }, 120_000);
+
+  it.runIf(dialect === "postgresql")(
+    "reads the inheritance children and partitions a DELETE without ONLY also empties",
+    async () => {
+      const events = `${P}_ev`;
+      const child = `${P}_ev_child`;
+      const parted = `${P}_pt`;
+      const part = `${P}_pt_1`;
+      for (const statement of [
+        `CREATE TABLE ${events} (id integer)`,
+        `CREATE TABLE ${child} () INHERITS (${events})`,
+        `CREATE TABLE ${parted} (id integer) PARTITION BY RANGE (id)`,
+        `CREATE TABLE ${part} PARTITION OF ${parted} FOR VALUES FROM (0) TO (100)`,
+      ]) {
+        await adapter.executeQuery(statement);
+      }
+      const facts = await readDeletionFacts(adapter.getDrizzle(), dialect, [
+        `DELETE FROM ${events}`,
+        `DELETE FROM ${parted}`,
+      ]);
+      expect(facts.descendantsOf(events)).toEqual([child]);
+      expect(facts.descendantsOf(parted)).toEqual([part]);
+    },
+    120_000
+  );
+
   it("judges a file against the facts the database gives", async () => {
     const facts = await readDeletionFacts(
       adapter.getDrizzle(),
@@ -178,6 +257,16 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     const missingCascade = {
       kind: "unnamed",
       description: `rows removed from tables ${missing}'s foreign keys cascade to, which could not be read`,
+    };
+    // A table the database lacks has no triggers or descendants to read
+    // either, and each fails closed as its keys do.
+    const missingTriggers = {
+      kind: "unnamed",
+      description: `rows removed from ${missing} may fire a DELETE trigger, which could not be read`,
+    };
+    const missingDescendants = {
+      kind: "unnamed",
+      description: `rows removed from tables that inherit from ${missing} or partition it, which could not be read`,
     };
     expect(fileDeletions(statements, dialect, facts)).toEqual([
       { kind: "rows", table: parent },
@@ -189,8 +278,10 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
             { kind: "rows", table: child },
             { kind: "rows", table: grand },
             { kind: "rows", table: missing },
+            ...(dialect === "postgresql" ? [missingDescendants] : []),
             missingCascade,
           ]),
+      missingTriggers,
       ...(dialect === "postgresql" ? [{ kind: "rows", table: keeper }] : []),
       ...(dialect === "sqlite"
         ? [{ kind: "column", table: posts, column: "body" }]

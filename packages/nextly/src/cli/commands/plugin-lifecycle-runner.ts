@@ -43,7 +43,7 @@ import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
 import {
   downDatabaseDeps,
-  isDestructiveDown,
+  rollbackDeletions,
   planRollback,
   refusalOf,
   rollBackOne,
@@ -323,16 +323,21 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       if (refusal !== undefined) throw refusal;
     }
     planned = new Map(plans.map(down => [down.filename, down]));
+    // Each module's DOWN judged by the reader `migrate:down` names a
+    // rollback's deletions with, every module read as one run in the order
+    // they run: a module that removes rows, converts a column or calls code
+    // that may delete is destructive, as one that drops is.
+    const deletions = await rollbackDeletions(
+      plans,
+      dialect,
+      deps.readDeletionFacts
+    );
     return plans.map((down, at) => ({
       moduleName: moduleNames[at],
       filename: down.filename,
       statements: down.statements,
       transaction: down.transaction,
-      destructive: isDestructiveDown(
-        down.statements,
-        dialect,
-        down.liveColumns
-      ),
+      destructive: (deletions[at]?.length ?? 0) > 0,
     }));
   };
 

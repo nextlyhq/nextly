@@ -61,7 +61,10 @@ import {
   describeDeletion,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
-import { fileDeletions } from "../../domains/schema/migrate/file-deletions";
+import {
+  fileDeletions,
+  type DeletionFacts,
+} from "../../domains/schema/migrate/file-deletions";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -90,6 +93,7 @@ import { reportMigrationSiblingFields } from "../../domains/schema/migrate-creat
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  parseSnapshotFile,
   SnapshotFileError,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
@@ -98,6 +102,7 @@ import type {
   NextlySchemaSnapshot,
   Operation,
 } from "../../domains/schema/pipeline/diff/types";
+import { renderedType } from "../../domains/schema/pipeline/sql-templates/create-table-body";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -582,10 +587,20 @@ export async function judgeStatements(
     deletions: Deletion[];
   }[] = [];
   const groups = await discoverMigrationGroups(migrationsDir);
+  const metaDir = resolve(migrationsDir, "meta");
+  // The schema before the file being read: nothing before the first file,
+  // then the snapshot paired with the file before it (undefined when that
+  // file has none, as a localisation file does).
+  let before: NextlySchemaSnapshot | undefined = EMPTY_SNAPSHOT;
   for (const baseName of getSortedBaseNames(groups)) {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
     if (file === undefined) continue;
     const content = await readFile(resolve(migrationsDir, file), "utf-8");
+    // UP runs against the schema before the file, DOWN against the one the
+    // file leaves, which its own snapshot records.
+    const after = await pairedSnapshot(metaDir, file);
+    const schemaFor = { UP: before, DOWN: after };
+    before = after;
     const transaction = !marksNoTransaction(content);
     if (!transaction) outsideTransaction.push(file);
     const { upSql, downSql } = parseSqlSections(content);
@@ -600,23 +615,79 @@ export async function judgeStatements(
       })) {
         refused.push({ file, message: refusal.message });
       }
-      // What the section deletes, read from its statements as the run reads
-      // them. This check has no database, so no foreign key, live column or
-      // function is known: the deletions named are the ones the statements
-      // name, a rebuild it cannot see is left to the run (unless it carries
-      // everything), and the run itself judges what a removal reaches.
-      const deletions = fileDeletions(statements, dialect, {
-        cascadeFrom: () => [],
-        truncateCascadeFrom: () => [],
-        nulledBy: () => [],
-        userFunctions: new Set(),
-        unseenRebuild: "deferred",
-        liveColumns: new Map(),
-      });
+      const deletions = fileDeletions(
+        statements,
+        dialect,
+        offlineFacts(schemaFor[section])
+      );
       if (deletions.length > 0) destructive.push({ file, section, deletions });
     }
   }
   return { outsideTransaction, refused, destructive };
+}
+
+/**
+ * The facts a section's deletions are judged against without a database.
+ * No foreign key or function is known: the deletions named are the ones the
+ * statements name, and the run itself judges what a removal reaches. The
+ * columns of the tables a SQLite rebuild rebuilds are read from `schema`, the
+ * snapshot of the schema the section runs against, so a column the rebuild
+ * leaves out is named. Without a snapshot, or for a table it does not hold, a
+ * rebuild is left to the run unless it carries everything.
+ */
+function offlineFacts(schema: NextlySchemaSnapshot | undefined): DeletionFacts {
+  const columnTypes = new Map(
+    (schema?.tables ?? []).map(table => [
+      table.name.toLowerCase(),
+      // Each type as the generated DDL spells it, so a column the rebuild
+      // carries unchanged compares equal and only a converted one is named.
+      new Map(
+        table.columns.map(column => [
+          column.name.toLowerCase(),
+          renderedType(column).toLowerCase(),
+        ])
+      ),
+    ])
+  );
+  return {
+    cascadeFrom: () => [],
+    truncateCascadeFrom: () => [],
+    nulledBy: () => [],
+    // No trigger or inheritance tree is known without a database; the run
+    // judges the ones a removal reaches.
+    deleteTriggered: () => false,
+    descendantsOf: () => [],
+    userFunctions: new Set(),
+    unseenRebuild: "deferred",
+    // Derived from the one reading of the types, so the two agree on which
+    // columns a table has.
+    liveColumns: new Map(
+      [...columnTypes].map(([table, columns]) => [
+        table,
+        new Set(columns.keys()),
+      ])
+    ),
+    liveColumnTypes: columnTypes,
+  };
+}
+
+/**
+ * The schema recorded by the snapshot paired with migration `file`, or
+ * undefined when it has none or it cannot be read. `runChecks` has already
+ * failed on an unreadable snapshot by then; this reader only judges what a
+ * file deletes, which then falls back to leaving a rebuild to the run.
+ */
+async function pairedSnapshot(
+  metaDir: string,
+  file: string
+): Promise<NextlySchemaSnapshot | undefined> {
+  const name = `${file.replace(/\.sql$/, "")}.snapshot.json`;
+  try {
+    const content = await readFile(resolve(metaDir, name), "utf-8");
+    return parseSnapshotFile(content, name).snapshot;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

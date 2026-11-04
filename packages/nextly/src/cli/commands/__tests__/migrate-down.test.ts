@@ -186,6 +186,91 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Live facts answering that nothing references, triggers or inherits from anything. */
+const quietFacts = async () => ({
+  cascadeFrom: () => [],
+  truncateCascadeFrom: () => [],
+  nulledBy: () => [],
+  deleteTriggered: () => false,
+  descendantsOf: () => [],
+  liveColumns: new Map(),
+});
+
+describe("a rollback's deletions, read as one run", () => {
+  it("follows a cascade key an earlier target's DOWN restores from a later target's removal of rows", async () => {
+    // a.sql is the newer file, so its DOWN runs first and restores the key.
+    const downs: Record<string, string> = {
+      "a.sql":
+        'ALTER TABLE "comments" ADD CONSTRAINT "fk" FOREIGN KEY ("post_id") REFERENCES "posts" ("id") ON DELETE CASCADE;',
+      "b.sql": 'DELETE FROM "posts";',
+    };
+    const { deps, executed } = baseDeps({
+      options: {
+        step: 2,
+        yes: false,
+        dryRun: false,
+        consent: resolveDataLossConsent({ flag: "posts", env: {} }),
+      },
+      listFileApplies: async () => [
+        row("b.sql", "applied", 1000),
+        row("a.sql", "applied", 2000),
+      ],
+      readDownSql: async (filename: string) => down(downs[filename] ?? ""),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/comments/);
+    expect(executed).toEqual([]);
+  });
+
+  it("never lets a yes to one file's deletion stand for another file's, when the plan moves while the lock is awaited", async () => {
+    // Before the lock a.sql is the newest applied file; while this run waits,
+    // another rolls it back, and the plan under the lock reaches b.sql,
+    // which deletes the same rows by the same statement.
+    let reads = 0;
+    const asked: string[] = [];
+    const { deps, executed } = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+      listFileApplies: async () =>
+        reads++ === 0
+          ? [row("b.sql", "applied", 1000), row("a.sql", "applied", 2000)]
+          : [
+              row("b.sql", "applied", 1000),
+              row("a.sql", "applied", 2000),
+              row("a.sql", "rolled_back", 3000),
+            ],
+      readDownSql: async () => down('DELETE FROM "posts";'),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/b\.sql/);
+    expect(asked).toHaveLength(1);
+    expect(executed).toEqual([]);
+  });
+
+  it("names what a plugin module's DOWN deletes, a removal of rows included, and needs consent for it", async () => {
+    const { deps, executed } = baseDeps({
+      owners: authOwnsT,
+      options: {
+        step: 1,
+        allowDataLoss: false,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () => [
+        row("plugin:auth/001_init.sql", "applied", 2000),
+      ],
+      readDownSql: async () => down('DELETE FROM "t";'),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/rows of t/);
+    expect(executed).toEqual([]);
+  });
+});
+
 describe("migrateDownCore", () => {
   describe("an unresolved attempt", () => {
     const refusal = new Error("unresolved attempt");

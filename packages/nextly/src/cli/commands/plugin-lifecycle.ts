@@ -89,8 +89,9 @@ export interface PreparedModuleDown {
   /** False when the module is marked `transaction: false`. */
   transaction: boolean;
   /**
-   * Whether it drops a table or column, or truncates a table, judged the way
-   * `migrate:down` judges one (`isDestructiveDown`). A module that drops only
+   * Whether it deletes data (drops a table or column, removes rows, converts a
+   * column, or calls code that may), judged the way `migrate:down` judges one
+   * (`rollbackDeletions`). A module that drops only
    * a column it added to another table loses data no table count shows.
    */
   destructive: boolean;

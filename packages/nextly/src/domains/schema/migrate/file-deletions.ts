@@ -38,17 +38,15 @@
 import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
-import { NextlyError } from "../../../errors/nextly-error";
 import type { LiveColumns } from "../ownership/drop-guard";
-import {
-  introspectLiveSnapshot,
-  introspectTableNames,
-} from "../pipeline/diff/introspect-live";
-import type { ForeignKeySpec } from "../pipeline/diff/types";
+import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { queryLiveColumnTypes } from "../pipeline/live-column-types";
 import {
-  readReferencingTables,
+  readPgDescendants,
+  readReferencingKeys,
+  readRemovalTriggered,
   readUserFunctions,
+  type RelationRef,
 } from "../pipeline/live-table-facts";
 
 import type { Deletion } from "./data-loss-consent";
@@ -75,6 +73,20 @@ export interface DeletionFacts {
    * `cascadeFrom` from the same reading. Undefined when unreadable; always empty on SQLite.
    */
   nulledBy(table: string): readonly NulledColumn[] | undefined;
+  /**
+   * Whether removing rows from `table` fires a trigger (or, on PostgreSQL, a rule) that runs code
+   * the statement does not show: a `delete` fires DELETE triggers, a `truncate` TRUNCATE ones.
+   * Undefined when unreadable.
+   */
+  deleteTriggered(
+    table: string,
+    removal: "delete" | "truncate"
+  ): boolean | undefined;
+  /**
+   * PostgreSQL: every table inheriting from `table` or partitioning it, transitively, which a
+   * DELETE or TRUNCATE without ONLY also empties. Empty elsewhere; undefined when unreadable.
+   */
+  descendantsOf(table: string): readonly string[] | undefined;
   /**
    * The functions a SELECT may call that run code the statement does not show: lower-cased names
    * of the user-defined functions (outside the system catalogs). Undefined when unreadable, when
@@ -108,6 +120,11 @@ interface FactSource {
   cascadeFrom(table: string): readonly string[] | undefined;
   truncateCascadeFrom(table: string): readonly string[] | undefined;
   nulledBy(table: string): readonly NulledColumn[] | undefined;
+  deleteTriggered(
+    table: string,
+    removal: "delete" | "truncate"
+  ): boolean | undefined;
+  descendantsOf(table: string): readonly string[] | undefined;
   /** Whether a SELECT calling `name` may run code that deletes. */
   mayDeleteThrough(name: string): boolean;
   unseenRebuild: "drop" | "deferred";
@@ -123,6 +140,9 @@ export interface NulledColumn {
 
 /** What a foreign key a run adds does to its rows when a referenced row goes. */
 type KeyAction = "cascade" | "set null" | "set default" | "none";
+
+/** How rows go, for the triggers it fires. */
+type Removal = "delete" | "truncate" | "partition";
 
 /** How a removal of rows reaches other tables. */
 type Reach = "delete" | "truncate" | "none";
@@ -146,7 +166,15 @@ type Step =
       description: string;
       fingerprint?: string;
     }
-  | { kind: "rows"; table: string; reach: Reach }
+  | {
+      kind: "rows";
+      table: string;
+      reach: Reach;
+      /** Which triggers the removal fires; a MySQL partition truncated fires none. */
+      removal: Removal;
+      /** PostgreSQL's ONLY: the table without its descendants. */
+      only?: boolean;
+    }
   | { kind: "column"; table: string; column: string }
   | { kind: "drop-column"; table: string; column: string }
   | { kind: "rename-table"; from: string; to: string }
@@ -325,7 +353,7 @@ function readStatement(statement: string, dialect: SupportedDialect): Step[] {
   }
   // MariaDB's ALTER IGNORE drops the rows a new unique key would refuse.
   if (cursor.accept("ALTER", "IGNORE")) return [unread(tokens)];
-  if (first === "SELECT") return readSelect(tokens);
+  if (cursor.accept("ALTER", "TYPE")) return readAlterType(tokens);
   if (cursor.accept("DELETE")) return readDelete(cursor, tokens);
   if (cursor.accept("TRUNCATE")) return readTruncate(cursor, tokens, dialect);
   const dialectForm = readDialectForm(cursor, tokens, dialect);
@@ -380,7 +408,7 @@ function readDialectForm(
     const table = cursor.name();
     return table === undefined
       ? [unread(tokens)]
-      : [{ kind: "rows", table, reach: "delete" }];
+      : [{ kind: "rows", table, reach: "delete", removal: "delete" }];
   }
   if (dialect === "mysql" && cursor.accept("RENAME", "TABLE")) {
     return readRenameTables(cursor, tokens);
@@ -450,27 +478,86 @@ function readCreateFunction(cursor: StatementCursor): Step[] {
 const FUNCTION_NAME = /^[A-Z_][A-Z0-9_$.]*$/;
 
 /**
- * The functions a SELECT calls, by the names it writes them with, lower-cased:
- * a word directly before `(`. Whether one may delete is a fact about the
- * database (`mayDeleteThrough`), asked by the walk.
+ * What a statement defines rather than runs: the code of a function,
+ * procedure or trigger, or a view's query, none of which runs now.
  */
-function readSelect(tokens: readonly Token[]): Step[] {
+const DEFINITION_FORMS = new Set([
+  "FUNCTION",
+  "PROCEDURE",
+  "TRIGGER",
+  "VIEW",
+  "RULE",
+]);
+
+/**
+ * `ALTER TYPE`: converting or dropping an attribute rewrites, with CASCADE,
+ * every table typed by it, so such a statement may delete; anything else it
+ * does reads as any other statement.
+ */
+function readAlterType(tokens: readonly Token[]): Step[] {
+  const at = tokens.indexOf("ATTRIBUTE");
+  const verb = at > 0 ? tokens[at - 1] : undefined;
+  return verb === "ALTER" || verb === "DROP"
+    ? [unread(tokens)]
+    : unreadIfDeleting(tokens);
+}
+
+/**
+ * The functions a statement calls, by the names it writes them with,
+ * lower-cased and qualified as written: a name, plain or quoted, directly
+ * before `(`. Whether one may delete is a fact about the database
+ * (`mayDeleteThrough`), asked by the walk. A statement that only defines
+ * code (a function, procedure, trigger or view) calls nothing now. An
+ * escaped quoted name (`U&"…"`) reads as a qualified one, which may delete.
+ */
+function readCalls(tokens: readonly Token[]): Step | undefined {
+  // A procedural statement already stands for whatever it runs.
+  if (typeof tokens[0] === "string" && CODE_WORDS.has(tokens[0]))
+    return undefined;
+  if (tokens[0] === "CREATE" && definesCode(tokens)) return undefined;
   const names = tokens.flatMap((token, at) =>
-    typeof token === "string" &&
-    FUNCTION_NAME.test(token) &&
-    tokens[at + 1] === "("
-      ? [token.toLowerCase()]
-      : []
+    tokens[at + 1] === "(" ? calledName(tokens, at) : []
   );
   return names.length === 0
-    ? []
-    : [
-        {
-          kind: "calls",
-          names,
-          description: `${labelOf(tokens)} (calls a function, may delete data)`,
-        },
-      ];
+    ? undefined
+    : {
+        kind: "calls",
+        names,
+        description: `${labelOf(tokens)} (calls a function, may delete data)`,
+      };
+}
+
+/**
+ * Whether a CREATE statement defines code rather than running it, its kind
+ * among its first words (after `OR REPLACE`, or MySQL's `DEFINER = user`).
+ * A materialized view runs its query now, so it is not one.
+ */
+function definesCode(tokens: readonly Token[]): boolean {
+  const head = tokens.slice(1, 8);
+  if (head.includes("MATERIALIZED")) return false;
+  return head.some(
+    token => typeof token === "string" && DEFINITION_FORMS.has(token)
+  );
+}
+
+/** The name a call at `at` writes, lower-cased, with any qualifier; none for a word that is not a name. */
+function calledName(tokens: readonly Token[], at: number): string[] {
+  const name = nameAt(tokens[at]);
+  if (name === undefined) return [];
+  if (tokens[at - 1] !== ".") return [name];
+  const qualifier = nameAt(tokens[at - 2]);
+  return [`${qualifier ?? "?"}.${name}`];
+}
+
+/** A token as a function name, lower-cased: a plain word, or a quoted name (an escaped one stands as qualified). */
+function nameAt(token: Token | undefined): string | undefined {
+  if (typeof token === "string") {
+    return FUNCTION_NAME.test(token) ? token.toLowerCase() : undefined;
+  }
+  if (token?.name === undefined) return undefined;
+  return token.escaped === true
+    ? `?.${token.name.toLowerCase()}`
+    : token.name.toLowerCase();
 }
 
 /**
@@ -506,10 +593,11 @@ function readDelete(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
     cursor.accept(modifier);
   }
   if (!cursor.accept("FROM")) return [unread(tokens)];
-  cursor.accept("ONLY");
+  const only = cursor.accept("ONLY");
   const table = cursor.name();
+  cursor.accept("*");
   if (table === undefined || cursor.isWord(",")) return [unread(tokens)];
-  return [{ kind: "rows", table, reach: "delete" }];
+  return [{ kind: "rows", table, reach: "delete", removal: "delete", only }];
 }
 
 /**
@@ -526,13 +614,13 @@ function readTruncate(
 ): Step[] {
   if (dialect === "sqlite") return [];
   cursor.accept("TABLE");
-  const tables: string[] = [];
+  const tables: { table: string; only: boolean }[] = [];
   do {
-    if (dialect === "postgresql") cursor.accept("ONLY");
+    const only = dialect === "postgresql" && cursor.accept("ONLY");
     const table = cursor.name();
     if (table === undefined) return [unread(tokens)];
     cursor.accept("*");
-    tables.push(table);
+    tables.push({ table, only });
   } while (cursor.accept(","));
   if (!cursor.accept("RESTART", "IDENTITY")) {
     cursor.accept("CONTINUE", "IDENTITY");
@@ -540,10 +628,12 @@ function readTruncate(
   const cascade = dialect === "postgresql" && cursor.accept("CASCADE");
   if (!cascade) cursor.accept("RESTRICT");
   if (!cursor.done()) return [unread(tokens)];
-  return tables.map(table => ({
+  return tables.map(({ table, only }) => ({
     kind: "rows",
     table,
     reach: cascade ? "truncate" : "none",
+    removal: "truncate",
+    only,
   }));
 }
 
@@ -561,7 +651,7 @@ function readRowsInto(
   const table = cursor.name();
   return table === undefined
     ? [unread(tokens)]
-    : [{ kind: "rows", table, reach: "delete" }];
+    : [{ kind: "rows", table, reach: "delete", removal: "delete" }];
 }
 
 /** MySQL's `RENAME TABLE a TO b[, c TO d]`: each rename, in order. */
@@ -756,7 +846,7 @@ function readMysqlAlterClause(
   // discarding the tablespace leaves the table without its data file.
   if (clause.isWord("CONVERT") || clause.isWord("DISCARD")) return undefined;
   if (clause.accept("TRUNCATE", "PARTITION")) {
-    return [{ kind: "rows", table, reach: "none" }];
+    return [{ kind: "rows", table, reach: "none", removal: "partition" }];
   }
   return null;
 }
@@ -789,7 +879,7 @@ function readDropClause(
   table: string
 ): Step[] | undefined {
   if (clause.accept("PARTITION")) {
-    return [{ kind: "rows", table, reach: "none" }];
+    return [{ kind: "rows", table, reach: "none", removal: "partition" }];
   }
   const explicit = clause.accept("COLUMN");
   const next = clause.peek();
@@ -1175,7 +1265,7 @@ class FileWalk {
       case "drop":
         return this.drop(step.table);
       case "rows":
-        return this.removeRows(step.table, step.reach);
+        return this.removeRows(step);
       case "column":
         return this.changeColumn(step.table, step.column);
       case "drop-column":
@@ -1312,19 +1402,85 @@ class FileWalk {
    * keys reach: the live keys as read before the run, and the keys the list
    * itself added before this statement, from a table the list made as well.
    */
-  private removeRows(name: string, reach: Reach): void {
-    const table = this.origin(name);
+  private removeRows(step: Extract<Step, { kind: "rows" }>): void {
+    const table = this.origin(step.table);
     if (table !== null) this.emit({ kind: "rows", table });
-    if (reach === "none") return;
-    const queue = [{ table: this.identity(name), askLive: table !== null }];
+    // The live tables whose rows go, for the triggers they fire.
+    const removed = table === null ? [] : [table];
+    // Without ONLY, PostgreSQL's DELETE and TRUNCATE reach every descendant.
+    if (table !== null && step.only !== true && step.removal !== "partition") {
+      removed.push(...this.descendants(table));
+    }
+    if (step.reach !== "none") {
+      const start = [this.identity(step.table), ...removed.slice(1)];
+      removed.push(...this.reach(start, table !== null, step.reach));
+    }
+    if (step.removal !== "partition") this.triggers(removed, step.removal);
+  }
+
+  /**
+   * Every live table the keys reach from `start` (the first maybe one the list
+   * made, when `live` is false), named; the live tables reached.
+   */
+  private reach(
+    start: readonly string[],
+    live: boolean,
+    reach: Reach
+  ): string[] {
+    const queue = start.map((table, at) => ({
+      table,
+      askLive: at > 0 || live,
+    }));
     const visited = new Set<string>();
+    const removed: string[] = [];
     for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
       if (visited.has(next.table)) continue;
       visited.add(next.table);
-      const live = next.askLive ? this.reachLive(next.table, reach) : [];
+      const reached = next.askLive ? this.reachLive(next.table, reach) : [];
+      removed.push(...reached);
       // A live table its keys reach may be one the list added a key to.
-      queue.push(...live.map(other => ({ table: other, askLive: false })));
-      queue.push(...this.reachAdded(next.table, reach));
+      queue.push(...reached.map(other => ({ table: other, askLive: false })));
+      const added = this.reachAdded(next.table, reach);
+      removed.push(...added.filter(key => key.askLive).map(key => key.table));
+      queue.push(...added);
+    }
+    return removed;
+  }
+
+  /** The descendants a removal of `table`'s rows reaches, named; none when unreadable, which only blanket consent covers. */
+  private descendants(table: string): readonly string[] {
+    const found = this.facts.descendantsOf(table);
+    if (found === undefined) {
+      this.emit({
+        kind: "unnamed",
+        description: `rows removed from tables that inherit from ${table} or partition it, which could not be read`,
+      });
+      return [];
+    }
+    for (const other of found) this.emit({ kind: "rows", table: other });
+    return found;
+  }
+
+  /**
+   * A trigger a removal fires runs code the statement does not show: each
+   * live table whose rows go, and that has one, stands for a deletion only
+   * blanket consent covers, as does one whose triggers could not be read.
+   */
+  private triggers(
+    tables: readonly string[],
+    removal: "delete" | "truncate"
+  ): void {
+    const event = removal.toUpperCase();
+    for (const table of new Set(tables)) {
+      const fires = this.facts.deleteTriggered(table, removal);
+      if (fires === false) continue;
+      this.emit({
+        kind: "unnamed",
+        description:
+          fires === true
+            ? `rows removed from ${table} fire a ${event} trigger, which may delete other data`
+            : `rows removed from ${table} may fire a ${event} trigger, which could not be read`,
+      });
     }
   }
 
@@ -1570,6 +1726,8 @@ function walk(
       for (const step of readStatement(statement, dialect)) {
         file.apply(fingerprinted(step, statement));
       }
+      const call = readCalls(tokensOf(statement, dialect));
+      if (call !== undefined) file.apply(fingerprinted(call, statement));
     }
   });
   return file.found;
@@ -1599,6 +1757,8 @@ function factSource(facts: DeletionFacts): FactSource {
     cascadeFrom: table => facts.cascadeFrom(table),
     truncateCascadeFrom: table => facts.truncateCascadeFrom(table),
     nulledBy: table => facts.nulledBy(table),
+    deleteTriggered: (table, removal) => facts.deleteTriggered(table, removal),
+    descendantsOf: table => facts.descendantsOf(table),
     mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
@@ -1660,200 +1820,359 @@ async function settle<T>(read: () => Promise<T>): Promise<T | undefined> {
   }
 }
 
+/** What a removal of a table's rows reaches through foreign keys: the tables whose rows go, and the columns blanked. */
+interface Reached {
+  rows: string[];
+  nulled: NulledColumn[];
+}
+
+/** A relation's identity, for telling two same-named tables apart. */
+function relationKey(ref: RelationRef): string {
+  return `${ref.schema ?? ""}.${ref.table}`.toLowerCase();
+}
+
 /**
- * The tables a removal of `root`'s rows reaches, lower-cased and sorted,
- * `root` excluded: through every foreign key referencing a reached table
- * when `every` (PostgreSQL's TRUNCATE CASCADE), through ON DELETE CASCADE
- * keys only otherwise. Each step reads who references a table
- * (`readReferencingTables`) and, for a delete, their keys' actions from the
- * diff's own reading (`introspectLiveSnapshot`). A referencing table whose
- * keys cannot be read makes the whole answer unreadable.
+ * What a removal of `root`'s rows reaches, followed transitively and by
+ * relation identity (`readReferencingKeys`), so a child in another schema or
+ * database is never confused with a same-named table the search path shows:
+ * the tables whose rows go, lower-cased and sorted, `root` excluded, through
+ * every referencing key when `every` (PostgreSQL's TRUNCATE CASCADE) and
+ * through ON DELETE CASCADE keys otherwise; and, for a delete, each column a
+ * SET NULL or SET DEFAULT key on a reached table blanks.
  */
 async function reachedFrom(
   db: unknown,
-  dialect: SupportedDialect,
+  dialect: "postgresql" | "mysql",
   root: string,
   every: boolean
-): Promise<{ rows: string[]; nulled: NulledColumn[] }> {
-  const reached = new Map<string, string>([[root.toLowerCase(), root]]);
+): Promise<Reached> {
+  const rows = new Set<string>();
   const nulled: NulledColumn[] = [];
-  const queue = [root];
+  const queue: RelationRef[] = [{ table: root }];
+  const seen = new Set([relationKey(queue[0])]);
   for (
     let parent = queue.shift();
     parent !== undefined;
     parent = queue.shift()
   ) {
-    const referencing = await readReferencingTables(db, dialect, parent);
-    let children = referencing;
-    if (!every && referencing.length > 0) {
-      const snapshot = await introspectLiveSnapshot(db, dialect, referencing);
-      const parentKey = parent.toLowerCase();
-      children = referencing.filter(name => {
-        const keys = keysTo(snapshot, name, parentKey);
-        nulled.push(...nulledColumns(name, keys));
-        return keys.some(key => key.onDelete === "cascade");
-      });
-    }
-    for (const child of children) {
-      if (reached.has(child.toLowerCase())) continue;
-      reached.set(child.toLowerCase(), child);
-      queue.push(child);
+    for (const key of await readReferencingKeys(db, dialect, parent)) {
+      if (every || key.onDelete === "cascade") {
+        if (seen.has(relationKey(key.ref))) continue;
+        seen.add(relationKey(key.ref));
+        rows.add(key.child.toLowerCase());
+        queue.push(key.ref);
+      } else if (
+        key.onDelete === "set null" ||
+        key.onDelete === "set default"
+      ) {
+        const table = key.child.toLowerCase();
+        nulled.push(
+          ...key.columns.map(column => ({
+            table,
+            column: column.toLowerCase(),
+          }))
+        );
+      }
     }
   }
-  reached.delete(root.toLowerCase());
-  return { rows: [...reached.keys()].sort(), nulled };
+  rows.delete(root.toLowerCase());
+  return { rows: [...rows].sort(), nulled };
 }
 
-/** The foreign keys of table `name` that reference `parent` (lower-cased); throws when they were not read. */
-function keysTo(
-  snapshot: Awaited<ReturnType<typeof introspectLiveSnapshot>>,
-  name: string,
-  parent: string
-): ForeignKeySpec[] {
-  const spec = snapshot.tables.find(
-    table => table.name.toLowerCase() === name.toLowerCase()
+/** The questions a walk asked that no reading has answered yet. */
+interface Questions {
+  cascade: Set<string>;
+  truncate: Set<string>;
+  rebuilt: Set<string>;
+  /** `table` and removal, joined by a NUL. */
+  triggers: Set<string>;
+  descendants: Set<string>;
+  calls: boolean;
+}
+
+/** Whether a walk asked nothing new. */
+function answered(asked: Questions): boolean {
+  return (
+    !asked.calls &&
+    [
+      asked.cascade,
+      asked.truncate,
+      asked.rebuilt,
+      asked.triggers,
+      asked.descendants,
+    ].every(set => set.size === 0)
   );
-  if (spec?.foreignKeys === undefined) {
-    throw NextlyError.internal({
-      logContext: { reason: "foreign keys not read", table: name },
-    });
+}
+
+/** A known answer, or the question recorded in `pending` when there is none yet. */
+function lookup<T>(
+  known: ReadonlyMap<string, T>,
+  key: string,
+  pending: Set<string>
+): { value: T } | undefined {
+  if (known.has(key)) return { value: known.get(key) as T };
+  pending.add(key);
+  return undefined;
+}
+
+/**
+ * The live facts read so far, by lower-cased table: a walk asks them, and
+ * what it asks beyond them is recorded, read, and answered on the next walk.
+ * An answer that could not be read is undefined, which the walk fails closed on.
+ */
+class FactReading {
+  private readonly cascades = new Map<string, Reached | undefined>();
+  private readonly truncates = new Map<string, readonly string[] | undefined>();
+  private readonly triggered = new Map<string, boolean | undefined>();
+  private readonly descendants = new Map<
+    string,
+    readonly string[] | undefined
+  >();
+  private readonly columnTypes = new Map<
+    string,
+    Map<string, string> | undefined
+  >();
+  private readonly spellings = new Map<string, string>();
+  /** Null until a walk calls a function; undefined when they could not be read. */
+  private userFunctions: ReadonlySet<string> | undefined | null = null;
+
+  constructor(
+    private readonly db: unknown,
+    private readonly dialect: SupportedDialect
+  ) {}
+
+  /** What a walk of `statements` asks that is not answered yet. */
+  ask(statements: readonly string[]): Questions {
+    const asked: Questions = {
+      cascade: new Set(),
+      truncate: new Set(),
+      rebuilt: new Set(),
+      triggers: new Set(),
+      descendants: new Set(),
+      calls: false,
+    };
+    walk(statements, this.dialect, this.answering(asked));
+    return asked;
   }
-  return spec.foreignKeys.filter(
-    key => key.referencesTable.toLowerCase() === parent
-  );
-}
 
-/** The columns of table `name` its SET NULL and SET DEFAULT keys blank, lower-cased. */
-function nulledColumns(
-  name: string,
-  keys: readonly ForeignKeySpec[]
-): NulledColumn[] {
-  return keys
-    .filter(
-      key => key.onDelete === "set null" || key.onDelete === "set default"
-    )
-    .flatMap(key =>
-      key.columns.map(column => ({
-        table: name.toLowerCase(),
-        column: column.toLowerCase(),
-      }))
+  /** Facts answering from what is known, recording into `asked` what is not. */
+  private answering(asked: Questions): FactSource {
+    const reached = (table: string) =>
+      lookup(this.cascades, table, asked.cascade);
+    return {
+      cascadeFrom: table => {
+        const known = reached(table);
+        return known === undefined ? [] : known.value?.rows;
+      },
+      nulledBy: table => {
+        const known = reached(table);
+        return known === undefined ? [] : known.value?.nulled;
+      },
+      truncateCascadeFrom: table => {
+        const known = lookup(this.truncates, table, asked.truncate);
+        return known === undefined ? [] : known.value;
+      },
+      deleteTriggered: (table, removal) => {
+        const key = `${table}\u0000${removal}`;
+        const known = lookup(this.triggered, key, asked.triggers);
+        return known === undefined ? false : known.value;
+      },
+      descendantsOf: table => {
+        const known = lookup(this.descendants, table, asked.descendants);
+        return known === undefined ? [] : known.value;
+      },
+      mayDeleteThrough: name => {
+        if (this.userFunctions !== null)
+          return mayDeleteThrough(name, this.userFunctions);
+        asked.calls = true;
+        return false;
+      },
+      unseenRebuild: "drop",
+      liveColumns: table => {
+        const known = lookup(this.columnTypes, table, asked.rebuilt);
+        return known?.value === undefined
+          ? undefined
+          : new Set(known.value.keys());
+      },
+      liveType: (table, column) => this.columnTypes.get(table)?.get(column),
+    };
+  }
+
+  /** Reads what `asked` asks, read-only; a fact that cannot be read is recorded as undefined. */
+  async answer(asked: Questions): Promise<void> {
+    const triggers = [...asked.triggers].map(key => key.split("\u0000"));
+    await this.spell([
+      ...asked.cascade,
+      ...asked.truncate,
+      ...asked.rebuilt,
+      ...asked.descendants,
+      ...triggers.map(([table]) => table),
+    ]);
+    for (const table of asked.cascade)
+      this.cascades.set(table, await this.readCascade(table));
+    for (const table of asked.truncate)
+      this.truncates.set(table, await this.readTruncate(table));
+    for (const [table, removal] of triggers) {
+      this.triggered.set(
+        `${table}\u0000${removal}`,
+        await this.readTriggered(table, removal)
+      );
+    }
+    for (const table of asked.descendants) {
+      this.descendants.set(table, await this.readDescendants(table));
+    }
+    await this.readColumnTypes([...asked.rebuilt]);
+    if (asked.calls)
+      this.userFunctions = await settle(() =>
+        readUserFunctions(this.db, this.dialect)
+      );
+  }
+
+  /** The live spelling of each table not spelled yet; a table the database lacks has none. */
+  private async spell(tables: readonly string[]): Promise<void> {
+    const unspelled = [...new Set(tables)].filter(
+      table => !this.spellings.has(table)
     );
+    if (unspelled.length === 0) return;
+    const live = await settle(() =>
+      introspectTableNames(this.db, this.dialect, unspelled)
+    );
+    for (const name of live ?? []) this.spellings.set(name.toLowerCase(), name);
+  }
+
+  /** How a table is named to the catalog: its live spelling, or a PostgreSQL name already qualified (a descendant's). */
+  private live(table: string): string | undefined {
+    const spelled = this.spellings.get(table);
+    if (spelled !== undefined) return spelled;
+    return this.dialect === "postgresql" && table.includes(".")
+      ? table
+      : undefined;
+  }
+
+  private async readCascade(table: string): Promise<Reached | undefined> {
+    // The runner applies every SQLite unit with foreign-key enforcement off
+    // (`withSqliteForeignKeysOff`), so no cascade fires there, whatever the
+    // connection's own setting: a removal that would orphan rows is refused
+    // by the unit's `PRAGMA foreign_key_check` instead.
+    if (this.dialect === "sqlite") return { rows: [], nulled: [] };
+    const live = this.live(table);
+    const dialect = this.dialect;
+    return live === undefined
+      ? undefined
+      : await settle(() => reachedFrom(this.db, dialect, live, false));
+  }
+
+  private async readTruncate(
+    table: string
+  ): Promise<readonly string[] | undefined> {
+    const live = this.live(table);
+    if (live === undefined || this.dialect !== "postgresql") return undefined;
+    return (await settle(() => reachedFrom(this.db, "postgresql", live, true)))
+      ?.rows;
+  }
+
+  private async readTriggered(
+    table: string,
+    removal: string
+  ): Promise<boolean | undefined> {
+    const live = this.live(table);
+    if (live === undefined || (removal !== "delete" && removal !== "truncate"))
+      return undefined;
+    return settle(() =>
+      readRemovalTriggered(this.db, this.dialect, [live], removal)
+    );
+  }
+
+  private async readDescendants(
+    table: string
+  ): Promise<readonly string[] | undefined> {
+    if (this.dialect !== "postgresql") return [];
+    const live = this.live(table);
+    if (live === undefined) return undefined;
+    const found = await settle(() => readPgDescendants(this.db, live));
+    return found?.map(name => name.toLowerCase());
+  }
+
+  /** The live columns and types of the rebuilt tables, read once together. */
+  private async readColumnTypes(tables: readonly string[]): Promise<void> {
+    if (tables.length === 0) return;
+    const live = tables.flatMap(table => {
+      const name = this.live(table);
+      return name === undefined ? [] : [name];
+    });
+    const types =
+      live.length === 0
+        ? new Map<string, Map<string, string>>()
+        : await settle(() => queryLiveColumnTypes(this.db, this.dialect, live));
+    const byTable = new Map(
+      [...(types ?? [])].map(([name, columns]) => [
+        name.toLowerCase(),
+        new Map(
+          [...columns].map(([column, type]) => [
+            column.toLowerCase(),
+            type.toLowerCase(),
+          ])
+        ),
+      ])
+    );
+    for (const table of tables) this.columnTypes.set(table, byTable.get(table));
+  }
+
+  /** The facts read, as the walk's judgement takes them. */
+  facts(): DeletionFacts {
+    // The column names are derived from the one reading of the types, so the
+    // two cannot disagree about which columns a table has.
+    const liveColumnTypes = new Map<string, Map<string, string>>();
+    for (const [table, columns] of this.columnTypes) {
+      if (columns !== undefined) liveColumnTypes.set(table, columns);
+    }
+    const liveColumns: LiveColumns = new Map(
+      [...liveColumnTypes].map(([table, columns]) => [
+        table,
+        new Set(columns.keys()),
+      ])
+    );
+    const userFunctions =
+      this.userFunctions === null ? new Set<string>() : this.userFunctions;
+    return {
+      cascadeFrom: table => this.cascades.get(table.toLowerCase())?.rows,
+      nulledBy: table => this.cascades.get(table.toLowerCase())?.nulled,
+      truncateCascadeFrom: table => this.truncates.get(table.toLowerCase()),
+      deleteTriggered: (table, removal) =>
+        this.triggered.get(`${table.toLowerCase()}\u0000${removal}`),
+      descendantsOf: table => this.descendants.get(table.toLowerCase()),
+      ...(userFunctions === undefined ? {} : { userFunctions }),
+      liveColumns,
+      liveColumnTypes,
+    };
+  }
 }
 
-/** Reads, once and read-only, every fact `fileDeletions` will ask about these statements. Never throws for an unreadable fact: it answers undefined. */
+/**
+ * How many times the facts are read before what is still unasked is left
+ * unread: each round answers questions earlier answers raised (a
+ * descendant's cascades, a cascaded table's triggers), so a list needs one
+ * round per level it reaches through.
+ */
+const FACT_ROUNDS = 8;
+
+/**
+ * Reads, read-only, every fact `fileDeletions` will ask about these
+ * statements. The questions are the walk's own: it is walked against the
+ * facts read so far, what it asks beyond them is read, and it is walked
+ * again, until it asks nothing new. Never throws for an unreadable fact: it
+ * answers undefined, and the walk fails closed on it.
+ */
 export async function readDeletionFacts(
   db: unknown,
   dialect: SupportedDialect,
   statements: readonly string[]
 ): Promise<DeletionFacts> {
-  // The questions are the ones the walk itself asks, recorded by walking
-  // the list once against facts that answer nothing.
-  const cascade = new Set<string>();
-  const truncate = new Set<string>();
-  const rebuilt = new Set<string>();
-  let calls = false;
-  walk(statements, dialect, {
-    cascadeFrom: table => {
-      cascade.add(table);
-      return [];
-    },
-    truncateCascadeFrom: table => {
-      truncate.add(table);
-      return [];
-    },
-    nulledBy: table => {
-      cascade.add(table);
-      return [];
-    },
-    mayDeleteThrough: () => {
-      calls = true;
-      return false;
-    },
-    unseenRebuild: "drop",
-    liveColumns: table => {
-      rebuilt.add(table);
-      return undefined;
-    },
-    liveType: () => undefined,
-  });
-
-  const asked = [...new Set([...cascade, ...truncate, ...rebuilt])];
-  // Each table's live spelling, which the catalog reads need; a table the
-  // database does not have yet is absent, and its facts unreadable.
-  const spellings = await settle(async () => {
-    const live = await introspectTableNames(db, dialect, asked);
-    return new Map(live.map(name => [name.toLowerCase(), name]));
-  });
-  const cascades = new Map<
-    string,
-    { rows: string[]; nulled: NulledColumn[] } | undefined
-  >();
-  for (const table of cascade) {
-    // The runner applies every SQLite unit with foreign-key enforcement off
-    // (`withSqliteForeignKeysOff`), so no cascade fires there, whatever the
-    // connection's own setting: a removal that would orphan rows is refused
-    // by the unit's `PRAGMA foreign_key_check` instead.
-    if (dialect === "sqlite") {
-      cascades.set(table, { rows: [], nulled: [] });
-      continue;
-    }
-    const live = spellings?.get(table);
-    cascades.set(
-      table,
-      live === undefined
-        ? undefined
-        : await settle(() => reachedFrom(db, dialect, live, false))
-    );
+  const reading = new FactReading(db, dialect);
+  for (let round = 0; round < FACT_ROUNDS; round += 1) {
+    const asked = reading.ask(statements);
+    if (answered(asked)) break;
+    await reading.answer(asked);
   }
-  const truncates = new Map<string, readonly string[] | undefined>();
-  for (const table of truncate) {
-    const live = spellings?.get(table);
-    truncates.set(
-      table,
-      live === undefined || dialect !== "postgresql"
-        ? undefined
-        : (await settle(() => reachedFrom(db, dialect, live, true)))?.rows
-    );
-  }
-  // Read only when a SELECT in the list calls a function at all.
-  const userFunctions = calls
-    ? await settle(() => readUserFunctions(db, dialect))
-    : new Set<string>();
-
-  const rebuiltLive = [...rebuilt].flatMap(table => {
-    const live = spellings?.get(table);
-    return live === undefined ? [] : [live];
-  });
-  const types =
-    rebuiltLive.length === 0
-      ? new Map<string, Map<string, string>>()
-      : await settle(() => queryLiveColumnTypes(db, dialect, rebuiltLive));
-  // The column names are derived from the one reading of the types, so the
-  // two cannot disagree about which columns a table has.
-  const liveColumnTypes = new Map(
-    [...(types ?? [])].map(([table, columns]) => [
-      table.toLowerCase(),
-      new Map(
-        [...columns].map(([column, type]) => [
-          column.toLowerCase(),
-          type.toLowerCase(),
-        ])
-      ),
-    ])
-  );
-  const liveColumns: LiveColumns = new Map(
-    [...liveColumnTypes].map(([table, columns]) => [
-      table,
-      new Set(columns.keys()),
-    ])
-  );
-
-  return {
-    cascadeFrom: table => cascades.get(table.toLowerCase())?.rows,
-    nulledBy: table => cascades.get(table.toLowerCase())?.nulled,
-    truncateCascadeFrom: table => truncates.get(table.toLowerCase()),
-    ...(userFunctions === undefined ? {} : { userFunctions }),
-    liveColumns,
-    liveColumnTypes,
-  };
+  return reading.facts();
 }

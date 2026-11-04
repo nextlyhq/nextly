@@ -22,6 +22,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   identifierCaseRules,
   indexCatalog,
@@ -293,6 +294,253 @@ export async function readReferencingTables(
   )) as { table_name: string }[];
   for (const row of rows) names.add(row.table_name);
   return [...names];
+}
+
+/**
+ * A relation as the next catalog read finds it again. PostgreSQL's is its `regclass` text in
+ * `table` (schema-qualified, and quoted, exactly when its bare name would not resolve to it) and
+ * no `schema`; MySQL's is its name in `table` and its database in `schema`, the current database
+ * when unset.
+ */
+export interface RelationRef {
+  schema?: string;
+  table: string;
+}
+
+/** One foreign key referencing a table, as a removal of that table's rows reaches it. */
+export interface ReferencingKey {
+  /**
+   * The referencing table, named the way an unqualified statement reaches it: its bare name when
+   * that name resolves to it, else qualified by its schema (PostgreSQL) or database (MySQL).
+   */
+  child: string;
+  /** How the next read finds the referencing table itself, never a same-named one. */
+  ref: RelationRef;
+  onDelete: "cascade" | "set null" | "set default" | "none";
+  /** The referencing table's key columns, in key order. */
+  columns: string[];
+}
+
+/** PostgreSQL's `confdeltype` codes for the actions that touch the referencing rows. */
+const PG_DELETE_ACTIONS: Record<string, ReferencingKey["onDelete"]> = {
+  c: "cascade",
+  n: "set null",
+  d: "set default",
+};
+
+/** MySQL's `DELETE_RULE` spellings for the actions that touch the referencing rows. */
+const MYSQL_DELETE_ACTIONS: Record<string, ReferencingKey["onDelete"]> = {
+  CASCADE: "cascade",
+  "SET NULL": "set null",
+  "SET DEFAULT": "set default",
+};
+
+/**
+ * Throws when `ref` resolves to no PostgreSQL relation, so a read through `to_regclass` that
+ * would match nothing answers "unreadable" to its caller instead of "none".
+ */
+async function requirePgRelation(db: unknown, ref: string): Promise<void> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT to_regclass(${ref}) IS NULL AS missing`
+  )) as { rows: { missing: boolean }[] };
+  if (result.rows[0]?.missing !== false) {
+    throw NextlyError.internal({
+      logContext: { reason: "relation not resolved", relation: ref },
+    });
+  }
+}
+
+/**
+ * Every foreign key referencing `parent`, with the referencing table it lives on, its ON DELETE
+ * action and its columns, read in one pass from the keys themselves.
+ *
+ * Read by relation identity rather than by name: a referencing table is found again through the
+ * ref this returns, so one in another schema (PostgreSQL) or database (MySQL) is never confused
+ * with a same-named table the search path or the current database makes visible. On PostgreSQL
+ * the keys come straight from `pg_constraint` by OID, the child named by `conrelid::regclass`;
+ * on MySQL from `KEY_COLUMN_USAGE` joined to `REFERENTIAL_CONSTRAINTS`, across every database.
+ * SQLite applies no cascade during a migration (its runner turns enforcement off) and is not read.
+ */
+export async function readReferencingKeys(
+  db: unknown,
+  dialect: "postgresql" | "mysql",
+  parent: RelationRef
+): Promise<ReferencingKey[]> {
+  const keys = new Map<string, ReferencingKey>();
+  if (dialect === "postgresql") {
+    await requirePgRelation(db, parent.table);
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT c.oid::text AS key_id, c.conrelid::regclass::text AS child,
+                 c.confdeltype::text AS action, a.attname::text AS column_name
+          FROM pg_constraint c
+          CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          WHERE c.contype = 'f' AND c.confrelid = to_regclass(${parent.table})
+          ORDER BY c.oid, k.ord`
+    )) as {
+      rows: {
+        key_id: string;
+        child: string;
+        action: string;
+        column_name: string;
+      }[];
+    };
+    for (const row of result.rows) {
+      const key = keys.get(row.key_id) ?? {
+        child: row.child,
+        ref: { table: row.child },
+        onDelete: PG_DELETE_ACTIONS[row.action] ?? "none",
+        columns: [],
+      };
+      key.columns.push(row.column_name);
+      keys.set(row.key_id, key);
+    }
+    return [...keys.values()];
+  }
+
+  const schema =
+    parent.schema === undefined ? sql`DATABASE()` : sql`${parent.schema}`;
+  const rows = mysqlRows<{
+    CONSTRAINT_SCHEMA: string;
+    CONSTRAINT_NAME: string;
+    TABLE_SCHEMA: string;
+    TABLE_NAME: string;
+    COLUMN_NAME: string;
+    DELETE_RULE: string;
+    CURRENT_DB: string | null;
+  }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT k.CONSTRAINT_SCHEMA, k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME,
+                 k.COLUMN_NAME, r.DELETE_RULE, DATABASE() AS CURRENT_DB
+          FROM information_schema.KEY_COLUMN_USAGE k
+          JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+            ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+           AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+           AND r.TABLE_NAME = k.TABLE_NAME
+          WHERE k.REFERENCED_TABLE_SCHEMA = ${schema}
+            AND k.REFERENCED_TABLE_NAME = ${parent.table}
+          ORDER BY k.CONSTRAINT_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION`
+    )
+  );
+  for (const row of rows) {
+    const id = `${row.CONSTRAINT_SCHEMA}\u0000${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
+    // A table in the current database goes by its bare name, any other by its database's too.
+    const child =
+      row.TABLE_SCHEMA === row.CURRENT_DB
+        ? row.TABLE_NAME
+        : `${row.TABLE_SCHEMA}.${row.TABLE_NAME}`;
+    const key = keys.get(id) ?? {
+      child,
+      ref: { schema: row.TABLE_SCHEMA, table: row.TABLE_NAME },
+      onDelete: MYSQL_DELETE_ACTIONS[row.DELETE_RULE] ?? "none",
+      columns: [],
+    };
+    key.columns.push(row.COLUMN_NAME);
+    keys.set(id, key);
+  }
+  return [...keys.values()];
+}
+
+/** PostgreSQL's `tgtype` bits for a trigger fired by a DELETE and by a TRUNCATE. */
+const PG_TRIGGER_BITS = { delete: 8, truncate: 32 } as const;
+
+/** Quoted names, strings and comments in a SQLite trigger's text, which name no event. */
+const SQLITE_NOT_CODE =
+  /"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g;
+
+/**
+ * Whether a SQLite trigger's `CREATE TRIGGER` text fires on DELETE: its first event word, read
+ * past quoted names, strings and comments, is DELETE. One whose event cannot be found counts as
+ * one that fires, since a trigger nobody could read cannot be ruled out.
+ */
+function sqliteTriggerFiresOnDelete(text: string): boolean {
+  const event = /\b(DELETE|INSERT|UPDATE)\b/i.exec(
+    text.replace(SQLITE_NOT_CODE, " ")
+  );
+  return event === null || event[1].toUpperCase() === "DELETE";
+}
+
+/**
+ * Whether removing rows from any of `tables` fires a trigger, which runs code the removal does not
+ * show and so may delete or rewrite other data. `removal` is how the rows go: a `delete` (DELETE,
+ * REPLACE, a cascade) fires DELETE triggers, a `truncate` fires PostgreSQL's TRUNCATE triggers
+ * and nothing on MySQL. PostgreSQL also counts a rule ON DELETE, which rewrites the removal into
+ * statements the file does not show, and reads each table through its ref (`RelationRef.table`),
+ * throwing when one does not resolve; MySQL reads the current database's triggers, SQLite every
+ * trigger in `sqlite_master` on one of the tables.
+ */
+export async function readRemovalTriggered(
+  db: unknown,
+  dialect: SupportedDialect,
+  tables: readonly string[],
+  removal: "delete" | "truncate"
+): Promise<boolean> {
+  if (tables.length === 0) return false;
+  if (dialect === "postgresql") {
+    for (const table of tables) await requirePgRelation(db, table);
+    const relations = sql.join(
+      tables.map(table => sql`to_regclass(${table})`),
+      sql`, `
+    );
+    const rule =
+      removal === "delete"
+        ? sql`OR EXISTS (SELECT 1 FROM pg_rewrite r
+                         WHERE r.ev_class IN (${relations}) AND r.ev_type = '4')`
+        : sql``;
+    return probeReturnsRow(
+      db,
+      dialect,
+      sql`SELECT 1 WHERE EXISTS (
+            SELECT 1 FROM pg_trigger t
+            WHERE t.tgrelid IN (${relations}) AND NOT t.tgisinternal
+              AND (t.tgtype::integer & ${PG_TRIGGER_BITS[removal]}::integer) <> 0
+          ) ${rule}`
+    );
+  }
+  // Neither has a trigger a TRUNCATE fires: MySQL's TRUNCATE fires none, SQLite has no TRUNCATE.
+  if (removal === "truncate") return false;
+  const names = sql.join(
+    tables.map(table => sql`${table.toLowerCase()}`),
+    sql`, `
+  );
+  if (dialect === "mysql") {
+    return probeReturnsRow(
+      db,
+      dialect,
+      sql`SELECT 1 FROM information_schema.TRIGGERS
+          WHERE EVENT_OBJECT_SCHEMA = DATABASE()
+            AND lower(EVENT_OBJECT_TABLE) IN (${names})
+            AND EVENT_MANIPULATION = 'DELETE'
+          LIMIT 1`
+    );
+  }
+  const rows = (await (db as SqliteAll).all(
+    sql`SELECT sql FROM sqlite_master
+        WHERE type = 'trigger' AND lower(tbl_name) IN (${names})`
+  )) as { sql: string | null }[];
+  return rows.some(row => sqliteTriggerFiresOnDelete(row.sql ?? ""));
+}
+
+/**
+ * Every table that inherits from PostgreSQL table `table` (its ref), directly or through another,
+ * partitions included: the tables a DELETE or TRUNCATE of it without ONLY also empties. Each comes
+ * as its `regclass` text, schema-qualified exactly when its bare name would not resolve to it, so
+ * it is both the name and the ref. Throws when `table` does not resolve.
+ */
+export async function readPgDescendants(
+  db: unknown,
+  table: string
+): Promise<string[]> {
+  await requirePgRelation(db, table);
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`WITH RECURSIVE d(id) AS (
+          SELECT i.inhrelid FROM pg_inherits i WHERE i.inhparent = to_regclass(${table})
+          UNION
+          SELECT i.inhrelid FROM pg_inherits i JOIN d ON i.inhparent = d.id
+        )
+        SELECT d.id::regclass::text AS name FROM d ORDER BY 1`
+  )) as { rows: { name: string }[] };
+  return result.rows.map(row => row.name);
 }
 
 /**

@@ -37,6 +37,10 @@ interface Facts {
   functions?: readonly string[] | "unreadable";
   /** Judge a rebuild of an unseen table as `migrate:check` does. */
   deferred?: boolean;
+  /** Per table, the removals a trigger on it fires on; none when left out. Undefined: unreadable. */
+  triggers?: Record<string, readonly ("delete" | "truncate")[] | undefined>;
+  /** Per table, its inheritance descendants and partitions; none when left out. Undefined: unreadable. */
+  descendants?: Record<string, readonly string[] | undefined>;
 }
 
 /** Live facts answering exactly from `facts`, with no case folding. */
@@ -46,11 +50,18 @@ function fake(facts: Facts = {}): DeletionFacts {
     (table: string) => (map !== undefined && table in map ? map[table] : []);
   const tables = Object.entries(facts.columns ?? {});
   const nulled = facts.nulled;
+  const triggers = facts.triggers;
   return {
     cascadeFrom: answer(facts.cascade),
     truncateCascadeFrom: answer(facts.truncate),
     nulledBy: table =>
       nulled !== undefined && table in nulled ? nulled[table] : [],
+    // A table left out has no trigger; one mapped to undefined is unreadable.
+    deleteTriggered: (table, removal) =>
+      triggers !== undefined && table in triggers
+        ? triggers[table]?.includes(removal)
+        : false,
+    descendantsOf: answer(facts.descendants),
     ...(facts.functions === "unreadable"
       ? {}
       : { userFunctions: new Set(facts.functions ?? []) }),
@@ -310,6 +321,97 @@ describe("rows removed", () => {
   });
 });
 
+describe("triggers a removal of rows fires", () => {
+  const fires = (table: string, event: string): Deletion =>
+    unnamed(
+      `rows removed from ${table} fire a ${event} trigger, which may delete other data`
+    );
+
+  it("stands for a DELETE trigger with a deletion only blanket consent covers, on a DELETE, a REPLACE and an INSERT OR REPLACE", () => {
+    const triggers = { posts: ["delete"] as const };
+    expect(
+      read("postgresql", ["DELETE FROM posts WHERE id = 1"], { triggers })
+    ).toEqual([rows("posts"), fires("posts", "DELETE")]);
+    expect(
+      read("mysql", ["REPLACE INTO posts (id) VALUES (1)"], { triggers })
+    ).toEqual([rows("posts"), fires("posts", "DELETE")]);
+    expect(
+      read("sqlite", ["INSERT OR REPLACE INTO posts (id) VALUES (1)"], {
+        triggers,
+      })
+    ).toEqual([rows("posts"), fires("posts", "DELETE")]);
+    // A trigger on another table, or one a TRUNCATE does not fire, asks nothing.
+    expect(
+      read("postgresql", ["DELETE FROM pages", "TRUNCATE posts"], { triggers })
+    ).toEqual([rows("pages"), rows("posts")]);
+  });
+
+  it("stands for a TRUNCATE trigger on PostgreSQL, with or without CASCADE", () => {
+    const triggers = { posts: ["truncate"] as const };
+    expect(read("postgresql", ["TRUNCATE posts"], { triggers })).toEqual([
+      rows("posts"),
+      fires("posts", "TRUNCATE"),
+    ]);
+    expect(
+      read("postgresql", ["TRUNCATE posts CASCADE"], { triggers })
+    ).toEqual([rows("posts"), fires("posts", "TRUNCATE")]);
+  });
+
+  it("fails closed when the triggers could not be read", () => {
+    expect(
+      read("mysql", ["DELETE FROM posts"], { triggers: { posts: undefined } })
+    ).toEqual([
+      rows("posts"),
+      unnamed(
+        "rows removed from posts may fire a DELETE trigger, which could not be read"
+      ),
+    ]);
+  });
+});
+
+describe("PostgreSQL inheritance children and partitions", () => {
+  it("names the rows of every descendant a DELETE or TRUNCATE without ONLY reaches, and follows their cascades", () => {
+    const facts = {
+      descendants: { events: ["events_2025", "archive.events_2024"] },
+      cascade: { events_2025: ["event_tags"] },
+    };
+    expect(read("postgresql", ["DELETE FROM events"], facts)).toEqual([
+      rows("events"),
+      rows("events_2025"),
+      rows("archive.events_2024"),
+      rows("event_tags"),
+    ]);
+    expect(read("postgresql", ["TRUNCATE events *"], facts)).toEqual([
+      rows("events"),
+      rows("events_2025"),
+      rows("archive.events_2024"),
+    ]);
+  });
+
+  it("names only the table itself under ONLY", () => {
+    const facts = { descendants: { events: ["events_2025"] } };
+    expect(read("postgresql", ["DELETE FROM ONLY events"], facts)).toEqual([
+      rows("events"),
+    ]);
+    expect(
+      read("postgresql", ["TRUNCATE ONLY events, events_2025"], facts)
+    ).toEqual([rows("events"), rows("events_2025")]);
+  });
+
+  it("fails closed when the descendants could not be read", () => {
+    expect(
+      read("postgresql", ["DELETE FROM events"], {
+        descendants: { events: undefined },
+      })
+    ).toEqual([
+      rows("events"),
+      unnamed(
+        "rows removed from tables that inherit from events or partition it, which could not be read"
+      ),
+    ]);
+  });
+});
+
 describe("SQLite rebuilds", () => {
   const live = {
     columns: {
@@ -536,6 +638,65 @@ describe("SELECT calling a function", () => {
     ]);
     expect(read("postgresql", [purge], { functions: "unreadable" })).toEqual([
       unreadAs(label, purge),
+    ]);
+  });
+});
+
+describe("a call to a function that may delete, wherever a statement makes it", () => {
+  const functions = ["purge_old_posts"];
+  const calls = (label: string, statement: string) =>
+    unreadAs(`${label} (calls a function, may delete data)`, statement);
+
+  it("stands for a call in an INSERT, a VALUES, an UPDATE and a DELETE's condition", () => {
+    const insert = "INSERT INTO audit VALUES (purge_old_posts())";
+    const values = "VALUES (purge_old_posts())";
+    const update = "UPDATE posts SET pruned = purge_old_posts()";
+    const remove = "DELETE FROM drafts WHERE purge_old_posts() > 0";
+    expect(
+      read("postgresql", [insert, values, update, remove], { functions })
+    ).toEqual([
+      calls("INSERT INTO AUDIT VALUES", insert),
+      calls("VALUES", values),
+      calls("UPDATE POSTS SET PRUNED = PURGE_OLD_POSTS", update),
+      rows("drafts"),
+      calls("DELETE FROM DRAFTS WHERE PURGE_OLD_POSTS", remove),
+    ]);
+  });
+
+  it("stands for a call to a quoted function name, on PostgreSQL and MySQL", () => {
+    const pg = 'SELECT "purge_old_posts"()';
+    const my = "SELECT `purge_old_posts`()";
+    expect(read("postgresql", [pg], { functions })).toEqual([
+      calls('SELECT "purge_old_posts"', pg),
+    ]);
+    expect(read("mysql", [my], { functions })).toEqual([
+      calls('SELECT "purge_old_posts"', my),
+    ]);
+  });
+
+  it("asks nothing for a function a statement only defines", () => {
+    expect(
+      read(
+        "mysql",
+        [
+          "CREATE FUNCTION tidy() RETURNS integer DETERMINISTIC RETURN purge_old_posts()",
+          "CREATE VIEW recent AS SELECT purge_old_posts() AS n",
+        ],
+        { functions }
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("a composite type's attribute converted", () => {
+  it("reads ALTER TYPE … ALTER ATTRIBUTE … TYPE as a statement that may delete, since CASCADE rewrites typed tables", () => {
+    const alter =
+      "ALTER TYPE app_row ALTER ATTRIBUTE title TYPE varchar(20) CASCADE";
+    expect(read("postgresql", [alter])).toEqual([
+      unreadAs(
+        "ALTER TYPE APP_ROW ALTER ATTRIBUTE TITLE TYPE VARCHAR (not read, may delete data)",
+        alter
+      ),
     ]);
   });
 });

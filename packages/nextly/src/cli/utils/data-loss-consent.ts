@@ -10,11 +10,14 @@
  *
  * @module cli/utils/data-loss-consent
  */
+import { createHash } from "node:crypto";
+
 import * as clack from "@clack/prompts";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   ACCEPT_DATA_LOSS_ENV,
+  deletionKey,
   deprecationNotices,
   judgeDataLoss,
   resolveDataLossConsent,
@@ -74,7 +77,7 @@ export async function askToDeleteInTerminal(
  * a deletion: nothing changed, and it names the consent that deletes without
  * asking. It exits 1, as a run with no consent and no terminal does.
  */
-export function dataLossDeclined(): CliError {
+function dataLossDeclined(): CliError {
   return new CliError("DATA_LOSS_DECLINED", {
     what: "Nothing was changed: the deletion was not confirmed.",
     why: "The prompt that listed what would be deleted was not answered yes.",
@@ -139,39 +142,69 @@ export async function judgeDataLossWithGrace(args: {
 }
 
 /**
+ * The file a deletion comes from: `label`, its name as the listing shows it,
+ * and `identity`, its name and a digest of its text, which an agreement binds
+ * to, so a yes to one file's deletion never stands for another file's, nor
+ * for the same file once its text changed.
+ */
+export interface DeletionSource {
+  label: string;
+  identity: string;
+}
+
+/** The source of a deletion from the file `label` whose statements are `text`. */
+export function deletionSource(label: string, text: string): DeletionSource {
+  const digest = createHash("sha256").update(text).digest("hex");
+  return { label, identity: `${label}\u0000${digest}` };
+}
+
+/** What a person agreed to: each deletion of each file, by the file's identity. */
+export type Agreement = ReadonlySet<string>;
+
+/** A deletion as an agreement holds it: bound to the identity of its file. */
+function agreed(source: DeletionSource, deletion: Deletion): string {
+  return `${source.identity}\u0000${deletionKey(deletion)}`;
+}
+
+/**
  * A run's deletions judged once, each listed under the file it comes from
  * (`sources`, keyed by identity). The first judgement (`agreed` absent) may
  * ask the person at a terminal and prints the listing; a later one, under the
- * command's lock, accepts only what was agreed. A refusal throws, its
- * listing naming each file, and a no at the terminal throws
- * `dataLossDeclined`: both before anything changes.
+ * command's lock, accepts without asking only a deletion of a file agreed to
+ * as it stands now. A refusal throws, its listing naming each file, and a no
+ * at the terminal throws `dataLossDeclined`: both before anything changes.
+ * Returns what this judgement agreed to.
  */
 export async function judgeRunDeletions(args: {
-  sources: ReadonlyMap<Deletion, string>;
+  sources: ReadonlyMap<Deletion, DeletionSource>;
   consent: DataLossConsent;
-  agreed: readonly Deletion[] | undefined;
+  agreed: Agreement | undefined;
   interactive: boolean | undefined;
   askToDelete: ((question: string) => Promise<boolean>) | undefined;
   warn: (line: string) => void;
-}): Promise<void> {
+}): Promise<Agreement> {
   const first = args.agreed === undefined;
+  const sources = [...args.sources];
   const verdict = await judgeDataLoss({
     deletions: [...args.sources.keys()],
     consent: args.consent,
     interactive: first && args.interactive === true,
     ask: question => args.askToDelete?.(question) ?? Promise.resolve(false),
     print: first ? args.warn : () => {},
-    approved: args.agreed,
-    sourceOf: deletion => args.sources.get(deletion),
+    approved: sources.flatMap(([deletion, source]) =>
+      args.agreed?.has(agreed(source, deletion)) === true ? [deletion] : []
+    ),
+    sourceOf: deletion => args.sources.get(deletion)?.label,
   });
   if (verdict.kind === "refused") {
     throw NextlyError.invalidInput({
       message: verdict.message,
       logContext: {
-        files: [...new Set(args.sources.values())],
+        files: [...new Set(sources.map(([, source]) => source.label))],
         reason: `data-loss-${verdict.reason}`,
       },
     });
   }
   if (verdict.kind === "declined") throw dataLossDeclined();
+  return new Set(sources.map(([deletion, source]) => agreed(source, deletion)));
 }

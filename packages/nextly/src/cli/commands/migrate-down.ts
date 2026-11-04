@@ -13,7 +13,6 @@
  *
  * @module cli/commands/migrate-down
  */
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -53,8 +52,9 @@ import {
   isConcurrentRun,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
-  fileDeletions,
   readDeletionFacts,
+  runDeletions,
+  runStatements,
   type DeletionFacts,
 } from "../../domains/schema/migrate/file-deletions";
 import {
@@ -82,12 +82,10 @@ import {
   readLiveElements,
   readLiveIndexTables,
   readLiveTables,
-  rebuildBlockStatements,
   type LiveColumns,
   type LiveElements,
 } from "../../domains/schema/ownership/drop-guard";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
-import { findUnexpectedDestructiveStatements } from "../../domains/schema/pipeline/filter-unsafe-statements";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
@@ -102,7 +100,10 @@ import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
+  deletionSource,
   judgeRunDeletions,
+  type Agreement,
+  type DeletionSource,
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
@@ -116,32 +117,41 @@ import {
 } from "./plugin-module-rollback";
 
 /**
- * Whether a DOWN loses data: it drops a table, a schema or a column, or
- * truncates a table.
+ * What each target of a rollback deletes, named, for the consent to cover:
+ * the DOWNs read as one run, in the order they run (`runDeletions`), so a
+ * target is judged against the schema the targets before it leave, and a
+ * foreign key an earlier DOWN restores is followed from a later one's
+ * removal of rows. App migrations and plugin modules are read alike.
  *
- * Judged per statement by the classifier the schema pipeline refuses
- * unexpected destructive DDL with, so "destructive" has one reading — it
- * covers the forms a text match on `DROP COLUMN` misses, such as PostgreSQL's
- * and MySQL's `ALTER TABLE t DROP c`. A complete table rebuild keeps the
- * table and its rows, so its `DROP TABLE` is not counted: the statements
- * `rebuildBlockStatements` names — judged against the table's live columns,
- * as the drop guard judges them — which is how a constraint-only SQLite DOWN
- * needs no data-loss consent. Everything else is handed to the classifier
- * with an empty approved-rebuild set, so a DROP TABLE outside a complete
- * block, or of a twin missing a live column, still counts.
+ * The live facts are read once, for every target's statements. Without a
+ * reader none is known: every removal's reach, trigger and inheritance tree
+ * stands for a deletion only the consent without targets covers, and the
+ * live columns are the ones the plan read (`readLiveState`).
  */
-export function isDestructiveDown(
-  statements: readonly string[],
+export async function rollbackDeletions(
+  planned: readonly Pick<PlannedDown, "statements" | "liveColumns">[],
   dialect: SupportedDialect,
-  liveColumns: LiveColumns | undefined
-): boolean {
-  const rebuilding = rebuildBlockStatements(statements, dialect, liveColumns);
-  return (
-    findUnexpectedDestructiveStatements(
-      statements.filter((_, index) => !rebuilding.has(index)),
-      new Set()
-    ).length > 0
-  );
+  readFacts:
+    | ((statements: readonly string[]) => Promise<DeletionFacts>)
+    | undefined
+): Promise<Deletion[][]> {
+  const lists = planned.map(p => p.statements);
+  const facts =
+    (await readFacts?.(runStatements(lists))) ??
+    unreadFacts(planned[0]?.liveColumns);
+  return runDeletions(lists, dialect, facts);
+}
+
+/** The facts of a rollback with no reader: nothing live answered, so each question fails closed. */
+function unreadFacts(liveColumns: LiveColumns | undefined): DeletionFacts {
+  return {
+    cascadeFrom: () => undefined,
+    truncateCascadeFrom: () => undefined,
+    nulledBy: () => undefined,
+    deleteTriggered: () => undefined,
+    descendantsOf: () => undefined,
+    liveColumns: liveColumns ?? new Map(),
+  };
 }
 
 /**
@@ -753,7 +763,7 @@ function plannedFrom(
  */
 async function planAndGuard(
   deps: MigrateDownCoreDeps,
-  agreed?: readonly Deletion[]
+  agreed?: Agreement
 ): Promise<GuardedPlan> {
   const step = deps.options.step ?? 1;
   // Plugin rows belong to their own migration stream, so they are excluded
@@ -769,9 +779,9 @@ async function planAndGuard(
     deps,
     agreed === undefined
   );
-  if (targets.length === 0) return { planned: [], deletions: [] };
+  if (targets.length === 0) return { planned: [], agreement: new Set() };
   const planned = await planRollback(targets, deps, reads);
-  if (deps.options.dryRun) return { planned, deletions: [] };
+  if (deps.options.dryRun) return { planned, agreement: new Set() };
 
   // Guards — evaluated up front for every target, before executing anything.
   for (const p of planned) {
@@ -788,14 +798,19 @@ async function planAndGuard(
       honours: ["--allow-data-loss"],
       earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
     });
-  // Each deletion keeps the file it comes from, by identity, for the listing.
-  const sources = new Map<Deletion, string>();
-  for (const p of planned) {
-    for (const deletion of await downDeletions(p, deps)) {
-      sources.set(deletion, p.filename);
-    }
-  }
-  await judgeRunDeletions({
+  // Each deletion keeps the file it comes from, by identity, for the listing
+  // and for binding an agreement to the file as it stands.
+  const sources = new Map<Deletion, DeletionSource>();
+  const perTarget = await rollbackDeletions(
+    planned,
+    deps.dialect,
+    deps.readDeletionFacts
+  );
+  planned.forEach((p, at) => {
+    const source = deletionSource(p.filename, p.statements.join("\n;\n"));
+    for (const deletion of perTarget[at] ?? []) sources.set(deletion, source);
+  });
+  const agreement = await judgeRunDeletions({
     sources,
     consent,
     agreed,
@@ -803,67 +818,14 @@ async function planAndGuard(
     askToDelete: deps.askToDelete,
     warn: line => deps.logger.warn(line),
   });
-  return { planned, deletions: [...sources.keys()] };
-}
-
-/**
- * The deletions one target's DOWN makes, named, for the consent to cover.
- *
- * An app migration's DOWN is read by `fileDeletions`, statement by statement:
- * each table or column it drops, each table it removes rows from, the tables a
- * row removal cascades to, and each column a type change can clear, so a
- * consent naming them covers it. A plugin's module keeps the judgement of its
- * whole DOWN as one deletion named by its file, which only the consent
- * without targets covers.
- */
-async function downDeletions(
-  p: PlannedDown,
-  deps: Pick<MigrateDownCoreDeps, "dialect" | "options" | "readDeletionFacts">
-): Promise<Deletion[]> {
-  if (deps.options.plugin !== undefined) {
-    return isDestructiveDown(p.statements, deps.dialect, p.liveColumns)
-      ? [
-          {
-            kind: "unnamed",
-            description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
-            // The statements as judged: under the lock the DOWN is read
-            // again, and one that changed since it was agreed to is a
-            // different deletion.
-            fingerprint: createHash("sha256")
-              .update(p.statements.join("\n;\n"))
-              .digest("hex"),
-          },
-        ]
-      : [];
-  }
-  const facts = await deps.readDeletionFacts?.(p.statements);
-  return fileDeletions(p.statements, deps.dialect, {
-    // Without a reader no foreign key is known, so a row removal's
-    // cascade is refused unless the consent has no targets.
-    cascadeFrom: table => facts?.cascadeFrom(table),
-    truncateCascadeFrom: table => facts?.truncateCascadeFrom(table),
-    nulledBy: table => facts?.nulledBy(table),
-    // Without a reader, a SELECT calling any function counts as one that
-    // may delete.
-    ...(facts?.userFunctions === undefined
-      ? {}
-      : { userFunctions: facts.userFunctions }),
-    // The columns as the targets before this one leave them.
-    liveColumns: p.liveColumns ?? facts?.liveColumns ?? new Map(),
-    // The types as read before the rollback, so a rebuild that carries a
-    // column as it is asks nothing. A target that converts a column before
-    // this one names that column itself, so the consent covering it covers
-    // this one's conversion too.
-    ...(facts?.liveColumnTypes === undefined
-      ? {}
-      : { liveColumnTypes: facts.liveColumnTypes }),
-  });
+  return { planned, agreement };
 }
 
 /** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
 interface GuardedPlan {
   planned: PlannedDown[];
-  deletions: Deletion[];
+  /** What the operator agreed the targets delete, bound to each file as it stood. */
+  agreement: Agreement;
 }
 
 export async function migrateDownCore(
@@ -915,7 +877,13 @@ export async function migrateDownCore(
     // The refusal a real run makes under the lock, reported as the others are.
     await reportUnresolvedRefusal(deps);
     deps.logger.info(`Would roll back ${planned.length} migration(s):`);
-    for (const p of planned) {
+    // Judged as the real run judges them: every target's DOWN as one run.
+    const perTarget = await rollbackDeletions(
+      planned,
+      deps.dialect,
+      deps.readDeletionFacts
+    );
+    for (const [at, p] of planned.entries()) {
       deps.logger.info(`  • ${p.filename}`);
       const refusal = refusalOf(p, deps);
       if (refusal !== undefined) {
@@ -924,7 +892,7 @@ export async function migrateDownCore(
         );
         continue;
       }
-      const deletes = await downDeletions(p, deps);
+      const deletes = perTarget[at] ?? [];
       if (deletes.length > 0) {
         deps.logger.info(
           `    ⚠ deletes data: ${deletes.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletes)}.`
@@ -958,7 +926,7 @@ export async function migrateDownCore(
       if (unresolved !== undefined) throw unresolved;
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
-      const { planned: current } = await planAndGuard(held, guarded.deletions);
+      const { planned: current } = await planAndGuard(held, guarded.agreement);
       if (current.length === 0) {
         deps.logger.info("Nothing to roll back.");
         return;
