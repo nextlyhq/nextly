@@ -1003,6 +1003,8 @@ function StyleTab({
       />
       <StyleInspectorPanel
         editor={editor}
+        // The block card above says why a held block can't be changed.
+        showReadOnlyReason={false}
         renderedTag={renderedTag}
         sideOrientation={sideOrientation}
         policy={policy}

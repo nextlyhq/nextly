@@ -404,6 +404,12 @@ export interface StyleInspectorPanelProps {
    * families. Absent, it lists the variables and the system families.
    */
   fonts?: FontChoices;
+  /**
+   * Whether the tab says above its controls why a held block's design can't
+   * be changed. True when omitted. A host that says it already, as the
+   * inspector's block card does, turns it off, so the reason is said once.
+   */
+  showReadOnlyReason?: boolean;
 }
 
 /**
@@ -522,6 +528,7 @@ function StyleInspectorBody({
   liveBreakpoints,
   onJumpToBreakpoint,
   target = BLOCK_TARGET,
+  showReadOnlyReason = true,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -690,7 +697,9 @@ function StyleInspectorBody({
     <StyleTargetContext.Provider value={target}>
       <CanvasTokenModeProvider value={tokenMode}>
         <div className="nx-style-inspector" data-style-target={target.kind}>
-          <ReadOnlyNote target={target} reason={readOnlyReason} />
+          {showReadOnlyReason ? (
+            <ReadOnlyNote target={target} reason={readOnlyReason} />
+          ) : null}
           <NoStyleProperties count={inspected.sections.length} />
           <Accordion
             type="single"
