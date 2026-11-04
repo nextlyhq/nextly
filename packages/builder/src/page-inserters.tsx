@@ -43,7 +43,7 @@ import {
   nodeAddressOf,
 } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
-import { watchCanvasFor } from "./canvas-geometry-watch";
+import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
 import { ChromeTooltip } from "./chrome-tooltip";
 import type { Point, Rect } from "./geometry";
 import {
@@ -54,6 +54,7 @@ import {
   overlaySpaceOf,
 } from "./geometry-dom";
 import { blockNameOf, type ComponentTitleOf } from "./layers";
+import { startWords } from "./page-start-words";
 import { nodeElements } from "./rendered-nodes";
 import { unionRect } from "./toolbar-actions";
 
@@ -91,27 +92,6 @@ interface Gap {
 }
 
 /**
- * What the start card and a gap's "+" say: of sections on a page, of blocks in
- * a component, which has no sections.
- */
-const WORDS = {
-  page: {
-    title: "Start your page",
-    hint: "Add a section, or drag one here from the panel.",
-    start: "Add section",
-    gap: "Add a section here",
-    after: "Add a section after",
-  },
-  component: {
-    title: "Add the first block",
-    hint: "Add a block, or drag one here from the panel.",
-    start: "Add block",
-    gap: "Add a block here",
-    after: "Add a block after",
-  },
-} as const;
-
-/**
  * How near the pointer must be to a gap for its "+" to show, in the chrome's
  * pixels: less than half a short block's height, so the middle of a block
  * one line tall stays the block's to press.
@@ -126,7 +106,9 @@ function gapNear(gaps: readonly Gap[], y: number): string | undefined {
 
 /** A gap's identity: the two sections it is between. */
 function keyOf(gap: Gap): string {
-  return `${gap.after}|${gap.before}`;
+  // Encoded rather than joined: an id can hold any character, so a separator
+  // could make two different pairs read the same.
+  return JSON.stringify([gap.after, gap.before]);
 }
 
 /**
@@ -203,7 +185,7 @@ export function PageInserters({
   onAddAfter,
   componentTitle,
 }: PageInsertersProps): React.JSX.Element | null {
-  const words = WORDS[document.kind === "component" ? "component" : "page"];
+  const words = startWords(document.kind);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [gaps, setGaps] = React.useState<readonly Gap[]>([]);
   const canvasFrame = useCanvasFrame();
@@ -229,6 +211,16 @@ export function PageInserters({
   React.useEffect(() => {
     if (hidden) return;
     return watchCanvasFor(() => layer.current, measure);
+  }, [measure, hidden, canvasFrame]);
+
+  // And what moves the part of the canvas on screen, which the start card is
+  // centred on: the scroller around the canvas, and the host's around a frame.
+  React.useEffect(() => {
+    const element = layer.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (hidden || space === null) return;
+    return watchScreenBand(space.root, space.frame, measure);
   }, [measure, hidden, canvasFrame]);
 
   // The pointer's distance from each gap, from its moves over the canvas.

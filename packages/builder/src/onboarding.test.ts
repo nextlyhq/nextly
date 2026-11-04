@@ -114,6 +114,14 @@ describe("builderChecklist", () => {
     );
   });
 
+  it("names the control an empty component offers, which adds blocks", () => {
+    // A component has no sections: its start card's button says Add block.
+    const component = { ...documentOf([]), kind: "component" } as never;
+    expect(step(component, "add-block")?.hint).toBe(
+      "Click Add block, or open Add in the left rail."
+    );
+  });
+
   it("counts the first block as done once one is there", () => {
     expect(step(documentOf([heading("a")]), "add-block")?.done).toBe(true);
   });

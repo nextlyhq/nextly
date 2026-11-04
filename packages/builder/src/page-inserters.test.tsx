@@ -228,6 +228,47 @@ describe("an empty page", () => {
     expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
   });
 
+  it("follows the scroller when it scrolls the empty page", async () => {
+    // The scroller around the canvas is outside it, and its scroll reaches no
+    // listener on the canvas: the card is re-centred on what it now shows.
+    let shownTop = 0;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 800);
+        }
+        if (this.classList.contains("nx-canvas")) {
+          return new DOMRect(0, -shownTop, 1000, 2000);
+        }
+        return new DOMRect(0, 0, 0, 0);
+      }
+    );
+    render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={page([])}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={
+            <PageInserters
+              document={page([])}
+              onStart={() => undefined}
+              onAddAfter={() => undefined}
+            />
+          }
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    const card = screen.getByText("Start your page").parentElement;
+    expect(card?.style.top).toBe("400px");
+    shownTop = 600;
+    const scroller = document.querySelector("[data-scroller]");
+    if (scroller === null) throw new Error("no scroller");
+    fireEvent.scroll(scroller);
+    await act(async () => undefined);
+    expect(card?.style.top).toBe("1000px");
+  });
+
   it("draws nothing while a block is dragged, so the drop line shows", async () => {
     mount(page([]), { hidden: true });
     await act(async () => undefined);
@@ -362,6 +403,36 @@ describe("the + between sections", () => {
     expect(
       gapButtons().map(button => button.getAttribute("aria-label"))
     ).toEqual(["Add a section after Hero banner"]);
+  });
+
+  it("keeps gaps apart whatever their sections' ids hold", async () => {
+    // Ids are any non-empty string: joined with a separator they collide,
+    // so "a" then "b|c" and "a|b" then "c" would be one gap twice.
+    const tops: Record<string, number> = { a: 0, "b|c": 24, "a|b": 48, c: 72 };
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        const id = this.getAttribute("data-nx-node");
+        return id !== null && id in tops
+          ? new DOMRect(0, tops[id], 1000, 24)
+          : new DOMRect(0, 0, 1000, 96);
+      }
+    );
+    mount(
+      page([
+        section("a", "A"),
+        section("b|c", "BC"),
+        section("a|b", "AB"),
+        section("c", "C"),
+      ])
+    );
+    await act(async () => undefined);
+    const root = document.querySelector(".nx-canvas");
+    if (root === null) throw new Error("no canvas");
+    // At the first gap, 24: only that one shows.
+    fireEvent.pointerMove(root, { clientX: 500, clientY: 24 });
+    expect(
+      gapButtons().map(button => button.closest("[data-near]") !== null)
+    ).toEqual([true, false, false]);
   });
 
   it("reports the section above the gap when pressed", async () => {

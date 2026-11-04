@@ -32,6 +32,7 @@ import {
 
 import { inlineTargets } from "./inline-text";
 import { insertionPropSets } from "./inserter";
+import { startWords } from "./page-start-words";
 
 /** One thing to do, and whether the page shows it has been done. */
 export interface ChecklistStep {
@@ -101,7 +102,7 @@ export function builderChecklist(
       label: "Add your first block",
       // The empty page's own Add section button first, which is on the canvas
       // beside this step, then the rail, which is there on every page.
-      hint: "Click Add section, or open Add in the left rail.",
+      hint: `Click ${startWords(document.kind).start}, or open Add in the left rail.`,
       done: blocks > 0,
     },
     {
