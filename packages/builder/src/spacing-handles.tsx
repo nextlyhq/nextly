@@ -178,10 +178,16 @@ export interface SpacingHandlesProps {
 
 /**
  * How thick a handle's hit area is, in the author's pixels: 24, the minimum
- * target WCAG 2.2 asks of a pointer control, centred on the edge it moves. The
- * strip an author sees stays thin; only the area that takes a press is wider.
+ * target WCAG 2.2 asks of a pointer control, where its band has the room.
  */
 const HANDLE_SCREEN_PX = 24;
+
+/**
+ * The least a handle's hit area is, in the author's pixels, on a band thinner
+ * than this: centred on the band, so it reaches past it by a few pixels at
+ * most. The Style panel's spacing fields edit the same values at full size.
+ */
+const HANDLE_FLOOR_PX = 9;
 
 /** A gesture in flight. */
 interface Gesture {
@@ -282,26 +288,46 @@ function sameEdge(
   if (one.side !== other.side) return false;
   const a = handleRect(one, outwardOf(one));
   const b = handleRect(other, outwardOf(other));
-  return a.x === b.x && a.y === b.y;
+  return (
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+  );
 }
+
+/** How a handle shares its band with another handle on the same pixels. */
+interface HandleShare {
+  /** Another handle lands on the same pixels, so the band is split. */
+  readonly shared: boolean;
+  /** This handle is the one moved aside, to the half away from the edge. */
+  readonly nudged: boolean;
+}
+
+const ALONE: HandleShare = { shared: false, nudged: false };
 
 /**
  * Where a handle's strip sits on its band.
  *
- * `nudged` shifts it clear of another handle occupying the same pixels, by one
- * thickness INTO the band — never out of it, so the control stays over the
- * space it edits.
+ * INSIDE the band, flush with the edge that moves. The band is the one place a
+ * press can only mean this control: past its outer edge is the neighbour the
+ * margin spaces the block from, and past its inner edge are the block's own
+ * children, and a press on either has to select what is there. A centred
+ * strip reached half its thickness into both.
+ *
+ * A band thinner than the strip is the strip, all of it; one thinner than
+ * {@link HANDLE_FLOOR_PX} gets that much, centred on it.
+ *
+ * `share` splits a band two handles land on: a negative margin's band is
+ * laid inside the border edge, exactly where padding's is. The earlier one
+ * takes the half away from the moving edge, so both strips take pointer events
+ * and neither leaves the space it describes.
  */
 function handleRect(
   band: SpacingBand,
   outward: boolean,
-  nudged = false,
+  share: HandleShare = ALONE,
   scale = 1
 ): Rect {
   const { rect, side } = band;
-  // In the band's units: the layer over a frame is scaled with the page, and
-  // the strip keeps its own thickness on screen.
-  const thickness = HANDLE_SCREEN_PX / scale;
+  const across = side === "top" || side === "bottom";
   const far = side === "bottom" || side === "right";
   /*
    * The edge that MOVES when the value grows, which is where the control
@@ -310,25 +336,23 @@ function handleRect(
    * are measured. See `spacingBandDrawnOutward` and `spacing-response.ts`.
    */
   const atMax = far === outward;
-  const half = thickness / 2;
-  // Into the band, which is the direction away from its moving edge.
-  const shift = nudged ? (atMax ? -thickness : thickness) : 0;
-  if (side === "top" || side === "bottom") {
-    const edge = atMax ? rect.y + rect.height : rect.y;
-    return {
-      x: rect.x,
-      y: edge - half + shift,
-      width: rect.width,
-      height: thickness,
-    };
-  }
-  const edge = atMax ? rect.x + rect.width : rect.x;
-  return {
-    x: edge - half + shift,
-    y: rect.y,
-    width: thickness,
-    height: rect.height,
-  };
+  const low = across ? rect.y : rect.x;
+  const room = across ? rect.height : rect.width;
+  // In the band's units: the layer over a frame is scaled with the page, and
+  // the strip keeps its own size on screen.
+  const thickness = Math.max(
+    Math.min(HANDLE_SCREEN_PX / scale, share.shared ? room / 2 : room),
+    HANDLE_FLOOR_PX / scale
+  );
+  // How far into the band from its moving edge the strip begins. Where the
+  // strips need more room than the band has, they are centred on it instead.
+  const needed = share.shared ? thickness * 2 : thickness;
+  const inset =
+    (needed > room ? (room - needed) / 2 : 0) + (share.nudged ? thickness : 0);
+  const from = atMax ? low + room - inset - thickness : low + inset;
+  return across
+    ? { x: rect.x, y: from, width: rect.width, height: thickness }
+    : { x: from, y: rect.y, width: thickness, height: rect.height };
 }
 
 /** The words an author reads for one side of one box. */
@@ -1222,7 +1246,7 @@ export function SpacingHandles({
          */
         if (!writable.has(band.box)) return null;
         /*
-         * Nudged aside where two handles would land on the same pixels.
+         * Sharing the band where two handles would land on the same pixels.
          *
          * A negative margin's band is laid inside the border edge, exactly where
          * padding's is — so `margin-top: -16px` with `padding-top: 16px` gives
@@ -1230,17 +1254,20 @@ export function SpacingHandles({
          * handles. Same stacking, and padding is drawn later, so it takes every
          * press and the margin's control is advertised and unreachable.
          *
-         * The EARLIER band moves, by its own thickness, into the band both of
-         * them occupy. Both strips then take pointer events and neither leaves
-         * the space it describes.
+         * The EARLIER band moves aside, into the band both of them occupy.
          */
         const outward = drawnEdgeOf(band);
         const rect = handleRect(
           band,
           outward,
-          drawn
-            .slice(index + 1)
-            .some(later => sameEdge(band, later, drawnEdgeOf)),
+          {
+            shared: drawn.some(
+              (other, at) => at !== index && sameEdge(band, other, drawnEdgeOf)
+            ),
+            nudged: drawn
+              .slice(index + 1)
+              .some(later => sameEdge(band, later, drawnEdgeOf)),
+          },
           handleScale
         );
         return (

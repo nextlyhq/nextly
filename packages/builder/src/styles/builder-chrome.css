@@ -6517,7 +6517,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 /*
  * The focus ring is drawn on the strip itself rather than left to the UA
- * default, which would be clipped to a nine-pixel band and easy to miss.
+ * default, which would be clipped to a thin band and easy to miss.
  */
 .nx-spacing-handles__handle:focus-visible {
   outline: 2px solid var(--nx-ring);

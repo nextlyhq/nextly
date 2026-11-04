@@ -73,7 +73,13 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
-import { canvasContentRect, onScreenOf, overlaySpaceOf } from "./geometry-dom";
+import {
+  canvasContentRect,
+  canvasScroller,
+  onScreenOf,
+  overlaySpaceOf,
+  scrollEventTarget,
+} from "./geometry-dom";
 import { useBlockActionsContext } from "./keyboard-actions";
 import { layerLabel } from "./layers";
 import { lockBlockingEdit } from "./locking";
@@ -307,6 +313,26 @@ export function BlockToolbar({
     observer.observe(root);
     return () => observer.disconnect();
   }, [measure, hidden, selectedId, selectedIds, document, canvasFrame]);
+
+  /*
+   * And when the canvas scrolls. The block does not move in the canvas's own
+   * coordinates, but what of it is on screen does, and the bar keeps to that:
+   * a tall block scrolled past its top takes its bar to the screen's top. The
+   * scroller is the one the screen band is read from, so what is heard and
+   * what is measured cannot be two different elements.
+   */
+  React.useEffect(() => {
+    if (hidden || selectedId === null) return;
+    const element = bar.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    const scroller = canvasScroller(space.root, space.frame !== null);
+    if (scroller === null) return;
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", measure, { passive: true });
+    return () => source.removeEventListener("scroll", measure);
+  }, [measure, hidden, selectedId, canvasFrame]);
 
   const focusAt = React.useCallback((index: number) => {
     setActiveIndex(index);

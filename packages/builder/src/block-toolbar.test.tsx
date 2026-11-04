@@ -421,6 +421,41 @@ describe("BlockToolbar", () => {
     expect(document.activeElement).toBe(stop);
   });
 
+  it("moves to the screen's top as a tall block is scrolled past its own", () => {
+    // jsdom lays nothing out, so the boxes are given: a page in a scroller
+    // showing 900px of it, and a 2000px block 100px down the page. Scrolling
+    // moves the page under the scroller and changes nothing a render reports.
+    let scrolled = 0;
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(-scrolled, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]'))
+          return box(100 - scrolled, 1000, 2000);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("above");
+      scrolled = 700;
+      const scroller = document.querySelector("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      fireEvent.scroll(scroller);
+      expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
   it("keeps the roving stop where FOCUS is when the selection moves", () => {
     /*
      * Duplicate and Select parent both change the selection while the author's
