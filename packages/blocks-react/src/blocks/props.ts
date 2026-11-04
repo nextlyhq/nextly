@@ -16,7 +16,8 @@ import {
   isFetchableUrl,
   isLinkableUrl,
 } from "@nextlyhq/blocks-engine";
-import type { RemotePatternInput } from "@nextlyhq/blocks-engine";
+import type { BoundValue, RemotePatternInput } from "@nextlyhq/blocks-engine";
+import { createElement, type ReactNode } from "react";
 
 /**
  * Whether a stored value is text an author actually put there.
@@ -38,6 +39,23 @@ export { isAuthoredText };
 /** A string prop, or the fallback when the stored value is not usable text. */
 export function text(value: unknown, fallback = ""): string {
   return authoredText(value, fallback);
+}
+
+/**
+ * A text prop's words, marked up as a date when its binding filled it with one.
+ *
+ * A bound date reaches a text prop already formatted for the reader, and the
+ * machine-readable value travels beside it in the block's `bound` argument.
+ * Wrapped in `<time datetime>` here, inside the element the block draws, so a
+ * crawler or an assistive tool reads the date a reader sees. Anything else is
+ * the text as it is.
+ */
+export function boundText(
+  label: string,
+  bound: BoundValue | undefined
+): ReactNode {
+  if (bound?.kind !== "date" || label === "") return label;
+  return createElement("time", { dateTime: bound.datetime }, label);
 }
 
 /** A stored value constrained to one of a fixed set, or the fallback. */

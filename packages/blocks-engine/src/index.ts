@@ -1177,3 +1177,81 @@ export {
   previewContainerName,
   type BreakpointContextOptions,
 } from "./style/compile-page";
+// Last, so the bundle reaches the style compiler's parser before the URL
+// policy's matcher, as the format entry's boundary test expects of the root.
+//
+// Bindings: the rules each one is checked against, the formatting of a bound
+// value, and the pass that fills bound props before blocks render. One set of
+// answers, shared by the renderer, the validator and the editor.
+export { BINDING_ISSUE_CODES } from "./binding-issues";
+export {
+  BINDABLE_KINDS,
+  bindablePropTypeOf,
+  bindingKindOf,
+  canBindFieldToProp,
+  FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+} from "./binding-vocabulary";
+export type {
+  BindablePropType,
+  BindingEndpoint,
+  BindingFieldType,
+  BindingValueKind,
+  FieldStoragePrimitive,
+  StorageFieldType,
+} from "./binding-vocabulary";
+export type { BindingIssue, BindingIssueCode } from "./binding-issues";
+export {
+  bindablePropKind,
+  checkBinding,
+  fieldFitsProp,
+  isBindPath,
+  isEmptyBoundValue,
+  isValidPropValue,
+} from "./binding-rules";
+export type {
+  BindablePropKind,
+  BindingCheck,
+  BindingCheckInput,
+  BindingFieldShape,
+  BindingRefs,
+  BindingSchemaRef,
+  BindingSchemaSource,
+  CheckedBinding,
+} from "./binding-rules";
+export {
+  checkFormat,
+  createBindingFormatter,
+  machineDate,
+  safeTimeZone,
+  supportedLocale,
+} from "./binding-format";
+export type {
+  BindingFormatter,
+  CheckedFormat,
+  FormatCheck,
+  FormatEnv,
+  FormatResult,
+  FormattedValue,
+} from "./binding-format";
+export {
+  bindDocument,
+  bindingDemand,
+  createBindingRun,
+  DEFAULT_BINDING_LOCALE,
+  hasItemBindings,
+  resolveNodeBindings,
+} from "./resolve-bindings";
+export type {
+  BindingDemand,
+  BindingRun,
+  BindingRunInput,
+  BindingScope,
+  BindingSources,
+  BlockPropsLookup,
+  BoundDocument,
+  BoundValue,
+  BoundValues,
+  NodeBindingResult,
+  SourceDemand,
+} from "./resolve-bindings";
