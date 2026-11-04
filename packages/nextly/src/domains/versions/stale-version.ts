@@ -25,10 +25,10 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 import type { StaleVersionPublicData } from "../../errors/public-data";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
-import type { RequestActor } from "../../auth/request-actor";
 import { COMPANION_UPDATED_AT_COLUMN } from "../i18n/companion-columns";
 import {
   claimCompanionRevision,
