@@ -524,6 +524,73 @@ describe("BlockToolbar", () => {
     }
   });
 
+  it("goes below the LAST part a placement draws, never over its content", () => {
+    // A placement whose definition draws two elements, a headline and an
+    // intro, each carrying the placement's address. Anchored to the first
+    // alone, a bar flipped below sits over the intro's line.
+    registerBlocks(
+      [
+        {
+          name: "acme/two-parts",
+          version: 1,
+          description: "A block drawn as two parts.",
+          example: { props: {} },
+          editor: { label: "Two parts" },
+          render: () =>
+            React.createElement(
+              React.Fragment,
+              null,
+              React.createElement("h2", {
+                "data-nx-node": "card-title",
+                "data-nx-instance": "card",
+              }),
+              React.createElement("p", {
+                "data-nx-node": "card-intro",
+                "data-nx-instance": "card",
+              })
+            ),
+        },
+      ] as never,
+      { source: "block-toolbar-test" }
+    );
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="card-title"]'))
+          return box(10, 1000, 24);
+        if (this.matches('[data-nx-node="card-intro"]'))
+          return box(34, 1000, 24);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      const doc = documentOf([
+        {
+          id: "card",
+          type: "acme/two-parts",
+          version: 1,
+          props: {},
+        } as BlockNode,
+      ]);
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(doc, "card"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      // No room above a block 10px down, so below: under the intro's bottom
+      // (34 + 24) and the 6px gap, not under the headline's.
+      expect(bar.getAttribute("data-side")).toBe("below");
+      expect(bar.style.top).toBe("64px");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
   it("moves when the window resizes the part of the page on screen", () => {
     // A block 10px down a scroller: the bar goes below it while that fits on
     // screen, and to the screen's top once the window is too short for it.

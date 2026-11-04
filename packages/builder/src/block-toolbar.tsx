@@ -68,7 +68,12 @@ import {
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
-import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import {
+  CANVAS_ROOT_CLASS,
+  CHROME_ATTRIBUTE,
+  outermostElementsOf,
+  nodeElement,
+} from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
@@ -328,11 +333,16 @@ export function BlockToolbar({
      * of them describes an action about to happen to the other, which the
      * author cannot see. The union is the shape the selection occupies.
      */
+    // Every element each selected block draws, not its first: a placement
+    // whose definition draws a headline and an intro is both, and a bar
+    // placed under the headline alone would sit over the intro's line.
     const rects: Rect[] = [];
-    for (const id of selectedIds) {
-      const element = nodeElement(root, id);
-      if (element !== null) {
-        rects.push(space.place(canvasContentRect(element, root)));
+    for (const elements of outermostElementsOf(
+      root,
+      new Set(selectedIds)
+    ).values()) {
+      for (const drawn of elements) {
+        rects.push(space.place(canvasContentRect(drawn, root)));
       }
     }
     const block = unionRect(rects);

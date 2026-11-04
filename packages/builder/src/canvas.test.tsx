@@ -1329,6 +1329,24 @@ describe("the drag in flight is drawn on the canvas", () => {
           render: ({ className }: { className: string }) =>
             createElement("div", { className }),
         },
+        {
+          // Draws a part the way a component placement's definition does: a
+          // re-minted node id the page does not hold, carrying the
+          // placement's address as its instance.
+          name: "acme/placement",
+          version: 1,
+          description: "A block drawn from a definition.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                [NODE_ID_ATTRIBUTE]: "minted-part",
+                [INSTANCE_ATTRIBUTE]: "card",
+              })
+            ),
+        },
       ] as never,
       { source: "canvas-drag-marks-test" }
     );
@@ -1565,6 +1583,41 @@ describe("the drag in flight is drawn on the canvas", () => {
     const locked = container.querySelectorAll(`[${LOCKED_ATTRIBUTE}]`);
     expect(locked).toHaveLength(1);
     expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+  });
+
+  it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {
+    /*
+     * A placement's parts carry a re-minted node id plus the placement's
+     * address. Read by the raw id, the lock finds nothing for them and the
+     * selection ring the marks draw from a part is solid, as for an unlocked
+     * block; read by the address, as the selection is, they are locked.
+     */
+    const { container } = draw(undefined, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "card",
+          type: "acme/placement",
+          version: 1,
+          props: {},
+          locked: true,
+        },
+        { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+      ],
+    });
+    await act(async () => undefined);
+
+    const part = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="minted-part"]`
+    );
+    expect(part?.getAttribute(LOCKED_ATTRIBUTE)).toBe("own");
+    // The control: an unlocked block beside it is not marked.
+    expect(
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="leaf"]`)
+        ?.hasAttribute(LOCKED_ATTRIBUTE)
+    ).toBe(false);
   });
 
   it("marks a block's own lock and a lock it is held by from around it apart", async () => {

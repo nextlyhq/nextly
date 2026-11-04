@@ -627,6 +627,28 @@ export function isOutermostForAddress(
 }
 
 /**
+ * Every element standing for each of `addresses` on this canvas: the
+ * outermost per address, in document order. What a toolbar or a gap measures a
+ * block by, so that a component placement whose definition draws several
+ * top-level elements is measured as all of them rather than as its first.
+ */
+export function outermostElementsOf(
+  root: HTMLElement,
+  addresses: ReadonlySet<string>
+): Map<string, Element[]> {
+  const drawn = new Map<string, Element[]>();
+  for (const element of nodeElements(root)) {
+    const address = nodeAddressOf(element);
+    if (address === null || !addresses.has(address)) continue;
+    if (!isOutermostForAddress(element, address, root)) continue;
+    const elements = drawn.get(address) ?? [];
+    elements.push(element);
+    drawn.set(address, elements);
+  }
+  return drawn;
+}
+
+/**
  * The element a node id was rendered as, or `null` when it is not on screen.
  *
  * The inverse of {@link nodeIdFromEvent}, and beside it because the two are one
@@ -824,11 +846,14 @@ function useCanvasMarkers(
         // Whether the engine would refuse to move this node, asked from the set
         // rather than from the document per element: this walk re-runs on every
         // change to the rendered tree, and a tree search per element would make
-        // that quadratic on a large page.
+        // that quadratic on a large page. Asked by the ADDRESS, as the selection
+        // pass above is: a placement's parts carry a re-minted id the document
+        // does not hold, and the lock that holds them is the placement's.
+        const address = nodeAddressOf(element);
         setMark(
           element,
           LOCKED_ATTRIBUTE,
-          id === null ? undefined : lockedIds.get(id)
+          address === null ? undefined : lockedIds.get(address)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
