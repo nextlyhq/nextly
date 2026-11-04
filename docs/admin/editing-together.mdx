@@ -9,7 +9,7 @@ The claim is a courtesy between people using the admin. It tells your colleagues
 
 ## What each message means
 
-These messages appear in a strip at the top of the editor. The names below are examples: the admin shows the person's name, or their email when they have no name.
+These messages appear in a strip at the top of the editor. The names below are examples. The admin shows the person's name, or their email when they have no name. When a program holds the document through an API key, it says so: "Ana's API key is editing this document", or "An API key is editing this document" when the key's maker has no name. When there is nothing to name the holder by, it says "Someone".
 
 ### When someone else is editing
 
@@ -21,12 +21,15 @@ These messages appear in a strip at the top of the editor. The names below are e
 | "Ana is editing this document right now." | Your role lets you read this document but not change it, and Ana is editing it. Publishing or unpublishing waits until Ana is done. | Read it. |
 | "Your access lets you view this, but not change it. If you need to change it, ask an admin." | Your role lets you read this document but not change it. Nobody else is involved. | Ask an admin if you need to change it. |
 
+While someone else holds the document, Save, Publish and the other actions that would change it are turned off. The actions menu and the side panel say why under each one, "This document is being edited elsewhere", and a button says it when you point at it. Actions that change nothing, such as previewing, opening the history and pinning to the dashboard, still work.
+
 ### When you are editing
 
 | Message | What it means | What you can do |
 | --- | --- | --- |
 | "Someone is waiting to edit this document." | A colleague asked for edit access. The admin does not say who. | Keep working: nothing is taken away from you. Finish and leave the document when you can. |
 | "Ana took over this document. Your unsaved changes are still here, but cannot be saved until you take it back." | Ana took the document from you. What you typed stays on screen, read-only. | Copy what you need, or choose **Take it back**. See [Your unsaved work](#your-unsaved-work). |
+| "You opened this document in another tab. Your unsaved changes are still here, but cannot be saved until you continue editing here." | You opened the same document in another tab, and that tab is now the one editing it. What you typed in this tab stays on screen, read-only. | Choose **Continue editing here** to edit in this tab again, with what you typed. See [Two tabs](#two-tabs). |
 | "Your claim on this document ended. Your unsaved changes are still here, but cannot be saved until you take it back." | Your claim lapsed, for example while your computer was asleep. Nobody has taken the document. | Choose **Take it back** to carry on. |
 | "This document could not be confirmed as yours for long enough that a colleague may now be editing it. Your unsaved changes are still here." | The admin could not reach the server for long enough that your claim may have lapsed. | Choose **Take it back** once you are online again. |
 | "We could not check whether anyone else is editing this document. You can keep working, but a colleague may be in it too." | The admin could not ask the server who is editing. | Keep working, but be aware that a colleague may have it open. |
@@ -51,7 +54,13 @@ Choose **Take over** when you need to edit a document now, for example because a
 
 Choose **Request edit access** to let the person editing know you are waiting, without taking anything from them. They see "Someone is waiting to edit this document." They are not told who asked, and they can keep working. The request is a courtesy: it does not move the document.
 
-You can edit the document once they leave it. If their tab closed without letting go of it, their claim lapses about two and a half minutes after it was last renewed.
+You can edit the document once they leave it: the editor unlocks for you on its own, within about 20 seconds. If they could not let go of it, for example because their computer went to sleep or lost its connection, their claim lapses about two and a half minutes after it was last renewed.
+
+## Leaving a document
+
+The document is yours until you leave it. You leave it when you close the editor, go to another page of the admin, reload the tab, close it, or follow a link out of the admin. A colleague waiting on it can edit within about 20 seconds.
+
+A reload gives the document back to you, not to someone waiting. When the editor cannot say it is leaving, because the browser crashed, the computer went to sleep or the connection dropped, the claim lapses after about two and a half minutes instead.
 
 ## Your unsaved work
 
@@ -59,7 +68,9 @@ If someone takes over while you are typing, nothing you typed is thrown away. It
 
 ## Two tabs
 
-You count as one person, however many tabs you have open. A list open in another tab does not update when you save in this one; it shows the change when you open it again or reload the tab.
+You count as one person, however many tabs you have open, so opening a document you are editing in a second tab is never a takeover. The tab you opened last is the one that edits. The earlier tab says "You opened this document in another tab", keeps what you typed there on screen, and offers **Continue editing here**, which makes it the editing tab again with your typing intact. The other tab is then told the same. Nothing is recorded in the history.
+
+A list open in another tab does not update when you save in this one; it shows the change when you open it again or reload the tab.
 
 ## Limits
 
@@ -67,3 +78,4 @@ You count as one person, however many tabs you have open. A list open in another
 - **One person is named.** The strip names whoever holds the document, not everyone who has it open.
 - **Existing documents only.** A new entry is not claimed while it is being created.
 - **Programs don't take part.** The REST API, the Direct API and plugins don't see claims, and a claim doesn't stop them writing. Developers can read who holds a document through the [REST API](/docs/api-reference/rest-api#document-locks).
+- **Your own API key counts as you.** If a program using an API key you made claims a document you have open, your editor says you opened it in another tab, not that the key took it. And if your key holds a document when you open it, you get the document straight away, without being told the key had it.

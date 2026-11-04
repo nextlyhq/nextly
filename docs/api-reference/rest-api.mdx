@@ -601,7 +601,7 @@ curl -X POST "http://localhost:3000/admin/api/document-lock" \
   "message": "Document claimed.",
   "item": {
     "status": "acquired",
-    "holder": { "ownerId": "user-1", "ownerLabel": "Ana Silva", "expiresInSeconds": 150 },
+    "holder": { "ownerId": "user-1", "ownerLabel": "Ana Silva's API key", "expiresInSeconds": 150 },
     "claimToken": "…"
   }
 }
@@ -622,6 +622,12 @@ When someone else holds it, the claim is still answered `200`, not refused:
 
 "Someone else is editing" is an answer to show, not an error, so a held document never comes
 back as `409`. The claim token is given only to the caller whose claim succeeded.
+
+`ownerLabel` is what the admin calls the holder, and it is never empty. A person is named by their
+name, or by their email when they have no name. An API key is named as a key, by the name of the
+person who made it ("Ana Silva's API key"), or as "An API key" when that person has no name. A
+claim with nothing to name it by reads "Someone". `ownerId` is the user's id, which for an API key
+is the id of the person who made it.
 
 Two options ride on the claim:
 
@@ -666,8 +672,17 @@ claim already lost is not an error. A renewal or release without `claimToken` is
 seconds after its last renewal, timed by the database's clock, and every read ignores a lapsed
 claim at once.
 
+The admin gives its claim up as soon as the editor closes, including when the tab is closed or
+reloaded or the browser leaves the admin. A claim is left to lapse only when the admin cannot say
+it is done: after a crash, a lost connection, or a computer that went to sleep. A script that
+claims a document should release it with `DELETE` when it is done, so nobody waits out the lapse.
+
 **One holder per person.** A claim by the person who already holds the document is always
-granted, so one person in two tabs, or a person and their own script, holds it once.
+granted, and moves the claim to the new caller. One person in two tabs holds the document once,
+and so do a person and an API key they made, because both claim as that person. The admin tells
+the tab the claim moved from that the document was opened in another tab, even when it was the
+key that claimed it. Moving a claim between one person's tabs and keys is not a takeover, and
+history records nothing.
 
 **Cleaning up.** Lapsed claims are deleted by the `document-lock:sweep` job, which runs whenever
 the [scheduled jobs run](/docs/jobs#running-the-queue) does. Nothing depends on it for
