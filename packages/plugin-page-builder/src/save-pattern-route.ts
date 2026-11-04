@@ -188,14 +188,28 @@ export async function savePattern(
   );
   if (plan.problem !== undefined) throw refusal(plan);
 
+  const data = {
+    ...plan.create.fields,
+    slug: plan.create.fields.slug ?? derivedSlug(plan.create.fields.title),
+    [PATTERN_DOCUMENT_FIELD]: plan.create.document,
+    status: SAVED_PATTERN_STATUS,
+  };
+  // A dry run answers the pattern it would store and stores nothing: the
+  // planner has already refused anything a save would, and the row's own
+  // rules (a unique slug, the caller's right to create) answer the write.
+  if (request.dryRun === true) {
+    return respondMutation(
+      "Nothing was written: this is the pattern it would save.",
+      {
+        dryRun: true,
+        pattern: data,
+      }
+    );
+  }
+
   const written = await ctx.services.collections.createEntry(
     plan.create.collection,
-    {
-      ...plan.create.fields,
-      slug: plan.create.fields.slug ?? derivedSlug(plan.create.fields.title),
-      [PATTERN_DOCUMENT_FIELD]: plan.create.document,
-      status: SAVED_PATTERN_STATUS,
-    },
+    data,
     // AS THE USER. A write with the instance's own identity would let any
     // authenticated caller create a pattern whatever the collection's
     // permissions say — and would record the wrong author on the version.
@@ -315,10 +329,14 @@ function refusal(refused: PlanRefusal): NextlyError {
  */
 async function readRequest(req: Request): Promise<SavePatternRequest> {
   const body = objectAt(await readJson(req), "body");
+  if (body.dryRun !== undefined && typeof body.dryRun !== "boolean") {
+    throw malformed("dryRun");
+  }
   return {
     document: documentAt(body.document),
     selectedIds: selectionAt(body.selectedIds),
     fields: settableFields(objectAt(body.fields, "fields")),
+    ...(body.dryRun === true ? { dryRun: true } : {}),
   };
 }
 

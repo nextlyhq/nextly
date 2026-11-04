@@ -352,6 +352,8 @@ export interface SavePatternRequest {
   /** The nodes to lift out of it, in the editor's own vocabulary. */
   readonly selectedIds: readonly string[];
   readonly fields: SavePatternFields;
+  /** Answer the pattern the save would store, and store nothing. */
+  readonly dryRun?: boolean;
 }
 
 /**

@@ -2,6 +2,7 @@ import {
   DEFAULT_LIMITS,
   type DocumentLimits,
   type RemotePattern,
+  type RetiredExposures,
 } from "@nextlyhq/blocks-engine";
 import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
@@ -9,6 +10,7 @@ import {
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginDefinition,
+  type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
@@ -98,6 +100,7 @@ import {
   PAGE_BUILDER_SETTINGS_SLUG,
   pageBuilderSettingsSingle,
 } from "./default-layout/settings-single";
+import { definitionActionsRoute } from "./definition-actions-route";
 import { entriesRoute } from "./entries-route";
 import type {
   CompositionSetup,
@@ -138,6 +141,7 @@ import {
 } from "./library-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
+import { pageActionsRoute } from "./page-actions-route";
 import { pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -1143,6 +1147,44 @@ export const pageBuilder = (
   // What deriving retired ids from component history has read so far, shared
   // by the repair after a failed record and the editor's facts read.
   const retiredHistory = retiredHistoryMemo();
+  // The ids a published removal retired: those the write hooks recorded, and
+  // those the component's published history implies, recorded here when the
+  // table lacks them. Where the hooks are not registered (the host renders
+  // components from a source of its own), nothing is recorded, so `null`. A
+  // localized store records no retirements (see the write hooks), so it
+  // answers `null` too. Read by the editor's facts and by the API's
+  // definition actions, which must never hand a retired id out again.
+  const readRetiredFor = (
+    ctx: PluginRouteContext
+  ): ((id: string) => Promise<RetiredExposures | null>) => {
+    if (opts.componentReadiness === false) return () => Promise.resolve(null);
+    const components =
+      componentStoreOf(opts).collection ??
+      ctx.self.collections[COMPONENTS_SLUG] ??
+      COMPONENTS_SLUG;
+    return reconciledRetired({
+      shape: () =>
+        componentStoreShape(ctx.services.collections, components, ctx.user),
+      reconcile: (id, lifecycle) =>
+        reconcileRetired(
+          {
+            history: ctx.services.versions,
+            componentCollection: components,
+            componentField: componentStoreOf(opts).field,
+            lifecycle,
+            memo: retiredHistory,
+            store: retiredStore({
+              nextly: () => requireInstalled().nextly(),
+              collection:
+                ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+                COMPONENT_RETIRED_SLUG,
+            }),
+            logger: ctx.logger,
+          },
+          id
+        ),
+    });
+  };
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -1658,47 +1700,8 @@ export const pageBuilder = (
               })
             );
           },
-          // The ids a published removal retired: those the write hooks
-          // recorded, and those the component's published history implies,
-          // recorded here when the table lacks them. Where the hooks are not
-          // registered (the host renders components from a source of its
-          // own), nothing is recorded, so `null`, and the editor adds no
-          // field. A localized store records no retirements (see the write
-          // hooks), so it answers `null` too.
-          readRetired: ctx => {
-            if (opts.componentReadiness === false)
-              return () => Promise.resolve(null);
-            const components =
-              componentStoreOf(opts).collection ??
-              ctx.self.collections[COMPONENTS_SLUG] ??
-              COMPONENTS_SLUG;
-            return reconciledRetired({
-              shape: () =>
-                componentStoreShape(
-                  ctx.services.collections,
-                  components,
-                  ctx.user
-                ),
-              reconcile: (id, lifecycle) =>
-                reconcileRetired(
-                  {
-                    history: ctx.services.versions,
-                    componentCollection: components,
-                    componentField: componentStoreOf(opts).field,
-                    lifecycle,
-                    memo: retiredHistory,
-                    store: retiredStore({
-                      nextly: () => requireInstalled().nextly(),
-                      collection:
-                        ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-                        COMPONENT_RETIRED_SLUG,
-                    }),
-                    logger: ctx.logger,
-                  },
-                  id
-                ),
-            });
-          },
+          // The ids a published removal retired; `null` adds no field.
+          readRetired: readRetiredFor,
         }),
         // How many placements chose one of a component's variants, for the
         // dialog that confirms deleting it: the usage index lists the hosts,
@@ -1730,6 +1733,18 @@ export const pageBuilder = (
           // Read when a request arrives, after `init` has registered the
           // usage hooks this hands back.
           reconcile: () => usage.reconcile,
+        }),
+        // The editor's page edits (insert a pattern, place a component, set a
+        // placement's values or variant, choose a Layout) and its component
+        // definition edits, one action per request, each with a dry run.
+        pageActionsRoute({
+          store: componentStoreOf(opts),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        }),
+        definitionActionsRoute({
+          store: componentStoreOf(opts),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+          readRetired: readRetiredFor,
         }),
         // Detach, duplicate and update a pattern, each with a dry run.
         ...componentActionRoutes({

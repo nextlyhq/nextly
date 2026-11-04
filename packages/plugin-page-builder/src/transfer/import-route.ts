@@ -67,6 +67,7 @@ import {
   type CompositionRouteContext,
   type CompositionRouteSetup,
 } from "../composition-route-kit";
+import { inCauses, JudgedAndRolledBack, refusalOf } from "../judged-writes";
 import { readingAsUser, type ComponentStore } from "../library-route";
 import type { SiteStyleData } from "../site-style";
 import { checkStoredClasses, checkStoredTokens } from "../site-style-record";
@@ -142,9 +143,6 @@ const ImportBody = z.strictObject({
 /** How many media files one search page reads, and the most pages read. */
 const MEDIA_SEARCH_PAGE_SIZE = 50;
 const MEDIA_SEARCH_PAGES = 20;
-
-/** Thrown inside the judging transaction to roll it back once it has answered. */
-class JudgedAndRolledBack extends Error {}
 
 /** Read, judge and preview or apply a file, as the docblock describes. */
 async function importFile(
@@ -557,37 +555,15 @@ async function judgeWrites(
     // what answered.
     if (inCauses(error, JudgedAndRolledBack) !== undefined) return [];
     const refused = inCauses(error, NextlyError);
-    if (refused !== undefined) return [refusedBySite(refused)];
-    throw error;
+    if (refused === undefined) throw error;
+    return [
+      {
+        code: "REFUSED_BY_SITE",
+        message: refusalOf(refused).messages.join(" "),
+      },
+    ];
   }
   return [];
-}
-
-/** The first error in `error`'s cause chain of the class given. */
-function inCauses<T extends Error>(
-  error: unknown,
-  kind: abstract new (...args: never[]) => T
-): T | undefined {
-  let current: unknown = error;
-  for (let depth = 0; depth < 10 && current instanceof Error; depth += 1) {
-    if (current instanceof kind) return current;
-    current = current.cause;
-  }
-  return undefined;
-}
-
-/** A write's refusal in the words the site gave it. */
-function refusedBySite(error: NextlyError): ImportProblem {
-  const listed = (error.publicData as { errors?: unknown } | undefined)?.errors;
-  const messages = Array.isArray(listed)
-    ? listed
-        .map(entry => (entry as { message?: unknown }).message)
-        .filter((message): message is string => typeof message === "string")
-    : [];
-  return {
-    code: "REFUSED_BY_SITE",
-    message: messages.length > 0 ? messages.join(" ") : error.publicMessage,
-  };
 }
 
 // ---------------------------------------------------------------------------

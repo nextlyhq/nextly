@@ -125,6 +125,22 @@ export async function actingCaller(
       logContext: { reason: "composition-action-not-granted", asks },
     });
   }
+  return actionByOf(user, caller);
+}
+
+/**
+ * Who a request runs as, as an answer reports it: the signed-in person, or the
+ * API key and the person who owns it. Every route that says `by` derives it
+ * here, so a key is never reported as its owner by one route and as the key by
+ * another.
+ */
+export function actionByOf(
+  user: { readonly id: string },
+  caller: {
+    readonly authMethod?: "session" | "api-key";
+    readonly apiKeyId?: string;
+  }
+): ActionBy {
   return caller.authMethod === "api-key"
     ? {
         kind: "api-key",
