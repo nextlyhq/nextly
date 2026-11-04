@@ -62,6 +62,7 @@ import {
   readerStatusWrite,
   statusWritesHeld,
 } from "@admin/components/features/entries/EntryForm/reader-status-write";
+import type { RecoveryPointState } from "@admin/components/features/entries/EntryForm/SaveStateIndicator";
 import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
 import {
   submitBusy,
@@ -92,6 +93,7 @@ import {
   offerHeldWhileRecovering,
   useRefusedForm,
 } from "@admin/components/features/entries/EntryForm/useRefusedForm";
+import { useResetOnReload } from "@admin/components/features/entries/EntryForm/useResetOnReload";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -114,6 +116,7 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
@@ -275,6 +278,13 @@ export interface SingleFormProps {
    * when the route names one.
    */
   documentView?: DocumentViewMount;
+  /**
+   * When the Single on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, a Single this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Additional CSS classes */
   className?: string;
 }
@@ -615,6 +625,7 @@ export function SingleForm({
   documentActions,
   documentBanner,
   documentView,
+  latest,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -799,8 +810,15 @@ export function SingleForm({
     entryId: document.id,
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
   });
-  const lock = heldWhileRecovering(lockSurface, recovering);
+  // A gained Single's latest version starts the whole form again, whatever
+  // its `updatedAt` says, and the lock holds until it has; the document views
+  // key on the count it carries.
+  const lock = heldWhileRecovering(
+    useResetOnReload(form, lockSurface, defaultValues),
+    recovering
+  );
 
   // System fields: title (drawn first in the editor) and slug (not drawn for a
   // Single, whose slug its config fixes). Per the
@@ -1258,6 +1276,18 @@ export function SingleForm({
    * back their outcome so an action run from outside the header can say what
    * it came to.
    */
+  /*
+   * The recovery point, once, for every place the save state is drawn: the
+   * header's chip, and a document view's own through the host.
+   */
+  const recoveryPoint: RecoveryPointState = {
+    enabled: autosaveScope !== null,
+    storedAt: autosave.lastSavedAt,
+    // A recovery point newer than the stored document, still on offer: its
+    // edits are not stored, whatever the form says.
+    pendingOfferAt: recovery.offer?.savedAt ?? null,
+  };
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode: "edit",
     hasStatus,
@@ -1351,6 +1381,9 @@ export function SingleForm({
                  */
                 // Nor beside a document view, which takes the window alone.
                 open={previewOnScreen}
+                // A document view is a full-height screen: the closed split
+                // hands it the content area's height to fill.
+                fill={documentView !== undefined}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1364,7 +1397,10 @@ export function SingleForm({
                 >
                   {/* A document view replaces the form body and nothing around
                       it, as in the entry editor. */}
-                  <DocumentActionsHost input={documentActionsInput}>
+                  <DocumentActionsHost
+                    input={documentActionsInput}
+                    recovery={recoveryPoint}
+                  >
                     <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Mod+S runs the Save action, so a Single saves by the
                       same rule the entry editor does. The view owns Escape;
@@ -1410,13 +1446,11 @@ export function SingleForm({
                               bar={
                                 <DocumentBar
                                   panelMode={panel.mode}
-                                  autosaveEnabled={autosaveScope !== null}
-                                  // A recovery point newer than the stored document, still on offer:
-                                  // its edits are not stored, whatever the form says.
+                                  autosaveEnabled={recoveryPoint.enabled}
                                   pendingRecoveryAt={
-                                    recovery.offer?.savedAt ?? null
+                                    recoveryPoint.pendingOfferAt
                                   }
-                                  autosaveLastSavedAt={autosave.lastSavedAt}
+                                  autosaveLastSavedAt={recoveryPoint.storedAt}
                                   mode="edit"
                                   hasStatus={hasStatus}
                                   // The status the pill reports, and whether a

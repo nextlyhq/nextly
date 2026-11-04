@@ -725,92 +725,101 @@ const COLLECTIONS_METHODS: Record<
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
-      // One exclusion around the registry read, the version check, the apply and the registry
-      // write, so no other schema change runs between this dialog's check and its write; the
-      // shared apply's own claim is taken inside it, re-entrantly.
+      // Registry alone is sufficient as the DI-readiness probe; the
+      // schema-change service is no longer consulted on the apply path.
+      const registry = getCollectionRegistryFromDI();
+      if (!registry) {
+        throw new Error("Collection registry not initialized");
+      }
+      const {
+        fields,
+        confirmed,
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+        eventResolutions,
+        hints,
+      } = body as {
+        fields: unknown[];
+        confirmed: boolean;
+        schemaVersion?: number;
+        // i18n: the request's Internationalization flag is read through
+        // `readRequestLocalized` below rather than destructured here, so a
+        // non-boolean is rejected instead of silently coerced.
+        localized?: boolean;
+        // Legacy admin UI shape (per-field, used by the old
+        // SchemaChangeService path). Kept alive while admin dialogs
+        // still send it.
+        resolutions?: Record<string, FieldResolution>;
+        renameResolutions?: BrowserRenameResolution[];
+        // Typed Resolution[] from the new pipeline contract. Optional:
+        // admin UIs that haven't been upgraded send only the legacy
+        // `resolutions` map and the new pipeline emits no events until
+        // the UI is updated to consume ClassifierEvents from preview.
+        eventResolutions?: Resolution[];
+        // RESERVED FIELD: accepted and IGNORED in the current version.
+        // A future revision will implement client-side rename hint
+        // tracking plus server-side auto-confirm so the
+        // SchemaChangeDialog stops asking the admin to re-confirm
+        // renames they already clicked once. Reserved so the future
+        // version can ship as a pure additive change without breaking
+        // older admin clients.
+        // See plans/specs/F10-notifications-and-audit-design.md §6.6.
+        hints?: {
+          renames?: Record<string, string>;
+        };
+      };
+      if (!confirmed) {
+        throw new Error("Schema changes must be confirmed");
+      }
+      if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields, { kind: "collection" });
+
+      // Log a debug line when hints arrive so we can track adoption
+      // without surprising operators with errors. The current version
+      // ignores the field entirely.
+      if (shouldLogF14HintReceipt(hints)) {
+        consoleLogger.debug(
+          `[F14] hints received but not processed; see plans/specs/F10-notifications-and-audit-design.md §6.6`
+        );
+      }
+
+      // Everything above reads the request alone, so no concurrent writer can change its answer
+      // and it is decided before the lock is taken: a malformed save is answered as one, not with
+      // a lock refusal or a lock table created on the way to rejecting it. Everything below reads
+      // or writes the database, from the registry row the save is checked against to the response,
+      // and runs holding the schema lock, refused at once while a migration holds it. The shared
+      // apply takes the lock too, re-entrantly; it is taken here so the registry read, the version
+      // check and the registry write sit inside the same claim as the DDL.
       return withSchemaChangeExcluded(
         {
           adapter: getAdapterFromDI(),
+          // An app whose DI registered no logger still saves; the refusal's log line then goes to
+          // the console.
           logger: getLoggerFromDI() ?? consoleLogger,
           label: `apply schema changes to collection "${p.collectionName}"`,
-          // This path runs the push pipeline, so it issues DDL and may create the lock table.
+          // This road runs the push pipeline, so it issues DDL and may create the lock table.
           issuesDdl: true,
         },
         async () => {
-          // Registry alone is sufficient as the DI-readiness probe; the
-          // schema-change service is no longer consulted on the apply path.
-          const registry = getCollectionRegistryFromDI();
-          if (!registry) {
-            throw new Error("Collection registry not initialized");
-          }
+          // Read once the lock is held, so the row every check below is asked against is the one
+          // the DDL and the registry write act on.
           const collection = await registry.getCollectionBySlug(
             p.collectionName
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
-          const {
-            fields,
-            confirmed,
-            schemaVersion,
-            resolutions,
-            renameResolutions,
-            eventResolutions,
-            hints,
-          } = body as {
-            fields: unknown[];
-            confirmed: boolean;
-            schemaVersion?: number;
-            // i18n: the request's Internationalization flag is read through
-            // `readRequestLocalized` below rather than destructured here, so a
-            // non-boolean is rejected instead of silently coerced.
-            localized?: boolean;
-            // Legacy admin UI shape (per-field, used by the old
-            // SchemaChangeService path). Kept alive while admin dialogs
-            // still send it.
-            resolutions?: Record<string, FieldResolution>;
-            renameResolutions?: BrowserRenameResolution[];
-            // Typed Resolution[] from the new pipeline contract. Optional:
-            // admin UIs that haven't been upgraded send only the legacy
-            // `resolutions` map and the new pipeline emits no events until
-            // the UI is updated to consume ClassifierEvents from preview.
-            eventResolutions?: Resolution[];
-            // RESERVED FIELD: accepted and IGNORED in the current version.
-            // A future revision will implement client-side rename hint
-            // tracking plus server-side auto-confirm so the
-            // SchemaChangeDialog stops asking the admin to re-confirm
-            // renames they already clicked once. Reserved so the future
-            // version can ship as a pure additive change without breaking
-            // older admin clients.
-            // See plans/specs/F10-notifications-and-audit-design.md §6.6.
-            hints?: {
-              renames?: Record<string, string>;
-            };
-          };
-          if (!confirmed) {
-            throw new Error("Schema changes must be confirmed");
-          }
-          if (!fields) throw new Error("fields is required in request body");
-          // Same rules as the ui-schema.json mirror (see api/fields-payload):
-          // an invalid field must fail HERE, not only at the file write, or
-          // the DB and the committed manifest diverge silently.
-          assertValidFieldsPayload(fields, { kind: "collection" });
-          // A pair of sibling fields this save would create is refused before any statement or archive
-          // write; one the entity already holds keeps working. Asked here because this road reaches its
-          // DDL through no shared service that could ask it.
+          // A pair of sibling fields this save would create is refused before any statement or
+          // archive write; one the entity already holds keeps working. Asked here because this
+          // road reaches its DDL through no shared service that could ask it.
           assertNoNewSiblingClashes(
             { kind: "collection", slug: p.collectionName },
             fields,
             collection.fields ?? []
           );
-
-          // Log a debug line when hints arrive so we can track adoption
-          // without surprising operators with errors. The current version
-          // ignores the field entirely.
-          if (shouldLogF14HintReceipt(hints)) {
-            consoleLogger.debug(
-              `[F14] hints received but not processed; see plans/specs/F10-notifications-and-audit-design.md §6.6`
-            );
-          }
 
           // Default legacy rows (schema_version NULL) to 1 so a first save is not
           // rejected as version-less. The registry types schemaVersion as `number`

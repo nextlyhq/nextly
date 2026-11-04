@@ -1,0 +1,33 @@
+/**
+ * The declaration of `nextly generate:manifest`: its options and help, with
+ * the action loaded from `./generate-manifest` only when the command runs.
+ */
+import type { Command } from "commander";
+
+import { lazyAction } from "../lazy-action";
+
+/**
+ * Register the generate:manifest command with the program
+ *
+ * @param program - Commander program instance
+ */
+export function registerGenerateManifestCommand(program: Command): void {
+  program
+    .command("generate:manifest")
+    .description(
+      "Generate the block manifest from plugin declarations, or check it is current"
+    )
+    .option(
+      "-o, --output <path>",
+      "Types output path the manifest is written beside"
+    )
+    .option(
+      "--check",
+      "Write nothing; exit non-zero if the committed manifest is stale"
+    )
+    .action(
+      lazyAction(
+        async () => (await import("./generate-manifest")).generateManifestAction
+      )
+    );
+}

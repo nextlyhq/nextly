@@ -95,6 +95,33 @@ export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin";
 export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
 
 /**
+ * The surrounding document's full-page preview (@experimental).
+ *
+ * For a field that shows the page it holds — the page builder's entry view —
+ * and offers to open it whole. `open` is the editor's own Preview handler, so
+ * the field opens the page the header would, in the language being edited.
+ *
+ * `null` wherever the editor offers no Preview action: no preview configured,
+ * an entry never saved, a reader, and outside a form. A field shows no such
+ * control then, rather than one that opens nothing.
+ */
+export { useDocumentPreview, type DocumentPreview } from "@nextlyhq/admin";
+
+/**
+ * The signed-in user's id (@experimental).
+ *
+ * For a plugin that keeps something per user on a browser several people
+ * share, such as the page builder's own editor preferences. Read from the
+ * query the admin's chrome already holds, so it costs no request.
+ *
+ * `null` while the answer is not known yet, when no one is signed in, and when
+ * the read failed: keep nothing for nobody rather than for a guess. Experimental
+ * while its first consumer settles; the intent is to keep its name and its
+ * `string | null` answer stable.
+ */
+export { useCurrentUserId } from "@nextlyhq/admin";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the
@@ -168,6 +195,48 @@ export {
   type DocumentSaveState,
   type BeforeDocumentAction,
   type SubmitRefusal,
+} from "@nextlyhq/admin";
+
+/**
+ * The editor header's own save state and leading action, for a document view
+ * that replaces the header (@experimental).
+ *
+ * - `<DocumentSaveIndicator />` is the header's save chip: Saving…, Unsaved
+ *   changes, Saved (when, in its tooltip) or Not saved with Retry, in a
+ *   reserved width so nothing beside it moves, and announced as the header
+ *   announces it. `className` places it; it does not restyle it.
+ * - `<DocumentPrimaryAction />` is the leading action (Publish, Publish
+ *   changes or Save, as the header's), with the other ways to publish and
+ *   Unpublish on its arrow, each row showing why it cannot run when it
+ *   cannot. Every control runs through the same runner as `run`.
+ *
+ * Drawn by the admin, so a view offers the header's controls rather than a
+ * copy that drifts from them. Both render nothing outside a document editor.
+ * Experimental while the first view that uses them settles; the intent is to
+ * keep both names and their props stable.
+ */
+export { DocumentSaveIndicator, DocumentPrimaryAction } from "@nextlyhq/admin";
+
+/**
+ * How a document view restores its own field from a recovery point
+ * (@experimental).
+ *
+ * Without it, the admin restores a recovery point by drawing the view afresh
+ * over the restored values, and the view's own history starts again, so the
+ * restore can't be undone. A view that registers `useDocumentRestore` is asked
+ * first: the admin resets every OTHER field to the recovery point and calls
+ * `restore` with this field's recovered value, unparsed, and the view applies
+ * it as one edit of its own, which the author can undo. Returning false
+ * declines (a value the view can't apply as an edit), and the admin restores
+ * the old way. One handler per view; it does nothing outside a document view.
+ *
+ * Experimental while the first view that uses it (the Page Builder) settles.
+ * Adding it changes no existing export; the intent is to keep the name and the
+ * handler's shape stable.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
 } from "@nextlyhq/admin";
 
 /**
@@ -624,6 +693,16 @@ export type {
 export { useUploadMedia } from "@nextlyhq/admin";
 
 /**
+ * @experimental The media library as a dialog a plugin can open: browse,
+ * search and upload, then hand back the chosen items. The page builder's
+ * inspector opens it to choose an image; a plugin's own inspector may do the
+ * same. Store the chosen item's `id`, which stays right when the file is moved
+ * or renamed, rather than its `url`, which does not.
+ */
+export { MediaPickerDialog } from "@nextlyhq/admin";
+export type { MediaPickerDialogProps } from "@nextlyhq/admin";
+
+/**
  * @experimental Reads the `clientConfig` this plugin declared in
  * `contributes.admin.clientConfig`, which is how a plugin's server-side
  * configuration reaches its browser components.
@@ -659,6 +738,17 @@ export { usePluginClientConfig } from "@nextlyhq/admin";
 export { usePluginRoute } from "@nextlyhq/admin";
 
 /**
+ * @experimental Read a route this plugin contributed once, outside React.
+ *
+ * For a read a hook cannot express: a search an author is typing, each read
+ * cancelling the one it replaces through `signal`. It goes through the same
+ * session handling as `usePluginRoute`, so an expired session is renewed
+ * rather than surfacing as a failure, and a refusal rejects with the admin's
+ * parsed error. Not cached. Answers `undefined` for an empty answer.
+ */
+export { readPluginRoute } from "@nextlyhq/admin";
+
+/**
  * @experimental Write to a route this plugin contributed.
  *
  * The other half of `usePluginRoute`, and it was the missing half: a plugin
@@ -679,6 +769,18 @@ export { usePluginRoute } from "@nextlyhq/admin";
  * learn rather than two.
  */
 export { usePluginRouteMutation } from "@nextlyhq/admin";
+
+/**
+ * @experimental Write to a route this plugin contributed once, outside React.
+ *
+ * The write half of `readPluginRoute`. Where `usePluginRouteMutation` reports
+ * a failure on `error` at the next render, this REJECTS with the admin's
+ * parsed error, so a caller that must hand a refusal's reasons back at the
+ * moment it awaits can. Same session handling and CSRF token as the hook; not
+ * cached, and it invalidates nothing. Experimental while its first caller
+ * settles; the intent is to keep its name and options stable.
+ */
+export { writePluginRoute } from "@nextlyhq/admin";
 /**
  * `PluginRouteInvalidation` is what a write names as gone stale. A plugin
  * serving both mounts has to say which one an entry belongs to, so the type has
@@ -782,3 +884,13 @@ export type {
   PluginFieldTypeDocumentView,
   PluginMenuItem,
 } from "nextly";
+
+/**
+ * `WEB_FONT_FORMATS` — the web font formats the host accepts, serves and
+ * advertises: each one's type, file suffix, `format()` keyword and the four
+ * bytes it begins with. Published so a plugin that takes a font file reads
+ * the table the upload gate checks rather than restating it. Intended to be
+ * stable: the host's own table, which changes only with a release that says
+ * so.
+ */
+export { WEB_FONT_FORMATS } from "nextly/config";

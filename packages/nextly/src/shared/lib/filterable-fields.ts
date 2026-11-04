@@ -419,7 +419,12 @@ export function refuseHiddenColumnFilter(keys: readonly string[]): void {
 export async function assertSortableField(
   kind: EntityKind,
   slug: string,
-  sort: string | undefined,
+  /**
+   * One key as written (`-field` sorts descending), or the fields of a sort
+   * already read into its keys. A collection read passes the keys its ORDER
+   * BY sorts by, so this judges exactly what is sorted, in every position.
+   */
+  sort: string | readonly string[] | undefined,
   opts: {
     overrideAccess?: boolean;
     frameworkFilter?: boolean;
@@ -428,14 +433,16 @@ export async function assertSortableField(
 ): Promise<void> {
   if (opts.overrideAccess || opts.frameworkFilter || !sort) return;
   // `-field` is descending; the field is the same either way.
-  const written = sort.replace(/^-/, "");
-  const denied = await unreadableFields(
-    kind,
-    slug,
-    [ownerOf(written)],
-    opts.caller ?? {}
+  const written = (typeof sort === "string" ? [sort] : sort).map(key =>
+    key.replace(/^-/, "")
   );
-  if (denied.length > 0) refuse([written], "sort");
+  if (written.length === 0) return;
+  const denied = new Set(
+    await unreadableFields(kind, slug, written.map(ownerOf), opts.caller ?? {})
+  );
+  // Every refused key is named, so a caller fixes the sort in one round.
+  const refused = written.filter(key => denied.has(ownerOf(key))).sort();
+  if (refused.length > 0) refuse(refused, "sort");
 }
 
 /**

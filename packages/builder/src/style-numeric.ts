@@ -306,6 +306,26 @@ export function withUnit(
 }
 
 /**
+ * A length field's value as committed: a bare number takes the unit the field
+ * shows (px unless the author chose another), where "24" used to be refused
+ * as "not a length". Anything that already says its own unit, a keyword, an
+ * empty field, or a number the property would refuse even with the unit is
+ * left exactly as typed, so the write path judges it as before.
+ */
+export function withDefaultUnit(
+  leaf: StyleLeaf,
+  value: StyleValue | null,
+  unit: string
+): StyleValue | null {
+  if (leaf.kind !== "dimension" || typeof value !== "string") return value;
+  // CSS whitespace only, as every numeric field here reads it.
+  const text = trimCssWhitespace(value);
+  if (!CSS_NUMBER.test(text)) return value;
+  const next = `${text}${unit}`;
+  return accepts(leaf, next) ? next : value;
+}
+
+/**
  * The value one step away, or `undefined` when this value cannot be stepped or
  * the result would be refused.
  *
@@ -490,13 +510,38 @@ export function toggleOptionsFor(
   if ((leaf.maxParts ?? 1) !== 1) return undefined;
 
   const values = leaf.values;
-  if (values.length < 2 || values.length > MAX_TOGGLE_OPTIONS) return undefined;
-  if (values.some(value => value.length > MAX_OPTION_LENGTH)) return undefined;
+  return fitsSideBySide(values, STYLE_ROW) ? values : undefined;
+}
 
-  const together = values.reduce((sum, value) => sum + value.length, 0);
-  if (together > MAX_OPTIONS_LENGTH) return undefined;
+/** How much room a row of options has: how many, how long each and together. */
+export interface SideBySideRoom {
+  readonly maxCount: number;
+  readonly maxEach: number;
+  readonly maxTotal: number;
+}
 
-  return values;
+/** A style row's room, beside its label in a rail an author can drag narrow. */
+const STYLE_ROW: SideBySideRoom = {
+  maxCount: MAX_TOGGLE_OPTIONS,
+  maxEach: MAX_OPTION_LENGTH,
+  maxTotal: MAX_OPTIONS_LENGTH,
+};
+
+/**
+ * Whether a whole set of options, by the words that show, fits side by side
+ * in the room given: at least two, and none of the bounds exceeded.
+ *
+ * ONE rule for every surface that draws options as a row of buttons; each
+ * says only how much room it has.
+ */
+export function fitsSideBySide(
+  labels: readonly string[],
+  room: SideBySideRoom
+): boolean {
+  if (labels.length < 2 || labels.length > room.maxCount) return false;
+  if (labels.some(label => label.length > room.maxEach)) return false;
+  const together = labels.reduce((sum, label) => sum + label.length, 0);
+  return together <= room.maxTotal;
 }
 
 /**

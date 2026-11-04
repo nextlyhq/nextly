@@ -195,7 +195,7 @@ pnpm nextly migrate:fresh                           # destructive: drop all tabl
 
 > **Rolling back.** `nextly migrate:down` rolls back the most recently applied migration using its `-- DOWN` section; there is no `migrate:rollback`. To undo anything else, write a NEW corrective migration that reverses it. See [production migrations](/docs/guides/production-migrations).
 
-`migrate:fresh` is destructive and prompts for confirmation -- use `--force` to skip the prompt in scripted local-dev flows. It is CLI-only and refuses to import from runtime code; never invoke it from a deployed app.
+`migrate:fresh` is destructive and prompts for confirmation -- use `--accept-data-loss` to skip the prompt in scripted local-dev flows. It is CLI-only and refuses to import from runtime code; never invoke it from a deployed app.
 
 ## Local development with Docker
 

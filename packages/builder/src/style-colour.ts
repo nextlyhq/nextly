@@ -69,6 +69,7 @@ import {
   resolveSiteTokens,
   STYLE_CATALOG,
   tokenCustomProperty,
+  tokenDisplayLabel,
   tokenIdentity,
   type BlockNode,
   type ContrastResult,
@@ -105,6 +106,14 @@ export interface ColourToken {
   readonly identity: string;
   /** What the author reads and edits. Free to change. */
   readonly name: string;
+  /**
+   * What the token is CALLED where an author picks it: the label they gave
+   * it, else words made from its name ("Brand" for `color.brand`), as the
+   * Variables tab shows it.
+   */
+  readonly label: string;
+  /** Its light and dark values as swatches paint them. See {@link colourPairOf}. */
+  readonly pair: ColourPairValues;
   /** What the token holds, so a leaf can be asked whether it admits one. */
   readonly kind: TokenKind;
   /** The literal this token holds, as the site recorded it. */
@@ -123,28 +132,41 @@ export interface ColourToken {
   readonly swatch: string | undefined;
 }
 
+/** A colour variable's two values, resolved for painting, or `undefined` each. */
+export interface ColourPairValues {
+  readonly light: string | undefined;
+  readonly dark: string | undefined;
+}
+
+/**
+ * A colour variable's light and dark values as a swatch may paint them.
+ *
+ * A token with no dark value shows its light one for dark, because that is
+ * what the page does: no dark declaration is written for it. Resolved with an
+ * empty table, for the reason {@link colourTokenOf} gives.
+ */
+export function colourPairOf(token: SiteToken): ColourPairValues {
+  return {
+    light: colourHexOf(token.values.light, undefined),
+    dark: colourHexOf(token.values.dark ?? token.values.light, undefined),
+  };
+}
+
 /**
  * Which mode's value a token resolves to on the canvas right now.
  *
- * `emitTokenBlocks` writes a second block for every token carrying a dark
- * value, and WHEN it applies is the site's strategy: `media` wraps it in
- * `@media (prefers-color-scheme:dark)`, so a viewer whose system prefers dark
+ * The site sheet writes every dark value under
+ * `@media (prefers-color-scheme:dark)`, so a viewer whose device prefers dark
  * sees the dark value with nothing else having to happen. A control resolving
  * `values.light` regardless would then paint a swatch and report a ratio for a
  * colour the canvas is not showing — the one failure this module exists to
  * prevent, reached through the mode rather than through the notation.
  *
- * `attribute` — the default — answers `light`, and that is a STATED LIMIT
- * rather than a claim. The dark block is written under
- * `[data-nx-theme="dark"]`, which the HOST sets on an ancestor of its choosing;
- * nothing tells this panel whether it did. Reading the DOM to find out would
- * make a pure projection depend on where the canvas happens to be mounted.
+ * The sheet also honours a `data-nx-theme` marker, which the editor does not
+ * set on its canvas, so the device preference is the whole answer here.
  */
-export function activeTokenMode(
-  tokens: SiteTokenSet | undefined,
-  prefersDark: boolean
-): TokenMode {
-  return tokens?.darkMode === "media" && prefersDark ? "dark" : "light";
+export function activeTokenMode(prefersDark: boolean): TokenMode {
+  return prefersDark ? "dark" : "light";
 }
 
 /**
@@ -351,9 +373,9 @@ export function colourTokenLabel(
   among: readonly ColourToken[]
 ): string {
   const shared = among.some(
-    other => other.name === token.name && other.identity !== token.identity
+    other => other.label === token.label && other.identity !== token.identity
   );
-  return shared ? `${token.name} (${token.identity})` : token.name;
+  return shared ? `${token.label} (${token.identity})` : token.label;
 }
 
 /**
@@ -371,6 +393,8 @@ function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
   return {
     identity: tokenIdentity(token),
     name: token.name,
+    label: tokenDisplayLabel(token),
+    pair: colourPairOf(token),
     kind: token.kind,
     colour,
     // Resolved with an EMPTY table, which is what stops this recursing: a token

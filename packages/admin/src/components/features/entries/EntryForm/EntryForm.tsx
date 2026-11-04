@@ -38,6 +38,7 @@ import {
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useCan } from "@admin/hooks/useCan";
@@ -90,7 +91,10 @@ import {
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
-import { fieldsBesidePanel } from "./EntryFieldsPanel";
+import {
+  fieldsBesidePanel,
+  type EntryFieldsPresentation,
+} from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -103,6 +107,7 @@ import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
+import type { RecoveryPointState } from "./SaveStateIndicator";
 import { deleteHeld, submitHeld } from "./submit-outcome";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
@@ -126,6 +131,7 @@ import {
   offerHeldWhileRecovering,
   quickEditSave,
 } from "./useRefusedForm";
+import { useResetOnReload } from "./useResetOnReload";
 
 // ============================================================================
 // Types
@@ -155,6 +161,13 @@ export interface EntryFormProps {
    * collection); an embedded editor reading the live row passes `false`.
    */
   readDraft?: boolean;
+  /**
+   * When the entry on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, an entry this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Called when the user switches the active content language. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
@@ -320,6 +333,7 @@ export function EntryForm({
   onCancel,
   locale,
   readDraft,
+  latest,
   onLocaleChange,
   seedFromLocale,
   onSeedHandled,
@@ -376,6 +390,7 @@ export function EntryForm({
 
   const {
     form,
+    defaultValues,
     handleSubmit: submitEntry,
     writeStatus,
     handleDelete: deleteEntry,
@@ -659,8 +674,15 @@ export function EntryForm({
     enabled: mode === "edit",
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
   });
-  const lock = heldWhileRecovering(lockSurface, recovering);
+  // A gained entry's latest version starts the whole form again, whatever its
+  // `updatedAt` says, and the lock holds until it has; the document views key
+  // on the count it carries.
+  const lock = heldWhileRecovering(
+    useResetOnReload(form, lockSurface, defaultValues),
+    recovering
+  );
 
   /*
    * Delegated whole, including the decision to answer NULL when there is
@@ -674,13 +696,14 @@ export function EntryForm({
    * whose read-only answer it shares with every other field.
    */
   const renderEntryFields = useCallback(
-    (excludePath: string) =>
+    (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(allFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
         values: conditionValues,
         hasPublicAddress,
+        ...(presentation === undefined ? {} : { presentation }),
       }),
     [
       allFields,
@@ -941,6 +964,18 @@ export function EntryForm({
    * through the gate above, and the storing ones hand back their outcome so an
    * action run from outside the header can say what it came to.
    */
+  /*
+   * The recovery point, once, for every place the save state is drawn: the
+   * header's chip, and a document view's own through the host.
+   */
+  const recoveryPoint: RecoveryPointState = {
+    enabled: autosaveScope !== null,
+    storedAt: autosave.lastSavedAt,
+    // A recovery point newer than the stored document, still on offer: its
+    // edits are not stored, whatever the form says.
+    pendingOfferAt: recovery.offer?.savedAt ?? null,
+  };
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1006,6 +1041,7 @@ export function EntryForm({
               notice={lock.notice}
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
+              onRetry={lock.retryLoad}
             />
             {/* No page around a modal to carry the removed-from-code notice in
                 a document banner, so the modal says it itself. */}
@@ -1118,6 +1154,9 @@ export function EntryForm({
               // Nor for a reader, who is offered no preview: an open pane
               // closes once the user may no longer change the entry.
               open={previewOnScreen}
+              // A document view is a full-height screen: the closed split
+              // hands it the content area's height to fill.
+              fill={documentView !== undefined}
               onClose={() => setPreviewOpen(false)}
               scope={{
                 collection: collection.name,
@@ -1143,12 +1182,21 @@ export function EntryForm({
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
                   renderEntryFields={renderEntryFields}
+                  // The header's own Preview handler, on the header's own
+                  // terms, so a field offering the preview opens the same page
+                  // and only where the header would.
+                  {...(canPreview
+                    ? { openPreview: entryPreview.openPreview }
+                    : {})}
                 >
                   {/* A document view replaces the form body and nothing around
                       it: every provider above, the guard, the claim, the
                       recovery, the shortcut and the document's actions are
                       this editor's own either way. */}
-                  <DocumentActionsHost input={documentActionsInput}>
+                  <DocumentActionsHost
+                    input={documentActionsInput}
+                    recovery={recoveryPoint}
+                  >
                     <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Standalone only: an embedded editor in a modal takes no
                       shortcuts. Mod+S runs the Save action, so the shortcut
@@ -1205,13 +1253,11 @@ export function EntryForm({
                                   // The whole unsaved-work state, so the restore
                                   // confirmation covers builder-held work too.
                                   hasUnsavedWork={hasUnsavedWork}
-                                  autosaveEnabled={autosaveScope !== null}
-                                  // A recovery point newer than the stored document, still on offer:
-                                  // its edits are not stored, whatever the form says.
+                                  autosaveEnabled={recoveryPoint.enabled}
                                   pendingRecoveryAt={
-                                    recovery.offer?.savedAt ?? null
+                                    recoveryPoint.pendingOfferAt
                                   }
-                                  autosaveLastSavedAt={autosave.lastSavedAt}
+                                  autosaveLastSavedAt={recoveryPoint.storedAt}
                                   entry={entry}
                                   collectionSlug={collection.name}
                                   hasStatus={hasStatus}

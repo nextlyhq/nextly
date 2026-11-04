@@ -25,6 +25,7 @@ import type { LoadConfigResult } from "../utils/config-loader";
 import type { ResolvedDevOptions } from "./db-sync";
 import {
   ensureLocalizedCompanions,
+  judgeOrphanRemoval,
   performPermissionSeeding,
   publishExtensionSchema,
   syncCollections,
@@ -119,6 +120,10 @@ export function createDebouncedSync(
               registered,
               table => liveAdapter.tableExists(table)
             );
+
+            // A re-sync deletes orphans as the first sync does, so it takes
+            // the same consent first; a no ends this re-sync, not the watch.
+            await judgeOrphanRemoval(configToSync, adapter, options, context);
 
             // Every entity as the registry records it before the syncs below rewrite it, so the
             // companion pass after them can tell a field this edit newly translates.

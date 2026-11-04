@@ -21,6 +21,8 @@ import {
 
 import { useOptionalEntryLocale } from "../EntryLocaleContext";
 
+import type { EntryFieldsPresentation } from "./EntryFieldsPanel";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -102,7 +104,30 @@ export interface EntryFormContextValue {
    * renderer, which passes four shared props to all fifteen input types and is
    * deliberately not where per-plugin wiring goes.
    */
-  renderEntryFields?: (excludePath: string) => ReactNode;
+  renderEntryFields?: (
+    excludePath: string,
+    presentation?: EntryFieldsPresentation
+  ) => ReactNode;
+
+  /**
+   * Opens the document's full-page preview, where the editor offers one.
+   *
+   * Read through {@link useDocumentPreview}. Absent wherever the editor's own
+   * Preview action is absent, for the same reasons.
+   */
+  preview?: DocumentPreview;
+}
+
+/**
+ * The surrounding document's full-page preview, as the editor opens it.
+ *
+ * `open` is the editor's own handler, not a second way to build the address:
+ * the preview renders the saved row in the language being edited, and a copy
+ * resolving either of those itself would open a different page.
+ */
+export interface DocumentPreview {
+  /** Opens the preview; resolving its address may take a round trip. */
+  open: () => void | Promise<void>;
 }
 
 /**
@@ -216,7 +241,17 @@ export interface EntryFormContextProviderProps {
    * Renders the entry's other fields for a surface that covers the form,
    * excluding the field at the path it is given.
    */
-  renderEntryFields?: (excludePath: string) => ReactNode;
+  renderEntryFields?: (
+    excludePath: string,
+    presentation?: EntryFieldsPresentation
+  ) => ReactNode;
+
+  /**
+   * The editor's handler for its full-page preview. Pass it exactly where the
+   * editor offers its own Preview action, so a field offers one on the same
+   * terms.
+   */
+  openPreview?: () => void | Promise<void>;
 
   /**
    * Child components.
@@ -258,6 +293,7 @@ export function EntryFormContextProvider({
   kind = "collection",
   documentStatus,
   renderEntryFields,
+  openPreview,
   children,
 }: EntryFormContextProviderProps): JSX.Element {
   /*
@@ -287,6 +323,8 @@ export function EntryFormContextProvider({
        * to tell that from a renderer that draws nothing.
        */
       ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
+      // Spread for the same reason: absent means the editor offers no preview.
+      ...(openPreview === undefined ? {} : { preview: { open: openPreview } }),
     }),
     [
       entryId,
@@ -296,6 +334,7 @@ export function EntryFormContextProvider({
       status,
       hasWorkingDraft,
       renderEntryFields,
+      openPreview,
     ]
   );
 
@@ -444,9 +483,34 @@ export function useDocumentIdentity(): DocumentIdentity | null {
  * rendered outside an entry form is a legitimate arrangement and gets null
  * rather than a thrown error.
  */
-export function useEntryFieldsPanel(excludePath: string): ReactNode | null {
+export function useEntryFieldsPanel(
+  excludePath: string,
+  options: {
+    /**
+     * How the fields are framed: the form's own sections (`"panel"`, the
+     * default), or flat for a dialog that frames them itself, where the slug
+     * reads as the page's address with the full address under it.
+     */
+    presentation?: EntryFieldsPresentation;
+  } = {}
+): ReactNode | null {
   const context = useOptionalEntryFormContext();
-  return context?.renderEntryFields?.(excludePath) ?? null;
+  return (
+    context?.renderEntryFields?.(excludePath, options.presentation) ?? null
+  );
+}
+
+/**
+ * The surrounding document's full-page preview, or `null` where the editor
+ * offers none.
+ *
+ * `null` covers every reason the editor's own Preview action is absent — no
+ * preview configured, an entry never saved, a reader who may not mint one —
+ * and outside a form. A field offering a preview of its own there would open
+ * nothing, or open a page the author may not see.
+ */
+export function useDocumentPreview(): DocumentPreview | null {
+  return useContext(EntryFormContext)?.preview ?? null;
 }
 
 export function useDocumentStatus(): DocumentStatus | null {

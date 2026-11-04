@@ -19,9 +19,12 @@
  */
 
 import { CONTENT_WIDTH_CLASS } from "@nextlyhq/blocks-engine";
+import type { ContentModel } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs } from "../context";
+
+import { url } from "./props";
 
 /** What both presets store. */
 export interface ContainerProps {
@@ -37,6 +40,13 @@ export interface ContainerProps {
    * moves every page instead of none of them.
    */
   contained?: boolean;
+  /**
+   * Where the whole block links to. Only the presets that declare it (Box and
+   * Card) render it: linked, the root element is an `<a>` instead of the `as`
+   * tag, which is what makes the block interactive content and refuses
+   * anything interactive inside it.
+   */
+  link?: string;
 }
 
 /** The tags a container may render, as a set the validator can check against. */
@@ -93,6 +103,79 @@ export const CONTAINER_SUPPORTS = {
 /** Whether a stored value is a tag a container may render. */
 function isContainerTag(value: unknown): value is ContainerTag {
   return CONTAINER_TAGS.some(tag => tag === value);
+}
+
+/**
+ * What a container preset is as HTML content, from the tag it renders.
+ *
+ * A `div` is plain flow content. Any other tag refuses a `main` beneath it,
+ * because HTML's main element may only sit inside plain containers; a header
+ * or a footer also refuses another header or footer, and a main refuses a
+ * second main.
+ */
+export function containerContentModel(props: ContainerProps): ContentModel {
+  const tag = isContainerTag(props.as) ? props.as : "div";
+  switch (tag) {
+    case "div":
+      return { is: ["flow"] };
+    case "header":
+    case "footer":
+      return {
+        is: ["flow", tag],
+        accepts: { without: ["header", "footer", "main"] },
+      };
+    case "main":
+      return { is: ["flow", "main"], accepts: { without: ["main"] } };
+    default:
+      return { is: ["flow"], accepts: { without: ["main"] } };
+  }
+}
+
+/**
+ * The link a linkable preset renders, or undefined when it renders none.
+ * The renderer and the content model both ask this, so a link the renderer
+ * would drop never makes the block count as interactive, and the reverse.
+ */
+function linkOf(props: ContainerProps): string | undefined {
+  return url(props.link);
+}
+
+/**
+ * A linkable preset's content model: an `<a>` while linked, which is
+ * interactive and refuses anything interactive (and a main) beneath it;
+ * otherwise what its tag makes it.
+ */
+export function linkableContentModel(props: ContainerProps): ContentModel {
+  if (linkOf(props) === undefined) return containerContentModel(props);
+  return {
+    is: ["flow", "interactive"],
+    accepts: { without: ["interactive", "main"] },
+  };
+}
+
+/**
+ * The base style a linkable preset carries: `display: block`, so a linked
+ * block's `<a>` root lays out as the box it was rather than as inline text. A
+ * `div` is already a block, so the declaration changes nothing until the link
+ * is on, and a display the author sets on the node still wins over it.
+ */
+export const LINKABLE_BASE_STYLE = { display: "block" } as const;
+
+/** Render a linkable preset: an `<a>` while linked, its tag otherwise. */
+export function renderLinkableContainer(
+  args: BlockRenderArgs<ContainerProps>
+): ReactElement {
+  const href = linkOf(args.props);
+  if (href === undefined) return renderContainer(args);
+  const classes =
+    args.props.contained === true
+      ? `${args.className} ${CONTENT_WIDTH_CLASS}`
+      : args.className;
+  return (
+    <a className={classes} href={href}>
+      {args.renderSlot("children")}
+    </a>
+  );
 }
 
 /**

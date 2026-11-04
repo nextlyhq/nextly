@@ -283,10 +283,12 @@ describeEachDialect("a collection's Builder save", dialect => {
     const before = await liveItems();
     const recordedBefore = await recordedFields();
 
+    // The save is refused as unavailable, as every schema change is while the lock is held.
     await whileMigrationHoldsLock(async () => {
-      const saved = await save();
-
-      expect(saved).toMatchObject({ success: false, message: LOCK_HELD });
+      await expect(save()).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        publicMessage: LOCK_HELD,
+      });
     });
 
     expect(await liveItems()).toBe(before);

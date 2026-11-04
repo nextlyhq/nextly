@@ -92,7 +92,10 @@ function same(a: CanvasReading, b: CanvasReading): boolean {
   return (
     a.tag === b.tag &&
     a.orientation?.writingMode === b.orientation?.writingMode &&
-    a.orientation?.direction === b.orientation?.direction
+    a.orientation?.direction === b.orientation?.direction &&
+    // The layout too: alignment icons follow it, and it can change alone.
+    a.orientation?.display === b.orientation?.display &&
+    a.orientation?.flexDirection === b.orientation?.flexDirection
   );
 }
 
@@ -151,8 +154,10 @@ export function useCanvasReading(
      * the admin window changing without the canvas changing cannot alter what a
      * rule inside it matched.
      */
-    const canObserveSize = typeof ResizeObserver === "function";
-    const sizes = canObserveSize ? new ResizeObserver(read) : undefined;
+    // From the canvas's own window: a canvas rendered in a frame is laid out
+    // by that frame, the realm its observer has to come from.
+    const Sizes = canvasRoot.ownerDocument.defaultView?.ResizeObserver;
+    const sizes = typeof Sizes === "function" ? new Sizes(read) : undefined;
     sizes?.observe(canvasRoot);
     return () => {
       stopTree?.();

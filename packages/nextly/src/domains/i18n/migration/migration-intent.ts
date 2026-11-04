@@ -20,7 +20,7 @@ export const LOCALIZATION_INTENT_HEADER = "-- Localization:";
  * Absence of the field is different, and does mean verbatim — that is what every file written
  * before this existed looks like.
  */
-export const LOCALIZATION_INTENT_VERSION = 4;
+export const LOCALIZATION_INTENT_VERSION = 5;
 
 /**
  * Every payload version this build has a parser for.
@@ -30,7 +30,7 @@ export const LOCALIZATION_INTENT_VERSION = 4;
  * When version 2 arrives and 1 is still readable, both belong here; when 1 stops being readable, it
  * comes out and its files start refusing instead of being silently misread.
  */
-const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4]);
+const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4, 5]);
 
 /**
  * What a companion migration file declares it is FOR, as opposed to the statements it happens to
@@ -61,6 +61,8 @@ const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4]);
  * - `unique` adds or drops the companion's per-language unique indexes, for translated fields that
  *   become or stop being unique (`plan-translated-unique-migration.ts`). Its drops run before the
  *   main migration, so no column they key on goes first, and its creates after every other file.
+ * - `adds` adds the companion columns of translated fields added to an entity that is already
+ *   translated (`field-added-to-translation.ts`), and its DOWN drops them.
  */
 export const LOCALIZATION_MIGRATION_KINDS = [
   "enable",
@@ -70,13 +72,14 @@ export const LOCALIZATION_MIGRATION_KINDS = [
   "shared",
   "joins",
   "unique",
+  "adds",
 ] as const;
 
 export type LocalizationMigrationKind =
   (typeof LOCALIZATION_MIGRATION_KINDS)[number];
 
 /**
- * The kinds each payload version can declare. Version 4 added `unique`, version 3 `joins`,
+ * The kinds each payload version can declare. Version 5 added `adds`, 4 `unique`, 3 `joins`,
  * version 2 `archive` and `shared`; version 1 has only the whole-entity transitions.
  */
 const KINDS_BY_VERSION: ReadonlyMap<
@@ -86,7 +89,19 @@ const KINDS_BY_VERSION: ReadonlyMap<
   [1, ["enable", "create-only", "disable"]],
   [2, ["enable", "create-only", "disable", "archive", "shared"]],
   [3, ["enable", "create-only", "disable", "archive", "shared", "joins"]],
-  [4, LOCALIZATION_MIGRATION_KINDS],
+  [
+    4,
+    [
+      "enable",
+      "create-only",
+      "disable",
+      "archive",
+      "shared",
+      "joins",
+      "unique",
+    ],
+  ],
+  [5, LOCALIZATION_MIGRATION_KINDS],
 ]);
 
 /**

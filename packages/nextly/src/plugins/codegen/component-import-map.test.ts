@@ -522,6 +522,41 @@ describe("field-type and slot components", () => {
     ).toContain("registerComponents");
   });
 
+  it("loads the page builder's admin entry, and with it the editor's stylesheet, only where the plugin is configured", () => {
+    // The entry imports the editor's stylesheet itself, so this import is what
+    // styles the builder: an app adds nothing by hand. The map writes no
+    // stylesheet import of its own, so an app that still imports the sheet by
+    // hand loads the same file once, rather than a second copy.
+    const pageBuilder = {
+      name: "@nextlyhq/plugin-page-builder",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        fieldTypes: [
+          {
+            type: "blocks",
+            storage: "json",
+            component: "@nextlyhq/plugin-page-builder/admin#BlocksField",
+          },
+        ],
+      },
+    } as unknown as PluginDefinition;
+    const other = plugin({
+      pages: [{ path: "/r", component: "@acme/x/admin#R" }],
+    });
+
+    const configured = buildComponentImportMap([other, pageBuilder]);
+    expect(configured).toContain('from "@nextlyhq/plugin-page-builder/admin";');
+    expect(configured).not.toMatch(/import\s+"[^"]*\.css";/);
+
+    const without = buildComponentImportMap([other]);
+    // The control: the other plugin's module IS imported, so the absence
+    // below is the page builder's and not an empty map's.
+    expect(without).toContain('from "@acme/x/admin";');
+    expect(without).not.toContain("@nextlyhq/plugin-page-builder");
+    expect(without).not.toMatch(/import\s+"[^"]*\.css";/);
+  });
+
   it("collects the header slot under both spellings, the schema-builder slot and the form toolbar slot", () => {
     const p = plugin({
       header: { slot: "@acme/x/admin#HeaderSlot" },

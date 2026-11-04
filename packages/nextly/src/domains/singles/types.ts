@@ -158,6 +158,17 @@ export interface GetSingleOptions {
    */
   includeWorkingDraft?: boolean;
 
+  /**
+   * Whether a read of a Single with no stored document creates its default
+   * document, as every read always has. `false` answers with no document
+   * instead (`success` with `data` absent) and writes nothing: no row, no
+   * version, no event and no creation hook, so a caller that must not write,
+   * such as a page render, can read without materialising the Single.
+   *
+   * @default true
+   */
+  createIfMissing?: boolean;
+
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
   /** The HTTP request behind this operation, when one produced it. */
