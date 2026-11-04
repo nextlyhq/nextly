@@ -142,10 +142,10 @@ export interface ToolbarAction {
   /**
    * Why it is disabled, phrased for an author, or `undefined` when enabled.
    *
-   * Only ever set for a reason an author can act on. "This block is at the top
-   * of its container" is a fact about the page they can see and is left unsaid;
-   * a lock is the opposite, because nothing on the canvas explains it and the
-   * remedy is one field away.
+   * Set for every disabled item, so nothing is dimmed without a word: a lock,
+   * which nothing on the canvas explains and whose remedy is one field away,
+   * and the plain edges too ("Already the first block here"), since a dimmed
+   * item with no reason reads as broken rather than as finished.
    */
   readonly reason?: string;
   /**
@@ -485,7 +485,9 @@ function singleMove<Id extends string>(
     return { id, label, enabled: false, reason: refusalAnnouncement(refused) };
   }
   return heldByLock(
-    { id, label, enabled: to !== null },
+    to === null
+      ? { id, label, enabled: false, reason: EDGE_REASONS[direction] }
+      : { id, label, enabled: true },
     ask,
     to === null
       ? undefined
@@ -499,6 +501,17 @@ function singleMove<Id extends string>(
         ]
   );
 }
+
+/**
+ * Why a block cannot move one step, when there is simply nowhere to go: said
+ * as plainly as a lock is, since a dimmed item with no reason reads as broken.
+ */
+const EDGE_REASONS: Record<MoveDirection, string> = {
+  up: "Already the first block here",
+  down: "Already the last block here",
+  indent: "No block above to move into",
+  outdent: "Already at the top level of the page",
+};
 
 /**
  * Whether a set can move one step, and what to say when it cannot.
@@ -800,6 +813,9 @@ export function toolbarActions(
       // The path always ends at the selection itself, so a length of one means
       // a top-level block with no container to step out to.
       enabled: path.length > 1,
+      ...(path.length > 1
+        ? {}
+        : { reason: "Already at the top level of the page" }),
     },
     singleMove(
       document,

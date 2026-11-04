@@ -373,8 +373,8 @@ export function useInlineRichText(
      * and nowhere else, so tearing it down loses them and puts the page's older
      * copy back in their place with nothing said. So each way of failing to
      * write is asked first, and the ones an author can still act on keep the
-     * passage open — their text stays on screen, and Escape still discards it
-     * deliberately.
+     * passage open — their text stays on screen, and a second Escape discards
+     * it deliberately.
      */
     // Read BEFORE detaching: a detached session answers nothing, deliberately,
     // so that a superseded one cannot read the live passage. Read before
@@ -667,11 +667,23 @@ export function useInlineRichText(
      * rule belongs to the element that is currently something else.
      */
     const swallow = (event: Event) => event.stopPropagation();
+    /*
+     * Escape keeps what was typed and ends the edit, as leaving the passage
+     * does; the NEXT Escape selects the block's parent. Where the write is
+     * refused the passage stays open with the words in it, and a second
+     * Escape then lets them go: the author's deliberate way out of a write
+     * the page will not take.
+     */
+    let refused = false;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      cancel();
+      if (refused) {
+        cancel();
+        return;
+      }
+      refused = commit().status === "refused";
     };
 
     /*

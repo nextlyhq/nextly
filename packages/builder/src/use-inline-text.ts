@@ -357,10 +357,14 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     selectAll(element);
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // Escape keeps what was typed and ends the edit, as Enter does on a
+      // line: the editor's design asks for it, and an author pressing Escape
+      // to get out of the text expects their words to stay. Stopped here, so
+      // it is the NEXT Escape that selects the block's parent.
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        cancel();
+        commit();
         return;
       }
       if (event.key !== "Enter") return;

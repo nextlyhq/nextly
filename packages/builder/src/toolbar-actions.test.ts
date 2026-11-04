@@ -96,6 +96,34 @@ describe("toolbarActions", () => {
     }
   });
 
+  describe("a greyed item says why", () => {
+    // Every item the bar or the menu shows dimmed carries its reason, the
+    // edges of a container included: "nothing happens" is not an answer an
+    // author can act on.
+    const document = documentOf([node("a"), node("b"), node("c")]);
+
+    it("says a top-level block has no parent to select", () => {
+      const action = actionOf(toolbarActions(document, "a"), "select-parent");
+      expect(action.enabled).toBe(false);
+      expect(action.reason).toBe("Already at the top level of the page");
+    });
+
+    it("says the first block cannot move up, and the last cannot move down", () => {
+      const first = actionOf(toolbarActions(document, "a"), "move-up");
+      expect(first.enabled).toBe(false);
+      expect(first.reason).toBe("Already the first block here");
+      const last = actionOf(toolbarActions(document, "c"), "move-down");
+      expect(last.enabled).toBe(false);
+      expect(last.reason).toBe("Already the last block here");
+    });
+
+    it("says nothing for an item that can be pressed", () => {
+      expect(actionOf(toolbarActions(document, "b"), "move-up").reason).toBe(
+        undefined
+      );
+    });
+  });
+
   describe("saving a selection to the pattern library", () => {
     // A rule source of its own rather than the registry, so these assert the
     // toolbar's reading of a refusal and not which blocks happen to be
@@ -217,17 +245,6 @@ describe("toolbarActions", () => {
     expect(actionOf(toolbarActions(document, "c"), "move-down").enabled).toBe(
       false
     );
-  });
-
-  it("says nothing about a move that is merely at the end of its container", () => {
-    // A fact about the page the author can see. Explaining it on every
-    // selection is noise, and it would train them to ignore the one reason that
-    // does need reading.
-    const document = documentOf([node("a"), node("b")]);
-
-    expect(
-      actionOf(toolbarActions(document, "a"), "move-up").reason
-    ).toBeUndefined();
   });
 
   it("a lock stops the move and the delete, and says why", () => {
