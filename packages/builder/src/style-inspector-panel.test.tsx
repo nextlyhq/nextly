@@ -2111,6 +2111,184 @@ describe("the numeric affordances a simple measurement earns", () => {
   });
 });
 
+describe("dragging a number field's label", () => {
+  const withPadding = (value: string): NodeStyles =>
+    ({
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: value } } },
+    }) as NodeStyles;
+
+  /** A pointer event carrying the fields the gesture and React read. */
+  function pointer(
+    type: string,
+    init: {
+      clientX?: number;
+      pointerType?: string;
+      shiftKey?: boolean;
+      altKey?: boolean;
+    } = {}
+  ): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      pointerId: 1,
+      button: 0,
+      clientX: init.clientX ?? 0,
+      clientY: 0,
+      pointerType: init.pointerType ?? "mouse",
+      shiftKey: init.shiftKey ?? false,
+      altKey: init.altKey ?? false,
+    });
+    return event;
+  }
+
+  /** The label naming one of padding's sides, and its field. */
+  function side(name: string): { label: HTMLElement; field: HTMLInputElement } {
+    const field = fieldsOf("padding").getByLabelText(name) as HTMLInputElement;
+    const label = document.querySelector(`label[for="${field.id}"]`);
+    if (!(label instanceof HTMLElement))
+      throw new Error(`no label for ${name}`);
+    return { label, field };
+  }
+
+  /** Press on the label, move through `xs`, and optionally release. */
+  function drag(
+    label: HTMLElement,
+    xs: readonly number[],
+    modifiers: { shiftKey?: boolean; altKey?: boolean } = {},
+    release = true
+  ): void {
+    act(() => {
+      label.dispatchEvent(pointer("pointerdown", { clientX: 100 }));
+    });
+    for (const x of xs) {
+      act(() => {
+        document.dispatchEvent(
+          pointer("pointermove", { clientX: 100 + x, ...modifiers })
+        );
+      });
+    }
+    if (!release) return;
+    act(() => {
+      document.dispatchEvent(
+        pointer("pointerup", { clientX: 100 + (xs.at(-1) ?? 0) })
+      );
+    });
+  }
+
+  const written = (editor: ReturnType<typeof mount>) =>
+    editor.applyAll.mock.calls.map(
+      call => JSON.stringify(call[0]).match(/"blockStart":("[^"]*")/)?.[1]
+    );
+
+  it("marks the label as draggable on a field holding one measurement", () => {
+    mount({ spacing: true }, withPadding("12px"));
+    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(true);
+  });
+
+  it("does not mark a label whose value is not one measurement", () => {
+    mount({ spacing: true }, withPadding("clamp(1rem, 2vw, 3rem)"));
+    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(false);
+  });
+
+  it("shows the value live while dragging and writes it ONCE, on release", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [6, 10, 20], {}, false);
+    // Live in the field, and nothing in the document yet.
+    expect(field.value).toBe("32");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 120 }));
+    });
+    expect(written(editor)).toEqual(['"32px"']);
+  });
+
+  it("treats a press that stays inside the dead zone as a click, writing nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [2, 3]);
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(field.value).toBe("12");
+  });
+
+  it("steps by ten with Shift and by a tenth with Alt", () => {
+    const shifted = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [5], { shiftKey: true });
+    expect(written(shifted)).toEqual(['"62px"']);
+
+    cleanup();
+    clearBlocks();
+    const fine = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [5], { altKey: true });
+    expect(written(fine)).toEqual(['"12.5px"']);
+  });
+
+  it("keeps the field's unit, and rests at what the property takes", () => {
+    const editor = mount({ spacing: true }, withPadding("2rem"));
+    // Padding takes no negative length: dragged far left it rests at zero.
+    drag(side("Block start").label, [-40]);
+    expect(written(editor)).toEqual(['"0rem"']);
+  });
+
+  it("restores the value on Escape and writes nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [30], {}, false);
+    expect(field.value).toBe("42");
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+      );
+    });
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 130 }));
+    });
+
+    expect(field.value).toBe("12");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("does not scrub on touch, so a tap still reaches the field", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label } = side("Block start");
+
+    const press = pointer("pointerdown", {
+      clientX: 100,
+      pointerType: "touch",
+    });
+    act(() => {
+      label.dispatchEvent(press);
+    });
+    act(() => {
+      document.dispatchEvent(pointer("pointermove", { clientX: 140 }));
+      document.dispatchEvent(pointer("pointerup", { clientX: 140 }));
+    });
+
+    // Not prevented, so the browser's tap and scroll go on as they would.
+    expect(press.defaultPrevented).toBe(false);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("starts an empty field from zero in the field's unit", () => {
+    const editor = mount({ spacing: true });
+    drag(side("Block start").label, [8]);
+    expect(written(editor)).toEqual(['"8px"']);
+  });
+
+  it("steps by a tenth with Alt on the arrow keys too", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    fireEvent.keyDown(side("Block start").field, {
+      key: "ArrowUp",
+      altKey: true,
+    });
+    expect(written(editor)).toEqual(['"12.1px"']);
+  });
+});
+
 describe("what the arrow keys do and do not claim", () => {
   const withPadding = (value: string): NodeStyles =>
     ({
@@ -2152,12 +2330,13 @@ describe("what the arrow keys do and do not claim", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it.each(["altKey", "ctrlKey", "metaKey"])(
+  it.each(["ctrlKey", "metaKey"])(
     "leaves %s+Arrow to the platform",
     modifier => {
       // These chords are OS, browser and assistive-navigation shortcuts.
       // Claiming one mutates a style and adds an undo entry from a keystroke
-      // the author aimed somewhere else entirely.
+      // the author aimed somewhere else entirely. Alt is a field's fine step,
+      // as on a label drag: see "dragging a number field's label".
       const editor = mount({ spacing: true }, withPadding("12px"));
       const field = fieldsOf("padding").getByLabelText("Block start");
 

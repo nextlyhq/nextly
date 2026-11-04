@@ -5154,6 +5154,15 @@ fieldset.nx-inspector__fields {
   row-gap: 0.125rem;
 }
 
+/*
+ * A number field's label drags its value: the resize cursor says so, and the
+ * words are not selected by the drag. Touch is left to scroll and tap.
+ */
+.nx-style-inspector .nx-inspector__field > label[data-scrub] {
+  cursor: ew-resize;
+  user-select: none;
+}
+
 .nx-style-inspector
   .nx-inspector__field
   > label

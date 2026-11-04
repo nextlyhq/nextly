@@ -356,6 +356,85 @@ export function steppedValue(
 }
 
 /**
+ * Where a drag on a field's label starts, or `undefined` when its value is not
+ * one measurement a drag could move.
+ *
+ * The text in the field, with the unit the field shows given to a bare number,
+ * as a commit would give it. An EMPTY field starts from what it shows instead:
+ * the value reaching it from another tier when that is a measurement, else
+ * zero in the field's unit — dragging an unset padding is the commonest scrub
+ * there is, and refusing it would make the label inert exactly where it is
+ * reached for. Anything else typed — `auto`, a `clamp()`, a shorthand — is
+ * left to the keyboard, as stepping leaves it.
+ */
+export function scrubOrigin(
+  leaf: StyleLeaf,
+  draft: string,
+  unit: string,
+  inherited: string | undefined
+): string | undefined {
+  const text = trimCssWhitespace(draft);
+  const steppable = (value: string): string | undefined =>
+    steppedValue(leaf, value, 0) === undefined ? undefined : value;
+  if (text !== "") {
+    const given = withDefaultUnit(leaf, text, unit);
+    return steppable(typeof given === "string" ? given : text);
+  }
+  const shown = inherited === undefined ? undefined : steppable(inherited);
+  if (shown !== undefined) return shown;
+  return steppable(leaf.kind === "dimension" ? `0${unit}` : "0");
+}
+
+/**
+ * The value `delta` away, or as far toward it as the property takes, for a
+ * drag; `undefined` when not even the smallest step is taken.
+ *
+ * A drag is not a key press. Dragging a padding from `4px` well past zero
+ * must REST at `0px`, where {@link steppedValue} answers `undefined` for the
+ * refused `-20px` and the field would freeze at whatever the last accepted
+ * move happened to be. So the step is shortened, at the drag's own precision,
+ * to the longest one the engine still accepts: the property's bounds are the
+ * engine's, and this only asks.
+ *
+ * The search halves, which assumes what is refused lies beyond a bound — the
+ * only refusal a change of quantity can meet, since the unit and the shape of
+ * the value are kept.
+ */
+export function scrubbedValue(
+  leaf: StyleLeaf,
+  value: StyleValue | undefined,
+  delta: number
+): string | number | undefined {
+  const whole = steppedValue(leaf, value, delta);
+  if (whole !== undefined || delta === 0) return whole;
+  const current = measurementOf(value);
+  if (current === undefined) return undefined;
+  const decimals = stepDecimals(current.decimals, delta);
+  const quantum = 10 ** -decimals;
+  const sign = Math.sign(delta);
+  // Steps of the smallest unit the drag can move by: `low` is taken, `high`
+  // is not.
+  let low = 0;
+  let high = Math.round(Math.abs(delta) / quantum);
+  let found: string | number | undefined;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    const next = steppedValue(
+      leaf,
+      value,
+      roundedTo(sign * middle * quantum, decimals)
+    );
+    if (next === undefined) {
+      high = middle;
+    } else {
+      low = middle;
+      found = next;
+    }
+  }
+  return found;
+}
+
+/**
  * Whether the composed result actually moved by the step that was asked for.
  *
  * The round-trip guard in {@link measurementOfText} proves the STARTING value

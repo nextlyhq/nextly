@@ -101,9 +101,15 @@ import {
   lockViewOf,
 } from "./inspector";
 import type { InspectorSectionKey } from "./inspector-sections";
+import {
+  LabelScrubRow,
+  useLabelScrub,
+  useLabelScrubProps,
+} from "./label-scrub";
 import { layerLabel } from "./layers";
 import { usePrefersDark } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
+import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
 import {
   moveToSharedStyleClear,
   planMoveToSharedStyle,
@@ -160,6 +166,8 @@ import {
   CSS_NUMBER,
   measurementOf,
   measurementOfText,
+  scrubbedValue,
+  scrubOrigin,
   steppedValue,
   toggleOptionsFor,
   toggleShows,
@@ -1698,12 +1706,16 @@ function StyleFieldLabel({
   descendant: string | undefined;
 }): React.JSX.Element {
   const namedAbove = React.useContext(NamedAbove);
+  // Dragging the label to change a number field's value, while it can.
+  const scrub = useLabelScrubProps();
   return (
     <Label
       id={id}
       htmlFor={readOnly || focusOnly ? undefined : htmlFor}
       title={title}
       data-named-above={namedAbove ? "" : undefined}
+      // A read-only field's label names nothing, so it drags nothing either.
+      {...(readOnly ? {} : scrub)}
       {...(focusOnly && !readOnly
         ? {
             onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
@@ -1861,33 +1873,36 @@ function StyleControlField({
       data-side={side}
       {...writes.caption}
     >
-      <StyleFieldLabel
-        id={labelId}
-        htmlFor={id}
-        readOnly={readOnly}
-        focusOnly={drawsIcons(control.leaf)}
-        title={summary}
-        label={label}
-        answer={answer}
-        editing={editing}
-        descendant={control.leaf.descendant}
-      />
-      <InheritedValue.Provider value={inherited}>
-        <ControlOrFont
-          id={id}
-          labelledBy={labelId}
-          control={control}
-          stored={stored}
-          actionName={actionName}
-          clearOnly={clearOnly}
-          tokens={tokens}
-          prefersDark={prefersDark}
-          pairedColour={pairedColour}
-          obscuredBy={obscuredBy}
-          describedBy={describedBy}
-          onCommit={commit}
+      {/* The label drags the value the number field below offers it. */}
+      <LabelScrubRow>
+        <StyleFieldLabel
+          id={labelId}
+          htmlFor={id}
+          readOnly={readOnly}
+          focusOnly={drawsIcons(control.leaf)}
+          title={summary}
+          label={label}
+          answer={answer}
+          editing={editing}
+          descendant={control.leaf.descendant}
         />
-      </InheritedValue.Provider>
+        <InheritedValue.Provider value={inherited}>
+          <ControlOrFont
+            id={id}
+            labelledBy={labelId}
+            control={control}
+            stored={stored}
+            actionName={actionName}
+            clearOnly={clearOnly}
+            tokens={tokens}
+            prefersDark={prefersDark}
+            pairedColour={pairedColour}
+            obscuredBy={obscuredBy}
+            describedBy={describedBy}
+            onCommit={commit}
+          />
+        </InheritedValue.Provider>
+      </LabelScrubRow>
       <BreakpointAction
         answer={answer}
         label={actionName}
@@ -2900,6 +2915,26 @@ function LengthOrNumberField({
       setDraft(storedText(stored));
     }
   };
+  // The label drags a line height as its kind steps, a number or a length.
+  const typed = lineHeightFromText(draft);
+  const typedLeaf = lineHeightLeafFor(draft);
+  useLabelScrub({
+    origin:
+      (typeof typed === "string" || typeof typed === "number") &&
+      typedLeaf !== undefined &&
+      steppedValue(typedLeaf, typed, 0) !== undefined
+        ? typed
+        : undefined,
+    at: (from, delta) => {
+      const leaf = lineHeightLeafFor(String(from));
+      return leaf === undefined ? undefined : scrubbedValue(leaf, from, delta);
+    },
+    draft,
+    show: setDraft,
+    commit: value => {
+      if (onCommit(value) === "unchanged") setDraft(storedText(stored));
+    },
+  });
   return (
     <Input
       id={id}
@@ -4997,12 +5032,19 @@ function NumericField({
   // a controlled select over it renders an EMPTY trigger above a value that is
   // doing something. Offered verbatim as its own item, which is what the
   // keyword select above already does for a value outside its vocabulary.
-  const extraUnit =
-    measurement !== undefined &&
-    measurement.unit !== "" &&
-    !units.includes(measurement.unit)
-      ? measurement.unit
-      : null;
+  const extraUnit = unlistedUnit(measurement, units);
+  // A bare number takes the unit the field shows: "24" is 24px.
+  const commitText = (value: StyleValue | null) =>
+    onCommit(withDefaultUnit(control.leaf, value, unit));
+  useNumericLabelScrub({
+    control,
+    stored,
+    draft,
+    unit,
+    setDraft,
+    setTyping,
+    commitText,
+  });
 
   return (
     <div className="nx-style-inspector__numeric">
@@ -5016,8 +5058,7 @@ function NumericField({
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
-        // A bare number takes the unit the field shows: "24" is 24px.
-        onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
+        onCommit={commitText}
         // The unit shown in the suffix is left out of the field.
         {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}
         onStep={(draft, delta) => {
@@ -5082,6 +5123,61 @@ function NumericField({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The unit a measurement carries that the menu does not list, or `null`.
+ * Its own function so the field reads as what it draws, not as the test.
+ */
+function unlistedUnit(
+  measurement: ReturnType<typeof measurementOfText>,
+  units: readonly string[]
+): string | null {
+  const unit = unitOf(measurement);
+  return unit !== undefined && !units.includes(unit) ? unit : null;
+}
+
+/**
+ * The number field's value, offered to its row's label to drag: shown in the
+ * field while the pointer is down, and written once on release through the
+ * same commit as a typed value, so one drag is one undo step.
+ */
+function useNumericLabelScrub({
+  control,
+  stored,
+  draft,
+  unit,
+  setDraft,
+  setTyping,
+  commitText,
+}: {
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  draft: string;
+  unit: string;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+  commitText: (value: StyleValue | null) => CommitOutcome;
+}): void {
+  const inherited = React.useContext(InheritedValue);
+  useLabelScrub({
+    origin: scrubOrigin(control.leaf, draft, unit, inherited),
+    at: (from, delta) => scrubbedValue(control.leaf, from, delta),
+    draft,
+    show: text => {
+      // Shown as a value, not as typing, so the unit stays beside it.
+      setTyping(false);
+      setDraft(text);
+    },
+    commit: value =>
+      commitDraft({
+        draft: String(value),
+        stored,
+        kind: control.kind,
+        onCommit: commitText,
+        setDraft,
+      }),
+  });
 }
 
 /**
@@ -5584,13 +5680,18 @@ function stepOnKey(
  * the two rules it encodes sit together, since they are easy to change apart
  * and wrong apart.
  *
- * Arrow steps by one and Shift by ten, which is what Figma, Framer and Webflow
- * all do: an author arrives already knowing it, and a different scale here
- * would cost them for no gain.
+ * Arrow steps by one, Shift by ten and Alt by a tenth, which is what Figma,
+ * Framer and Webflow all do: an author arrives already knowing it, and a
+ * different scale here would cost them for no gain. The sizes are the label
+ * drag's own (`fieldStep`), so a modifier means the same on both.
  *
- * Alt, Control and Meta are refused outright. Those chords are platform,
- * browser and assistive-navigation shortcuts, so claiming one would mutate a
- * style and add an undo entry from a keystroke aimed somewhere else entirely.
+ * Alt+Up and Alt+Down are claimed only here, inside a number field: the
+ * editor's block moves on those keys stay out of fields, where they would be
+ * caret movement in a text field and are a step in this one.
+ *
+ * Control and Meta are refused outright. Those chords are platform, browser
+ * and assistive-navigation shortcuts, so claiming one would mutate a style
+ * and add an undo entry from a keystroke aimed somewhere else entirely.
  */
 function arrowStep(event: React.KeyboardEvent): number | null {
   // A keystroke arriving mid-composition belongs to the IME, which uses the
@@ -5599,11 +5700,11 @@ function arrowStep(event: React.KeyboardEvent): number | null {
   // shortcut manager states the same rule for the same reason, and this is the
   // second reader of a keyboard event in this repository that has to know it.
   if (event.nativeEvent.isComposing) return null;
-  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (event.ctrlKey || event.metaKey) return null;
   const direction =
     event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0;
   if (direction === 0) return null;
-  return direction * (event.shiftKey ? 10 : 1);
+  return direction * fieldStep(scrubModifiersOf(event));
 }
 
 /**
