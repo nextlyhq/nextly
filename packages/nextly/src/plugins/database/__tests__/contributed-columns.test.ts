@@ -140,7 +140,11 @@ function surfaceFor(
     transaction: async fn => {
       sqlite.exec("BEGIN");
       try {
-        const result = await fn({ db, relationalDb: db });
+        const result = await fn({
+          db,
+          relationalDb: db,
+          afterCommit: () => undefined,
+        });
         sqlite.exec("COMMIT");
         return result;
       } catch (error) {
