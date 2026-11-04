@@ -10148,10 +10148,35 @@ export class CollectionMutationService extends BaseService {
       args.collectionName,
       args.entryId
     );
+    // The fields every language shares, whose promoted values land beneath
+    // each language judged below.
+    const sharedNames = new Set(
+      args.fields.flatMap(field =>
+        typeof field.name === "string" && field.localized !== true
+          ? [field.name]
+          : []
+      )
+    );
     await this.assertLanguagesGoLiveValid({
       collectionName: args.collectionName,
       entryId: args.entryId,
-      row: args.row,
+      // Each language judged as stored is judged over the shared values the
+      // publish leaves, not those it replaces: every promotion writes the
+      // same shared state, so a language with no change of its own lands as
+      // its translation over the promotions' shared fields. Only the main
+      // row's own shared fields are taken, by the names the row is read
+      // under, so no language's translated values reach another's.
+      row: promotions.reduce<Record<string, unknown>>(
+        (row, promoted) => ({
+          ...row,
+          ...Object.fromEntries(
+            Object.entries(promoted.payload).filter(
+              ([name]) => name in args.row && sharedNames.has(name)
+            )
+          ),
+        }),
+        args.row
+      ),
       patch: {},
       writeLocale: undefined,
       writeLocaleValues: {},
@@ -10825,6 +10850,35 @@ export class CollectionMutationService extends BaseService {
    * including the published/draft `status`) makes the write persist the
    * promoted content with no separate code path.
    */
+  /**
+   * What a publish's caller contributes over a pending change: the payload
+   * the field gate has already judged, never the raw request, as one logical
+   * document. The fold credits the caller with it, and the out-of-date check
+   * judges the change with it merged over, so the check and the write agree
+   * on what the publish writes.
+   */
+  private callerContributionOf(args: {
+    finalData: Record<string, unknown>;
+    componentFieldData: Record<string, unknown>;
+    manyToManyData: Record<string, string[]>;
+    fields: FieldDefinition[];
+    manyToManyFields: FieldDefinition[];
+    componentSchemas: ComponentSchemas | null;
+  }): Record<string, unknown> {
+    return this.deserializeJsonFieldsForSnapshot(
+      this.assemblePromotedDocument(
+        {},
+        args.finalData,
+        args.componentFieldData,
+        args.manyToManyData,
+        args.fields,
+        args.manyToManyFields,
+        args.componentSchemas
+      ),
+      args.fields
+    );
+  }
+
   private async foldWorkingDraft(
     tx: TransactionContext,
     args: {
@@ -10901,18 +10955,14 @@ export class CollectionMutationService extends BaseService {
     // so the resolver credits them only with what the rules let them send, and
     // judges the rest as the pending change holds it. Logical, through the
     // same conversion as the document it is compared against.
-    const callerContribution = this.deserializeJsonFieldsForSnapshot(
-      this.assemblePromotedDocument(
-        {},
-        finalData,
-        componentFieldData,
-        manyToManyData,
-        fields,
-        manyToManyFields,
-        componentSchemas
-      ),
-      fields
-    );
+    const callerContribution = this.callerContributionOf({
+      finalData,
+      componentFieldData,
+      manyToManyData,
+      fields,
+      manyToManyFields,
+      componentSchemas,
+    });
     // The locked draft on its own, through the same conversion: the field gate
     // keeps a protected child of a group the caller sent at its LIVE value, so
     // where that group replaced the draft's, only the draft still says what
@@ -13659,7 +13709,22 @@ export class CollectionMutationService extends BaseService {
                   locale: draftLocaleKey,
                   shared,
                   live,
-                  pending: snapshotRecord(workingDraft.snapshot),
+                  // Judged as the publish writes it: the stored change with
+                  // the caller's gated contribution merged over it. A request
+                  // that retypes the live value of a field the change is
+                  // behind on writes nothing behind live, so it goes through
+                  // in one step.
+                  pending: {
+                    ...snapshotRecord(workingDraft.snapshot),
+                    ...this.callerContributionOf({
+                      finalData,
+                      componentFieldData,
+                      manyToManyData,
+                      fields,
+                      manyToManyFields,
+                      componentSchemas: splitComponentSchemas,
+                    }),
+                  },
                   views,
                 });
                 if (stale.length > 0) {

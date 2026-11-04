@@ -19,6 +19,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  number,
   password,
   text,
 } from "../../../config";
@@ -415,6 +416,7 @@ const REMOVED = "removedpending";
 const SEALED = "sealedpending";
 const SEALED_BOX = "sealedboxpending";
 const HOOKED = "hookedpending";
+const LIMITED = "limitedpending";
 const SEALED_BOX_COMPONENT = "sealedboxlabel";
 const PUBLISHER = "publisher";
 
@@ -875,6 +877,75 @@ describe.each(getConfiguredTestDialects())(
         expect({ hook: durable(), field: [...fieldValues] }).toEqual(byOne);
       }
     );
+
+    // A pending change can rewrite the shared values beneath a language with
+    // no change of its own, which then goes live over the new values. That
+    // language is judged as it will land: its own translated values over the
+    // shared values the publish leaves. The plausible broken implementation
+    // judges it over the shared values as they stood, so a change that makes
+    // another language's live text invalid publishes it.
+    it("refuses a change whose shared value makes a language without a change of its own invalid", async () => {
+      const entries = await bootWith(
+        dialect,
+        defineCollection({
+          slug: LIMITED,
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            number({ name: "titleLimit", localized: false }),
+            text({
+              name: "title",
+              localized: true,
+              validate: (value, { data }) =>
+                typeof value === "string" &&
+                typeof data.titleLimit === "number" &&
+                value.length > data.titleLimit
+                  ? "Longer than the limit."
+                  : true,
+            }),
+          ],
+        })
+      );
+      const created = await entries.createEntry(
+        { collectionName: LIMITED, overrideAccess: true, locale: "en" },
+        { title: "Hello", titleLimit: 10, status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      // Spanish live with seven characters, within ten.
+      const spanish = await entries.updateEntry(at(id, "es", LIMITED), {
+        title: "Saludos",
+        status: "published",
+      });
+      expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+      // English's change lowers the shared limit to five, which its own
+      // title meets and Spanish's does not.
+      const held = await entries.updateEntry(at(id, "en", LIMITED), {
+        title: "Hi",
+        titleLimit: 5,
+      });
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      expect(await pendingLocales(id)).toEqual(["en"]);
+
+      const every = await entries.publishAllLocales({
+        collectionName: LIMITED,
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      expect(every.success, JSON.stringify(every)).toBe(false);
+      expect(every.statusCode).toBe(400);
+      expect((every as { publicData?: unknown }).publicData).toMatchObject({
+        errors: [expect.objectContaining({ path: "title" })],
+      });
+      // Nothing went live: the limit is still ten and English's change waits.
+      const read = await entries.getEntry(at(id, "es", LIMITED));
+      expect(read.data as Record<string, unknown>).toMatchObject({
+        title: "Saludos",
+        titleLimit: 10,
+      });
+      expect(await pendingLocales(id)).toEqual(["en"]);
+    });
 
     it("consumes pending changes the schema no longer lets it promote, putting none of them live", async () => {
       const entries = await bootWith(
