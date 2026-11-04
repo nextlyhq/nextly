@@ -321,6 +321,26 @@ describe("DecorationField", () => {
     expect(onCommit).toHaveBeenLastCalledWith(null);
   });
 
+  it("goes back to the stored line when the write is refused later", () => {
+    // A shared style's write can be refused after the click that sent it; the
+    // refusal arrives as the field's problem, and the icons then show what the
+    // document still holds rather than the line it refused.
+    const onCommit = vi.fn(() => "applied" as const);
+    const view = render(field("underline", onCommit));
+    fireEvent.click(screen.getByRole("radio", { name: "Overline" }));
+    expect(
+      screen
+        .getByRole("radio", { name: "Overline" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+    view.rerender(field("underline", onCommit, "decoration-error"));
+    expect(
+      screen
+        .getByRole("radio", { name: "Underline" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
   it("holds the popover's controls when the section is held while it is open", () => {
     // The popover is drawn outside the section, where the section's disabled
     // fieldset does not reach.

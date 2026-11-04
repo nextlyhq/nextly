@@ -191,7 +191,8 @@ export function DecorationField({
   // so a line changed here keeps the style, thickness and colour it showed.
   const parts = useQueuedParts(
     typeof stored === "string" ? stored : undefined,
-    own ?? inheritedParts
+    own ?? inheritedParts,
+    describedBy !== undefined
   );
   // A part changed keeps the others: a line changed keeps its style.
   const write = (next: Partial<DecorationParts>) => parts.write(next, onCommit);
@@ -261,11 +262,12 @@ export function DecorationField({
  * that sent it, so a second part changed meanwhile would otherwise start from
  * the old value and undo the first. The queue follows the stored value: each
  * written value arriving is dropped from it, and any other change (an undo,
- * another author) or a refused write empties it.
+ * another author) or a refused write, at once or later, empties it.
  */
 function useQueuedParts(
   stored: string | undefined,
-  base: DecorationParts | undefined
+  base: DecorationParts | undefined,
+  refused: boolean
 ): {
   current: DecorationParts | undefined;
   /** Whether a written value has yet to come back as the stored one. */
@@ -287,6 +289,10 @@ function useQueuedParts(
     const arrived = queue.current.findIndex(entry => entry.value === stored);
     queue.current = arrived === -1 ? [] : queue.current.slice(arrived + 1);
   }
+  // A refusal that arrives after the write (a shared style's) leaves the
+  // stored value as it was: what was queued will not arrive, so the queue
+  // empties and the controls show what the document holds.
+  if (refused) queue.current = [];
   const current = queue.current.at(-1)?.parts ?? base;
   /** Sends a value, queued as its parts when they can be read from it. */
   const send = (

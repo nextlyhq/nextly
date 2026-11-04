@@ -103,9 +103,8 @@
  * populated region.
  *
  * The rule's ANCESTOR conditions are part of that question and not a detail of
- * how the stylesheet is written. Its box is scoped to a builder shell that has
- * not been asked to hide empty-element chrome, and `Canvas` and this component
- * are both exported — so a host composing them with no shell renders containers
+ * how the stylesheet is written. Its box is scoped to a canvas inside a builder
+ * shell, and `Canvas` and this component are both exported — so a host composing them with no shell renders containers
  * the element-level condition accepts and the rule never reaches. Asking the
  * whole selector is what keeps "there is a box here" a fact rather than an
  * assumption about how the caller mounted this.

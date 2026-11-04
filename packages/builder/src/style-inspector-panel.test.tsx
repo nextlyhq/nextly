@@ -39,6 +39,7 @@ import { NoticeSinkProvider } from "./builder-notices";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
+  describedWithUnit,
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
@@ -3045,6 +3046,192 @@ describe("where a control's value came from", () => {
       `[data-property="${property}"] .nx-style-inspector__provenance-source`
     )?.textContent;
 
+  it("lays out a shared target's controls by its own display, not the block's", () => {
+    // Card stores `display: flex`; this block overrides it to `block`. While
+    // Card is the target, its flex controls are the ones being edited, so
+    // they show, though the block on the canvas is not a flex container.
+    register({ layout: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: { base: { [BASE_BREAKPOINT]: { display: "block" } } },
+        },
+      ],
+    } as never);
+    const cardStyles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+    } as NodeStyles;
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: { id: "cls-1", name: "Card", styles: cardStyles } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "display", value: "flex" }),
+              entry({ property: "display", value: "block" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.queryByRole("radiogroup", { name: "Justify" })
+    ).not.toBeNull();
+  });
+
+  it("says a block's tablet value overrides its style's wider value", () => {
+    // Card sets opacity for every width; this block sets its own at tablet.
+    // At tablet the block's value covers Card's, so the line names Card,
+    // though Card stores nothing at the tablet address itself.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: { base: { tablet: { opacity: 0.2 } } },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [],
+          } as never
+        }
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.2",
+                breakpoint: "tablet",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      document.querySelector('[data-shared-line="override"]')?.textContent
+    ).toContain("overrides\u00a0Card");
+  });
+
+  it("names no style when the block's own wider value is what Reset would show", () => {
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: {
+              [BASE_BREAKPOINT]: { opacity: 0.4 },
+              tablet: { opacity: 0.2 },
+            },
+          },
+        },
+      ],
+    } as never);
+    // Card stores a tablet value too, which the exact address would find:
+    // the block's own base value sits between them in the cascade.
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { tablet: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [],
+          } as never
+        }
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({
+                property: "opacity",
+                value: "0.5",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.4" }),
+              entry({
+                property: "opacity",
+                value: "0.2",
+                breakpoint: "tablet",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    // Reset would show the block's own base value, so naming Card, with a
+    // Reset "showing Card's value", would say something untrue.
+    // The control is drawn, so the absence below is the line's own.
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
+
   it("shows an inherited value in its field, and where it came from beside the label", () => {
     // The value an author sees on the canvas, where a generic hint said
     // nothing about it. Shown as the placeholder, so it reads as not set here
@@ -5126,6 +5313,15 @@ describe("opacity's unit in words", () => {
   it("says percent while the value is a number", () => {
     mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
     expect(described()).toContain("percent");
+  });
+
+  it("decides from what the field shows, an inherited keyword included", () => {
+    // Unset here, the field shows what reaches it as its hint; a keyword
+    // there has no unit either, and a number there does.
+    expect(describedWithUnit(undefined, "unit", "", "inherit")).toBeUndefined();
+    expect(describedWithUnit("err", "unit", "", "50")).toBe("err unit");
+    expect(describedWithUnit(undefined, "unit", "", undefined)).toBe("unit");
+    expect(describedWithUnit(undefined, "unit", "40", "inherit")).toBe("unit");
   });
 
   it("says no unit for a keyword, which has none", () => {

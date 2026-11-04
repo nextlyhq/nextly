@@ -168,13 +168,12 @@ describe("the canvas frame", () => {
     expect(canvasFrameTitle("   ")).toBe("Page canvas: Untitled");
   });
 
-  it("states the site's theme and the empty-elements preference on the page's root", () => {
+  it("states the site's theme on the page's root", () => {
     const { container, rerender } = render(
       <CanvasFrame
         width={1280}
         title="Home"
         theme="dark"
-        showEmptyElements={false}
         source={TEST_SOURCE}
       />
     );
@@ -182,11 +181,9 @@ describe("the canvas frame", () => {
     loadPage(frame);
     const root = frame.contentDocument?.documentElement;
     expect(root?.getAttribute("data-nx-theme")).toBe("dark");
-    expect(root?.getAttribute("data-nx-empty-elements")).toBe("hidden");
 
     rerender(<CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />);
     expect(root?.hasAttribute("data-nx-theme")).toBe(false);
-    expect(root?.hasAttribute("data-nx-empty-elements")).toBe(false);
   });
 
   it("hands the region chrome the admin's tokens, scoped to it, and again when the theme changes", async () => {
