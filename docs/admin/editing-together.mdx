@@ -1,0 +1,69 @@
+---
+title: Editing with others
+description: What the admin tells you when someone else has the same entry or Single open, and what you can do about it.
+---
+
+When you open an existing entry or a Single in the admin, it is claimed for you while the editor is open. Anyone else who opens it is told that you are editing it, and sees it read-only until they decide what to do. Plugin views that open inside the editor, such as the Visual Page Builder, share the same claim.
+
+The claim is a courtesy between people using the admin. It tells your colleagues you are working on the document, and lets them take over when they need to. It does not stop a program, an integration or a plugin from saving the document.
+
+## What each message means
+
+These messages appear in a strip at the top of the editor. The names below are examples: the admin shows the person's name, or their email when they have no name.
+
+### When someone else is editing
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Ana is editing this document. You can read it, or take over." | Ana has the document open. You see it read-only. | Read it, choose **Take over** to edit it yourself, or choose **Request edit access** to let Ana know you are waiting. |
+| "We have let Ana know you are waiting." | Your request reached Ana. Nothing else changed: the document is still Ana's. | Wait. You can edit as soon as Ana leaves the document or Ana's claim lapses. You can still take over. |
+| "Ana was editing this document, and we could not re-check. You can read it, or take over." | The admin lost touch with the server, and the last thing it knew was that Ana was editing. | Read it, or take over. When the connection comes back, the message updates. |
+| "Ana is editing this document right now." | Your role lets you read this document but not change it, and Ana is editing it. Publishing or unpublishing waits until Ana is done. | Read it. |
+| "Your access lets you view this, but not change it. If you need to change it, ask an admin." | Your role lets you read this document but not change it. Nobody else is involved. | Ask an admin if you need to change it. |
+
+### When you are editing
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Someone is waiting to edit this document." | A colleague asked for edit access. The admin does not say who. | Keep working: nothing is taken away from you. Finish and leave the document when you can. |
+| "Ana took over this document. Your unsaved changes are still here, but cannot be saved until you take it back." | Ana took the document from you. What you typed stays on screen, read-only. | Copy what you need, or choose **Take it back**. See [Your unsaved work](#your-unsaved-work). |
+| "Your claim on this document ended. Your unsaved changes are still here, but cannot be saved until you take it back." | Your claim lapsed, for example while your computer was asleep. Nobody has taken the document. | Choose **Take it back** to carry on. |
+| "This document could not be confirmed as yours for long enough that a colleague may now be editing it. Your unsaved changes are still here." | The admin could not reach the server for long enough that your claim may have lapsed. | Choose **Take it back** once you are online again. |
+| "We could not check whether anyone else is editing this document. You can keep working, but a colleague may be in it too." | The admin could not ask the server who is editing. | Keep working, but be aware that a colleague may have it open. |
+
+### When you start editing a document someone else had
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Loading the latest version of this document before you edit it." | You can edit now, and the admin is loading what was saved while you were waiting, so you don't edit an old copy. | Wait a moment. The form unlocks when the latest version is on screen. |
+| "We couldn't load the latest version of this document, so you can't edit it yet." | The latest version could not be loaded. The form stays read-only so you can't save over newer work. | Choose **Try again**. |
+
+## Taking over
+
+Choose **Take over** when you need to edit a document now, for example because a colleague left it open and went home. It works at once: you do not need their permission.
+
+- The latest version of the document loads before you can type.
+- Your colleague's editor turns read-only and tells them you took over. What they typed and had not saved stays on their screen, and their autosave keeps a copy (see [Your unsaved work](#your-unsaved-work)).
+- It is recorded in the document's history. Where [version history](/docs/versions) is on, the History panel shows it as "Took over from Ana".
+- Your colleague can take it back the same way.
+
+## Asking for edit access
+
+Choose **Request edit access** to let the person editing know you are waiting, without taking anything from them. They see "Someone is waiting to edit this document." They are not told who asked, and they can keep working. The request is a courtesy: it does not move the document.
+
+You can edit the document once they leave it. If their tab closed without letting go of it, their claim lapses about two and a half minutes after it was last renewed.
+
+## Your unsaved work
+
+If someone takes over while you are typing, nothing you typed is thrown away. It stays on screen, read-only, so you can copy what you need. Your autosave also keeps it as a recovery point, and when you next open the document the editor offers to restore it.
+
+## Two tabs
+
+You count as one person, however many tabs you have open. A list open in another tab does not update when you save in this one; it shows the change when you open it again or reload the tab.
+
+## Limits
+
+- **No editing together.** Only one person edits a document at a time. There are no live cursors, and edits are never merged.
+- **One person is named.** The strip names whoever holds the document, not everyone who has it open.
+- **Existing documents only.** A new entry is not claimed while it is being created.
+- **Programs don't take part.** The REST API, the Direct API and plugins don't see claims, and a claim doesn't stop them writing. Developers can read who holds a document through the [REST API](/docs/api-reference/rest-api#document-locks).

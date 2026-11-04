@@ -265,6 +265,10 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `PATCH`         | `/admin/api/singles/{slug}/schema`                     | Update single schema (Schema Builder).                                                                                                                                                               | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `POST`          | `/admin/api/singles/schema/{slug}/preview`             | Dry-run single schema diff.                                                                                                                                                                          | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `POST`          | `/admin/api/singles/schema/{slug}/apply`               | Apply single schema changes.                                                                                                                                                                         | `create-settings`, `update-settings` and `delete-settings`                                               |
+| `GET`           | `/admin/api/document-lock`                             | Who is editing an entry or a Single. See [Document locks](#document-locks).                                                                                                                         | Read access to that document                                    |
+| `POST`          | `/admin/api/document-lock`                             | Claim a document, take it over, or ask for edit access.                                                                                                                                              | The same access an update of that document needs                |
+| `PATCH`         | `/admin/api/document-lock`                             | Renew a claim.                                                                                                                                                                                       | The same access an update of that document needs                |
+| `DELETE`        | `/admin/api/document-lock`                             | Give up a claim.                                                                                                                                                                                     | `update-{slug}`                                                 |
 | `GET`           | `/admin/api/field-groups`                              | List field group definitions.                                                                                                                                                                        | Authenticated                                                   |
 | `POST`          | `/admin/api/field-groups`                              | Create field group.                                                                                                                                                                                  | `create-settings`                                               |
 | `GET`           | `/admin/api/field-groups/{slug}`                       | Get field group.                                                                                                                                                                                     | Authenticated                                                   |
@@ -554,6 +558,120 @@ curl -X PATCH http://localhost:3000/admin/api/singles/site-settings \
   -H "Content-Type: application/json" \
   -d '{"siteName":"My New Site","maintenanceMode":false}'
 ```
+
+### Document locks
+
+The admin claims an entry or a Single while someone has it open, so that a colleague who opens
+it is told who is editing (see [Editing with others](/docs/admin/editing-together)). The claim is
+advisory: no write is refused because someone else holds the document, through this API or any
+other.
+
+A document is named by three values: `scopeKind` (`collection` or `single`), `slug` (the
+collection's or Single's slug) and `entryId` (the entry's id, or the `id` a Single's content read
+returns). They go in the query string of a `GET`, and in the JSON body of every other request. A
+missing or unusable value is a `400 VALIDATION_ERROR` with the code `invalid_document_ref`.
+
+Who is editing:
+
+```bash
+curl "http://localhost:3000/admin/api/document-lock?scopeKind=collection&slug=posts&entryId=abc-123" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY"
+```
+
+```json
+{
+  "holder": { "ownerId": "user-1", "ownerLabel": "Ana Silva", "expiresInSeconds": 132 }
+}
+```
+
+`holder` is `null` when nobody holds the document. The answer is sent `private, no-store`,
+because it names a colleague.
+
+Claim it:
+
+```bash
+curl -X POST "http://localhost:3000/admin/api/document-lock" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"scopeKind":"collection","slug":"posts","entryId":"abc-123"}'
+```
+
+```json
+{
+  "message": "Document claimed.",
+  "item": {
+    "status": "acquired",
+    "holder": { "ownerId": "user-1", "ownerLabel": "Ana Silva", "expiresInSeconds": 150 },
+    "claimToken": "…"
+  }
+}
+```
+
+When someone else holds it, the claim is still answered `200`, not refused:
+
+```json
+{
+  "message": "Document is being edited by someone else.",
+  "item": {
+    "status": "held",
+    "holder": { "ownerId": "user-2", "ownerLabel": "Ben Okafor", "expiresInSeconds": 97 },
+    "waiting": false
+  }
+}
+```
+
+"Someone else is editing" is an answer to show, not an error, so a held document never comes
+back as `409`. The claim token is given only to the caller whose claim succeeded.
+
+Two options ride on the claim:
+
+- `"takeover": true` takes the document from its holder. The holder's next renewal finds the claim
+  gone. Taking over from someone else is recorded in the document's
+  [history](/docs/versions); if that record cannot be written, the takeover is refused and the
+  holder keeps the document.
+- `"requestAccess": true` marks that someone is waiting. It moves nothing: the holder is told on
+  their next renewal, without being told who asked, and `waiting` is `true` on both sides until
+  the request lapses. The document passes on only when the holder leaves or their claim lapses.
+
+Renew it, with the token the claim returned:
+
+```bash
+curl -X PATCH "http://localhost:3000/admin/api/document-lock" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"scopeKind":"collection","slug":"posts","entryId":"abc-123","claimToken":"…"}'
+```
+
+The `item` is `{ "status": "renewed", "holder": …, "waiting": false }`, or `{ "status": "lost" }`
+when the claim lapsed or was taken over. A lost claim carries `holder` when someone else now holds
+the document.
+
+Give it up with `DELETE` and the same body. The `item` is `{ "released": true }`, and releasing a
+claim already lost is not an error. A renewal or release without `claimToken` is a
+`400 VALIDATION_ERROR`.
+
+**Who may call.**
+
+- Reading who holds a document needs read access to that document. Under a read rule that
+  allows only some entries, that means one the rule matches (see
+  [Permissions](/docs/permissions)).
+- Claiming, renewing and taking over are judged exactly as an update of that document: the
+  `update-{slug}` permission, and the collection's or Single's own update rule for that
+  document. An API key needs both its grant and the rule.
+- Giving up a claim needs `update-{slug}`, and the claim token proves it is the same claim.
+- The claimant is always taken from the session or API key, never from the body.
+- A refusal is `403 FORBIDDEN`, and it does not say whether the document exists.
+
+**Timings.** The admin renews its claim every 15 seconds. A claim that is not renewed lapses 150
+seconds after its last renewal, timed by the database's clock, and every read ignores a lapsed
+claim at once.
+
+**One holder per person.** A claim by the person who already holds the document is always
+granted, so one person in two tabs, or a person and their own script, holds it once.
+
+**Cleaning up.** Lapsed claims are deleted by the `document-lock:sweep` job, which runs whenever
+the [scheduled jobs run](/docs/jobs#running-the-queue) does. Nothing depends on it for
+correctness: it only keeps the table from growing.
 
 ### Email send
 

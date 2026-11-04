@@ -292,7 +292,8 @@ The admin keeps the document's own behaviour around your view, so you don't
 build any of it yourself:
 
 - It loads the document and holds its form state.
-- It holds the document's soft lock, and shows who else is editing.
+- It holds the document's soft lock, and shows who else is editing (see
+  [Editing with others](/docs/admin/editing-together)).
 - It offers unsaved work recovered after a crash or a reload. Restoring it
   unmounts your view, replaces the form's values, then mounts your view again.
   A view that keeps its own copy of the document, read when it mounts, starts
