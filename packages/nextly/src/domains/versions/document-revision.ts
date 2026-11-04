@@ -19,7 +19,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
@@ -31,7 +31,10 @@ import { contentEventActor } from "../content-events/actor";
 import type { SanitizedLocalizationConfig } from "../i18n/config/types";
 import { isLocaleSelector } from "../i18n/locale-selector";
 import { resolveRequestedLocale } from "../i18n/resolve-locale";
-import { systemColumnDriverValue } from "../schema/services/runtime-schema-generator";
+import {
+  languageRevisionTable,
+  systemColumnDriverValue,
+} from "../schema/services/runtime-schema-generator";
 
 export { DOCUMENT_VERSION_KEY };
 
@@ -216,7 +219,7 @@ export async function bumpDocumentRevision(
  * version it produced. A read after the commit can see a later save's.
  */
 async function readDocumentRevisions(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: Pick<TransactionContext, "select" | "getDrizzle">,
   args: {
     dialect: SupportedDialect;
     table: string;
@@ -235,10 +238,11 @@ async function readDocumentRevisions(
   if (!row) return undefined;
   const main = revisionOf(row[DOCUMENT_REVISION_COLUMN]);
   if (!args.languages || args.languages.locales.length === 0) return { main };
-  const byDocument = await readLanguageRevisions(
-    (statement, params) => tx.execute(statement, params),
-    { dialect: args.dialect, table: args.languages.table, ids: [args.id] }
-  );
+  const byDocument = await readLanguageRevisions(tx.getDrizzle<SelectsRows>(), {
+    dialect: args.dialect,
+    table: args.languages.table,
+    ids: [args.id],
+  });
   return {
     main,
     languages: languageCounters(
@@ -248,35 +252,42 @@ async function readDocumentRevisions(
   };
 }
 
-/** Runs one statement with its parameters and answers its rows. */
-export type RunStatement = (
-  statement: string,
-  params: (string | number)[]
-) => Promise<Record<string, unknown>[]>;
+/**
+ * A Drizzle database or transaction handle, as `getDrizzle()` answers it:
+ * the part of its query builder a counter read uses, the same on every
+ * dialect.
+ */
+export interface SelectsRows {
+  select(fields: Record<string, unknown>): {
+    from(table: never): {
+      where(condition: unknown): PromiseLike<Record<string, unknown>[]>;
+    };
+  };
+}
 
 /**
  * Every translation row's counter for `ids`, in one statement: by document,
  * then by language.
  *
- * Named in the statement: a translation table's runtime model does not
- * declare the counter, since the same model serves field-group translation
- * tables, which are no documents and never carry it.
+ * Selected through `languageRevisionTable`: a translation table's runtime
+ * model does not declare the counter, since the same model serves
+ * field-group translation tables, which are no documents and never carry it.
  */
 async function readLanguageRevisions(
-  run: RunStatement,
+  db: SelectsRows,
   args: { dialect: SupportedDialect; table: string; ids: readonly string[] }
 ): Promise<Map<string, Map<string, number>>> {
   const out = new Map<string, Map<string, number>>();
   if (args.ids.length === 0) return out;
-  const q = (name: string) =>
-    args.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-  const placeholders = args.ids
-    .map((_, i) => (args.dialect === "postgresql" ? `$${i + 1}` : "?"))
-    .join(", ");
-  const rows = await run(
-    `SELECT ${q("_parent")}, ${q("_locale")}, ${q(DOCUMENT_REVISION_COLUMN)} FROM ${q(args.table)} WHERE ${q("_parent")} IN (${placeholders})`,
-    [...args.ids]
-  );
+  const table = languageRevisionTable(args.dialect, args.table);
+  const rows = await db
+    .select({
+      _parent: table._parent,
+      _locale: table._locale,
+      [DOCUMENT_REVISION_COLUMN]: table[DOCUMENT_REVISION_COLUMN],
+    })
+    .from(table as never)
+    .where(inArray(table._parent as never, [...args.ids]));
   for (const row of rows) {
     const parent = String(row._parent);
     const languages = out.get(parent) ?? new Map<string, number>();
@@ -327,7 +338,7 @@ function versionLanguagesFor(args: {
  * same languages as a read's (`attachDocumentVersions`).
  */
 export async function documentVersionOn(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: Pick<TransactionContext, "select" | "getDrizzle">,
   args: {
     dialect: SupportedDialect;
     table: string;
@@ -462,7 +473,12 @@ export function attachDocumentVersions(
   }
   for (const row of rows) {
     const id = documentIdOf(row);
-    if (id === undefined || !args.stored.has(id)) continue;
+    if (id === undefined || !args.stored.has(id)) {
+      // No stored document to take a version from, such as a row whose id a
+      // hook rewrote: it carries none, rather than one the hook set.
+      delete row[DOCUMENT_VERSION_KEY];
+      continue;
+    }
     row[DOCUMENT_VERSION_KEY] = encodeDocumentVersion(
       revisionOf(args.stored.get(id)),
       locales
@@ -545,7 +561,7 @@ export function withDocumentVersion<T extends Record<string, unknown>>(
  * older content would let a client save over a translation it never saw.
  */
 export async function languageCountersBeforeContent(
-  run: RunStatement,
+  db: SelectsRows,
   args: {
     dialect: SupportedDialect;
     languagesTable: string | null;
@@ -562,7 +578,7 @@ export async function languageCountersBeforeContent(
   if (args.languagesTable === null || !args.localization) return undefined;
   if (args.ids.length === 0) return undefined;
   return {
-    revisions: await readLanguageRevisions(run, {
+    revisions: await readLanguageRevisions(db, {
       dialect: args.dialect,
       table: args.languagesTable,
       ids: args.ids,

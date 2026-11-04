@@ -731,6 +731,60 @@ export function systemColumnDriverValue(
   return columns.column.mapToDriverValue(value);
 }
 
+const languageRevisionTables = new Map<string, Record<string, unknown>>();
+
+/**
+ * The Drizzle model a read of a translation table's counters selects from:
+ * its keys and its counter, the counter built from the same descriptor and
+ * builder as on a main table.
+ *
+ * A translation table's own runtime model does not declare the counter (the
+ * same model serves field-group translation tables, which never carry it),
+ * so the read names it through this model instead, which Drizzle quotes and
+ * binds as it does every other query.
+ */
+export function languageRevisionTable(
+  dialect: SupportedDialect,
+  tableName: string
+): Record<string, unknown> {
+  const key = `${dialect}\u0000${tableName}`;
+  const cached = languageRevisionTables.get(key);
+  if (cached !== undefined) return cached;
+  const descriptor = getSystemColumnDescriptors(dialect, {
+    hasTitleField: true,
+    hasSlugField: true,
+    hasStatus: true,
+    isSingle: false,
+  }).find(column => column.name === "_revision");
+  if (descriptor === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "unknown-system-column", name: "_revision" },
+    });
+  }
+  const revision = buildSystemDrizzleColumn(descriptor, dialect);
+  const table = (
+    dialect === "postgresql"
+      ? pgTable(tableName, {
+          _parent: pgText("_parent"),
+          _locale: pgText("_locale"),
+          _revision: revision as never,
+        })
+      : dialect === "mysql"
+        ? mysqlTable(tableName, {
+            _parent: mysqlVarchar("_parent", { length: 255 }),
+            _locale: mysqlVarchar("_locale", { length: 255 }),
+            _revision: revision as never,
+          })
+        : sqliteTable(tableName, {
+            _parent: sqliteText("_parent"),
+            _locale: sqliteText("_locale"),
+            _revision: revision as never,
+          })
+  ) as Record<string, unknown>;
+  languageRevisionTables.set(key, table);
+  return table;
+}
+
 /**
  * Apply nullability once, rather than in every arm.
  *
