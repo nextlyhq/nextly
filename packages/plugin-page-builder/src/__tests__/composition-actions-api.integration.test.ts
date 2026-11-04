@@ -20,14 +20,14 @@ import {
   COMPONENT_INSTANCE_TYPE,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { definePlugin, getCachedNextly } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { requireNextly } from "nextly/runtime";
+import { defineCollection, text } from "nextly/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
@@ -40,6 +40,7 @@ import {
   type PageActionRequest,
   type PageActionResult,
 } from "../composition-actions-contract";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
 import type { SavePatternDryRunResponse } from "../library-contract";
 import { MANAGE_SITE_PERMISSION } from "../site-settings";
@@ -65,6 +66,8 @@ function heading(id: string, text: string): BlockNode {
 
 /** The title marker of a page whose saves a hook rewrites. */
 const STAMP_MARK = "stamped";
+/** How many saves the hook below has rewritten, so no two read alike. */
+let stamps = 0;
 
 /**
  * A plugin whose only act is to rewrite the first block's text on every save
@@ -91,7 +94,13 @@ const stampingPages = definePlugin({
         content: {
           ...content,
           nodes: [
-            { ...first, props: { ...first.props, text: "Stamped" } },
+            {
+              ...first,
+              props: {
+                ...first.props,
+                text: `Stamped ${String((stamps += 1))}`,
+              },
+            },
             ...rest,
           ],
         },
@@ -114,6 +123,18 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder(), stampingPages],
+        collections: [
+          // A host collection with a lifecycle but no working drafts: a save
+          // that names no status lands on the live entry.
+          defineCollection({
+            slug: "articles",
+            status: true,
+            fields: [
+              text({ name: "title" }),
+              { name: "content", type: BLOCKS_TYPE } as never,
+            ],
+          }),
+        ],
         seedPublic: true,
       });
       // The instance's first user is its super admin, so it is made here and
@@ -328,7 +349,7 @@ describe.each(getConfiguredTestDialects())(
       const { cookie } = await holding(t, AUTHOR);
       // Someone else's save lands just after the action reads the page, so
       // it plans from the older page.
-      const direct = requireNextly();
+      const direct = await getCachedNextly();
       const read = direct.findByID.bind(direct);
       let saved = false;
       const spy = vi
@@ -386,11 +407,56 @@ describe.each(getConfiguredTestDialects())(
         dryRun: true,
       });
 
-      expect(
-        (dry.body.item as PageActionResult).document?.nodes.map(
-          node => node.props.text
-        )
-      ).toEqual(["Stamped", "From the pattern"]);
+      const previewed = (dry.body.item as PageActionResult).document?.nodes;
+      expect(previewed?.[0]?.props.text).toMatch(/^Stamped \d+$/);
+      expect(previewed?.[1]?.props.text).toBe("From the pattern");
+
+      // The apply answers what it committed, which the hook stamped anew.
+      const applied = await act(cookie, {
+        page: { collection: "pages", id: page },
+        action: { kind: "insert-pattern", patternId: pattern },
+      });
+      const answered = (applied.body.item as PageActionResult).document?.nodes;
+      const kept = await nodes(t, page);
+      expect(answered?.[0]?.props.text).toBe(kept[0]?.props.text);
+      expect(answered?.[0]?.props.text).not.toBe(previewed?.[0]?.props.text);
+    });
+
+    it("refuses a field that holds no blocks, rather than failing", async () => {
+      const t = await boot();
+      const { page, pattern } = await site(t);
+      const { cookie } = await holding(t, AUTHOR);
+
+      const answer = await act(cookie, {
+        page: { collection: "pages", id: page, field: "title" },
+        action: { kind: "insert-pattern", patternId: pattern },
+      });
+
+      expect(answer.status).toBe(422);
+    });
+
+    it("asks for the publish right where a save lands on the live entry", async () => {
+      const t = await boot();
+      const { pattern } = await site(t);
+      const article = await created(t, "articles", {
+        title: "News",
+        status: "published",
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [heading("lead", "Lead")],
+        },
+      });
+      const reads = ["read-patterns", "read-articles", "update-articles"];
+      const editor = await holding(t, reads);
+      const publisher = await holding(t, [...reads, "publish-articles"]);
+      const request: PageActionRequest = {
+        page: { collection: "articles", id: article },
+        action: { kind: "insert-pattern", patternId: pattern },
+      };
+
+      expect((await act(editor.cookie, request)).status).toBe(403);
+      expect((await act(publisher.cookie, request)).status).toBe(200);
     });
 
     it("turns the Layout back on when one is chosen without the switch", async () => {

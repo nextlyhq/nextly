@@ -55,8 +55,10 @@ Content-Type: application/json
 ```
 
 `page` may also name the blocks `field` (`content` by default) and, for a translated
-field, the `locale`. The caller needs **update** on the page's collection. `action` is
-one of:
+field, the `locale`; a field that holds no blocks is refused. The caller needs **update**
+on the page's collection. A collection with a Draft/Published lifecycle but no working
+drafts saves an edit straight onto the published entry, so there the caller needs
+**publish** too. `action` is one of:
 
 | `kind`                 | Fields                                      | What it does                                                                                                                    |
 | ---------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,6 +72,8 @@ one of:
 inside a block; without it the block goes at the end of the page. The answer holds the
 `ops` the change makes, the page's blocks as it leaves them (`document`) or its Layout
 fields (`layout`), and `insertedId`, the new block's id for the next action to address.
+New blocks get fresh ids on every write, as in the editor, so the ids in a dry run's
+answer are not the ones an apply stores: address what the apply's own answer names.
 
 ## Change a component's definition
 

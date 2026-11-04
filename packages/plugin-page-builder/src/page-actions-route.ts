@@ -41,12 +41,12 @@ import {
   type OpPosition,
 } from "@nextlyhq/blocks-engine";
 import {
+  getCachedNextly,
   NextlyError,
   respondMutation,
   type PluginCollectionTransaction,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
-import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
 import { PAGES_SLUG } from "./collections/pages";
@@ -63,6 +63,7 @@ import {
   planRefusal,
   readBodyWith,
   readOrNull,
+  savesLive,
   storeOf,
   type CompositionRouteContext,
 } from "./composition-route-kit";
@@ -137,7 +138,11 @@ export interface PageActionsSetup {
 }
 
 /** The context the page actions run with. */
-type PageActionsContext = CompositionRouteContext;
+type PageActionsContext = CompositionRouteContext & {
+  services: {
+    collections: Parameters<typeof savesLive>[0];
+  };
+};
 
 /**
  * The key a read gives a document's version under, and an update hands back
@@ -175,21 +180,105 @@ async function runPageAction(
 ): Promise<Response> {
   const body = await readBodyWith(req, PageActionBody, "page action");
   const page = body.page;
+  const collections = ctx.services.collections;
   // Preconditions first: the caller may change this collection's entries,
-  // and publish them when asked to.
-  // Asked of any entry: whether the caller may change THIS page is the
-  // write's to decide, made as the caller against the row.
+  // and publish them when asked to, or when the collection holds no working
+  // draft and a save lands on the live entry. Asked of any entry: whether
+  // the caller may change THIS page is the write's to decide, made as the
+  // caller against the row.
+  const publishes =
+    body.publish === true || (await savesLive(collections, page.collection));
   const by = await actingCaller(
     ctx,
     [
       ["update", page.collection],
-      ...(body.publish === true
-        ? ([["publish", page.collection]] as const)
-        : []),
+      ...(publishes ? ([["publish", page.collection]] as const) : []),
     ],
     { anyEntry: true }
   );
   const field = page.field ?? DEFAULT_FIELD;
+  const read = await readForAction(ctx, page, field, body.expect);
+  const planned = await planAction(
+    ctx,
+    body.action,
+    read.page,
+    field,
+    page.collection,
+    setup
+  );
+  const data = {
+    ...planned.data,
+    ...(body.publish === true ? { status: "published" } : {}),
+    ...(read.version === undefined ? {} : { [VERSION_KEY]: read.version }),
+  };
+  const options = asCaller(ctx, page.locale);
+  await collections.warmLocalizedReadiness(page.collection);
+  const judged = await judgeInTransaction(
+    run => collections.withTransaction(run),
+    (tx: PluginCollectionTransaction) =>
+      collections.updateEntryInTransaction(tx, page.collection, page.id, data, {
+        ...options,
+        context: { [JUDGEMENT_CONTEXT]: true },
+      })
+  );
+  const result = (
+    dryRun: boolean,
+    written: unknown,
+    refusals: readonly string[]
+  ): PageActionResult => {
+    const shown = asWritten(planned, written, field);
+    return {
+      dryRun,
+      page: { collection: page.collection, id: page.id },
+      ops: planned.ops,
+      ...(shown.document === undefined ? {} : { document: shown.document }),
+      ...(shown.layout === undefined ? {} : { layout: shown.layout }),
+      ...(planned.insertedId === undefined
+        ? {}
+        : { insertedId: planned.insertedId }),
+      refusals,
+      fingerprint: read.fingerprint,
+      by,
+    };
+  };
+
+  if (judged.refusal !== null) {
+    if (body.dryRun !== true) throw refusedAction(judged.refusal.messages);
+    return respondMutation<PageActionResult>(
+      "Nothing was written: the site would refuse this action.",
+      result(true, undefined, judged.refusal.messages)
+    );
+  }
+  if (body.dryRun === true) {
+    return respondMutation<PageActionResult>(
+      "Nothing was written: this is what the action would do.",
+      result(true, judged.written, [])
+    );
+  }
+  // The answer is the committed write's: a hook may store something other
+  // than what the rolled-back judgement stored.
+  const applied = await collections.updateEntry(
+    page.collection,
+    page.id,
+    data,
+    options
+  );
+  return respondMutation<PageActionResult>(
+    "The page was changed.",
+    result(false, applied.item, [])
+  );
+}
+
+/**
+ * The page an action plans against, the version it was read at, and its
+ * fingerprint, refused when `expect` names another.
+ */
+async function readForAction(
+  ctx: PageActionsContext,
+  page: { collection: string; id: string; locale?: string | undefined },
+  field: string,
+  expected: string | undefined
+): Promise<ReadPage & { fingerprint: string }> {
   const read = await readStoredPage(
     ctx,
     page.collection,
@@ -202,9 +291,8 @@ async function runPageAction(
       logContext: { reason: "page-action-missing-page" },
     });
   }
-  const stored = read.page;
-  const fingerprint = storedFingerprint(stored);
-  if (body.expect !== undefined && body.expect !== fingerprint) {
+  const fingerprint = storedFingerprint(read.page);
+  if (expected !== undefined && expected !== fingerprint) {
     throw NextlyError.conflict({
       reason: "state",
       message:
@@ -212,64 +300,7 @@ async function runPageAction(
       logContext: { reason: "page-action-stale" },
     });
   }
-
-  const planned = await planAction(
-    ctx,
-    body.action,
-    stored,
-    field,
-    page.collection,
-    setup
-  );
-  const data = {
-    ...planned.data,
-    ...(body.publish === true ? { status: "published" } : {}),
-    ...(read.version === undefined ? {} : { [VERSION_KEY]: read.version }),
-  };
-  const options = asCaller(ctx, page.locale);
-  const collections = ctx.services.collections;
-  await collections.warmLocalizedReadiness(page.collection);
-  const judged = await judgeInTransaction(
-    run => collections.withTransaction(run),
-    (tx: PluginCollectionTransaction) =>
-      collections.updateEntryInTransaction(tx, page.collection, page.id, data, {
-        ...options,
-        context: { [JUDGEMENT_CONTEXT]: true },
-      })
-  );
-  const refusal = judged.refusal;
-  const shown =
-    judged.refusal === null
-      ? asWritten(planned, judged.written, field)
-      : planned;
-  const result = (dryRun: boolean): PageActionResult => ({
-    dryRun,
-    page: { collection: page.collection, id: page.id },
-    ops: planned.ops,
-    ...(shown.document === undefined ? {} : { document: shown.document }),
-    ...(shown.layout === undefined ? {} : { layout: shown.layout }),
-    ...(planned.insertedId === undefined
-      ? {}
-      : { insertedId: planned.insertedId }),
-    refusals: refusal?.messages ?? [],
-    fingerprint,
-    by,
-  });
-
-  if (body.dryRun === true) {
-    return respondMutation<PageActionResult>(
-      refusal === null
-        ? "Nothing was written: this is what the action would do."
-        : "Nothing was written: the site would refuse this action.",
-      result(true)
-    );
-  }
-  if (refusal !== null) throw refusedAction(refusal.messages);
-  await collections.updateEntry(page.collection, page.id, data, options);
-  return respondMutation<PageActionResult>(
-    "The page was changed.",
-    result(false)
-  );
+  return { ...read, fingerprint };
 }
 
 /** The stored page as the caller may read it, its working draft first. */
@@ -281,7 +312,7 @@ async function readStoredPage(
   locale: string | undefined
 ): Promise<ReadPage | null> {
   const row = await readOrNull(async () =>
-    requireNextly().findByID({
+    (await getCachedNextly()).findByID({
       collection,
       id: pageId,
       ...(await readingAsUser(ctx)),
@@ -415,7 +446,7 @@ async function insertPatternOps(
   // A published pattern, as the caller may read it: the insert panel offers
   // only published patterns.
   const row = await readOrNull(async () =>
-    requireNextly().findByID({
+    (await getCachedNextly()).findByID({
       collection: ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
       id: patternId,
       ...(await readingAsUser(ctx)),
@@ -477,7 +508,7 @@ async function requireReadable(
   componentId: string
 ): Promise<void> {
   const row = await readOrNull(async () =>
-    requireNextly().findByID({
+    (await getCachedNextly()).findByID({
       collection,
       id: componentId,
       ...(await readingAsUser(ctx)),

@@ -38,13 +38,13 @@ import {
   type VariantEditResult,
 } from "@nextlyhq/blocks-engine";
 import {
+  getCachedNextly,
   NextlyError,
   respondMutation,
   type PluginCollectionTransaction,
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
-import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
@@ -61,13 +61,13 @@ import {
   readBodyWith,
   readOrNull,
   requirePluginStore,
+  savesLive,
   storeOf,
   type CompositionRouteContext,
 } from "./composition-route-kit";
 import {
   JUDGEMENT_CONTEXT,
   judgeInTransaction,
-  type Judgement,
   storedFingerprint,
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
@@ -148,9 +148,14 @@ async function runDefinitionAction(
   );
   // The declared permission admitted the caller to update components; publish
   // is asked of any entry, and the write, made as the caller, decides this one.
+  // A store that holds no working draft saves onto the live component, so an
+  // edit there is a publish whether or not it says so.
+  const publishes =
+    body.publish === true ||
+    (await savesLive(ctx.services.collections, store.collection));
   const by = await actingCaller(
     ctx,
-    body.publish === true ? [["publish", store.collection]] : [],
+    publishes ? [["publish", store.collection]] : [],
     { anyEntry: true }
   );
   const componentId = ctx.params.id ?? "";
@@ -186,11 +191,14 @@ async function runDefinitionAction(
       )
   );
   const refusal = judged.refusal;
-  const result = (dryRun: boolean): DefinitionActionResult => ({
+  const result = (
+    dryRun: boolean,
+    written: unknown
+  ): DefinitionActionResult => ({
     dryRun,
     component: { id: componentId },
     // As the write stored it, after its hooks, where its answer shows it.
-    definition: storedDefinition(judged, store.field) ?? plan.document,
+    definition: storedDefinition(written, store.field) ?? plan.document,
     targetId: plan.id,
     ...("prunedVariants" in plan
       ? { prunedVariants: plan.prunedVariants }
@@ -205,11 +213,13 @@ async function runDefinitionAction(
       refusal === null
         ? "Nothing was written: this is what the edit would do."
         : "Nothing was written: the site would refuse this edit.",
-      result(true)
+      result(true, judged.refusal === null ? judged.written : undefined)
     );
   }
   if (refusal !== null) throw refusedWrite(refusal.messages);
-  await collections.updateEntry(
+  // The answer is the committed write's: a hook may store something other
+  // than what the rolled-back judgement stored.
+  const applied = await collections.updateEntry(
     store.collection,
     componentId,
     data,
@@ -217,7 +227,7 @@ async function runDefinitionAction(
   );
   return respondMutation<DefinitionActionResult>(
     "The component was changed.",
-    result(false)
+    result(false, applied.item)
   );
 }
 
@@ -236,7 +246,7 @@ async function readForEdit(
   fingerprint: string;
 }> {
   const row = await readOrNull(async () =>
-    requireNextly().findByID({
+    (await getCachedNextly()).findByID({
       collection: store.collection,
       id: componentId,
       ...(await readingAsUser(ctx)),
@@ -264,13 +274,12 @@ async function readForEdit(
   return { definition, version, fingerprint };
 }
 
-/** The definition a judged write stored, when its answer shows one. */
+/** The definition a write stored, when its answer shows one. */
 function storedDefinition(
-  judged: Judgement<unknown>,
+  written: unknown,
   field: string
 ): ComponentDocument | null {
-  if (judged.refusal !== null) return null;
-  const stored = blocksDocumentOf(judged.written, field);
+  const stored = blocksDocumentOf(written, field);
   return stored !== null && isComponentDocument(stored) ? stored : null;
 }
 

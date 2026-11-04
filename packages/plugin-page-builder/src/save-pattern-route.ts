@@ -220,20 +220,9 @@ export async function savePattern(
           context: { [JUDGEMENT_CONTEXT]: true },
         })
     );
-    // The pattern's blocks as the save stored them, after its hooks, where
-    // the write's answer shows them.
-    const stored =
-      judged.refusal === null
-        ? (judged.written as Record<string, unknown> | null)?.[
-            PATTERN_DOCUMENT_FIELD
-          ]
-        : undefined;
     const result: SavePatternDryRun = {
       dryRun: true,
-      pattern:
-        stored === undefined
-          ? data
-          : { ...data, [PATTERN_DOCUMENT_FIELD]: stored },
+      pattern: judged.refusal === null ? asStored(data, judged.written) : data,
       refusals: judged.refusal?.messages ?? [],
     };
     return respondMutation(
@@ -258,6 +247,26 @@ export async function savePattern(
   return respondMutation("Pattern created.", writtenRow(written.item), {
     status: 201,
   });
+}
+
+/**
+ * The pattern a dry run would store: each value it would write, as the save
+ * stored it after its hooks where the save's answer shows it. Only the fields
+ * written are taken, so the row's own id and timestamps, which belong to a
+ * row that was rolled back, are not offered as the pattern's.
+ */
+function asStored(
+  data: Record<string, unknown>,
+  written: unknown
+): Record<string, unknown> {
+  if (typeof written !== "object" || written === null) return data;
+  const row = written as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      key in row ? row[key] : value,
+    ])
+  );
 }
 
 /**
