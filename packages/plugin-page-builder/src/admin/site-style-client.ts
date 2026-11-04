@@ -207,12 +207,23 @@ export function refusalWords(reason: unknown, fallback: string): string {
   return apiErrorMessage(reason, fallback);
 }
 
+/**
+ * What one save of the site's spacing model came to: stored and read back,
+ * stored but not read back (the editor still holds the earlier style), or
+ * refused, with the words to show for the last two.
+ */
+export type SpacingModeSaveResult =
+  | { readonly saved: true; readonly refreshed: true }
+  | { readonly saved: true; readonly refreshed: false; readonly issue: string }
+  | { readonly saved: false; readonly issue: string };
+
+/** What a stored choice whose read-back failed is told. */
+const SPACING_MODE_NOT_REFRESHED =
+  "The space between blocks was saved, but the editor could not read it back. Reload to see it on the canvas.";
+
 /** What saving the site's spacing model answers. */
 export interface SpacingModeSave {
-  /** Whether the model is now stored; the refusal's words when it is not. */
-  readonly save: (
-    mode: SpacingMode
-  ) => Promise<{ saved: true } | { saved: false; issue: string }>;
+  readonly save: (mode: SpacingMode) => Promise<SpacingModeSaveResult>;
 }
 
 /**
@@ -232,8 +243,6 @@ export function useSaveSpacingMode(): SpacingModeSave {
           path: SPACING_MODE_ROUTE_PATH,
           body: { mode },
         });
-        await refetch();
-        return { saved: true };
       } catch (reason) {
         return {
           saved: false,
@@ -243,6 +252,13 @@ export function useSaveSpacingMode(): SpacingModeSave {
           ),
         };
       }
+      // Stored; the canvas moves only once the style is read again. A failed
+      // read answers rather than rejects, so its verdict is what tells a
+      // refreshed editor from one still drawing the earlier model.
+      const read = await refetch().catch(() => ({ isError: true }));
+      return read.isError
+        ? { saved: true, refreshed: false, issue: SPACING_MODE_NOT_REFRESHED }
+        : { saved: true, refreshed: true };
     },
     [refetch]
   );

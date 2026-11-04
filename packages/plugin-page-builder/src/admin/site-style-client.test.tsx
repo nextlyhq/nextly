@@ -54,6 +54,8 @@ const writes: Record<string, unknown>[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
+/** Whether the read after a write answers that it failed. */
+let readFails = false;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
 
@@ -64,7 +66,7 @@ vi.mock("./site-style-read", () => ({
     ...readAnswer,
     refetch: async () => {
       refetches += 1;
-      return { isError: false };
+      return { isError: readFails };
     },
   }),
 }));
@@ -127,6 +129,7 @@ beforeEach(() => {
   writes.length = 0;
   routeWrites.length = 0;
   refetches = 0;
+  readFails = false;
   writeOptions = undefined;
 });
 
@@ -197,7 +200,7 @@ describe("saving the space between blocks", () => {
     await act(async () => {
       verdict = await result.current.save("classic");
     });
-    expect(verdict).toEqual({ saved: true });
+    expect(verdict).toEqual({ saved: true, refreshed: true });
     expect(routeWrites).toEqual([
       {
         plugin: "@nextlyhq/plugin-page-builder",
@@ -206,6 +209,17 @@ describe("saving the space between blocks", () => {
       },
     ]);
     expect(writes).toEqual([]);
+    expect(refetches).toBe(1);
+  });
+
+  it("says the choice is stored but not read back when the reread fails", async () => {
+    readFails = true;
+    const { result } = renderHook(() => useSaveSpacingMode());
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("classic");
+    });
+    expect(verdict).toMatchObject({ saved: true, refreshed: false });
     expect(refetches).toBe(1);
   });
 

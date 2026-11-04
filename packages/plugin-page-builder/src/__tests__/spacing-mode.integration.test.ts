@@ -30,6 +30,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
+import { group, text } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { Suspense, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -47,10 +48,12 @@ import {
   PAGE_BUILDER_PLUGIN_NAME,
   SPACING_MODE_ROUTE_PATH,
 } from "../library-contract";
+import { blocks } from "../fields/blocksHelper";
 import { pageBuilderLayouts } from "../page-layouts";
 import { pageBuilder } from "../plugin";
 import { siteOptions } from "../schema/tables";
 import { loadSiteStyle } from "../site-style-load";
+import { blocksSurvey } from "../site-style-route";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 import {
   settleSpacingModeAtStart,
@@ -80,6 +83,7 @@ const SLUGS = {
 interface Probe {
   db?: PluginDatabase;
   store?: SpacingModeStore;
+  survey?: SpacingModeAtStartDeps["survey"];
 }
 
 function probePlugin(holder: Probe): PluginDefinition {
@@ -91,6 +95,8 @@ function probePlugin(holder: Probe): PluginDefinition {
     init(ctx) {
       holder.db = ctx.db;
       holder.store = spacingModeStore(ctx.db, ctx.dialect);
+      // The plugin's own survey of where blocks live, over this site.
+      holder.survey = () => blocksSurvey(ctx);
     },
   });
 }
@@ -117,7 +123,9 @@ describe.each(getConfiguredTestDialects())(
     }
 
     function deps(t: TestNextly): SpacingModeAtStartDeps {
-      return { nextly: t.nextly, store: store(), slugs: SLUGS };
+      const survey = probe.survey;
+      if (survey === undefined) throw new Error("the probe did not boot");
+      return { nextly: t.nextly, store: store(), slugs: SLUGS, survey };
     }
 
     /**
@@ -130,6 +138,22 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         plugins: [pageBuilder(), probePlugin(probe)],
         seedPublic: true,
+        // A collection and a Single of the host's own holding blocks, as code
+        // or the Schema Builder declares them: block documents live there too.
+        collections: [
+          {
+            slug: "features",
+            fields: [text({ name: "title" }), blocks({ name: "body" })],
+          } as never,
+        ],
+        singles: [
+          {
+            slug: "frontpage",
+            fields: [
+              group({ name: "hero", fields: [blocks({ name: "body" })] }),
+            ],
+          } as never,
+        ],
       });
       // The boot seeds the default Layout and then runs the step, neither
       // awaited by the boot. Waiting for the seed's record first, then joining
@@ -222,6 +246,50 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(await settleSpacingModeAtStart(deps(t))).toBe("classic");
+    });
+
+    it("records classic on a site whose only block document is in a host collection", async () => {
+      const t = await boot();
+      // The control: the survey reaches the host's collection and Single.
+      const survey = await deps(t).survey();
+      expect(survey.collections).toContain("features");
+      expect(survey.singles.map(single => single.slug)).toContain("frontpage");
+
+      await t.nextly.create({
+        collection: "features",
+        data: {
+          title: "Launch",
+          body: { formatVersion: 1, kind: "page", nodes: [] },
+        },
+        overrideAccess: true,
+      } as never);
+      expect(await settleSpacingModeAtStart(deps(t))).toBe("classic");
+    });
+
+    it("records classic on a site whose only block document is a Single's, and gaps for an empty one", async () => {
+      const t = await boot();
+      const write = (nodes: unknown[]) =>
+        t.nextly.updateSingle({
+          slug: "frontpage",
+          data: {
+            hero: { body: { formatVersion: 1, kind: "page", nodes } },
+          },
+          overrideAccess: true,
+        } as never);
+      await write([]);
+      // An empty document is no content: the site is still fresh.
+      expect(await settleSpacingModeOnce(deps(t))).toBe("gaps");
+      await forgetTheModel();
+
+      await write([
+        {
+          id: "h",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Hi", level: "h2" },
+        },
+      ]);
+      expect(await settleSpacingModeOnce(deps(t))).toBe("classic");
     });
 
     it("records classic on a site with a Layout of its own beside the seed", async () => {

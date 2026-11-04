@@ -5,19 +5,36 @@
  * are drawn into.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const can = vi.hoisted(() => ({ update: true }));
+type SpacingAnswer =
+  | { saved: true; refreshed: true }
+  | { saved: true; refreshed: false; issue: string }
+  | { saved: false; issue: string };
+
 const spacing = vi.hoisted(() => ({
   saved: [] as string[],
-  answer: { saved: true } as { saved: boolean; issue?: string },
+  answer: { saved: true, refreshed: true } as SpacingAnswer,
+  /** Answers one save; by default at once with `answer`. */
+  reply: null as null | ((mode: string) => Promise<SpacingAnswer>),
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
@@ -32,7 +49,9 @@ vi.mock("../site-style-client", () => ({
   useSaveSpacingMode: () => ({
     save: (mode: string) => {
       spacing.saved.push(mode);
-      return Promise.resolve(spacing.answer);
+      return spacing.reply === null
+        ? Promise.resolve(spacing.answer)
+        : spacing.reply(mode);
     },
   }),
   useFontCatalogueClient: () => ({
@@ -171,19 +190,77 @@ describe("the space between blocks", () => {
     expect((gaps() as HTMLInputElement).checked).toBe(false);
   });
 
+  beforeEach(() => {
+    spacing.saved.length = 0;
+    spacing.answer = { saved: true, refreshed: true };
+    spacing.reply = null;
+  });
+
   it("saves a choice and shows it at once", async () => {
     can.update = true;
-    spacing.saved.length = 0;
-    spacing.answer = { saved: true };
     renderStudio();
     fireEvent.click(gaps());
+    expect((gaps() as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
+  });
+
+  it("lets the latest of two quick choices win, sent in the order they were made", async () => {
+    can.update = true;
+    const pending: ((answer: SpacingAnswer) => void)[] = [];
+    spacing.reply = () =>
+      new Promise<SpacingAnswer>(resolve => pending.push(resolve));
+    renderStudio();
+    fireEvent.click(gaps());
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
+    fireEvent.click(classic());
+    // The second waits for the first, so the server cannot store them out of
+    // order; the screen shows the latest choice meanwhile.
+    await act(() => new Promise(resolve => setTimeout(resolve, 20)));
     expect(spacing.saved).toEqual(["gaps"]);
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+    // The first answers, refused: it is superseded, so it neither rolls the
+    // choice back nor speaks.
+    pending[0]?.({ saved: false, issue: "An older refusal." });
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps", "classic"]));
+    expect(screen.queryByText("An older refusal.")).toBeNull();
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+    pending[1]?.({ saved: true, refreshed: true });
+    await waitFor(() =>
+      expect((classic() as HTMLInputElement).checked).toBe(true)
+    );
+  });
+
+  it("never sends a choice replaced before its turn", async () => {
+    can.update = true;
+    const pending: ((answer: SpacingAnswer) => void)[] = [];
+    spacing.reply = () =>
+      new Promise<SpacingAnswer>(resolve => pending.push(resolve));
+    renderStudio();
+    fireEvent.click(gaps());
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
+    fireEvent.click(classic());
+    fireEvent.click(gaps());
+    pending[0]?.({ saved: true, refreshed: true });
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps", "gaps"]));
+    pending[1]?.({ saved: true, refreshed: true });
+    expect((gaps() as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("keeps a stored choice shown and says so when the editor could not read it back", async () => {
+    can.update = true;
+    spacing.answer = {
+      saved: true,
+      refreshed: false,
+      issue: "Saved, but not read back.",
+    };
+    renderStudio();
+    fireEvent.click(gaps());
+    expect(await screen.findByText("Saved, but not read back.")).toBeTruthy();
     expect((gaps() as HTMLInputElement).checked).toBe(true);
   });
 
   it("puts the stored model back and says why when the save is refused", async () => {
     can.update = true;
-    spacing.saved.length = 0;
     spacing.answer = { saved: false, issue: "Not allowed here." };
     renderStudio();
     fireEvent.click(gaps());
@@ -193,7 +270,6 @@ describe("the space between blocks", () => {
 
   it("offers no other model to a role that may not change the site style", () => {
     can.update = false;
-    spacing.saved.length = 0;
     renderStudio();
     expect((gaps() as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(gaps());

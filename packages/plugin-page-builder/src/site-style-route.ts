@@ -189,6 +189,28 @@ export async function collectionsTheBuilderOpens(
 }
 
 /**
+ * Where the site's block documents may live: every collection and live Single
+ * holding a blocks field the builder opens, the Singles with the form paths of
+ * those fields. The survey this route admits editors by, so a reader asking
+ * where blocks live gets the same answer.
+ */
+export async function blocksSurvey(
+  ctx: PageCollectionsContext &
+    Pick<SiteStyleRouteContext, "config" | "services">
+): Promise<{
+  collections: string[];
+  singles: { slug: string; paths: readonly string[] }[];
+}> {
+  return {
+    collections: (await collectionsTheBuilderOpens(ctx)).map(type => type.slug),
+    singles: (await singlesTheBuilderOpens(ctx)).map(({ slug, paths }) => ({
+      slug,
+      paths,
+    })),
+  };
+}
+
+/**
  * Whether this caller may read the stored site style through the editor.
  *
  * Asked in order of how often it answers: Design's read, then the plugin's

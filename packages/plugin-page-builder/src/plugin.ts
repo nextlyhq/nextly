@@ -142,13 +142,14 @@ import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleExpiry } from "./site-style-expiry";
 import { referableClassIds } from "./site-style-record";
-import { siteStyleRoute } from "./site-style-route";
+import { blocksSurvey, siteStyleRoute } from "./site-style-route";
 import {
   loadSiteStyle,
   SITE_STYLE_SLUG,
   siteStyleSingle,
 } from "./site-style-storage";
 import {
+  configuredSpacingMode,
   settleSpacingModeAfterBoot,
   spacingModeJob,
   type SpacingModeAtStartDeps,
@@ -953,6 +954,7 @@ export const pageBuilder = (
   let spacingSetup: {
     store: SpacingModeStore;
     slugs: SpacingModeSlugs;
+    survey: SpacingModeAtStartDeps["survey"];
     siteStyle: string;
     warn: (message: string, meta?: Record<string, unknown>) => void;
   } | null = null;
@@ -969,11 +971,14 @@ export const pageBuilder = (
 
   /** The step's deps for one run, the Direct API resolved at call time. */
   const spacingModeDeps = async (): Promise<SpacingModeAtStartDeps> => {
-    const { store, slugs, siteStyle, warn } = requireSpacingSetup();
+    const { store, slugs, survey, siteStyle, warn } = requireSpacingSetup();
     const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const configured = configuredSpacingMode(opts.siteStyle);
     return {
       store,
       slugs,
+      survey,
+      ...(configured === undefined ? {} : { configured }),
       nextly: await getCachedNextly(),
       expire: () => siteStyleExpiry(warn)(siteStyle),
     };
@@ -1102,14 +1107,13 @@ export const pageBuilder = (
       spacingSetup = {
         store: spacingModeStore(ctx.db, ctx.dialect),
         slugs: {
-          pages: defaultLayoutSetup.pagesSlug,
-          components:
-            componentStoreOf(opts).collection ??
-            ctx.self.collections[COMPONENTS_SLUG] ??
-            COMPONENTS_SLUG,
           layouts: defaultLayoutSetup.slugs.layouts,
           settings: defaultLayoutSetup.slugs.settings,
         },
+        // Where block documents may live: the registry's survey of every
+        // collection and live Single holding a blocks field the builder opens,
+        // the same survey the editor's style route asks.
+        survey: () => blocksSurvey(ctx),
         // The RESOLVED Site Style slug, whose cached reads a recorded model
         // expires.
         siteStyle: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,

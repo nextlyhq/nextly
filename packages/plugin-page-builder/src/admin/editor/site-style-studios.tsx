@@ -308,15 +308,32 @@ function useSpacingModeChoice(
 ): Pick<TokensPanelProps, "spacingMode" | "onSpacingModeChange"> {
   const { save } = useSaveSpacingMode();
   const [chosen, setChosen] = useState<SpacingMode | null>(null);
+  // The latest choice, by number, and the saves in the order they were made.
+  // Saves run one after another, so the server stores them in that order and
+  // the last choice is the one left stored; a choice superseded before its
+  // turn is never sent, and the answer to a superseded one changes nothing.
+  const latest = useRef(0);
+  const queue = useRef<Promise<void>>(Promise.resolve());
   if (stored === undefined) return {};
   return {
     spacingMode: chosen ?? stored,
     onSpacingModeChange: mode => {
+      latest.current += 1;
+      const submission = latest.current;
       setChosen(mode);
       report(undefined);
-      void save(mode).then(result => {
-        setChosen(null);
-        if (!result.saved) report(result.issue);
+      queue.current = queue.current.then(async () => {
+        if (submission !== latest.current) return;
+        const result = await save(mode);
+        if (submission !== latest.current) return;
+        if (result.saved && result.refreshed) {
+          setChosen(null);
+          return;
+        }
+        // Stored but not read back: the choice stays shown, since the store
+        // holds it, and the editor says it could not refresh.
+        if (!result.saved) setChosen(null);
+        report(result.issue);
       });
     },
   };

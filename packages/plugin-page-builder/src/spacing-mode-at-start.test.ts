@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  type BlocksSurvey,
+  configuredSpacingMode,
   settleSpacingModeOnce,
   siteVerdict,
   spacingModeFor,
@@ -8,11 +10,20 @@ import {
 } from "./spacing-mode-at-start";
 
 const SLUGS = {
-  pages: "pages",
-  components: "components",
   layouts: "layouts",
   settings: "page-builder-settings",
 } as const;
+
+/**
+ * The registry's survey on an ordinary site: the plugin's own collections and
+ * one the Schema Builder made, and a Single with a blocks field. The Layouts
+ * collection is named too, as a survey that found a blocks field on it would.
+ */
+const SURVEY: BlocksSurvey = {
+  collections: ["pages", "components", "landing-pages", "layouts"],
+  singles: [{ slug: "home", paths: ["hero.body"] }],
+};
+const survey = () => Promise.resolve(SURVEY);
 
 interface FindArgs {
   collection: string;
@@ -23,7 +34,11 @@ interface FindArgs {
  * A Direct API double holding rows per collection and the recorded seed, and
  * keeping every `find` it was asked, so a case can say what was read.
  */
-function site(rows: Record<string, string[]>, seededLayout: string | null) {
+function site(
+  rows: Record<string, string[]>,
+  seededLayout: string | null,
+  singles: Record<string, { live?: unknown; draft?: unknown }> = {}
+) {
   const asked: FindArgs[] = [];
   const nextly = {
     find: (args: FindArgs) => {
@@ -36,7 +51,16 @@ function site(rows: Record<string, string[]>, seededLayout: string | null) {
         .map(id => ({ id }));
       return Promise.resolve({ items: items.slice(0, 1) });
     },
-    findSingle: () => Promise.resolve({ seededLayout, defaultLayout: null }),
+    findSingle: (args: { slug: string; draft?: boolean }) => {
+      asked.push({ collection: `single:${args.slug}` });
+      if (args.slug === SLUGS.settings) {
+        return Promise.resolve({ seededLayout, defaultLayout: null });
+      }
+      const stored = singles[args.slug];
+      return Promise.resolve(
+        (args.draft === true ? stored?.draft : stored?.live) ?? null
+      );
+    },
   } as unknown as SpacingModeAtStartDeps["nextly"];
   return { nextly, asked };
 }
@@ -48,32 +72,92 @@ describe("spacingModeFor", () => {
   });
 });
 
+describe("configuredSpacingMode", () => {
+  it("reads a model the host's configuration states, and nothing else", () => {
+    expect(configuredSpacingMode({ spacingMode: "classic" })).toBe("classic");
+    expect(configuredSpacingMode({ spacingMode: "gaps" })).toBe("gaps");
+    expect(configuredSpacingMode({ spacingMode: "wide" })).toBeUndefined();
+    expect(configuredSpacingMode({})).toBeUndefined();
+    expect(configuredSpacingMode(undefined)).toBeUndefined();
+  });
+});
+
 describe("siteVerdict", () => {
   it("leaves the recorded seed out, and a site holding only it is fresh", async () => {
     const { nextly, asked } = site({ layouts: ["seed"] }, "seed");
-    expect(await siteVerdict({ nextly, slugs: SLUGS })).toBe("fresh");
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe("fresh");
     expect(asked.at(-1)?.where).toEqual({ id: { not_equals: "seed" } });
   });
 
   it("calls a site existing on a page without reading Layouts", async () => {
     const { nextly, asked } = site({ pages: ["p"], layouts: ["seed"] }, null);
-    expect(await siteVerdict({ nextly, slugs: SLUGS })).toBe("existing");
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "existing"
+    );
     expect(asked.map(a => a.collection)).toEqual(["pages"]);
+  });
+
+  it("calls a site existing on a collection the Schema Builder made", async () => {
+    const { nextly } = site({ "landing-pages": ["lp"] }, null);
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "existing"
+    );
+  });
+
+  it("calls a site existing on a Single storing blocks, live or as a draft", async () => {
+    const blocks = { hero: { body: { nodes: [{ id: "n" }] } } };
+    // SQLite hands a JSON column back as text, the group's included.
+    const asText = {
+      hero: JSON.stringify({ body: { nodes: [{ id: "n" }] } }),
+    };
+    for (const stored of [
+      { live: blocks },
+      { draft: blocks },
+      { live: asText },
+    ]) {
+      const { nextly } = site({}, null, { home: stored });
+      expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+        "existing"
+      );
+    }
+  });
+
+  it("does not count a Single whose blocks field is empty or absent", async () => {
+    const { nextly } = site({}, null, {
+      home: { live: { hero: { body: { nodes: [] } } }, draft: { hero: {} } },
+    });
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe("fresh");
+  });
+
+  it("leaves the seed out even when the survey names the Layouts collection", async () => {
+    const { nextly, asked } = site({ layouts: ["seed"] }, "seed");
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe("fresh");
+    // One read of the Layouts, the one that leaves the seed out.
+    const layoutReads = asked.filter(a => a.collection === "layouts");
+    expect(layoutReads.map(read => read.where)).toEqual([
+      { id: { not_equals: "seed" } },
+    ]);
   });
 
   it("calls a site existing on a component", async () => {
     const { nextly } = site({ components: ["c"] }, null);
-    expect(await siteVerdict({ nextly, slugs: SLUGS })).toBe("existing");
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "existing"
+    );
   });
 
   it("is undecided when a Layout is the only content and no seed is recorded", async () => {
     const { nextly } = site({ layouts: ["maybe-a-seed"] }, null);
-    expect(await siteVerdict({ nextly, slugs: SLUGS })).toBe("undecided");
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "undecided"
+    );
   });
 
   it("calls a site existing on a Layout beside the recorded seed", async () => {
     const { nextly } = site({ layouts: ["seed", "mine"] }, "seed");
-    expect(await siteVerdict({ nextly, slugs: SLUGS })).toBe("existing");
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "existing"
+    );
   });
 });
 
@@ -84,6 +168,7 @@ describe("settleSpacingModeOnce", () => {
     const outcome = await settleSpacingModeOnce({
       nextly,
       slugs: SLUGS,
+      survey,
       store: {
         read: () => Promise.resolve("gaps"),
         adoptIfUnset: () => {
@@ -103,6 +188,7 @@ describe("settleSpacingModeOnce", () => {
     const outcome = await settleSpacingModeOnce({
       nextly,
       slugs: SLUGS,
+      survey,
       store: {
         read: () => Promise.resolve(null),
         adoptIfUnset: mode => {
@@ -121,6 +207,7 @@ describe("settleSpacingModeOnce", () => {
       settleSpacingModeOnce({
         nextly: site({ pages: ["p"] }, null).nextly,
         slugs: SLUGS,
+        survey,
         store: {
           read: () => Promise.resolve(recorded),
           adoptIfUnset: () => Promise.resolve(adopted),
@@ -137,5 +224,31 @@ describe("settleSpacingModeOnce", () => {
     // Already recorded: nothing changed, so nothing is expired.
     expect(await run(true, "gaps")).toBe("kept");
     expect(expiries).toEqual(["recorded"]);
+  });
+
+  it("records nothing when the host's configuration states a model, in either direction", async () => {
+    for (const [rows, configured] of [
+      [{}, "classic"],
+      [{ pages: ["p"] }, "gaps"],
+    ] as const) {
+      const { nextly, asked } = site(rows, null);
+      const writes: string[] = [];
+      const outcome = await settleSpacingModeOnce({
+        nextly,
+        slugs: SLUGS,
+        survey,
+        configured,
+        store: {
+          read: () => Promise.resolve(null),
+          adoptIfUnset: mode => {
+            writes.push(mode);
+            return Promise.resolve(true);
+          },
+        },
+      });
+      expect(outcome).toBe("configured");
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    }
   });
 });

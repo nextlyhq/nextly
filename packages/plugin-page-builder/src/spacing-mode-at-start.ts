@@ -10,36 +10,60 @@
  * added later does not change it, and an owner's choice is never replaced (see
  * `spacing-mode-store` for why the single insert guarantees both).
  *
+ * A site whose configuration states a model (`pageBuilder({ siteStyle: {
+ * spacingMode } })`) has chosen already: the step records nothing, and the
+ * configured model applies until an owner chooses one under Design.
+ *
  * ## What counts as an existing site
  *
- * Any page, component or Layout, drafts included, except the Layout the
- * default-Layout seed created: the boot seeds one on a fresh site, so counting
- * it would call every new site an existing one. The seed is known by the id
- * the settings Single records, never by name.
+ * Any block document, wherever it lives: a row of any collection that holds a
+ * blocks field the builder opens, drafts included, whether the collection is
+ * the plugin's (pages, components, patterns), the host's code or one built in
+ * the Schema Builder; a Single of that kind that stores a non-empty blocks
+ * document, live or as its working draft; or a Layout. Which collections and
+ * Singles hold blocks is read from the same registry survey the editor's
+ * style route asks, so the two cannot come to disagree about where blocks
+ * live. Each collection costs one query of one row.
+ *
+ * The Layout the default-Layout seed created does not count: the boot seeds
+ * one on a fresh site, so counting it would call every new site an existing
+ * one. The seed is known by the id the settings Single records, never by name.
  *
  * That record is written after the seed is created, so between the two another
  * instance's seed is a Layout nothing names yet. When a Layout is the only
  * content found and the settings record no seed, the step decides nothing and
  * writes nothing (`deferred`); its own sweep job runs it again on every jobs
- * pass, and decides once the default-Layout repair has recorded the seed. Pages and components are never seeded, so either one
- * decides at once.
+ * pass, and decides once the default-Layout repair has recorded the seed. Any
+ * other block document is never seeded, so it decides at once.
  *
  * @module spacing-mode-at-start
  */
-import type { SpacingMode } from "@nextlyhq/blocks-engine";
+import { isSpacingMode, type SpacingMode } from "@nextlyhq/blocks-engine";
 import { defineJob, type JobDefinition } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
 import { readLayoutSettings } from "./default-layout/store";
 import type { SpacingModeStore } from "./spacing-mode-store";
+import { readStoredJson } from "./stored-json";
 
-/** The RESOLVED slugs the step reads: a host may rename any of them. */
+/** The RESOLVED slugs the step reads: a host may rename either. */
 export interface SpacingModeSlugs {
-  readonly pages: string;
-  readonly components: string;
   readonly layouts: string;
   /** The default-Layout settings Single, which records the seed's id. */
   readonly settings: string;
+}
+
+/**
+ * Where the site's block documents may live, by the registry's survey: each
+ * collection holding a blocks field the builder opens, and each such Single
+ * with the form paths of its blocks fields (`hero.body`).
+ */
+export interface BlocksSurvey {
+  readonly collections: readonly string[];
+  readonly singles: readonly {
+    readonly slug: string;
+    readonly paths: readonly string[];
+  }[];
 }
 
 /** What the step needs. */
@@ -47,11 +71,30 @@ export interface SpacingModeAtStartDeps {
   readonly nextly: Pick<Nextly, "find" | "findSingle">;
   readonly store: Pick<SpacingModeStore, "read" | "adoptIfUnset">;
   readonly slugs: SpacingModeSlugs;
+  /** Where block documents may live, asked once per run that has to decide. */
+  readonly survey: () => Promise<BlocksSurvey>;
+  /**
+   * The model the host's configuration states, when it states one: the
+   * site's choice, so the step records nothing.
+   */
+  readonly configured?: SpacingMode;
   /**
    * Expire the cached pages that read the site style, once a model is
    * recorded: a page cached before the step ran was drawn under no model.
    */
   readonly expire?: () => Promise<void>;
+}
+
+/**
+ * The model the host's configuration states (`pageBuilder({ siteStyle: {
+ * spacingMode } })`), or `undefined` when it states none or a value that is
+ * not a model.
+ */
+export function configuredSpacingMode(
+  siteStyle: { readonly spacingMode?: unknown } | undefined
+): SpacingMode | undefined {
+  const stated = siteStyle?.spacingMode;
+  return isSpacingMode(stated) ? stated : undefined;
 }
 
 /** What the site is, for the one decision this step makes. */
@@ -61,9 +104,14 @@ export type SiteVerdict = "existing" | "fresh" | "undecided";
  * What one run did. `kept`: a model was already recorded, by an earlier run or
  * by the owner, or another instance recorded one while this run decided.
  * `classic` / `gaps`: this run recorded that model. `deferred`: nothing could
- * be decided yet, and nothing was written.
+ * be decided yet, and nothing was written. `configured`: the host's
+ * configuration states a model, so nothing was read or written.
  */
-export type SpacingModeOutcome = "kept" | "deferred" | SpacingMode;
+export type SpacingModeOutcome =
+  | "kept"
+  | "deferred"
+  | "configured"
+  | SpacingMode;
 
 /**
  * The model each decided verdict records: the one replaceable step that says
@@ -106,6 +154,9 @@ export function settleSpacingModeAtStart(
 export async function settleSpacingModeOnce(
   deps: SpacingModeAtStartDeps
 ): Promise<SpacingModeOutcome> {
+  // A configured model is the site's choice; recording an inferred one would
+  // replace it, since a stored model outranks the configured tier.
+  if (deps.configured !== undefined) return "configured";
   // Most runs end here: every boot after the first finds the row.
   if ((await deps.store.read()) !== null) return "kept";
   const verdict = await siteVerdict(deps);
@@ -137,16 +188,66 @@ async function holdsAny(
   return found.items.length > 0;
 }
 
+/** The value at a form path (`hero.body`) of a stored document. */
+function valueAt(doc: unknown, path: string): unknown {
+  let value: unknown = doc;
+  for (const key of path.split(".")) {
+    if (typeof value !== "object" || value === null) return undefined;
+    value = readStoredJson((value as Record<string, unknown>)[key]);
+  }
+  return readStoredJson(value);
+}
+
+/** Whether a stored blocks value is a document holding at least one block. */
+function holdsBlocks(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const { nodes } = value as { nodes?: unknown };
+  return Array.isArray(nodes) && nodes.length > 0;
+}
+
 /**
- * Whether the site already had content: pages and components first, since
- * neither is ever seeded, then Layouts other than the recorded seed.
+ * Whether a Single stores a non-empty blocks document at any of `paths`, in
+ * its live document or its working draft. Read without creating a missing
+ * document, so asking never writes one.
+ */
+async function singleHoldsBlocks(
+  nextly: SpacingModeAtStartDeps["nextly"],
+  slug: string,
+  paths: readonly string[]
+): Promise<boolean> {
+  for (const draft of [false, true]) {
+    const doc: unknown = await nextly.findSingle({
+      slug,
+      depth: 0,
+      status: "all",
+      ...(draft ? { draft: true } : {}),
+      overrideAccess: true,
+      createIfMissing: false,
+    });
+    if (paths.some(path => holdsBlocks(valueAt(doc, path)))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the site already had content: a block document in any collection
+ * or Single the survey names, then Layouts other than the recorded seed.
  */
 export async function siteVerdict(
-  deps: Pick<SpacingModeAtStartDeps, "nextly" | "slugs">
+  deps: Pick<SpacingModeAtStartDeps, "nextly" | "slugs" | "survey">
 ): Promise<SiteVerdict> {
   const { nextly, slugs } = deps;
-  if (await holdsAny(nextly, slugs.pages)) return "existing";
-  if (await holdsAny(nextly, slugs.components)) return "existing";
+  const survey = await deps.survey();
+  for (const collection of survey.collections) {
+    // Layouts are asked below, where the seed is left out.
+    if (collection === slugs.layouts) continue;
+    if (await holdsAny(nextly, collection)) return "existing";
+  }
+  for (const single of survey.singles) {
+    if (await singleHoldsBlocks(nextly, single.slug, single.paths)) {
+      return "existing";
+    }
+  }
   const { seededLayout } = await readLayoutSettings(nextly, {
     layouts: slugs.layouts,
     settings: slugs.settings,
