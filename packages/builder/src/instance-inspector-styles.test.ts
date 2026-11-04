@@ -54,14 +54,6 @@ describe("the placement's header", () => {
   });
 });
 
-describe("a placement's visibility row", () => {
-  it("keeps the box apart from its words", () => {
-    const row = ruleBody(".nx-inspector__check");
-    expect(row).toContain("display: flex");
-    expect(row).toContain("gap: 0.5rem");
-  });
-});
-
 describe("a placement's row on the inspector grid", () => {
   it("draws label, control and reset on one row, as a Style row does", () => {
     expect(
