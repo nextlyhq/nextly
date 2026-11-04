@@ -35,6 +35,6 @@ An update that carries the `_rev` it read is now judged against it (experimental
 - In `updateMany` and the in-transaction updates, each entry is judged on its own: an out-of-date one is reported and writes nothing, and the others are applied.
 - An update of several documents with one set of values (by ids or by query) that carries `_rev` is refused with 400.
 - A `_rev` that isn't a version a read returned, or that comes from a read of another language, is refused with 400.
-- An update may send `_overwrite: true` (experimental). Its handling is still to come, and nothing else stores it. Any value other than `true` or `false` is refused with 400.
+- An update may send `_overwrite: true` (experimental) to be applied without being judged: it saves over whatever was saved since its version, as an update with no `_rev` does. It is never stored. Any value other than `true` or `false` is refused with 400.
 
 If your code reads a document once and then saves it several times with `{ ...doc }`, take `_rev` from each save's result, or the second save is refused.
