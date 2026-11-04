@@ -757,7 +757,8 @@ export async function refuseIfLanguageMoved(
 export interface EveryLanguageWrite {
   table: string;
   id: string;
-  languagesTable: string;
+  /** Null where the document keeps no translation table to judge. */
+  languagesTable: string | null;
   /** The languages judged (`judgedLanguages`); undefined judges none. */
   judged: readonly string[] | undefined;
 }
@@ -784,7 +785,9 @@ export async function refuseIfAnyLanguageMoved(
   row: EveryLanguageWrite,
   holder: StaleWriteHolder
 ): Promise<PartState[] | undefined> {
-  if (check.kind === "unjudged" || !row.judged) return undefined;
+  if (check.kind === "unjudged" || !row.judged || row.languagesTable === null) {
+    return undefined;
+  }
   const read = await readDocumentRevision(tx, {
     dialect,
     table: row.table,

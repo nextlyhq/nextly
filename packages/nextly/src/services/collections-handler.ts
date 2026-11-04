@@ -52,6 +52,41 @@ import type { FieldGroupRegistryService } from "./field-groups/field-group-regis
 import { consoleLogger } from "./shared";
 import type { Logger } from "./shared";
 
+/** What publishing or unpublishing every language of an entry takes. */
+type EveryLanguageLifecycleHandlerParams = {
+  collectionName: string;
+  entryId: string;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  /** Authenticated role set, forwarded to role-based access rules. */
+  userRoles?: string[];
+  user?: UserContext;
+  /** When true, bypass all access control checks */
+  overrideAccess?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded.
+   * Absent means every populated target inherits the caller's trust. Only ever
+   * narrows, and never admits a target's drafts.
+   */
+  trusted?: TrustBound;
+  /**
+   * Set by the REST dispatcher to attest the route middleware already ran the
+   * RBAC/code-access gate, so the entry service skips only that redundant
+   * re-check. Never inferred from a userId.
+   */
+  routeAuthorized?: boolean;
+  /** API-key scope; gates the unconditional publish or unpublish check. */
+  authenticatedScope?: AuthenticatedScope;
+  /** Acting identity from the transport, forwarded to the recorded event. */
+  actor?: RequestActor;
+  /**
+   * The version the move was made from: `_rev` and `_overwrite`, judged as a
+   * save's are (see the entry service).
+   */
+  data?: Readonly<Record<string, unknown>>;
+};
+
 /**
  * CollectionsHandler - Unified facade for collection operations.
  *
@@ -1003,36 +1038,7 @@ export class CollectionsHandler {
    * i18n M7: publish every language of an entry at once (spec §10). Sets the main status and,
    * for localized+draft collections, every companion `_status` to published, atomically.
    */
-  async publishAllLocales(params: {
-    collectionName: string;
-    entryId: string;
-    userId?: string;
-    userName?: string;
-    userEmail?: string;
-    /** Authenticated role set, forwarded to role-based access rules. */
-    userRoles?: string[];
-    user?: UserContext;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /**
-     * Set by the REST dispatcher to attest the route middleware already ran the
-     * RBAC/code-access gate, so the entry service skips only that redundant
-     * re-check. Never inferred from a userId.
-     */
-    routeAuthorized?: boolean;
-    /** API-key scope; gates the unconditional publish check. */
-    authenticatedScope?: AuthenticatedScope;
-    /** Acting identity from the transport, forwarded to the recorded event. */
-    actor?: RequestActor;
-    /** `_rev` and `_overwrite`, judged as a save's are; see the entry service. */
-    data?: Readonly<Record<string, unknown>>;
-  }) {
+  async publishAllLocales(params: EveryLanguageLifecycleHandlerParams) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
 
@@ -1045,36 +1051,7 @@ export class CollectionsHandler {
    * `unpublishAllLocales` on the mutation service for why a takedown asks that
    * question when a publish does not.
    */
-  async unpublishAllLocales(params: {
-    collectionName: string;
-    entryId: string;
-    userId?: string;
-    userName?: string;
-    userEmail?: string;
-    /** Authenticated role set, forwarded to role-based access rules. */
-    userRoles?: string[];
-    user?: UserContext;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /**
-     * Set by the REST dispatcher to attest the route middleware already ran the
-     * RBAC/code-access gate, so the entry service skips only that redundant
-     * re-check. Never inferred from a userId.
-     */
-    routeAuthorized?: boolean;
-    /** API-key scope; gates the unconditional unpublish check. */
-    authenticatedScope?: AuthenticatedScope;
-    /** Acting identity from the transport, forwarded to the recorded event. */
-    actor?: RequestActor;
-    /** `_rev` and `_overwrite`, judged as a save's are; see the entry service. */
-    data?: Readonly<Record<string, unknown>>;
-  }) {
+  async unpublishAllLocales(params: EveryLanguageLifecycleHandlerParams) {
     return this.entryService.unpublishAllLocales(this.resolveUserParam(params));
   }
 
