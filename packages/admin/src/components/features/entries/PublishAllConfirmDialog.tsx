@@ -5,8 +5,8 @@
  * each configured language with what the publish does to it.
  *
  * The step exists because of what this action can do that its label does not
- * say: a language holding a saved, unpublished change goes live with the rest,
- * and publishing cannot be undone by pressing it again. So what happens to
+ * say: a language holding a saved, unpublished change goes live with the rest.
+ * So what happens to
  * each language is stated before the action, read from the server's preview of
  * the publish, which judges the request as the publish would. The dialog never
  * says a language's pending changes go live unless the server says they do,
@@ -71,14 +71,14 @@ function publishAllWarning(pendingCount: number | null): string {
   // Not knowing which languages hold a change is not knowing there are none:
   // the warning then covers any of them.
   if (pendingCount === null) {
-    return "Any language holding unpublished changes goes live too. This cannot be undone by publishing again.";
+    return "Any language holding unpublished changes goes live too.";
   }
   if (pendingCount > 0) {
     return `${pendingCount} of them ${
       pendingCount === 1 ? "has" : "have"
-    } unpublished changes that will go live too. This cannot be undone by publishing again.`;
+    } unpublished changes that will go live too.`;
   }
-  return "Every language goes live together. This cannot be undone by publishing again.";
+  return "Every language goes live together.";
 }
 
 /** Each language with its outcome, and what stops the publish, if anything. */
@@ -137,7 +137,6 @@ function PreviewBody({
           ))}
         </ul>
       ) : null}
-      <p>This cannot be undone by publishing again.</p>
     </div>
   );
 }
@@ -164,8 +163,11 @@ export function PublishAllConfirmDialog({
           <AlertDialogTitle>
             Publish all {languageCount} languages?
           </AlertDialogTitle>
+          {/* Left-aligned at every width: a list of languages reads down its
+              names, which the dialog's centred narrow-screen text would
+              scatter once a line wraps. */}
           <AlertDialogDescription asChild>
-            <div className="space-y-3 text-sm text-muted-foreground">
+            <div className="space-y-3 text-left text-sm text-muted-foreground">
               <PreviewBody
                 preview={preview}
                 pendingCount={pendingCount}

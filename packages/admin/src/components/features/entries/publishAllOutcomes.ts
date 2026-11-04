@@ -47,11 +47,13 @@ export function outcomeSentence(
       return language.fallback === null
         ? "Goes live with no content of its own."
         : `Goes live with no content of its own, showing ${labelOf(language.fallback)}.`;
+    // Where to act: a publish of that language alone is refused with the
+    // offer to take the live values, which brings its change up to date.
     case "out-of-date":
       return `Its changes are behind the published ${fieldList(
         language.fields,
         language.hiddenCount
-      )}. Take the published values first.`;
+      )}. Publish ${labelOf(language.locale)} on its own and choose "Take the live values", then publish all again.`;
   }
 }
 

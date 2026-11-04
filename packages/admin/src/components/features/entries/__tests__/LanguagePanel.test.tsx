@@ -753,7 +753,7 @@ describe("LanguagePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
     expect(
       await screen.findByText(
-        "Any language holding unpublished changes goes live too. This cannot be undone by publishing again."
+        "Any language holding unpublished changes goes live too."
       )
     ).toBeInTheDocument();
   });

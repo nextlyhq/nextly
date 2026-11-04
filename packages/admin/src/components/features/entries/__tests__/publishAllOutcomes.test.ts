@@ -59,7 +59,7 @@ describe("what publishing every language says about each language", () => {
         label
       )
     ).toBe(
-      "Its changes are behind the published tagline and 1 field you can't see. Take the published values first."
+      'Its changes are behind the published tagline and 1 field you can\'t see. Publish German on its own and choose "Take the live values", then publish all again.'
     );
   });
 
