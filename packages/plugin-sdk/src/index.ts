@@ -653,8 +653,8 @@ export type {
 /**
  * @experimental A document's stored field values read with no read hook, and
  *   a write of a field made only if the stored value is still the one read.
- *   Graduates per D55 once `@nextlyhq/plugin-page-builder`'s component delete
- *   rewrites site content through it in a release.
+ *   Graduates once `@nextlyhq/plugin-page-builder`'s component delete has
+ *   rewritten site content through it in a release.
  *
  * A plugin that rewrites content it did not author has two problems the
  *   ordinary Direct API cannot solve: a site's `afterRead` hook can hide or
