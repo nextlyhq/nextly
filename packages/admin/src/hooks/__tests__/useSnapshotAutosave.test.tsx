@@ -11,7 +11,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useSnapshotAutosave } from "../useSnapshotAutosave";
+import { recordingsSettled, useSnapshotAutosave } from "../useSnapshotAutosave";
 
 const DEBOUNCE = 2000;
 const STORED_AT = "2026-08-19T02:00:00.000Z";
@@ -518,5 +518,107 @@ describe("a refusal is not asked again", () => {
     act(() => void vi.advanceTimersByTime(DEBOUNCE));
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("a real save waits for the recordings already sent", () => {
+  /**
+   * A recorder whose recordings each stay open until released, in order.
+   * Every case releases what it opened: the set of recordings in flight is
+   * the tab's, so one left open would hold the next case's wait.
+   */
+  function heldRecorder() {
+    const open: Array<(answer: "stored" | "failed") => void> = [];
+    const save = vi.fn(
+      () =>
+        new Promise<{ updatedAt: string }>((resolve, reject) => {
+          open.push(answer =>
+            answer === "stored"
+              ? resolve({ updatedAt: STORED_AT })
+              : reject(new Error("network"))
+          );
+        })
+    );
+    const hook = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+    const record = () => {
+      act(() => hook.result.current.schedule());
+      act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    };
+    const release = async (answer: "stored" | "failed" = "stored") => {
+      await act(async () => open.shift()?.(answer));
+    };
+    return { save, record, release };
+  }
+
+  /** Whether the wait has finished, read after the queue has drained. */
+  function watch(wait: Promise<void>) {
+    let done = false;
+    void wait.then(() => {
+      done = true;
+    });
+    return async () => {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return done;
+    };
+  }
+
+  it("answers at once when nothing is on its way, which is the control", async () => {
+    const settled = watch(recordingsSettled());
+    expect(await settled()).toBe(true);
+  });
+
+  it("waits until the recording in flight has landed", async () => {
+    const recorder = heldRecorder();
+    recorder.record();
+    expect(recorder.save).toHaveBeenCalledTimes(1);
+
+    const settled = watch(recordingsSettled());
+    expect(await settled()).toBe(false);
+
+    await recorder.release();
+    expect(await settled()).toBe(true);
+  });
+
+  it("waits for the recording queued behind it as well", async () => {
+    // Asked for while the first was open, it is sent once the first lands,
+    // and it is just as able to arrive after the save.
+    const recorder = heldRecorder();
+    recorder.record();
+    recorder.record();
+    const settled = watch(recordingsSettled());
+
+    await recorder.release();
+    await waitFor(() => expect(recorder.save).toHaveBeenCalledTimes(2));
+    expect(await settled()).toBe(false);
+
+    await recorder.release();
+    expect(await settled()).toBe(true);
+  });
+
+  it("counts a recording that failed as landed", async () => {
+    const recorder = heldRecorder();
+    recorder.record();
+    const settled = watch(recordingsSettled());
+
+    await recorder.release("failed");
+    expect(await settled()).toBe(true);
+  });
+
+  it("stops waiting for a recording that never answers", async () => {
+    const recorder = heldRecorder();
+    recorder.record();
+    const settled = watch(recordingsSettled(1000));
+
+    act(() => void vi.advanceTimersByTime(999));
+    expect(await settled()).toBe(false);
+    act(() => void vi.advanceTimersByTime(1));
+    expect(await settled()).toBe(true);
+
+    await recorder.release();
   });
 });

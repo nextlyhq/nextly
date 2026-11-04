@@ -104,6 +104,53 @@ export interface SnapshotSaveResult {
 }
 
 /**
+ * The recordings on their way to the server, from every recorder in this tab:
+ * an editor's form and a field recording its own state alike.
+ */
+const recordingsInFlight = new Set<Promise<unknown>>();
+
+/** How long a save waits for recordings in flight: see `recordingsSettled`. */
+const RECORDINGS_WAIT_MS = 5000;
+
+/**
+ * Resolves once no recovery point is on its way to the server.
+ *
+ * A real save waits for this before it writes. The save deletes the author's
+ * recovery point, and a recording already sent could otherwise land after it:
+ * an older snapshot stored as if made from the saved document, which the
+ * editor would then offer as current work and a restore would revert the save
+ * with. Turning recording off for the save stops new recordings, not one
+ * already sent. Every recorder's, not one editor's, since a field recording
+ * its own state writes the same point. Checked again after each wait, because
+ * a recording asked for meanwhile follows the one that finished.
+ *
+ * Waits `atMostMs` at most: a recording that never answers must not hold the
+ * author's save, which matters more than the point it would leave behind.
+ */
+export async function recordingsSettled(
+  atMostMs = RECORDINGS_WAIT_MS
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const deadline = new Promise<void>(resolve => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, atMostMs);
+  });
+  try {
+    while (recordingsInFlight.size > 0 && !timedOut) {
+      await Promise.race([
+        Promise.allSettled([...recordingsInFlight]),
+        deadline,
+      ]);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Whether a recording must NOT be made.
  *
  * One question with one implementation, asked at flush and only there. Checking
@@ -303,8 +350,10 @@ export function useSnapshotAutosave({
     inFlightRef.current = true;
     if (mountedRef.current) setStatus("saving");
 
+    const saving = latest.save();
+    recordingsInFlight.add(saving);
     try {
-      const result = await latest.save();
+      const result = await saving;
       if (mountedRef.current) {
         setLastSavedAt(new Date(result.updatedAt));
         setStatus("saved");
@@ -326,6 +375,7 @@ export function useSnapshotAutosave({
       if (mountedRef.current) setStatus(outcome.status);
     } finally {
       inFlightRef.current = false;
+      recordingsInFlight.delete(saving);
       if (pendingRef.current) {
         pendingRef.current = false;
         void flush();

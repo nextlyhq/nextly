@@ -12,6 +12,8 @@
 import type { BaseSyntheticEvent } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import { recordingsSettled } from "@admin/hooks/useSnapshotAutosave";
+
 import { adoptStoredValues } from "./adopt-stored";
 import {
   submitFailed,
@@ -63,6 +65,9 @@ export async function submitDocument(args: {
   let outcome: SubmitOutcome = submitInvalid;
   await form.handleSubmit(
     async validated => {
+      // A recovery point already on its way lands first, so this save, which
+      // deletes it, comes after it: see `recordingsSettled`.
+      await recordingsSettled();
       // Validation awaits, and the document can change hands meanwhile:
       // asked with nothing awaited before the write.
       if (mayWrite && !mayWrite()) {

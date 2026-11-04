@@ -1286,15 +1286,6 @@ export class VersionsRepository {
   }
 
   /**
-   * One author's current recovery point for a document, or null when they have
-   * none.
-   *
-   * Newest first rather than arbitrary: on MySQL and SQLite the insert race
-   * above can leave two rows for one author, and the later snapshot is the one
-   * that describes their work. Ordering makes that harmless instead of a
-   * coin toss.
-   */
-  /**
    * The base a rewrite of an autosave row carries: none, keeping the one it
    * began with, unless the point moves to another language, where it is a new
    * point and takes that language's base.
@@ -1378,6 +1369,15 @@ export class VersionsRepository {
       : "by-another";
   }
 
+  /**
+   * One author's current recovery point for a document, or null when they have
+   * none.
+   *
+   * Newest first rather than arbitrary: on MySQL and SQLite the insert race
+   * above can leave two rows for one author, and the later snapshot is the one
+   * that describes their work. Ordering makes that harmless instead of a
+   * coin toss.
+   */
   async findAutosave(
     ref: VersionRef,
     createdBy: string | null
