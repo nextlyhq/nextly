@@ -29,34 +29,21 @@ import {
  *
  * `before.main` is the main row as read under the lock, before the write.
  * `before.language`, where the save writes a language's row, is that row as
- * read before the write, its counter 0 and its changer nobody where there was
- * no row yet.
+ * read before the write (its `part` the language), its counter 0 and its
+ * changer nobody where there was no row yet.
  *
  * @experimental
  */
 export function overwriteRecordOf(
   check: Extract<VersionCheck, { kind: "overwrite" }>,
-  before: { main?: PartState; language?: { locale: string; state: PartState } }
+  before: { main?: PartState; language?: PartState }
 ): OverwriteRecord {
   const given = givenOf(check);
   if (!given) return { given: "none", replaced: null };
-  const parts = [
-    ...(before.main ? [before.main] : []),
-    ...(before.language ? [before.language.state] : []),
-  ];
-  const moved = staleParts(given, {
-    main: before.main,
-    // Read before the write, so nothing of this save's is in it yet.
-    ...(before.language
-      ? {
-          languageAfterWrite: {
-            locale: before.language.locale,
-            state: before.language.state,
-            bumped: false,
-          },
-        }
-      : {}),
-  });
+  // Each read before the write, so nothing of this save's is in them yet.
+  const languages = before.language ? [before.language] : [];
+  const parts = [...(before.main ? [before.main] : []), ...languages];
+  const moved = staleParts(given, { main: before.main, languages });
   if (moved.length === 0) return { given: "current", replaced: null };
   const changer = lastChangerOf(parts, given);
   return {

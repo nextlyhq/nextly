@@ -179,9 +179,19 @@ async function refusalOf(call: () => Promise<unknown>): Promise<string> {
       success?: boolean;
       code?: string;
       status?: number;
-      json?: { error?: { code?: string } };
+      json?: {
+        error?: { code?: string };
+        items?: unknown[];
+        errors?: { code?: string }[];
+      };
     };
     if (answer?.json?.error?.code) return answer.json.error.code;
+    // A bulk route answers each document apart: refused only when no
+    // document was applied, so one that slipped through still reads as such.
+    const perItem = answer?.json?.errors;
+    if (perItem?.length && !answer.json?.items?.length) {
+      return perItem[0]?.code ?? "FAILED";
+    }
     if (answer?.success === false && answer.code) return answer.code;
   } catch (error) {
     return String((error as { code?: unknown }).code);
@@ -656,9 +666,9 @@ describe.each(getConfiguredTestDialects())(
 
       // On SQLite a write to the pool waits behind the open transaction, so
       // an event written anywhere but the caller's transaction never returns.
-      await t.adapter.transaction(async tx => {
+      await services!.withTransaction(async tx => {
         await services!.updateEntryInTransaction(
-          tx as never,
+          tx,
           NOTES,
           id,
           { title: "in tx", _rev: "1", _overwrite: true },

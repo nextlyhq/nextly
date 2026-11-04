@@ -11436,7 +11436,7 @@ export class CollectionMutationService extends BaseService {
           );
           // The save's language row as it stood before this save wrote it,
           // for an overwrite's history; set where the row is written below.
-          let languageBefore: { locale: string; state: PartState } | undefined;
+          let languageBefore: PartState | undefined;
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -12237,7 +12237,7 @@ export class CollectionMutationService extends BaseService {
               staleWrite
             );
             if (before && judgedLocale === localizedUpdate.writeLocale) {
-              languageBefore = { locale: judgedLocale, state: before };
+              languageBefore = before;
             }
             await upsertCompanionRow(
               companionWriteVia(tx, this.dialect),
@@ -17263,13 +17263,7 @@ export class CollectionMutationService extends BaseService {
           locale: localizedUpdate?.writeLocale ?? null,
           ...overwriteRecordOf(versionCheck, {
             main: mainJudged.before?.main,
-            language:
-              localizedUpdate && languageJudged.before
-                ? {
-                    locale: localizedUpdate.writeLocale,
-                    state: languageJudged.before,
-                  }
-                : undefined,
+            language: languageJudged.before,
           }),
         });
       }
