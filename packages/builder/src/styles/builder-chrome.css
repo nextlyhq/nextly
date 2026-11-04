@@ -7745,6 +7745,48 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * Text decoration: its line's icons, then Style… for the line's style,
+ * thickness and colour, in a popover laid out as label and control rows.
+ */
+.nx-style-inspector__decoration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__decoration-style {
+  block-size: var(--nx-builder-control-height);
+  padding-inline: 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  cursor: pointer;
+}
+
+.nx-style-inspector__decoration-style:disabled {
+  color: var(--nx-builder-text-muted);
+  cursor: default;
+}
+
+.nx-style-inspector__decoration-parts {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 14rem;
+}
+
+.nx-style-inspector__decoration-part {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
  * An aspect ratio: the menu, and under it a custom ratio's width and height
  * on one line, split by a colon as the ratio is written.
  */

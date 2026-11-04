@@ -287,3 +287,18 @@ describe("an icon choice's help line", () => {
     );
   });
 });
+
+describe("text decoration's icons and style", () => {
+  it("puts Style… beside the icons, and the popover's parts in rows", () => {
+    const row = ruleBody(CHROME, ".nx-style-inspector__decoration");
+    expect(row).toContain("display: flex");
+    expect(row).toContain("flex-wrap: wrap");
+    // A control's height and a quiet edge, as the inspector's other buttons.
+    const style = ruleBody(CHROME, ".nx-style-inspector__decoration-style");
+    expect(style).toContain("block-size: var(--nx-builder-control-height)");
+    expect(style).toContain("border: 1px solid var(--nx-builder-border)");
+    expect(ruleBody(CHROME, ".nx-style-inspector__decoration-part")).toContain(
+      "grid-template-columns: 5.5rem minmax(0, 1fr)"
+    );
+  });
+});
