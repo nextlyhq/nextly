@@ -54,6 +54,25 @@ describe("buildLocalizationUpSql", () => {
   });
 });
 
+describe("the per-document columns in a translation table's CREATE", () => {
+  it.each(["collection", "single", undefined] as const)(
+    "declares them for a %s's",
+    kind => {
+      const sql = buildCompanionCreateOnlySql({ ...spec("sqlite"), kind });
+      expect(sql).toContain(`"_revision" integer DEFAULT 1 NOT NULL`);
+      expect(sql).toContain(`"_changed_at"`);
+    }
+  );
+
+  it("leaves them out of a field group's, which is no document", () => {
+    const sql = buildCompanionCreateOnlySql({
+      ...spec("sqlite"),
+      kind: "fieldGroup",
+    });
+    expect(sql).not.toMatch(/_revision|_changed_/);
+  });
+});
+
 describe("buildCompanionCreateOnlySql", () => {
   it("emits only the CREATE (no seed, no drop) for a fresh collection", () => {
     const sql = buildCompanionCreateOnlySql(spec("sqlite"), {

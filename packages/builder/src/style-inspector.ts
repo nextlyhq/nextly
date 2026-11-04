@@ -372,13 +372,15 @@ function tiersFrom(
 }
 
 /**
- * Labels shorter than the property's name, where the name is cut short in
- * the Style tab's 7rem label column: "Justify content" read "Justify cont…".
- * Webflow's and Figma's words for the same two controls.
+ * Labels other than the property's name: shorter, where the name is cut short
+ * in the Style tab's 7rem label column ("Justify content" read "Justify
+ * cont…"), Webflow's and Figma's words for the same two controls; or plainer,
+ * where the name says how CSS does it rather than what it is.
  */
 const SHORT_LABELS: Readonly<Record<string, string>> = {
   justifyContent: "Justify",
   alignItems: "Align",
+  textTransform: "Letter case",
 };
 
 /** One property's controls and the value they are showing. */

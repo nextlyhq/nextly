@@ -29,6 +29,10 @@ import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
+import {
+  autosaveScopeFor,
+  documentRecordingKey,
+} from "@admin/hooks/useDocumentAutosave";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
@@ -755,6 +759,10 @@ export function useEntryForm({
           mayWrite: () => !writesHeld(),
           // And the editor can move to another entry or language.
           stillShown: () => scopeNow.current === startedIn,
+          // This entry's recovery points, addressed as its recorder does.
+          recordingsFor: documentRecordingKey(
+            autosaveScopeFor("collection", collection.name, entry?.id)
+          ),
           // Why: intent → payload mapping is the core PR-3 bug fix —
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
@@ -813,6 +821,7 @@ export function useEntryForm({
       mode,
 
       entry?.id,
+      collection.name,
       createMutation,
       updateMutation,
       isSubmitting,

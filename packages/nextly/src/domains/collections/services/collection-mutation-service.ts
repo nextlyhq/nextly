@@ -255,12 +255,26 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
   sharedComparison,
   type SharedComparison,
 } from "../../singles/services/live-shared-single";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  bumpDocumentRevision,
+  changerColumns,
+  documentVersionOn,
+  mainRowBump,
+  setDocumentVersion,
+  translationChangeColumns,
+  translationRevisionBumpColumns,
+  translationTableOf,
+  updateTimeOf,
+  withDocumentVersion,
+  withoutDocumentVersionKeys,
+} from "../../versions/document-revision";
 import {
   draftComponentValues,
   mergeComponentPatches,
@@ -1517,6 +1531,8 @@ interface CreateEntryWriteOptions {
 interface WorkingDraftWriteContext {
   collection: unknown;
   collectionHasStatus: boolean;
+  /** The entry's own table, whose version counter a held edit moves. */
+  tableName: string;
   componentFieldData: Record<string, unknown>;
   /**
    * The locale this document's working draft is keyed under, from
@@ -3043,6 +3059,25 @@ export class CollectionMutationService extends BaseService {
    * for new content is invisible. Both create paths call this, so they cannot
    * come to disagree about what a new translation carries.
    */
+  /**
+   * A translated collection's translation table when it is there, read on the
+   * caller's transaction; null for a collection that keeps no translations or
+   * whose table is not there yet. Asked of the catalog rather than taken from
+   * the write, which writes no translation row for a held edit, so the
+   * version a write answers with names the languages a read's will.
+   */
+  private async translationTableOnTx(
+    tx: TransactionContext,
+    collection: unknown,
+    tableName: string
+  ): Promise<string | null> {
+    if ((collection as { localized?: boolean }).localized !== true) return null;
+    if (!this.localization) return null;
+    const table = `${tableName}_locales`;
+    const live = await liveColumnNames(tx.getDrizzle(), this.dialect, [table]);
+    return live.has(table.toLowerCase()) ? table : null;
+  }
+
   private async insertCompanionRow(
     tx: TransactionContext,
     localizedWrite: {
@@ -3050,7 +3085,8 @@ export class CollectionMutationService extends BaseService {
       writeLocale: string;
       companionData: Record<string, unknown>;
     },
-    parentId: unknown
+    parentId: unknown,
+    savedBy: RequestActor
   ): Promise<void> {
     await tx.insert(
       localizedWrite.companionTableName,
@@ -3065,6 +3101,19 @@ export class CollectionMutationService extends BaseService {
         ),
       },
       {}
+    );
+    // The row's counter starts at its default, 1. Its changer is set by name:
+    // a translation table's runtime model does not declare the column, so the
+    // insert above, built from that model, cannot carry it.
+    await tx.update(
+      localizedWrite.companionTableName,
+      translationChangeColumns(savedBy, this.dialect),
+      {
+        and: [
+          { column: "_parent", op: "=", value: String(parentId) },
+          { column: "_locale", op: "=", value: localizedWrite.writeLocale },
+        ],
+      }
     );
   }
 
@@ -5417,6 +5466,15 @@ export class CollectionMutationService extends BaseService {
      * authorization stays the caller's concern.
      */
     updateUnderLock?: { authenticatedScope?: AuthenticatedScope };
+    /**
+     * Told the version the discard left the document at, read on its
+     * transaction and spelled for `locale`: for a caller that answers with
+     * the document, so the version it hands back is the one this discard
+     * produced. Used only once the discard has resolved, so a discard that
+     * rolls back hands out none. Not called when there was no draft to
+     * discard.
+     */
+    onVersion?: (version: string | undefined) => void;
   }): Promise<number> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -5469,6 +5527,30 @@ export class CollectionMutationService extends BaseService {
         await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the document's history only when there was a draft to discard.
         if (removed > 0) {
+          // A reader of the pending change now sees the live entry, so the
+          // version they hold no longer describes what they would read.
+          await bumpDocumentRevision(
+            tx,
+            tableName,
+            { id: params.entryId },
+            actorForWrite(params.actor, params.user)
+          );
+          if (params.onVersion) {
+            params.onVersion(
+              await documentVersionOn(tx, {
+                dialect: this.dialect,
+                table: tableName,
+                id: params.entryId,
+                languagesTable: await this.translationTableOnTx(
+                  tx,
+                  collection,
+                  tableName
+                ),
+                localization: this.localization,
+                locale: params.locale ?? undefined,
+              })
+            );
+          }
           await this.recordHistoryEvent(
             tx,
             params.collectionName,
@@ -5714,6 +5796,15 @@ export class CollectionMutationService extends BaseService {
         ),
     });
     // A save of the pending change, in its history like any other.
+    // What a reader of the pending change sees moved, so its version moves.
+    if (took.taken.length > 0) {
+      await bumpDocumentRevision(
+        tx,
+        tableName,
+        { id: params.entryId },
+        actorForWrite(params.actor, params.user)
+      );
+    }
     await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
       actor: actorForWrite(params.actor, params.user),
       personName: params.user?.name ?? null,
@@ -6743,6 +6834,8 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // A version sent with the body is the server's to decide; see updateEntry.
+    body = withoutDocumentVersionKeys(body);
     // Set once the outbox event is appended (below), so the catch can report a
     // committed-but-hook-failed write as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -7139,6 +7232,13 @@ export class CollectionMutationService extends BaseService {
       for (const [key, value] of Object.entries(rawEntryData)) {
         entryData[toSnakeCase(key)] = value;
       }
+      // Who created it is the document's first changer, at the moment it was
+      // created; its counter starts at the column default, 1.
+      Object.assign(
+        entryData,
+        changerColumns(actorForWrite(params.actor, params.user)),
+        { _changed_at: now }
+      );
 
       // A create has no prior status, so landing on published IS a first publication. Read from
       // the post-hook `finalData`: a hook that derives `status: "published"`, or a status the
@@ -7210,6 +7310,7 @@ export class CollectionMutationService extends BaseService {
       // collection opted out of recording), so the post-commit fast drain is
       // scheduled only for a write that recorded something.
       let recorded = false;
+      let createdVersion: string | undefined;
       // Verify every localized field group in this payload can actually be written
       // BEFORE the transaction opens. Inside it the probes would borrow a second
       // connection and deadlock a single-connection pool, and a NextlyError raised in
@@ -7226,9 +7327,11 @@ export class CollectionMutationService extends BaseService {
         });
 
         // Convert snake_case keys from DB response back to camelCase field names
-        // so hooks and the API response use the original field names.
+        // so hooks and the API response use the original field names. The
+        // per-document columns are no field and are never handed on: the
+        // version is published as `_rev` below.
         for (const [key, value] of Object.entries(
-          rawEntry as Record<string, unknown>
+          withoutDocumentVersionKeys(rawEntry as Record<string, unknown>)
         )) {
           entry[toCamelCase(key)] = value;
         }
@@ -7236,7 +7339,12 @@ export class CollectionMutationService extends BaseService {
         // i18n M5: write the translatable values to the companion `_locales` row for the
         // write's locale (same transaction → rolls back with the main insert).
         if (localizedWrite) {
-          await this.insertCompanionRow(tx, localizedWrite, entry.id);
+          await this.insertCompanionRow(
+            tx,
+            localizedWrite,
+            entry.id,
+            actorForWrite(params.actor, params.user)
+          );
           // The localized values were split out of the main insert, so the
           // returned main row lacks them. Merge them back (camelCase keys) so
           // afterCreate hooks, events, and the response include them. `_status`
@@ -7248,6 +7356,16 @@ export class CollectionMutationService extends BaseService {
             entry[toCamelCase(column)] = value;
           }
         }
+
+        // The version this create produced, read on its own transaction.
+        createdVersion = await documentVersionOn(tx, {
+          dialect: this.dialect,
+          table: tableName,
+          id: String(entry.id),
+          languagesTable: translationTableOf(localizedWrite),
+          localization: this.localization,
+          locale: params.locale,
+        });
 
         // Save component field data to separate comp_{slug} tables
         if (
@@ -7698,6 +7816,8 @@ export class CollectionMutationService extends BaseService {
         tableName
       );
 
+      setDocumentVersion(responseEntry, createdVersion);
+
       return {
         success: true,
         statusCode: 201,
@@ -7809,6 +7929,7 @@ export class CollectionMutationService extends BaseService {
       companionTableName: string;
       entryId: string;
       status: string;
+      savedBy: RequestActor;
     }
   ): Promise<Map<string, string | null>> {
     const companion = await this.fileManager.loadCompanionSchema(
@@ -7829,6 +7950,7 @@ export class CollectionMutationService extends BaseService {
       parentId: args.entryId,
       status: args.status,
       locale: EVERY_LOCALE,
+      savedBy: args.savedBy,
     });
 
     const moved = new Map<string, string | null>();
@@ -7941,6 +8063,8 @@ export class CollectionMutationService extends BaseService {
       status: string;
       /** {@link EVERY_LOCALE}, or one locale code. */
       locale: string;
+      /** Who made the save: each translation row moved is a save of it. */
+      savedBy: RequestActor;
     }
   ): Promise<void> {
     const conditions: WhereCondition[] = [
@@ -7955,7 +8079,10 @@ export class CollectionMutationService extends BaseService {
     }
     await tx.update(
       args.companionTableName,
-      { [COMPANION_STATUS_COLUMN]: args.status },
+      {
+        [COMPANION_STATUS_COLUMN]: args.status,
+        ...translationRevisionBumpColumns(args.savedBy, this.dialect),
+      },
       { and: conditions }
     );
   }
@@ -8545,6 +8672,7 @@ export class CollectionMutationService extends BaseService {
         hasMainStatus,
         companion,
         companionPublishable,
+        companionReady,
         lifecycleChecks,
         fields,
         publishes,
@@ -8583,6 +8711,9 @@ export class CollectionMutationService extends BaseService {
     // DatabaseError as the transaction rolls back, so `instanceof` no longer
     // identifies it.
     let publishDocDenied: CollectionServiceResult | undefined;
+    // The version every language holds after this write, read in its
+    // transaction.
+    let allLocalesVersion: string | undefined;
     // Set when judging the languages going live refuses the publish inside the
     // transaction, read by the catch for the same reason as the one above.
     let publishRefused: unknown;
@@ -8616,6 +8747,7 @@ export class CollectionMutationService extends BaseService {
         hasMainStatus,
         companion,
         companionPublishable,
+        companionReady,
         lifecycleChecks,
         fields,
         publishes,
@@ -9041,6 +9173,7 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                   columns: promoted.columns,
                   translation: promoted.translation,
+                  savedBy: actorForWrite(params.actor, params.user),
                 });
                 await this.writeRelations(tx, {
                   collectionName: params.collectionName,
@@ -9102,14 +9235,35 @@ export class CollectionMutationService extends BaseService {
               this.whereEq("id", params.entryId)
             );
           }
+          // A move of every language is a save of the document, whether or
+          // not its main row keeps a status of its own: changed at the moment
+          // the status move above wrote to `updated_at`.
+          await bumpDocumentRevision(
+            tx,
+            tableName,
+            { id: params.entryId },
+            actorForWrite(params.actor, params.user),
+            publishNow
+          );
           if (companion && companionPublishable) {
             await this.writeCompanionStatus(tx, {
               companionTableName: companion.companionTableName,
               parentId: params.entryId,
               status: direction.nextStatus,
               locale: EVERY_LOCALE,
+              savedBy: actorForWrite(params.actor, params.user),
             });
           }
+          // Every language's version, after the moves above: what a caller
+          // of a publish or takedown of every language holds next.
+          allLocalesVersion = await documentVersionOn(tx, {
+            dialect: this.dialect,
+            table: tableName,
+            id: params.entryId,
+            languagesTable: translationTableOf(companion, companionReady),
+            localization: this.localization,
+            locale: EVERY_LOCALE,
+          });
 
           if (needsFreshParent) {
             // The committed post-publish parent, read back on the lock this
@@ -9777,13 +9931,16 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: direction.successMessage,
-        data: {
-          id: params.entryId,
-          status: direction.nextStatus,
-          // What the publish did to each configured language, as its preview
-          // says it would.
-          ...(publishes ? { languages: publishLanguages } : {}),
-        },
+        data: withDocumentVersion(
+          {
+            id: params.entryId,
+            status: direction.nextStatus,
+            // What the publish did to each configured language, as its preview
+            // says it would.
+            ...(publishes ? { languages: publishLanguages } : {}),
+          },
+          allLocalesVersion
+        ),
         eventRecorded,
         revalidationIntent,
       };
@@ -10869,6 +11026,11 @@ export class CollectionMutationService extends BaseService {
         writeLocale: string;
         companionData: Record<string, unknown>;
       } | null;
+      /**
+       * Who the write is made as: recorded on the translation row, whose
+       * counter the upsert moves with it.
+       */
+      savedBy: RequestActor;
     }
   ): Promise<void> {
     await tx.update(
@@ -10885,7 +11047,9 @@ export class CollectionMutationService extends BaseService {
         args.translation.companionTableName,
         args.entryId,
         args.translation.writeLocale,
-        args.translation.companionData
+        args.translation.companionData,
+        undefined,
+        { savedBy: args.savedBy }
       );
     }
   }
@@ -12007,6 +12171,15 @@ export class CollectionMutationService extends BaseService {
       sourceVersionNo: params.sourceVersionNo ?? null,
       maxPerDoc: versionsConfig?.maxPerDoc,
     });
+    // A held edit is a change to the document another editor must not
+    // overwrite unseen, though the live row's content is untouched: only its
+    // counter and last changer move, and `updated_at` stays the live one's.
+    await bumpDocumentRevision(
+      tx,
+      ctx.tableName,
+      { id: params.entryId },
+      actorForWrite(params.actor, params.user)
+    );
     // Both update paths hold a draft through here, so the save's history
     // event is recorded here once.
     await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
@@ -12095,7 +12268,9 @@ export class CollectionMutationService extends BaseService {
     // Read once, as plain data: a caller's object may compute a key on each
     // read, and the gate a write asks and the write itself must read the same
     // body.
-    body = { ...body };
+    // The version a client sends back with what it read is the server's to
+    // decide, so it is dropped before any hook or gate reads the body.
+    body = withoutDocumentVersionKeys({ ...body });
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
     const params = sweepAllLocales
       ? { ...rawParams, locale: undefined }
@@ -12161,6 +12336,9 @@ export class CollectionMutationService extends BaseService {
     // assembled previous document is in scope) and read out here so the intent,
     // computed post-commit, can bust the stale slug tag after a rename.
     let revalidationIntent: RevalidationIntent | undefined;
+    // The version this save produced, read inside its own transaction: the
+    // re-read after the commit below can already see a later save's.
+    let writtenVersion: string | undefined;
     let previousSlug: string | undefined;
     // Set when the in-transaction transition check refuses the write. Declared
     // out here (not in `try`) so the catch can read it: the adapter wraps a
@@ -13622,6 +13800,19 @@ export class CollectionMutationService extends BaseService {
           for (const [key, value] of Object.entries(updatePayload)) {
             columns[toSnakeCase(key)] = value;
           }
+          // The document's own counter moves when this save changes anything
+          // the main row's version covers: a shared column, the lifecycle, a
+          // component or a relation. A save of translated fields alone moves
+          // only that language's row, so a reader of another language keeps
+          // the version it holds.
+          Object.assign(
+            columns,
+            mainRowBump(
+              { updatePayload, componentFieldData, manyToManyData },
+              actorForWrite(params.actor, params.user),
+              updateTimeOf(updatePayload.updatedAt)
+            )
+          );
 
           // Capture the committed per-locale `_status` BEFORE the upsert so the
           // post-commit event can report the real prior value. Only when the
@@ -13673,6 +13864,7 @@ export class CollectionMutationService extends BaseService {
               tableName,
               entryId: params.entryId,
               columns,
+              savedBy: actorForWrite(params.actor, params.user),
               translation:
                 localizedUpdate &&
                 upsertsTranslation({
@@ -13717,6 +13909,7 @@ export class CollectionMutationService extends BaseService {
               companionTableName: localizedUpdate.companionTableName,
               entryId: params.entryId,
               status: localizedUpdate.companionData._status,
+              savedBy: actorForWrite(params.actor, params.user),
             });
           }
 
@@ -14018,6 +14211,7 @@ export class CollectionMutationService extends BaseService {
                 const draftWrite = await this.storeWorkingDraftInTx(tx, {
                   collection,
                   collectionHasStatus,
+                  tableName,
                   componentFieldData,
                   // The locale this write is for: the companion row's write
                   // locale when the patch touched localized columns, and the
@@ -14413,6 +14607,19 @@ export class CollectionMutationService extends BaseService {
             },
             params.user?.id ?? null
           );
+
+          writtenVersion = await documentVersionOn(tx, {
+            dialect: this.dialect,
+            table: tableName,
+            id: params.entryId,
+            // The split found the translation table there to write to;
+            // without it the translated values are on the entry's own row.
+            languagesTable: translationTableOf(localizedUpdate),
+            localization: this.localization,
+            // As asked: a wildcard write moved every language, and answers
+            // for them all.
+            locale: rawParams.locale,
+          });
         })
       );
       // The transaction committed (skipped if the retry ultimately threw), so
@@ -14733,6 +14940,7 @@ export class CollectionMutationService extends BaseService {
       if (workingDraftDocument) {
         responseEntry._isWorkingDraft = true;
       }
+      setDocumentVersion(responseEntry, writtenVersion);
 
       return {
         success: true,
@@ -16740,6 +16948,8 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
+    // A version sent with the body is the server's to decide; see updateEntry.
+    body = withoutDocumentVersionKeys(body);
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
     // post-write return, so a committed item whose after-hook then throws still
@@ -17046,6 +17256,13 @@ export class CollectionMutationService extends BaseService {
       if (createStamp) {
         (entryData as Record<string, unknown>).first_published_at = createStamp;
       }
+      // The document's first changer, at its creation; its counter starts at
+      // the default, 1.
+      Object.assign(
+        entryData,
+        changerColumns(actorForWrite(params.actor, params.user)),
+        { _changed_at: nowForTxCreate }
+      );
 
       // The bulk create worker inserts status like any other field, so publishing
       // through it needs `publish-<slug>` the same as a single create — otherwise
@@ -17124,7 +17341,8 @@ export class CollectionMutationService extends BaseService {
             await this.insertCompanionRow(
               tx,
               localizedWrite,
-              (entry as { id: string }).id
+              (entry as { id: string }).id,
+              actorForWrite(params.actor, params.user)
             );
           } catch (error: unknown) {
             throw markWriteIntegrityFailure(error);
@@ -17251,6 +17469,22 @@ export class CollectionMutationService extends BaseService {
         // Still inside the caller-owned transaction.
         tx.getDrizzle()
       );
+      // Read on the caller's transaction, where this create is visible.
+      setDocumentVersion(
+        entry as Record<string, unknown>,
+        await documentVersionOn(tx, {
+          dialect: this.dialect,
+          table: tableName,
+          id: (entry as { id: string }).id,
+          languagesTable: await this.translationTableOnTx(
+            tx,
+            collection,
+            tableName
+          ),
+          localization: this.localization,
+          locale: localizedWrite?.writeLocale,
+        })
+      );
 
       return {
         success: true,
@@ -17362,6 +17596,8 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
+    // A version sent with the body is the server's to decide; see updateEntry.
+    body = withoutDocumentVersionKeys(body);
     // Computed right after the row is updated (before redaction can strip the
     // slug and before the after-hooks run) and carried on every post-write
     // return, so a committed item whose after-hook then throws still surfaces
@@ -17989,6 +18225,22 @@ export class CollectionMutationService extends BaseService {
               // column rather than dropping it.
               updated_at: nowForUpdate,
               ...(updateStamp ? { first_published_at: updateStamp } : {}),
+              // As on the single-entry update: the document's counter moves
+              // unless this save changed translated fields alone.
+              ...mainRowBump(
+                {
+                  updatePayload: stripImmutableSystemFields(
+                    finalData,
+                    "collection",
+                    tableName,
+                    fields
+                  ),
+                  componentFieldData,
+                  manyToManyData,
+                },
+                actorForWrite(params.actor, params.user),
+                updateTimeOf(nowForUpdate)
+              ),
             },
             this.whereEq("id", entryId),
             { returning: "*" }
@@ -18022,7 +18274,9 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate.companionTableName,
             entryId,
             localizedUpdate.writeLocale,
-            localizedUpdate.companionData
+            localizedUpdate.companionData,
+            undefined,
+            { savedBy: actorForWrite(params.actor, params.user) }
           );
         } catch (error: unknown) {
           throw markWriteIntegrityFailure(error);
@@ -18195,6 +18449,7 @@ export class CollectionMutationService extends BaseService {
       if (storeAsWorkingDraft) {
         const draftWrite = await this.storeWorkingDraftInTx(tx, {
           collection,
+          tableName,
           collectionHasStatus:
             (collection as { status?: boolean }).status === true,
           componentFieldData,
@@ -18610,6 +18865,25 @@ export class CollectionMutationService extends BaseService {
         tableName,
         // Still inside the caller-owned transaction.
         tx.getDrizzle()
+      );
+      // Read on the caller's transaction, where this save is visible and no
+      // later one can be.
+      setDocumentVersion(
+        response,
+        await documentVersionOn(tx, {
+          dialect: this.dialect,
+          table: tableName,
+          id: entryId,
+          // From the collection, not from this write: a held edit writes no
+          // translation row, yet the version a read gives names its language.
+          languagesTable: await this.translationTableOnTx(
+            tx,
+            collection,
+            tableName
+          ),
+          localization: this.localization,
+          locale: localizedUpdate?.writeLocale,
+        })
       );
 
       return {
