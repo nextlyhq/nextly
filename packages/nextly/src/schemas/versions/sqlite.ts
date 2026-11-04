@@ -65,6 +65,9 @@ export const nextlyVersionsSqlite = sqliteTable(
     // ordering that `updated_at` cannot here: `mode: "timestamp"` stores whole
     // epoch SECONDS, so two rewrites inside one second are stored identically.
     revision: integer("revision").default(0).notNull(),
+    // A recovery point's base, as the PostgreSQL schema says.
+    baseVersionNo: integer("base_version_no"),
+    baseDraftRevision: integer("base_draft_revision"),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique
