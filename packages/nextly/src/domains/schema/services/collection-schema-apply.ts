@@ -58,6 +58,7 @@ import { desiredCollectionTable } from "../pipeline/desired-collection-table";
 import {
   readIndexColumns,
   readIndexUniqueness,
+  readNameHoldersElsewhere,
   readUniqueColumns,
 } from "../pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../pipeline/pre-cleanup/executor";
@@ -812,11 +813,13 @@ function expectedCollectionColumns(
 }
 
 /**
- * Refuse a change that declares an index under a name another index of the table already holds,
- * on other columns or with another uniqueness: the push creates an index only where its name is
- * free, so the field would be recorded unique, or indexed, while the index under that name
- * enforces something else. A precondition, read from the live table before anything changes,
- * against the indexes the push itself declares.
+ * Refuse a change that declares an index under a name another index already holds: one of the
+ * table's own, on other columns or with another uniqueness, or, where the dialect shares index
+ * names beyond one table, any object elsewhere under that name (`readNameHoldersElsewhere`). The
+ * push creates an index only where its name is free, so the field would be recorded unique, or
+ * indexed, while the index under that name enforces something else, or nothing on this table. A
+ * precondition, read from the live database before anything changes, against the indexes the
+ * push itself declares.
  */
 async function refuseIndexNamesTaken(
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
@@ -845,22 +848,51 @@ async function refuseIndexNamesTaken(
       (uniqueness.get(index.name)?.unique === true) === index.unique;
     return sameColumns && sameUniqueness ? [] : [{ index, live }];
   });
-  if (taken.length === 0) return;
+  // A name this table's indexes don't hold under that exact spelling may still be held elsewhere.
+  const unheld = declared.filter(
+    index => index.columns.length > 0 && !uniqueness.has(index.name)
+  );
+  const elsewhere = await readNameHoldersElsewhere(
+    db,
+    adapter.dialect,
+    tableName,
+    unheld.map(index => index.name)
+  );
+  const heldElsewhere = unheld.flatMap(index => {
+    const holder = elsewhere.get(index.name);
+    return holder ? [{ index, holder }] : [];
+  });
+  if (taken.length === 0 && heldElsewhere.length === 0) return;
   throw NextlyError.validation({
-    errors: taken.map(({ index, live }) => ({
-      path: `fields.${index.columns[0]}`,
-      code: "INDEX_NAME_TAKEN",
-      message:
-        `The table already has an index "${index.name}" ` +
-        (live === null
-          ? "that is partial, on an expression or on part of a column"
-          : `on ${live.join(", ")}`) +
-        `, under the name this change's ${index.unique ? "unique " : ""}index on ` +
-        `${index.columns.join(", ")} takes. Remove that index first, then save again.`,
-    })),
+    errors: [
+      ...heldElsewhere.map(({ index, holder }) => ({
+        path: `fields.${index.columns[0]}`,
+        code: "INDEX_NAME_TAKEN",
+        message:
+          `The database already has ${holder.type === "index" ? "an index" : `a ${holder.type}`} ` +
+          `"${holder.name}"${holder.table === null ? "" : ` on ${holder.table}`}, holding the name ` +
+          `this change's ${index.unique ? "unique " : ""}index on ${index.columns.join(", ")} takes. ` +
+          "Remove or rename it first, then save again.",
+      })),
+      ...taken.map(({ index, live }) => ({
+        path: `fields.${index.columns[0]}`,
+        code: "INDEX_NAME_TAKEN",
+        message:
+          `The table already has an index "${index.name}" ` +
+          (live === null
+            ? "that is partial, on an expression or on part of a column"
+            : `on ${live.join(", ")}`) +
+          `, under the name this change's ${index.unique ? "unique " : ""}index on ` +
+          `${index.columns.join(", ")} takes. Remove that index first, then save again.`,
+      })),
+    ],
     logContext: {
       tableName,
       indexes: taken.map(({ index, live }) => ({ name: index.name, live })),
+      heldElsewhere: heldElsewhere.map(({ index, holder }) => ({
+        name: index.name,
+        holder,
+      })),
     },
   });
 }
