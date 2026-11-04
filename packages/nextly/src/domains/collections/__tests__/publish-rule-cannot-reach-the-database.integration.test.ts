@@ -18,6 +18,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { requireNextly } from "../../../direct-api/nextly";
 import {
@@ -111,6 +115,12 @@ async function boot(
       }),
     ],
   });
+  // The publisher may read, update and publish both documents, so each
+  // publish reaches its rules rather than being refused before them.
+  await userWhoMay(current, BOSS.id, "read", [POSTS, PREFS]);
+  for (const action of ["update", "publish"]) {
+    await grantTo(current, BOSS.id, action, [POSTS, PREFS]);
+  }
   return {
     t: current,
     entries: (
