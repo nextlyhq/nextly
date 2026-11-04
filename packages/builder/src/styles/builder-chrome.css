@@ -159,6 +159,7 @@
   --nx-builder-local: var(--nx-builder-local-on-light);
   --nx-builder-shared: var(--nx-success);
   --nx-builder-component-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
   /*
@@ -216,6 +217,8 @@
   --nx-builder-local-on-dark: #f48fb1; /* design-lint-ok: this-block pink; no admin token */
   --nx-builder-component-text-on-light: #ffffff; /* design-lint-ok: text on the deep purple */
   --nx-builder-component-text-on-dark: #15171c; /* design-lint-ok: text on the light purple */
+  --nx-builder-select-text-on-light: #ffffff; /* design-lint-ok: text on the deep select blue */
+  --nx-builder-select-text-on-dark: #15171c; /* design-lint-ok: text on the light select blue */
   --nx-builder-halo: #ffffff; /* design-lint-ok: mode-invariant halo on site content */
 }
 
@@ -237,6 +240,7 @@
   --nx-builder-component: var(--nx-builder-component-on-dark);
   --nx-builder-local: var(--nx-builder-local-on-dark);
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
 }
 
@@ -1500,6 +1504,13 @@
   outline-offset: 1px;
 }
 
+/* An option's value beside its words, muted: an HTML tag after its name. */
+.nx-inspector__option-value {
+  margin-inline-start: 0.5rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--nx-muted-foreground);
+}
+
 /* The control, and a held row's reason under it, in the row's second column. */
 .nx-inspector__exposed {
   display: flex;
@@ -2399,6 +2410,42 @@
 }
 
 /*
+ * A field with no unit but a ◇ draws as the same one box, the ◇ inside its
+ * end where a unit's field has its suffix, so every field reads alike. Not a
+ * side of a box, whose ◇ sits inside the side itself.
+ */
+.nx-inspector__field:not([data-side])
+  > .nx-style-inspector__numeric:has(> input + .nx-variable-choice) {
+  gap: 0;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+}
+
+.nx-inspector__field:not([data-side])
+  > .nx-style-inspector__numeric:has(> input + .nx-variable-choice):has(
+    [aria-invalid="true"]
+  ) {
+  border-color: var(--nx-destructive);
+}
+
+.nx-inspector__field:not([data-side])
+  > .nx-style-inspector__numeric:has(
+    > input + .nx-variable-choice
+  ):focus-within {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -1px;
+}
+
+.nx-inspector__field:not([data-side])
+  > .nx-style-inspector__numeric:has(> input + .nx-variable-choice)
+  > input {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+/*
  * Exactly its text: the menu's own `min-width` is given up here, so the suffix
  * takes no width the number could use.
  */
@@ -2736,11 +2783,21 @@
  * not rest on the fill's colour alone; the sentence below says it in words.
  * The device being edited is underlined, as the device buttons mark it.
  */
+/*
+ * Separate toggles, a gap between them, each with its own edge and corners:
+ * a joined strip reads as "pick one", and this is "pick any".
+ */
+.nx-visible-on {
+  gap: 0.375rem;
+}
+
 .nx-visible-on > button {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-inline-start-width: 1px;
+  border-radius: var(--radius-md);
 }
 
 .nx-visible-on__icon {
@@ -2763,8 +2820,20 @@
   transform: translate(-50%, -50%) rotate(-45deg);
 }
 
+/* The device being edited, marked with a dot at its top corner. */
 .nx-visible-on > button[data-editing] {
-  box-shadow: inset 0 -2px 0 var(--nx-ring);
+  overflow: visible;
+}
+
+.nx-visible-on > button[data-editing]::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0.1875rem;
+  inset-inline-end: 0.1875rem;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: var(--nx-ring);
 }
 
 /*
@@ -3086,6 +3155,179 @@
 }
 
 /*
+ * The ◇ beside a field whose property takes a site variable, which opens the
+ * list of them. At least 24px square, WCAG 2.2's minimum target.
+ */
+.nx-variable-choice {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-variable-choice:hover,
+.nx-variable-choice[data-state="open"] {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-variable-choice:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+/*
+ * Shown while the field is pointed at or holds focus, and always while it
+ * holds a variable, holds nothing at all, or its list is open: on an empty
+ * field the ◇ is what says a variable may be chosen. Faded rather than removed, so the ◇
+ * stays in the tab order and shows itself when Tab reaches it.
+ */
+.nx-style-inspector__numeric .nx-variable-choice,
+.nx-style-inspector__select .nx-variable-choice {
+  opacity: 0;
+  /* Hidden is out of hit testing too: invisible, it would still take a click
+     meant for what it sits over. Focus still reaches it, and reveals it. */
+  pointer-events: none;
+}
+
+.nx-style-inspector__numeric:hover .nx-variable-choice,
+.nx-style-inspector__numeric:focus-within .nx-variable-choice,
+.nx-style-inspector__select:hover .nx-variable-choice,
+.nx-style-inspector__select:focus-within .nx-variable-choice,
+.nx-variable-choice[data-bound],
+.nx-variable-choice[data-empty],
+.nx-variable-choice[data-state="open"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/*
+ * The same list opened from a unit menu's "Use a variable…", sized as the
+ * popover is; two parts, to outrank the menu's own width and padding.
+ */
+[role="menu"].nx-variable-choice__menu {
+  display: flex;
+  flex-direction: column;
+  width: 18rem;
+  padding: 0;
+}
+
+/*
+ * A variable's row in the list: its sample, its name, then its value. The
+ * name keeps its width and the value gives way, cut with an ellipsis, so a
+ * long value such as a fluid one never pushes the name out of the row.
+ */
+.nx-variable-choice__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nx-variable-choice__sample {
+  display: flex;
+  flex: none;
+  align-items: center;
+  inline-size: 4rem;
+}
+
+/* A length drawn to scale; its width is set on the element, up to 64px. */
+.nx-variable-choice__bar {
+  block-size: 0.375rem;
+  min-inline-size: 1px;
+  border-radius: 999px;
+  background: var(--nx-muted-foreground);
+}
+
+/* A fluid length, with no one size to scale to: an outline, dashed. */
+.nx-variable-choice__bar[data-fluid] {
+  inline-size: 2rem;
+  border-width: 1px;
+  border-style: dashed;
+  border-color: var(--nx-muted-foreground);
+  background: none;
+}
+
+/*
+ * A name, whole while there is room for it and cut with an ellipsis only once
+ * its value has given way entirely, in the list and on a held variable's chip.
+ */
+.nx-variable-choice__name,
+.nx-variable-chip__name {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * A held variable's name takes the room the row has rather than asking for
+ * its own: sized by its text, a long name widened the control column and
+ * pushed the row's label left of the grid and its buttons past its edge.
+ */
+.nx-variable-chip__text {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.25rem;
+  min-inline-size: 0;
+  /* One line: a value with no room left wraps out of sight, whole or not at
+     all, rather than showing a stub such as "4…" after the name. */
+  max-block-size: 1.25rem;
+  overflow: hidden;
+  line-height: 1.25rem;
+  contain: inline-size;
+}
+
+/* A held variable's name as the way to choose another, in a narrow side. */
+.nx-style-inspector__token .nx-variable-chip__choose {
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  padding-inline: 0.125rem;
+  overflow: hidden;
+  font-size: inherit;
+  color: var(--nx-foreground);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-style-inspector__token .nx-variable-chip__choose:hover {
+  text-decoration: underline;
+}
+
+.nx-style-inspector__token .nx-variable-chip__choose:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+/* A value, which gives way to its name: it takes what is left, or nothing. */
+.nx-variable-choice__value,
+.nx-variable-chip__value {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--nx-muted-foreground);
+}
+
+/* On the chip a value is whole or gone; in the list it is cut instead. */
+.nx-variable-chip__value {
+  flex: 0 0 auto;
+}
+
+/*
  * The breakpoint actions on a control: reset here, or go to the tier a value
  * came from.
  *
@@ -3209,12 +3451,14 @@
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
   --nx-builder-component-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-light);
 }
 
 .nx-canvas-layer[data-nx-page-scheme="dark"] {
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
 }
 
 .nx-canvas-layer__content {
@@ -3415,6 +3659,42 @@
 
 .nx-canvas-mark[data-mark="hovered"][data-component] {
   outline-color: var(--nx-builder-component);
+}
+
+/*
+ * The hovered block's name, as a small tag over its outline's top left
+ * corner, outside it, in the outline's colour; inside it at the top of what
+ * is on screen, where it still shows. The selected block's toolbar takes that
+ * corner on the block it acts on, which is never the hovered one.
+ */
+.nx-canvas-mark[data-mark="hovered"][data-hover-label]::before {
+  content: attr(data-hover-label);
+  position: absolute;
+  /* In from the left edge as far as the screen cuts the outline off there. */
+  left: var(--nx-tag-inset-side, 0px);
+  bottom: 100%;
+  max-width: calc(100% - var(--nx-tag-inset-side, 0px));
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-component][data-hover-label]::before {
+  background: var(--nx-builder-component);
+  color: var(--nx-builder-component-text);
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-hover-label][data-hover-tag-inside]::before {
+  top: 0;
+  bottom: auto;
+  border-radius: 0 0 4px 4px;
 }
 
 /*
@@ -4609,6 +4889,12 @@
   white-space: nowrap;
 }
 
+/* A row's kind beside its name, said only when another row shares the name:
+   muted, so it reads as telling the two apart rather than as the name. */
+.nx-vars__name-kind {
+  color: var(--nx-muted-foreground);
+}
+
 .nx-vars__swatch {
   display: inline-block;
   width: 14px;
@@ -5129,15 +5415,20 @@ fieldset.nx-inspector__fields {
 /*
  * Where an inherited value comes from, in brief, always in sight: the value
  * the control shows greyed is half an answer without it. Muted and small, at
- * the end of the label's row, and cut short rather than wrapped, its whole
- * sentence in its `title`.
+ * the end of the label's row. Up to two lines, since one line of the label
+ * column cut "From section · Tablet" short; past two it ends in an ellipsis,
+ * its whole sentence in its `title`.
  */
 .nx-style-inspector__provenance-source {
+  display: -webkit-box;
   min-width: 0;
   margin-inline-start: auto;
   overflow: hidden;
+  overflow-wrap: anywhere;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   font-size: var(--text-xs);
   font-weight: 400;
   color: var(--nx-builder-text-muted);
@@ -5172,8 +5463,8 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-inspector__field:focus-within .nx-style-inspector__provenance-text {
-  /* Held back (none) by a row that has just committed a value, until the
-     field is focused again; see `--nx-provenance-caption` on the row. */
+  /* Held back (none) by a row whose value has just changed, until the author
+     focuses the field again; see `--nx-provenance-caption` on the row. */
   display: var(--nx-provenance-caption, block);
   position: absolute;
   z-index: 2;
@@ -5685,8 +5976,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 /* An "Aa" not shown to read on its background: an outline painted under its
    fill, so it shows on any colour. The site's page colour overrides this
    inline where the tab has it. */
+/* The outline itself is the specimen's inline style, chosen against its own
+   background: a stroke, or two halos where the background can't be
+   measured. The class only paints a stroke under the fill. */
 .nx-shared-styles__lead--outlined {
-  -webkit-text-stroke: 2px var(--nx-background);
   paint-order: stroke fill;
 }
 
@@ -5746,6 +6039,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* A zero not counted yet is words, not a count: no box, the panel's own
+   type, and room for the whole phrase. */
+.nx-vars__chip.nx-shared-styles__count--uncounted {
+  max-width: none;
+  padding: 0;
+  border-color: transparent;
+  font-family: inherit;
 }
 
 .nx-shared-styles__meta,
@@ -6502,6 +6804,92 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * A side's ◇, inside the side at its end rather than beside or above it: a
+ * box of eight sides has no room for a ninth control per row, and above the
+ * side it covered the label or the side above. The side's text makes room
+ * for it while it shows, so neither covers the other.
+ */
+.nx-style-inspector__side-box .nx-style-inspector__numeric {
+  position: relative;
+}
+
+.nx-style-inspector__side-box .nx-variable-choice {
+  position: absolute;
+  z-index: 2;
+  inset-block-start: 0.125rem;
+  inset-inline-end: 0.125rem;
+  background: var(--nx-popover);
+}
+
+.nx-style-inspector__side-box
+  .nx-style-inspector__numeric:is(:hover, :focus-within)
+  > input {
+  padding-inline-end: 1.625rem;
+}
+
+/* A side shows a held variable by name only; its value would not fit. */
+.nx-style-inspector__side-box .nx-variable-chip__value {
+  display: none;
+}
+
+/*
+ * A side of a box shows its ◇ only while pointed at or focused, held
+ * variable or not: kept in view over a box of eight sides, it would cover
+ * the side above it for good. After the rule that keeps a held variable's ◇
+ * in view, which this outranks by order for a side.
+ */
+[data-side] .nx-variable-choice {
+  opacity: 0;
+  pointer-events: none;
+}
+
+[data-side]:hover .nx-variable-choice,
+[data-side]:focus-within .nx-variable-choice,
+[data-side] .nx-variable-choice[data-state="open"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/*
+ * A side holding a variable: its name, then its clear, both in the side's own
+ * row and always shown, where a clear drawn over the box below hid it until
+ * hover and covered the box when it showed.
+ */
+.nx-spacing-box .nx-style-inspector__token.nx-variable-chip {
+  position: relative;
+  gap: 0;
+  padding-inline: 0.125rem 0;
+  font-size: var(--text-xs);
+}
+
+/* The name gets every pixel the side has left beside its clear. */
+.nx-spacing-box .nx-style-inspector__token .nx-variable-chip__choose {
+  padding-inline: 0;
+}
+
+/*
+ * Over the name's end, inside the chip, and only while the side is pointed at
+ * or focused, which the box's own reveal for a side's clear decides: at rest
+ * the name has the side's whole width. Faded rather than removed, so Tab still
+ * reaches it and its focus shows it.
+ */
+.nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button {
+  position: absolute;
+  inset-block-start: 0;
+  inset-block-end: 0;
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  /* A gap of the chip's own fill between the name and the clear. */
+  border-inline-start: 0.25rem solid var(--nx-muted);
+  background: var(--nx-muted);
+  box-shadow: none;
+}
+
+/*
  * Below the width where three columns of a control can be read, the box gives
  * up and becomes rows.
  *
@@ -6805,7 +7193,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 /*
  * The focus ring is drawn on the strip itself rather than left to the UA
- * default, which would be clipped to a nine-pixel band and easy to miss.
+ * default, which would be clipped to a thin band and easy to miss.
  */
 .nx-spacing-handles__handle:focus-visible {
   outline: 2px solid var(--nx-ring);
@@ -7639,6 +8027,23 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-inspector__exposed [role="switch"] {
   align-self: flex-start;
+}
+
+/*
+ * A switch in the inspector is a 24px target on its own. The shared switch is
+ * 18px tall, which passes only while no other target sits within 12px of its
+ * centre, and an on/off row ends directly above "Visible on". The thumb grows
+ * with the track, so the 18px its checked travel covers still ends one pixel
+ * inside the far edge.
+ */
+:is(.nx-inspector, .nx-style-inspector) [data-slot="switch"] {
+  block-size: 1.5rem;
+  inline-size: 2.5rem;
+}
+
+:is(.nx-inspector, .nx-style-inspector) [data-slot="switch-thumb"] {
+  block-size: 1.25rem;
+  inline-size: 1.25rem;
 }
 
 /*

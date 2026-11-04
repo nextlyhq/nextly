@@ -211,6 +211,14 @@ export interface AutosaveDetail {
   snapshot: unknown;
   updatedAt: string;
   locale: string | null;
+  /**
+   * Whether the document has been written since this recovery point began,
+   * and by whom, as the server keeps it: `by-you` (this author's own later
+   * save or publish), `by-another` (anyone else, or a write that names no
+   * one), or `unknown` (a point recorded before this was kept). Absent while
+   * the document is as it was when the point began.
+   */
+  superseded?: "by-you" | "by-another" | "unknown";
 }
 
 /** What a restore reports back. */

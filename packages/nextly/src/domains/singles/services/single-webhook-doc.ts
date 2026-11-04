@@ -21,7 +21,10 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import { populateCompanionFields } from "../../i18n/companion-join";
+import {
+  populateCompanionFieldsAllLocales,
+  resolveLocalizedValue,
+} from "../../i18n/companion-join";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 
@@ -41,13 +44,42 @@ export async function readCompanionLocaleValues(
   entryId: string,
   locale: string
 ): Promise<Record<string, unknown>> {
-  const localeRow: Record<string, unknown> = { id: entryId };
-  await populateCompanionFields({
-    db: tx.getDrizzle<Parameters<typeof populateCompanionFields>[0]["db"]>(),
+  const byLocale = await readCompanionValuesByLocale(
+    adapter,
+    tx,
+    companion,
+    entryId,
+    [locale]
+  );
+  return byLocale.get(locale) ?? {};
+}
+
+/**
+ * {@link readCompanionLocaleValues} for several locales in ONE query, so a
+ * write that needs every language's state reads it in a single round trip
+ * however many languages there are. Each locale's values are resolved by the
+ * rule a one-locale read applies: a blank translation reads as null.
+ */
+export async function readCompanionValuesByLocale(
+  adapter: DrizzleAdapter,
+  tx: TransactionContext,
+  companion: CompanionSchema,
+  entryId: string,
+  locales: readonly string[]
+): Promise<Map<string, Record<string, unknown>>> {
+  const byLocale = new Map<string, Record<string, unknown>>(
+    locales.map(locale => [locale, {}])
+  );
+  if (locales.length === 0) return byLocale;
+  const row: Record<string, unknown> = { id: entryId };
+  await populateCompanionFieldsAllLocales({
+    db: tx.getDrizzle<
+      Parameters<typeof populateCompanionFieldsAllLocales>[0]["db"]
+    >(),
     companionTable: companion.table,
     localizedFields: companion.localizedFields,
-    rows: [localeRow],
-    localeChain: [locale],
+    rows: [row],
+    locales: [...locales],
     // Inside the caller's transaction, so the remembered verdict is read rather than resolved:
     // resolving would query, and a query against a missing relation aborts the whole transaction
     // on PostgreSQL. Any other failure propagates, which is what this read needs — it feeds a
@@ -55,13 +87,19 @@ export async function readCompanionLocaleValues(
     // swallowed would corrupt it.
     readiness: cachedCompanionReadiness(adapter, companion.companionTableName),
   });
-  const values: Record<string, unknown> = {};
   for (const f of companion.localizedFields) {
-    if (localeRow[f.name] !== undefined) {
-      values[f.column] = localeRow[f.name];
+    // Left unset when the companion is not ready, as a one-locale read leaves
+    // every translation absent then.
+    const perLocale = row[f.name];
+    if (!perLocale || typeof perLocale !== "object") continue;
+    for (const [locale, values] of byLocale) {
+      values[f.column] = resolveLocalizedValue(
+        perLocale as Record<string, unknown>,
+        [locale]
+      );
     }
   }
-  return values;
+  return byLocale;
 }
 
 /**

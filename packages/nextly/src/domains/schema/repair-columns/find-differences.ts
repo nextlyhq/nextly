@@ -10,6 +10,7 @@
 //
 // @module domains/schema/repair-columns/find-differences
 
+import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
@@ -227,7 +228,13 @@ async function readLiveTables(
       table.name.toLowerCase(),
       {
         name: table.name,
-        columns: new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
+        // The per-document columns are Nextly's own, added by `nextly
+        // migrate` rather than by any field, so no comparison sees them.
+        columns: new Map(
+          table.columns
+            .filter(c => !isNextlyOwnedDocumentColumn(c.name))
+            .map(c => [c.name.toLowerCase(), c])
+        ),
       },
     ])
   );

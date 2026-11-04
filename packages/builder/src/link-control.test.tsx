@@ -108,6 +108,13 @@ function register(): void {
           entryId: { label: "Linked entry", role: "content", type: "text" },
           target: TARGET,
           rel: { label: "Link relationship", type: "text" },
+          // As the button block declares it: offered only without a link.
+          type: {
+            label: "Acts as",
+            type: "select",
+            options: ["button", "submit", "reset"],
+            onlyWithout: ["href", ["entryCollection", "entryId"]],
+          },
         },
         render: () => null,
       },
@@ -233,6 +240,26 @@ describe("the link group", () => {
       screen.getByRole("switch", { name: "Open in new tab" })
     ).toBeDefined();
     expect(screen.getByRole("button", { name: /Link options/ })).toBeDefined();
+  });
+
+  it("offers a button's Acts as only while the button has no link", () => {
+    // The link group draws the link; what the block offers beside it still
+    // follows what is stored, a page's address or an entry alike.
+    const actsAs = () => screen.queryByText("Acts as");
+    mount("acme/button", {}, { findLinkTargets: targetsService() });
+    expect(actsAs()).not.toBeNull();
+    cleanup();
+    clearBlocks();
+    mount("acme/button", { href: "/pricing" }, undefined);
+    expect(actsAs()).toBeNull();
+    cleanup();
+    clearBlocks();
+    mount(
+      "acme/button",
+      { entryCollection: "landing", entryId: "l-1" },
+      { findLinkTargets: targetsService() }
+    );
+    expect(actsAs()).toBeNull();
   });
 
   it("hides a button's entry rows behind its link", () => {

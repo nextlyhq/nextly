@@ -910,8 +910,29 @@ export interface ToolbarSize {
 export interface ToolbarPlacement {
   readonly x: number;
   readonly y: number;
-  readonly side: "above" | "below";
+  /**
+   * Above the block, below it, or pinned to the top of the screen over a tall
+   * block whose own top is scrolled out of view.
+   */
+  readonly side: "above" | "below" | "pinned";
 }
+
+/**
+ * The part of the canvas on screen, in its coordinates: top and bottom, and
+ * the left and right edges where the canvas scrolls sideways too.
+ */
+export interface ToolbarScreen {
+  readonly top: number;
+  readonly bottom: number;
+  readonly left?: number;
+  readonly right?: number;
+}
+
+/** No screen to keep to: the whole page, from its top down. */
+const WHOLE_PAGE: ToolbarScreen = {
+  top: 0,
+  bottom: Number.POSITIVE_INFINITY,
+};
 
 /** The gap between the bar and the block it names, in pixels. */
 export const TOOLBAR_GAP_PX = 6;
@@ -933,29 +954,75 @@ export const TOOLBAR_GAP_PX = 6;
  * is unreachable, so it slides back in. Vertical overflow is handled by the
  * side flip above rather than by clamping, because a clamped bar overlaps the
  * block and a flipped one does not.
+ *
+ * **Kept to what is on screen** (`screen`, the whole page when not given):
+ * room above is room above on screen, so a block just below the screen's top
+ * flips its bar below it; and a tall block whose top is scrolled away keeps
+ * its bar pinned at the top of the screen, over the block, where an author
+ * working in its middle can reach it.
  */
 export function toolbarPlacement(
   block: Rect,
   toolbar: ToolbarSize,
   canvas: ToolbarSize,
-  gap: number = TOOLBAR_GAP_PX
+  gap: number = TOOLBAR_GAP_PX,
+  screen: ToolbarScreen = WHOLE_PAGE
 ): ToolbarPlacement {
   const above = block.y - toolbar.height - gap;
   const below = block.y + block.height + gap;
+  const side = toolbarSide(block, toolbar, gap, screen, above, below);
 
-  // Below only when above would leave the canvas. A block near the BOTTOM keeps
-  // the bar above it, where it is still visible — flipping there would push it
-  // under the fold for no gain.
-  const side: "above" | "below" = above >= 0 ? "above" : "below";
+  // Kept to the canvas, and to the part of it on screen where that is given
+  // and the block crosses it: a block wholly off the side keeps its bar with
+  // it, rather than one at the screen's edge over another block. The clamp is
+  // skipped when the bar is wider than that, because there is no position that
+  // satisfies both edges and clamping would silently choose the right one —
+  // leaving the first buttons, which are the ones an author reaches for,
+  // off-screen.
+  const left = screen.left ?? Number.NEGATIVE_INFINITY;
+  const right = screen.right ?? Number.POSITIVE_INFINITY;
+  const crosses = block.x < right && block.x + block.width > left;
+  const minX = Math.max(0, crosses ? left : 0);
+  const maxX =
+    Math.min(canvas.width, crosses ? right : Number.POSITIVE_INFINITY) -
+    toolbar.width;
+  const x = maxX <= minX ? minX : Math.min(Math.max(block.x, minX), maxX);
 
-  // The clamp is skipped when the bar is wider than the canvas, because there
-  // is no position that satisfies both edges and clamping would silently choose
-  // the right one — leaving the first buttons, which are the ones an author
-  // reaches for, off-screen.
-  const maxX = canvas.width - toolbar.width;
-  const x = maxX <= 0 ? 0 : Math.min(Math.max(block.x, 0), maxX);
+  const y =
+    side === "above" ? above : side === "below" ? below : screen.top + gap;
+  return { x, y, side };
+}
 
-  return { x, y: side === "above" ? above : below, side };
+/**
+ * Which side the bar takes. Below only when above would leave the screen, the
+ * block is on it (its top, or a short end of it too little to pin over) and
+ * the bar fits on screen under the block; a block
+ * near the BOTTOM keeps the bar above it, where it is still visible, since
+ * flipping there would push it under the fold for no gain. Pinned to the
+ * screen's top over a block that fills the screen below the bar: one whose top
+ * is scrolled away, or one too tall for the bar to fit under it on screen.
+ * Above for a block wholly out of view.
+ */
+function toolbarSide(
+  block: Rect,
+  toolbar: ToolbarSize,
+  gap: number,
+  screen: ToolbarScreen,
+  above: number,
+  below: number
+): ToolbarPlacement["side"] {
+  if (above >= screen.top) return "above";
+  const stillShown =
+    block.y + block.height >= screen.top + toolbar.height + gap;
+  const fitsBelow = below + toolbar.height <= screen.bottom;
+  if (block.y >= screen.top) {
+    return fitsBelow || !stillShown ? "below" : "pinned";
+  }
+  if (stillShown) return "pinned";
+  // A short block whose top is just off the screen, with a little of it
+  // still on: too little to pin the bar over, so below it where that fits.
+  const partlyShown = block.y + block.height > screen.top;
+  return partlyShown && fitsBelow ? "below" : "above";
 }
 
 /** A plan's ops, or undefined for no plan or a refusal. */

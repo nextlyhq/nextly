@@ -85,6 +85,7 @@ import {
   lockStatusOf,
   lockViewOf,
   propIsWritable,
+  propLabel,
   propPatch,
   renameOp,
   selectedNode,
@@ -1288,7 +1289,12 @@ function ContentFields({
   /** The component's own view, when the document is a component. */
   fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
-  if (inspection.props.length === 0) {
+  // A prop the inspector leaves out draws no control, but in a component's
+  // view keeps its expose icon: a page may clear what hides it.
+  const drawn = inspection.props.filter(
+    prop => prop.offered || fields !== undefined
+  );
+  if (drawn.length === 0) {
     return (
       <p className="nx-inspector__note">
         This block has no editable properties.
@@ -1300,7 +1306,7 @@ function ContentFields({
   const link = linkGroupOf(inspection.props);
   return (
     <div className="nx-inspector__fields">
-      {inspection.props.map(prop => {
+      {drawn.map(prop => {
         if (link?.drawn.has(prop.name) === true && prop.name !== link.link) {
           return null;
         }
@@ -1316,22 +1322,29 @@ function ContentFields({
               onCommitMany={onCommitMany}
             />
           ) : undefined;
-        const field = grouped ?? (
-          <HeldByLock
-            // Keyed by node AND prop: a bare prop name would let React reuse
-            // one block's field for the next block's same-named prop, so the
-            // input would keep the previous block's uncommitted text.
-            key={`${inspection.nodeId}:${prop.name}`}
-            // A held field points at the reason in the card.
-            reasonId={writable(prop.name) ? undefined : reasonId}
-          >
-            <PropField
-              prop={prop}
-              disabled={!writable(prop.name)}
-              onCommit={onCommit}
-              services={services}
-            />
-          </HeldByLock>
+        // Named as the block names it, so its icon is not drawn bare.
+        const field = !prop.offered ? (
+          <p className="nx-inspector__note">
+            {propLabel(prop.name, prop.schema)}
+          </p>
+        ) : (
+          (grouped ?? (
+            <HeldByLock
+              // Keyed by node AND prop: a bare prop name would let React reuse
+              // one block's field for the next block's same-named prop, so the
+              // input would keep the previous block's uncommitted text.
+              key={`${inspection.nodeId}:${prop.name}`}
+              // A held field points at the reason in the card.
+              reasonId={writable(prop.name) ? undefined : reasonId}
+            >
+              <PropField
+                prop={prop}
+                disabled={!writable(prop.name)}
+                onCommit={onCommit}
+                services={services}
+              />
+            </HeldByLock>
+          ))
         );
         if (fields === undefined) return field;
         // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is

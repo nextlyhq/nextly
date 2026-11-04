@@ -33,7 +33,10 @@ import {
 } from "./builder-view";
 import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
-import { blocksFieldSurvey } from "./class-usage-blocks-fields";
+import {
+  blocksFieldReach,
+  blocksFieldSurvey,
+} from "./class-usage-blocks-fields";
 import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
@@ -67,7 +70,11 @@ import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
-import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
+import {
+  componentFactsRoute,
+  componentStoreShape,
+  reconciledRetired,
+} from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
 import {
@@ -98,6 +105,19 @@ import type {
 } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { registerFencedWriteReport } from "./host-rewrite/after-commit";
+import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
+import { progressStore } from "./host-rewrite/progress";
+import {
+  COMPONENT_DELETE_REWRITE_SERVICE,
+  componentDeleteRewriteService,
+  type RewriteInstall,
+} from "./host-rewrite/service";
+import {
+  singleToWalk,
+  type RewriteDirectApi,
+  type SingleToWalk,
+} from "./host-rewrite/site";
 import {
   layoutChoicesRoute,
   pageCollectionRoute,
@@ -122,6 +142,7 @@ import { pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
+import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
@@ -147,6 +168,8 @@ import {
   SITE_STYLE_SLUG,
   siteStyleSingle,
 } from "./site-style-storage";
+import { exportRoutes } from "./transfer/export-route";
+import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -655,39 +678,57 @@ function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
 export async function singlesHoldBlocks(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
 ): Promise<boolean> {
-  // The count the first page reported. This walk pages by OFFSET, so it carries
-  // the same shift as the collection registry above: a Single deleted behind the
-  // cursor moves the rest back and one is never read. Here the missed row would
-  // be a Single that HOLDS blocks, so the answer flips from "content this index
-  // cannot reach" to "none" — and completeness is granted over a homepage whose
-  // components read as used by nothing.
-  //
-  // `true` is the refusal on every unreadable shape in this function, and a
-  // changed population is one: it means content may be out of reach, which is
-  // what withholds completeness.
-  let expected: number | undefined;
   // The slugs configuration still declares, read once. A row whose source is
   // `code` and whose slug is not in here is a leftover, not a Single.
   const declared = declaredSingleSlugs(ctx);
+  for await (const rows of singlesRegistryPages(ctx)) {
+    // `true` is the refusal on every unreadable shape: it means content may be
+    // out of reach, which is what withholds completeness.
+    if (rows === UNREADABLE_PAGE) return true;
+    if (rowsHoldBlocks(rows, declared)) return true;
+  }
+  return false;
+}
 
+/** What {@link singlesRegistryPages} yields for a registry it cannot read whole. */
+const UNREADABLE_PAGE = Symbol("unreadable registry page");
+
+/**
+ * The Singles registry, a page at a time, ending after the last one; or
+ * {@link UNREADABLE_PAGE}, and then nothing more, when a page is not shaped as
+ * one or the population changed while it was listed.
+ *
+ * The count the first page reported is held because this walk pages by OFFSET,
+ * so it carries the same shift as the collection registry above: a Single
+ * deleted behind the cursor moves the rest back and one is never read. Here the
+ * missed row could be a Single that HOLDS blocks, so a changed count is read as
+ * a registry that cannot be read whole.
+ */
+async function* singlesRegistryPages(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): AsyncGenerator<readonly unknown[] | typeof UNREADABLE_PAGE> {
+  let expected: number | undefined;
   for (let offset = 0; ; offset += REGISTRY_PAGE_SIZE) {
     const listed: unknown = await ctx.services.singles.list({
       offset,
       limit: REGISTRY_PAGE_SIZE,
     });
-
     const rows = (listed as { data?: unknown }).data;
     const total = (listed as { total?: unknown }).total;
-    if (!Array.isArray(rows) || typeof total !== "number") return true;
+    if (!Array.isArray(rows) || typeof total !== "number") {
+      yield UNREADABLE_PAGE;
+      return;
+    }
     expected ??= total;
-    if (total !== expected) return true;
-
-    if (rowsHoldBlocks(rows, declared)) return true;
-
+    if (total !== expected) {
+      yield UNREADABLE_PAGE;
+      return;
+    }
+    yield rows;
     // Bounded by BOTH, so neither a `total` that disagrees with the rows nor an
     // empty page can spin this. An empty page with work still claimed is the
     // shape that would otherwise loop for ever.
-    if (rows.length === 0 || offset + rows.length >= total) return false;
+    if (rows.length === 0 || offset + rows.length >= total) return;
   }
 }
 
@@ -887,6 +928,118 @@ function installContext(
   };
 }
 
+/**
+ * What the component-delete rewrite reads the installed site through: the
+ * live registries, the Direct API (through the SDK, at call time), the
+ * Layouts, and the usage index as a hint.
+ */
+function rewriteInstallFor(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  opts: PageBuilderOptions,
+  composition: CompositionSetup
+): RewriteInstall {
+  // The booted instance through the SDK, the plugin's stable surface, imported
+  // at call time for the reason `defaultLayoutDeps` gives.
+  const nextly = async (): Promise<RewriteDirectApi> => {
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    return getCachedNextly();
+  };
+  return {
+    db: ctx.db,
+    dialect: ctx.dialect,
+    site: {
+      nextly,
+      collectionSlugs: () => registeredCollectionSlugs(ctx),
+      resolveCollection: slug =>
+        ctx.services.collections.getCollection(slug, undefined as never),
+      singles: () => singlesDeclaringBlocks(ctx),
+      locales: () =>
+        ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+      defaultLocale: () => ctx.config.localization?.defaultLocale,
+      layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+    },
+    hints: async componentId => {
+      const found = await composition.hostsOf?.placing([componentId]);
+      const seen = new Set<string>();
+      const hints: { slug: string; id: string }[] = [];
+      for (const host of found?.hosts ?? []) {
+        const key = `${host.slug}\u001F${host.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        hints.push({ slug: host.slug, id: host.id });
+      }
+      return hints;
+    },
+    store: composition.store,
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+  };
+}
+
+/**
+ * Every live Single whose declaration holds a blocks field, with its fields
+ * and its localization master switch, or `undefined` when the registry cannot
+ * be read whole. Orphaned code-first rows are left out, as `singlesHoldBlocks`
+ * leaves them out.
+ */
+async function singlesDeclaringBlocks(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<SingleToWalk[] | undefined> {
+  const declared = declaredSingleSlugs(ctx);
+  const configured = configuredSingles(ctx);
+  const localizedSite = (ctx.config.localization?.locales.length ?? 0) > 0;
+  const found: SingleToWalk[] = [];
+  for await (const rows of singlesRegistryPages(ctx)) {
+    if (rows === UNREADABLE_PAGE) return undefined;
+    const page = singlesDeclaringBlocksIn(rows, declared);
+    if (page === undefined) return undefined;
+    for (const single of page) {
+      found.push(
+        singleToWalk(single, configured.get(single.slug), localizedSite)
+      );
+    }
+  }
+  return found;
+}
+
+/** The Singles declared in code, by slug, as the site's config states them. */
+function configuredSingles(ctx: {
+  config?: { singles?: unknown };
+}): ReadonlyMap<string, { fields?: unknown; localized?: unknown }> {
+  const singles = ctx.config?.singles;
+  const bySlug = new Map<string, { fields?: unknown; localized?: unknown }>();
+  if (!Array.isArray(singles)) return bySlug;
+  for (const single of singles) {
+    const slug = (single as { slug?: unknown } | null)?.slug;
+    if (typeof slug === "string") {
+      bySlug.set(slug, single as { fields?: unknown; localized?: unknown });
+    }
+  }
+  return bySlug;
+}
+
+/**
+ * The live Singles on one registry page whose declaration holds a blocks
+ * field; `undefined` when a live row carries no readable slug, since a Single
+ * that cannot be named cannot be read.
+ */
+function singlesDeclaringBlocksIn(
+  rows: readonly unknown[],
+  declared: ReadonlySet<string> | undefined
+): { slug: string; fields?: unknown }[] | undefined {
+  const found: { slug: string; fields?: unknown }[] = [];
+  for (const row of rows) {
+    if (isOrphanedSingle(row, declared)) continue;
+    const slug = (row as { slug?: unknown } | null)?.slug;
+    if (typeof slug !== "string") return undefined;
+    const fields = (row as { fields?: unknown }).fields;
+    const reach = blocksFieldReach({ fields });
+    if (reach.fields.length > 0 || reach.unreachable) {
+      found.push({ slug, fields });
+    }
+  }
+  return found;
+}
+
 export const pageBuilder = (
   opts: PageBuilderOptions = {}
 ): PluginDefinition => {
@@ -940,6 +1093,21 @@ export const pageBuilder = (
   let composition: CompositionSetup | undefined;
 
   /**
+   * What the component-delete rewrite needs from the installed plugin,
+   * published by `init` for the reason `installed` is: the service is
+   * contributed before `init` runs and called long after it.
+   */
+  let rewriteInstall: RewriteInstall | null = null;
+  const requireRewriteInstall = (): RewriteInstall => {
+    if (rewriteInstall === null) {
+      throw new Error(
+        "[page-builder] the component-delete rewrite ran before the plugin was installed"
+      );
+    }
+    return rewriteInstall;
+  };
+
+  /**
    * The installed context, or a refusal naming why it is missing.
    *
    * Throwing beats defaulting here. Every plausible default is a claim about a
@@ -972,6 +1140,9 @@ export const pageBuilder = (
     reconcile?: CommittedWriteReconciler;
     origins?: OriginStore;
   } = {};
+  // What deriving retired ids from component history has read so far, shared
+  // by the repair after a failed record and the editor's facts read.
+  const retiredHistory = retiredHistoryMemo();
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -1149,6 +1320,17 @@ export const pageBuilder = (
             }
           ),
         onLayersLockUnjudged: warnLayersLockUnjudged,
+        // The components being deleted, read from the plugin's own table on
+        // each write that places a component. A table that cannot be read
+        // refuses only writes adding a component, and says so here.
+        fencedComponents: fencedComponentsReader(
+          () => fenceStore(ctx.db, ctx.dialect),
+          error =>
+            ctx.logger.warn(
+              "[page-builder] the components being deleted could not be read, so writes adding a component are refused until they can be",
+              { error }
+            )
+        ),
         onLockedExposures: found =>
           ctx.logger.warn(
             `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,
@@ -1239,8 +1421,19 @@ export const pageBuilder = (
               COMPONENT_RETIRED_SLUG,
           }),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          memo: retiredHistory,
         });
       }
+      // A write that keeps a reference to a component being deleted, committed
+      // after the deletion converted that document, sends the document back to
+      // be converted again from what was saved.
+      registerFencedWriteReport({
+        ctx,
+        fence: () => fenceStore(ctx.db, ctx.dialect),
+        progress: () => progressStore(ctx.db, ctx.dialect),
+        limits: () => opts.limits ?? DEFAULT_LIMITS,
+      });
+      rewriteInstall = rewriteInstallFor(ctx, opts, composition);
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in
       // the form.
@@ -1275,6 +1468,11 @@ export const pageBuilder = (
         // nothing anybody can observe: every consumer takes the conservative
         // branch and the answer stays a floor for ever.
         [USAGE_HEALTH_SERVICE]: () => usageHealthService(requireInstalled),
+        // Turning every copy of a component into plain blocks before it is
+        // deleted: the run (which fences the component), the rewrite of every
+        // host as the person who started it, and its progress.
+        [COMPONENT_DELETE_REWRITE_SERVICE]: () =>
+          componentDeleteRewriteService(requireRewriteInstall),
       },
       // The backfill sweep. Contributed unconditionally beside the index it
       // fills: the work is owed from the moment this plugin meets existing
@@ -1460,34 +1658,46 @@ export const pageBuilder = (
               })
             );
           },
-          // The ids a published removal retired, from the store the write
-          // hooks record them in. Where those hooks are not registered (the
-          // host renders components from a source of its own), nothing is
-          // recorded, so `null`, and the editor adds no field.
-          readRetired: ctx => async id => {
-            if (opts.componentReadiness === false) return null;
-            // A localized store records no retirements (see the write hooks),
-            // so none can be reported: `null`, and the editor adds no field.
-            if (
-              await storeIsLocalized(
-                ctx.services.collections,
-                componentStoreOf(opts).collection ??
-                  ctx.self.collections[COMPONENTS_SLUG] ??
-                  COMPONENTS_SLUG,
-                ctx.user
-              )
-            ) {
-              return null;
-            }
-            const store = retiredStore({
-              nextly: () => requireInstalled().nextly(),
-              collection:
-                ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-                COMPONENT_RETIRED_SLUG,
+          // The ids a published removal retired: those the write hooks
+          // recorded, and those the component's published history implies,
+          // recorded here when the table lacks them. Where the hooks are not
+          // registered (the host renders components from a source of its
+          // own), nothing is recorded, so `null`, and the editor adds no
+          // field. A localized store records no retirements (see the write
+          // hooks), so it answers `null` too.
+          readRetired: ctx => {
+            if (opts.componentReadiness === false)
+              return () => Promise.resolve(null);
+            const components =
+              componentStoreOf(opts).collection ??
+              ctx.self.collections[COMPONENTS_SLUG] ??
+              COMPONENTS_SLUG;
+            return reconciledRetired({
+              shape: () =>
+                componentStoreShape(
+                  ctx.services.collections,
+                  components,
+                  ctx.user
+                ),
+              reconcile: (id, lifecycle) =>
+                reconcileRetired(
+                  {
+                    history: ctx.services.versions,
+                    componentCollection: components,
+                    componentField: componentStoreOf(opts).field,
+                    lifecycle,
+                    memo: retiredHistory,
+                    store: retiredStore({
+                      nextly: () => requireInstalled().nextly(),
+                      collection:
+                        ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+                        COMPONENT_RETIRED_SLUG,
+                    }),
+                    logger: ctx.logger,
+                  },
+                  id
+                ),
             });
-            return (
-              (await store.of([id])).get(id) ?? { properties: [], slots: [] }
-            );
           },
         }),
         // How many placements chose one of a component's variants, for the
@@ -1565,6 +1775,20 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // A pattern, a component or a Layout as one file, with the components,
+        // shared styles, variables, breakpoints and media it depends on,
+        // read as the caller.
+        ...exportRoutes({
+          store: componentStoreOf(opts),
+          defaults: configStyle,
+        }),
+        // Such a file read against this site: a preview of what it adds,
+        // reuses and clashes with, or the import itself, as the caller.
+        importRoute({
+          store: componentStoreOf(opts),
+          defaults: configStyle,
+          reconcile: () => usage.reconcile,
+        }),
         // The editor's read of the stored site style, for anyone who may
         // edit something the builder opens: the canvas cannot draw without it.
         siteStyleRoute(componentStoreOf(opts)),

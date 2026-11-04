@@ -43,6 +43,11 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
   /** What an entry draws: its label unless said otherwise. */
   readonly renderChoice?: (choice: C) => React.ReactNode;
+  /**
+   * An entry's tooltip: its label unless said otherwise, such as a label and
+   * a value the row may cut short.
+   */
+  readonly choiceTitle?: (choice: C) => string;
   /** An entry's own style, such as a family drawn in itself. */
   readonly choiceStyle?: (choice: C) => React.CSSProperties | undefined;
   /** A class each entry carries beside the list's own. */
@@ -58,6 +63,7 @@ export function ChoiceList<C extends ListedChoice>({
   noMatch,
   groups,
   renderChoice,
+  choiceTitle,
   choiceStyle,
   choiceClassName,
 }: ChoiceListProps<C>): React.JSX.Element {
@@ -65,10 +71,19 @@ export function ChoiceList<C extends ListedChoice>({
   const [query, setQuery] = React.useState("");
   const searchable = choices.length > SEARCH_FROM;
   const needle = query.trim().toLowerCase();
-  const shown =
+  const matching =
     needle === ""
       ? choices
       : choices.filter(choice => choice.label.toLowerCase().includes(needle));
+  // In the order the rows are DRAWN: grouped, a list draws group by group,
+  // and the row it opens on and the one an arrow moves to have to be the
+  // ones the author sees there, not the next in the order they were given.
+  const shown =
+    groups === undefined
+      ? matching
+      : groups.flatMap(({ group }) =>
+          matching.filter(choice => choice.group === group)
+        );
   const [active, setActive] = React.useState(() =>
     Math.max(
       0,
@@ -127,7 +142,7 @@ export function ChoiceList<C extends ListedChoice>({
           : `nx-font-pick__option ${choiceClassName}`
       }
       // Cut with an ellipsis when long: whole on hover.
-      title={choice.label}
+      title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
       style={choiceStyle?.(choice)}
       onMouseMove={() => setActive(shown.indexOf(choice))}
       onClick={() => onPick(choice)}
