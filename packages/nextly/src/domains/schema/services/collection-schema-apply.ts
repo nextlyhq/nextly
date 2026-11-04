@@ -832,8 +832,12 @@ async function refuseIndexNamesTaken(
   const declared =
     desiredCollectionTable(collection, adapter.dialect).indexes ?? [];
   const taken = declared.flatMap(index => {
-    const live = covers.get(index.name);
-    if (live === undefined || index.columns.length === 0) return [];
+    if (index.columns.length === 0 || !uniqueness.has(index.name)) return [];
+    // An index under the name that does not stand on whole columns (partial, on an expression,
+    // a MySQL prefix, or invalid) is not described by its columns, but it still holds the name:
+    // the push's CREATE INDEX IF NOT EXISTS would skip it and enforce nothing.
+    const live = covers.get(index.name) ?? null;
+    if (live === null) return [{ index, live }];
     const sameColumns =
       live.length === index.columns.length &&
       live.every((column, i) => column === index.columns[i]);
@@ -847,9 +851,12 @@ async function refuseIndexNamesTaken(
       path: `fields.${index.columns[0]}`,
       code: "INDEX_NAME_TAKEN",
       message:
-        `The table already has an index "${index.name}" on ${live.join(", ")}, under the name ` +
-        `this change's ${index.unique ? "unique " : ""}index on ${index.columns.join(", ")} ` +
-        `takes. Remove that index first, then save again.`,
+        `The table already has an index "${index.name}" ` +
+        (live === null
+          ? "that is partial, on an expression or on part of a column"
+          : `on ${live.join(", ")}`) +
+        `, under the name this change's ${index.unique ? "unique " : ""}index on ` +
+        `${index.columns.join(", ")} takes. Remove that index first, then save again.`,
     })),
     logContext: {
       tableName,

@@ -320,6 +320,44 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     );
   });
 
+  // MySQL has no partial index; an index on part of the rows is the case this holds.
+  it.skipIf(dialect === "mysql")(
+    "refuses a unique field whose index's name a partial index holds, before anything changes",
+    async () => {
+      // A partial index is not described by its columns, but it holds the name all the same: the
+      // apply's CREATE INDEX IF NOT EXISTS would skip it, and nothing would enforce uniqueness.
+      await postsWith(
+        [{ name: "heading", type: "text" }],
+        [{ heading: "One" }, { heading: "Two" }]
+      );
+      const blocking = uniqueIndexNameForColumn("dc_posts", "code");
+      await query(
+        `CREATE INDEX "${blocking}" ON "dc_posts" ("id") WHERE "id" IS NOT NULL`
+      );
+      const fields = [
+        { name: "heading", type: "text" },
+        {
+          name: "code",
+          type: "text",
+          unique: true,
+          options: { variant: "short" },
+          validation: { maxLength: 64 },
+        },
+      ];
+
+      const refused = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields }
+      );
+
+      expect(refused.success, JSON.stringify(refused)).toBe(false);
+      expect(JSON.stringify(refused)).toContain(blocking);
+      expect(JSON.stringify(refused)).toContain("partial");
+      expect(await columnsOf("dc_posts")).not.toContain("code");
+      expect(await registeredFields("posts")).not.toContain("code");
+    }
+  );
+
   it.skipIf(dialect === "sqlite")(
     "refuses again, rather than recording a uniqueness it cannot enforce, while the name is taken",
     async () => {
