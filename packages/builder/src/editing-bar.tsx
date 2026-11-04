@@ -73,6 +73,11 @@ export interface EditingBarProps {
   readonly onRemove?: (id: string) => void;
   /** Keep the style's look on this block only. Absent withholds the item. */
   readonly onDetach?: (id: string) => void;
+  /**
+   * Why one style can't be detached, when its look can't be kept exactly:
+   * asked as its menu opens, so the item is held with the reason beside it.
+   */
+  readonly detachHeld?: (id: string) => string | undefined;
   /** Why the chip's actions are held (the block's lock), shown in its menu. */
   readonly chipActionsHeld?: string;
   /**
@@ -109,6 +114,7 @@ export function EditingBar({
   onTargetChange,
   onRemove,
   onDetach,
+  detachHeld,
   chipActionsHeld,
   targetHeld,
   actions,
@@ -177,6 +183,7 @@ export function EditingBar({
                   chip={chip}
                   onRemove={onRemove}
                   onDetach={onDetach}
+                  detachHeld={detachHeld}
                   held={chipActionsHeld}
                 />
               </span>
@@ -405,11 +412,13 @@ function ChipMenu({
   chip,
   onRemove,
   onDetach,
+  detachHeld,
   held,
 }: {
   chip: EditingBarChip;
   onRemove: ((id: string) => void) | undefined;
   onDetach: ((id: string) => void) | undefined;
+  detachHeld: ((id: string) => string | undefined) | undefined;
   held: string | undefined;
 }): React.JSX.Element | null {
   if (onRemove === undefined && onDetach === undefined) return null;
@@ -430,15 +439,10 @@ function ChipMenu({
       {/* Kept clear of the window's edge. */}
       <DropdownMenuContent align="start" collisionPadding={8}>
         {onDetach === undefined ? null : (
-          <DropdownMenuItem
-            disabled={held !== undefined}
+          <DetachItem
+            reason={held ?? detachHeld?.(chip.id)}
             onSelect={() => onDetach(chip.id)}
-          >
-            Detach: keep the look on this block only
-            {held === undefined ? null : (
-              <span className="nx-block-card__reason"> — {held}</span>
-            )}
-          </DropdownMenuItem>
+          />
         )}
         {onRemove === undefined ? null : (
           <DropdownMenuItem
@@ -450,6 +454,28 @@ function ChipMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * "Detach", or why it is held: the block's lock, or a look that can't be
+ * kept exactly. Its own component, so the reason is asked only while the
+ * menu is open.
+ */
+function DetachItem({
+  reason,
+  onSelect,
+}: {
+  reason: string | undefined;
+  onSelect: () => void;
+}): React.JSX.Element {
+  return (
+    <DropdownMenuItem disabled={reason !== undefined} onSelect={onSelect}>
+      Detach: keep the look on this block only
+      {reason === undefined ? null : (
+        <span className="nx-block-card__reason"> — {reason}</span>
+      )}
+    </DropdownMenuItem>
   );
 }
 

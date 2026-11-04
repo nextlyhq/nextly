@@ -262,6 +262,8 @@ describe("the shared style target", () => {
       supports?: Record<string, boolean>;
       /** Where a refusal that outlives its field is raised. */
       raise?: (message: string) => void;
+      /** The site's breakpoints, which Detach weighs. */
+      breakpoints?: BreakpointSet;
     } = {}
   ) {
     register(options.supports ?? { effects: true });
@@ -289,6 +291,9 @@ describe("the shared style target", () => {
     const panelFor = (current: EditorState) => (
       <InspectorPanel
         editor={current}
+        {...(options.breakpoints === undefined
+          ? {}
+          : { breakpoints: options.breakpoints })}
         classLibrary={options.library ?? [hero, card, promo]}
         sharedStyles={{
           mayChange: options.mayChange ?? true,
@@ -679,6 +684,47 @@ describe("the shared style target", () => {
     expect(raise).toHaveBeenCalledWith(
       "Card could not be detached from this block: the page could not take the change."
     );
+  });
+
+  it("holds Detach, saying why, when the look can't be kept on the block exactly", () => {
+    // Card's small-container value shows only where Promo's tablet value
+    // does not: a combined query the block's own rules can't say.
+    const early = {
+      ...card,
+      orderIndex: 0,
+      styles: { base: { "cq-sm": { color: "#aaaa00" } } } as NodeStyles,
+    };
+    const late = {
+      ...promo,
+      label: "Promo",
+      styles: { base: { md: { color: "#0000aa" } } } as NodeStyles,
+    };
+    const { editor } = mountTarget({
+      classes: ["c-card", "c-promo"],
+      library: [early, late],
+      breakpoints: {
+        viewport: [
+          { id: BASE_BREAKPOINT, label: "Desktop" },
+          { id: "md", label: "Tablet", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      } as BreakpointSet,
+    });
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    const item = screen.getByRole("menuitem", {
+      name: /^Detach: keep the look/,
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain(
+      "This look depends on screen and container width together, so it can't be detached yet."
+    );
+    fireEvent.click(item);
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
   it("raises a refusal through the shell once the author has switched target", async () => {
