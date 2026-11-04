@@ -128,6 +128,27 @@ describe("holding a lost removal", () => {
     });
   });
 
+  it("finds the publish before the removal past a page of drafts", async () => {
+    const memory = memoryHolder();
+    const pins = pinsOver(
+      memoryHistory([
+        { status: "published", fields: ["title"] },
+        ...Array.from({ length: 60 }, () => ({
+          status: "draft",
+          fields: [],
+        })),
+        { status: "published", fields: [] },
+      ]),
+      memory
+    );
+
+    expect(await pins.hold("hero", TITLE, true)).toBe(true);
+    expect(Object.fromEntries(memory.slots)).toEqual({
+      "removal-62-before": 1,
+      "removal-62": 62,
+    });
+  });
+
   it("pins the same removal once, however often it is held", async () => {
     const memory = memoryHolder();
     const pins = pinsOver(

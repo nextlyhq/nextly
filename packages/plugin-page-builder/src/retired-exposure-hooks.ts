@@ -115,6 +115,11 @@ export interface RetiredExposureHooksArgs {
    * until a repair records it (`retired-pins`).
    */
   pins?: RetiredPins;
+  /**
+   * How long to wait between looks for a removal written inside a caller's
+   * transaction to commit. A second by default; a test waits for nothing.
+   */
+  commitWait?: () => Promise<void>;
 }
 
 /**
@@ -180,7 +185,7 @@ async function recordRetirements(
     if (live?.live === true && componentId !== undefined) {
       await hold(args, context, componentId, retired, live.lifecycle);
     }
-    await repair(args, live, componentId);
+    await repair(args, live, componentId, inCallersTransaction(context));
   }
 }
 
@@ -189,9 +194,10 @@ async function recordRetirements(
  * the repair fails too, retention cannot prune the only record of it before
  * a later one is made. The repair releases them when it records the ids.
  *
- * Not inside a caller's transaction: the pin takes the component's write
- * lock, which that transaction holds. The repair still runs, and the next
- * one reads history while it holds the removal.
+ * Inside a caller's transaction the removal is not yet visible, and the pin
+ * would wait on the component's write lock, which that transaction holds. It
+ * is then made once the removal shows in history, which is when the
+ * transaction has committed (`holdOnceCommitted`).
  */
 async function hold(
   args: RetiredExposureHooksArgs,
@@ -200,18 +206,64 @@ async function hold(
   retired: RetiredExposures,
   lifecycle: boolean
 ): Promise<void> {
-  if (args.pins === undefined) return;
-  if ((context as { executor?: unknown }).executor !== undefined) {
-    args.ctx.logger.warn(
-      `[page-builder] the versions behind component "${componentId}"'s lost ` +
-        "retirement were not held against retention, as its write ran inside " +
-        "a transaction; a repair records them while history still has them.",
-      { componentId, retired }
-    );
+  const pins = args.pins;
+  if (pins === undefined) return;
+  if (inCallersTransaction(context)) {
+    void holdOnceCommitted(args, pins, componentId, retired, lifecycle);
     return;
   }
   try {
-    await args.pins.hold(componentId, retired, lifecycle);
+    await pins.hold(componentId, retired, lifecycle);
+  } catch (error) {
+    args.ctx.logger.error(
+      `[page-builder] the versions behind component "${componentId}"'s lost ` +
+        "retirement could not be held against retention; a repair records it " +
+        "while history still has them.",
+      { componentId, retired, error }
+    );
+  }
+}
+
+/** How many times a removal in a caller's transaction is looked for. */
+const COMMIT_LOOKS = 60;
+
+/** A second, not keeping the process alive. */
+function aSecond(): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, 1000);
+    if (typeof timer === "object" && "unref" in timer) timer.unref();
+  });
+}
+
+/**
+ * Hold a removal written inside a caller's transaction once it commits, then
+ * repair: the history the pool reads shows the removal only then. Looked for
+ * once a second for a minute; a transaction that rolled back never shows it,
+ * and nothing is held for a removal that did not happen. Never raises: it
+ * runs after the hook has returned.
+ */
+async function holdOnceCommitted(
+  args: RetiredExposureHooksArgs,
+  pins: RetiredPins,
+  componentId: string,
+  retired: RetiredExposures,
+  lifecycle: boolean
+): Promise<void> {
+  const wait = args.commitWait ?? aSecond;
+  try {
+    for (let look = 0; look < COMMIT_LOOKS; look += 1) {
+      await wait();
+      if (await pins.hold(componentId, retired, lifecycle)) {
+        await repair(args, { live: true, lifecycle }, componentId);
+        return;
+      }
+    }
+    args.ctx.logger.warn(
+      `[page-builder] component "${componentId}"'s removal, written in a ` +
+        "transaction, never showed in its history, so nothing was held for " +
+        "it; a transaction that rolled back made no removal.",
+      { componentId, retired }
+    );
   } catch (error) {
     args.ctx.logger.error(
       `[page-builder] the versions behind component "${componentId}"'s lost ` +
@@ -234,12 +286,16 @@ async function hold(
 async function repair(
   args: RetiredExposureHooksArgs,
   live: Live | undefined,
-  componentId: string | undefined
+  componentId: string | undefined,
+  inTransaction = false
 ): Promise<void> {
   if (live?.live !== true || componentId === undefined) return;
   const lifecycle = live.lifecycle;
   try {
-    await reconcileRetired(repairArgs(args, lifecycle), componentId);
+    await reconcileRetired(
+      repairArgs(args, lifecycle, inTransaction),
+      componentId
+    );
   } catch (error) {
     args.ctx.logger.error(
       `[page-builder] the retired fields of component "${componentId}" ` +
@@ -253,7 +309,13 @@ async function repair(
 /** What a repair of this store's retired ids reads and writes through. */
 function repairArgs(
   args: RetiredExposureHooksArgs,
-  lifecycle: boolean
+  lifecycle: boolean,
+  /**
+   * Whether the repair runs inside a caller's transaction. A release then
+   * waits: it takes the component's write lock, which that transaction holds,
+   * and a later repair makes it.
+   */
+  inTransaction = false
 ): ReconcileArgs {
   return {
     history: args.ctx.services.versions,
@@ -263,7 +325,7 @@ function repairArgs(
     store: args.store,
     logger: args.ctx.logger,
     ...(args.memo === undefined ? {} : { memo: args.memo }),
-    ...(args.pins === undefined ? {} : { pins: args.pins }),
+    ...(args.pins === undefined || inTransaction ? {} : { pins: args.pins }),
   };
 }
 
@@ -440,7 +502,11 @@ async function ownRetired(
     )) as { localized?: unknown; status?: unknown } | null;
     if (collection?.localized === true) return undefined;
     const repaired = await repairRetired(
-      repairArgs(args, collection?.status === true),
+      repairArgs(
+        args,
+        collection?.status === true,
+        inCallersTransaction(context)
+      ),
       componentId
     );
     return repaired.retired;
@@ -593,6 +659,14 @@ function removeOwnKeys(
     if (apply) delete record[key];
   }
   return removed;
+}
+
+/**
+ * Whether the hook runs inside a transaction its caller owns: core hands it
+ * that transaction's executor only then.
+ */
+function inCallersTransaction(context: HookContext<unknown>): boolean {
+  return (context as { executor?: unknown }).executor !== undefined;
 }
 
 /** A field of a row that may be absent. */

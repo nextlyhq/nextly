@@ -73,10 +73,13 @@ export interface RetiredPins {
 }
 
 /**
- * How many published versions `hold` reads looking for the removal. It runs
- * right after the publish that made it, so the pair is the newest two.
+ * How many published versions `hold` reads looking for the removal, and how
+ * many listing pages it reads to find them. It runs right after the publish
+ * that made it, so the pair is the newest two published versions, however
+ * many drafts were saved between them, up to the pages' bound.
  */
 const MAX_SEARCHED = 10;
+const MAX_PAGES = 100;
 
 /** How many listed versions one page returns. */
 const VERSIONS_PER_PAGE = 50;
@@ -160,13 +163,8 @@ async function removalOf(
   dropped: RetiredExposures,
   lifecycle: boolean
 ): Promise<{ before: number; after: number } | undefined> {
-  const rows = await history.list(ref, { limit: VERSIONS_PER_PAGE });
-  const served = rows
-    .filter(row => !lifecycle || row.status === "published")
-    .flatMap(row => (typeof row.versionNo === "number" ? [row.versionNo] : []))
-    .slice(0, MAX_SEARCHED);
   let after: number | undefined;
-  for (const versionNo of served) {
+  for await (const versionNo of servedVersions(history, ref, lifecycle)) {
     const exposure = exposedIn(
       (await history.get(ref, versionNo)).snapshot,
       field
@@ -178,6 +176,62 @@ async function removalOf(
     after = versionNo;
   }
   return undefined;
+}
+
+/**
+ * The served versions' numbers, newest first, paged past drafts, at most
+ * {@link MAX_SEARCHED} of them from at most {@link MAX_PAGES} pages.
+ */
+async function* servedVersions(
+  history: ComponentHistory,
+  ref: ComponentHistoryRef,
+  lifecycle: boolean
+): AsyncGenerator<number> {
+  let cursor: number | undefined;
+  let served = 0;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const rows = await history.list(ref, pageAfter(cursor));
+    for (const versionNo of servedIn(rows, lifecycle)) {
+      if (served === MAX_SEARCHED) return;
+      served += 1;
+      yield versionNo;
+    }
+    if (rows.length < VERSIONS_PER_PAGE) return;
+    cursor = oldestIn(rows) ?? cursor;
+  }
+}
+
+/** One page of the listing, below `cursor` when one is given. */
+function pageAfter(cursor: number | undefined): {
+  limit: number;
+  cursor?: number;
+} {
+  return cursor === undefined
+    ? { limit: VERSIONS_PER_PAGE }
+    : { limit: VERSIONS_PER_PAGE, cursor };
+}
+
+/** The numbers of a page's served versions, newest first. */
+function servedIn(
+  rows: readonly { versionNo: number | null; status: string }[],
+  lifecycle: boolean
+): number[] {
+  return rows.flatMap(row =>
+    typeof row.versionNo === "number" &&
+    (!lifecycle || row.status === "published")
+      ? [row.versionNo]
+      : []
+  );
+}
+
+/** The oldest version number a page lists: where the next page starts. */
+function oldestIn(
+  rows: readonly { versionNo: number | null }[]
+): number | undefined {
+  const numbers = rows.flatMap(row =>
+    typeof row.versionNo === "number" ? [row.versionNo] : []
+  );
+  return numbers.at(-1);
 }
 
 /** Whether a definition exposes any of these ids. */

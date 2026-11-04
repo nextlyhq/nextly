@@ -11,7 +11,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type RetiredExposures,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import type { ComponentHistory } from "./retired-history";
@@ -175,6 +175,7 @@ function harness(
     store,
     limits: () => LIMITS,
     ...(options.pins === undefined ? {} : { pins: options.pins }),
+    commitWait: async () => {},
   });
   const run = (phase: string, collection: string, context: Row) =>
     handlers.get(`${phase} ${collection}`)!({
@@ -380,15 +381,21 @@ describe("recording retired ids at publish", () => {
     });
   });
 
-  /** Pins that record what they are asked to do. */
-  function recordingPins() {
+  /**
+   * Pins that record what they are asked to do. `shows` answers, look by
+   * look, whether the removal is in history yet; true from then on.
+   */
+  function recordingPins(shows: boolean[] = []) {
     const calls: string[] = [];
+    let looks = 0;
     const pins: RetiredPins = {
       hold: async (componentId, dropped, lifecycle) => {
         calls.push(
           `hold ${componentId} ${dropped.properties.join(",")} ${lifecycle}`
         );
-        return true;
+        const shown = shows[looks] ?? true;
+        looks += 1;
+        return shown;
       },
       release: async componentId => {
         calls.push(`release ${componentId}`);
@@ -460,8 +467,29 @@ describe("recording retired ids at publish", () => {
     expect(calls).toEqual([]);
   });
 
-  it("holds nothing inside a caller's transaction, and says so", async () => {
-    const { pins, calls } = recordingPins();
+  it("holds a removal made in a caller's transaction once it commits", async () => {
+    const { pins, calls } = recordingPins([false, false, true]);
+    const failing: RetiredStore = {
+      of: async () => new Map(),
+      retire: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run } = harness({ store: failing, pins });
+
+    await run("afterUpdate", COMPONENTS, {
+      ...published(definition(["title"]), definition([])),
+      executor: {},
+    });
+
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    expect(new Set(calls)).toEqual(new Set(["hold hero title true"]));
+  });
+
+  it("holds nothing for a transaction's removal that never shows, and says so", async () => {
+    const { pins, calls } = recordingPins(
+      Array.from({ length: 60 }, () => false)
+    );
     const failing: RetiredStore = {
       of: async () => new Map(),
       retire: async () => {
@@ -475,10 +503,37 @@ describe("recording retired ids at publish", () => {
       executor: {},
     });
 
-    expect(calls.filter(call => call.startsWith("hold"))).toEqual([]);
-    expect(warnings.some(warning => warning.message.includes('"hero"'))).toBe(
-      true
+    await vi.waitFor(() =>
+      expect(
+        warnings.some(warning => warning.message.includes("never showed"))
+      ).toBe(true)
     );
+    expect(calls).toHaveLength(60);
+  });
+
+  it("releases nothing from inside a caller's transaction", async () => {
+    const { pins, calls } = recordingPins();
+    const { run } = harness({
+      pins,
+      history: [definition(["title", "body"]), definition(["body"])],
+    });
+
+    await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      operation: "update",
+      originalData: { id: "hero", content: definition(["body"]) },
+      data: { content: definition(["body"]) },
+      executor: {},
+    });
+    await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      operation: "update",
+      originalData: { id: "hero", content: definition(["body"]) },
+      data: { content: definition(["body"]) },
+    });
+
+    // Only the write outside a transaction released.
+    expect(calls).toEqual(["release hero"]);
   });
 
   it("repairs a failed record from the component's history", async () => {
