@@ -36,6 +36,9 @@ const LANGUAGES = `dc_${DOCS}_locales`;
 const NOTES = "notes";
 /** Draft and published, so a published entry holds an edit as a working draft. */
 const POSTS = "posts";
+/** Keeps history and runs an after-change hook, to see a refusal reach neither. */
+const HOOKED = "hooked";
+let afterChangeCalls = 0;
 /** A person whose saves are named in a refusal. */
 const ANA = {
   id: "user-ana",
@@ -67,6 +70,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineCollection({
         slug: NOTES,
         access: OPEN,
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: HOOKED,
+        versions: true,
+        access: OPEN,
+        hooks: {
+          afterChange: [
+            () => {
+              afterChangeCalls += 1;
+            },
+          ],
+        },
         fields: [text({ name: "title" })],
       }),
       defineCollection({
@@ -865,6 +881,41 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(unversioned).toMatchObject({ code: "STALE_VERSION" });
       expect(unversioned.publicData).not.toHaveProperty("historyVersion");
+    });
+
+    it("refuses with no after-change hook, no history event and no version recorded", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: HOOKED, overrideAccess: true },
+        { title: "first" }
+      );
+      const id = idOf(created);
+      await update(t, HOOKED, id, { title: "theirs" });
+      const count = async (table: string) =>
+        (await t.adapter.select<Record<string, unknown>>(table, {})).length;
+      const before = {
+        hooks: afterChangeCalls,
+        events: await count("nextly_content_events"),
+        versions: await count("nextly_versions"),
+        row: await stored(t, `dc_${HOOKED}`, id),
+      };
+      // The hook does run for an applied save, so its silence below means something.
+      expect(before.hooks).toBeGreaterThan(0);
+
+      const refused = await update(t, HOOKED, id, {
+        title: "mine",
+        _rev: revOf(created),
+      });
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      const flags = refused as { eventRecorded?: boolean; committed?: boolean };
+      expect(flags.eventRecorded ?? false).toBe(false);
+      expect(flags.committed ?? false).toBe(false);
+      expect({
+        hooks: afterChangeCalls,
+        events: await count("nextly_content_events"),
+        versions: await count("nextly_versions"),
+        row: await stored(t, `dc_${HOOKED}`, id),
+      }).toEqual(before);
     });
   }
 );
