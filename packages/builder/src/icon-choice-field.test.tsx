@@ -232,6 +232,49 @@ describe("IconChoiceField", () => {
     ).toBeDefined();
   });
 
+  it("says what the fit that applies does, under the icons", () => {
+    const fit = alignmentGroupFor(
+      "object-fit",
+      ["fill", "contain", "cover", "none", "scale-down"],
+      {
+        writingMode: "horizontal-tb",
+        rtl: false,
+        flex: false,
+        direction: "row",
+      }
+    )!;
+    const { rerender } = render(
+      <IconChoiceField
+        id="fit"
+        labelledBy="label"
+        group={fit}
+        stored="cover"
+        actionName="Object fit"
+        describedBy={undefined}
+        onCommit={() => "applied"}
+      />
+    );
+    expect(screen.getByText("Fills the box; edges may be cut.")).toBeDefined();
+    // An inherited fit is said too: it is the one the canvas draws.
+    rerender(
+      <InheritedValue.Provider value="contain">
+        <IconChoiceField
+          id="fit"
+          labelledBy="label"
+          group={fit}
+          stored={undefined}
+          actionName="Object fit"
+          describedBy={undefined}
+          onCommit={() => "applied"}
+        />
+      </InheritedValue.Provider>
+    );
+    expect(screen.queryByText("Fills the box; edges may be cut.")).toBeNull();
+    expect(
+      screen.getByText("Shows the whole image inside the box.")
+    ).toBeDefined();
+  });
+
   it("shows a stored spelling neither the icons nor the list carry, in More", () => {
     // The engine accepts spellings outside the catalogue's list, "inherit"
     // among them; shown as unset, an active declaration would look absent.

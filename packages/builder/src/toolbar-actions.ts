@@ -966,7 +966,8 @@ export function toolbarPlacement(
   toolbar: ToolbarSize,
   canvas: ToolbarSize,
   gap: number = TOOLBAR_GAP_PX,
-  screen: ToolbarScreen = WHOLE_PAGE
+  screen: ToolbarScreen = WHOLE_PAGE,
+  parts: readonly Rect[] = [block]
 ): ToolbarPlacement {
   const above = block.y - toolbar.height - gap;
   const below = block.y + block.height + gap;
@@ -981,7 +982,11 @@ export function toolbarPlacement(
   // off-screen.
   const left = screen.left ?? Number.NEGATIVE_INFINITY;
   const right = screen.right ?? Number.POSITIVE_INFINITY;
-  const crosses = block.x < right && block.x + block.width > left;
+  // Judged by each selected block, not by their union: two blocks off
+  // opposite sides have a union that crosses the screen through the gap.
+  const crosses = parts.some(
+    part => part.x < right && part.x + part.width > left
+  );
   const minX = Math.max(0, crosses ? left : 0);
   const maxX =
     Math.min(canvas.width, crosses ? right : Number.POSITIVE_INFINITY) -

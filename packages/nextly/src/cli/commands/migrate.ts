@@ -2260,6 +2260,39 @@ async function refuseUniqueFileThatCannotHold(
 }
 
 /**
+ * Refuses a companion file whose header records the settings a move out of translation applies
+ * (an `archive` or `shared` file, or a `unique` file dropping a per-language index ahead of them),
+ * where the fields' default-language values cannot take them
+ * (`refuseLeavingFileThatCannotTakeItsSettings`). Any other file, and one written before headers
+ * recorded settings, passes untouched.
+ */
+async function refuseLeavingFileThatCannotTakeItsSettings(
+  adapter: DrizzleAdapter,
+  localization: LocalizationMigrationIntent | undefined,
+  filename: string
+): Promise<void> {
+  // The archive and shared files of a move out of translation carry its settings, and so does a
+  // per-language unique-index drop that runs before them for a field unique before and after.
+  if (
+    localization?.kind !== "archive" &&
+    localization?.kind !== "shared" &&
+    localization?.kind !== "unique"
+  )
+    return;
+  if (localization.spec.settings === undefined) return;
+  const { refuseLeavingFileThatCannotTakeItsSettings: refuse } = await import(
+    "../../domains/i18n/migration/leaving-constraint-preconditions"
+  );
+  // The shared file runs after the main file, so the main table has the fields' columns by then.
+  await refuse(
+    adapter,
+    localization.spec,
+    filename,
+    localization.kind === "shared"
+  );
+}
+
+/**
  * Phase 2 — apply pending user migration files via §4.7 drift reconciliation.
  * Walks files in lex order, carrying each file's target snapshot forward as the
  * next file's baseline. Returns the count actually applied.
@@ -2369,6 +2402,14 @@ export async function runFileMigrations(args: {
       m.localization,
       filename,
       m.upSql
+    );
+    // A file moving fields out of translation is refused here too, where their default language's
+    // values cannot take the Required or Unique setting the move applies after its copy: at the
+    // archive file, before the move's first statement, and again at the shared file.
+    await refuseLeavingFileThatCannotTakeItsSettings(
+      dz,
+      m.localization,
+      filename
     );
 
     if (!target) {

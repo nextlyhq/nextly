@@ -35,6 +35,7 @@ import {
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
+import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
 
@@ -550,6 +551,94 @@ describe("BlockToolbar", () => {
       shown = 150;
       fireEvent(window, new Event("resize"));
       expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("fades while the pointer is over another block, and not over its own", () => {
+    // The bar sits over the block above the selection, so a hovered block
+    // there would otherwise be covered by it. Faded rather than removed, so a
+    // pointer heading for the bar still reaches its buttons.
+    function PointAt({ id }: { id: string | null }) {
+      const point = useHoveredBlockSetter();
+      React.useEffect(() => point(id), [id, point]);
+      return null;
+    }
+    const editor = editorSpy(pair(), "a");
+    const { rerender } = render(
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        {tree(editor, {})}
+      </HoveredBlockProvider>
+    );
+    const bar = screen.getByRole("toolbar", { name: "Block actions" });
+    expect(bar.hasAttribute("data-faded")).toBe(true);
+    rerender(
+      <HoveredBlockProvider>
+        <PointAt id="a" />
+        {tree(editor, {})}
+      </HoveredBlockProvider>
+    );
+    expect(bar.hasAttribute("data-faded")).toBe(false);
+  });
+
+  it("keeps its height clear at the top of the scroller while it is drawn", () => {
+    // `scroll-padding-top`, so a block scrolled or focused into view is not
+    // left under the bar (WCAG 2.4.11): the bar's 40px and its 6px gap.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(200, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      const { unmount } = render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      expect(scroller.style.scrollPaddingTop).toBe("46px");
+      unmount();
+      expect(scroller.style.scrollPaddingTop).toBe("");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("keeps a larger clearance the scroller already had", () => {
+    // A site keeping focused blocks below its sticky header sets its own
+    // scroll-padding-top; the bar's 46px must not shrink it to the bar alone.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(200, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div
+          data-scroller=""
+          style={{ overflowY: "auto", scrollPaddingTop: "80px" }}
+        >
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      expect(scroller.style.scrollPaddingTop).toBe("80px");
     } finally {
       boxes.mockRestore();
     }

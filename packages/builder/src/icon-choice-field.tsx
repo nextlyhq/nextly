@@ -55,12 +55,14 @@ import {
   CaseSensitive,
   CaseUpper,
   Circle,
+  Crop,
   Columns3,
   EyeOff,
   Grid2x2,
   Minus,
   MoreHorizontal,
   RectangleHorizontal,
+  Shrink,
   StretchHorizontal,
   StretchVertical,
   WrapText,
@@ -111,10 +113,12 @@ const ICONS: Readonly<Record<string, LucideIcon>> = {
   CaseSensitive,
   CaseUpper,
   Columns3,
+  Crop,
   EyeOff,
   Grid2x2,
   Minus,
   RectangleHorizontal,
+  Shrink,
   StretchHorizontal,
   StretchVertical,
   WrapText,
@@ -206,17 +210,17 @@ export function IconChoiceField({
   // and other spellings): in More, as stored, in the place of a value it
   // reads the same as or else first, so an active declaration never reads as
   // unset and is never listed twice.
-  // So is an inherited value no icon draws, so the field shows what the
-  // canvas uses rather than nothing at all.
-  const unlisted =
-    current !== undefined
-      ? chosen === -1
-        ? current
-        : ""
-      : shownInherited !== undefined && iconFor(shownInherited) === -1
-        ? shownInherited
-        : "";
-  const more = menuKeywords(group.cssProperty, group.rest, unlisted);
+  const more = moreValues(group, {
+    current,
+    chosen,
+    inherited: shownInherited,
+    iconFor,
+  });
+  const { help, helpId, describedByAll } = useAppliedHelp(
+    group,
+    current ?? shownInherited,
+    describedBy
+  );
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -226,7 +230,7 @@ export function IconChoiceField({
           <div
             role="radiogroup"
             aria-labelledby={labelledBy}
-            aria-describedby={describedBy}
+            aria-describedby={describedByAll}
             className="nx-icon-choice__group"
           >
             {options.map((option, index) => {
@@ -281,9 +285,72 @@ export function IconChoiceField({
             />
           )}
         </div>
+        {help === undefined ? null : (
+          <p className="nx-inspector__note nx-icon-choice__help" id={helpId}>
+            {help}
+          </p>
+        )}
       </div>
     </TooltipProvider>
   );
+}
+
+/**
+ * The values beside the icons: the group's list, with a stored value no icon
+ * draws in the place of the one it reads the same as, or else first. So is
+ * an inherited value no icon draws, so the field shows what the canvas uses
+ * rather than nothing at all.
+ */
+function moreValues(
+  group: AlignmentGroup,
+  {
+    current,
+    chosen,
+    inherited,
+    iconFor,
+  }: {
+    current: string | undefined;
+    chosen: number;
+    inherited: string | undefined;
+    iconFor: (value: string | undefined) => number;
+  }
+): readonly string[] {
+  const unlisted =
+    current !== undefined
+      ? chosen === -1
+        ? current
+        : ""
+      : inherited !== undefined && iconFor(inherited) === -1
+        ? inherited
+        : "";
+  return menuKeywords(group.cssProperty, group.rest, unlisted);
+}
+
+/**
+ * What the value that applies does, set here or inherited, where the group
+ * says it in words (an image's fit), and the ids the group is described by
+ * with that line among them.
+ */
+function useAppliedHelp(
+  group: AlignmentGroup,
+  applies: string | undefined,
+  describedBy: string | undefined
+): {
+  help: string | undefined;
+  helpId: string;
+  describedByAll: string | undefined;
+} {
+  const helpId = React.useId();
+  const help =
+    applies === undefined ? undefined : group.help?.[foldKeyword(applies)];
+  const ids = [describedBy, help === undefined ? undefined : helpId].filter(
+    (id): id is string => id !== undefined
+  );
+  return {
+    help,
+    helpId,
+    describedByAll: ids.length === 0 ? undefined : ids.join(" "),
+  };
 }
 
 /** The class an icon is drawn with: turned a quarter, for text down the page. */

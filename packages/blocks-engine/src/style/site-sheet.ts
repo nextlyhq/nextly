@@ -28,6 +28,7 @@ import {
   resolveTokenPrefix,
   tokenIdentity,
 } from "./site-tokens";
+import type { SpacingMode } from "./spacing-mode";
 
 /** Everything the shared sheet is built from. All of it is site configuration, not document content. */
 export interface SiteSheetInput {
@@ -83,6 +84,14 @@ export interface SiteSheetInput {
    * all. The tiers split across two sheets; the option must not.
    */
   previewStates?: boolean;
+  /**
+   * The site's spacing model, carried beside the other site inputs so a
+   * renderer handed this record compiles the page under the model the site
+   * chose. This sheet writes nothing different for it: block defaults reach
+   * it only when a caller states them, already resolved for the model. See
+   * `style/spacing-mode`.
+   */
+  spacingMode?: SpacingMode;
 }
 
 /** The shared sheet and the name it is addressed by. */

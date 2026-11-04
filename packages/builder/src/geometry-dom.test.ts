@@ -30,6 +30,7 @@ import {
   containerEdges,
   hasScrollbarGutter,
   hostPointInFrame,
+  hostScrollerBandOf,
   visibleBandOf,
   overflowApplies,
   renderSkips,
@@ -1341,6 +1342,41 @@ describe("the part of a scroller on screen, in canvas content coordinates", () =
     });
   });
 
+  it("keeps a scaled scroller's client box in its painted units", () => {
+    // Drawn at 2x: the border box is read painted, the client box in layout
+    // pixels. 885 layout pixels shown are 1770 painted, which the root's own
+    // 2x brings back to 885 of the canvas's.
+    const region = document.createElement("section");
+    region.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        width: 1800,
+        height: 1600,
+        bottom: 1600,
+      }) as DOMRect;
+    Object.defineProperty(region, "offsetWidth", { value: 900 });
+    Object.defineProperty(region, "offsetHeight", { value: 800 });
+    Object.defineProperty(region, "clientWidth", { value: 885 });
+    Object.defineProperty(region, "clientHeight", { value: 785 });
+    const root = document.createElement("div");
+    region.appendChild(root);
+    document.body.appendChild(region);
+    Object.defineProperty(root, "offsetWidth", { value: 900 });
+    Object.defineProperty(root, "offsetHeight", { value: 3000 });
+    root.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, left: 0, top: 0, width: 1800, height: 6000 }) as DOMRect;
+
+    expect(visibleBandOf(region, root)).toEqual({
+      x: 0,
+      y: 0,
+      width: 885,
+      height: 785,
+    });
+  });
+
   it("leaves out a frame viewport's scrollbar", () => {
     const inner = frameDocument();
     const view = inner.defaultView;
@@ -1394,5 +1430,61 @@ describe("the part of a scroller on screen, in canvas content coordinates", () =
       width: 900,
       height: 800,
     });
+  });
+});
+
+describe("the host's scroller around a frame, in the frame's canvas", () => {
+  it("is the part of the frame the host's scroller shows", () => {
+    // A frame zoomed past the region it sits in, which scrolls it: the region
+    // shows 800x600 of a 1600x1200 frame scrolled 300 down. The canvas in the
+    // frame sees content 300 to 900 of it.
+    const region = document.createElement("div");
+    region.style.overflowY = "auto";
+    region.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        width: 800,
+        height: 600,
+        bottom: 600,
+      }) as DOMRect;
+    const frame = document.createElement("iframe");
+    region.appendChild(frame);
+    document.body.appendChild(region);
+    frame.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: -300,
+        left: 0,
+        top: -300,
+        width: 1600,
+        height: 1200,
+        bottom: 900,
+      }) as DOMRect;
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    const root = inner.createElement("div");
+    inner.body.appendChild(root);
+    root.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, left: 0, top: 0, width: 1600, height: 1200 }) as DOMRect;
+
+    expect(hostScrollerBandOf(frame, root)).toEqual({
+      x: 0,
+      y: 300,
+      width: 800,
+      height: 600,
+    });
+  });
+
+  it("is nothing for a frame no host scroller holds", () => {
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    const root = inner.createElement("div");
+    inner.body.appendChild(root);
+    expect(hostScrollerBandOf(frame, root)).toBeNull();
   });
 });

@@ -5,10 +5,7 @@
  *
  * @module domains/workflows/permissions
  */
-import {
-  isSystemResource,
-  PermissionActionSchema,
-} from "../../schemas/_zod/rbac";
+import { PermissionActionSchema } from "../../schemas/_zod/rbac";
 
 import type { Workflow } from "./types";
 
@@ -50,21 +47,21 @@ export function isPublishWithoutReview(permission: {
   );
 }
 
+/** The group a workflow's seeded permissions are stored under, which marks where they came from. */
+export const WORKFLOW_PERMISSION_GROUP = "workflow";
+
 /**
- * Whether a stored permission row has the shape only a workflow seeds: owned by no app or plugin,
- * on a collection or Single rather than a system resource, with an action no entity is built with.
- * Read from the row itself, so a row a workflow seeded stays one after the workflow is detached or
- * its step's action is renamed, when the registry no longer names it.
+ * Whether a stored permission row is one a workflow seeded: owned by no app or plugin, and stored
+ * under the workflow group. Read from the row itself, so a row a workflow seeded stays one after
+ * the workflow is detached or its step's action is renamed, when the registry no longer names it,
+ * while a permission an admin created with an action of their own is not one.
  */
-export function hasWorkflowSeededShape(permission: {
-  action: string;
-  resource: string;
+export function isWorkflowSeededRow(permission: {
   owner: string | null;
+  group: string | null;
 }): boolean {
   return (
-    permission.owner === null &&
-    !isSystemResource(permission.resource) &&
-    !BUILT_IN_ACTIONS.has(permission.action.toLowerCase())
+    permission.owner === null && permission.group === WORKFLOW_PERMISSION_GROUP
   );
 }
 

@@ -858,6 +858,25 @@ describe("toolbarPlacement", () => {
     expect(at.x).toBe(0);
   });
 
+  it("judges a set of blocks off both sides by each block, not by their union", () => {
+    // 0..100 and 2000..2100 with the screen at 500..1500: their union crosses
+    // the screen through the gap between them, though neither block does.
+    const screen = { top: 0, bottom: 900, left: 500, right: 1500 };
+    const parts = [
+      { x: 0, y: 200, width: 100, height: 50 },
+      { x: 2000, y: 200, width: 100, height: 50 },
+    ];
+    const at = toolbarPlacement(
+      { x: 0, y: 200, width: 2100, height: 50 },
+      bar,
+      { width: 3000, height: 3000 },
+      TOOLBAR_GAP_PX,
+      screen,
+      parts
+    );
+    expect(at.x).toBe(0);
+  });
+
   it("is left where it is for a block scrolled wholly out of view", () => {
     const screen = { top: 600, bottom: 1400 };
     expect(
