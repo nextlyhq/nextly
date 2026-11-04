@@ -64,6 +64,7 @@ const PER_DOCUMENT_COLUMNS = [
   "_changed_by_kind",
   "_changed_by_id",
   "_changed_by_principal_kind",
+  "_changed_at",
 ];
 
 const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-docver-");
@@ -417,12 +418,15 @@ describe.each(getConfiguredTestDialects())(
             kind: row._changed_by_kind,
             id: row._changed_by_id,
             principal: row._changed_by_principal_kind,
+            changedAt: row._changed_at,
           }).toEqual({
             table,
             revision: 1,
             kind: null,
             id: null,
             principal: null,
+            // No time is known for a row from before the column.
+            changedAt: null,
           });
         }
       }

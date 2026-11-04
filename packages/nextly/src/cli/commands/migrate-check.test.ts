@@ -149,6 +149,7 @@ describe("runChecks (F11 PR 4)", () => {
                 type: "varchar",
                 nullable: true,
               },
+              { name: "_changed_at", type: "timestamp", nullable: true },
             ],
           },
         ],

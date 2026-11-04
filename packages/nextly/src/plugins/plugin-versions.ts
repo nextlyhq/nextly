@@ -37,7 +37,8 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import { runAsPrincipal } from "../auth/principal-scope";
-import type { RequestActor } from "../auth/request-actor";
+import { SYSTEM_ACTOR, type RequestActor } from "../auth/request-actor";
+import { getService } from "../di";
 import {
   authorizeChecked,
   checkedCaller,
@@ -355,6 +356,40 @@ function refuseOtherAuthor(
  * id, so a discard made with a key is refused rather than recorded against
  * the key's owner, who did not make it. The count is of the drafts removed.
  */
+/**
+ * A trusted plugin's discard of a working draft: through the document's own
+ * service, as every other discard goes, never straight to the draft table. The
+ * service deletes the draft under the document's lock and, in the same
+ * transaction, moves the document's version: what a reader of the draft would
+ * see has changed. Page history has no document version, so it keeps the
+ * direct delete.
+ */
+async function discardTrusted(
+  ref: VersionRef,
+  locale: string | null,
+  service: () => VersionsService
+): Promise<number> {
+  if (ref.scopeKind === "collection") {
+    return getService("collectionsHandler")
+      .getEntryService()
+      .discardWorkingDraftCounted({
+        collectionName: ref.scopeSlug,
+        entryId: ref.entryId,
+        locale,
+        actor: SYSTEM_ACTOR,
+      });
+  }
+  if (ref.scopeKind === "single") {
+    return getService("singleEntryService").discardWorkingDraftCounted({
+      slug: ref.scopeSlug,
+      entryId: ref.entryId,
+      locale,
+      actor: SYSTEM_ACTOR,
+    });
+  }
+  return service().deleteWorkingDraft(ref, locale);
+}
+
 async function discardAsWriter(
   ref: VersionRef,
   locale: string | null,
@@ -448,7 +483,7 @@ export function pluginVersionWrites(
         const writer = await checkedWriter(ref, resolved, "discard", {
           locale,
         });
-        if (!writer) return service().deleteWorkingDraft(ref, locale);
+        if (!writer) return discardTrusted(ref, locale, service);
         return discardAsWriter(ref, locale, writer);
       });
     },

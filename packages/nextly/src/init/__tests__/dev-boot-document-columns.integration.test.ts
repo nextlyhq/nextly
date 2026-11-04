@@ -42,6 +42,7 @@ const PER_DOCUMENT_COLUMNS = [
   "_changed_by_kind",
   "_changed_by_id",
   "_changed_by_principal_kind",
+  "_changed_at",
 ];
 
 const TABLES = [

@@ -172,9 +172,10 @@ import {
   bumpDocumentRevision,
   documentVersionOn,
   mainRowBump,
-  revisionBumpColumns,
   setDocumentVersion,
+  translationRevisionBumpColumns,
   translationTableOf,
+  updateTimeOf,
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
 import {
@@ -3305,7 +3306,10 @@ export class SingleMutationService extends BaseService {
                         componentFieldData: attemptComponentFields,
                         manyToManyData: {},
                       },
-                      savedBy
+                      savedBy,
+                      updateTimeOf(
+                        (mainPayload as { updated_at?: unknown }).updated_at
+                      )
                     ),
                   },
                   this.whereEq("id", existingDoc.id),
@@ -3900,7 +3904,10 @@ export class SingleMutationService extends BaseService {
                 {
                   [COMPANION_STATUS_COLUMN]: companionStatus,
                   // Each translation row moved is a save of that language.
-                  ...revisionBumpColumns(savedBy),
+                  ...translationRevisionBumpColumns(
+                    savedBy,
+                    this.adapter.dialect
+                  ),
                 },
                 {
                   and: [

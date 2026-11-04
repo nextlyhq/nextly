@@ -515,6 +515,28 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     },
     addedByMigrateStep: true,
   },
+  {
+    // When the save that last moved `_revision` was made: written in the same statement as the
+    // counter and the changer, which `updated_at` is not on every save — a held working draft, a
+    // status moved on translation rows only, a change to components or relations alone. Declared
+    // exactly as `updated_at` is on each dialect and written from the same clock, so the two compare
+    // as one kind of moment. Nullable with no default: a row predating the column has no known
+    // time, and a default would invent one.
+    name: "_changed_at",
+    camelName: "_changed_at",
+    appliesTo: BOTH_ENTITIES,
+    presence: "always",
+    writableByClient: false,
+    publishedUnderCamelName: false,
+    strippedFromResponses: true,
+    reservedIn: [],
+    shape: {
+      postgresql: { kind: "timestamp", nullable: true },
+      mysql: { kind: "timestamp", nullable: true },
+      sqlite: { kind: "timestamp", nullable: true },
+    },
+    addedByMigrateStep: true,
+  },
 ];
 
 // ============================================================

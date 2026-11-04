@@ -31,6 +31,7 @@ import { contentEventActor } from "../content-events/actor";
 import type { SanitizedLocalizationConfig } from "../i18n/config/types";
 import { isLocaleSelector } from "../i18n/locale-selector";
 import { resolveRequestedLocale } from "../i18n/resolve-locale";
+import { systemColumnDriverValue } from "../schema/services/runtime-schema-generator";
 
 export { DOCUMENT_VERSION_KEY };
 
@@ -136,20 +137,63 @@ export function changerColumns(
   };
 }
 
+/** The column holding when a row's counter last moved. */
+const CHANGED_AT_COLUMN = "_changed_at";
+
 /**
- * What one save adds to the UPDATE of a row it changes: the counter
- * incremented by the database, and the changer.
+ * What one save adds to the UPDATE of a document's own row: the counter
+ * incremented by the database, the changer, and when — `at`, the same moment
+ * the save writes to `updated_at` when it writes one, so the two compare
+ * equal. The row's runtime model declares the column, so it stores the value
+ * exactly as it stores `updated_at`.
  *
  * The increment is an expression, never a value computed from a read, so two
  * saves can never both write the same next version: the row lock the UPDATE
  * takes orders them, and each adds one to what the other committed.
  */
 export function revisionBumpColumns(
-  actor: RequestActor
+  actor: RequestActor,
+  at: Date = new Date()
 ): Record<string, unknown> {
   return {
     [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
     ...changerColumns(actor),
+    [CHANGED_AT_COLUMN]: at,
+  };
+}
+
+/**
+ * The changer and the time for a translation row a save writes, without the
+ * counter: for a row being inserted, which takes the counter's default.
+ *
+ * Encoded here because a translation table's runtime model does not declare
+ * the column: stored as the main table's `_changed_at` is, by the same column
+ * builder, never as a driver binds a bare `Date`.
+ */
+export function translationChangeColumns(
+  actor: RequestActor,
+  dialect: SupportedDialect,
+  at: Date = new Date()
+): Record<string, unknown> {
+  return {
+    ...changerColumns(actor),
+    [CHANGED_AT_COLUMN]: systemColumnDriverValue(
+      dialect,
+      CHANGED_AT_COLUMN,
+      at
+    ),
+  };
+}
+
+/** {@link revisionBumpColumns} for an UPDATE of translation rows. */
+export function translationRevisionBumpColumns(
+  actor: RequestActor,
+  dialect: SupportedDialect,
+  at: Date = new Date()
+): Record<string, unknown> {
+  return {
+    [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
+    ...translationChangeColumns(actor, dialect, at),
   };
 }
 
@@ -474,9 +518,11 @@ export function setDocumentVersion(
  */
 export function mainRowBump(
   write: Parameters<typeof savesMainRow>[0],
-  actor: RequestActor
+  actor: RequestActor,
+  /** The moment the save writes to `updated_at`. */
+  at: Date
 ): Record<string, unknown> {
-  return savesMainRow(write) ? revisionBumpColumns(actor) : {};
+  return savesMainRow(write) ? revisionBumpColumns(actor, at) : {};
 }
 
 /**
@@ -550,4 +596,13 @@ export function chainCoversVersion(
 ): boolean {
   const locales = versionLanguagesFor({ localized: true, ...args });
   return locales === undefined || locales.every(code => chain.includes(code));
+}
+
+/**
+ * The moment an UPDATE writes to `updated_at`, for the `_changed_at` it sets
+ * beside it: the same value, so the two compare equal. Now, for a payload
+ * that names none.
+ */
+export function updateTimeOf(value: unknown): Date {
+  return value instanceof Date ? value : new Date();
 }

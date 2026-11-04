@@ -30,8 +30,8 @@ import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-r
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import {
-  changerColumns,
   DOCUMENT_REVISION_COLUMN,
+  translationChangeColumns,
 } from "../../versions/document-revision";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import {
@@ -402,7 +402,14 @@ export async function upsertCompanionRow(
   const withChanger =
     options.savedBy === undefined
       ? withStamp
-      : { ...withStamp, ...changerColumns(options.savedBy) };
+      : {
+          ...withStamp,
+          ...translationChangeColumns(
+            options.savedBy,
+            adapter.dialect,
+            options.now
+          ),
+        };
   const cols = Object.keys(withChanger);
 
   const isMysql = adapter.dialect === "mysql";

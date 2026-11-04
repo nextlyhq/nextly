@@ -62,6 +62,7 @@ describe("immutability projections", () => {
         "_changed_by_kind",
         "_changed_by_id",
         "_changed_by_principal_kind",
+        "_changed_at",
         "_rev",
       ])
     );
@@ -87,6 +88,7 @@ describe("immutability projections", () => {
         "_changed_by_kind",
         "_changed_by_id",
         "_changed_by_principal_kind",
+        "_changed_at",
         "_rev",
       ])
     );
@@ -109,6 +111,7 @@ describe("immutability projections", () => {
         "_changed_by_kind",
         "_changed_by_id",
         "_changed_by_principal_kind",
+        "_changed_at",
         "_rev",
       ])
     );
@@ -840,6 +843,7 @@ describe("the physical shape is pinned to the schema version", () => {
       "_changed_by_kind | always | collection,single | po:varchar:16:null:-:- my:varchar(16):16:null:-:- sq:text:-:null:-:-",
       "_changed_by_id | always | collection,single | po:text:-:null:-:- my:varchar(255):255:null:-:- sq:text:-:null:-:-",
       "_changed_by_principal_kind | always | collection,single | po:varchar:64:null:-:- my:varchar(64):64:null:-:- sq:text:-:null:-:-",
+      "_changed_at | always | collection,single | po:timestamp:-:null:-:- my:timestamp:-:null:-:- sq:integer:-:null:-:-",
     ]);
   });
 });

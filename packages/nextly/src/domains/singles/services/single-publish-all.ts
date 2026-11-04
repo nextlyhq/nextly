@@ -91,6 +91,7 @@ import {
   bumpDocumentRevision,
   documentVersionOn,
   revisionBumpColumns,
+  translationRevisionBumpColumns,
   translationTableOf,
   withDocumentVersion,
 } from "../../versions/document-revision";
@@ -1029,7 +1030,7 @@ export class SinglePublishAllService extends BaseService {
           status: "published",
           updated_at: publishNow,
           ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
-          ...revisionBumpColumns(plan.actor),
+          ...revisionBumpColumns(plan.actor, publishNow),
         },
         this.whereEq("id", existingDoc.id)
       );
@@ -1056,7 +1057,10 @@ export class SinglePublishAllService extends BaseService {
       // and parameter binding are the adapter's problem and not this module's.
       await tx.update(
         companion.companionTableName,
-        { _status: "published", ...revisionBumpColumns(plan.actor) },
+        {
+          _status: "published",
+          ...translationRevisionBumpColumns(plan.actor, this.adapter.dialect),
+        },
         this.whereEq("_parent", existingDoc.id)
       );
     }
@@ -1242,7 +1246,7 @@ export class SinglePublishAllService extends BaseService {
           {
             ...main,
             updated_at: publishNow,
-            ...revisionBumpColumns(plan.actor),
+            ...revisionBumpColumns(plan.actor, publishNow),
           },
           this.whereEq("id", existingDoc.id)
         );
