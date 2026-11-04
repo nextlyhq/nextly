@@ -126,6 +126,7 @@ const ENTRY_CLASS = `${blockTypeClassName(COLLECTION_LOOP_BLOCK)} ${CHILD_GAP_CL
 export async function renderCollectionLoop({
   props,
   renderSlot,
+  spacingMode,
   className,
   ctx,
 }: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
@@ -190,11 +191,17 @@ export async function renderCollectionLoop({
   return (
     <div className={className}>
       {items.map((item, index) => (
-        <div key={keyFor(item, index)} className={ENTRY_CLASS}>
+        <div
+          key={keyFor(item, index)}
+          // Under the classic model no gap is written, so an entry wears
+          // nothing: its blocks space themselves with their own margins.
+          {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}
+        >
           {/* Drawn again per entry, with this entry on the context, so anything
               inside the template reads its own values rather than the first
-              entry's. */}
-          {renderSlot("children", { ...ctx, item })}
+              entry's. The collection goes with it, so an item binding is
+              checked against that collection's fields. */}
+          {renderSlot("children", { ...ctx, item, itemSource: collection })}
         </div>
       ))}
     </div>

@@ -115,7 +115,12 @@ export interface BlockNode {
   version: number;
   /** Literal content/config values. Bound values live in `bindings`, never here. */
   props: Record<string, unknown>;
-  /** Per-prop data bindings; a bound prop's literal stays in `props` as the fallback shown on unbind. */
+  /**
+   * Per-prop data bindings. A bound prop's literal stays in `props` as its own
+   * value: shown when the binding cannot be used and has no valid fallback, and
+   * kept when the prop is unbound. Filled on a published page by
+   * `bindDocument` after each binding is checked (`binding-rules`).
+   */
   bindings?: Record<string, Binding>;
   /** Named child regions, stored in the node. Only container blocks declare slots. */
   slots?: Record<string, BlockNode[]>;
@@ -641,9 +646,16 @@ function renameEntry(
 
 /** Fields every binding carries, regardless of source. */
 interface BindingBase {
-  /** Dot path into the binding source, one relation traversal max. */
+  /**
+   * Dot path into the binding source, following one to-one relation at most.
+   * The limit needs the source's schema, so `binding-rules` enforces it.
+   */
   $bind: string;
-  /** Rendered when the bound value is empty or the path cannot resolve. */
+  /**
+   * Rendered when the bound value is empty or the binding cannot be used. It
+   * must be a valid value of the prop; one that is not is ignored, and the
+   * prop's own value is shown instead.
+   */
   fallback?: unknown;
   /** Locale-aware display formatting applied after resolution. */
   format?: BindingFormat;

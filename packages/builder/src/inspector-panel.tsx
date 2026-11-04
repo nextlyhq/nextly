@@ -95,6 +95,8 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { commitLinkChanges, LinkGroupField } from "./link-control";
+import { linkGroupOf } from "./link-group";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -969,7 +971,7 @@ function StyleTab({
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
   // ONE holder of what an edit changes, read by the bar and the controls.
-  const { target, choose } = useStyleTarget(
+  const { target, choose, held } = useStyleTarget(
     editor,
     shared.classLibrary,
     shared.sharedStyles
@@ -986,6 +988,7 @@ function StyleTab({
         editor={editor}
         target={target}
         onChoose={choose}
+        held={held}
         library={shared.classLibrary}
         libraryAbsence={shared.classLibraryAbsence}
         host={shared.sharedStyles}
@@ -1002,6 +1005,8 @@ function StyleTab({
       />
       <StyleInspectorPanel
         editor={editor}
+        // The block card above says why a held block can't be changed.
+        showReadOnlyReason={false}
         renderedTag={renderedTag}
         sideOrientation={sideOrientation}
         policy={policy}
@@ -1090,6 +1095,9 @@ function ContentSurface({
           name,
           lockViewOf(editor)
         )
+      }
+      onCommitMany={changes =>
+        commitLinkChanges(editor, inspection.nodeId, changes)
       }
     />
   );
@@ -1263,9 +1271,14 @@ function ContentFields({
   reasonId,
   fields,
   writable,
+  onCommitMany,
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  /** Several props written as one edit, for a block's link group. */
+  onCommitMany: (
+    changes: Readonly<Record<string, unknown>>
+  ) => BlockDocument | null | void;
   services: ContentServices | undefined;
   /** The id of the lock reason a held field points to. */
   reasonId: string;
@@ -1291,30 +1304,52 @@ function ContentFields({
       </p>
     );
   }
+  // A link and the props that qualify it are drawn as one group, where the
+  // link prop sits; the others it draws get no row of their own. Built from
+  // the props the block offers, so a sibling its own `onlyWithout` hides is
+  // neither drawn nor written by the group.
+  const link = linkGroupOf(inspection.props.filter(prop => prop.offered));
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
+        if (link?.drawn.has(prop.name) === true && prop.name !== link.link) {
+          return null;
+        }
+        const grouped =
+          link?.link === prop.name ? (
+            <LinkGroupField
+              key={`${inspection.nodeId}:${prop.name}`}
+              group={link}
+              props={inspection.props}
+              writable={writable}
+              reasonId={reasonId}
+              services={services}
+              onCommitMany={onCommitMany}
+            />
+          ) : undefined;
         // Named as the block names it, so its icon is not drawn bare.
         const field = !prop.offered ? (
           <p className="nx-inspector__note">
             {propLabel(prop.name, prop.schema)}
           </p>
         ) : (
-          <HeldByLock
-            // Keyed by node AND prop: a bare prop name would let React reuse
-            // one block's field for the next block's same-named prop, so the
-            // input would keep the previous block's uncommitted text.
-            key={`${inspection.nodeId}:${prop.name}`}
-            // A held field points at the reason in the card.
-            reasonId={writable(prop.name) ? undefined : reasonId}
-          >
-            <PropField
-              prop={prop}
-              disabled={!writable(prop.name)}
-              onCommit={onCommit}
-              services={services}
-            />
-          </HeldByLock>
+          (grouped ?? (
+            <HeldByLock
+              // Keyed by node AND prop: a bare prop name would let React reuse
+              // one block's field for the next block's same-named prop, so the
+              // input would keep the previous block's uncommitted text.
+              key={`${inspection.nodeId}:${prop.name}`}
+              // A held field points at the reason in the card.
+              reasonId={writable(prop.name) ? undefined : reasonId}
+            >
+              <PropField
+                prop={prop}
+                disabled={!writable(prop.name)}
+                onCommit={onCommit}
+                services={services}
+              />
+            </HeldByLock>
+          ))
         );
         if (fields === undefined) return field;
         // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is

@@ -1,6 +1,7 @@
 import {
   compilePageCss,
   declaresNoMarkup,
+  hasItemBindings,
   isFetchableUrl,
   nodeAtPointer,
   nodeClassNames,
@@ -17,10 +18,12 @@ import {
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
+  type SpacingMode,
   type StyleValue,
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
+import { blockBaseUnder } from "./blocks/classic-spacing";
 import { withTypographyDefaults } from "./blocks/typography-defaults";
 import { prepareDocumentForRead } from "./prepare-document";
 import type {
@@ -206,12 +209,15 @@ export function toPageStyles(
 export function blockBasesFor(
   document: BlockDocument,
   blocks: BlockResolver,
-  stated?: Readonly<Record<string, NodeStyles>>
+  stated?: Readonly<Record<string, NodeStyles>>,
+  spacingMode?: SpacingMode
 ): Record<string, NodeStyles> {
+  // A derived default follows the spacing model; a stated record is the
+  // caller's own choice and is narrowed as it is.
   return perUsedType(
     document,
     blocks,
-    definition => definition.baseStyles,
+    definition => blockBaseUnder(definition, spacingMode),
     stated
   );
 }
@@ -446,18 +452,24 @@ function compileContextFor(
     blockBases: blockBasesFor(
       storedDocument ?? document,
       blocks,
-      styleContext.blockBases
+      styleContext.blockBases,
+      styleContext.spacingMode
     ),
     blockParts: blockPartsFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockParts
     ),
-    childGaps: childGapsFor(
-      storedDocument ?? document,
-      blocks,
-      styleContext.childGaps
-    ),
+    // None under the classic model, so the identity carries no gap the
+    // compile would not write.
+    childGaps:
+      styleContext.spacingMode === "classic"
+        ? {}
+        : childGapsFor(
+            storedDocument ?? document,
+            blocks,
+            styleContext.childGaps
+          ),
     drawsNothing,
   });
 }
@@ -677,7 +689,12 @@ export function readableGatedRules(
 export function drawlessTestFor(
   blocks: BlockResolver
 ): (node: BlockNode) => boolean {
-  return node => declaresNoMarkup(node, type => blocks.get(type));
+  // A node bound to its list item draws, as far as the page can tell: its
+  // props are filled only when the list draws each item, so before then the
+  // tree holds its own values and its declaration would be judged on those.
+  // Its rules ship, which is the safe direction for a node that may draw.
+  return node =>
+    !hasItemBindings(node) && declaresNoMarkup(node, type => blocks.get(type));
 }
 
 /**

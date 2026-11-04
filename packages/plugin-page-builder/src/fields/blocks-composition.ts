@@ -86,6 +86,8 @@ import {
   type HeldLibrary,
   type ReadComposition,
 } from "../composition-reading";
+import { changedSinceRead } from "../host-rewrite/expectations";
+import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import { isForest } from "./blocks-document";
 import {
@@ -202,6 +204,12 @@ export interface CompositionSetup {
    */
   readonly composesDocuments: boolean;
   /**
+   * The components being deleted. A write adding a reference to one is
+   * refused, judged against what the document stores now; absent where no
+   * fence is installed.
+   */
+  readonly fencedComponents?: () => Promise<FencedComponents>;
+  /**
    * The ids of the classes the site defines, its code's and its stored ones,
    * read per write. A write adding a reference to any other is refused.
    * Absent where the site style cannot be read, and then nothing is refused.
@@ -294,6 +302,7 @@ export async function compositionIssues(
   const source = storedComponentSource(write, setup.store);
   const self = componentSaved(write, args.path, setup.store);
   const report = issueReport(args.path);
+  await judgeHostRewrite(document, args, write, setup, report);
   if (savesComponent(write, args.path, setup.store)) {
     await judgeLockedExposures(document, write, setup, report);
     await judgeVariantLocks({
@@ -366,6 +375,37 @@ export async function compositionIssues(
   }
   tally.flush(report);
   return report.issues;
+}
+
+/**
+ * What a rewrite of every host adds to a write's judgement, on every write:
+ * a rewrite's own write is refused when the host changed since the rewrite
+ * read it, and any write adding a reference to a component being deleted is
+ * refused (see `host-rewrite/fence`).
+ */
+async function judgeHostRewrite(
+  document: BlockDocument,
+  args: Pick<PluginFieldValidateArgs, "data" | "path"> &
+    Partial<Pick<PluginFieldValidateArgs, "field">>,
+  write: PluginFieldWrite,
+  setup: CompositionSetup,
+  report: Report
+): Promise<void> {
+  const changed = await changedSinceRead(write, args.path);
+  if (changed !== undefined) report.add(changed.code, changed.message);
+  if (setup.fencedComponents === undefined) return;
+  const refused = await fenceIssues({
+    document,
+    write,
+    path: args.path,
+    nextStatus:
+      typeof args.data.status === "string" ? args.data.status : undefined,
+    localized:
+      (args.field as { localized?: unknown } | undefined)?.localized === true,
+    maxNodes: setup.limits.maxNodes,
+    fenced: setup.fencedComponents,
+  });
+  for (const issue of refused) report.add(issue.code, issue.message);
 }
 
 /**

@@ -14,9 +14,12 @@
 import type {
   SqlParam,
   SupportedDialect,
+  TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
+import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
@@ -28,7 +31,10 @@ import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoti
 import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
+import { languageRevisionTable } from "../../schema/services/runtime-schema-generator";
 import {
+  CHANGED_AT_COLUMN,
+  changerColumns,
   DOCUMENT_REVISION_COLUMN,
   translationChangeColumns,
 } from "../../versions/document-revision";
@@ -325,6 +331,12 @@ export async function upsertCompanionRow(
      * archive replay.
      */
     savedBy?: RequestActor;
+    /**
+     * Set when this save already took the row's next version with
+     * {@link claimCompanionRevision}: the counter is then not moved a second
+     * time. The changer is still written, the same one the claim wrote.
+     */
+    revisionClaimed?: boolean;
   } = {}
 ): Promise<void> {
   const withStatus =
@@ -424,7 +436,7 @@ export async function upsertCompanionRow(
   // An existing row's counter moves by one in the conflict branch, from the row's own value under
   // the lock the upsert holds; an inserted row takes the column default.
   const increment =
-    options.savedBy === undefined
+    options.savedBy === undefined || options.revisionClaimed
       ? []
       : [
           isMysql
@@ -443,6 +455,113 @@ export async function upsertCompanionRow(
       `VALUES (${valuePlaceholders}) ${conflict}`,
     params
   );
+}
+
+/**
+ * Take a translation row's next version for a save judged on it, as that
+ * save's first write of the row, before it writes anything else: a
+ * compare-and-set, so it succeeds only when the row still holds the version
+ * the save was made from (`expected`), and a stale save is found with
+ * nothing of it written.
+ *
+ * `expected` 0 means the save was made with no row in this language: the
+ * row is inserted bare, with its counter at the column default (1) and this
+ * save's changer, and its values follow in {@link upsertCompanionRow}. A row
+ * already there means someone else's save created it since.
+ *
+ * Takes no lock on a row that is not there. A locking read of an absent
+ * translation row locks a range of the table's key on MySQL, and two
+ * documents' first translations that each lock the same range and then
+ * insert into it deadlock. Every writer of a document's translation rows
+ * holds the document's own row lock first, so nothing else moves this row
+ * between the claim and the write that follows it.
+ *
+ * @returns Whether the row was claimed; false when it is out of date.
+ */
+export async function claimCompanionRevision(
+  tx: Pick<TransactionContext, "getDrizzle" | "execute">,
+  dialect: SupportedDialect,
+  companionTableName: string,
+  parentId: string,
+  locale: string,
+  expected: number,
+  savedBy: RequestActor
+): Promise<boolean> {
+  if (expected > 0) {
+    // Through the translation table's revision model, which declares the
+    // counter, the changer and its time; it encodes the time as the row's
+    // other writes store it.
+    const table = languageRevisionTable(dialect, companionTableName);
+    const update = tx
+      .getDrizzle<ClaimsRows>()
+      .update(table as never)
+      .set({
+        [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
+        ...changerColumns(savedBy),
+        [CHANGED_AT_COLUMN]: new Date(),
+      })
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale),
+          eq(table[DOCUMENT_REVISION_COLUMN] as never, expected)
+        )
+      );
+    // MySQL answers how many rows changed; the others return them.
+    if (dialect === "mysql") {
+      const result: unknown = await update;
+      const header = (Array.isArray(result) ? result[0] : result) as {
+        affectedRows?: number;
+      };
+      return header?.affectedRows === 1;
+    }
+    const rows = await update.returning({ parent: table._parent });
+    return rows.length === 1;
+  }
+
+  // The bare row, named in the statement as the upsert above names its
+  // columns: its values follow in that upsert, on the same transaction.
+  const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
+  const p = (n: number) => (dialect === "postgresql" ? `$${n}` : "?");
+  // Who and when, encoded as the row's other writes encode them.
+  const changer = translationChangeColumns(savedBy, dialect);
+  const changerNames = Object.keys(changer);
+  const columns = ["_parent", "_locale", ...changerNames];
+  const values = [
+    parentId,
+    locale,
+    ...changerNames.map(name => changer[name]),
+  ] as SqlParam[];
+  const insert = `INSERT INTO ${q(companionTableName)} (${columns.map(q).join(", ")}) VALUES (${columns.map((_, i) => p(i + 1)).join(", ")})`;
+  if (dialect === "mysql") {
+    // A duplicate fails this statement alone: MySQL keeps the transaction,
+    // which the rest of a batch goes on with.
+    try {
+      await tx.execute(insert, values);
+      return true;
+    } catch (error) {
+      if (isUniqueViolation(dialect, error)) return false;
+      throw error;
+    }
+  }
+  // PostgreSQL would abort the whole transaction on a failed insert, so the
+  // conflict is answered by the statement itself, with the row it inserted.
+  const rows = await tx.execute(
+    `${insert} ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO NOTHING RETURNING ${q("_parent")}`,
+    values
+  );
+  return rows.length === 1;
+}
+
+/** A Drizzle handle that updates rows, as `getDrizzle()` answers it. */
+interface ClaimsRows {
+  update(table: never): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): PromiseLike<unknown> & {
+        returning(fields: Record<string, unknown>): PromiseLike<unknown[]>;
+      };
+    };
+  };
 }
 
 /**

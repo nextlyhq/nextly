@@ -7,6 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
+import { spacingModeOf } from "@nextlyhq/blocks-engine";
 import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
@@ -644,6 +645,13 @@ export function editorPanelRenderer({
               )}
               supplied={configSiteStyle?.tokens}
               pending={siteStylePending}
+              // Offered once the stored style is read, so the choice shows
+              // the model the canvas is compiled under and nothing earlier.
+              {...(siteStylePending || siteStyleError !== null
+                ? {}
+                : {
+                    spacingMode: spacingModeOf(canvasSiteStyle?.spacingMode),
+                  })}
             >
               {designTabs}
             </TokensStudio>
