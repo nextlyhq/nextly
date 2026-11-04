@@ -145,6 +145,18 @@ describe("what InspectorPanel forwards to the style tab", () => {
     expect(screen.getByRole("button", { name: "Hero" })).toBeDefined();
   });
 
+  it("names Content and Style for the inspector's own tab rules", () => {
+    // Named for the stylesheet's compact underlined tab rules, which apply
+    // to the inspector's tabs only.
+    register();
+    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+    const style = screen.getByRole("tab", { name: "Style" });
+    expect(style.className).toContain("nx-inspector__tab");
+    expect(style.closest('[role="tablist"]')?.className).toContain(
+      "nx-inspector__tablist"
+    );
+  });
+
   it("lists no shared style when the host passed no library", () => {
     // The control: the assertion above must be about forwarding, not about a
     // chip drawn from the node's ids alone.

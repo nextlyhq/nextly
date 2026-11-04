@@ -35,7 +35,9 @@ export function renderDivider({
 const DIVIDER_BASE_STYLES = {
   base: {
     base: {
-      margin: { blockStart: "1.5em", blockEnd: "1.5em" },
+      // No outer margin: the rule is spaced from its neighbours by the gap of
+      // whatever holds it, like every other block.
+      margin: { blockStart: "0", blockEnd: "0" },
       border: {
         width: {
           blockStart: "1px",

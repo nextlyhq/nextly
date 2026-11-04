@@ -91,7 +91,7 @@ export type SharedStyleInputs = Pick<
   // compile. A host replacing it changes what every heading and paragraph
   // renders as, and a stored sheet compiled against the old one is wrong in a
   // way nothing downstream can detect — so it has to move the stamp, exactly as
-  // a changed `blockBases` does. `ENCODING` is at `v3` for the neighbouring
+  // a changed `blockBases` does. `ENCODING` moved to `v3` for the neighbouring
   // reason: a sheet stored before this field existed was compiled without the
   // baseline at all, and is refused rather than served.
   | "elementBases"
@@ -107,6 +107,10 @@ export type SharedStyleInputs = Pick<
   // for the contexts that produced it; only a caller that turns it ON computes
   // a different identity, which is the point.
   | "previewStates"
+  // The space a container type puts between its children. A block changing
+  // its `childGap` changes the rules `compilePageCss` writes for every page
+  // holding one, so it has to move the stamp as `blockBases` does.
+  | "childGaps"
 >;
 
 /**
@@ -143,7 +147,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * changes. It costs one recompile per artifact, which is the safe direction —
  * the unbumped alternative is a stale stylesheet served indefinitely, silently.
  */
-const ENCODING = "v3";
+const ENCODING = "v4";
+
+/**
+ * Whether a stored stamp was written under the current {@link ENCODING}.
+ *
+ * Answerable from the stamp alone, so a read with no compile context, which
+ * cannot rebuild a stamp to compare against, can still refuse a sheet the
+ * compiler before this encoding wrote. Absent and unidentified stamps carry no
+ * encoding and answer `true`: they are judged where a context exists, as
+ * before.
+ */
+export function stampedUnderCurrentEncoding(
+  stamp: string | undefined
+): boolean {
+  if (stamp === undefined || stamp === UNIDENTIFIED_SHARED_INPUTS) return true;
+  return stamp.startsWith(`${ENCODING}:`);
+}
 
 /**
  * The identity of shared inputs that decline to identify themselves.
@@ -627,6 +647,10 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     ...(blockPartsPresent(inputs.blockParts)
       ? [blockPartsParts(inputs.blockParts, reading)]
       : []),
+    // Each container type's child gap, sorted by type for the reason the block
+    // tier is. A fixed slot, which moves every stamp, and that is intended:
+    // `v4` is the compiler that writes these gaps at all.
+    childGapParts(inputs.childGaps, reading),
     // A preview sheet gives every interaction state a forceable form, so its
     // selectors are not the published ones and the two must not share a stored
     // artifact. Without this, `resolvePageStyles` — exported, and returning a
@@ -682,6 +706,17 @@ function blockPartsParts(
           ]),
       ];
     });
+}
+
+/** Each container type's child gap, in a fixed key order, read structurally. */
+function childGapParts(
+  childGaps: SharedStyleInputs["childGaps"],
+  reading: Reading
+): unknown[] {
+  const gaps = childGaps ?? {};
+  return Object.keys(gaps)
+    .sort()
+    .map(type => [structural(type, reading), structural(gaps[type], reading)]);
 }
 
 /** Each block type's defaults, in a fixed key order, reduced as classes are. */
