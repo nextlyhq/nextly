@@ -27,8 +27,16 @@ import { TRANSFER_JUDGEMENT_CONTEXT } from "./transfer/transfer-contract";
  */
 export const JUDGEMENT_CONTEXT: string = TRANSFER_JUDGEMENT_CONTEXT;
 
-/** Thrown inside the judging transaction to roll it back once it has answered. */
-export class JudgedAndRolledBack extends Error {}
+/**
+ * Thrown inside the judging transaction to roll it back once it has answered,
+ * carrying what the writes returned so the answer can show the stored form,
+ * after the hooks, rather than the plan.
+ */
+export class JudgedAndRolledBack extends Error {
+  constructor(readonly written?: unknown) {
+    super("judged and rolled back");
+  }
+}
 
 /** What the site said when it refused a judged write. */
 export interface JudgedRefusal {
@@ -36,33 +44,65 @@ export interface JudgedRefusal {
   readonly messages: readonly string[];
 }
 
+/** A judged write's answer: refused, or accepted with what it wrote. */
+export type Judgement<R> =
+  | { readonly refusal: JudgedRefusal }
+  | { readonly refusal: null; readonly written: R };
+
 /**
- * Run `write` in a transaction and roll it back. Answers `null` when every
- * write went through, or the site's refusal. Any other failure is thrown: a
- * fault is not a judgement.
+ * Run `write` in a transaction and roll it back. Answers what it wrote, or the
+ * site's refusal. Any other failure is thrown: a fault is not a judgement.
  */
-export async function judgeInTransaction<Tx>(
+export async function judgeInTransaction<Tx, R>(
   withTransaction: (run: (tx: Tx) => Promise<never>) => Promise<unknown>,
-  write: (tx: Tx) => Promise<void>
-): Promise<JudgedRefusal | null> {
+  write: (tx: Tx) => Promise<R>
+): Promise<Judgement<R>> {
   try {
     await withTransaction(async tx => {
-      await write(tx);
-      throw new JudgedAndRolledBack();
+      throw new JudgedAndRolledBack(await write(tx));
     });
   } catch (error) {
-    // A database adapter can wrap what the transaction threw; the cause is
-    // what answered.
-    if (inCauses(error, JudgedAndRolledBack) !== undefined) return null;
-    const refused = inCauses(error, NextlyError);
-    if (refused !== undefined) return refusalOf(refused);
+    const verdict = verdictOf(error);
+    return verdict.refusal === null
+      ? { refusal: null, written: verdict.rolledBack.written as R }
+      : verdict;
+  }
+  // Unreachable while the write above throws its sentinel; a transaction that
+  // committed instead would be a write the caller asked only to preview.
+  throw NextlyError.internal({
+    logContext: { reason: "judging-transaction-committed" },
+  });
+}
+
+/**
+ * What ended a judging transaction: the rollback it was made to end in, or the
+ * site's refusal. Anything else is thrown again, a fault rather than a
+ * judgement: a server error, and a write refused because the item changed
+ * since it was read, which the caller answers by reading again rather than by
+ * changing what it asked.
+ */
+export function verdictOf(
+  error: unknown
+):
+  | { readonly refusal: null; readonly rolledBack: JudgedAndRolledBack }
+  | { readonly refusal: JudgedRefusal } {
+  // A database adapter can wrap what the transaction threw; the cause is what
+  // answered.
+  const rolledBack = inCauses(error, JudgedAndRolledBack);
+  if (rolledBack !== undefined) return { refusal: null, rolledBack };
+  const refused = inCauses(error, NextlyError);
+  if (
+    refused === undefined ||
+    refused.statusCode >= 500 ||
+    refused.code === "STALE_VERSION"
+  ) {
     throw error;
   }
-  return null;
+  return { refusal: refusalOf(refused) };
 }
 
 /** The first error in `error`'s cause chain of the class given. */
-export function inCauses<T extends Error>(
+function inCauses<T extends Error>(
   error: unknown,
   kind: abstract new (...args: never[]) => T
 ): T | undefined {
@@ -75,7 +115,7 @@ export function inCauses<T extends Error>(
 }
 
 /** A refusal in the words the site gave it. */
-export function refusalOf(error: NextlyError): JudgedRefusal {
+function refusalOf(error: NextlyError): JudgedRefusal {
   const listed = (error.publicData as { errors?: unknown } | undefined)?.errors;
   const messages = Array.isArray(listed)
     ? listed

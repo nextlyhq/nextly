@@ -85,6 +85,7 @@ import { JUDGEMENT_CONTEXT, judgeInTransaction } from "./judged-writes";
 import {
   SAVE_PATTERN_ROUTE_PATH,
   type SavePatternFields,
+  type SavePatternDryRun,
   type SavePatternRequest,
   type SavePatternResponse,
 } from "./library-contract";
@@ -211,22 +212,35 @@ export async function savePattern(
   // slug, the caller's right to create and publish a pattern) answer it.
   if (request.dryRun === true) {
     const collections = ctx.services.collections;
-    const refused = await judgeInTransaction(
+    const judged = await judgeInTransaction(
       run => collections.withTransaction(run),
-      async (tx: PluginCollectionTransaction) => {
-        await collections.createEntryInTransaction(
-          tx,
-          plan.create.collection,
-          data,
-          { ...asUser, context: { [JUDGEMENT_CONTEXT]: true } }
-        );
-      }
+      (tx: PluginCollectionTransaction) =>
+        collections.createEntryInTransaction(tx, plan.create.collection, data, {
+          ...asUser,
+          context: { [JUDGEMENT_CONTEXT]: true },
+        })
     );
+    // The pattern's blocks as the save stored them, after its hooks, where
+    // the write's answer shows them.
+    const stored =
+      judged.refusal === null
+        ? (judged.written as Record<string, unknown> | null)?.[
+            PATTERN_DOCUMENT_FIELD
+          ]
+        : undefined;
+    const result: SavePatternDryRun = {
+      dryRun: true,
+      pattern:
+        stored === undefined
+          ? data
+          : { ...data, [PATTERN_DOCUMENT_FIELD]: stored },
+      refusals: judged.refusal?.messages ?? [],
+    };
     return respondMutation(
-      refused === null
+      judged.refusal === null
         ? "Nothing was written: this is the pattern it would save."
         : "Nothing was written: the site would refuse this pattern.",
-      { dryRun: true, pattern: data, refusals: refused?.messages ?? [] }
+      result
     );
   }
 

@@ -67,7 +67,7 @@ import {
   type CompositionRouteContext,
   type CompositionRouteSetup,
 } from "../composition-route-kit";
-import { inCauses, JudgedAndRolledBack, refusalOf } from "../judged-writes";
+import { JudgedAndRolledBack, verdictOf } from "../judged-writes";
 import { readingAsUser, type ComponentStore } from "../library-route";
 import type { SiteStyleData } from "../site-style";
 import { checkStoredClasses, checkStoredTokens } from "../site-style-record";
@@ -551,16 +551,10 @@ async function judgeWrites(
   try {
     await writeDocuments(ctx, file, judged, slugs, media);
   } catch (error) {
-    // A database adapter can wrap what the transaction threw; the cause is
-    // what answered.
-    if (inCauses(error, JudgedAndRolledBack) !== undefined) return [];
-    const refused = inCauses(error, NextlyError);
-    if (refused === undefined) throw error;
+    const verdict = verdictOf(error);
+    if (verdict.refusal === null) return [];
     return [
-      {
-        code: "REFUSED_BY_SITE",
-        message: refusalOf(refused).messages.join(" "),
-      },
+      { code: "REFUSED_BY_SITE", message: verdict.refusal.messages.join(" ") },
     ];
   }
   return [];

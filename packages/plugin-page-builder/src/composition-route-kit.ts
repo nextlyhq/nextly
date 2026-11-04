@@ -112,13 +112,20 @@ export function storeOf(
  */
 export async function actingCaller(
   ctx: CompositionRouteContext,
-  asks: readonly (readonly [action: string, resource: string])[] = []
+  asks: readonly (readonly [action: string, resource: string])[] = [],
+  /**
+   * `{ anyEntry: true }` asks whether the caller may act on any entry at all,
+   * for a route whose write, made as the caller, then decides the entry it
+   * names: a rule limiting the action to some entries answers no to a
+   * question that names none.
+   */
+  options?: { readonly anyEntry?: boolean }
 ): Promise<ActionBy> {
   const { user, caller } = ctx;
   let allowed = user !== null && caller !== null;
   for (const [action, resource] of asks) {
     if (!allowed) break;
-    allowed = (await caller?.can(action, resource)) === true;
+    allowed = (await caller?.can(action, resource, options)) === true;
   }
   if (!allowed || user === null || caller === null) {
     throw NextlyError.forbidden({

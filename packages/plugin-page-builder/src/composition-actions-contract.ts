@@ -77,7 +77,8 @@ export type PageAction =
     }
   /**
    * Choose the page's Layout: a Layout's id, or `null` for the site's default.
-   * `noHeaderFooter` switches the Layout off for this page.
+   * `noHeaderFooter: true` switches the Layout off for this page; absent, it
+   * is turned back on, as choosing a Layout in the editor does.
    */
   | {
       readonly kind: "set-layout";

@@ -380,6 +380,25 @@ export interface SavePatternResponse {
 }
 
 /**
+ * What a save asked as a dry run answers, inside the envelope's `item`: the
+ * pattern it would store, and why the site would refuse it, empty when it
+ * would not. Nothing was stored, so there is no id.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface SavePatternDryRun {
+  readonly dryRun: true;
+  readonly pattern: Readonly<Record<string, unknown>>;
+  readonly refusals: readonly string[];
+}
+
+/** What a dry-run save answers: the envelope around {@link SavePatternDryRun}. */
+export interface SavePatternDryRunResponse {
+  readonly message: string;
+  readonly item: SavePatternDryRun;
+}
+
+/**
  * What the editor may do with patterns, as the server sees this caller.
  *
  * ONE field, because one verb asks. A map of every capability the plugin might

@@ -15,7 +15,12 @@
  * write is judged by the blocks field's own validation and the caller's
  * rights, exactly as an editor save is. A dry run makes that write and rolls
  * it back (see `judged-writes`), so its answer says whether the site would
- * accept it; an apply refuses up front what the dry run would report.
+ * accept it, and shows the page as the write stored it, after its hooks; an
+ * apply refuses up front what the dry run would report.
+ *
+ * Every write carries the version the page was read at (`_rev`), so a page
+ * someone else saved between this action's read and its write is refused with
+ * 409 rather than overwritten by a plan made from the older page.
  *
  * @experimental Settles when the composition API ships.
  * @module page-actions-route
@@ -134,11 +139,23 @@ export interface PageActionsSetup {
 /** The context the page actions run with. */
 type PageActionsContext = CompositionRouteContext;
 
+/**
+ * The key a read gives a document's version under, and an update hands back
+ * to be applied only to that version.
+ */
+const VERSION_KEY = "_rev";
+
 /** The page as an action reads it: its blocks field and its Layout fields. */
 interface StoredPage {
   readonly document: BlockDocument | null;
   readonly layout: string | null;
   readonly noHeaderFooter: boolean;
+}
+
+/** The stored page, and the version it was read at. */
+interface ReadPage {
+  readonly page: StoredPage;
+  readonly version: unknown;
 }
 
 /** What an action plans: the write it makes, and what it answers with. */
@@ -160,23 +177,32 @@ async function runPageAction(
   const page = body.page;
   // Preconditions first: the caller may change this collection's entries,
   // and publish them when asked to.
-  const by = await actingCaller(ctx, [
-    ["update", page.collection],
-    ...(body.publish === true ? ([["publish", page.collection]] as const) : []),
-  ]);
+  // Asked of any entry: whether the caller may change THIS page is the
+  // write's to decide, made as the caller against the row.
+  const by = await actingCaller(
+    ctx,
+    [
+      ["update", page.collection],
+      ...(body.publish === true
+        ? ([["publish", page.collection]] as const)
+        : []),
+    ],
+    { anyEntry: true }
+  );
   const field = page.field ?? DEFAULT_FIELD;
-  const stored = await readStoredPage(
+  const read = await readStoredPage(
     ctx,
     page.collection,
     page.id,
     field,
     page.locale
   );
-  if (stored === null) {
+  if (read === null) {
     throw NextlyError.notFound({
       logContext: { reason: "page-action-missing-page" },
     });
   }
+  const stored = read.page;
   const fingerprint = storedFingerprint(stored);
   if (body.expect !== undefined && body.expect !== fingerprint) {
     throw NextlyError.conflict({
@@ -198,31 +224,30 @@ async function runPageAction(
   const data = {
     ...planned.data,
     ...(body.publish === true ? { status: "published" } : {}),
+    ...(read.version === undefined ? {} : { [VERSION_KEY]: read.version }),
   };
   const options = asCaller(ctx, page.locale);
   const collections = ctx.services.collections;
   await collections.warmLocalizedReadiness(page.collection);
-  const refusal = await judgeInTransaction(
+  const judged = await judgeInTransaction(
     run => collections.withTransaction(run),
-    async (tx: PluginCollectionTransaction) => {
-      await collections.updateEntryInTransaction(
-        tx,
-        page.collection,
-        page.id,
-        data,
-        {
-          ...options,
-          context: { [JUDGEMENT_CONTEXT]: true },
-        }
-      );
-    }
+    (tx: PluginCollectionTransaction) =>
+      collections.updateEntryInTransaction(tx, page.collection, page.id, data, {
+        ...options,
+        context: { [JUDGEMENT_CONTEXT]: true },
+      })
   );
+  const refusal = judged.refusal;
+  const shown =
+    judged.refusal === null
+      ? asWritten(planned, judged.written, field)
+      : planned;
   const result = (dryRun: boolean): PageActionResult => ({
     dryRun,
     page: { collection: page.collection, id: page.id },
     ops: planned.ops,
-    ...(planned.document === undefined ? {} : { document: planned.document }),
-    ...(planned.layout === undefined ? {} : { layout: planned.layout }),
+    ...(shown.document === undefined ? {} : { document: shown.document }),
+    ...(shown.layout === undefined ? {} : { layout: shown.layout }),
     ...(planned.insertedId === undefined
       ? {}
       : { insertedId: planned.insertedId }),
@@ -254,7 +279,7 @@ async function readStoredPage(
   pageId: string,
   field: string,
   locale: string | undefined
-): Promise<StoredPage | null> {
+): Promise<ReadPage | null> {
   const row = await readOrNull(async () =>
     requireNextly().findByID({
       collection,
@@ -268,10 +293,47 @@ async function readStoredPage(
   );
   if (typeof row !== "object" || row === null) return null;
   const record = row as Record<string, unknown>;
+  return { page: storedPageOf(record, field), version: record[VERSION_KEY] };
+}
+
+/** The parts of a page row an action reads and writes. */
+function storedPageOf(
+  record: Record<string, unknown>,
+  field: string
+): StoredPage {
   return {
     document: blocksDocumentOf(record, field),
     layout: relationId(record.layout),
     noHeaderFooter: record.noHeaderFooter === true,
+  };
+}
+
+/**
+ * What a judged write stored, in place of what was planned: the hooks a save
+ * runs may change the blocks field or the Layout fields, and the answer shows
+ * what an apply would keep. A field the write's answer leaves out (one the
+ * caller may not read back) is shown as planned.
+ */
+function asWritten(
+  planned: PlannedWrite,
+  written: unknown,
+  field: string
+): Pick<PlannedWrite, "document" | "layout"> {
+  if (typeof written !== "object" || written === null) return planned;
+  const record = written as Record<string, unknown>;
+  const stored = storedPageOf(record, field);
+  return {
+    ...(planned.document === undefined
+      ? {}
+      : { document: stored.document ?? planned.document }),
+    ...(planned.layout === undefined
+      ? {}
+      : {
+          layout:
+            "layout" in record
+              ? { layout: stored.layout, noHeaderFooter: stored.noHeaderFooter }
+              : planned.layout,
+        }),
   };
 }
 
@@ -283,8 +345,7 @@ async function planAction(
   collection: string,
   setup: PageActionsSetup
 ): Promise<PlannedWrite> {
-  if (action.kind === "set-layout")
-    return planLayout(ctx, action, stored, collection);
+  if (action.kind === "set-layout") return planLayout(ctx, action, collection);
   const document = stored.document;
   if (document === null) {
     throw refusedAction([`This entry has no "${field}" blocks to change.`]);
@@ -473,7 +534,6 @@ function valuesSet(
 function planLayout(
   ctx: PageActionsContext,
   action: Extract<PageAction, { kind: "set-layout" }>,
-  stored: StoredPage,
   collection: string
 ): PlannedWrite {
   // Only the plugin's own pages hold a Layout; a host collection with a blocks
@@ -483,7 +543,9 @@ function planLayout(
   }
   const layout = {
     layout: action.layout,
-    noHeaderFooter: action.noHeaderFooter ?? stored.noHeaderFooter,
+    // Choosing a Layout, or the site default, turns the switch off unless the
+    // caller says otherwise, as the editor's one choice does.
+    noHeaderFooter: action.noHeaderFooter ?? false,
   };
   return { data: layout, ops: [], layout };
 }

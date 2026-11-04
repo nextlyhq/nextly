@@ -20,13 +20,15 @@ import {
   COMPONENT_INSTANCE_TYPE,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { requireNextly } from "nextly/runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
@@ -39,6 +41,7 @@ import {
   type PageActionResult,
 } from "../composition-actions-contract";
 import { pageBuilder } from "../plugin";
+import type { SavePatternDryRunResponse } from "../library-contract";
 import { MANAGE_SITE_PERMISSION } from "../site-settings";
 
 import { created, holding, person, post, unique } from "./transfer-harness";
@@ -60,6 +63,43 @@ function heading(id: string, text: string): BlockNode {
   return { id, type: "core/heading", version: 1, props: { text, level: "h2" } };
 }
 
+/** The title marker of a page whose saves a hook rewrites. */
+const STAMP_MARK = "stamped";
+
+/**
+ * A plugin whose only act is to rewrite the first block's text on every save
+ * of a page whose title carries the marker, as a host's normalising hook
+ * might: what is stored is not what was sent.
+ */
+const stampingPages = definePlugin({
+  name: "@t/stamping-pages",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    ctx.hooks.on("beforeUpdate", "pages", hook => {
+      const { data, originalData } = hook as {
+        data?: Record<string, unknown>;
+        originalData?: { title?: unknown };
+      };
+      const content = data?.content as { nodes?: BlockNode[] } | undefined;
+      if (!String(originalData?.title ?? "").includes(STAMP_MARK)) return data;
+      if (content?.nodes === undefined) return data;
+      const [first, ...rest] = content.nodes;
+      if (first === undefined) return data;
+      return {
+        ...data,
+        content: {
+          ...content,
+          nodes: [
+            { ...first, props: { ...first.props, text: "Stamped" } },
+            ...rest,
+          ],
+        },
+      };
+    });
+  },
+});
+
 describe.each(getConfiguredTestDialects())(
   "composition actions through the API (%s)",
   (dialect: TestDialect) => {
@@ -73,7 +113,7 @@ describe.each(getConfiguredTestDialects())(
     async function boot(): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), stampingPages],
         seedPublic: true,
       });
       // The instance's first user is its super admin, so it is made here and
@@ -280,6 +320,96 @@ describe.each(getConfiguredTestDialects())(
       expect((await nodes(t, page)).map(node => node.props.text)).toEqual([
         "Edited",
       ]);
+    });
+
+    it("refuses an apply when the page is saved between its read and its write", async () => {
+      const t = await boot();
+      const { page, pattern } = await site(t);
+      const { cookie } = await holding(t, AUTHOR);
+      // Someone else's save lands just after the action reads the page, so
+      // it plans from the older page.
+      const direct = requireNextly();
+      const read = direct.findByID.bind(direct);
+      let saved = false;
+      const spy = vi
+        .spyOn(direct, "findByID")
+        .mockImplementation(async (args: Parameters<typeof read>[0]) => {
+          const row = await read(args);
+          if (args.collection === "pages" && !saved) {
+            saved = true;
+            await t.nextly.update({
+              collection: "pages",
+              id: page,
+              data: {
+                content: {
+                  formatVersion: 1,
+                  kind: "page",
+                  nodes: [heading("lead", "Saved meanwhile")],
+                },
+              },
+              overrideAccess: true,
+            });
+          }
+          return row;
+        });
+      try {
+        const applied = await act(cookie, {
+          page: { collection: "pages", id: page },
+          action: { kind: "insert-pattern", patternId: pattern },
+        });
+        expect(applied.status).toBe(409);
+      } finally {
+        spy.mockRestore();
+      }
+      expect((await nodes(t, page)).map(node => node.props.text)).toEqual([
+        "Saved meanwhile",
+      ]);
+    });
+
+    it("answers the page as the save stores it, after the site's hooks", async () => {
+      const t = await boot();
+      const { pattern } = await site(t);
+      const page = await created(t, "pages", {
+        title: `Home ${STAMP_MARK}`,
+        slug: unique("stamped"),
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [heading("lead", "Lead")],
+        },
+      });
+      const { cookie } = await holding(t, AUTHOR);
+
+      const dry = await act(cookie, {
+        page: { collection: "pages", id: page },
+        action: { kind: "insert-pattern", patternId: pattern },
+        dryRun: true,
+      });
+
+      expect(
+        (dry.body.item as PageActionResult).document?.nodes.map(
+          node => node.props.text
+        )
+      ).toEqual(["Stamped", "From the pattern"]);
+    });
+
+    it("turns the Layout back on when one is chosen without the switch", async () => {
+      const t = await boot();
+      const { page } = await site(t);
+      await t.nextly.update({
+        collection: "pages",
+        id: page,
+        data: { noHeaderFooter: true },
+        overrideAccess: true,
+      });
+      const { cookie } = await holding(t, AUTHOR);
+
+      await act(cookie, {
+        page: { collection: "pages", id: page },
+        action: { kind: "set-layout", layout: null },
+      });
+
+      expect((await stored(t, "pages", page)).noHeaderFooter).toBe(false);
     });
 
     it("chooses a page's Layout, and the site default again", async () => {
@@ -624,7 +754,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await save(drafter.cookie);
       expect(refused.status).toBe(200);
       expect(
-        (refused.body.item as { refusals: string[] }).refusals
+        (refused.body as unknown as SavePatternDryRunResponse).item.refusals
       ).not.toEqual([]);
       expect(await count()).toBe(before);
     });
