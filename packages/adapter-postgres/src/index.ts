@@ -255,6 +255,29 @@ async function schemaExists(
 }
 
 /**
+ * The SQLSTATE an error carries: its own, or that of the driver error it
+ * wraps, as a Drizzle query error does.
+ */
+function sqlStateOf(error: unknown): string | undefined {
+  for (let at: unknown = error, hops = 0; hops < 4; hops++) {
+    if (typeof at !== "object" || at === null) return undefined;
+    const code: unknown = Reflect.get(at, "code");
+    if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return code;
+    at = Reflect.get(at, "cause");
+  }
+  return undefined;
+}
+
+/**
+ * A serialization failure or a deadlock: the transaction lost a race, and
+ * running it again may succeed.
+ */
+function isSerializationFailure(error: unknown): boolean {
+  const code = sqlStateOf(error);
+  return code === "40001" || code === "40P01";
+}
+
+/**
  * Delay helper for retry logic.
  */
 function delay(ms: number): Promise<void> {
@@ -695,12 +718,20 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Supports automatic retry for serialization failures (40001) and
    * deadlocks (40P01) when `retryCount` is specified in options.
    *
-   * An error carrying the Nextly application brand is neither retried nor
-   * classified: it is the application refusing the write, so it arrives at the
-   * caller as it was thrown. Retrying it would repeat work whose verdict has
-   * already been given. Every other error, including an unbranded one raised by
-   * the callback, is retried when it is a serialization failure or deadlock and
-   * classified on the way out.
+   * An error carrying the Nextly application brand is not classified: it is the
+   * application refusing the write, so it arrives at the caller as it was
+   * thrown. It is retried only when `retryWhen` accepts it, which is asked
+   * first, of every error; a refusal re-run is otherwise the same refusal.
+   * Every other error, including an unbranded one raised by the callback, is
+   * retried when it is a serialization failure or deadlock and classified on
+   * the way out.
+   *
+   * A call made inside another transaction's work joins it, on its client,
+   * as a savepoint: released when the callback resolves, rolled back to when
+   * it throws, so its failure undoes only its own part. A serialization
+   * failure or deadlock inside a joined part fails the whole transaction,
+   * which only a retry of the outermost one can answer. A joined call keeps
+   * the outer's options and is never retried itself.
    *
    * @param callback - Function to execute within the transaction
    * @param options - Transaction options (isolation level, timeout, retry)
@@ -714,58 +745,88 @@ export class PostgresAdapter extends DrizzleAdapter {
     callback: (ctx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
-    // The calling flow's open transaction from BEGIN until COMMIT or ROLLBACK
-    // has run, for `transactionOpenInFlow`.
-    return this.runInFlowTransaction(() =>
-      this.runTransactionAttempts(callback, options)
+    const frame = this.beginTransactionCall();
+    if (frame) {
+      try {
+        return await this.runJoined(
+          frame,
+          depth => frame.join.adapter(depth),
+          callback,
+          options
+        );
+      } catch (error) {
+        if (isApplicationError(error)) throw error;
+        throw this.classifyError(error);
+      }
+    }
+    // Before anything is awaited, so the stack still reaches the caller.
+    return this.runTransactionAttempts(
+      callback,
+      options,
+      this.captureOpeningStack()
     );
   }
 
-  /** The attempts `transaction` makes, each on a connection of its own. */
+  /**
+   * The attempts an outermost transaction makes, each on a client of its own,
+   * each its own transaction frame.
+   */
   private async runTransactionAttempts<T>(
     callback: (ctx: TransactionContext) => Promise<T>,
-    options?: TransactionOptions
+    options: TransactionOptions | undefined,
+    openedAt: string | undefined
   ): Promise<T> {
     const pool = this.ensurePool();
     const maxAttempts = (options?.retryCount ?? 0) + 1;
     const retryDelayMs = options?.retryDelayMs ?? 100;
 
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const client = await this.connectFlowTransaction(() => pool.connect());
+    for (let attempt = 1; ; attempt++) {
+      // A checkout, taken from the pool like `executeQuery`'s queries are.
+      this.notePoolAccess();
+      const client = await pool.connect();
       const startTime = Date.now();
       // Set when the ROLLBACK failed. The client may then still be inside the
       // transaction, so it is destroyed rather than pooled: the next request
       // handed it would otherwise write into a transaction nobody commits.
       let discard: Error | true | undefined;
 
-      try {
-        // Begin transaction with options
-        await this.beginTransaction(client, options);
+      const settled = await this.runOutermost(
+        {
+          context: this.createTransactionContext(client),
+          join: this.joinSteps(client),
+          openedAt,
+          begin: () => this.beginTransaction(client, options),
+          // A transaction a failed statement aborted is not refused at
+          // COMMIT: PostgreSQL rolls it back and answers with the ROLLBACK
+          // command tag, raising nothing. A callback that caught its failed
+          // statement and returned would otherwise be told its writes
+          // committed when none of them were kept, so that answer is an error.
+          commit: async () => {
+            const committed = await client.query("COMMIT");
+            if (committed?.command === "ROLLBACK") {
+              throw createDatabaseError({
+                kind: "query",
+                code: "25P02",
+                message:
+                  "The transaction was rolled back, not committed: a statement in it failed, and PostgreSQL ends such a transaction with a rollback when asked to commit.",
+              });
+            }
+          },
+          rollback: async () => {
+            await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+              discard = rollbackError instanceof Error ? rollbackError : true;
+            });
+          },
+        },
+        callback,
+        options
+      );
+      // node-postgres destroys a client released with an error or `true`,
+      // and pools one released with nothing. Released before anything held
+      // runs, so an effect that opens a transaction takes one client, not two.
+      client.release(discard);
 
-        // Create transaction context
-        const ctx = this.createTransactionContext(client);
-
-        // Execute callback
-        const result = await callback(ctx);
-
-        // Commit transaction. A transaction a failed statement aborted is not
-        // refused at COMMIT: PostgreSQL rolls it back and answers with the
-        // ROLLBACK command tag, raising nothing. A callback that caught its
-        // failed statement and returned would otherwise be told its writes
-        // committed when none of them were kept, so that answer is an error.
-        const committed = await client.query("COMMIT");
-        if (committed?.command === "ROLLBACK") {
-          throw createDatabaseError({
-            kind: "query",
-            code: "25P02",
-            message:
-              "The transaction was rolled back, not committed: a statement in it failed, and PostgreSQL ends such a transaction with a rollback when asked to commit.",
-          });
-        }
-
-        // Log success
+      if (settled.committed) {
         if (this.config.logger?.debug) {
           const durationMs = Date.now() - startTime;
           this.config.logger.debug("Transaction committed", {
@@ -773,51 +834,86 @@ export class PostgresAdapter extends DrizzleAdapter {
             durationMs,
           });
         }
-
-        return result;
-      } catch (error) {
-        // Rollback transaction
-        await client.query("ROLLBACK").catch((rollbackError: unknown) => {
-          discard = rollbackError instanceof Error ? rollbackError : true;
-        });
-
-        lastError = error;
-
-        // Work inside a transaction may throw to roll the write back — a
-        // refused value, a denied permission — and that is the application's
-        // verdict, not the driver's failure. Rethrown before the retry check as
-        // well as before classification: a refusal re-run is the same refusal,
-        // and the caller must receive the code and payload it raised rather
-        // than a generic database error with the detail stripped out.
-        if (isApplicationError(error)) throw error;
-
-        // Check if error is retryable
-        const pgError = error as { code?: string };
-        const isRetryable =
-          pgError.code === "40001" || // serialization_failure
-          pgError.code === "40P01"; // deadlock
-
-        if (isRetryable && attempt < maxAttempts) {
-          if (this.config.logger?.warn) {
-            this.config.logger.warn(
-              `Transaction failed with ${pgError.code}, retrying (${attempt}/${maxAttempts})`,
-              { code: pgError.code, attempt }
-            );
-          }
-          await delay(retryDelayMs * attempt); // Exponential backoff
-          continue;
-        }
-
-        throw this.classifyError(error);
-      } finally {
-        // node-postgres destroys a client released with an error or `true`,
-        // and pools one released with nothing.
-        client.release(discard);
+        await this.runHeldEffects(settled.effects);
+        return settled.result;
       }
-    }
 
-    // Should not reach here, but handle just in case
-    throw this.classifyError(lastError);
+      const { error } = settled;
+      if (attempt < maxAttempts && this.retries(error, options)) {
+        if (this.config.logger?.warn) {
+          const code = sqlStateOf(error);
+          this.config.logger.warn(
+            `Transaction failed with ${code ?? "a retryable error"}, retrying (${attempt}/${maxAttempts})`,
+            { code, attempt }
+          );
+        }
+        // This attempt's rollback effects go with it: it is not the last.
+        await delay(retryDelayMs * attempt); // Exponential backoff
+        continue;
+      }
+
+      await this.runHeldEffects(settled.effects);
+      // Work inside a transaction may throw to roll the write back — a
+      // refused value, a denied permission — and that is the application's
+      // verdict, not the driver's failure: the caller receives the code and
+      // payload it raised rather than a generic database error.
+      if (isApplicationError(error)) throw error;
+      throw this.classifyError(error);
+    }
+  }
+
+  /**
+   * Whether an attempt that ended with `error` is tried again: when
+   * `retryWhen` accepts it, asked first and of every error, application ones
+   * included; otherwise when it is a serialization failure or a deadlock,
+   * never an application error.
+   */
+  private retries(
+    error: unknown,
+    options: TransactionOptions | undefined
+  ): boolean {
+    if (options?.retryWhen?.(error) === true) return true;
+    if (isApplicationError(error)) return false;
+    return isSerializationFailure(error);
+  }
+
+  /**
+   * How a call made inside a transaction on `client` joins it: a savepoint
+   * each, on `client`, named for its depth.
+   */
+  private joinSteps(client: PoolClient) {
+    // Memoized per transaction, as a transaction context's handles are.
+    const handles = this.transactionDrizzleHandles(relations =>
+      relations ? drizzle({ client, relations }) : drizzle({ client })
+    );
+    const savepoint = <C>(context: C, depth: number) => {
+      const name = this.escapeIdentifier(`nextly_sp_${depth}`);
+      return {
+        context,
+        begin: async () => {
+          await client.query(`SAVEPOINT ${name}`);
+        },
+        commit: async () => {
+          await client.query(`RELEASE SAVEPOINT ${name}`);
+        },
+        rollback: async () => {
+          await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+          await client.query(`RELEASE SAVEPOINT ${name}`);
+        },
+        dooms: isSerializationFailure,
+      };
+    };
+    return {
+      adapter: (depth: number) =>
+        savepoint(this.createTransactionContext(client), depth),
+      drizzle: (depth: number, relations: AnyRelations | undefined) =>
+        savepoint(
+          relations
+            ? handles.withRelations<ReturnType<typeof handles.bare>>(relations)
+            : handles.bare(),
+          depth
+        ),
+    };
   }
 
   /**
@@ -996,8 +1092,8 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Its `transaction` runs on a client this adapter checks out and returns
    * itself (`pinDrizzleTransactions`): node-postgres destroys a client
    * released with `true`, which is what happens when no ROLLBACK could be
-   * confirmed on it. And it counts for `transactionOpenInFlow`, as the
-   * adapter's does.
+   * confirmed on it. And it joins a transaction the calling flow is inside,
+   * as the adapter's `transaction()` does (`trackFlowTransactions`).
    */
   private poolDrizzle(pool: Pool, relations?: AnyRelations) {
     const onClient = (client: Pool | PoolClient) =>
@@ -1006,14 +1102,20 @@ export class PostgresAdapter extends DrizzleAdapter {
     // pool that reports them (`observedPool`).
     const reported = this.observedPool(pool, ["query"]);
     return this.trackFlowTransactions(
-      this.pinDrizzleTransactions(onClient(reported), async () => {
-        const client = await this.connectFlowTransaction(() => pool.connect());
-        return {
-          drizzle: onClient(client),
-          rollback: () => client.query("ROLLBACK"),
-          release: dirty => client.release(dirty),
-        };
-      })
+      this.pinDrizzleTransactions(
+        onClient(reported),
+        async () => {
+          const client = await pool.connect();
+          return {
+            drizzle: onClient(client),
+            rollback: () => client.query("ROLLBACK"),
+            release: dirty => client.release(dirty),
+            join: this.joinSteps(client),
+          };
+        },
+        relations
+      ),
+      relations
     );
   }
 

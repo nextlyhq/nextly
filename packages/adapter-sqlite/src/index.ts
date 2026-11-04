@@ -529,7 +529,7 @@ export class SqliteAdapter extends DrizzleAdapter {
       try {
         return await this.runJoined(
           frame,
-          depth => this.savepointSteps(depth),
+          depth => frame.join.adapter(depth),
           work,
           options
         );
@@ -538,13 +538,37 @@ export class SqliteAdapter extends DrizzleAdapter {
         throw this.classifyError(error);
       }
     }
-    const { result, effects } = await this.takeTurn(() =>
-      this.runTransaction(work, options)
-    );
-    // After the queue has moved on rather than inside it: an effect that opens
-    // a transaction of its own would otherwise wait behind the one running it.
-    await this.runHeldEffects(effects);
-    return result;
+    // SQLite raises no serialization failure: an attempt is tried again only
+    // when `retryWhen` accepts the error that ended it.
+    const maxAttempts = (options?.retryCount ?? 0) + 1;
+    const retryDelayMs = options?.retryDelayMs ?? 100;
+    for (let attempt = 1; ; attempt++) {
+      const settled = await this.takeTurn(() =>
+        this.runTransaction(work, options)
+      );
+      // After the queue has moved on rather than inside it: an effect that
+      // opens a transaction of its own would otherwise wait behind the one
+      // running it.
+      if (settled.committed) {
+        await this.runHeldEffects(settled.effects);
+        return settled.result;
+      }
+      const { error } = settled;
+      if (attempt < maxAttempts && options?.retryWhen?.(error) === true) {
+        // This attempt's rollback effects go with it: it is not the last.
+        await delay(retryDelayMs * attempt);
+        continue;
+      }
+      await this.runHeldEffects(settled.effects);
+      // Work inside a transaction may throw to roll the write back — a
+      // refused value, a denied permission — and that is the application's
+      // verdict, not the driver's failure. Classifying it would replace its
+      // code and payload with a generic database error, so a caller that
+      // asked for a refusal is handed an unexplained failure and the
+      // per-field detail never arrives.
+      if (isApplicationError(error)) throw error;
+      throw this.classifyError(error);
+    }
   }
 
   /**
@@ -589,28 +613,6 @@ export class SqliteAdapter extends DrizzleAdapter {
     return next;
   }
 
-  /**
-   * Hold `effect` until the transaction enclosing this async context commits,
-   * or run it now when none does ({@link holdEffect}).
-   *
-   * The effect belongs to the scope this async context runs in, even one
-   * that has already released or rolled back: a service whose own
-   * transaction nested as a savepoint registers from its caller's scope once
-   * that savepoint has released, and the change is undoable for as long as
-   * any scope around it is. The outermost transaction runs the effect once
-   * its COMMIT succeeds, unless a scope between the effect's scope and the
-   * outermost transaction rolled back, and drops every effect on ROLLBACK or
-   * a failed COMMIT. A context whose outermost transaction has already
-   * finished is outside any transaction, so its effect runs now, unless what
-   * it announces was undone and it has run no transaction since.
-   */
-  override afterCommit(
-    effect: () => unknown,
-    onDeferredFailure?: (error: unknown) => void
-  ): Promise<void> {
-    return this.holdEffect(effect, onDeferredFailure);
-  }
-
   /** A held effect's failure that no reporter took goes to the adapter's logger. */
   protected override logHeldEffectFailure(failure: Error): void {
     if (this.config.logger?.error) {
@@ -618,16 +620,6 @@ export class SqliteAdapter extends DrizzleAdapter {
     } else {
       super.logHeldEffectFailure(failure);
     }
-  }
-
-  /**
-   * Whether a `transaction()` call made here would join an open transaction
-   * as a savepoint. On SQLite it would: the connection is the only one, so a
-   * transaction open on it encloses whatever the async chain that opened it
-   * starts.
-   */
-  override inTransaction(): boolean {
-    return this.joinableFrame() !== undefined;
   }
 
   /**
@@ -653,9 +645,10 @@ export class SqliteAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Inner transaction body. Kept private so callers always go through
-   * the serialized `transaction()` queue above and the BEGIN/COMMIT
-   * pair is never invoked outside of it.
+   * One attempt's transaction body, settled rather than rejected for the
+   * transaction's own failure (`runOutermost`). Kept private so callers always
+   * go through the serialized `transaction()` queue above and the
+   * BEGIN/COMMIT pair is never invoked outside of it.
    */
   private async runTransaction<T>(
     work: (tx: TransactionContext) => Promise<T>,
@@ -667,10 +660,11 @@ export class SqliteAdapter extends DrizzleAdapter {
     try {
       // Since better-sqlite3's db.transaction() doesn't support async functions,
       // we manually manage the transaction with BEGIN/COMMIT/ROLLBACK
-      const committed = await this.runOutermost(
+      const settled = await this.runOutermost(
         {
-          connection: db,
           context: this.createTransactionContext(db),
+          // A call made inside the transaction joins it as a savepoint.
+          join: { adapter: depth => this.savepointSteps(depth) },
           begin: () => {
             db.exec("BEGIN IMMEDIATE");
           },
@@ -687,20 +681,17 @@ export class SqliteAdapter extends DrizzleAdapter {
       );
 
       // Log success
-      if (this.config.logger?.debug) {
+      if (settled.committed && this.config.logger?.debug) {
         const durationMs = Date.now() - startTime;
         this.config.logger.debug("Transaction committed", {
           durationMs,
         });
       }
 
-      return committed;
+      return settled;
     } catch (error) {
-      // Work inside a transaction may throw to roll the write back — a refused
-      // value, a denied permission — and that is the application's verdict, not
-      // the driver's failure. Classifying it would replace its code and payload
-      // with a generic database error, so a caller that asked for a refusal is
-      // handed an unexplained failure and the per-field detail never arrives.
+      // Building the transaction's context failed before it began: as
+      // `transaction()` reports an attempt's failure.
       if (isApplicationError(error)) throw error;
       throw this.classifyError(error);
     }
@@ -1206,6 +1197,11 @@ export function createSqliteAdapter(
  */
 export function isSqliteAdapter(value: unknown): value is SqliteAdapter {
   return value instanceof SqliteAdapter;
+}
+
+/** Waits `ms` before a transaction's next attempt. */
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**

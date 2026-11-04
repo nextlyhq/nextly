@@ -44,24 +44,35 @@ class FrameAdapter extends DrizzleAdapter {
     if (frame) {
       return this.runJoined(
         frame,
-        depth =>
-          this.steps(
-            `SAVEPOINT ${depth}`,
-            `RELEASE ${depth}`,
-            `ROLLBACK TO ${depth}`
-          ),
+        depth => frame.join.adapter(depth),
         work,
         options
       );
     }
-    const { result, effects } = await this.runOutermost(
-      { connection: this, ...this.steps("BEGIN", "COMMIT", "ROLLBACK") },
+    const settled = await this.runOutermost(
+      {
+        ...this.steps("BEGIN", "COMMIT", "ROLLBACK"),
+        join: {
+          adapter: depth =>
+            this.flatJoin
+              ? { ...this.steps("", "", ""), dooms: () => true }
+              : this.steps(
+                  `SAVEPOINT ${depth}`,
+                  `RELEASE ${depth}`,
+                  `ROLLBACK TO ${depth}`
+                ),
+        },
+      },
       work,
       options
     );
-    await this.runHeldEffects(effects);
-    return result;
+    await this.runHeldEffects(settled.effects);
+    if (settled.committed) return settled.result;
+    throw settled.error;
   }
+
+  /** Join flat, as MySQL does: no savepoint, and a part's failure dooms the transaction. */
+  flatJoin = false;
 
   /** The frame a call made here would join. */
   frame(): TransactionFrame | undefined {
@@ -94,18 +105,16 @@ class FrameAdapter extends DrizzleAdapter {
     throw new Error("These tests run no Drizzle queries.");
   }
 
+  /** Steps that record their statements; a flat join's send none. */
   private steps(begin: string, commit: string, rollback: string) {
+    const record = (statement: string) => {
+      if (statement !== "") this.statements.push(statement);
+    };
     return {
       context: CONTEXT,
-      begin: () => {
-        this.statements.push(begin);
-      },
-      commit: () => {
-        this.statements.push(commit);
-      },
-      rollback: () => {
-        this.statements.push(rollback);
-      },
+      begin: () => record(begin),
+      commit: () => record(commit),
+      rollback: () => record(rollback),
     };
   }
 }
@@ -278,5 +287,65 @@ describe("transaction frames", () => {
       "RELEASE 1",
       "COMMIT",
     ]);
+  });
+
+  it("fails the whole transaction when a flat part fails, though the outer caught it", async () => {
+    const adapter = new FrameAdapter();
+    adapter.flatJoin = true;
+    const refusal = new Error("the part refuses");
+    let later: unknown;
+
+    const outcome = await adapter
+      .transaction(async () => {
+        await adapter
+          .transaction(async () => {
+            throw refusal;
+          })
+          .catch(() => undefined);
+        later = await adapter
+          .transaction(async () => "ran")
+          .catch((error: unknown) => error);
+      })
+      .then(
+        () => "committed",
+        (error: unknown) => error
+      );
+
+    expect(outcome).toBe(refusal);
+    expect(later).toBe(refusal);
+    expect(adapter.statements).toEqual(["BEGIN", "ROLLBACK"]);
+  });
+
+  it("runs rollback effects once the outermost transaction rolls back, and drops them when it commits", async () => {
+    const adapter = new FrameAdapter();
+    const ran: string[] = [];
+
+    await adapter.transaction(async () => {
+      await adapter.afterRollback(() =>
+        ran.push("from a committed transaction")
+      );
+      await adapter
+        .transaction(async () => {
+          await adapter.afterRollback(() =>
+            ran.push("from a rolled-back part")
+          );
+          throw new Error("undo the part");
+        })
+        .catch(() => undefined);
+    });
+    let ranBeforeRollback: string[] = [];
+    await adapter
+      .transaction(async () => {
+        await adapter.transaction(async () => {
+          await adapter.afterRollback(() => ran.push("from a part"));
+        });
+        await adapter.afterRollback(() => ran.push("from the outer"));
+        ranBeforeRollback = [...ran];
+        throw new Error("undo everything");
+      })
+      .catch(() => undefined);
+
+    expect(ranBeforeRollback).toEqual([]);
+    expect(ran).toEqual(["from a part", "from the outer"]);
   });
 });

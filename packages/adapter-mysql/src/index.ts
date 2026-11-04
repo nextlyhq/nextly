@@ -294,6 +294,23 @@ const MYSQL_ERROR_CODES: Record<number, DatabaseErrorKind> = {
   1054: "query", // ER_BAD_FIELD_ERROR
 };
 
+/** ER_LOCK_DEADLOCK: the transaction lost a race, and running it again may succeed. */
+const DEADLOCK = 1213;
+
+/**
+ * The MySQL error number an error carries: its own, or that of the driver
+ * error it wraps, as a classified or a Drizzle query error does.
+ */
+function errnoOf(error: unknown): number | undefined {
+  for (let at: unknown = error, hops = 0; hops < 4; hops++) {
+    if (typeof at !== "object" || at === null) return undefined;
+    const errno: unknown = Reflect.get(at, "errno");
+    if (typeof errno === "number") return errno;
+    at = Reflect.get(at, "cause");
+  }
+  return undefined;
+}
+
 /**
  * Delay helper for retry logic.
  */
@@ -585,15 +602,39 @@ export class MySqlAdapter extends DrizzleAdapter {
    *
    * Note: Savepoints are disabled in this adapter for safety due to
    * MySQL's quirks with nested transactions.
+   *
+   * A call made inside another transaction's work therefore joins it flat,
+   * on its connection: its statements are the outer's. Its failure cannot be
+   * undone alone, so it fails the whole transaction, even when the outer
+   * catches it: the outer's COMMIT is refused, it rolls back, and it rejects
+   * with the error that failed the joined call; any later joined call fails
+   * with that error at once. A joined call keeps the outer's options and is
+   * never retried itself. `retryWhen` is asked first, of every error that
+   * ends an attempt, application ones included.
    */
   async transaction<T>(
     work: (tx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
-    // The calling flow's open transaction from BEGIN until COMMIT or ROLLBACK
-    // has run, for `transactionOpenInFlow`.
-    return this.runInFlowTransaction(() =>
-      this.runTransactionAttempts(work, options)
+    const frame = this.beginTransactionCall();
+    if (frame) {
+      try {
+        return await this.runJoined(
+          frame,
+          depth => frame.join.adapter(depth),
+          work,
+          options
+        );
+      } catch (error) {
+        if (isApplicationError(error)) throw error;
+        throw this.classifyError(error);
+      }
+    }
+    // Before anything is awaited, so the stack still reaches the caller.
+    return this.runTransactionAttempts(
+      work,
+      options,
+      this.captureOpeningStack()
     );
   }
 
@@ -686,21 +727,23 @@ export class MySqlAdapter extends DrizzleAdapter {
     }
   }
 
-  /** The attempts `transaction` makes, each on a connection of its own. */
+  /**
+   * The attempts an outermost transaction makes, each on a connection of its
+   * own, each its own transaction frame.
+   */
   private async runTransactionAttempts<T>(
     work: (tx: TransactionContext) => Promise<T>,
-    options?: TransactionOptions
+    options: TransactionOptions | undefined,
+    openedAt: string | undefined
   ): Promise<T> {
     const pool = this.ensurePool();
     const maxAttempts = (options?.retryCount ?? 0) + 1;
     const retryDelayMs = options?.retryDelayMs ?? 100;
 
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const connection = await this.connectFlowTransaction(() =>
-        pool.getConnection()
-      );
+    for (let attempt = 1; ; attempt++) {
+      // A checkout, taken from the pool like `executeQuery`'s queries are.
+      this.notePoolAccess();
+      const connection = await pool.getConnection();
       const startTime = Date.now();
       // Set when the ROLLBACK failed (`returnTransactionConnection`).
       let rollbackFailed = false;
@@ -709,20 +752,29 @@ export class MySqlAdapter extends DrizzleAdapter {
       // that fails part way still puts back what it had already changed.
       const restore: NonNullable<SessionRestore> = {};
 
-      try {
-        // Begin transaction with options
-        await this.beginTransaction(connection, options, restore);
+      const settled = await this.runOutermost(
+        {
+          context: this.createTransactionContext(connection),
+          join: this.joinSteps(connection),
+          openedAt,
+          begin: () => this.beginTransaction(connection, options, restore),
+          commit: async () => {
+            await connection.query("COMMIT");
+          },
+          rollback: async () => {
+            await connection.query("ROLLBACK").catch(() => {
+              rollbackFailed = true;
+            });
+          },
+        },
+        work,
+        options
+      );
+      // Returned before anything held runs, so an effect that opens a
+      // transaction takes one connection, not two.
+      await returnTransactionConnection(connection, rollbackFailed, restore);
 
-        // Create transaction context
-        const ctx = this.createTransactionContext(connection);
-
-        // Execute callback
-        const result = await work(ctx);
-
-        // Commit transaction
-        await connection.query("COMMIT");
-
-        // Log success
+      if (settled.committed) {
         if (this.config.logger?.debug) {
           const durationMs = Date.now() - startTime;
           this.config.logger.debug("Transaction committed", {
@@ -730,47 +782,79 @@ export class MySqlAdapter extends DrizzleAdapter {
             durationMs,
           });
         }
-
-        return result;
-      } catch (error) {
-        // Rollback transaction
-        await connection.query("ROLLBACK").catch(() => {
-          rollbackFailed = true;
-        });
-
-        lastError = error;
-
-        // Work inside a transaction may throw to roll the write back — a
-        // refused value, a denied permission — and that is the application's
-        // verdict, not the driver's failure. Rethrown before the retry check as
-        // well as before classification: a refusal re-run is the same refusal,
-        // and the caller must receive the code and payload it raised rather
-        // than a generic database error with the detail stripped out.
-        if (isApplicationError(error)) throw error;
-
-        // Check if error is retryable (deadlock only per approved approach)
-        const mysqlError = error as { errno?: number; code?: string };
-        const isRetryable = mysqlError.errno === 1213; // ER_LOCK_DEADLOCK
-
-        if (isRetryable && attempt < maxAttempts) {
-          if (this.config.logger?.warn) {
-            this.config.logger.warn(
-              `Transaction failed with deadlock, retrying (${attempt}/${maxAttempts})`,
-              { errno: mysqlError.errno, attempt }
-            );
-          }
-          await delay(retryDelayMs * attempt); // Exponential backoff
-          continue;
-        }
-
-        throw this.classifyError(error);
-      } finally {
-        await returnTransactionConnection(connection, rollbackFailed, restore);
+        await this.runHeldEffects(settled.effects);
+        return settled.result;
       }
-    }
 
-    // Should not reach here, but handle just in case
-    throw this.classifyError(lastError);
+      const { error } = settled;
+      if (attempt < maxAttempts && this.retries(error, options)) {
+        if (this.config.logger?.warn) {
+          const errno = errnoOf(error);
+          this.config.logger.warn(
+            `Transaction failed with ${errno === DEADLOCK ? "deadlock" : "a retryable error"}, retrying (${attempt}/${maxAttempts})`,
+            { errno, attempt }
+          );
+        }
+        // This attempt's rollback effects go with it: it is not the last.
+        await delay(retryDelayMs * attempt); // Exponential backoff
+        continue;
+      }
+
+      await this.runHeldEffects(settled.effects);
+      // Work inside a transaction may throw to roll the write back — a
+      // refused value, a denied permission — and that is the application's
+      // verdict, not the driver's failure: the caller receives the code and
+      // payload it raised rather than a generic database error.
+      if (isApplicationError(error)) throw error;
+      throw this.classifyError(error);
+    }
+  }
+
+  /**
+   * Whether an attempt that ended with `error` is tried again: when
+   * `retryWhen` accepts it, asked first and of every error, application ones
+   * included; otherwise when it is a deadlock, never an application error.
+   */
+  private retries(
+    error: unknown,
+    options: TransactionOptions | undefined
+  ): boolean {
+    if (options?.retryWhen?.(error) === true) return true;
+    if (isApplicationError(error)) return false;
+    return errnoOf(error) === DEADLOCK;
+  }
+
+  /**
+   * How a call made inside a transaction on `connection` joins it: flat, on
+   * the same connection, with nothing to send. Any failure inside it fails
+   * the whole transaction, since no savepoint can undo the part alone.
+   */
+  private joinSteps(connection: PoolConnection) {
+    // Memoized per transaction, as a transaction context's handles are.
+    const callbackConnection = (
+      connection as unknown as { connection: CallbackConnection }
+    ).connection;
+    const handles = this.transactionDrizzleHandles(relations =>
+      relations
+        ? drizzle({ client: callbackConnection, relations })
+        : drizzle({ client: callbackConnection })
+    );
+    const flat = <C>(context: C) => ({
+      context,
+      begin() {},
+      commit() {},
+      rollback() {},
+      dooms: () => true,
+    });
+    return {
+      adapter: () => flat(this.createTransactionContext(connection)),
+      drizzle: (_depth: number, relations: AnyRelations | undefined) =>
+        flat(
+          relations
+            ? handles.withRelations<ReturnType<typeof handles.bare>>(relations)
+            : handles.bare()
+        ),
+    };
   }
 
   /**
@@ -884,8 +968,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    *
    * Its `transaction` runs on a connection this adapter checks out and
    * returns itself (`pinDrizzleTransactions`): destroyed rather than pooled
-   * when no ROLLBACK could be confirmed on it. And it counts for
-   * `transactionOpenInFlow`, as the adapter's does.
+   * when no ROLLBACK could be confirmed on it. And it joins a transaction
+   * the calling flow is inside, as the adapter's `transaction()` does
+   * (`trackFlowTransactions`).
    */
   private poolDrizzle(pool: Pool, relations?: AnyRelations) {
     // drizzle v1's mysql2 driver takes the CALLBACK pool and connection,
@@ -901,22 +986,26 @@ export class MySqlAdapter extends DrizzleAdapter {
       ["query", "execute", "getConnection"]
     );
     return this.trackFlowTransactions(
-      this.pinDrizzleTransactions(onClient(callbackPool), async () => {
-        const connection = await this.connectFlowTransaction(() =>
-          pool.getConnection()
-        );
-        return {
-          drizzle: onClient(
-            (connection as unknown as { connection: CallbackConnection })
-              .connection
-          ),
-          rollback: () => connection.query("ROLLBACK"),
-          release: dirty => {
-            if (dirty) connection.destroy();
-            else connection.release();
-          },
-        };
-      })
+      this.pinDrizzleTransactions(
+        onClient(callbackPool),
+        async () => {
+          const connection = await pool.getConnection();
+          return {
+            drizzle: onClient(
+              (connection as unknown as { connection: CallbackConnection })
+                .connection
+            ),
+            rollback: () => connection.query("ROLLBACK"),
+            release: dirty => {
+              if (dirty) connection.destroy();
+              else connection.release();
+            },
+            join: this.joinSteps(connection),
+          };
+        },
+        relations
+      ),
+      relations
     );
   }
 
