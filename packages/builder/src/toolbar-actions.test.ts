@@ -931,3 +931,108 @@ describe("toolbarActions for MORE than one block", () => {
     );
   });
 });
+
+describe("Save as shared style…", () => {
+  const styled = { styles: { base: { base: { color: "#123456" } } } };
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 0,
+    styles: {},
+  };
+  const save = (
+    document: BlockDocument,
+    ids: string[],
+    offer?: { library: (typeof card)[] | undefined; mayChange: boolean }
+  ) =>
+    toolbarActions(
+      document,
+      ids[0] ?? null,
+      ids,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      false,
+      offer
+    ).find(action => action.id === "save-as-shared-style");
+
+  it("is not offered by a host with no shared styles", () => {
+    expect(
+      save(documentOf([node("a", undefined, styled)]), ["a"])
+    ).toBeUndefined();
+  });
+
+  it("is offered, in the menu, for one block with styles of its own", () => {
+    expect(
+      save(documentOf([node("a", undefined, styled)]), ["a"], {
+        library: [card],
+        mayChange: true,
+      })
+    ).toEqual({
+      id: "save-as-shared-style",
+      label: "Save as shared style…",
+      enabled: true,
+      inMenu: true,
+    });
+  });
+
+  it("is dimmed inside an area locked to its content, judged by the editor's lock view", () => {
+    // The area's lock comes from the definitions the editor composes with,
+    // not the global registry, so only the lock view knows it.
+    const view = {
+      definitions: {
+        get: (type: string) =>
+          type === "acme/area"
+            ? {
+                version: 1,
+                slots: { children: { lock: "contentOnly" as const } },
+              }
+            : undefined,
+      },
+    };
+    const document = documentOf([
+      node("area", "acme/area", {
+        slots: { children: [node("a", undefined, styled)] },
+      }),
+    ]);
+    const action = save(document, ["a"], {
+      library: [card],
+      mayChange: true,
+      view,
+    } as never);
+    expect(action?.enabled).toBe(false);
+    expect(action?.reason).toMatch(/content/i);
+  });
+
+  it("is dimmed with the save rule's own reason", () => {
+    const offer = { library: [card], mayChange: true };
+    expect(save(documentOf([node("a")]), ["a"], offer)?.reason).toBe(
+      "This block has no styles of its own yet."
+    );
+    expect(
+      save(
+        documentOf([node("a", undefined, { ...styled, classes: ["c-card"] })]),
+        ["a"],
+        offer
+      )?.reason
+    ).toBe("This block already uses Card.");
+    expect(
+      save(documentOf([node("a", undefined, styled)]), ["a"], {
+        ...offer,
+        mayChange: false,
+      })?.reason
+    ).toBe("You can't change this site's design.");
+    expect(
+      save(
+        documentOf([
+          node("a", undefined, styled),
+          node("b", undefined, styled),
+        ]),
+        ["a", "b"],
+        offer
+      )?.reason
+    ).toBe("Only one block at a time. 2 are selected.");
+  });
+});
