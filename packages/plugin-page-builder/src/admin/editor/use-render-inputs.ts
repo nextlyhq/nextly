@@ -60,6 +60,7 @@ import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
 import { useCanvasPageContext } from "./canvas-page-context";
+import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
   useBreakpointWriter,
@@ -788,6 +789,13 @@ export function useCanvasInputs(
     ...styleState,
   });
   const site = useSiteCanvas(mount.clientConfig);
+  // Shared styles on the selected block, read off the same class surface and
+  // page counts the inspector and the Shared styles tab read.
+  const sharedStyle = useSharedStyleVerb({
+    editor: mount.editor,
+    classes: style.classes,
+    pageClassBlocks: readings.pageClassBlocks,
+  });
   return {
     ...render,
     ...viewport,
@@ -795,6 +803,7 @@ export function useCanvasInputs(
     ...wiring,
     ...readings,
     ...site,
+    sharedStyle,
   };
 }
 
@@ -808,4 +817,7 @@ export type CanvasInputs = CanvasRender &
   ShownStyleState &
   CanvasWiring &
   StyleReadings &
-  SiteCanvas;
+  SiteCanvas & {
+    /** The Style tab's shared-style host, the save verb and its dialog. */
+    sharedStyle: SharedStyleVerb;
+  };
