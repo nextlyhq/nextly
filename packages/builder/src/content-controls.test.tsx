@@ -242,6 +242,20 @@ describe("what an author reads", () => {
       option.querySelector(".nx-inspector__option-value")?.textContent
     ).toBe("div");
   });
+
+  it("puts an on/off prop's label in the label column and its switch in the control column", () => {
+    // The switch drawn before its label broke the column every other row
+    // keeps: label on the left, control on the right.
+    registerWorded();
+    const { getByRole } = render(
+      <InspectorPanel editor={editorFor(documentOf())} />
+    );
+    const toggle = getByRole("switch", { name: "Open by default" });
+    const row = toggle.closest('[data-content-control="checkbox"]');
+    expect(row?.className).not.toContain("nx-inspector__field--inline");
+    expect(row?.firstElementChild?.tagName).toBe("LABEL");
+    expect(row?.lastElementChild).toBe(toggle);
+  });
 });
 
 describe("a few short options in a row", () => {

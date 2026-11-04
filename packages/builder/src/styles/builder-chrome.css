@@ -7074,11 +7074,16 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   white-space: nowrap;
 }
 
-/* A checkbox beside the words it names, kept apart from them. */
-.nx-inspector__check {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+/*
+ * An on/off row's switch at the start of the control column, its own size,
+ * rather than stretched across it.
+ */
+.nx-inspector__field[data-content-control="checkbox"] > [role="switch"] {
+  justify-self: start;
+}
+
+.nx-inspector__exposed [role="switch"] {
+  align-self: flex-start;
 }
 
 /*
