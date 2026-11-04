@@ -36,6 +36,7 @@ import { hasExecutableText, splitSqlStatements } from "./split-sql";
 import { isDownMarker, isUpMarker } from "./sql-sections";
 import {
   indexesDroppedBy,
+  indexesRenamedBy,
   registryRowWrittenBy,
   tablesChangedIn,
   tablesDroppedBy,
@@ -164,26 +165,26 @@ const COLUMN_INDEX_NAMES = [
 ] as const;
 
 /**
- * Whether an index dropped by name alone is on one of the entity's tables:
- * its name is exactly the one-column index name, plain or unique, of an own
- * table and some column. Two kinds of name are not traced, so a file
- * dropping one is partial:
- *
- * - one at the length bound, or holding a character outside ASCII, which may
- *   be a bounded name: its readable part cut short and a hash appended, so
- *   the table it names may be a prefix of the real one;
- * - one another entity's table also explains (`idx_dc_posts_archive_title` is
- *   `dc_posts`' `archive_title` or `dc_posts_archive`'s `title`).
+ * Whether an index named alone (dropped, or renamed on PostgreSQL) is on one
+ * of the entity's tables: its name is exactly the one-column index name,
+ * plain or unique, of a table and some column, and the longest such table is
+ * the entity's own. The longest decides because a junction's index names the
+ * junction, which can start with the other side's table
+ * (`idx_dc_authors_dc_posts_writers_posts`), while a name another entity's
+ * table explains as well traces to that longer table
+ * (`idx_dc_posts_archive_title` is `dc_posts_archive`'s `title`). A name at
+ * the length bound, or holding a character outside ASCII, is not traced: it
+ * may be a bounded one, its readable part cut short and a hash appended.
  */
 function isOwnIndex(entity: NamedEntity, index: string): boolean {
   if (index.length >= MAX_INDEX_NAME_LENGTH || !/^[\x20-\x7e]*$/.test(index)) {
     return false;
   }
-  const tables = tablesNamedBy(index);
-  return (
-    tables.some(table => entity.owns(table)) &&
-    !tables.some(table => !entity.owns(table) && isEntityTableName(table))
-  );
+  // The longest table the name traces to decides: a junction's index names
+  // the junction, which can start with the other side's table, while a name
+  // another entity's table explains as well traces to that longer table.
+  const [longest] = tablesNamedBy(index).sort((a, b) => b.length - a.length);
+  return longest !== undefined && entity.owns(longest);
 }
 
 /**
@@ -260,7 +261,8 @@ function staysInEntity(
     }
     const indexes = dropOnly
       ? undefined
-      : indexesDroppedBy(statement, file.dialect);
+      : (indexesDroppedBy(statement, file.dialect) ??
+        indexesRenamedBy(statement, file.dialect));
     if (indexes !== undefined) {
       return indexes.every(index => isOwnIndex(entity, index));
     }

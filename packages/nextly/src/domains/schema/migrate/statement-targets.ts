@@ -34,6 +34,26 @@ function oneTable(cursor: StatementCursor): string[] | undefined {
   return name === undefined ? undefined : [name];
 }
 
+/**
+ * The table an ALTER TABLE's clauses rename it to, read from the tokens after
+ * its table: undefined when no clause renames the table, null when one does
+ * to a name not read here (schema-qualified). `RENAME TO x`, `RENAME AS x`
+ * and MySQL's bare `RENAME x` rename the table; `RENAME COLUMN`, `INDEX`,
+ * `KEY` and `CONSTRAINT` rename something on it.
+ */
+function renameDestination(
+  tokens: readonly StatementToken[]
+): string | null | undefined {
+  const at = tokens.indexOf("RENAME");
+  if (at === -1) return undefined;
+  const clause = new StatementCursor(tokens.slice(at + 1));
+  if (["COLUMN", "INDEX", "KEY", "CONSTRAINT"].some(w => clause.isWord(w))) {
+    return undefined;
+  }
+  if (!clause.accept("TO")) clause.accept("AS");
+  return clause.name() ?? null;
+}
+
 /** The table a CREATE TABLE or CREATE [UNIQUE] INDEX … ON names, read after CREATE. */
 function createdOn(cursor: StatementCursor): string[] | undefined {
   cursor.accept("TEMPORARY");
@@ -62,7 +82,11 @@ export function tablesChangedIn(
   if (cursor.accept("ALTER", "TABLE")) {
     cursor.acceptCondition();
     cursor.accept("ONLY");
-    return oneTable(cursor);
+    const table = cursor.name();
+    if (table === undefined) return undefined;
+    const renamedTo = renameDestination(cursor.rest());
+    if (renamedTo === null) return undefined;
+    return renamedTo === undefined ? [table] : [table, renamedTo];
   }
   if (cursor.accept("DROP", "TABLE")) {
     cursor.acceptCondition();
@@ -97,6 +121,24 @@ export function indexesDroppedBy(
   const names = nameList(cursor);
   cursor.accept("RESTRICT");
   return names !== undefined && cursor.done() ? names : undefined;
+}
+
+/**
+ * The two names of PostgreSQL's `ALTER INDEX [IF EXISTS] a RENAME TO b`,
+ * lower-cased, or `undefined` for any other statement. Which table an index
+ * is on is the caller's to trace from its name.
+ */
+export function indexesRenamedBy(
+  statement: string,
+  dialect: SupportedDialect
+): string[] | undefined {
+  const cursor = cursorOf(statement, dialect);
+  if (!cursor.accept("ALTER", "INDEX")) return undefined;
+  cursor.acceptCondition();
+  const from = cursor.name();
+  if (from === undefined || !cursor.accept("RENAME", "TO")) return undefined;
+  const to = cursor.name();
+  return to !== undefined && cursor.done() ? [from, to] : undefined;
 }
 
 /**

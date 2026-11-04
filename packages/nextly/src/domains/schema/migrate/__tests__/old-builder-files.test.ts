@@ -378,6 +378,14 @@ describe.each(["postgresql", "sqlite"] as const)(
       expect(update(sql)).toEqual(ignored);
     });
 
+    // A junction's index names its junction, which may start with the other
+    // side's table: the longest table the name traces to decides.
+    it("traces a junction index whose name starts with the other side's table", () => {
+      expect(
+        update(`DROP INDEX IF EXISTS "idx_dc_authors_dc_posts_writers_posts";`)
+      ).toEqual(ignored);
+    });
+
     it.each([
       [
         "another entity's index",
@@ -448,3 +456,39 @@ describe.each<Dialect>(["postgresql", "mysql"])(
     });
   }
 );
+
+// Renames a Builder update writes: a junction's table and its indexes. A
+// rename into another entity's address leaves the entity, so the file is
+// partial; one whose both names are the entity's stays inside it.
+describe("renames in an update file", () => {
+  const update = (...statements: string[]) =>
+    classifyMigrationFile(
+      facts({
+        name: "1730000000013_update_posts.sql",
+        content: statements.join(BREAK),
+        dialect: "postgresql",
+      })
+    );
+
+  it("ignores a rename of the entity's junction and its index", () => {
+    expect(
+      update(
+        `ALTER TABLE "dc_authors_dc_posts_writers" RENAME TO "dc_authors_dc_posts_editors";`,
+        `ALTER INDEX "idx_dc_authors_dc_posts_writers_posts" RENAME TO "idx_dc_authors_dc_posts_editors_posts";`
+      )
+    ).toEqual({ kind: "old-builder", entity: "posts" });
+  });
+
+  it.each([
+    [
+      "a table into another entity's address",
+      `ALTER TABLE "dc_posts" RENAME TO "dc_comments";`,
+    ],
+    [
+      "an index into another entity's name",
+      `ALTER INDEX "idx_dc_posts_title" RENAME TO "idx_dc_comments_title";`,
+    ],
+  ])("is partial for a rename of %s", (_n, sql) => {
+    expect(update(sql)).toEqual({ kind: "partial", lacks: ["scope"] });
+  });
+});

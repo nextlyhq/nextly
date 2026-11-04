@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
 import {
   indexesDroppedBy,
+  indexesRenamedBy,
   registryRowWrittenBy,
   tablesChangedIn,
   tablesDroppedBy,
@@ -244,6 +245,51 @@ describe("registryRowWrittenBy on postgresql only", () => {
         "postgresql"
       )
     ).toBeUndefined();
+  });
+});
+
+// A table rename creates its destination's address, so the destination is a
+// target too; a column, index or constraint rename changes the table alone.
+describe.each(["postgresql", "mysql"] as const)("a rename on %s", dialect => {
+  const q = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  it.each([
+    [
+      "RENAME TO",
+      () => `ALTER TABLE ${q("dc_posts")} RENAME TO ${q("dc_comments")}`,
+      ["dc_posts", "dc_comments"],
+    ],
+    [
+      "RENAME COLUMN",
+      () => `ALTER TABLE ${q("dc_posts")} RENAME COLUMN ${q("a")} TO ${q("b")}`,
+      ["dc_posts"],
+    ],
+    [
+      "RENAME CONSTRAINT",
+      () =>
+        `ALTER TABLE ${q("dc_posts")} RENAME CONSTRAINT ${q("a")} TO ${q("b")}`,
+      ["dc_posts"],
+    ],
+  ])("reads %s", (_n, sql, tables) => {
+    expect(tablesChangedIn(sql(), dialect)).toEqual(tables);
+  });
+});
+
+describe("indexesRenamedBy", () => {
+  it("reads PostgreSQL's ALTER INDEX … RENAME TO as both names", () => {
+    expect(
+      indexesRenamedBy(
+        `ALTER INDEX IF EXISTS "idx_a" RENAME TO "idx_b"`,
+        "postgresql"
+      )
+    ).toEqual(["idx_a", "idx_b"]);
+  });
+
+  it.each([
+    `ALTER INDEX "idx_a" SET TABLESPACE t`,
+    `ALTER INDEX "s"."idx_a" RENAME TO "idx_b"`,
+  ])("reads nothing from %s", sql => {
+    expect(indexesRenamedBy(sql, "postgresql")).toBeUndefined();
   });
 });
 

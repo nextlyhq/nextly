@@ -1203,11 +1203,13 @@ export async function runMigrateDown(
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
-    // Read as `nextly migrate` reads the folder.
-    const knownJunctions = await knownJunctionsOf({
-      ...configResult,
-      projectRoot: cwd,
-    });
+    // Read as `nextly migrate` reads the folder, for an app rollback only: a
+    // plugin's DOWNs come from its definition, never from the app's folder,
+    // so the app's manifest has nothing to say about them.
+    const knownJunctions =
+      options.plugin === undefined
+        ? await knownJunctionsOf({ ...configResult, projectRoot: cwd })
+        : undefined;
 
     if (options.forceUnlock) {
       const { forceUnlock } = await import(
