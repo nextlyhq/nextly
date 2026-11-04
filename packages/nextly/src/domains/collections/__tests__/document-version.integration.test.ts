@@ -19,6 +19,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import type { CollectionService } from "../services/collection-service";
 
 let current: TestNextly | undefined;
@@ -428,6 +429,45 @@ describe.each(getConfiguredTestDialects())(
       expect(revOf(saved)).toBe("2");
       expect(await readRev(t, UNTRANSLATED, id, "en")).toBe("2");
       expect(await readRev(t, UNTRANSLATED, id, "*")).toBe("2");
+    });
+
+    it("a list read takes the translation counters before the translated content", async () => {
+      // Read after the content, a counter could be newer than what the read
+      // shows, and a client saving from it would overwrite a translation it
+      // never saw. Before it, a save landing between the two can only make
+      // the version look older than the content.
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "hello", note: "n" }
+        )
+      );
+      const statements = await statementsOf(dialect, () =>
+        t.nextly.find({
+          collection: DOCS as never,
+          locale: "en",
+          overrideAccess: true,
+          status: "all",
+        } as never)
+      );
+      const translations = statements
+        .map((statement, at) => ({ statement, at }))
+        .filter(({ statement }) => statement.includes(`dc_${DOCS}_locales`));
+      // One counter read, and it is the one the version is made from: an
+      // early read whose counters went unused would leave a later one here.
+      const counterReads = translations.filter(({ statement }) =>
+        statement.includes("_revision")
+      );
+      expect(counterReads).toHaveLength(1);
+      const [counters] = counterReads;
+      const content = translations.find(
+        ({ statement }) => !statement.includes("_revision")
+      );
+      expect(counters).toBeDefined();
+      expect(content).toBeDefined();
+      expect(counters!.at).toBeLessThan(content!.at);
+      expect(await readRev(t, DOCS, id, "en")).toBe("1.en:1");
     });
 
     it("a wildcard save answers with every language's version", async () => {

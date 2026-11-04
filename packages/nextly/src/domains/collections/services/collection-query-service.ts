@@ -195,6 +195,7 @@ import { resolveComponentTableName } from "../../schema/utils/resolve-table-name
 import {
   attachDocumentVersions,
   DOCUMENT_REVISION_COLUMN,
+  languageCountersBeforeContent,
   languageRevisionsOf,
   storedRevisionsOf,
 } from "../../versions/document-revision";
@@ -2588,6 +2589,35 @@ export class CollectionQueryService extends BaseService {
   // `listEntries` (cyclomatic 87) and `getEntry` (64), both critical — which
   // had already diverged on where the owner column is cleared.
   // fallow-ignore-next-line complexity
+  /**
+   * The translation counters of `rows`, read before their translated content
+   * (`languageCountersBeforeContent`); undefined for a collection that keeps
+   * no translations or whose table is not there yet.
+   */
+  private async languageCountersFirst(
+    rows: readonly Record<string, unknown>[],
+    collection: unknown,
+    collectionName: string
+  ) {
+    const table = `${collectionTableName(collection, collectionName)}_locales`;
+    const translated =
+      (collection as { localized?: boolean }).localized === true &&
+      this.localization !== undefined;
+    return languageCountersBeforeContent(
+      (statement, values) =>
+        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
+      {
+        dialect: this.dialect,
+        languagesTable:
+          translated && (await isCompanionReady(this.adapter, table))
+            ? table
+            : null,
+        localization: this.localization,
+        ids: rows.flatMap(row => (typeof row.id === "string" ? [row.id] : [])),
+      }
+    );
+  }
+
   private async finalizeReadRows(params: {
     rows: Record<string, unknown>[];
     /**
@@ -3691,6 +3721,12 @@ export class CollectionQueryService extends BaseService {
             : 0;
       }
 
+      // The page's translation counters, before its translated content.
+      const knownLanguages = await this.languageCountersFirst(
+        entries,
+        collection,
+        params.collectionName
+      );
       // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
@@ -3866,6 +3902,7 @@ export class CollectionQueryService extends BaseService {
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
         hooksWaived,
+        knownLanguages,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.

@@ -1770,9 +1770,9 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
-      // Before the app's files as well as after them: a file written after
-      // these columns existed may rebuild a SQLite table, copying them from
-      // the live one, and a file written before them creates tables without.
+      // Before the app's files as well as after them (below, once Phase 3 has
+      // recorded the registry): a file written after these columns existed may
+      // rebuild a SQLite table, copying them from the live one.
       await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
       await recordAppTableOwners(deps);
       ({ pluginModulesApplied, applied } = await runMigrationStreams(
@@ -1787,7 +1787,6 @@ export async function migrateCore(
       // longer holds it. Each stream's reconcile ignores elements it does not
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
-      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
 
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();
@@ -1832,6 +1831,11 @@ export async function migrateCore(
           }. The tables are in place; run \`nextly migrate\` again to record it.`
         );
       }
+
+      // After the files and after Phase 3: a file written before these
+      // columns creates tables without them, and an entity whose registry
+      // row only Phase 3 records is found only once it has.
+      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
     },
     {
       command: deps.lockCommand ?? "nextly migrate",

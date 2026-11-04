@@ -267,9 +267,9 @@ describe("migrateCore", () => {
   });
 
   // Before the files, because a file written once the per-document columns existed may name
-  // them (a SQLite table rebuild copies every column); after them, because a file written before
-  // them creates tables without.
-  it("adds the per-document columns before the files and again after them", async () => {
+  // them (a SQLite table rebuild copies every column); after the files and the metadata, because a
+  // file written before them creates tables without, whose registry rows the metadata records.
+  it("adds the per-document columns before the files and again after the metadata", async () => {
     const order: string[] = [];
     const d = deps({
       runFileMigrationsFn: vi.fn(async () => {
@@ -296,8 +296,8 @@ describe("migrateCore", () => {
     expect(order).toEqual([
       "document columns",
       "files",
-      "document columns",
       "metadata",
+      "document columns",
     ]);
   });
 

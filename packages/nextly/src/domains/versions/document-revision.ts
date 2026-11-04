@@ -491,3 +491,38 @@ export function withDocumentVersion<T extends Record<string, unknown>>(
     ? data
     : { ...data, [DOCUMENT_VERSION_KEY]: version };
 }
+
+/**
+ * Every configured language's counter for `ids`, read now, for a read that
+ * takes the translated content in a later statement.
+ *
+ * Read BEFORE the content so a save landing between the two can only make a
+ * version look older than what was read, never newer: a newer counter beside
+ * older content would let a client save over a translation it never saw.
+ */
+export async function languageCountersBeforeContent(
+  run: RunStatement,
+  args: {
+    dialect: SupportedDialect;
+    languagesTable: string | null;
+    localization: SanitizedLocalizationConfig | undefined;
+    ids: readonly string[];
+  }
+): Promise<
+  | {
+      revisions: Map<string, Map<string, number>>;
+      locales: readonly string[];
+    }
+  | undefined
+> {
+  if (args.languagesTable === null || !args.localization) return undefined;
+  if (args.ids.length === 0) return undefined;
+  return {
+    revisions: await readLanguageRevisions(run, {
+      dialect: args.dialect,
+      table: args.languagesTable,
+      ids: args.ids,
+    }),
+    locales: args.localization.locales.map(locale => locale.code),
+  };
+}

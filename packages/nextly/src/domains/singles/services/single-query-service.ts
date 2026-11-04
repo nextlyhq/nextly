@@ -161,6 +161,7 @@ import {
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   attachDocumentVersions,
+  languageCountersBeforeContent,
   languageRevisionsOf,
   storedRevisionsOf,
 } from "../../versions/document-revision";
@@ -1255,6 +1256,11 @@ export class SingleQueryService extends BaseService {
       const read = await this.readDocument(slug, singleMeta, options);
       const { translations } = read;
       let { doc } = read;
+      // Not joined with the document: the translation counters now, before
+      // the translated content is read.
+      const countersFirst = translations
+        ? undefined
+        : await this.languageCountersFirst(singleMeta, doc);
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -1388,6 +1394,7 @@ export class SingleQueryService extends BaseService {
         singleMeta,
         stored: storedRevisions,
         translations,
+        countersFirst,
         locale: options.locale,
       });
 
@@ -1412,6 +1419,34 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * The Single's translation counters, read before its translated content
+   * (`languageCountersBeforeContent`); undefined without a document, or for a
+   * Single that keeps no translations or whose table is not there yet.
+   */
+  private async languageCountersFirst(
+    singleMeta: DynamicSingleRecord,
+    doc: { id?: unknown } | null
+  ) {
+    if (!doc || typeof doc.id !== "string") return undefined;
+    const table = `${singleMeta.tableName}_locales`;
+    const translated =
+      this.localization !== undefined && singleMeta.localized === true;
+    return languageCountersBeforeContent(
+      (statement, values) =>
+        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
+      {
+        dialect: this.adapter.dialect,
+        languagesTable:
+          translated && (await isCompanionReady(this.adapter, table))
+            ? table
+            : null,
+        localization: this.localization,
+        ids: [doc.id],
+      }
+    );
+  }
+
+  /**
    * Publish the document's version on `doc`, from the counter read with it and
    * its translation counters: those the joined read took, else one read of
    * its own. A translated Single whose table is not there yet keeps its
@@ -1423,6 +1458,8 @@ export class SingleQueryService extends BaseService {
       singleMeta: DynamicSingleRecord;
       stored: ReadonlyMap<string, unknown>;
       translations: JoinedTranslations | undefined;
+      /** Counters read before the content, when it was not joined. */
+      countersFirst?: Awaited<ReturnType<typeof languageCountersBeforeContent>>;
       locale: string | undefined;
     }
   ): Promise<void> {
@@ -1450,7 +1487,9 @@ export class SingleQueryService extends BaseService {
               locales: args.translations.localeChain,
             },
           }
-        : {}),
+        : args.countersFirst
+          ? { known: args.countersFirst }
+          : {}),
     });
   }
 
