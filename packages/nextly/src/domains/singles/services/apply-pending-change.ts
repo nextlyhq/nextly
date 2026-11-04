@@ -148,6 +148,8 @@ export async function writeCompanionValues(args: {
    * changer is recorded, in the upsert itself.
    */
   savedBy: RequestActor;
+  /** Set when the save already took the row's next version (`claimCompanionRevision`). */
+  revisionClaimed?: boolean;
 }): Promise<void> {
   const txWriteAdapter = {
     dialect: args.dialect,
@@ -161,7 +163,7 @@ export async function writeCompanionValues(args: {
     args.locale,
     args.values,
     args.status,
-    { savedBy: args.savedBy }
+    { savedBy: args.savedBy, revisionClaimed: args.revisionClaimed }
   );
 }
 
