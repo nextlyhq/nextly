@@ -110,6 +110,12 @@ export interface PageItem {
   readonly collectionPluralLabel?: string;
   /** The Page Builder field the editor opens for, by its name. */
   readonly field: string;
+  /**
+   * Where the page is served on the site (`/pricing`), resolved on the server
+   * from where the host said its pages are served. Present for the plugin's
+   * own Pages with a slug; absent for any other collection.
+   */
+  readonly path?: string;
   readonly title: string;
   /** Present only when the collection has the Draft/Published lifecycle. */
   readonly status?: PageStatus;

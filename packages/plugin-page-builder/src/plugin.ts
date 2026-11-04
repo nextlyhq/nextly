@@ -1535,7 +1535,7 @@ export const pageBuilder = (
         // The editor's page search: the site's pages (entries of collections
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
-        pagesSearchRoute(componentStoreOf(opts)),
+        pagesSearchRoute(componentStoreOf(opts), opts.pagePreviewPath),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.

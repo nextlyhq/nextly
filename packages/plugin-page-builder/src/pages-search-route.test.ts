@@ -1062,6 +1062,56 @@ describe("paging by cursor", () => {
   });
 });
 
+describe("where a page is served", () => {
+  it("names a Pages item's path from where the host serves pages, and no other collection's", async () => {
+    const withSlug = [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "content", type: "blocks" },
+    ];
+    const { reads, find } = readsOver(
+      [
+        record("pages", { fields: withSlug }),
+        record("posts", { fields: withSlug }),
+      ],
+      async args =>
+        args.collection === "pages"
+          ? rows([{ id: "p1", title: "Pricing", slug: "pricing" }])
+          : rows([
+              { id: "b1", title: "Pricing update", slug: "pricing-update" },
+            ])
+    );
+
+    const answer = await readPagesSearch(request({ limit: 10 }), {
+      ...reads,
+      pagePath: () => "/{slug}",
+    });
+
+    expect(answer.items.find(item => item.id === "p1")?.path).toBe("/pricing");
+    // A collection whose address is the host's own code has none to give.
+    expect(answer.items.find(item => item.id === "b1")).not.toHaveProperty(
+      "path"
+    );
+    // The slug is read only where a path is resolved from it.
+    const select = (collection: string) =>
+      (
+        find.mock.calls.find(
+          call => (call[0] as PagesFindArgs).collection === collection
+        )?.[0] as PagesFindArgs | undefined
+      )?.select;
+    expect(select("pages")).toHaveProperty("slug", true);
+    expect(select("posts")).not.toHaveProperty("slug");
+  });
+
+  it("gives no path where the host states none", async () => {
+    const { reads } = readsOver([record("pages")], async () =>
+      rows([{ id: "p1", title: "Pricing", slug: "pricing" }])
+    );
+    const answer = await readPagesSearch(request({ limit: 10 }), reads);
+    expect(answer.items[0]).not.toHaveProperty("path");
+  });
+});
+
 describe("listing by collection", () => {
   it("lists the plugin's Pages first, then the others by name, each in title order, across pages", async () => {
     // Titles that would interleave by title, so a merge by title cannot
