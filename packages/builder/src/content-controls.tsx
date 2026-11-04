@@ -680,9 +680,35 @@ interface RichTextSession {
   hold(): void;
 }
 
+/** The Content tab's rich-text prop: its name, and the passage under it. */
+function RichTextControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  services,
+}: ContentControlProps): React.JSX.Element {
+  return (
+    <div className="nx-inspector__field" data-content-control="richText">
+      <p className="nx-inspector__field-name" id={`${id}-label`}>
+        {propLabel(prop.name, prop.schema)}
+      </p>
+      <RichTextField
+        id={id}
+        labelledBy={`${id}-label`}
+        value={prop.value}
+        disabled={disabled}
+        onCommit={value => onCommit(prop.name, value)}
+        services={services}
+      />
+    </div>
+  );
+}
+
 /**
  * A rich-text passage, edited in the inspector with the admin's one rich-text
- * editor.
+ * editor. Shared by every surface that edits one: the Content tab's prop and a
+ * placement's exposed field, each with its own label and write path.
  *
  * The editor is attached when the field is focused, loaded with the stored
  * passage, and what it reads is committed once when the field is left, so an
@@ -692,13 +718,27 @@ interface RichTextSession {
  * Read-only is passed to the element itself: a disabled fieldset does not
  * stop typing in a `contenteditable`.
  */
-function RichTextControl({
+export function RichTextField({
   id,
-  prop,
+  labelledBy,
+  value,
   disabled,
   onCommit,
   services,
-}: ContentControlProps): React.JSX.Element {
+}: {
+  id: string;
+  /** The id of the element naming the field. */
+  labelledBy: string;
+  /** The passage stored, or `undefined` for none. */
+  value: unknown;
+  disabled: boolean;
+  /**
+   * Write the passage the editor reads; `null` when the write was refused,
+   * which keeps the passage open with the author's words.
+   */
+  onCommit: (value: unknown) => BlockDocument | null | void;
+  services: ContentServices | undefined;
+}): React.JSX.Element {
   const field = React.useRef<HTMLDivElement>(null);
   const session = React.useRef<RichTextSession | null>(null);
   // Whether the field still has focus, so an editor that finishes loading
@@ -708,7 +748,6 @@ function RichTextControl({
   const [refused, setRefused] = React.useState<
     "held" | "unsupported" | "unsaved" | null
   >(null);
-  const label = propLabel(prop.name, prop.schema);
   const load = services?.loadRichTextEditor;
   const editable = !disabled && load !== undefined;
 
@@ -735,7 +774,7 @@ function RichTextControl({
       setLoading(false);
     }
     if (!focused.current || session.current !== null) return;
-    const attachment = editor.attach(element, prop.value);
+    const attachment = editor.attach(element, value);
     if (attachment.status === "refused") {
       setRefused(attachment.reason);
       return;
@@ -758,7 +797,7 @@ function RichTextControl({
       return null;
     }
     // Read and written BEFORE letting go: the words exist in the editor alone.
-    const written = onCommit(prop.name, live.read());
+    const written = onCommit(live.read());
     if (written === null) {
       // Refused (a size cap, a lock that arrived): the passage stays open with
       // the author's words, held against anything else taking the editor,
@@ -783,9 +822,7 @@ function RichTextControl({
   // While no editor is attached, the field shows the passage's words, set on
   // the element rather than rendered as children: the editor takes the
   // element's contents over once attached, and React must not own them.
-  const preview = isRichTextValue(prop.value)
-    ? richTextToPlainText(prop.value)
-    : "";
+  const preview = isRichTextValue(value) ? richTextToPlainText(value) : "";
   React.useEffect(() => {
     if (session.current === null && field.current !== null) {
       field.current.textContent = preview;
@@ -816,17 +853,14 @@ function RichTextControl({
   );
 
   return (
-    <div className="nx-inspector__field" data-content-control="richText">
-      <p className="nx-inspector__field-name" id={`${id}-label`}>
-        {label}
-      </p>
+    <>
       <div
         id={id}
         ref={field}
         className="nx-inspector__rich-text"
         role="textbox"
         aria-multiline="true"
-        aria-labelledby={`${id}-label`}
+        aria-labelledby={labelledBy}
         aria-readonly={!editable}
         aria-busy={loading}
         // Not editable until the shared editor attaches and makes it so:
@@ -861,7 +895,7 @@ function RichTextControl({
           Rich text is edited on the canvas here.
         </p>
       ) : null}
-    </div>
+    </>
   );
 }
 
