@@ -492,9 +492,9 @@ describe("the shared style target", () => {
     const field = screen.getByRole("textbox", {
       name: "Opacity",
     }) as HTMLInputElement;
-    expect(field.value).toBe("0.5");
+    expect(field.value).toBe("50");
 
-    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.change(field, { target: { value: "80" } });
     fireEvent.blur(field);
 
     expect(writtenTo(writeStyles, card.styles)).toEqual({
@@ -517,7 +517,7 @@ describe("the shared style target", () => {
     // The second edit is made before the first has been stored and read back.
     fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
     const opacity = screen.getByRole("textbox", { name: "Opacity" });
-    fireEvent.change(opacity, { target: { value: "0.8" } });
+    fireEvent.change(opacity, { target: { value: "80" } });
     fireEvent.blur(opacity);
 
     await host.settle();
@@ -537,10 +537,10 @@ describe("the shared style target", () => {
     });
     fireEvent.click(chip("Card"));
     const field = screen.getByRole("textbox", { name: "Opacity" });
-    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.change(field, { target: { value: "80" } });
     fireEvent.blur(field);
     // Back to the value the last read shows, before 0.8 has been stored.
-    fireEvent.change(field, { target: { value: "0.5" } });
+    fireEvent.change(field, { target: { value: "50" } });
     fireEvent.blur(field);
 
     await host.settle();
@@ -692,6 +692,12 @@ describe("the shared style target", () => {
       ).closest("fieldset")?.disabled ??
         (screen.getByRole("textbox", { name: "Opacity" }) as HTMLInputElement)
           .readOnly
+    ).toBe(true);
+    // The slider beside it is held with it, though not a form control.
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .hasAttribute("data-disabled")
     ).toBe(true);
   });
 
@@ -1066,7 +1072,7 @@ describe("controls", () => {
     const editor = mount({ effects: true });
     const field = screen.getByLabelText("Opacity");
 
-    fireEvent.change(field, { target: { value: "0.5" } });
+    fireEvent.change(field, { target: { value: "50" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1618,7 +1624,7 @@ describe("controls", () => {
     const editor = mount({ effects: true });
     const field = screen.getByLabelText("Opacity");
 
-    fireEvent.change(field, { target: { value: "\u00a00.5" } });
+    fireEvent.change(field, { target: { value: "\u00a050" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -1879,7 +1885,7 @@ describe("a value the panel shows and could not remove", () => {
   });
 
   it("puts back what the document holds when a draft only RE-SPELLS it", () => {
-    // `01` commits as the `1` already stored, so `styleWriteOp` answers with no
+    // `0100` commits as the `100` (1) already stored, so `styleWriteOp` answers with no
     // op and the stored value never moves — which means the effect that syncs
     // the field cannot fire. The typed text stayed on screen, showing something
     // the document does not contain, until the panel remounted.
@@ -1889,11 +1895,11 @@ describe("a value the panel shows and could not remove", () => {
     const editor = mount({ effects: true }, styles);
     const field = screen.getByRole("textbox", { name: "Opacity" });
 
-    fireEvent.change(field, { target: { value: "01" } });
+    fireEvent.change(field, { target: { value: "0100" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
-    expect((field as HTMLInputElement).value).toBe("1");
+    expect((field as HTMLInputElement).value).toBe("100");
   });
 
   it("KEEPS a refused draft, so the author can correct it", () => {
@@ -4632,6 +4638,53 @@ describe("a per-side property is drawn as a box", () => {
     expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
       "rtl"
     );
+  });
+});
+
+describe("opacity in percent", () => {
+  it("shows a stored opacity in percent, in the field and on its slider", () => {
+    mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    expect((field as HTMLInputElement).value).toBe("50");
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .getAttribute("aria-valuenow")
+    ).toBe("50");
+  });
+
+  it("stores a typed percent as the fraction CSS takes", () => {
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "80" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.8 } } } },
+    });
+  });
+
+  it("stores the slider's percent as the fraction once the drag settles", () => {
+    const editor = mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } }
+    );
+    const slider = screen.getByRole("slider", { name: "Opacity slider" });
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    expect(JSON.stringify(editor.applyAll.mock.calls)).toContain(
+      '"opacity":0.49'
+    );
+  });
+
+  it("passes a CSS-wide keyword through, unscaled", () => {
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "inherit" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: {
+        styles: { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } },
+      },
+    });
   });
 });
 

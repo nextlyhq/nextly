@@ -7663,6 +7663,27 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * Opacity: the slider across the row for "more or less", then the number for
+ * an exact value, holding three digits, and its percent sign.
+ */
+.nx-style-inspector__opacity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__opacity > .nx-style-inspector__numeric {
+  flex: 0 0 3.5rem;
+}
+
+.nx-style-inspector__percent {
+  margin-inline-start: -0.25rem;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-builder-text-muted);
+}
+
+/*
  * A switch in the inspector is a 24px target on its own. The shared switch is
  * 18px tall, which passes only while no other target sits within 12px of its
  * centre, and an on/off row ends directly above "Visible on". The thumb grows

@@ -246,3 +246,21 @@ describe("an inspector switch", () => {
     ).toContain("block-size: 1.25rem");
   });
 });
+
+describe("opacity's slider and field", () => {
+  it("lays the slider across the row, the number and its percent sign after it", () => {
+    const row = ruleBody(CHROME, ".nx-style-inspector__opacity");
+    expect(row).toContain("display: flex");
+    expect(row).toContain("align-items: center");
+    // The number holds three digits and no more of the row.
+    expect(
+      ruleBody(
+        CHROME,
+        ".nx-style-inspector__opacity > .nx-style-inspector__numeric"
+      )
+    ).toContain("flex: 0 0 3.5rem");
+    expect(ruleBody(CHROME, ".nx-style-inspector__percent")).toContain(
+      "color: var(--nx-builder-text-muted)"
+    );
+  });
+});

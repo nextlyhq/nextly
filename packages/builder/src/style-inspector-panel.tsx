@@ -74,6 +74,7 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
+  Slider,
   TooltipProvider,
 } from "@nextlyhq/ui";
 import { ChevronDown, RotateCcw } from "lucide-react";
@@ -1069,26 +1070,28 @@ function SectionFields({
       : undefined;
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
-      {rings === undefined ? null : (
-        <SpacingBox
-          margin={rings.margin}
-          padding={rings.padding}
-          surroundings={surroundings}
-        />
-      )}
-      {(rings?.rest ?? shown).map(property => (
-        <StylePropertyFields
-          key={`${surroundings.nodeId}:${property.property}`}
-          property={property}
-          namesSection={property.property === sectionKey}
-          {...surroundings}
-        />
-      ))}
-      {shown.length === 0 ? (
-        <p className="nx-inspector__note">
-          Nothing set here yet. Add a property from More.
-        </p>
-      ) : null}
+      <SectionHeld.Provider value={readOnly}>
+        {rings === undefined ? null : (
+          <SpacingBox
+            margin={rings.margin}
+            padding={rings.padding}
+            surroundings={surroundings}
+          />
+        )}
+        {(rings?.rest ?? shown).map(property => (
+          <StylePropertyFields
+            key={`${surroundings.nodeId}:${property.property}`}
+            property={property}
+            namesSection={property.property === sectionKey}
+            {...surroundings}
+          />
+        ))}
+        {shown.length === 0 ? (
+          <p className="nx-inspector__note">
+            Nothing set here yet. Add a property from More.
+          </p>
+        ) : null}
+      </SectionHeld.Provider>
     </fieldset>
   );
 }
@@ -5024,8 +5027,10 @@ function ValueField({
       />
     );
   }
+  const Field =
+    control.leaf.cssProperty === "opacity" ? OpacityField : NumericField;
   return (
-    <NumericField
+    <Field
       id={id}
       control={control}
       stored={stored}
@@ -5034,6 +5039,115 @@ function ValueField({
       describedBy={describedBy}
       onCommit={onCommit}
     />
+  );
+}
+
+/**
+ * A number typed as text, with only the whitespace CSS trims around it: not
+ * JavaScript's `\s`, which also takes a no-break space the engine refuses.
+ */
+const PLAIN_NUMBER = /^[ \t\n\r\f]*-?\d+(\.\d+)?[ \t\n\r\f]*$/;
+
+/**
+ * Whether the section a field sits in is held read-only. Its fieldset holds
+ * the form controls; a control that is not one (a slider's thumb) reads this.
+ */
+const SectionHeld = React.createContext(false);
+
+/** A fraction as a percent, to two places. */
+function percentOf(fraction: number): number {
+  return Math.round(fraction * 10000) / 100;
+}
+
+/** A stored opacity as the percent the field shows; anything else as stored. */
+function toPercent(value: StyleValue | undefined): StyleValue | undefined {
+  return typeof value === "number" ? percentOf(value) : value;
+}
+
+/**
+ * What the percent field commits, as the fraction CSS takes. A number, or a
+ * number typed as text, is divided by 100; a CSS-wide keyword is a whole
+ * value and passes through unscaled.
+ */
+function fromPercent(value: StyleValue | null): StyleValue | null {
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && PLAIN_NUMBER.test(value)
+        ? Number(value)
+        : undefined;
+  return number === undefined ? value : Math.round(number * 100) / 10000;
+}
+
+/**
+ * Opacity, which an author thinks of in percent: a slider for "more or
+ * less" and the number field beside it for an exact value, both 0 to 100.
+ *
+ * The number field is the ordinary one, handed the value and its range in
+ * percent and converting what it commits back, so every behaviour it has (a
+ * draft held while its menu opens, a refused value said beside it, a keyword
+ * passed through, the variables at its end) is the same here. The inherited
+ * value it shows as a hint is converted the same way.
+ */
+function OpacityField(
+  props: React.ComponentProps<typeof NumericField>
+): React.JSX.Element {
+  const { control, stored, actionName, onCommit } = props;
+  const inherited = React.useContext(InheritedValue);
+  const shown = toPercent(stored);
+  const inheritedShown =
+    inherited !== undefined && PLAIN_NUMBER.test(inherited)
+      ? String(percentOf(Number(inherited)))
+      : inherited;
+  const leaf = control.leaf;
+  const percentControl =
+    leaf.kind === "number"
+      ? { ...control, leaf: { ...leaf, min: 0, max: 100 } }
+      : control;
+  // While dragging, the thumb follows the pointer; the value is written once
+  // the drag settles.
+  const [preview, setPreview] = React.useState<number | undefined>(undefined);
+  const resting =
+    typeof shown === "number"
+      ? shown
+      : inheritedShown !== undefined && /^[\d.]+$/.test(inheritedShown)
+        ? Number(inheritedShown)
+        : 100;
+  // Held with its section, as the fieldset holds the form controls; a
+  // slider's thumb is not one, so it is told.
+  const held = React.useContext(SectionHeld);
+  return (
+    <div className="nx-style-inspector__opacity">
+      <Slider
+        value={[preview ?? resting]}
+        min={0}
+        max={100}
+        step={1}
+        disabled={held}
+        onValueChange={([next]) => setPreview(next)}
+        onValueCommit={([next]) => {
+          setPreview(undefined);
+          if (next !== undefined) onCommit(Math.round(next * 100) / 10000);
+        }}
+        thumbs={[
+          {
+            "aria-label": `${actionName} slider`,
+            "aria-valuetext": `${preview ?? resting} percent`,
+          },
+        ]}
+      />
+      <InheritedValue.Provider value={inheritedShown}>
+        <NumericField
+          {...props}
+          control={percentControl}
+          stored={shown}
+          onCommit={value => onCommit(fromPercent(value))}
+        />
+      </InheritedValue.Provider>
+      <span className="nx-style-inspector__percent" aria-hidden="true">
+        %
+      </span>
+    </div>
   );
 }
 
