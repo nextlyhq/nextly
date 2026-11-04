@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The Shared styles tab says what its counts count ("4 pages", "5+ pages") and, while some pages have not been counted yet, that the site's background jobs count them, with a link to how they are run; it stops asking for counts again after five minutes in which nothing changed. The inspector's state menu names the one other state with values ("Hover set"), and the Variables tab shows a length that changes with the page as "Fluid", with its whole value on hover.
+The Shared styles tab says what its counts count ("4 pages", "5+ pages", "Not counted yet") and, while some pages have not been counted yet, that the site's background jobs count them, with a link to how they are run; it stops asking for counts again after five minutes in which nothing changed. The inspector's state menu names the one other state with values ("Hover set"), and the Variables tab shows a length that changes with the page as "Fluid", with its whole value on hover, and says the kind of two variables shown under one name ("Card · radius").
