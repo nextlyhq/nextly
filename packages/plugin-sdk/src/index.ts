@@ -838,7 +838,9 @@ export type {
  * @experimental Background jobs.
  *
  * A plugin declares a job type with `defineJob` and asks for one to happen with
- * `nextly.jobs.queue`. Held experimental per D55 until a first-party plugin
+ * `nextly.jobs.queue`. `ctx.services.jobs.runSweepNow(slug)` runs one of the
+ * plugin's OWN sweeps from a request, for a site no scheduler drains
+ * (`PluginJobsNamespace`). Held experimental per D55 until a first-party plugin
  * ships one — the release drain is core's, not a plugin's, so nothing has yet
  * exercised this from the outside.
  */
@@ -851,6 +853,7 @@ export type {
   JobInputFor,
   JobRetryPolicy,
   JobSlug,
+  PluginJobsNamespace,
   QueueJobArgs,
   QueueJobResult,
 } from "nextly";

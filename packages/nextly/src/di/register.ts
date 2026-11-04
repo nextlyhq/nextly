@@ -79,7 +79,11 @@ import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
 import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
-import type { AnyJobDefinition } from "../domains/jobs/job-registry";
+import type {
+  AnyJobDefinition,
+  JobRegistry,
+} from "../domains/jobs/job-registry";
+import type { JobsPassDatabase } from "../domains/jobs/jobs-runner";
 import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warning";
@@ -4452,6 +4456,8 @@ async function initializePlugins(
       | Logger
       | NextlyServiceConfig
       | AdapterTransactions
+      | JobRegistry
+      | JobsPassDatabase
   > = {
     collectionService: () =>
       services.container.get<CollectionService>("collectionService"),
@@ -4480,6 +4486,11 @@ async function initializePlugins(
     // EVERY dialect: Drizzle's better-sqlite3 transaction cannot carry awaited
     // work, so SQLite writes ride the adapter's manual BEGIN IMMEDIATE path.
     adapter: () => services.container.get<AdapterTransactions>("adapter"),
+    // This registration's job registry and the adapter its runner reads,
+    // through the same box: a plugin running one of its sweeps now runs it
+    // on the instance its context belongs to.
+    jobRegistry: () => services.container.get<JobRegistry>("jobRegistry"),
+    jobsDatabase: () => services.container.get<JobsPassDatabase>("adapter"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>

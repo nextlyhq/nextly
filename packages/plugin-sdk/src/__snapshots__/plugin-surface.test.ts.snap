@@ -485,6 +485,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginHookPointDeclaration (type)",
   "PluginHookRegistry (type)",
   "PluginInsert (type)",
+  "PluginJobsNamespace (type)",
   "PluginLimiter (type)",
   "PluginMediaService (type)",
   "PluginMenuItem (type)",

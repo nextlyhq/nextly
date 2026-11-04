@@ -74,11 +74,13 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
+  Slider,
   TooltipProvider,
 } from "@nextlyhq/ui";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import * as React from "react";
 
+import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
@@ -404,6 +406,12 @@ export interface StyleInspectorPanelProps {
    * families. Absent, it lists the variables and the system families.
    */
   fonts?: FontChoices;
+  /**
+   * Whether the tab says above its controls why a held block's design can't
+   * be changed. True when omitted. A host that says it already, as the
+   * inspector's block card does, turns it off, so the reason is said once.
+   */
+  showReadOnlyReason?: boolean;
 }
 
 /**
@@ -522,6 +530,7 @@ function StyleInspectorBody({
   liveBreakpoints,
   onJumpToBreakpoint,
   target = BLOCK_TARGET,
+  showReadOnlyReason = true,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -690,7 +699,9 @@ function StyleInspectorBody({
     <StyleTargetContext.Provider value={target}>
       <CanvasTokenModeProvider value={tokenMode}>
         <div className="nx-style-inspector" data-style-target={target.kind}>
-          <ReadOnlyNote target={target} reason={readOnlyReason} />
+          {showReadOnlyReason ? (
+            <ReadOnlyNote target={target} reason={readOnlyReason} />
+          ) : null}
           <NoStyleProperties count={inspected.sections.length} />
           <Accordion
             type="single"
@@ -1069,26 +1080,28 @@ function SectionFields({
       : undefined;
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
-      {rings === undefined ? null : (
-        <SpacingBox
-          margin={rings.margin}
-          padding={rings.padding}
-          surroundings={surroundings}
-        />
-      )}
-      {(rings?.rest ?? shown).map(property => (
-        <StylePropertyFields
-          key={`${surroundings.nodeId}:${property.property}`}
-          property={property}
-          namesSection={property.property === sectionKey}
-          {...surroundings}
-        />
-      ))}
-      {shown.length === 0 ? (
-        <p className="nx-inspector__note">
-          Nothing set here yet. Add a property from More.
-        </p>
-      ) : null}
+      <SectionHeld.Provider value={readOnly}>
+        {rings === undefined ? null : (
+          <SpacingBox
+            margin={rings.margin}
+            padding={rings.padding}
+            surroundings={surroundings}
+          />
+        )}
+        {(rings?.rest ?? shown).map(property => (
+          <StylePropertyFields
+            key={`${surroundings.nodeId}:${property.property}`}
+            property={property}
+            namesSection={property.property === sectionKey}
+            {...surroundings}
+          />
+        ))}
+        {shown.length === 0 ? (
+          <p className="nx-inspector__note">
+            Nothing set here yet. Add a property from More.
+          </p>
+        ) : null}
+      </SectionHeld.Provider>
     </fieldset>
   );
 }
@@ -4996,6 +5009,20 @@ function ValueField({
       />
     );
   }
+  // A ratio from a menu of the ones an author reaches for, where the stored
+  // value is one it can draw; any other spelling keeps the text field.
+  if (control.leaf.cssProperty === "aspect-ratio" && drawsAspectRatio(stored)) {
+    return (
+      <AspectRatioField
+        id={id}
+        labelledBy={labelledBy}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   const toggle = toggleOptionsFor(control.leaf);
   if (toggle !== undefined && toggleShows(toggle, stored)) {
     return (
@@ -5024,8 +5051,10 @@ function ValueField({
       />
     );
   }
+  const Field =
+    control.leaf.cssProperty === "opacity" ? OpacityField : NumericField;
   return (
-    <NumericField
+    <Field
       id={id}
       control={control}
       stored={stored}
@@ -5033,6 +5062,188 @@ function ValueField({
       tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
+    />
+  );
+}
+
+/**
+ * A number written as text, as CSS reads one (`0.5`, `1e-7`), with only the
+ * whitespace CSS trims around it: not JavaScript's `\s`, which also takes a
+ * no-break space the engine refuses. `undefined` for anything else.
+ */
+function textNumber(text: string): number | undefined {
+  const trimmed = trimCssWhitespace(text);
+  return CSS_NUMBER.test(trimmed) ? Number(trimmed) : undefined;
+}
+
+/**
+ * Whether the section a field sits in is held read-only. Its fieldset holds
+ * the form controls; a control that is not one (a slider's thumb) reads this.
+ */
+const SectionHeld = React.createContext(false);
+
+/**
+ * A fraction as a percent, and back: multiplied or divided by 100 and no
+ * more, to twelve significant figures, which drops the binary noise of the
+ * division (`12.345 / 100` is `0.12345000000000001`) without rounding a
+ * value an author typed.
+ */
+function percentOf(fraction: number): number {
+  return Number((fraction * 100).toPrecision(12));
+}
+
+function fractionOf(percent: number): number {
+  return Number((percent / 100).toPrecision(12));
+}
+
+/** A stored opacity as the percent the field shows; anything else as stored. */
+function toPercent(value: StyleValue | undefined): StyleValue | undefined {
+  return typeof value === "number" ? percentOf(value) : value;
+}
+
+/**
+ * What the percent field commits, as the fraction CSS takes. A number, or a
+ * number typed as text, is divided by 100; a CSS-wide keyword is a whole
+ * value and passes through unscaled.
+ */
+function fromPercent(value: StyleValue | null): StyleValue | null {
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? textNumber(value)
+        : undefined;
+  return number === undefined ? value : fractionOf(number);
+}
+
+/**
+ * Opacity, which an author thinks of in percent: a slider for "more or
+ * less" and the number field beside it for an exact value, both 0 to 100.
+ *
+ * The number field is the ordinary one, handed the value and its range in
+ * percent and converting what it commits back, so every behaviour it has (a
+ * draft held while its menu opens, a refused value said beside it, a keyword
+ * passed through, the variables at its end) is the same here. The inherited
+ * value it shows as a hint is converted the same way.
+ */
+function OpacityField(
+  props: React.ComponentProps<typeof NumericField>
+): React.JSX.Element {
+  const { control, stored, actionName, describedBy, onCommit } = props;
+  const { shown, inheritedShown, resting } = opacityReading(
+    stored,
+    React.useContext(InheritedValue)
+  );
+  const leaf = control.leaf;
+  const percentControl =
+    leaf.kind === "number"
+      ? { ...control, leaf: { ...leaf, min: 0, max: 100 } }
+      : control;
+  return (
+    <div className="nx-style-inspector__opacity">
+      {resting === undefined ? null : (
+        <OpacitySlider
+          resting={resting}
+          actionName={actionName}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+      )}
+      <InheritedValue.Provider value={inheritedShown}>
+        <NumericField
+          {...props}
+          control={percentControl}
+          stored={shown}
+          onCommit={value => onCommit(fromPercent(value))}
+        />
+      </InheritedValue.Provider>
+      <span className="nx-style-inspector__percent" aria-hidden="true">
+        %
+      </span>
+    </div>
+  );
+}
+
+/**
+ * An opacity as the field shows it: the stored value in percent, the
+ * inherited one in percent as its hint, and where the slider's thumb rests.
+ *
+ * The thumb rests on the value set here, else the one inherited, else the
+ * 100% of an unset opacity. A keyword (`inherit`) is none of these, so it has
+ * no resting place and no slider: no position stands for it, and a nudge
+ * would replace it with a number built from a position it never had.
+ */
+function opacityReading(
+  stored: StyleValue | undefined,
+  inherited: string | undefined
+): {
+  shown: StyleValue | undefined;
+  inheritedShown: string | undefined;
+  resting: number | undefined;
+} {
+  const shown = toPercent(stored);
+  const inheritedNumber =
+    inherited === undefined ? undefined : textNumber(inherited);
+  const inheritedPercent =
+    inheritedNumber === undefined ? undefined : percentOf(inheritedNumber);
+  const unsetResting =
+    inheritedPercent ?? (inherited === undefined ? 100 : undefined);
+  return {
+    shown,
+    inheritedShown:
+      inheritedPercent === undefined ? inherited : String(inheritedPercent),
+    resting:
+      typeof shown === "number"
+        ? shown
+        : shown === undefined
+          ? unsetResting
+          : undefined,
+  };
+}
+
+/**
+ * Opacity's slider, 0 to 100: the thumb follows a drag, and the value is
+ * written once it settles.
+ */
+function OpacitySlider({
+  resting,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  resting: number;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const [preview, setPreview] = React.useState<number | undefined>(undefined);
+  // Held with its section, as the fieldset holds the form controls; a
+  // slider's thumb is not one, so it is told.
+  const held = React.useContext(SectionHeld);
+  const at = preview ?? resting;
+  return (
+    <Slider
+      value={[at]}
+      min={0}
+      max={100}
+      step={1}
+      disabled={held}
+      onValueChange={([next]) => setPreview(next)}
+      onValueCommit={([next]) => {
+        setPreview(undefined);
+        if (next !== undefined) onCommit(fractionOf(next));
+      }}
+      thumbs={[
+        {
+          "aria-label": `${actionName} slider`,
+          "aria-valuetext": `${at} percent`,
+          // A refusal said for the field is said for the slider too, which
+          // may hold the focus when it arrives.
+          ...(describedBy === undefined
+            ? {}
+            : { "aria-describedby": describedBy }),
+        },
+      ]}
     />
   );
 }
