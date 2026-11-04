@@ -24,7 +24,6 @@
  * ```
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 
 import type { Command } from "commander";
@@ -55,6 +54,7 @@ import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
+import { reportDryRun, type DryRunChange } from "../dry-run";
 import { configDeclarationError, exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { loadConfigOrExit } from "../utils/command-prerequisites";
@@ -65,12 +65,18 @@ import {
   logWarnings,
   type Logger,
 } from "../utils/logger";
-import { writeGeneratedTypesFile } from "../utils/write-generated-types";
+import {
+  generateTypesFile,
+  writeGeneratedOutput,
+  type GeneratedFile,
+} from "../utils/write-generated-types";
 
 import { runComponentMapCheck } from "./component-map-check-command";
 import {
   applyBlockManifestState,
+  blockManifestDryRunChanges,
   readBlockManifestState,
+  shownPath,
 } from "./generate-manifest";
 
 // ============================================================================
@@ -105,6 +111,9 @@ export interface GenerateTypesCommandOptions {
    * exit with the verdict (`runComponentMapCheck`). For CI.
    */
   check?: boolean;
+
+  /** Report every file the run would write or remove, and write none. */
+  dryRun?: boolean;
 }
 
 /**
@@ -139,11 +148,32 @@ interface GenerationResult {
   zodSchemaFiles: string[];
   /** Path to Zod index file */
   zodIndexFile?: string;
-  /** Total duration in milliseconds */
+  /** Milliseconds from generating the files to having written them */
   durationMs: number;
   /** Any warnings encountered */
   warnings: string[];
 }
+
+/**
+ * Every file generation writes after the block manifest and the component
+ * map, with its content: what a real run writes and a dry run names.
+ */
+interface GenerationPlan {
+  /** The TypeScript types file. */
+  types: GeneratedFile;
+  /** One Zod schema per collection; none under `--no-zod`. */
+  zodSchemas: GeneratedFile[];
+  /** The Zod index; absent under `--no-zod`. */
+  zodIndex?: GeneratedFile;
+}
+
+/**
+ * What a dry run says of the component map and its path list. The writer
+ * decides inside one call whether either file changes, so a dry run cannot
+ * name them without writing; it says so rather than leaving them out silently.
+ */
+export const COMPONENT_MAP_DRY_RUN_NOTE =
+  "Not shown: the plugin component map and its path list, which a real run rewrites beside the configured types file wherever they differ.";
 
 // ============================================================================
 // Generate Types Command Implementation
@@ -192,6 +222,10 @@ export async function runGenerateTypes(
 ): Promise<void> {
   const { logger } = context;
   const startTime = Date.now();
+  // Under `--dry-run` each change below is collected instead of made, from the
+  // same state and the same generated content the real run writes.
+  const dryRun = options.dryRun === true;
+  const dryRunChanges: DryRunChange[] = [];
 
   logger.header("Generate Types");
 
@@ -250,9 +284,15 @@ export async function runGenerateTypes(
     typesFileForLayout,
     manifestCwd
   );
-  await applyBlockManifestState(manifestState);
+  if (dryRun) {
+    dryRunChanges.push(
+      ...blockManifestDryRunChanges(manifestState, manifestCwd)
+    );
+  } else {
+    await applyBlockManifestState(manifestState);
+  }
   const writtenManifestPath =
-    manifestState.expected === null ? undefined : manifestState.path;
+    dryRun || manifestState.expected === null ? undefined : manifestState.path;
   if (writtenManifestPath) {
     logger.debug(`Written block manifest to: ${writtenManifestPath}`);
   }
@@ -266,15 +306,20 @@ export async function runGenerateTypes(
   // place, and the admin's check rewrites it in development and names it in
   // production from the config, so a map written elsewhere would be one nothing
   // reads.
-  const writtenImportMapPath = await settleImportMap(
-    configResult.config.plugins ?? [],
-    generatedTypesFile(manifestCwd, configResult.config.typescript.outputFile),
-    manifestCwd,
-    // The config file it was loaded from, whose type the map imports to check each widget
-    // component against its widget. None for a site running on the default config.
-    configResult.configPath,
-    configResult.config.admin?.dashboard
-  );
+  const writtenImportMapPath = dryRun
+    ? undefined
+    : await settleImportMap(
+        configResult.config.plugins ?? [],
+        generatedTypesFile(
+          manifestCwd,
+          configResult.config.typescript.outputFile
+        ),
+        manifestCwd,
+        // The config file it was loaded from, whose type the map imports to check each widget
+        // component against its widget. None for a site running on the default config.
+        configResult.configPath,
+        configResult.config.admin?.dashboard
+      );
   if (writtenImportMapPath) {
     logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);
   }
@@ -289,6 +334,12 @@ export async function runGenerateTypes(
     logger.info(
       "Add collections, singles, or components to your nextly.config.ts to generate types."
     );
+    if (dryRun) {
+      reportDryRun(logger, {
+        changes: dryRunChanges,
+        notes: [COMPONENT_MAP_DRY_RUN_NOTE],
+      });
+    }
     return;
   }
 
@@ -297,7 +348,23 @@ export async function runGenerateTypes(
   logger.info("Generating types...");
 
   try {
-    const result = await generateTypes(configResult, options, context);
+    const generationStart = Date.now();
+    const plan = planGeneration(configResult, options, context);
+    if (dryRun) {
+      reportDryRun(logger, {
+        changes: [
+          ...dryRunChanges,
+          ...plannedFiles(plan).map(file => ({
+            action: "write" as const,
+            target: shownPath(manifestCwd, file.path),
+          })),
+        ],
+        notes: [COMPONENT_MAP_DRY_RUN_NOTE],
+      });
+      return;
+    }
+    const result = await writeGeneration(plan, configResult, options, context);
+    result.durationMs = Date.now() - generationStart;
     // Reported here because the manifest is settled earlier, before the
     // empty-schema return, while this object is built by the call above.
     result.blockManifestFile = writtenManifestPath;
@@ -347,16 +414,81 @@ export async function publishConfiguredWorkflows(
 }
 
 /**
- * Generate TypeScript types and Zod schemas
+ * Generate the TypeScript types and Zod schemas, writing nothing: the files
+ * and their content, which a real run writes and a dry run names.
  */
-async function generateTypes(
+function planGeneration(
+  configResult: LoadConfigResult,
+  options: ResolvedGenerateTypesOptions,
+  context: CommandContext
+): GenerationPlan {
+  const { logger } = context;
+  const { config } = configResult;
+  const cwd = options.cwd ?? process.cwd();
+
+  // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
+  const records = convertToRecords(config.collections);
+
+  // Generate TypeScript types
+  const generateDeclare = options.declare !== false;
+  logger.debug(`Generating TypeScript types (declare: ${generateDeclare})`);
+
+  // `config` is the already-merged config (plugin contributions folded by
+  // loadConfig); `config.plugins` is the resolved plugin list.
+  const types = generateTypesFile({
+    cwd,
+    outputFile: options.output ?? config.typescript.outputFile,
+    config,
+    plugins: config.plugins ?? [],
+    collections: records,
+    singles: convertToSingleRecords(config.singles ?? []),
+    components: convertToComponentRecords(config.fieldGroups ?? []),
+    userFields: convertToUserFieldRecords(config.users?.fields ?? []),
+    moduleAugmentation: generateDeclare,
+  });
+
+  if (options.zod === false) return { types, zodSchemas: [] };
+
+  logger.debug("Generating Zod validation schemas...");
+  const zodGenerator = new ZodGenerator({
+    generateTypes: true,
+    includeComments: true,
+  });
+  // Zod schemas go to schemasDir/zod, fitted to the app's layout.
+  const zodOutputDir = generatedZodDir(cwd, config.db.schemasDir);
+  const indexFile = zodGenerator.generateIndexFile(records);
+  return {
+    types,
+    zodSchemas: zodGenerator.generateAllSchemas(records).map(schema => ({
+      path: resolve(zodOutputDir, schema.filename),
+      code: schema.code,
+    })),
+    zodIndex: {
+      path: resolve(zodOutputDir, indexFile.filename),
+      code: indexFile.code,
+    },
+  };
+}
+
+/** The plan's files in the order a real run writes them. */
+function plannedFiles(plan: GenerationPlan): GeneratedFile[] {
+  return [
+    plan.types,
+    ...plan.zodSchemas,
+    ...(plan.zodIndex ? [plan.zodIndex] : []),
+  ];
+}
+
+/** Write the planned files, and answer what was written for the summary. */
+async function writeGeneration(
+  plan: GenerationPlan,
   configResult: LoadConfigResult,
   options: ResolvedGenerateTypesOptions,
   context: CommandContext
 ): Promise<GenerationResult> {
   const { logger } = context;
   const { config } = configResult;
-  const startTime = Date.now();
+  const cwd = options.cwd ?? process.cwd();
 
   const result: GenerationResult = {
     collectionCount: config.collections.length,
@@ -368,79 +500,21 @@ async function generateTypes(
     warnings: [],
   };
 
-  const cwd = options.cwd ?? process.cwd();
-
-  // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
-  const records = convertToRecords(config.collections);
-
-  // Convert SingleConfig[] to DynamicSingleRecord[] for generators
-  const singleRecords = convertToSingleRecords(config.singles ?? []);
-
-  // Convert FieldGroupConfig[] to DynamicFieldGroupRecord[] for generators
-  const componentRecords = convertToComponentRecords(config.fieldGroups ?? []);
-
-  // Convert UserFieldConfig[] to UserFieldDefinitionRecord[] for generators
-  const userFieldRecords = convertToUserFieldRecords(
-    config.users?.fields ?? []
-  );
-
-  // Generate TypeScript types
-  const generateDeclare = options.declare !== false;
-  const typesOutputPath = options.output ?? config.typescript.outputFile;
-
-  logger.debug(`Generating TypeScript types (declare: ${generateDeclare})`);
-
-  // `config` is the already-merged config (plugin contributions folded by
-  // loadConfig); `config.plugins` is the resolved plugin list.
-  const typesFilePath = await writeGeneratedTypesFile({
-    cwd,
-    outputFile: typesOutputPath,
-    config,
-    plugins: config.plugins ?? [],
-    collections: records,
-    singles: singleRecords,
-    components: componentRecords,
-    userFields: userFieldRecords,
-    moduleAugmentation: generateDeclare,
-    warn: message => logger.warn(message),
-  });
-
-  result.typesFile = typesFilePath;
-  logger.debug(`Written types to: ${typesFilePath}`);
-
-  // Generate Zod schemas if enabled
-  if (options.zod !== false) {
-    logger.debug("Generating Zod validation schemas...");
-
-    const zodGenerator = new ZodGenerator({
-      generateTypes: true,
-      includeComments: true,
-    });
-
-    // Generate schemas for all collections
-    const zodSchemas = zodGenerator.generateAllSchemas(records);
-
-    // Zod schemas go to schemasDir/zod, fitted to the app's layout.
-    const zodOutputDir = generatedZodDir(cwd, config.db.schemasDir);
-    await ensureDir(zodOutputDir);
-
-    // Write individual schema files
-    for (const schema of zodSchemas) {
-      const schemaPath = resolve(zodOutputDir, schema.filename);
-      await writeFile(schemaPath, schema.code, "utf-8");
-      result.zodSchemaFiles.push(schemaPath);
-      logger.debug(`Written Zod schema: ${schemaPath}`);
+  await writeGeneratedOutput(
+    {
+      zod: plan.zodIndex ? [...plan.zodSchemas, plan.zodIndex] : [],
+      types: plan.types,
+    },
+    {
+      cwd,
+      outputFile: options.output ?? config.typescript.outputFile,
+      warn: message => logger.warn(message),
     }
-
-    // Generate and write index file
-    const indexFile = zodGenerator.generateIndexFile(records);
-    const indexPath = resolve(zodOutputDir, indexFile.filename);
-    await writeFile(indexPath, indexFile.code, "utf-8");
-    result.zodIndexFile = indexPath;
-    logger.debug(`Written Zod index: ${indexPath}`);
-  }
-
-  result.durationMs = Date.now() - startTime;
+  );
+  result.typesFile = plan.types.path;
+  result.zodSchemaFiles.push(...plan.zodSchemas.map(schema => schema.path));
+  result.zodIndexFile = plan.zodIndex?.path;
+  logger.debug(`Written types to: ${plan.types.path}`);
 
   return result;
 }
@@ -600,17 +674,6 @@ function toTitleCase(slug: string): string {
     .split(/[-_]/)
     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ");
-}
-
-/**
- * Ensure directory exists
- */
-async function ensureDir(dir: string): Promise<void> {
-  try {
-    await mkdir(dir, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
 }
 
 /**

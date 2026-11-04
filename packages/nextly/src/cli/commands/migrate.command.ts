@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -12,10 +13,12 @@ import { lazyAction } from "../lazy-action";
  * @param program - Commander program instance
  */
 export function registerMigrateCommand(program: Command): void {
-  program
-    .command("migrate")
-    .description("Run all pending database migrations")
-    .option("--dry-run", "Show what would be migrated without executing", false)
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("migrate")
+      .description("Run all pending database migrations")
+  )
     .option(
       "--step <n>",
       "Run only N migrations, plugin modules and app files together",

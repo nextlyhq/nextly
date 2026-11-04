@@ -28,8 +28,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { relative, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -46,6 +46,7 @@ import { generatedZodDir } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import { assertValidSingleConfig } from "../../singles/config/validate-single";
+import { reportDryRun, type DryRunChange } from "../dry-run";
 import {
   configDeclarationError,
   exitWithError,
@@ -76,7 +77,11 @@ import {
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
-import { writeGeneratedTypesFile } from "../utils/write-generated-types";
+import {
+  generateTypesFile,
+  writeGeneratedOutput,
+  type GeneratedFile,
+} from "../utils/write-generated-types";
 
 import {
   convertToComponentRecords,
@@ -116,6 +121,12 @@ export interface BuildCommandOptions {
    * @default false (Zod schemas are generated)
    */
   zod?: boolean;
+
+  /**
+   * `--dry-run`: validate and plan the files as a real build does, name each
+   * file it would write and the failure it would end with, and write nothing.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -342,6 +353,8 @@ export async function runBuild(
   // Each step that fails the build adds its reason here, and the build ends with them in the
   // error shape once every step that runs has run, so each reason is printed once, at the end.
   const failures: CliError[] = [];
+  // The files a real build writes, which a dry run names in place of writing them.
+  const dryRunChanges: DryRunChange[] = [];
 
   if (declarationErrors.length > 0) {
     result.success = false;
@@ -382,6 +395,12 @@ export async function runBuild(
       result.generatedZodSchemas = generationResult.zodSchemas;
       result.generatedTypesFile = generationResult.typesFile;
       result.warnings.push(...generationResult.warnings);
+      for (const file of generationResult.files) {
+        dryRunChanges.push({
+          action: "write",
+          target: relative(options.cwd ?? process.cwd(), file.path),
+        });
+      }
 
       // Display generation results
       if (generationResult.zodSchemas.length > 0) {
@@ -470,6 +489,17 @@ export async function runBuild(
 
   // Step 5: Final summary
   result.durationMs = Date.now() - startTime;
+
+  // A dry run ends with what it planned: the files, and each reason the real
+  // build would fail, which a dry run names and does not exit on.
+  if (options.dryRun === true) {
+    logger.newline();
+    reportDryRun(logger, {
+      changes: dryRunChanges,
+      refusals: failures.map(failure => failure.what),
+    });
+    return;
+  }
 
   logger.newline();
   logger.divider();
@@ -696,6 +726,8 @@ async function generateAllFiles(
   zodSchemas: string[];
   typesFile?: string;
   warnings: string[];
+  /** Every file the build writes, in order; under `--dry-run`, written to none. */
+  files: GeneratedFile[];
 }> {
   const { logger } = context;
   const { config } = configResult;
@@ -705,7 +737,11 @@ async function generateAllFiles(
     zodSchemas: [] as string[],
     typesFile: undefined as string | undefined,
     warnings: [] as string[],
+    files: [] as GeneratedFile[],
   };
+  // Each file is planned first, path and content, and then written, so a dry
+  // run names exactly the files a real build writes.
+  const dryRun = options.dryRun === true;
 
   // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
   const records = convertToRecords(config.collections);
@@ -720,6 +756,9 @@ async function generateAllFiles(
     config.users?.fields ?? []
   );
 
+  let zodFiles: GeneratedFile[] = [];
+  let typesFile: GeneratedFile | undefined;
+
   // Generate Zod schemas
   if (options.zod !== false) {
     logger.debug("Generating Zod schemas...");
@@ -729,24 +768,16 @@ async function generateAllFiles(
       includeComments: true,
     });
 
-    const zodSchemas = zodGenerator.generateAllSchemas(records);
     // schemasDir/zod, fitted to the app's layout as `generate:types` fits it.
     const zodDir = generatedZodDir(cwd, config.db.schemasDir);
-    await ensureDir(zodDir);
-
-    for (const schema of zodSchemas) {
-      const schemaPath = resolve(zodDir, schema.filename);
-      await writeFile(schemaPath, schema.code, "utf-8");
-      result.zodSchemas.push(schemaPath);
-      logger.debug(`Written Zod schema: ${schemaPath}`);
-    }
-
-    // Generate index file
     const indexFile = zodGenerator.generateIndexFile(records);
-    const indexPath = resolve(zodDir, indexFile.filename);
-    await writeFile(indexPath, indexFile.code, "utf-8");
-    result.zodSchemas.push(indexPath);
-    logger.debug(`Written Zod index: ${indexPath}`);
+    zodFiles = [
+      ...zodGenerator.generateAllSchemas(records).map(schema => ({
+        path: resolve(zodDir, schema.filename),
+        code: schema.code,
+      })),
+      { path: resolve(zodDir, indexFile.filename), code: indexFile.code },
+    ];
   }
 
   // Generate TypeScript types
@@ -755,7 +786,7 @@ async function generateAllFiles(
 
     // The same writer `generate:types` uses, so a deployment build writes the
     // file a development run wrote: the same narrowed names, the same path.
-    const typesFilePath = await writeGeneratedTypesFile({
+    typesFile = generateTypesFile({
       cwd,
       outputFile: config.typescript.outputFile,
       config,
@@ -765,10 +796,23 @@ async function generateAllFiles(
       components: componentRecords,
       userFields: userFieldRecords,
       moduleAugmentation: true,
-      warn: message => logger.warn(message),
     });
-    result.typesFile = typesFilePath;
-    logger.debug(`Written types: ${typesFilePath}`);
+  }
+
+  // Everything planned, then written in one place unless this is a dry run.
+  result.files.push(...zodFiles, ...(typesFile ? [typesFile] : []));
+  if (!dryRun && result.files.length > 0) {
+    await writeGeneratedOutput(
+      { zod: zodFiles, types: typesFile },
+      {
+        cwd,
+        outputFile: config.typescript.outputFile,
+        warn: message => logger.warn(message),
+      }
+    );
+    result.zodSchemas.push(...zodFiles.map(file => file.path));
+    result.typesFile = typesFile?.path;
+    logger.debug(`Written ${formatCount(result.files.length, "file")}`);
   }
 
   return result;
@@ -804,17 +848,6 @@ function convertToRecords(
     createdAt: new Date(),
     updatedAt: new Date(),
   }));
-}
-
-/**
- * Ensure directory exists
- */
-async function ensureDir(dir: string): Promise<void> {
-  try {
-    await mkdir(dir, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
 }
 
 /**

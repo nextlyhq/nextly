@@ -181,8 +181,7 @@ export { installRegistryResolver };
  */
 export interface MigrateCommandOptions {
   /**
-   * Show what would be migrated without executing.
-   * @default false
+   * Show what would be migrated without executing; unset means a real run.
    */
   dryRun?: boolean;
 
