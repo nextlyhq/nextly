@@ -17,6 +17,10 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import {
+  poolRevisionReader,
+  readDocumentRevision,
+} from "../../../versions/stale-version";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -514,6 +518,140 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(1);
       expect(results.filter(r => r.code === "STALE_VERSION").length).toBe(1);
       expect(Number((await stored(t, `dc_${NOTES}`, id))._revision)).toBe(2);
+    });
+
+    it("never stores _overwrite, and refuses one that is not true or false", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "first" }
+      );
+      const id = idOf(created);
+      const overwritten = await update(t, NOTES, id, {
+        title: "over",
+        _overwrite: true,
+      });
+      expect(overwritten.success, JSON.stringify(overwritten)).toBe(true);
+      expect(overwritten.data).not.toHaveProperty("_overwrite");
+      expect(await stored(t, `dc_${NOTES}`, id)).not.toHaveProperty(
+        "_overwrite"
+      );
+      const withVersion = await update(t, NOTES, id, {
+        title: "over again",
+        _overwrite: false,
+        _rev: revOf(overwritten),
+      });
+      expect(withVersion.success, JSON.stringify(withVersion)).toBe(true);
+      // Through the Direct API too.
+      const direct = await t.nextly.update({
+        collection: NOTES as never,
+        id,
+        data: { title: "direct", _overwrite: true } as never,
+      });
+      expect(direct).not.toHaveProperty("item._overwrite");
+      for (const value of ["yes", 1, null]) {
+        const refused = await update(t, NOTES, id, {
+          title: "no",
+          _overwrite: value,
+        });
+        expect(refused, JSON.stringify(value)).toMatchObject({
+          success: false,
+          statusCode: 400,
+        });
+      }
+      expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("direct");
+    });
+
+    it("judges a request that carries anything that looks like the release-run mark", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { title: "first" }
+      );
+      const id = idOf(created);
+      const read = revOf(created);
+      await update(t, NOTES, id, { title: "theirs" });
+      const lookalikes = {
+        exempt: true,
+        _exempt: true,
+        releaseRun: true,
+        _releaseRun: true,
+      };
+      // In the body,
+      const inBody = await update(t, NOTES, id, {
+        title: "mine",
+        _rev: read,
+        ...lookalikes,
+      });
+      expect(inBody).toMatchObject({ success: false, code: "STALE_VERSION" });
+      // in the options,
+      const inOptions = (await handlerOf(t).updateEntry(
+        {
+          collectionName: NOTES,
+          entryId: id,
+          overrideAccess: true,
+          ...lookalikes,
+        } as never,
+        { title: "mine", _rev: read }
+      )) as Result;
+      expect(inOptions).toMatchObject({
+        success: false,
+        code: "STALE_VERSION",
+      });
+      // and through the Direct API.
+      await expect(
+        t.nextly.update({
+          collection: NOTES as never,
+          id,
+          data: { title: "mine", _rev: read, ...lookalikes } as never,
+          ...lookalikes,
+        } as never)
+      ).rejects.toMatchObject({ code: "STALE_VERSION" });
+      expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
+    });
+
+    it("reads a document's counters, who moved each and when, per language, with a row missing as 0", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        {
+          collectionName: DOCS,
+          overrideAccess: true,
+          locale: "en",
+          user: ANA,
+        } as never,
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      const state = await readDocumentRevision(poolRevisionReader(t.adapter), {
+        dialect: t.adapter.dialect,
+        table: `dc_${DOCS}`,
+        id,
+        languages: { table: LANGUAGES, locales: ["en", "es"] },
+      });
+      expect(state?.main).toMatchObject({
+        part: "main",
+        counter: 1,
+        changer: { kind: "person", id: ANA.id },
+      });
+      expect(state?.main.at).toBeInstanceOf(Date);
+      expect(state?.languages.en).toMatchObject({
+        part: "en",
+        counter: 1,
+        changer: { kind: "person", id: ANA.id },
+      });
+      expect(state?.languages.es).toEqual({
+        part: "es",
+        counter: 0,
+        changer: { kind: null, id: null, principalKind: null },
+        at: null,
+      });
+      expect(
+        await readDocumentRevision(poolRevisionReader(t.adapter), {
+          dialect: t.adapter.dialect,
+          table: `dc_${DOCS}`,
+          id: "no-such-entry",
+        })
+      ).toBeUndefined();
     });
   }
 );

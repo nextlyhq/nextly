@@ -88,6 +88,59 @@ describe("versionCheckFor", () => {
   });
 });
 
+describe("versionCheckFor and _overwrite", () => {
+  const codeOf = (body: Record<string, unknown>) => {
+    try {
+      versionCheckFor(body, { exempt: false });
+    } catch (error) {
+      return NextlyError.is(error)
+        ? { code: error.code, path: JSON.stringify(error.publicData) }
+        : error;
+    }
+    return undefined;
+  };
+
+  it("overwrites with or without a version, and still decodes the version given", () => {
+    expect(versionCheckFor({ _overwrite: true }, { exempt: false })).toEqual({
+      kind: "overwrite",
+    });
+    expect(
+      versionCheckFor({ _overwrite: true, _rev: "4.es:2" }, { exempt: false })
+    ).toEqual({
+      kind: "overwrite",
+      given: { main: 4, languages: { es: 2 } },
+    });
+    expect(codeOf({ _overwrite: true, _rev: "four" })).toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+  });
+
+  it("judges as before when _overwrite is false or absent", () => {
+    expect(
+      versionCheckFor({ _overwrite: false, _rev: "4" }, { exempt: false })
+    ).toMatchObject({ kind: "judge" });
+    expect(versionCheckFor({ _overwrite: false }, { exempt: false })).toEqual({
+      kind: "unjudged",
+    });
+  });
+
+  it("refuses any other _overwrite, naming it", () => {
+    for (const value of ["yes", "true", 1, 0, null, {}]) {
+      const refused = codeOf({ _overwrite: value, _rev: "4" });
+      expect(refused, JSON.stringify(value)).toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      expect((refused as { path: string }).path).toContain("_overwrite");
+    }
+  });
+
+  it("leaves an exempt overwrite unjudged", () => {
+    expect(
+      versionCheckFor({ _overwrite: true, _rev: "4" }, { exempt: true })
+    ).toEqual({ kind: "unjudged" });
+  });
+});
+
 describe("the release run's mark", () => {
   const entry = {
     scopeKind: "collection" as const,
