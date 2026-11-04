@@ -10,8 +10,8 @@ vi.mock("@nextlyhq/plugin-sdk", () => ({
 }));
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
+import { bootedSpacingModeReader } from "./spacing-mode-booted";
 import {
-  bootedSpacingModeReader,
   SPACING_MODE_SERVICE,
   spacingModeReaderOf,
 } from "./spacing-mode-reader";
@@ -59,11 +59,19 @@ describe("a reader with no plugin services", () => {
 
   it("reads the model from the instance this process booted", async () => {
     booted.instance = instance("classic");
-    // The documented route's reader: the Single's read and nothing else.
+    // The documented route's reader: the Single's read and nothing else, with
+    // the booted reader a server path hands in.
     const stored = await readStoredSiteStyle({
       nextly: { findSingle: () => Promise.resolve(null) },
+      bootedReader: bootedSpacingModeReader,
     });
     expect(stored.spacingMode).toBe("classic");
+    // Without one, nothing is read past the reader it was handed: the module
+    // browser entries reach never loads the booted instance itself.
+    const alone = await readStoredSiteStyle({
+      nextly: { findSingle: () => Promise.resolve(null) },
+    });
+    expect(alone.spacingMode).toBeNull();
   });
 
   it("prefers the reader's own services to the booted instance", async () => {

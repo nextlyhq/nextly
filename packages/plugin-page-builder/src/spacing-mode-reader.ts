@@ -38,30 +38,8 @@ export function spacingModeReaderOf(nextly: {
     : undefined;
 }
 
-/**
- * The reader of the instance this process booted, for a render handed a
- * reader with no plugin services: the documented route wraps the instance in
- * a reader of `find`, `findByID` and `findSingle` alone. `undefined` when the
- * process has booted no instance, or it offers no such service.
- *
- * Imported at call time, as the plugin's own boot reaches the instance: this
- * module is reached from the package root, which a browser bundle imports.
- */
-export async function bootedSpacingModeReader(): Promise<
-  SpacingModeReader | undefined
-> {
-  try {
-    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-    const instance: unknown = await getCachedNextly();
-    return spacingModeReaderOf({ plugins: fieldOf(instance, "plugins") });
-  } catch {
-    // No booted instance: nothing records a model for this render.
-    return undefined;
-  }
-}
-
 /** One field of a value read as an object, or `undefined` when it is not one. */
-function fieldOf(value: unknown, key: string): unknown {
+export function fieldOf(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) return undefined;
   return (value as Readonly<Record<string, unknown>>)[key];
 }

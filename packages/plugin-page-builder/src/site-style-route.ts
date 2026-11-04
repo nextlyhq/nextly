@@ -59,6 +59,7 @@ import {
   SITE_STYLE_SLUG,
   type SiteStyleReader,
 } from "./site-style-storage";
+import { bootedSpacingModeReader } from "./spacing-mode-booted";
 
 /**
  * What the route reads of the plugin route context: the caller, the plugin's
@@ -253,6 +254,9 @@ export async function readSiteStyleForEditor(
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
     // Past the Single's own permission: the caller was admitted above.
     overrideAccess: true,
+    // The model of the booted instance when the route's reader has no plugin
+    // services; this route is server-only, so it may import that read.
+    bootedReader: bootedSpacingModeReader,
   });
 }
 

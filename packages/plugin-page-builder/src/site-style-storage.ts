@@ -34,8 +34,8 @@ import {
   type SectionPolicy,
 } from "./site-style-record";
 import {
-  bootedSpacingModeReader,
   spacingModeReaderOf,
+  type SpacingModeReader,
 } from "./spacing-mode-reader";
 import { readStoredJson } from "./stored-json";
 
@@ -418,12 +418,18 @@ export async function readStoredSiteStyle(args: {
   slug?: string;
   /** Read past the Single's own read permission. */
   overrideAccess?: true;
+  /**
+   * Where to read the model when `nextly` offers no plugin services: a server
+   * path hands the booted instance's reader (`spacing-mode-booted`). Handed in
+   * rather than imported, so this module stays safe for a browser entry.
+   */
+  bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<StoredSiteStyle> {
   // Read beside the Single, so every reader of the stored style, the
   // published render and the editor's route alike, compiles under the model
   // the site recorded.
   const spacing =
-    spacingModeReaderOf(args.nextly) ?? (await bootedSpacingModeReader());
+    spacingModeReaderOf(args.nextly) ?? (await args.bootedReader?.());
   const [doc, spacingMode] = await Promise.all([
     args.nextly.findSingle({
       slug: args.slug ?? SITE_STYLE_SLUG,
@@ -452,6 +458,8 @@ export async function loadSiteStyle(args: {
   defaults?: SiteStyleData;
   /** The Single's RESOLVED slug, where a host renamed it. */
   slug?: string;
+  /** As {@link readStoredSiteStyle} takes it. */
+  bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<SiteStyleData> {
   return resolveSiteStyle(
     args.defaults,
@@ -461,6 +469,9 @@ export async function loadSiteStyle(args: {
       await readStoredSiteStyle({
         nextly: args.nextly,
         ...(args.slug === undefined ? {} : { slug: args.slug }),
+        ...(args.bootedReader === undefined
+          ? {}
+          : { bootedReader: args.bootedReader }),
       })
     )
   );
