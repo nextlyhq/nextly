@@ -1797,6 +1797,41 @@ function useSelectionPointer({
 }
 
 /**
+ * A click on the page around the canvas, inside its frame, answered as a
+ * click on the canvas's own ground: the selection is cleared.
+ *
+ * On a page the site serves, the site's layout decides how tall the canvas
+ * is, so below a short page the frame shows the site's own page rather than
+ * the canvas, and the click an author makes there to let go of a block lands
+ * outside the canvas root. Only inside a frame: where the canvas shares the
+ * editor's document, everything outside it is the editor's own panels.
+ */
+function useFrameGroundClick(
+  root: React.RefObject<HTMLDivElement | null>,
+  onSelect: CanvasProps["onSelect"]
+): void {
+  const framed = useCanvasFrame().frame !== null;
+  const latest = useRef(onSelect);
+  useEffect(() => {
+    latest.current = onSelect;
+  }, [onSelect]);
+  useEffect(() => {
+    const element = root.current;
+    if (!framed || element === null) return;
+    const doc = element.ownerDocument;
+    const ground = (event: MouseEvent): void => {
+      const { target } = event;
+      // The canvas answers its own clicks, and chrome is not the page.
+      if (isElement(target) && element.contains(target)) return;
+      if (isChrome(target)) return;
+      latest.current?.(null, selectionModeFor(event));
+    };
+    doc.addEventListener("click", ground);
+    return () => doc.removeEventListener("click", ground);
+  }, [framed, root]);
+}
+
+/**
  * The document and window the blocks are drawn in, for block code that
  * measures itself or listens (`useBlockEnvironment`). Read from the canvas
  * root's OWN document rather than the globals, so the answer is the frame's
@@ -1882,6 +1917,7 @@ export function Canvas({
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
+  useFrameGroundClick(root, onSelect);
 
   const { marked, pointer, pointerDown } = useSelectionPointer({
     selectedIds,

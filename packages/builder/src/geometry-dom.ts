@@ -228,6 +228,13 @@ export interface OverlaySpace {
  */
 export const CANVAS_LAYER_ATTRIBUTE = "data-nx-canvas-layer";
 
+/**
+ * How far past the frame's viewport the layer draws, on every side, in the
+ * chrome's pixels: as far as a selection ring stands outside its block, so the
+ * ring of a block flush with the page's edge is drawn rather than cut off.
+ */
+export const CHROME_BLEED = 4;
+
 /** The attribute marking the box holding a canvas frame and its layer. */
 export const CANVAS_FRAME_BOX_ATTRIBUTE = "data-nx-canvas-frame-box";
 
