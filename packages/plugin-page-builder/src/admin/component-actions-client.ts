@@ -66,7 +66,7 @@ function useRouteCall<TBody, TResult>(
 export function useDetach(): RouteCall<DetachRequest, DetachResult> {
   return useRouteCall(
     DETACH_ROUTE_PATH,
-    "The placement could not be detached. Try again."
+    "It could not be detached from the component. Try again."
   );
 }
 

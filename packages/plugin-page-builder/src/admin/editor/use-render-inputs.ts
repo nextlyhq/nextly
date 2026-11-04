@@ -59,6 +59,7 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
+import { useCanvasPageContext } from "./canvas-page-context";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
   useBreakpointWriter,
@@ -308,9 +309,12 @@ function useCanvasRender({
    * edited, and a surface showing the page as published must not have one.
    */
 
+  // The canvas's own page context, one object for the editor's life: see
+  // `canvas-page-context.ts`.
+  const canvasContext = useCanvasPageContext();
   const canvasRender = useMemo(
-    () =>
-      pageRenderInputs({
+    () => ({
+      ...pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         // None: the canvas is a frame at the previewed device's size, so the
@@ -323,11 +327,14 @@ function useCanvasRender({
         // keystroke.
         definitions: componentLibrary.definitions,
       }),
+      context: canvasContext,
+    }),
     [
       canvasSiteStyle,
       clientConfig,
       documentLimits,
       componentLibrary.definitions,
+      canvasContext,
     ]
   );
 

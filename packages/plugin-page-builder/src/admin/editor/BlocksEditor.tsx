@@ -15,6 +15,7 @@ import {
   prepareDocumentForRead,
   registeredBlocks,
 } from "@nextlyhq/blocks-react";
+import { blockNameOf } from "@nextlyhq/builder";
 import {
   BlockContextMenu,
   BlockKeyboardActions,
@@ -46,7 +47,7 @@ import {
   MediaPickerDialog,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useState, type ComponentProps, type JSX } from "react";
+import { useEffect, useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
   useWatch,
@@ -63,7 +64,10 @@ import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
-import { SiteStyleHistoryContext } from "../site-style-client";
+import {
+  SiteStyleHistoryContext,
+  SiteStylePreviewContext,
+} from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
 import {
@@ -73,8 +77,13 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import {
+  useMediaSummaryReader,
+  type ReadMediaSummary,
+} from "./media-summary-reader";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
+import { useReveal, type Reveal } from "./reveal-hidden";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -118,6 +127,12 @@ type EditorView = EditorMount &
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** The block verbs shared for the surfaces drawn outside the provider. */
+    layerVerbs: CardVerbs;
+    /** What the canvas draws: the document, with selected hidden blocks shown. */
+    reveal: Reveal;
+    /** A stored media id's name, picture and alt text, for the image fields. */
+    readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
   };
@@ -366,7 +381,8 @@ const servicesByPassages = new WeakMap<
 
 function servicesFor(
   passages: OpenPassages,
-  locale: string | undefined
+  locale: string | undefined,
+  readMedia: ReadMediaSummary
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -379,6 +395,7 @@ function servicesFor(
     services = {
       ...borrowedServices(),
       openPassages: passages,
+      readMedia,
       findEntries: query =>
         findEntries(locale === undefined ? query : { ...query, locale }),
     };
@@ -452,7 +469,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(view.passages, view.locale)}
+      contentServices={servicesFor(view.passages, view.locale, view.readMedia)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -460,6 +477,9 @@ function editorInspector(
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
+      // The set above is the config's defaults until the stored one is read,
+      // so a per-device hide waits for it.
+      breakpointsStatus={siteStyleStatus(siteStylePending, siteStyleError)}
       // Which tier the Style tab writes to, and which tiers are live: the
       // canvas's answer rather than the panel's, as the frame's width is
       // what the page's media queries answer for.
@@ -625,7 +645,24 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             overlay={
               <>
                 <VariantPreviewTag name={view.preview.previewing} />
-                <CanvasMarks />
+                {/* A selected block the page hides on this device is drawn
+                    anyway, and its ring says so. */}
+                <CanvasMarks
+                  revealed={view.reveal.ids}
+                  device={{
+                    breakpoints: canvasRender.styleContext.breakpoints,
+                    id: view.editedBreakpoint,
+                  }}
+                  // A selected placement's frame is tagged with the name its
+                  // Layers row reads.
+                  nameOf={address =>
+                    blockNameOf(
+                      editor.document,
+                      address,
+                      componentLibrary.titleOf
+                    )
+                  }
+                />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
                 {/*
@@ -677,8 +714,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
           >
             <Canvas
               // The document as the open variant draws it, in a component's
-              // view; the document itself otherwise.
-              document={view.preview.document}
+              // view, with a selected block it hides on this device drawn
+              // while selected; the document itself otherwise.
+              document={view.reveal.document}
               rootRef={canvasRoot}
               onRoot={setCanvasElement}
               forcedState={shownStyleState}
@@ -789,6 +827,9 @@ function editorSettings(
           // dialog on every pass, open or not.
           dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
         }
+        // The SEO plugin's group, where the page has one: its fields are then
+        // among the page's own, and the preview is not all there is.
+        seoFields={page.seo !== undefined}
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
@@ -830,19 +871,22 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
   const style = useSiteStyleHistory();
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
-      <StyleRevisionContext.Provider value={style.replay}>
-        <ConnectStyleHistoryContext.Provider value={style.connect}>
-          {/*
+      {/* Held style edits, drawn before they are stored. */}
+      <SiteStylePreviewContext.Provider value={style.preview}>
+        <StyleRevisionContext.Provider value={style.replay}>
+          <ConnectStyleHistoryContext.Provider value={style.connect}>
+            {/*
             The canvas's frame, provided above the whole editor: the canvas
             registers it here, and the inspector, the toolbar, inline editing
             and the keys outside the canvas all ask it which document and
             window the page is drawn in.
           */}
-          <CanvasFrameProvider>
-            <EditorBody {...props} />
-          </CanvasFrameProvider>
-        </ConnectStyleHistoryContext.Provider>
-      </StyleRevisionContext.Provider>
+            <CanvasFrameProvider>
+              <EditorBody {...props} />
+            </CanvasFrameProvider>
+          </ConnectStyleHistoryContext.Provider>
+        </StyleRevisionContext.Provider>
+      </SiteStylePreviewContext.Provider>
     </SiteStyleHistoryContext.Provider>
   );
 }
@@ -930,12 +974,28 @@ function EditorBody<TFieldValues extends FieldValues>({
     here: page.title,
     inline,
   });
+  // The "Part of" toast offers the same Edit component the panel does.
+  useOfferedEditComponent(
+    mount.offerEditComponent,
+    componentView.onEditComponent
+  );
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
 
   // The page's title, for the canvas frame's accessible name.
   const pageTitle = page.title;
+  // Over the document the canvas draws: in a component's view, the open
+  // variant's.
+  const reveal = useReveal(
+    componentView.preview.document,
+    mount.editor.selection.ids,
+    canvas.canvasRender.styleContext.breakpoints,
+    canvas.editedBreakpoint
+  );
+  // A stored image's name and picture in the inspector, read as the canvas
+  // reads it.
+  const readMedia = useMediaSummaryReader();
   const view: EditorView = {
     ...mount,
     ...style,
@@ -944,6 +1004,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     documentDirty,
     pageTitle,
     componentView,
+    layerVerbs: cardVerbs,
+    reveal,
+    readMedia,
     preview: componentView.preview,
   };
   useOpenAtSection({
@@ -1157,4 +1220,17 @@ function EditorFrame({
       <div className="min-h-0 flex-1">{children}</div>
     </div>
   );
+}
+
+/**
+ * Hand the "Part of" toast the component opener the view built, so its Edit
+ * component action opens what the panel's button does.
+ */
+function useOfferedEditComponent(
+  offer: EditorMount["offerEditComponent"],
+  open: ComponentView["onEditComponent"]
+): void {
+  useEffect(() => {
+    offer(open);
+  }, [offer, open]);
 }

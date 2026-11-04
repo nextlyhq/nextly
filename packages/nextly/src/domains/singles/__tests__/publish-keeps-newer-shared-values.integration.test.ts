@@ -291,6 +291,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await pendingLocales()).toEqual(["en"]);
     });
 
+    it("publishes an English change behind live in one step when the request retypes the live count", async () => {
+      const singles = await boot(dialect);
+      await spanishPublishesThirteen(singles);
+
+      // The editor retypes the live value into the publish itself, rather
+      // than taking the live values first: judged as the request merged over
+      // the stored change, nothing the publish writes is behind live.
+      const published = await save(singles, "en", {
+        articleCount: 13,
+        status: "published",
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      expect(await liveCount(singles)).toBe(13);
+      expect(await liveName(singles, "en")).toBe("EN edited");
+      expect(await pendingLocales()).toEqual([]);
+    });
+
     it("publishes once English takes the live values, and keeps 13", async () => {
       const singles = await boot(dialect);
       await spanishPublishesThirteen(singles);
