@@ -44,6 +44,11 @@ import {
   type SelectsRows,
 } from "./document-revision";
 
+/** A language's counter in a version: 0 where it names none. */
+function languageCounterOf(version: DecodedVersion, code: string): number {
+  return Object.hasOwn(version.languages, code) ? version.languages[code] : 0;
+}
+
 /** A version as its parts: the main counter, and each language's it names. */
 export interface DecodedVersion {
   main: number;
@@ -82,11 +87,16 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
       `${DOCUMENT_VERSION_KEY} names a version no document has.`
     );
   }
-  const languages: Record<string, number> = {};
+  // Without a prototype, so a language code such as `constructor` is only
+  // ever an own key.
+  const languages: Record<string, number> = Object.create(null) as Record<
+    string,
+    number
+  >;
   for (const part of match[2]?.split(",") ?? []) {
     const [code, counter] = part.split(":");
     const n = Number(counter);
-    if (code in languages || !Number.isSafeInteger(n)) {
+    if (Object.hasOwn(languages, code) || !Number.isSafeInteger(n)) {
       throw unjudgeable(
         `${DOCUMENT_VERSION_KEY} names a version no document has.`
       );
@@ -369,7 +379,7 @@ export function judgedLanguage(
   writeLocale: string | undefined
 ): string | undefined {
   if (given === undefined || writeLocale === undefined) return undefined;
-  if (!(writeLocale in given.languages)) {
+  if (!Object.hasOwn(given.languages, writeLocale)) {
     throw unjudgeable(
       `${DOCUMENT_VERSION_KEY} names no version of ${writeLocale}, the language this update saves. Send the version a read of ${writeLocale} returned.`
     );
@@ -396,7 +406,7 @@ export function staleParts(
   const stale: string[] = [];
   if (args.main && args.main.counter !== given.main) stale.push("main");
   for (const language of args.languages ?? []) {
-    if (language.counter !== (given.languages[language.part] ?? 0)) {
+    if (language.counter !== languageCounterOf(given, language.part)) {
       stale.push(language.part);
     }
   }
@@ -435,7 +445,7 @@ export function lastChangerOf(
     ? parts.filter(part =>
         part.part === "main"
           ? part.counter !== given.main
-          : part.counter !== (given.languages[part.part] ?? 0)
+          : part.counter !== languageCounterOf(given, part.part)
       )
     : [...parts];
   const rank = (part: PartState) => (part.part === "main" ? "" : part.part);
@@ -637,9 +647,14 @@ export async function certainlyStale(
     ...(args.languages ? { languages: args.languages } : {}),
   });
   if (inHand === undefined) return false;
-  if (inHand.main.counter > args.given.main) return true;
-  return Object.values(inHand.languages).some(
-    language => language.counter > (args.given.languages[language.part] ?? 0)
+  // Not the version stored: a counter only goes up, so one below it is out of
+  // date for good, and one above it is one no read of this document gave.
+  return (
+    inHand.main.counter !== args.given.main ||
+    Object.values(inHand.languages).some(
+      language =>
+        language.counter !== languageCounterOf(args.given, language.part)
+    )
   );
 }
 
@@ -773,7 +788,7 @@ export async function judgeLanguageRow(
     row.languagesTable,
     row.id,
     row.written,
-    check.given.languages[row.written] ?? 0,
+    languageCounterOf(check.given, row.written),
     savedBy
   );
   return { stale: !claimed, claimed };

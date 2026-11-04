@@ -12361,29 +12361,40 @@ export class CollectionMutationService extends BaseService {
       locale?: string;
     },
     check: VersionCheck,
-    table: string
+    table: string,
+    /** A sweep of every language, judged on each of them. */
+    sweep: boolean
   ): Promise<CollectionServiceResult | null> {
     if (check.kind !== "judge") return null;
-    // The save's language, when the version names it: compared here as the
-    // main row is, and named in the answer so it can be sent back with the
-    // same save. Read before any hook has split the body, so taken from the
-    // request: the language it names, or the default.
-    const locale = this.localization
-      ? resolveRequestedLocale(this.localization, params.locale)
-      : undefined;
-    const companion =
-      locale !== undefined && locale in check.given.languages
-        ? await this.fileManager.loadCompanionSchema(params.collectionName)
-        : null;
+    // The languages the save is judged on: compared here as the main row is,
+    // and named in the answer so it can be sent back with the same save.
+    // Read before any hook has split the body, so taken from the request:
+    // every language for a sweep, else the one it names or the default.
+    const companion = this.localization
+      ? await this.fileManager.loadCompanionSchema(params.collectionName)
+      : null;
+    const locales =
+      companion && this.localization
+        ? sweep
+          ? this.localization.locales.map(l => l.code)
+          : [resolveRequestedLocale(this.localization, params.locale)]
+        : [];
+    // A version from a read of another language can't be judged: refused
+    // here, before any hook runs, as the validation error it is.
+    if (!sweep && locales.length === 1) {
+      try {
+        judgedLanguage(check.given, locales[0]);
+      } catch (error) {
+        return errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        );
+      }
+    }
     const at: StaleWrite =
-      companion && locale !== undefined
-        ? {
-            table,
-            languages: {
-              table: companion.companionTableName,
-              locales: [locale],
-            },
-          }
+      companion && locales.length > 0
+        ? { table, languages: { table: companion.companionTableName, locales } }
         : { table };
     const stale = await certainlyStale(poolRevisionReader(this.adapter), {
       dialect: this.dialect,
@@ -12826,7 +12837,8 @@ export class CollectionMutationService extends BaseService {
       const certainlyStale = await this.certainlyStaleAnswer(
         params,
         versionCheck,
-        tableName
+        tableName,
+        sweepAllLocales
       );
       if (certainlyStale) return certainlyStale;
 
@@ -18020,6 +18032,19 @@ export class CollectionMutationService extends BaseService {
       // The main row's version, under the lock just taken and before this
       // item writes anything, so a refused item leaves nothing behind in a
       // transaction that goes on with the rest of a batch.
+      if (rowFilter) {
+        const outside = await this.refusalOutsideFilterOfWrite(
+          tx,
+          rowFilter.params,
+          rowFilter.access,
+          filteredWrites
+        );
+        if (outside) {
+          return asMissingItem(outside, entryId, options.identifyMissingEntry);
+        }
+      }
+      // Judged once the caller is known to reach this entry, so a refusal
+      // never tells one the row filter excludes that the entry exists.
       // The default language, the one a batch writes, when the version names
       // it: judged with the main row, and named in a refusal so the answer
       // can be sent back with the same save.
@@ -18028,7 +18053,7 @@ export class CollectionMutationService extends BaseService {
         versionCheck.kind !== "unjudged" &&
         defaultLocale !== undefined &&
         versionCheck.given !== undefined &&
-        defaultLocale in versionCheck.given.languages
+        Object.hasOwn(versionCheck.given.languages, defaultLocale)
           ? await this.fileManager.loadCompanionSchema(
               params.collectionName,
               tx.getDrizzle()
@@ -18061,17 +18086,6 @@ export class CollectionMutationService extends BaseService {
           versionCheck.given,
           batchAt
         );
-      }
-      if (rowFilter) {
-        const outside = await this.refusalOutsideFilterOfWrite(
-          tx,
-          rowFilter.params,
-          rowFilter.access,
-          filteredWrites
-        );
-        if (outside) {
-          return asMissingItem(outside, entryId, options.identifyMissingEntry);
-        }
       }
 
       let currentData: Record<string, unknown> = { ...body };

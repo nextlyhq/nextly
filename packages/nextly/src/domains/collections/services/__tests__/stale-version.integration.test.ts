@@ -17,6 +17,12 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../../__tests__/fixtures/permission-holders";
+import { NextlyError } from "../../../../errors/nextly-error";
+import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionService } from "../collection-service";
 import {
   poolRevisionReader,
@@ -40,6 +46,12 @@ const NOTES = "notes";
 const POSTS = "posts";
 /** Two languages, each with its own status, for a sweep of every language. */
 const LIVES = "lives";
+let livesBeforeChangeCalls = 0;
+/** Updatable only through an update rule that answers a filter: the caller's own. */
+const OWNED = "owned";
+const AUTHOR = "stale-author";
+const ownEntries = ({ user }: { user: { id: string } | null }) =>
+  ({ owner: { equals: user?.id ?? "" } }) as unknown as boolean;
 /** Keeps history and runs an after-change hook, to see a refusal reach neither. */
 const HOOKED = "hooked";
 let afterChangeCalls = 0;
@@ -89,7 +101,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         access: { ...OPEN, publish: () => true, unpublish: () => true },
+        hooks: {
+          beforeChange: [
+            ({ data }: { data?: unknown }) => {
+              livesBeforeChangeCalls += 1;
+              return data;
+            },
+          ],
+        },
         fields: [text({ name: "headline", localized: true })],
+      }),
+      defineCollection({
+        slug: OWNED,
+        access: { read: () => true, create: () => true, update: ownEntries },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
       }),
       defineCollection({
         slug: HOOKED,
@@ -126,6 +151,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     createdAt: now,
     updatedAt: now,
   });
+  // A code rule only narrows a permission, so the author holds each one.
+  await userWhoMay(current, AUTHOR, "read", [OWNED]);
+  await grantTo(current, AUTHOR, "update", [OWNED]);
   return current;
 }
 
@@ -1221,6 +1249,140 @@ describe.each(getConfiguredTestDialects())(
         { locale: lost.locale }
       );
       expect(again.success, JSON.stringify(again)).toBe(true);
+    });
+
+    it("tells a caller the row filter keeps from an entry nothing more for a stale version than for a current one", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: OWNED, overrideAccess: true },
+        { title: "theirs", owner: "someone-else" }
+      );
+      const id = idOf(created);
+      const read = revOf(created);
+      const current = revOf(
+        await update(t, OWNED, id, { title: "theirs again" })
+      );
+      const entries = t
+        .getService("collectionsHandler")
+        .getEntryService() as CollectionEntryService;
+      const answerTo = (rev: string) =>
+        t.adapter
+          .transaction(tx =>
+            entries.updateEntryInTransaction(
+              tx,
+              {
+                collectionName: OWNED,
+                entryId: id,
+                user: { id: AUTHOR },
+              } as never,
+              { title: "mine", _rev: rev }
+            )
+          )
+          .then(
+            (result: unknown) => {
+              // A refusal comes back as a result or is thrown; read it either way.
+              const r = result as {
+                statusCode?: number;
+                code?: string;
+                publicData?: unknown;
+              };
+              return {
+                status: r.statusCode ?? 200,
+                code: r.code,
+                data: r.publicData,
+              };
+            },
+            (error: unknown) =>
+              NextlyError.is(error)
+                ? {
+                    status: error.statusCode,
+                    code: error.code,
+                    data: error.publicData,
+                  }
+                : { status: -1, code: String(error), data: undefined }
+          );
+      const forCurrent = await answerTo(current);
+      const forStale = await answerTo(read);
+      // Refused alike, as the entry the caller may not reach: never told it
+      // is out of date, nor its version.
+      expect(forCurrent.status).toBeGreaterThanOrEqual(400);
+      expect(forCurrent.code).not.toBe("STALE_VERSION");
+      expect(forStale).toEqual(forCurrent);
+      expect(JSON.stringify(forStale)).not.toContain(current);
+    });
+
+    it("refuses before any hook a sweep whose other language moved, a version from another language's read, and one no read gave", async () => {
+      const t = await boot(dialect);
+      const live = await handlerOf(t).createEntry(
+        { collectionName: LIVES, overrideAccess: true, locale: "en" },
+        { headline: "Hi", status: "published" }
+      );
+      const liveId = idOf(live);
+      await update(
+        t,
+        LIVES,
+        liveId,
+        { headline: "Hola", status: "published" },
+        { locale: "es" }
+      );
+      const everyLanguage = String(
+        (
+          (await t.nextly.findByID({
+            collection: LIVES as never,
+            id: liveId,
+            locale: "*",
+            overrideAccess: true,
+            status: "all",
+          } as never)) as { _rev: string }
+        )._rev
+      );
+      await update(
+        t,
+        LIVES,
+        liveId,
+        { headline: "Hola de nuevo" },
+        { locale: "es" }
+      );
+      const beforeSweep = livesBeforeChangeCalls;
+      const swept = await update(
+        t,
+        LIVES,
+        liveId,
+        { status: "draft", _rev: everyLanguage },
+        { locale: "*" }
+      );
+      expect(swept).toMatchObject({ code: "STALE_VERSION" });
+      expect(livesBeforeChangeCalls).toBe(beforeSweep);
+
+      const doc = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello" }
+      );
+      const docId = idOf(doc);
+      const before = docsBeforeChangeCalls;
+      // English's version on a Spanish save: a validation error, before hooks.
+      const otherLanguage = await update(
+        t,
+        DOCS,
+        docId,
+        { title: "hola", _rev: revOf(doc) },
+        { locale: "es" }
+      );
+      expect(otherLanguage).toMatchObject({ success: false, statusCode: 400 });
+      // A version above the stored one: no read of this entry gave it.
+      const [main] = revOf(doc).split(".");
+      const future = await update(
+        t,
+        DOCS,
+        docId,
+        {
+          title: "later",
+          _rev: revOf(doc).replace(/^\d+/, String(Number(main) + 5)),
+        },
+        { locale: "en" }
+      );
+      expect(future).toMatchObject({ code: "STALE_VERSION" });
+      expect(docsBeforeChangeCalls).toBe(before);
     });
   }
 );
