@@ -1,6 +1,7 @@
 /**
- * The page builder's own tables: the usage indexes' bookkeeping, and the
- * fence a Layout's removal puts up.
+ * The page builder's own tables: the usage indexes' bookkeeping, the
+ * fence a Layout's removal puts up, and the runs that turn every copy of a
+ * component into plain blocks before it is deleted.
  *
  * Kept in tables this plugin declares, reached only through its own `ctx.db`,
  * rather than in collections. A collection has an admin screen, a REST route
@@ -30,7 +31,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -174,9 +175,101 @@ export const layoutRemovals: TableDefinition<
   { indexes: [{ columns: ["layoutId"], unique: true }] }
 );
 
+/** The columns of {@link componentDeletions}. */
+type ComponentDeletionsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly componentId: ColumnBuilder<string, false, false>;
+  readonly purpose: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, false, false>;
+  readonly phase: ColumnBuilder<string, false, true>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * One run rewriting every host of a component, one row per component and
+ * purpose: `delete` turns its copies into plain blocks before it is deleted,
+ * `strip-retired` removes the values of fields it no longer exposes. The two
+ * may run at once, each with its own progress.
+ *
+ * Inserting a `delete` row IS the fence: while it exists, a write that would
+ * add a reference to the component is refused. A `strip-retired` run fences
+ * nothing. The unique (`componentId`, `purpose`) means two people starting one
+ * run at once start it once.
+ *
+ * `startedBy` names who the run's writes are made as, as `user:<id>` for a
+ * signed-in person or `api-key:<id>` for a key, so a later call can be
+ * matched against it.
+ *
+ * `phase` says which walk the run is on: `converting` (every host, skipping
+ * the ones its progress says are done), `final` (every host again, trusting
+ * no progress row) or `done`. `cursor` is where the final walk stopped, so a
+ * walk larger than one tick resumes rather than starting over.
+ */
+export const componentDeletions: TableDefinition<
+  "component_deletions",
+  ComponentDeletionsColumns
+> = defineTable<"component_deletions", ComponentDeletionsColumns>(
+  "component_deletions",
+  {
+    id: col.id(),
+    componentId: col.varchar(255),
+    purpose: col.varchar(32),
+    startedBy: col.varchar(255),
+    phase: col.varchar(16, { default: "converting" }),
+    cursor: col.varchar(1024, { nullable: true }),
+  },
+  { indexes: [{ columns: ["componentId", "purpose"], unique: true }] }
+);
+
+/** The columns of {@link componentDeletionHosts}. */
+type ComponentDeletionHostsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly deletionId: ColumnBuilder<string, false, false>;
+  readonly hostKey: ColumnBuilder<string, false, false>;
+  readonly state: ColumnBuilder<string, false, false>;
+  readonly reason: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * What a run has done to one host document: `rewritten`, `unchanged`, `left`
+ * (with the reason) or `pending` (re-queued by a write made while fenced).
+ * Hosts outside every walk that block the run (a Layout naming the component)
+ * are recorded here too, as `left`, before the run is marked done.
+ *
+ * An ordering hint for the converting walk only. The final walk reads every
+ * host again whatever these rows say, so a row claiming a host is done skips
+ * nothing that still needs converting.
+ */
+export const componentDeletionHosts: TableDefinition<
+  "component_deletion_hosts",
+  ComponentDeletionHostsColumns
+> = defineTable<"component_deletion_hosts", ComponentDeletionHostsColumns>(
+  "component_deletion_hosts",
+  {
+    id: col.id(),
+    deletionId: col.char(36),
+    hostKey: col.varchar(512),
+    state: col.varchar(16),
+    reason: col.varchar(64, { nullable: true }),
+  },
+  { indexes: [{ columns: ["deletionId", "hostKey"], unique: true }] }
+);
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
   typeof usageProgress,
   typeof layoutRemovals,
-] = [usageRuns, usageProgress, layoutRemovals];
+  typeof componentDeletions,
+  typeof componentDeletionHosts,
+] = [
+  usageRuns,
+  usageProgress,
+  layoutRemovals,
+  componentDeletions,
+  componentDeletionHosts,
+];
