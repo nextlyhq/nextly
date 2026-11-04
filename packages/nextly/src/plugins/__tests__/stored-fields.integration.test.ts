@@ -222,7 +222,32 @@ describe.each(getConfiguredTestDialects())(
             localized: true,
             fields: [
               { ...hiddenBody, localized: true },
+              { name: "note", type: "doc", localized: true },
               { name: "extra", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            // A read rule closing German alone, as a site with a language
+            // its translators have not released might write one.
+            slug: "germanless",
+            localized: true,
+            access: {
+              read: ({ locales }: { locales: readonly string[] }) =>
+                !locales.includes("de"),
+            },
+            fields: [{ name: "body", type: "doc", localized: true }],
+          } as unknown as CollectionConfig,
+          {
+            slug: "grouped",
+            fields: [
+              {
+                name: "hero",
+                type: "group",
+                fields: [
+                  { name: "body", type: "doc" },
+                  { name: "aside", type: "doc" },
+                ],
+              },
             ],
           } as unknown as CollectionConfig,
         ],
@@ -254,7 +279,14 @@ describe.each(getConfiguredTestDialects())(
       // The install's first account holds super-admin; the others are judged
       // by what they are granted.
       owner = { user: { id: await person("owner") } };
-      const content = ["pages", "drafted", "hooked", "worded"];
+      const content = [
+        "pages",
+        "drafted",
+        "hooked",
+        "worded",
+        "germanless",
+        "grouped",
+      ];
       const editorId = await person("editor");
       for (const action of ["read", "update", "publish"]) {
         await grantTo(t, editorId, action, content);
@@ -743,6 +775,153 @@ describe.each(getConfiguredTestDialects())(
           );
           expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
         }
+      });
+    });
+
+    describe("languages and groups", () => {
+      it("judges the stored read in the language it reads, refusing one a read rule closes", async () => {
+        const id = await created("germanless", { body: { v: "en" } });
+        await t.nextly.update({
+          collection: "germanless",
+          id,
+          locale: "de",
+          data: { body: { v: "de" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "germanless", id };
+        const asked = {
+          ...entry,
+          fields: ["body"],
+          form: "published",
+        } as const;
+
+        // The control: the same person reads the language the rule leaves open.
+        expect(
+          await readStoredFields(editor, { ...asked, locale: "en" })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "en" } } },
+        });
+        expect(
+          NextlyError.isForbidden(
+            await rejectionOf(
+              readStoredFields(editor, { ...asked, locale: "de" })
+            )
+          )
+        ).toBe(true);
+        // A conditional write in the closed language reads it first, so it is
+        // refused too, and the German value stays as it was.
+        const refusal = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            locale: "de",
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({
+                kind: "value",
+                value: { v: "de" },
+              }),
+            },
+          })
+        );
+        expect(NextlyError.isForbidden(refusal)).toBe(true);
+        const german = (await t.nextly.findByID({
+          collection: "germanless",
+          id,
+          locale: "de",
+          fallbackLocale: false,
+          overrideAccess: true,
+        } as never)) as { body?: unknown };
+        expect(german.body).toEqual({ v: "de" });
+      });
+
+      it("refuses an expectation on a field inside a group, and writes nothing", async () => {
+        const id = await created("grouped", {
+          hero: { body: { v: 0 }, aside: { a: "author" } },
+        });
+        const entry = { collection: "grouped", id };
+        // The stored read reaches the field; only the write refuses it.
+        const read = await readStoredFields(editor, {
+          ...entry,
+          fields: ["hero.body"],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the entry");
+        const hash = await storedValueHash(
+          read.values["hero.body"] ?? { kind: "absent" }
+        );
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            data: { hero: { body: { v: "plugin" } } },
+            expect: { field: "hero.body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+        expect(
+          await readStoredFields(editor, {
+            ...entry,
+            fields: ["hero.body", "hero.aside"],
+            form: "published",
+          })
+        ).toEqual({
+          kind: "found",
+          values: {
+            "hero.body": { kind: "value", value: { v: 0 } },
+            "hero.aside": { kind: "value", value: { a: "author" } },
+          },
+        });
+      });
+
+      it("reads every field kept per language from one query of its language row", async () => {
+        const id = await created("worded", {
+          body: { v: "en" },
+          note: { n: "en" },
+          extra: { e: "shared" },
+        });
+        await t.nextly.update({
+          collection: "worded",
+          id,
+          locale: "de",
+          data: { body: { v: "de" }, note: { n: "de" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "worded", id };
+        const db = t.adapter.getDrizzle() as {
+          select: (...a: never[]) => unknown;
+        };
+        const selects = vi.spyOn(db, "select");
+        const countFor = async (fields: string[]) => {
+          selects.mockClear();
+          const read = await readStoredFields(editor, {
+            ...entry,
+            fields,
+            form: "published",
+            locale: "de",
+          });
+          return { read, count: selects.mock.calls.length };
+        };
+        // Once to settle what a first read resolves and remembers.
+        await countFor(["body", "note", "extra"]);
+
+        const shared = await countFor(["extra"]);
+        const one = await countFor(["body", "extra"]);
+        const two = await countFor(["body", "note", "extra"]);
+        // A field kept per language costs one query of the language row, and a
+        // second such field costs nothing more.
+        expect(one.count).toBe(shared.count + 1);
+        expect(two.count).toBe(one.count);
+        expect(two.read).toEqual({
+          kind: "found",
+          values: {
+            body: { kind: "value", value: { v: "de" } },
+            note: { kind: "value", value: { n: "de" } },
+            extra: { kind: "value", value: { e: "shared" } },
+          },
+        });
       });
     });
 

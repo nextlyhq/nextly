@@ -308,21 +308,31 @@ export async function readStoredFieldsOn(
       ? await pendingWorkingDraft(connection, entity, id, locale)
       : undefined;
 
+  // The working draft a `draft` read shows, and the one language row every
+  // field kept per language that it does not carry is read from, in one query
+  // however many such fields are asked for.
+  const shownDraft = target.form === "draft" ? draft : undefined;
+  const translated = await languageValues(
+    connection,
+    placed.flatMap(({ field, path, perLanguage }) =>
+      perLanguage === undefined || draftCarries(shownDraft, path.column)
+        ? []
+        : [{ field, kept: perLanguage }]
+    ),
+    id,
+    locale,
+    target
+  );
+
   const values = new Map<string, PluginStoredValue>();
   for (const { field, path, perLanguage } of placed) {
-    const shown = await shownValue(
-      connection,
-      entity,
-      { ...target, field },
-      {
-        id,
-        column: path.column,
-        stored: row[path.column],
-        perLanguage,
-        locale,
-        draft: target.form === "draft" ? draft : undefined,
-      }
-    );
+    const shown = shownValue({
+      column: path.column,
+      stored: row[path.column],
+      perLanguage,
+      translated,
+      draft: shownDraft,
+    });
     const reached =
       shown === undefined ? undefined : valueWithin(shown.value, path.within);
     // Only a column's own value is stored encoded. A value reached inside a
@@ -475,33 +485,40 @@ function valueWithin(
  * per language and from the main row for any other.
  *
  * A draft that does not carry the column leaves the stored value standing,
- * which is what promoting it would do.
+ * which is what promoting it would do. A language row that holds nothing for
+ * a field kept per language leaves it with no value.
  */
-async function shownValue(
-  connection: StoredFieldConnection,
-  entity: StoredEntity,
-  target: StoredFieldTarget,
-  at: {
-    readonly id: string;
-    /** The column read: the field's own, or the top-level group holding it. */
-    readonly column: string;
-    readonly stored: unknown;
-    readonly perLanguage: CompanionField | undefined;
-    readonly locale: string | null;
-    readonly draft: PendingDraft | undefined;
-  }
-): Promise<{ value: unknown } | undefined> {
+function shownValue(at: {
+  /** The column read: the field's own, or the top-level group holding it. */
+  readonly column: string;
+  readonly stored: unknown;
+  readonly perLanguage: CompanionField | undefined;
+  /** The language row's values, by field name, as {@link languageValues} read them. */
+  readonly translated: ReadonlyMap<string, unknown>;
+  readonly draft: PendingDraft | undefined;
+}): { value: unknown } | undefined {
   const snapshot = at.draft?.snapshot;
-  if (
-    typeof snapshot === "object" &&
-    snapshot !== null &&
-    Object.hasOwn(snapshot, at.column)
-  ) {
-    return { value: (snapshot as Record<string, unknown>)[at.column] };
+  if (draftCarries(at.draft, at.column) && isRecord(snapshot)) {
+    return { value: snapshot[at.column] };
   }
-  return at.perLanguage === undefined
-    ? { value: at.stored }
-    : languageValue(connection, at.perLanguage, at.id, at.locale, target);
+  if (at.perLanguage === undefined) return { value: at.stored };
+  return at.translated.has(at.perLanguage.field.name)
+    ? { value: at.translated.get(at.perLanguage.field.name) }
+    : undefined;
+}
+
+/** Whether `draft`'s snapshot holds a value for `column`. */
+function draftCarries(
+  draft: PendingDraft | undefined,
+  column: string
+): boolean {
+  const snapshot = draft?.snapshot;
+  return isRecord(snapshot) && Object.hasOwn(snapshot, column);
+}
+
+/** Whether `value` is an object whose keys can be read as a record. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 /** What a read needs to know about the entity it reads from. */
@@ -573,7 +590,7 @@ interface CompanionSelect {
   select(projection: Record<string, unknown>): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): Promise<{ value?: unknown }[]>;
+        limit(count: number): Promise<Record<string, unknown>[]>;
       };
     };
   };
@@ -639,8 +656,13 @@ async function storedRow(
 }
 
 /**
- * The field's value in one language, as its companion row holds it, with no
- * fallback to another language; `undefined` where that language stores none.
+ * The values of `fields`, each kept per language, in one language as its
+ * companion row holds them, with no fallback to another language: by field
+ * name, and without the fields that language stores nothing for. One query
+ * for the row, however many fields are read; none where none is asked for.
+ *
+ * Every field read here belongs to one entity, so to one companion table and
+ * one row of it for this entry and language.
  *
  * Inside a write's transaction the remembered readiness verdict is read and
  * never resolved: resolving queries, and on PostgreSQL a query against a
@@ -648,47 +670,62 @@ async function storedRow(
  * is refused rather than answered as empty, which a caller could not tell from
  * a language that stores nothing.
  */
-async function languageValue(
+async function languageValues(
   connection: StoredFieldConnection,
-  { companion, field }: CompanionField,
+  fields: readonly { readonly field: string; readonly kept: CompanionField }[],
   id: string,
   locale: string | null,
-  target: StoredFieldTarget
-): Promise<{ value: unknown } | undefined> {
+  target: StoredFieldsTarget
+): Promise<ReadonlyMap<string, unknown>> {
+  const first = fields[0];
+  if (first === undefined) return new Map();
+  const named: RefusedTarget = { ...target, field: first.field };
   if (locale === null) {
-    throw refused(target, "", "is kept per language, and no language is set");
+    throw refused(named, "", "is kept per language, and no language is set");
   }
+  const { companion } = first.kept;
   const adapter = getService("adapter");
   const readiness =
     connection.executor === undefined
       ? await resolveCompanionSchemaReadiness(adapter, companion)
       : cachedCompanionReadiness(adapter, companion.companionTableName);
   if (readiness !== "ready") {
+    const document = "single" in target ? target.single : target.collection;
     throw NextlyError.serviceUnavailable({
       // Not a refusal of the caller's request: the language store is still
       // being set up, so a reader can tell "cannot read yet" from an error.
       publicMessage: "This language's content can't be read yet.",
-      logMessage: `"${"single" in target ? target.single : target.collection}.${target.field}" is kept per language, and that store is not ready.`,
+      logMessage: `"${document}.${first.field}" is kept per language, and that store is not ready.`,
     });
   }
-  // Only the field asked for, of the one row for this entry and language: a
+  // Only the fields asked for, of the one row for this entry and language: a
   // translation row can hold every other large value of the page, and a save
   // reads this for each stored form. Read as stored, whatever the language's
-  // status, as the main row is for a field kept there.
+  // status, as the main row is for a field kept there. Each column is selected
+  // under its position, so no field name can collide with another's key.
   const table = companion.table as Record<string, unknown>;
+  const projection = Object.fromEntries(
+    fields.map(({ kept }, index) => [`c${index}`, table[kept.field.column]])
+  );
   const rows = await (
     (connection.executor ?? adapter.getDrizzle()) as CompanionSelect
   )
-    .select({ value: table[field.column] })
+    .select(projection)
     .from(companion.table)
     .where(
       and(eq(table._parent as never, id), eq(table._locale as never, locale))
     )
     .limit(1);
-  // No row, or a row holding nothing for the field: either way the language
-  // stores nothing.
-  const value = rows[0]?.value;
-  return value === null || value === undefined ? undefined : { value };
+  // No row, or a row holding nothing for a field: either way the language
+  // stores nothing for it.
+  const values = new Map<string, unknown>();
+  fields.forEach(({ kept }, index) => {
+    const value = rows[0]?.[`c${index}`];
+    if (value !== null && value !== undefined) {
+      values.set(kept.field.name, value);
+    }
+  });
+  return values;
 }
 
 /** A pending working draft a preview would show, as its version row holds it. */

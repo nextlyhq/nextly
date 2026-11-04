@@ -25,6 +25,11 @@
  * @experimental
  */
 
+import {
+  registeredReadLanguagesFor,
+  registeredWriteLanguagesFor,
+  withRuleLanguage,
+} from "../auth/access/rule-language";
 import { readAccessCaller, entityReadFor } from "../auth/entity-read-access";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
@@ -96,7 +101,11 @@ export type PluginStoredFields =
  * the write's own row lock.
  */
 export interface PluginWriteExpectation {
-  /** The field read, by its name at top level or its path through named groups. */
+  /**
+   * The field read, by its top-level name. A field inside a named group is
+   * refused: an update writes a group's whole value, so an expectation on one
+   * field of it would not guard the siblings the write replaces.
+   */
   readonly field: string;
   /** The form it was read in, as {@link PluginStoredFieldsRequest.form}. */
   readonly form: "published" | "draft";
@@ -204,7 +213,10 @@ export async function readStoredFields(
  *
  * The expectation reads a stored value, so it is first judged as
  * {@link readStoredFields} is: a field that read could not return cannot be
- * the subject of one, and nothing is written.
+ * the subject of one, and nothing is written. It names a top-level field; a
+ * field inside a named group is refused with `INVALID_INPUT`, because an
+ * update writes the group's whole value and would replace siblings the
+ * expectation never compared.
  */
 export async function updateIfUnchanged(
   identity: PluginRouteIdentity,
@@ -213,6 +225,11 @@ export async function updateIfUnchanged(
   if (update.locale === EVERY_LOCALE) {
     throw NextlyError.invalidInput({
       message: `A conditional write is made in one language, not '${EVERY_LOCALE}'.`,
+    });
+  }
+  if (update.expect.field.includes(".")) {
+    throw NextlyError.invalidInput({
+      message: `A conditional write expects a top-level field, and "${update.expect.field}" is inside a group: an update writes the group's whole value, so an expectation on one field of it would not guard the rest.`,
     });
   }
   const document = documentOf(update);
@@ -310,7 +327,14 @@ async function assertMayRead(
   document: ReturnType<typeof documentOf>,
   request: PluginStoredFieldsRequest
 ): Promise<void> {
-  const read = await entityReadFor(document.slug, readAccessCaller(identity));
+  // Each gate is told the languages its ordinary counterpart is: a read in
+  // the one language named, with no fallback, as this read makes none; an
+  // update as an update in that language. A rule answering by language then
+  // answers here as it does there.
+  const read = await withRuleLanguage(
+    registeredReadLanguagesFor(request.locale, false),
+    () => entityReadFor(document.slug, readAccessCaller(identity))
+  );
   const refuse = (reason: string) =>
     NextlyError.forbidden({
       logContext: {
@@ -322,24 +346,27 @@ async function assertMayRead(
     });
   if (!read.allowed) throw refuse("stored-read-not-readable");
   if (request.form !== "draft") return;
-  const editable =
-    document.kind === "single"
-      ? await singleDocumentEditable(document.slug, {
-          user: identity.user,
-          routeAuthorized: false,
-          ...(identity.authenticatedScope === undefined
-            ? {}
-            : { actor: identity.authenticatedScope }),
-          ...(request.locale === undefined ? {} : { locale: request.locale }),
-        })
-      : await getService("collectionsHandler").canUpdateEntry({
-          collectionName: document.slug,
-          entryId: document.id,
-          user: identity.user,
-          ...(identity.authenticatedScope === undefined
-            ? {}
-            : { authenticatedScope: identity.authenticatedScope }),
-          ...(request.locale === undefined ? {} : { locale: request.locale }),
-        });
+  const editable = await withRuleLanguage(
+    registeredWriteLanguagesFor(request.locale),
+    () =>
+      document.kind === "single"
+        ? singleDocumentEditable(document.slug, {
+            user: identity.user,
+            routeAuthorized: false,
+            ...(identity.authenticatedScope === undefined
+              ? {}
+              : { actor: identity.authenticatedScope }),
+            ...(request.locale === undefined ? {} : { locale: request.locale }),
+          })
+        : getService("collectionsHandler").canUpdateEntry({
+            collectionName: document.slug,
+            entryId: document.id,
+            user: identity.user,
+            ...(identity.authenticatedScope === undefined
+              ? {}
+              : { authenticatedScope: identity.authenticatedScope }),
+            ...(request.locale === undefined ? {} : { locale: request.locale }),
+          })
+  );
   if (!editable) throw refuse("stored-draft-not-editable");
 }
