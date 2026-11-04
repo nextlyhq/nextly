@@ -378,5 +378,29 @@ describe.each(getConfiguredTestDialects())(
       expect(refused).toMatchObject({ code: "STALE_VERSION" });
       expect(prefsBeforeChangeCalls).toBe(before);
     });
+
+    it("refuses with 400 a sweep of every language whose version names only one", async () => {
+      const t = await boot(dialect);
+      await save(
+        t,
+        LIVE,
+        { headline: "Hi", status: "published" },
+        { locale: "en" }
+      );
+      await save(
+        t,
+        LIVE,
+        { headline: "Hola", status: "published" },
+        { locale: "es" }
+      );
+      const english = await read(t, LIVE, "en");
+      const swept = await save(
+        t,
+        LIVE,
+        { status: "draft", _rev: english },
+        { locale: "*" }
+      );
+      expect(swept).toMatchObject({ success: false, statusCode: 400 });
+    });
   }
 );

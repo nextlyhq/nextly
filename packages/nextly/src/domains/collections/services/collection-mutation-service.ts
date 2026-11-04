@@ -329,12 +329,12 @@ import {
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
 import {
+  assertVersionNamesEvery,
   certainlyStale,
   type DecodedVersion,
   type DocumentRevisionState,
   givenOf,
   judgedLanguage,
-  judgedLanguages as judgedEveryLanguage,
   judgeLanguageRow,
   judgedLanguageStates,
   judgeMainRow,
@@ -12537,15 +12537,19 @@ export class CollectionMutationService extends BaseService {
     check: VersionCheck,
     languagesTable: string | null
   ): readonly string[] | undefined {
-    return judgedEveryLanguage(
-      givenOf(check),
-      versionLanguagesFor({
-        localized: languagesTable !== null,
-        localization: this.localization,
-        locale: EVERY_LOCALE,
-      })
-    );
+    const given = givenOf(check);
+    const locales = versionLanguagesFor({
+      localized: languagesTable !== null,
+      localization: this.localization,
+      locale: EVERY_LOCALE,
+    });
+    if (given === undefined || !locales || locales.length === 0) {
+      return undefined;
+    }
+    assertVersionNamesEvery(given, locales);
+    return locales;
   }
+
 
   /**
    * How a rewrite of one language's pending change is judged (taking the live
@@ -12711,17 +12715,13 @@ export class CollectionMutationService extends BaseService {
           ? this.localization.locales.map(l => l.code)
           : [resolveRequestedLocale(this.localization, params.locale)]
         : [];
-    // A version from a read of another language can't be judged: refused
-    // here, before any hook runs, as the validation error it is. A sweep's
-    // version must name every language, as only a read of every language
-    // does (`everyLanguageJudged`).
-    if (sweep || locales.length === 1) {
+    // A version from a read of another language, or for a sweep one that
+    // does not name every language, can't be judged: refused here, before
+    // any hook runs, as the validation error it is.
+    if (locales.length > 0) {
       try {
-        if (sweep) {
-          this.everyLanguageJudged(check, companion?.companionTableName ?? null);
-        } else {
-          judgedLanguage(check.given, locales[0]);
-        }
+        if (sweep) assertVersionNamesEvery(check.given, locales);
+        else judgedLanguage(check.given, locales[0]);
       } catch (error) {
         return errorToServiceResult(
           error,

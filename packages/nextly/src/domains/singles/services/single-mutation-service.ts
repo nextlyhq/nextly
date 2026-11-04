@@ -206,6 +206,7 @@ import {
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
 import {
+  assertVersionNamesEvery,
   certainlyStale,
   type DocumentRevisionState,
   givenOf,
@@ -2253,6 +2254,14 @@ export class SingleMutationService extends BaseService {
       // must name it; one from a read of another language is refused here,
       // before anything is written.
       const judgedLocale = judgedLanguage(givenOf(versionCheck), writeLocale);
+      // A sweep of every language is judged on each, so its version must
+      // name each; one that does not is refused before any hook runs.
+      if (sweepAllLocales && companion) {
+        assertVersionNamesEvery(
+          givenOf(versionCheck),
+          this.localization?.locales.map(l => l.code) ?? []
+        );
+      }
       // Every language a refusal's current version names: the one the save
       // is judged on, or for a sweep of every language, each of them.
       const judgedLanguages =
