@@ -55,7 +55,10 @@ import {
   type DiscardScopeKind,
 } from "../../domains/versions/discard-working-draft";
 import { lockDocument, lockPerson } from "../../domains/versions/history-locks";
-import { restoreVersion } from "../../domains/versions/restore-version";
+import {
+  restoreVersion,
+  type RestoreVersionResult,
+} from "../../domains/versions/restore-version";
 import type { TakenLiveValues } from "../../domains/versions/shared-publish-base";
 import { markVersionSeen } from "../../domains/versions/version-views";
 import { VersionsRepository } from "../../domains/versions/versions-repository";
@@ -695,8 +698,10 @@ export async function restoreVersionForDocument(
     params: Params;
     /** The HTTP request behind the restore, when one produced it. */
     request?: Request;
+    /** `_rev` and `_overwrite` from the request: see `restoreVersion`. */
+    version?: Readonly<Record<string, unknown>>;
   }
-): Promise<{ restoredFrom: number; droppedFields: string[] }> {
+): Promise<RestoreVersionResult> {
   const caller = readAccessCallerForDispatch(args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
@@ -741,6 +746,8 @@ export async function restoreVersionForDocument(
     // scope, not the owner's RBAC.
     authenticatedScope: readAuthenticatedScope(),
     request: args.request,
+    // Judged as the update the restore makes is.
+    version: args.version,
   });
 }
 

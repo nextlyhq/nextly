@@ -117,6 +117,7 @@ import {
   requireParam,
   toNumber,
 } from "../helpers/validation";
+import { versionInputOf } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -257,7 +258,7 @@ export const SINGLE_VERSION_METHODS: Record<
     },
   },
   restoreSingleVersion: {
-    execute: async (_svc, p, _body, request) => {
+    execute: async (_svc, p, body, request) => {
       const slug = String(p.slug ?? "");
       // The document id comes from the live row, never from the URL: a Single
       // has exactly one document and the client must not name which.
@@ -273,6 +274,8 @@ export const SINGLE_VERSION_METHODS: Record<
         // A restore replays a snapshot through the ordinary update, so its
         // hooks are told about the caller the same way an edit's are.
         request,
+        // The version the restore was made from, judged as its update is.
+        version: versionInputOf(body),
       });
       return respondAction("Version restored.", result);
     },
