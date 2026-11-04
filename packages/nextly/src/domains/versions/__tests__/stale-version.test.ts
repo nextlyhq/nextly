@@ -178,28 +178,26 @@ describe("staleParts", () => {
     expect(staleParts(given, { main: main(7) })).toEqual([]);
     expect(staleParts(given, { main: main(8) })).toEqual(["main"]);
   });
+});
 
-  it("judges a language after this save's write: the given counter plus its own", () => {
-    const after = (counter: number) => ({
-      locale: "es",
-      state: part("es", counter, person("u"), null),
-      bumped: true,
-    });
-    expect(staleParts(given, { languageAfterWrite: after(4) })).toEqual([]);
-    expect(staleParts(given, { languageAfterWrite: after(5) })).toEqual(["es"]);
-    // A first translation: the version gave 0, and this save's insert made 1.
+describe("staleParts over several languages", () => {
+  it("names each language row that moved from the version given, a missing one as 0", () => {
+    const given = { main: 7, languages: { en: 2, es: 3 } };
+    const row = (name: string, counter: number) =>
+      part(name, counter, person("u"), null);
     expect(
-      staleParts(
-        { main: 7, languages: { es: 0 } },
-        {
-          languageAfterWrite: {
-            locale: "es",
-            state: part("es", 1, person("u"), null),
-            bumped: true,
-          },
-        }
-      )
+      staleParts(given, {
+        main: row("main", 7),
+        languages: [row("en", 2), row("es", 3)],
+      })
     ).toEqual([]);
+    expect(
+      staleParts(given, {
+        main: row("main", 8),
+        languages: [row("en", 2), row("es", 4), row("fr", 1)],
+      })
+    ).toEqual(["main", "es", "fr"]);
+    expect(staleParts(given, { languages: [row("fr", 0)] })).toEqual([]);
   });
 });
 

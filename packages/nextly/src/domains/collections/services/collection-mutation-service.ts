@@ -310,6 +310,8 @@ import {
   type DecodedVersion,
   givenOf,
   judgedLanguage,
+  judgeLanguageRow,
+  judgeMainRow,
   poolRevisionReader,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
@@ -10172,6 +10174,86 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * An item's language judged inside a transaction it shares (see
+   * `judgeLanguageRow`): its refusal as a result, never thrown, since the
+   * transaction goes on with the rest of a batch. A version from a read of
+   * another language is a validation error.
+   */
+  private async judgeLanguageInTransaction(
+    tx: TransactionContext,
+    params: UpdateEntryWriteParams,
+    check: VersionCheck,
+    entryId: string,
+    row: { table: string; languagesTable: string; written: string }
+  ): Promise<
+    | Awaited<ReturnType<typeof judgeLanguageRow>>
+    | CollectionServiceResult<unknown>
+  > {
+    let judged: string | undefined;
+    try {
+      judged = judgedLanguage(givenOf(check), row.written);
+    } catch (error) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
+    const result = await judgeLanguageRow(
+      tx,
+      this.dialect,
+      check,
+      { ...row, id: entryId, judged },
+      actorForWrite(params.actor, params.user)
+    );
+    if (!result.stale || check.kind !== "judge") return result;
+    return this.staleVersionAnswerInTransaction(
+      tx,
+      params,
+      entryId,
+      check.given,
+      {
+        table: row.table,
+        languages: { table: row.languagesTable, locale: row.written },
+      }
+    );
+  }
+
+  /**
+   * The refusal of an item found out of date inside a transaction it shares,
+   * read on that transaction: a pooled read would wait behind it on SQLite.
+   * So who changed it and when are told to a trusted caller alone, unnamed,
+   * since the read gate and the people lookup both read on the pool.
+   */
+  private async staleVersionAnswerInTransaction(
+    tx: TransactionContext,
+    params: UpdateEntryWriteParams,
+    entryId: string,
+    given: DecodedVersion,
+    at: StaleWrite
+  ): Promise<CollectionServiceResult<unknown>> {
+    const refusal = await staleVersionErrorFor(tx, {
+      dialect: this.dialect,
+      scopeKind: "collection",
+      slug: params.collectionName,
+      id: entryId,
+      given,
+      at,
+      inSharedTransaction: true,
+      reader: {
+        user: params.user,
+        trusted: params.overrideAccess === true && !params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+      },
+    });
+    return errorToServiceResult(
+      refusal,
+      { defaultMessage: "Failed to update entry" },
+      this.dialect
+    );
+  }
+
+  /**
    * How an update is judged, decided from its body before the version in it
    * is dropped: a release run's own write is exempt, and nothing a caller
    * sends can make a write one. A version that is not one is answered as the
@@ -12134,18 +12216,9 @@ export class CollectionMutationService extends BaseService {
                   )))) &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
-            await upsertCompanionRow(
-              companionWriteVia(tx, this.dialect),
-              localizedUpdate.companionTableName,
-              params.entryId,
-              localizedUpdate.writeLocale,
-              localizedUpdate.companionData,
-              undefined,
-              { savedBy: actorForWrite(params.actor, params.user) }
-            );
-            // The language's version, judged once this save has written its
-            // row (see `refuseIfLanguageMoved`).
-            await refuseIfLanguageMoved(
+            // The language's version, judged by the save's first write of its
+            // row: a refusal here rolls the whole save back.
+            const { claimed } = await refuseIfLanguageMoved(
               tx,
               this.dialect,
               versionCheck,
@@ -12156,7 +12229,20 @@ export class CollectionMutationService extends BaseService {
                 judged: judgedLocale,
                 written: localizedUpdate.writeLocale,
               },
+              actorForWrite(params.actor, params.user),
               staleWrite
+            );
+            await upsertCompanionRow(
+              companionWriteVia(tx, this.dialect),
+              localizedUpdate.companionTableName,
+              params.entryId,
+              localizedUpdate.writeLocale,
+              localizedUpdate.companionData,
+              undefined,
+              {
+                savedBy: actorForWrite(params.actor, params.user),
+                revisionClaimed: claimed,
+              }
             );
           }
 
@@ -15950,6 +16036,14 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
+    // How this item is judged, decided before the version and `_overwrite`
+    // are dropped, as on updateEntry: an item that gives a version is judged
+    // on its own, so a stale one is refused and the rest of a batch applied.
+    const versionCheck = this.versionCheckOf(
+      { collectionName: params.collectionName, entryId },
+      body
+    );
+    if ("success" in versionCheck) return versionCheck;
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
     // Computed right after the row is updated (before redaction can strip the
@@ -16045,6 +16139,22 @@ export class CollectionMutationService extends BaseService {
           message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
+      }
+      // The main row's version, under the lock just taken and before this
+      // item writes anything, so a refused item leaves nothing behind in a
+      // transaction that goes on with the rest of a batch.
+      const mainJudged = await judgeMainRow(tx, this.dialect, versionCheck, {
+        table: tableName,
+        id: entryId,
+      });
+      if (mainJudged.stale && versionCheck.kind === "judge") {
+        return this.staleVersionAnswerInTransaction(
+          tx,
+          params,
+          entryId,
+          versionCheck.given,
+          { table: tableName }
+        );
       }
       if (rowFilter) {
         const outside = await this.refusalOutsideFilterOfWrite(
@@ -16561,6 +16671,26 @@ export class CollectionMutationService extends BaseService {
           })
         : null;
 
+      // The language's version, by this item's first write of its row, ahead
+      // of the main row's write: a stale item is answered with nothing of it
+      // written. Only when the row is written, so no empty translation row is
+      // left behind.
+      const languageJudged =
+        localizedUpdate && writesCompanionRow
+          ? await this.judgeLanguageInTransaction(
+              tx,
+              params,
+              versionCheck,
+              entryId,
+              {
+                table: tableName,
+                languagesTable: localizedUpdate.companionTableName,
+                written: localizedUpdate.writeLocale,
+              }
+            )
+          : { stale: false, claimed: false };
+      if ("success" in languageJudged) return languageJudged;
+
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -16629,7 +16759,10 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate.writeLocale,
             localizedUpdate.companionData,
             undefined,
-            { savedBy: actorForWrite(params.actor, params.user) }
+            {
+              savedBy: actorForWrite(params.actor, params.user),
+              revisionClaimed: languageJudged.claimed,
+            }
           );
         } catch (error: unknown) {
           throw markWriteIntegrityFailure(error);
