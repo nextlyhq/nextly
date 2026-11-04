@@ -1287,6 +1287,14 @@
   cursor: default;
 }
 
+/* A shared style chip held with the block's design: reachable, so its
+   tooltip can say why, but drawn as a press that will not land, as a held
+   toolbar verb is. */
+.nx-editing-bar__chip[aria-disabled="true"] {
+  color: color-mix(in srgb, var(--nx-builder-shared) 55%, transparent);
+  cursor: not-allowed;
+}
+
 .nx-editing-bar__chip-wrap {
   display: inline-flex;
   min-inline-size: 0;
