@@ -319,9 +319,47 @@ export async function siteVerdict(
   });
   const otherLayout = await holdsAny(nextly, slugs.layouts, seededLayout);
   if (!otherLayout) return "fresh";
-  // A Layout with no seed recorded may be a seed another instance created and
-  // has not recorded yet: undecided until the record lands.
-  return seededLayout === null ? "undecided" : "existing";
+  if (seededLayout !== null) return "existing";
+  // No seed recorded: the Layout may be a seed another instance created and
+  // has not recorded yet, which waits for that record. Only what such a seed
+  // looks like waits; any other Layout is the site's own, such as a default an
+  // earlier version set, for which no record will ever land.
+  return (await mayBeUnrecordedSeed(nextly, slugs.layouts))
+    ? "undecided"
+    : "existing";
+}
+
+/** How long after its create an empty Layout may be a seed not yet recorded. */
+const SEED_RECORD_WINDOW_MS = 5 * 60_000;
+
+/**
+ * Whether the site's Layouts are what another instance's seed is before its
+ * record lands: one Layout, no area filled, created moments ago.
+ */
+async function mayBeUnrecordedSeed(
+  nextly: SpacingModeAtStartDeps["nextly"],
+  layouts: string
+): Promise<boolean> {
+  // Two rows at most, read whole: the answer needs only whether a second
+  // exists, and the first one's areas and creation time, which a row may
+  // carry under either spelling of the timestamp.
+  const found = await nextly.find({
+    collection: layouts,
+    status: "all",
+    limit: 2,
+    depth: 0,
+    overrideAccess: true,
+  });
+  if (found.items.length !== 1) return false;
+  const row = found.items[0];
+  const areas = readStoredJson(row.areas);
+  if (Array.isArray(areas) && areas.length > 0) return false;
+  const created = new Date(
+    (row.createdAt ?? row.created_at) as string | number | Date
+  ).getTime();
+  return (
+    Number.isFinite(created) && Date.now() - created < SEED_RECORD_WINDOW_MS
+  );
 }
 
 /** The sweep that retries the step until a model is recorded. */

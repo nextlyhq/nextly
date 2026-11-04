@@ -36,8 +36,11 @@ interface FindArgs {
  * A Direct API double holding rows per collection and the recorded seed, and
  * keeping every `find` it was asked, so a case can say what was read.
  */
+/** A stored row: its id, or the id with the columns a case reads. */
+type Row = string | { id: string; areas?: unknown; created_at?: unknown };
+
 function site(
-  rows: Record<string, string[]>,
+  rows: Record<string, Row[]>,
   seededLayout: string | null,
   singles: Record<string, { live?: unknown; draft?: unknown }> = {}
 ) {
@@ -49,9 +52,10 @@ function site(
         args.where as { id?: { not_equals?: string } } | undefined
       )?.id?.not_equals;
       const items = (rows[args.collection] ?? [])
-        .filter(id => id !== except)
-        .map(id => ({ id }));
-      return Promise.resolve({ items: items.slice(0, 1) });
+        .map(row => (typeof row === "string" ? { id: row } : row))
+        .filter(row => row.id !== except);
+      const limit = (args as { limit?: number }).limit ?? 1;
+      return Promise.resolve({ items: items.slice(0, limit) });
     },
     findSingle: (args: { slug: string; draft?: boolean; locale?: string }) => {
       asked.push({ collection: `single:${args.slug}` });
@@ -168,10 +172,77 @@ describe("siteVerdict", () => {
     );
   });
 
-  it("is undecided when a Layout is the only content and no seed is recorded", async () => {
-    const { nextly } = site({ layouts: ["maybe-a-seed"] }, null);
+  it("is undecided while the only content is an empty Layout made moments ago and no seed is recorded", async () => {
+    // What another instance's seed looks like before its record lands.
+    const { nextly } = site(
+      {
+        layouts: [
+          {
+            id: "maybe-a-seed",
+            areas: [],
+            created_at: new Date().toISOString(),
+          },
+        ],
+      },
+      null
+    );
     expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
       "undecided"
+    );
+  });
+
+  it("calls a site existing on a Layout with areas filled and no seed recorded", async () => {
+    // An earlier version's default: no seed was ever recorded for it, so
+    // waiting for one would wait for ever.
+    const { nextly } = site(
+      {
+        layouts: [
+          {
+            id: "old-default",
+            areas: [{ area: "header", component: "c" }],
+            created_at: new Date().toISOString(),
+          },
+        ],
+      },
+      null
+    );
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "existing"
+    );
+  });
+
+  it("calls a site existing on an empty Layout made long ago and no seed recorded", async () => {
+    const { nextly } = site(
+      {
+        layouts: [
+          {
+            id: "old-blank",
+            areas: [],
+            created_at: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      },
+      null
+    );
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "existing"
+    );
+  });
+
+  it("calls a site existing on two Layouts and no seed recorded", async () => {
+    // A seed is one Layout; two cannot both be one.
+    const now = new Date().toISOString();
+    const { nextly } = site(
+      {
+        layouts: [
+          { id: "a", areas: [], created_at: now },
+          { id: "b", areas: [], created_at: now },
+        ],
+      },
+      null
+    );
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
+      "existing"
     );
   });
 
@@ -205,7 +276,19 @@ describe("settleSpacingModeOnce", () => {
   });
 
   it("writes nothing when it cannot decide", async () => {
-    const { nextly } = site({ layouts: ["maybe-a-seed"] }, null);
+    // Another instance's seed, made moments ago and not yet recorded.
+    const { nextly } = site(
+      {
+        layouts: [
+          {
+            id: "maybe-a-seed",
+            areas: [],
+            created_at: new Date().toISOString(),
+          },
+        ],
+      },
+      null
+    );
     const writes: string[] = [];
     const outcome = await settleSpacingModeOnce({
       nextly,
