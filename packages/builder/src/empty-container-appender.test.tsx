@@ -178,6 +178,11 @@ describe("the empty-container appender", () => {
     );
     const control = screen.getByRole("button", { name: /Box/ });
     expect(control.textContent).toBe("Drop a block here, or click to add one");
+    // Its name starts with the words it shows, so speaking them reaches it
+    // (WCAG 2.5.3), and goes on to say which container.
+    expect(control.getAttribute("aria-label")).toBe(
+      "Drop a block here, or click to add one, in Box"
+    );
   });
 
   it("offers nothing for a container that already has a child", () => {
@@ -328,19 +333,23 @@ describe("the accessible name it announces", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Add a block to Header slot" })
+      screen.getByRole("button", {
+        name: "Drop a block here, or click to add one, in Header slot",
+      })
     ).toBeTruthy();
     // The un-named sibling still falls back to the block's own label, proving
     // the precedence runs one way: a name wins when given, and its absence
     // does not disturb the existing fallback.
     expect(
-      screen.getByRole("button", { name: "Add a block to Box" })
+      screen.getByRole("button", {
+        name: "Drop a block here, or click to add one, in Box",
+      })
     ).toBeTruthy();
   });
 
   it("ignores a name of only whitespace, the same way the Layers panel does", () => {
     // `authoredName` trims and treats a blank result as absent; a control
-    // announcing "Add a block to    " would be no name at all.
+    // announcing "Drop a block here, or click to add one, in    " would be no name at all.
     const blankName = {
       id: "box-blank",
       type: "core/box",
@@ -358,7 +367,9 @@ describe("the accessible name it announces", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Add a block to Box" })
+      screen.getByRole("button", {
+        name: "Drop a block here, or click to add one, in Box",
+      })
     ).toBeTruthy();
   });
 });
@@ -752,7 +763,9 @@ async function flushObservers(): Promise<void> {
 
 /** The inline rectangle a control was drawn at, in the order left/top/w/h. */
 function drawnAt(name: string): [string, string, string, string] {
-  const button = screen.getByRole("button", { name: `Add a block to ${name}` });
+  const button = screen.getByRole("button", {
+    name: `Drop a block here, or click to add one, in ${name}`,
+  });
   if (!(button instanceof HTMLElement)) throw new Error(`${name}: no element`);
   return [
     button.style.left,
@@ -1088,7 +1101,9 @@ describe("which containers it actually draws a control on", () => {
 
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Closed section" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Closed section",
+      })
     ).toBeNull();
   });
 
@@ -1175,7 +1190,9 @@ describe("which containers it actually draws a control on", () => {
 
     expect(drawnAt("Shelled box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Bare box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Bare box",
+      })
     ).toBeNull();
   });
 
@@ -1200,7 +1217,9 @@ describe("which containers it actually draws a control on", () => {
 
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Clipped box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Clipped box",
+      })
     ).toBeNull();
   });
 
@@ -1236,7 +1255,7 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Add a block to Box in a hidden wrapper",
+        name: "Drop a block here, or click to add one, in Box in a hidden wrapper",
       })
     ).toBeNull();
   });
@@ -1292,7 +1311,7 @@ describe("which containers it actually draws a control on", () => {
     ]);
     expect(
       screen.queryByRole("button", {
-        name: "Add a block to Box in a closed section",
+        name: "Drop a block here, or click to add one, in Box in a closed section",
       })
     ).toBeNull();
   });
@@ -1323,7 +1342,7 @@ describe("which containers it actually draws a control on", () => {
     });
     expect(
       screen.queryByRole("button", {
-        name: "Add a block to Box in a closed section",
+        name: "Drop a block here, or click to add one, in Box in a closed section",
       })
     ).toBeNull();
 
@@ -1369,10 +1388,14 @@ describe("which containers it actually draws a control on", () => {
 
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Ghost box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Ghost box",
+      })
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Add a block to Closed section" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Closed section",
+      })
     ).toBeNull();
   });
 
@@ -1462,7 +1485,9 @@ describe("which containers it actually draws a control on", () => {
     );
     expect(drawnAt("Anchored box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Fixed box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Fixed box",
+      })
     ).toBeNull();
   });
 
@@ -1485,7 +1510,9 @@ describe("which containers it actually draws a control on", () => {
     );
     expect(drawnAt("Anchored box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Sticky box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Sticky box",
+      })
     ).toBeNull();
   });
 
@@ -1637,7 +1664,7 @@ describe("which containers it actually draws a control on", () => {
       clipped: { x: 0, y: 100, width: 400, height: 200 },
     });
     const drawn = screen.getByRole("button", {
-      name: "Add a block to Clipped box",
+      name: "Drop a block here, or click to add one, in Clipped box",
     });
     await act(async () => {
       drawn.setAttribute("style", drawn.getAttribute("style") ?? "");

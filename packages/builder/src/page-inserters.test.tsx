@@ -37,6 +37,7 @@ import {
 
 import { Canvas } from "./canvas";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
+import { componentTitles, type ComponentTitleOf } from "./layers";
 import { PageInserters } from "./page-inserters";
 
 afterEach(cleanup);
@@ -139,6 +140,7 @@ function mount(
     hovered?: string | null;
     onStart?: () => void;
     onAddAfter?: (id: string) => void;
+    componentTitle?: ComponentTitleOf;
   } = {}
 ) {
   return render(
@@ -153,6 +155,9 @@ function mount(
             {...(props.hidden === undefined ? {} : { hidden: props.hidden })}
             onStart={props.onStart ?? (() => undefined)}
             onAddAfter={props.onAddAfter ?? (() => undefined)}
+            {...(props.componentTitle === undefined
+              ? {}
+              : { componentTitle: props.componentTitle })}
           />
         }
       />
@@ -211,6 +216,16 @@ describe("an empty page", () => {
     } finally {
       boxes.mockRestore();
     }
+  });
+
+  it("speaks of blocks, not of a page, in an empty component", async () => {
+    // A component is not a page and has no sections: its card says what an
+    // author adds to it.
+    mount({ formatVersion: 1, kind: "component", nodes: [] } as never);
+    await act(async () => undefined);
+    expect(screen.queryByText("Start your page")).toBeNull();
+    expect(screen.getByText("Add the first block")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
   });
 
   it("draws nothing while a block is dragged, so the drop line shows", async () => {
@@ -297,6 +312,56 @@ describe("the + between sections", () => {
     // Inside it, between its parts at 60: no gap there.
     fireEvent.pointerMove(root, { clientX: 500, clientY: 60 });
     expect(near()).toEqual([false, false]);
+  });
+
+  it("measures a section drawn with display: contents by what it draws", async () => {
+    // A section styled `display: contents` generates no box of its own, and
+    // its children are still on the page: the gap after it is still there.
+    mount(THREE);
+    await act(async () => undefined);
+    const team = document.querySelector<HTMLElement>('[data-nx-node="team"]');
+    if (team === null) throw new Error("no team section");
+    team.style.display = "contents";
+    team.append(document.createElement("p"));
+    boxless.add("team");
+    // Anything re-measures; a mutation inside the canvas does.
+    team.append(document.createElement("span"));
+    await act(async () => undefined);
+    expect(
+      gapButtons().map(button => button.getAttribute("aria-label"))
+    ).toEqual([
+      "Add a section after Our story",
+      "Add a section after Our team",
+    ]);
+  });
+
+  it("names the gap after a component placement with the component's title", async () => {
+    const doc = page([
+      {
+        id: "hero",
+        type: "nextly/component-instance",
+        version: 1,
+        props: { componentId: "cmp-hero" },
+      } as BlockNode,
+      section("contact", "Contact"),
+    ]);
+    mount(doc, {
+      componentTitle: componentTitles([
+        { id: "cmp-hero", title: "Hero banner" },
+      ]),
+    });
+    await act(async () => undefined);
+    if (document.querySelector('[data-nx-node="hero"]') === null) {
+      // A placement with no definition draws nothing here: stand in for it.
+      const contact = document.querySelector('[data-nx-node="contact"]');
+      const part = document.createElement("div");
+      part.setAttribute("data-nx-node", "hero");
+      contact?.before(part);
+      await act(async () => undefined);
+    }
+    expect(
+      gapButtons().map(button => button.getAttribute("aria-label"))
+    ).toEqual(["Add a section after Hero banner"]);
   });
 
   it("reports the section above the gap when pressed", async () => {

@@ -800,7 +800,9 @@ export function EmptyContainerAppenders({
             // The block's own name, so a control an author meets is one they
             // can find by searching for the thing it fills rather than for a
             // generic "add block" that says nothing about which container.
-            aria-label={`Add a block to ${container.label}`}
+            // Its name starts with the words it shows, so a voice command
+            // speaking them reaches it (WCAG 2.5.3), then says which container.
+            aria-label={`${APPENDER_WORDS}, in ${container.label}`}
             title={`Add a block to ${container.label}`}
             onClick={() => onAppend(container.id)}
           >

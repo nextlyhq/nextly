@@ -49,12 +49,11 @@ import type { Point, Rect } from "./geometry";
 import {
   canvasContentPoint,
   canvasContentRect,
-  layoutFragments,
+  drawnBoxes,
   onScreenOf,
   overlaySpaceOf,
-  renderSkips,
 } from "./geometry-dom";
-import { blockNameOf } from "./layers";
+import { blockNameOf, type ComponentTitleOf } from "./layers";
 import { nodeElements } from "./rendered-nodes";
 import { unionRect } from "./toolbar-actions";
 
@@ -71,6 +70,11 @@ export interface PageInsertersProps {
   readonly onStart: () => void;
   /** A gap's "+" was pressed: add a section after this one. */
   readonly onAddAfter: (nodeId: string) => void;
+  /**
+   * Names a component by its library title, as Layers does, so the "+" after a
+   * placement names the component rather than "Component".
+   */
+  readonly componentTitle?: ComponentTitleOf;
 }
 
 /** One gap between two top-level sections, where its "+" is drawn. */
@@ -86,12 +90,26 @@ interface Gap {
   readonly width: number;
 }
 
-/** What the start card says. */
-const START_TITLE = "Start your page";
-const START_HINT = "Add a section, or drag one here from the panel.";
-
-/** What a gap's "+" says. */
-const GAP_TOOLTIP = "Add a section here";
+/**
+ * What the start card and a gap's "+" say: of sections on a page, of blocks in
+ * a component, which has no sections.
+ */
+const WORDS = {
+  page: {
+    title: "Start your page",
+    hint: "Add a section, or drag one here from the panel.",
+    start: "Add section",
+    gap: "Add a section here",
+    after: "Add a section after",
+  },
+  component: {
+    title: "Add the first block",
+    hint: "Add a block, or drag one here from the panel.",
+    start: "Add block",
+    gap: "Add a block here",
+    after: "Add a block after",
+  },
+} as const;
 
 /**
  * How near the pointer must be to a gap for its "+" to show, in the chrome's
@@ -147,9 +165,10 @@ function measureGaps(
     const id = nodeAddressOf(element);
     if (id === null || !top.has(id)) continue;
     if (!isOutermostForAddress(element, id, root)) continue;
-    if (layoutFragments(element) === 0 || renderSkips(element)) continue;
     const rects = parts.get(id) ?? [];
-    rects.push(space.place(canvasContentRect(element, root)));
+    for (const drawn of drawnBoxes(element)) {
+      rects.push(space.place(canvasContentRect(drawn, root)));
+    }
     parts.set(id, rects);
   }
   const drawn = document.nodes.flatMap(node => {
@@ -182,7 +201,9 @@ export function PageInserters({
   hidden = false,
   onStart,
   onAddAfter,
+  componentTitle,
 }: PageInsertersProps): React.JSX.Element | null {
+  const words = WORDS[document.kind === "component" ? "component" : "page"];
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [gaps, setGaps] = React.useState<readonly Gap[]>([]);
   const canvasFrame = useCanvasFrame();
@@ -254,15 +275,15 @@ export function PageInserters({
                 : { left: start.x, top: start.y }
             }
           >
-            <p className="nx-page-inserters__title">{START_TITLE}</p>
-            <p className="nx-page-inserters__hint">{START_HINT}</p>
+            <p className="nx-page-inserters__title">{words.title}</p>
+            <p className="nx-page-inserters__hint">{words.hint}</p>
             <button
               type="button"
               className="nx-page-inserters__start-button"
               onClick={onStart}
             >
               <Plus size={16} aria-hidden="true" />
-              Add section
+              {words.start}
             </button>
           </div>
         ) : (
@@ -280,12 +301,13 @@ export function PageInserters({
               }}
             >
               <span className="nx-page-inserters__line" aria-hidden="true" />
-              <ChromeTooltip content={GAP_TOOLTIP} side="top">
+              <ChromeTooltip content={words.gap} side="top">
                 <button
                   type="button"
                   className="nx-page-inserters__add"
-                  aria-label={`Add a section after ${
-                    blockNameOf(document, gap.after) ?? "this section"
+                  aria-label={`${words.after} ${
+                    blockNameOf(document, gap.after, componentTitle) ??
+                    "this one"
                   }`}
                   onClick={() => onAddAfter(gap.after)}
                   onPointerEnter={() => setHeld(keyOf(gap))}

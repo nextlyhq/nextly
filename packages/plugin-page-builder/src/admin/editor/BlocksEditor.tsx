@@ -724,6 +724,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 */}
                 <PageInserters
                   document={editor.document}
+                  componentTitle={componentLibrary.titleOf}
                   hidden={dragging}
                   onStart={() => openInsertPanel()}
                   onAddAfter={nodeId => {

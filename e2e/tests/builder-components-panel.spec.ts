@@ -440,6 +440,33 @@ test.describe("the Components panel", () => {
       .toBe("1");
   });
 
+  test.describe("on a touch screen", () => {
+    test.use({ hasTouch: true });
+
+    test("shows the + between sections without a pointer near it, and takes a tap", async ({
+      page,
+    }) => {
+      // No pointer moves before a tap, so the + is shown and pressable from
+      // the start where the screen's pointer is coarse.
+      const id = await createPage(page.request);
+      await openBuilder(page, id);
+      expect(
+        await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
+        "the browser reports a coarse pointer"
+      ).toBe(true);
+      const add = page.getByRole("button", {
+        name: "Add a section after Heading",
+      });
+      await expect
+        .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+        .toBe("1");
+      await add.tap();
+      await expect(
+        page.locator(".nx-insert-panel__placement").first()
+      ).toHaveText("Adding after Heading");
+    });
+  });
+
   for (const way of ["click", "keyboard"] as const) {
     test(`inserts from Add and from Components by ${way}, in the same spot`, async ({
       page,
