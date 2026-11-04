@@ -38,6 +38,15 @@ import {
 
 export { DOCUMENT_VERSION_KEY };
 
+/**
+ * The key an update names to save over whatever was saved since the version
+ * it read. Read at the write path's boundary (`versionCheckFor`) and never
+ * stored: it says how to write, not what.
+ *
+ * @experimental
+ */
+export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
+
 /** The column holding a row's counter, on every content and translation table. */
 export const DOCUMENT_REVISION_COLUMN = "_revision";
 
@@ -68,6 +77,7 @@ export function encodeDocumentVersion(
  */
 const SERVER_ONLY_KEYS: readonly string[] = [
   DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
   ...MIGRATE_STEP_COLUMN_NAMES,
 ];
 
@@ -95,7 +105,7 @@ export function withoutDocumentVersionKeys<T extends Record<string, unknown>>(
  * A row read without its counter is a read that selected too little, never a
  * version: guessing one would publish a version no save produced.
  */
-function revisionOf(value: unknown): number {
+export function revisionOf(value: unknown): number {
   const n = typeof value === "string" ? Number(value) : value;
   if (typeof n === "number" && Number.isInteger(n)) return n;
   throw NextlyError.internal({
@@ -131,7 +141,7 @@ export function changerColumns(
 }
 
 /** The column holding when a row's counter last moved. */
-const CHANGED_AT_COLUMN = "_changed_at";
+export const CHANGED_AT_COLUMN = "_changed_at";
 
 /**
  * What one save adds to the UPDATE of a document's own row: the counter

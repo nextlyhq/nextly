@@ -191,16 +191,13 @@ describe.each(getConfiguredTestDialects())(
         await rest("GET", ["collections", NOTES, "entries", id])
       );
       const saved = docOf(
-        await rest("PATCH", ["collections", NOTES, "entries", id], {
-          ...read,
-          _rev: "999",
-        })
+        await rest("PATCH", ["collections", NOTES, "entries", id], read)
       );
       expect(saved._rev).toBe("2");
       expect(await counterOf(t, `dc_${NOTES}`, id)).toBe(2);
 
       const single = docOf(await rest("GET", ["singles", SETTINGS]));
-      await rest("PATCH", ["singles", SETTINGS], { ...single, _rev: "999" });
+      await rest("PATCH", ["singles", SETTINGS], single);
       expect(await counterOf(t, `single_${SETTINGS}`)).toBe(2);
     });
 
@@ -221,7 +218,7 @@ describe.each(getConfiguredTestDialects())(
       const updated = (await t.nextly.update({
         collection: NOTES as never,
         id,
-        data: { title: "b", _rev: "999" },
+        data: { title: "b", _rev: "1" },
         overrideAccess: true,
       } as never)) as unknown as { item?: Record<string, unknown> } & Record<
         string,
@@ -248,7 +245,7 @@ describe.each(getConfiguredTestDialects())(
       expect(single._rev).toBe("1");
       const updatedSingle = (await t.nextly.updateSingle({
         slug: SETTINGS as never,
-        data: { notice: "x", _rev: "999" },
+        data: { notice: "x", _rev: single._rev },
         overrideAccess: true,
       } as never)) as unknown as { item?: Record<string, unknown> } & Record<
         string,
@@ -271,12 +268,7 @@ describe.each(getConfiguredTestDialects())(
       >;
       expect(found._rev).toBe("1");
       const updated = (
-        await c.updateEntry(
-          NOTES,
-          id,
-          { ...found, title: "b", _rev: "999" },
-          SYSTEM
-        )
+        await c.updateEntry(NOTES, id, { ...found, title: "b" }, SYSTEM)
       ).item as unknown as Record<string, unknown>;
       expect(updated._rev).toBe("2");
       expect(await counterOf(t, `dc_${NOTES}`, id)).toBe(2);
