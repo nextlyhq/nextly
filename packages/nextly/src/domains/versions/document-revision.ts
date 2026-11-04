@@ -34,6 +34,15 @@ import { resolveRequestedLocale } from "../i18n/resolve-locale";
 
 export { DOCUMENT_VERSION_KEY };
 
+/**
+ * The key an update names to save over whatever was saved since the version
+ * it read. Read at the write path's boundary (`versionCheckFor`) and never
+ * stored: it says how to write, not what.
+ *
+ * @experimental
+ */
+export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
+
 /** The column holding a row's counter, on every content and translation table. */
 export const DOCUMENT_REVISION_COLUMN = "_revision";
 
@@ -64,6 +73,7 @@ export function encodeDocumentVersion(
  */
 const SERVER_ONLY_KEYS: readonly string[] = [
   DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
   ...MIGRATE_STEP_COLUMN_NAMES,
 ];
 
