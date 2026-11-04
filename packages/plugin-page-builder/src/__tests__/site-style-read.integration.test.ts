@@ -185,7 +185,7 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.body.classes).toEqual(CLASSES);
     });
 
-    it("answers the four stored sections and nothing else", async () => {
+    it("answers the four stored sections and the spacing model, and nothing else", async () => {
       const t = await boot();
       const author = await holding(t, "read-pages", "update-pages");
       const answer = await read(author);
@@ -194,6 +194,7 @@ describe.each(getConfiguredTestDialects())(
         "breakpoints",
         "classes",
         "fonts",
+        "spacingMode",
         "tokens",
       ]);
       // A section the Single does not hold reads as empty, not as missing.

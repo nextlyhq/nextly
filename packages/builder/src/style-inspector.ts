@@ -381,6 +381,7 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   justifyContent: "Justify",
   alignItems: "Align",
   textTransform: "Letter case",
+  objectFit: "Fit",
 };
 
 /** One property's controls and the value they are showing. */

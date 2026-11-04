@@ -252,6 +252,8 @@ describe("the shared style target", () => {
       styles?: NodeStyles;
       library?: (typeof card | typeof hero)[];
       mayChange?: boolean;
+      /** The block locked, which holds its design as contentOnly does. */
+      locked?: boolean;
       writeStyles?: (
         classId: string,
         change: never
@@ -276,6 +278,7 @@ describe("the shared style target", () => {
             ? {}
             : { classes: options.classes }),
           ...(options.styles === undefined ? {} : { styles: options.styles }),
+          ...(options.locked === true ? { locked: true } : {}),
         },
       ] as BlockNode[],
     } as BlockDocument;
@@ -432,6 +435,51 @@ describe("the shared style target", () => {
     );
   });
 
+  it("holds the shared style chips while the block's design is held, and every field with them", async () => {
+    // A locked or contentOnly block's design is fixed on this page. Editing
+    // the shared style it wears from here would change that design all the
+    // same, so the chip says why it is held and the target stays the block.
+    mountTarget({ classes: ["c-card"], locked: true });
+    const card = chip("Card");
+    expect(card.getAttribute("aria-disabled")).toBe("true");
+    // Why, as its description, heard without opening anything.
+    const why = document.getElementById(
+      card.getAttribute("aria-describedby") ?? ""
+    );
+    expect(why?.textContent).toMatch(
+      /Locked: it can't be moved, deleted or edited/
+    );
+    // And shown: the editor's tooltip on focus, as on hover, not a native
+    // title, which focus never shows.
+    expect(card.getAttribute("title")).toBeNull();
+    fireEvent.focus(card);
+    expect((await screen.findByRole("tooltip")).textContent).toMatch(
+      /Locked: it can't be moved, deleted or edited/
+    );
+    fireEvent.blur(card);
+
+    fireEvent.click(card);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    expect(card.getAttribute("aria-pressed")).toBe("false");
+    expect(bar().textContent).not.toContain("Editing shared style");
+    expect(
+      (screen.getByLabelText("Opacity") as HTMLInputElement).matches(
+        ":disabled"
+      )
+    ).toBe(true);
+    // No write the bar offers: no Save as, no Move to.
+    expect(screen.queryByText(/Save as shared style/)).toBeNull();
+    expect(screen.queryByText(/Move to/)).toBeNull();
+  });
+
+  it("lets the shared style chip be chosen on a block nothing holds", () => {
+    // The positive control for the hold above.
+    mountTarget({ classes: ["c-card"] });
+    expect(chip("Card").getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(chip("Card"));
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("returns to This block on Escape, and with Edit this block only", () => {
     mountTarget({ classes: ["c-card"] });
     fireEvent.click(chip("Card"));
@@ -492,9 +540,9 @@ describe("the shared style target", () => {
     const field = screen.getByRole("textbox", {
       name: "Opacity",
     }) as HTMLInputElement;
-    expect(field.value).toBe("0.5");
+    expect(field.value).toBe("50");
 
-    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.change(field, { target: { value: "80" } });
     fireEvent.blur(field);
 
     expect(writtenTo(writeStyles, card.styles)).toEqual({
@@ -517,7 +565,7 @@ describe("the shared style target", () => {
     // The second edit is made before the first has been stored and read back.
     fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
     const opacity = screen.getByRole("textbox", { name: "Opacity" });
-    fireEvent.change(opacity, { target: { value: "0.8" } });
+    fireEvent.change(opacity, { target: { value: "80" } });
     fireEvent.blur(opacity);
 
     await host.settle();
@@ -537,10 +585,10 @@ describe("the shared style target", () => {
     });
     fireEvent.click(chip("Card"));
     const field = screen.getByRole("textbox", { name: "Opacity" });
-    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.change(field, { target: { value: "80" } });
     fireEvent.blur(field);
     // Back to the value the last read shows, before 0.8 has been stored.
-    fireEvent.change(field, { target: { value: "0.5" } });
+    fireEvent.change(field, { target: { value: "50" } });
     fireEvent.blur(field);
 
     await host.settle();
@@ -692,6 +740,12 @@ describe("the shared style target", () => {
       ).closest("fieldset")?.disabled ??
         (screen.getByRole("textbox", { name: "Opacity" }) as HTMLInputElement)
           .readOnly
+    ).toBe(true);
+    // The slider beside it is held with it, though not a form control.
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .hasAttribute("data-disabled")
     ).toBe(true);
   });
 
@@ -1066,7 +1120,7 @@ describe("controls", () => {
     const editor = mount({ effects: true });
     const field = screen.getByLabelText("Opacity");
 
-    fireEvent.change(field, { target: { value: "0.5" } });
+    fireEvent.change(field, { target: { value: "50" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1618,7 +1672,7 @@ describe("controls", () => {
     const editor = mount({ effects: true });
     const field = screen.getByLabelText("Opacity");
 
-    fireEvent.change(field, { target: { value: "\u00a00.5" } });
+    fireEvent.change(field, { target: { value: "\u00a050" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -1879,7 +1933,7 @@ describe("a value the panel shows and could not remove", () => {
   });
 
   it("puts back what the document holds when a draft only RE-SPELLS it", () => {
-    // `01` commits as the `1` already stored, so `styleWriteOp` answers with no
+    // `0100` commits as the `100` (1) already stored, so `styleWriteOp` answers with no
     // op and the stored value never moves — which means the effect that syncs
     // the field cannot fire. The typed text stayed on screen, showing something
     // the document does not contain, until the panel remounted.
@@ -1889,11 +1943,11 @@ describe("a value the panel shows and could not remove", () => {
     const editor = mount({ effects: true }, styles);
     const field = screen.getByRole("textbox", { name: "Opacity" });
 
-    fireEvent.change(field, { target: { value: "01" } });
+    fireEvent.change(field, { target: { value: "0100" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
-    expect((field as HTMLInputElement).value).toBe("1");
+    expect((field as HTMLInputElement).value).toBe("100");
   });
 
   it("KEEPS a refused draft, so the author can correct it", () => {
@@ -2739,6 +2793,17 @@ describe("where a control's value came from", () => {
     expect(input?.getAttribute("placeholder")).toBe("#123456");
     expect(input?.value).toBe("");
     expect(sourceIn("color")).toBe("From .card");
+  });
+
+  it("shows an inherited opacity in percent, however small its number is written", () => {
+    // `0.0000001` arrives as `1e-7`, which is a number CSS reads: shown in
+    // percent, unrounded.
+    mountCarded([fromCard({ property: "opacity", value: "1e-7" })], {
+      effects: true,
+    });
+    // By the label's start: the label also holds the source caption.
+    const field = screen.getByRole("textbox", { name: /^Opacity/ });
+    expect(field.getAttribute("placeholder")).toBe("0.00001");
   });
 
   it("leaves the swatch unpainted for an inherited colour it cannot resolve here", () => {
@@ -4631,6 +4696,140 @@ describe("a per-side property is drawn as a box", () => {
     expect(frameOf(box)?.getAttribute("data-sides")).toBe("logical");
     expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
       "rtl"
+    );
+  });
+});
+
+describe("opacity in percent", () => {
+  it("shows a stored opacity in percent, in the field and on its slider", () => {
+    mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    expect((field as HTMLInputElement).value).toBe("50");
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .getAttribute("aria-valuenow")
+    ).toBe("50");
+  });
+
+  it("stores a typed percent as the fraction CSS takes", () => {
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "80" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.8 } } } },
+    });
+  });
+
+  it("stores the slider's percent as the fraction once the drag settles", () => {
+    const editor = mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } }
+    );
+    const slider = screen.getByRole("slider", { name: "Opacity slider" });
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    expect(JSON.stringify(editor.applyAll.mock.calls)).toContain(
+      '"opacity":0.49'
+    );
+  });
+
+  it("points the slider at a refusal, as the number beside it is", () => {
+    mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "lots" } });
+    fireEvent.blur(field);
+    const alert = screen.getByRole("alert");
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .getAttribute("aria-describedby")
+    ).toBe(alert.id);
+  });
+
+  it("draws no slider over a keyword, which no position on it stands for", () => {
+    // A slider at 100% over `inherit` would show a value that is not there,
+    // and a nudge would replace the keyword with one built from it.
+    mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } }
+    );
+    expect(screen.queryByRole("slider", { name: "Opacity slider" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Opacity" })).toBeDefined();
+  });
+
+  it("keeps a typed percent's precision, dividing it by 100 and no more", () => {
+    // The number is the exact path; only the slider is whole percent.
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "12.345" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.12345 } } } },
+    });
+  });
+
+  it("commits a typed percent on Enter without submitting the entry", () => {
+    // The builder mounts inside the entry's form.
+    const submitted = vi.fn((event: React.FormEvent) => event.preventDefault());
+    register({ effects: true });
+    const editor = editorFor(documentOf());
+    render(
+      <form onSubmit={submitted}>
+        <StyleInspectorPanel editor={editor} />
+      </form>
+    );
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "40" } });
+    expect(fireEvent.keyDown(field, { key: "Enter" })).toBe(false);
+    expect(submitted).not.toHaveBeenCalled();
+  });
+
+  it("passes a CSS-wide keyword through, unscaled", () => {
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "inherit" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: {
+        styles: { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } },
+      },
+    });
+  });
+});
+
+describe("an aspect ratio", () => {
+  it("is a menu of ratios by name where the stored ratio is one it can draw", () => {
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { aspectRatio: "16 / 9" } } }
+    );
+    expect(fieldsOf("aspectRatio").getByRole("combobox").textContent).toBe(
+      "16:9"
+    );
+  });
+
+  it("keeps the text field for a ratio the menu cannot draw", () => {
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { aspectRatio: "auto 4 / 3" } } }
+    );
+    expect(fieldsOf("aspectRatio").queryByRole("combobox")).toBeNull();
+    expect(fieldsOf("aspectRatio").getByRole("textbox")).toBeDefined();
+  });
+});
+
+describe("an image's fit", () => {
+  it("is named Fit, its CSS name in the label's tooltip", () => {
+    // "Object fit" is how CSS names it. Plain "Fit", since the same row fits
+    // a video, an embed or a canvas as well as an image.
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
+    );
+    expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
+    expect(screen.getByText("Fit").closest("label")?.title).toMatch(
+      /^Object fit/
     );
   });
 });

@@ -787,8 +787,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("stores the counter's own value whatever version a create or update carries", async () => {
       const t = await boot(dialect);
-      // A client that saves back what it read sends `_rev` with it. The key
-      // is dropped rather than refused, and never reaches the column.
+      // A create is not judged: a `_rev` it carries is dropped, and never
+      // reaches the column.
       const created = await createNote(t, {
         title: "a",
         code: "a",
@@ -804,16 +804,37 @@ describe.each(getConfiguredTestDialects())(
         id,
         overrideAccess: true,
       } as never)) as Record<string, unknown>;
-      const resaved = await updateNote(t, id, { ...read, _rev: "999" });
+      // A client saving back what it read sends that read's own version.
+      const resaved = await updateNote(t, id, { ...read, _revision: 999 });
       expect(revOf(resaved)).toBe("2");
 
       await updateNote(t, id, { title: "b", _revision: 999 });
       expect(await mainCounter(t, NOTES, id)).toBe(3);
 
+      // An update of several documents with one set of values names no one
+      // document's version, so one carrying `_rev` is refused whole.
+      await expect(
+        handlerOf(t).bulkUpdateEntries({
+          collectionName: NOTES,
+          ids: [id],
+          data: { title: "c", _rev: "3" },
+          overrideAccess: true,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      await expect(
+        handlerOf(t).bulkUpdateByQuery({
+          collectionName: NOTES,
+          where: { id: { equals: id } },
+          data: { title: "c", _rev: "3" },
+          overrideAccess: true,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(await mainCounter(t, NOTES, id)).toBe(3);
+
       await handlerOf(t).bulkUpdateEntries({
         collectionName: NOTES,
         ids: [id],
-        data: { title: "c", _rev: "999", _revision: 999 },
+        data: { title: "c", _revision: 999 },
         overrideAccess: true,
       });
       expect(await mainCounter(t, NOTES, id)).toBe(4);
@@ -821,14 +842,21 @@ describe.each(getConfiguredTestDialects())(
       await handlerOf(t).bulkUpdateByQuery({
         collectionName: NOTES,
         where: { id: { equals: id } },
-        data: { title: "d", _rev: "999", _revision: 999 },
+        data: { title: "d", _revision: 999 },
         overrideAccess: true,
       });
       expect(await mainCounter(t, NOTES, id)).toBe(5);
 
-      await serviceOf(t).updateMany(
+      // Each entry of `updateMany` carries its own version, judged on its own.
+      const stale = await serviceOf(t).updateMany(
         NOTES,
         [{ id, data: { title: "e", _rev: "999", _revision: 999 } }],
+        { overrideAccess: true } as never
+      );
+      expect(stale.errors.map(e => e.code)).toEqual(["STALE_VERSION"]);
+      await serviceOf(t).updateMany(
+        NOTES,
+        [{ id, data: { title: "e", _rev: "5", _revision: 999 } }],
         { overrideAccess: true } as never
       );
       expect(await mainCounter(t, NOTES, id)).toBe(6);

@@ -185,7 +185,8 @@ export interface PublishAllSingleResult {
   /**
    * Every language's version once the publish has committed.
    *
-   * @experimental Nothing is judged against the version yet.
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
    */
   _rev?: string;
   /**

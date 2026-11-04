@@ -696,7 +696,7 @@ export function immutableSystemColumnNamesAnyEntity(): string[] {
  * Declared here, beside the columns it is built from, so every list of keys a client may never
  * write can name it without reaching into the versions domain.
  *
- * @experimental Nothing is judged against the version yet.
+ * @experimental An update that hands it back is refused when it is no longer the current version (`STALE_VERSION`).
  */
 export const DOCUMENT_VERSION_KEY = "_rev";
 
