@@ -767,6 +767,36 @@ export function variableGroups(
   }));
 }
 
+/** One size of the site's type scale, as a font size field offers it. */
+export interface TypeScalePreset {
+  /** The variable's identity, which a chosen preset stores a reference to. */
+  readonly token: string;
+  /** Its name, as the Design panel shows it. */
+  readonly label: string;
+  /** Its value, as the Design panel shows it. */
+  readonly value: string;
+}
+
+/**
+ * The type scale's sizes, in the Design panel's order: the font sizes of its
+ * "Type scale" group, without the line heights paired with them.
+ *
+ * Read from {@link variableGroups} rather than by testing names again, so a
+ * size the Design panel lists is the size a font size field offers.
+ */
+export function typeScalePresets(
+  tokens: SiteTokenSet | undefined
+): readonly TypeScalePreset[] {
+  const type = variableGroups(tokens).find(group => group.group === "type");
+  return (type?.entries ?? [])
+    .filter(entry => entry.row.name.startsWith(SIZE_PREFIX))
+    .map(entry => ({
+      token: entry.row.identity,
+      label: entry.label,
+      value: entry.row.value,
+    }));
+}
+
 /* ------------------------------------------------------------------ labels */
 
 /**

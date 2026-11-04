@@ -21,6 +21,7 @@ import {
   type BlockNode,
   type BreakpointSet,
   type NodeStyles,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
   act,
@@ -4626,6 +4627,81 @@ describe("a per-side property is drawn as a box", () => {
     expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
       "rtl"
     );
+  });
+});
+
+describe("a font size's presets", () => {
+  const TYPE_SCALE: SiteTokenSet = {
+    tokens: [
+      {
+        name: "font-size.body",
+        label: "Body",
+        kind: "dimension",
+        values: { light: "16px" },
+      },
+      {
+        name: "font-size.h2",
+        label: "H2",
+        kind: "dimension",
+        values: { light: "32px" },
+      },
+    ],
+  };
+
+  function mountWithScale(): ReturnType<typeof editorFor> {
+    register({ typography: true });
+    const editor = editorFor(documentOf());
+    render(<StyleInspectorPanel editor={editor} tokens={TYPE_SCALE} />);
+    return editor;
+  }
+
+  it("offers the site's type scale above the units", () => {
+    mountWithScale();
+    fireEvent.click(screen.getByLabelText("Unit for Font size"));
+    const options = screen.getAllByRole("option");
+    const body = screen.getByRole("option", { name: /^Body/ });
+    const px = screen.getByRole("option", { name: "px" });
+    expect(body.textContent).toContain("16px");
+    expect(options.indexOf(body)).toBeLessThan(options.indexOf(px));
+  });
+
+  it("stores the size chosen as a reference to its variable", () => {
+    const editor = mountWithScale();
+    fireEvent.click(screen.getByLabelText("Unit for Font size"));
+    fireEvent.click(screen.getByRole("option", { name: /^H2/ }));
+    expect(JSON.stringify(editor.applyAll.mock.calls)).toContain(
+      '"fontSize":{"$token":"font-size.h2"}'
+    );
+  });
+
+  it("names a chosen size as the Design panel does, not by its code name", () => {
+    register({ typography: true });
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontSize: { $token: "font-size.h2" } } },
+    } as NodeStyles;
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        tokens={TYPE_SCALE}
+      />
+    );
+    const row = document.querySelector<HTMLElement>(
+      '[data-property="fontSize"]'
+    );
+    expect(row?.textContent).toContain("H2");
+    expect(row?.textContent).not.toContain("font-size.h2");
+  });
+
+  it("leaves the absolute size keywords out of the menu, where they read as nothing", () => {
+    // "x-large" says no size an author can picture; the type scale does.
+    mountWithScale();
+    fireEvent.click(screen.getByLabelText("Unit for Font size"));
+    const spelled = screen
+      .getAllByRole("option")
+      .map(option => option.getAttribute("title"));
+    for (const keyword of ["xx-small", "small", "medium", "x-large"]) {
+      expect(spelled).not.toContain(keyword);
+    }
   });
 });
 

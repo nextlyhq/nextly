@@ -33,6 +33,8 @@ import {
   findNode,
   isRawColour,
   isTokenRef,
+  tokenDisplayLabel,
+  tokenIdentity,
   trimCssWhitespace,
   walkNodes,
   type BreakpointId,
@@ -68,7 +70,9 @@ import {
   PopoverTrigger,
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectSeparator,
   SelectTrigger,
   SelectValue,
@@ -191,6 +195,7 @@ import {
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
+import { typeScalePresets, type TypeScalePreset } from "./tokens-studio";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 
 /**
@@ -492,9 +497,16 @@ function styleUnavailable(
 export function StyleInspectorPanel(
   props: StyleInspectorPanelProps
 ): React.JSX.Element {
+  // The type scale reaches the Font size menu the same way, read once here.
+  const scale = React.useMemo(
+    () => typeScalePresets(props.tokens),
+    [props.tokens]
+  );
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      <StyleInspectorBody {...props} />
+      <TypeScale.Provider value={scale}>
+        <StyleInspectorBody {...props} />
+      </TypeScale.Provider>
     </FontChoicesContext.Provider>
   );
 }
@@ -2561,7 +2573,7 @@ function ControlValue({
       <TokenValue
         labelledBy={labelledBy}
         label={actionName}
-        name={stored.$token}
+        name={tokenNameOf(tokens, stored.$token)}
         onClear={() => onCommit(null)}
       />
     );
@@ -2593,6 +2605,20 @@ function ControlValue({
       onCommit={onCommit}
     />
   );
+}
+
+/**
+ * A stored token reference as the Design panel names its variable ("H2"),
+ * else by the identity the document holds, the only name it then has.
+ */
+function tokenNameOf(
+  tokens: SiteTokenSet | undefined,
+  identity: string
+): string {
+  const token = tokens?.tokens.find(
+    candidate => tokenIdentity(candidate) === identity
+  );
+  return token === undefined ? identity : tokenDisplayLabel(token);
 }
 
 /**
@@ -4722,6 +4748,33 @@ function ContrastNote({
   );
 }
 
+/** The site's type scale, which a font size offers above its units. */
+const TypeScale = React.createContext<readonly TypeScalePreset[]>([]);
+
+/**
+ * A preset's value in the unit menu, apart from every unit and keyword: no
+ * CSS unit or keyword holds a colon.
+ */
+const PRESET_CHOICE = "preset:";
+
+/**
+ * Keywords a menu leaves out, still accepted when typed and still shown when
+ * stored: a font size's absolute sizes say no size an author can picture
+ * ("x-large"), where the type scale above them does.
+ */
+const UNOFFERED_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
+  "font-size": [
+    "xx-small",
+    "x-small",
+    "small",
+    "medium",
+    "large",
+    "x-large",
+    "xx-large",
+    "xxx-large",
+  ],
+};
+
 /** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({
   writingMode: "horizontal-tb",
@@ -5043,7 +5096,12 @@ function NumericField({
           // displaying it while the draft has none. The draft is the only unit
           // state, and passing `undefined` would give it a second one.
           value={suffix.value}
-          onValueChange={hold.choosing(unitMenu.choose)}
+          onValueChange={hold.choosing(choice =>
+            // A preset stores a reference to its variable, a whole value.
+            choice.startsWith(PRESET_CHOICE)
+              ? void onCommit({ $token: choice.slice(PRESET_CHOICE.length) })
+              : unitMenu.choose(choice)
+          )}
           onOpenChange={hold.onOpenChange}
         >
           <SelectTrigger
@@ -5063,6 +5121,7 @@ function NumericField({
             <SelectValue placeholder={suffix.placeholder} />
           </SelectTrigger>
           <SelectContent ref={hold.content}>
+            <TypeScaleItems cssProperty={control.leaf.cssProperty} />
             {extraUnit === null ? null : (
               <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
             )}
@@ -5071,16 +5130,76 @@ function NumericField({
                 {choice}
               </SelectItem>
             ))}
-            {keywords.length === 0 ? null : <SelectSeparator />}
-            {keywords.map(keyword => (
-              <SelectItem key={keyword} value={keyword} title={keyword}>
-                {keywordLabel(control.leaf.cssProperty, keyword)}
-              </SelectItem>
-            ))}
+            <KeywordItems
+              cssProperty={control.leaf.cssProperty}
+              keywords={keywords}
+              draft={draft}
+            />
           </SelectContent>
         </Select>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The site's type scale at the top of a font size's unit menu: each size by
+ * its name, its value muted beside it, then a line before the units.
+ */
+function TypeScaleItems({
+  cssProperty,
+}: {
+  cssProperty: string;
+}): React.JSX.Element | null {
+  const scale = React.useContext(TypeScale);
+  if (cssProperty !== "font-size" || scale.length === 0) return null;
+  return (
+    <>
+      <SelectGroup>
+        <SelectLabel>Type scale</SelectLabel>
+        {scale.map(preset => (
+          <SelectItem
+            key={preset.token}
+            value={`${PRESET_CHOICE}${preset.token}`}
+          >
+            {preset.label}
+            <span className="nx-inspector__option-value">{preset.value}</span>
+          </SelectItem>
+        ))}
+      </SelectGroup>
+      <SelectSeparator />
+    </>
+  );
+}
+
+/**
+ * A unit menu's keywords after a line, in words with the CSS spelling in the
+ * tooltip; see style-keyword-labels. Those a menu leaves out are left out
+ * unless the field holds one.
+ */
+function KeywordItems({
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  const unoffered = UNOFFERED_KEYWORDS[cssProperty] ?? [];
+  const offered = keywords.filter(
+    keyword => keyword === draft || !unoffered.includes(keyword)
+  );
+  if (offered.length === 0) return null;
+  return (
+    <>
+      <SelectSeparator />
+      {offered.map(keyword => (
+        <SelectItem key={keyword} value={keyword} title={keyword}>
+          {keywordLabel(cssProperty, keyword)}
+        </SelectItem>
+      ))}
+    </>
   );
 }
 
