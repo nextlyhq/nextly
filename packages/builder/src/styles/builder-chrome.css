@@ -5946,8 +5946,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * A touch screen has no pointer moving near a gap to reveal its "+", and a tap
  * is hit-tested before any movement, so there the "+" stays shown and
  * pressable: seen, it cannot take a tap meant for something else unawares.
+ * `any-pointer`, not `pointer`: a touchscreen laptop's PRIMARY pointer is
+ * its trackpad, and its screen still takes taps.
  */
-@media (pointer: coarse) {
+@media (any-pointer: coarse) {
   .nx-page-inserters__add {
     pointer-events: auto;
     opacity: 1;

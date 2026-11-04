@@ -228,6 +228,19 @@ describe("an empty page", () => {
     expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
   });
 
+  it.each(["pattern", "region", "template"])(
+    "speaks of blocks in an empty %s, which has no sections either",
+    async kind => {
+      // Only a page is built of sections; every other kind of document holds
+      // blocks at its top level.
+      mount({ formatVersion: 1, kind, nodes: [] } as never);
+      await act(async () => undefined);
+      expect(screen.queryByText("Start your page")).toBeNull();
+      expect(screen.getByText("Add the first block")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
+    }
+  );
+
   it("follows the scroller when it scrolls the empty page", async () => {
     // The scroller around the canvas is outside it, and its scroll reaches no
     // listener on the canvas: the card is re-centred on what it now shows.
@@ -374,6 +387,38 @@ describe("the + between sections", () => {
       "Add a section after Our story",
       "Add a section after Our team",
     ]);
+  });
+
+  it("measures a display: contents section where the engine says it has no box", async () => {
+    // jsdom has no `checkVisibility`; a browser's answers false for an
+    // element that generates no box, `display: contents` included. Given the
+    // browser's answer, the section still counts by what its children draw.
+    Object.defineProperty(Element.prototype, "checkVisibility", {
+      configurable: true,
+      value(this: Element): boolean {
+        const id = this.getAttribute("data-nx-node");
+        return id === null || !boxless.has(id);
+      },
+    });
+    try {
+      mount(THREE);
+      await act(async () => undefined);
+      const team = document.querySelector<HTMLElement>('[data-nx-node="team"]');
+      if (team === null) throw new Error("no team section");
+      team.style.display = "contents";
+      team.append(document.createElement("p"));
+      boxless.add("team");
+      team.append(document.createElement("span"));
+      await act(async () => undefined);
+      expect(
+        gapButtons().map(button => button.getAttribute("aria-label"))
+      ).toEqual([
+        "Add a section after Our story",
+        "Add a section after Our team",
+      ]);
+    } finally {
+      Reflect.deleteProperty(Element.prototype, "checkVisibility");
+    }
   });
 
   it("names the gap after a component placement with the component's title", async () => {
