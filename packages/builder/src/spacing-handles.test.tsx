@@ -41,6 +41,7 @@ import { CANVAS_ROOT_CLASS } from "./canvas";
 import { useEditorState, type EditorState } from "./editor-state";
 import type { SpacingBand } from "./spacing-bands";
 import {
+  placeHandles,
   SpacingHandles,
   type SpacingScrubContext,
   type SpacingSubject,
@@ -1387,6 +1388,40 @@ describe("two handles that would land on the same pixels", () => {
     const margin = span("top margin");
     const padding = span("top padding");
     expect(margin.to <= padding.from || padding.to <= margin.from).toBe(true);
+  });
+
+  it("splits two handles that overlap only at the canvas's zoom", () => {
+    // Two 12px bands side by side clear each other at 100%. At 50% the least
+    // size is 18 of the bands' pixels, centred on each, and the two overlap:
+    // the overlap has to be found at the scale they are drawn at.
+    const bands: SpacingBand[] = [
+      {
+        box: "margin",
+        side: "top",
+        rect: { x: 0, y: 88, width: 50, height: 12 },
+        label: "12",
+        negative: false,
+      },
+      {
+        box: "padding",
+        side: "top",
+        rect: { x: 0, y: 100, width: 50, height: 12 },
+        label: "12",
+        negative: false,
+      },
+    ];
+    const [margin, padding] = placeHandles(
+      bands,
+      band => band.box === "margin",
+      0.5
+    );
+    if (margin === undefined || padding === undefined) {
+      throw new Error("a handle was not placed");
+    }
+    expect(
+      margin.y + margin.height <= padding.y ||
+        padding.y + padding.height <= margin.y
+    ).toBe(true);
   });
 
   it("leaves handles that do not coincide where they were", () => {

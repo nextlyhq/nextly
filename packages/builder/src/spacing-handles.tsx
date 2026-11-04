@@ -279,21 +279,54 @@ function applied(editor: EditorState, result: StyleWrite): string | undefined {
     : undefined;
 }
 
-/** Whether two bands' handles, each placed alone, would share any pixels. */
-function handlesOverlap(
-  one: SpacingBand,
-  other: SpacingBand,
-  outwardOf: (band: SpacingBand) => boolean
-): boolean {
-  if (one.side !== other.side) return false;
-  const a = handleRect(one, outwardOf(one));
-  const b = handleRect(other, outwardOf(other));
+/** Whether two rectangles share any pixels. */
+function overlaps(a: Rect, b: Rect): boolean {
   return (
     a.x < b.x + b.width &&
     b.x < a.x + a.width &&
     a.y < b.y + b.height &&
     b.y < a.y + a.height
   );
+}
+
+/**
+ * Where every band's handle sits, in the bands' order.
+ *
+ * Each is placed alone first, and a handle whose strip would overlap another
+ * on its side is placed again, splitting the stretch the two share. Both
+ * passes at the one `scale`: at a zoom the least size grows in the bands'
+ * units, so two strips that clear each other at 100% can overlap at 50%, and
+ * a check made at another scale than the placement would miss it.
+ *
+ * @param edgeOf - whether a band's moving edge is its outward one
+ * @param scale - the canvas's painted zoom, 1 outside a frame
+ * @internal
+ */
+export function placeHandles(
+  bands: readonly SpacingBand[],
+  edgeOf: (band: SpacingBand) => boolean,
+  scale: number
+): Rect[] {
+  const alone = bands.map(band =>
+    handleRect(band, edgeOf(band), undefined, scale)
+  );
+  return bands.map((band, index) => {
+    const own = alone[index];
+    if (own === undefined) throw new Error("a band without a handle");
+    const partner = bands.findIndex((other, at) => {
+      const theirs = alone[at];
+      return (
+        at !== index &&
+        other.side === band.side &&
+        theirs !== undefined &&
+        overlaps(own, theirs)
+      );
+    });
+    const other = bands[partner];
+    return other === undefined
+      ? own
+      : handleRect(band, edgeOf(band), shareWith(band, other), scale);
+  });
 }
 
 /**
@@ -1259,6 +1292,16 @@ export function SpacingHandles({
     return region;
   }
 
+  /*
+   * Split with another handle where the two would overlap.
+   *
+   * A negative margin's band is laid inside the border edge, where padding's
+   * is — so `margin-top: -16px` beside `padding-top: 20px` gives two bands
+   * from one edge. Padding is drawn later, so its handle would take every
+   * press there and the margin's control would be advertised and unreachable.
+   */
+  const placed = placeHandles(drawn, drawnEdgeOf, handleScale);
+
   return (
     <>
       {drawn.map((band, index) => {
@@ -1269,26 +1312,8 @@ export function SpacingHandles({
          * declaration the Style panel honours.
          */
         if (!writable.has(band.box)) return null;
-        /*
-         * Split with another handle where the two would overlap.
-         *
-         * A negative margin's band is laid inside the border edge, where
-         * padding's is — so `margin-top: -16px` beside `padding-top: 20px`
-         * gives two bands from one edge. Padding is drawn later, so its handle
-         * would take every press there and the margin's control would be
-         * advertised and unreachable.
-         */
-        const outward = drawnEdgeOf(band);
-        const partner = drawn.find(
-          (other, at) =>
-            at !== index && handlesOverlap(band, other, drawnEdgeOf)
-        );
-        const rect = handleRect(
-          band,
-          outward,
-          partner === undefined ? undefined : shareWith(band, partner),
-          handleScale
-        );
+        const rect = placed[index];
+        if (rect === undefined) return null;
         return (
           <div
             key={`${band.box}-${band.side}`}
