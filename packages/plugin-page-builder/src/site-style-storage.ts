@@ -428,16 +428,25 @@ export async function readStoredSiteStyle(args: {
   // Read beside the Single, so every reader of the stored style, the
   // published render and the editor's route alike, compiles under the model
   // the site recorded.
-  const spacing =
-    spacingModeReaderOf(args.nextly) ?? (await args.bootedReader?.());
-  const [doc, spacingMode] = await Promise.all([
+  const readDoc = () =>
     args.nextly.findSingle({
       slug: args.slug ?? SITE_STYLE_SLUG,
       ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
-    }),
-    spacing === undefined ? null : spacing.read(),
-  ]);
-  return storedSiteStyleOf(doc, spacingMode);
+    });
+  const own = spacingModeReaderOf(args.nextly);
+  if (own !== undefined) {
+    const [doc, spacingMode] = await Promise.all([readDoc(), own.read()]);
+    return storedSiteStyleOf(doc, spacingMode);
+  }
+  // The booted instance only AFTER the document read: a lazy reader boots
+  // the instance on its first read, and asked before that there is none, so
+  // the page would render with no model.
+  const doc = await readDoc();
+  const booted = await args.bootedReader?.();
+  return storedSiteStyleOf(
+    doc,
+    booted === undefined ? null : await booted.read()
+  );
 }
 
 /**

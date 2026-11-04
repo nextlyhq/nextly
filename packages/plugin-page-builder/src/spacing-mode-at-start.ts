@@ -23,7 +23,10 @@
  * document, live or as its working draft; or a Layout. Which collections and
  * Singles hold blocks is read from the same registry survey the editor's
  * style route asks, so the two cannot come to disagree about where blocks
- * live. Each collection costs one query of one row.
+ * live. Each collection costs one query of one row: an entry is one row
+ * whatever languages it has content in, so its existence answers for all of
+ * them. A Single is one document per language, so it is read in each of the
+ * site's configured languages, live and as its working draft.
  *
  * The Layout the default-Layout seed created does not count: the boot seeds
  * one on a fresh site, so counting it would call every new site an existing
@@ -60,6 +63,11 @@ export interface SpacingModeSlugs {
  */
 export interface BlocksSurvey {
   readonly collections: readonly string[];
+  /**
+   * The site's configured languages, empty when it is not localized. A
+   * Single is read in each, since its document may exist in one alone.
+   */
+  readonly locales: readonly string[];
   readonly singles: readonly {
     readonly slug: string;
     readonly paths: readonly string[];
@@ -207,24 +215,31 @@ function holdsBlocks(value: unknown): boolean {
 
 /**
  * Whether a Single stores a non-empty blocks document at any of `paths`, in
- * its live document or its working draft. Read without creating a missing
- * document, so asking never writes one.
+ * its live document or its working draft, in any of `locales` (or the one
+ * document of a site that is not localized). Bounded: two reads per locale.
+ * Read without creating a missing document, so asking never writes one.
  */
 async function singleHoldsBlocks(
   nextly: SpacingModeAtStartDeps["nextly"],
   slug: string,
-  paths: readonly string[]
+  paths: readonly string[],
+  locales: readonly string[]
 ): Promise<boolean> {
-  for (const draft of [false, true]) {
-    const doc: unknown = await nextly.findSingle({
-      slug,
-      depth: 0,
-      status: "all",
-      ...(draft ? { draft: true } : {}),
-      overrideAccess: true,
-      createIfMissing: false,
-    });
-    if (paths.some(path => holdsBlocks(valueAt(doc, path)))) return true;
+  const languages: readonly (string | undefined)[] =
+    locales.length === 0 ? [undefined] : locales;
+  for (const locale of languages) {
+    for (const draft of [false, true]) {
+      const doc: unknown = await nextly.findSingle({
+        slug,
+        depth: 0,
+        status: "all",
+        ...(locale === undefined ? {} : { locale }),
+        ...(draft ? { draft: true } : {}),
+        overrideAccess: true,
+        createIfMissing: false,
+      });
+      if (paths.some(path => holdsBlocks(valueAt(doc, path)))) return true;
+    }
   }
   return false;
 }
@@ -239,12 +254,15 @@ export async function siteVerdict(
   const { nextly, slugs } = deps;
   const survey = await deps.survey();
   for (const collection of survey.collections) {
-    // Layouts are asked below, where the seed is left out.
+    // Layouts are asked below, where the seed is left out. No locale: an
+    // entry's row exists whatever languages its content is in.
     if (collection === slugs.layouts) continue;
     if (await holdsAny(nextly, collection)) return "existing";
   }
   for (const single of survey.singles) {
-    if (await singleHoldsBlocks(nextly, single.slug, single.paths)) {
+    if (
+      await singleHoldsBlocks(nextly, single.slug, single.paths, survey.locales)
+    ) {
       return "existing";
     }
   }

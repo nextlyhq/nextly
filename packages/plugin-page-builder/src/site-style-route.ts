@@ -191,17 +191,32 @@ export async function collectionsTheBuilderOpens(
 /**
  * Where the site's block documents may live: every collection and live Single
  * holding a blocks field the builder opens, the Singles with the form paths of
- * those fields. The survey this route admits editors by, so a reader asking
- * where blocks live gets the same answer.
+ * those fields, and the site's configured languages. The survey this route
+ * admits editors by, so a reader asking where blocks live gets the same
+ * answer.
  */
 export async function blocksSurvey(
   ctx: PageCollectionsContext &
-    Pick<SiteStyleRouteContext, "config" | "services">
+    Pick<SiteStyleRouteContext, "services"> & {
+      readonly config: SiteStyleRouteContext["config"] & {
+        readonly localization?: { readonly locales: readonly unknown[] };
+      };
+    }
 ): Promise<{
   collections: string[];
   singles: { slug: string; paths: readonly string[] }[];
+  locales: string[];
 }> {
   return {
+    // The site's languages, since a Single's document may exist in one of
+    // them alone. A locale is a code or an entry carrying one.
+    locales: (ctx.config.localization?.locales ?? []).flatMap(locale => {
+      const code =
+        typeof locale === "string"
+          ? locale
+          : (locale as { code?: unknown } | null)?.code;
+      return typeof code === "string" ? [code] : [];
+    }),
     collections: (await collectionsTheBuilderOpens(ctx)).map(type => type.slug),
     singles: (await singlesTheBuilderOpens(ctx)).map(({ slug, paths }) => ({
       slug,

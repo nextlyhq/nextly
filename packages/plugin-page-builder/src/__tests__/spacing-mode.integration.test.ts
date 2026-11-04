@@ -48,6 +48,7 @@ import {
   PAGE_BUILDER_PLUGIN_NAME,
   SPACING_MODE_ROUTE_PATH,
 } from "../library-contract";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { blocks } from "../fields/blocksHelper";
 import { pageBuilderLayouts } from "../page-layouts";
 import { pageBuilder } from "../plugin";
@@ -289,6 +290,105 @@ describe.each(getConfiguredTestDialects())(
           props: { text: "Hi", level: "h2" },
         },
       ]);
+      expect(await settleSpacingModeOnce(deps(t))).toBe("classic");
+    });
+
+    it("records classic on a localized site whose only block documents are German", async () => {
+      // A site in two languages: a localized blocks Single, and a localized
+      // collection holding blocks.
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder(), probePlugin(probe)],
+        seedPublic: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        singles: [
+          {
+            slug: "welcome",
+            localized: true,
+            fields: [{ name: "content", type: BLOCKS_TYPE, localized: true }],
+          } as never,
+        ],
+        collections: [
+          {
+            slug: "stories",
+            localized: true,
+            fields: [
+              { name: "title", type: "text", localized: true },
+              { name: "content", type: BLOCKS_TYPE, localized: true },
+            ],
+          } as never,
+        ],
+      });
+      const t = current;
+      await waitFor(
+        async () =>
+          (await readLayoutSettings(t.nextly, SLUGS)).seededLayout !== null
+      );
+      await settleSpacingModeAtStart(deps(t));
+      await forgetTheModel();
+      // The control: the survey carries both languages.
+      expect((await deps(t).survey()).locales).toEqual(["en", "de"]);
+      expect(await settleSpacingModeOnce(deps(t))).toBe("gaps");
+      await forgetTheModel();
+
+      // German alone holds the Single's page.
+      await t.nextly.updateSingle({
+        slug: "welcome",
+        locale: "de",
+        data: {
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "h",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Hallo", level: "h2" },
+              },
+            ],
+          },
+        },
+        overrideAccess: true,
+      } as never);
+      expect(await settleSpacingModeOnce(deps(t))).toBe("classic");
+    });
+
+    it("counts a collection entry written in a non-default language alone", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder(), probePlugin(probe)],
+        seedPublic: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [
+          {
+            slug: "stories",
+            localized: true,
+            fields: [
+              { name: "title", type: "text", localized: true },
+              { name: "content", type: BLOCKS_TYPE, localized: true },
+            ],
+          } as never,
+        ],
+      });
+      const t = current;
+      await waitFor(
+        async () =>
+          (await readLayoutSettings(t.nextly, SLUGS)).seededLayout !== null
+      );
+      await settleSpacingModeAtStart(deps(t));
+      await forgetTheModel();
+      // An entry's row exists whatever languages its content is in, so the
+      // one-row read without a locale finds it.
+      await t.nextly.create({
+        collection: "stories",
+        locale: "de",
+        data: {
+          title: "Geschichte",
+          content: { formatVersion: 1, kind: "page", nodes: [] },
+        },
+        overrideAccess: true,
+      } as never);
       expect(await settleSpacingModeOnce(deps(t))).toBe("classic");
     });
 

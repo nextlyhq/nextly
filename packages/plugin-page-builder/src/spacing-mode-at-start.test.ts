@@ -22,6 +22,7 @@ const SLUGS = {
 const SURVEY: BlocksSurvey = {
   collections: ["pages", "components", "landing-pages", "layouts"],
   singles: [{ slug: "home", paths: ["hero.body"] }],
+  locales: [],
 };
 const survey = () => Promise.resolve(SURVEY);
 
@@ -51,12 +52,16 @@ function site(
         .map(id => ({ id }));
       return Promise.resolve({ items: items.slice(0, 1) });
     },
-    findSingle: (args: { slug: string; draft?: boolean }) => {
+    findSingle: (args: { slug: string; draft?: boolean; locale?: string }) => {
       asked.push({ collection: `single:${args.slug}` });
       if (args.slug === SLUGS.settings) {
         return Promise.resolve({ seededLayout, defaultLayout: null });
       }
-      const stored = singles[args.slug];
+      // A language's own document, under `slug@locale`, else the slug's.
+      const stored =
+        (args.locale === undefined
+          ? undefined
+          : singles[`${args.slug}@${args.locale}`]) ?? singles[args.slug];
       return Promise.resolve(
         (args.draft === true ? stored?.draft : stored?.live) ?? null
       );
@@ -119,6 +124,22 @@ describe("siteVerdict", () => {
       expect(await siteVerdict({ nextly, slugs: SLUGS, survey })).toBe(
         "existing"
       );
+    }
+  });
+
+  it("reads a Single in every configured language, live and as a draft", async () => {
+    const blocks = { hero: { body: { nodes: [{ id: "n" }] } } };
+    const localized = () =>
+      Promise.resolve({ ...SURVEY, locales: ["en", "de"] });
+    for (const stored of [{ live: blocks }, { draft: blocks }]) {
+      // German alone holds the page; English is empty.
+      const { nextly } = site({}, null, {
+        "home@en": { live: { hero: { body: { nodes: [] } } } },
+        "home@de": stored,
+      });
+      expect(
+        await siteVerdict({ nextly, slugs: SLUGS, survey: localized })
+      ).toBe("existing");
     }
   });
 

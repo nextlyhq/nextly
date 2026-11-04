@@ -74,6 +74,22 @@ describe("a reader with no plugin services", () => {
     expect(alone.spacingMode).toBeNull();
   });
 
+  it("reads the model from an instance the reader's own document read booted", async () => {
+    booted.instance = null;
+    // A lazy reader, as a route builds it: its first read boots the instance.
+    const lazy = {
+      findSingle: async () => {
+        booted.instance = instance("classic");
+        return null;
+      },
+    };
+    const stored = await readStoredSiteStyle({
+      nextly: lazy,
+      bootedReader: bootedSpacingModeReader,
+    });
+    expect(stored.spacingMode).toBe("classic");
+  });
+
   it("prefers the reader's own services to the booted instance", async () => {
     booted.instance = instance("classic");
     const stored = await readStoredSiteStyle({
