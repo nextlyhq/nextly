@@ -68,9 +68,10 @@ function canvasFontSize(page: Page): Promise<string> {
 async function fontSize(
   page: Page
 ): Promise<{ field: Locator; label: Locator }> {
+  // Named by its label and the provenance after it ("Font size Set here").
   const field = page
     .getByTestId("inspector")
-    .getByLabel("Font size", { exact: true });
+    .getByRole("textbox", { name: /^Font size\b/ });
   await expect(field).toBeVisible();
   const id = await field.getAttribute("id");
   if (id === null) throw new Error("the Font size field has no id");

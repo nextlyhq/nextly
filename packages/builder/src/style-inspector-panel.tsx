@@ -2915,26 +2915,7 @@ function LengthOrNumberField({
       setDraft(storedText(stored));
     }
   };
-  // The label drags a line height as its kind steps, a number or a length.
-  const typed = lineHeightFromText(draft);
-  const typedLeaf = lineHeightLeafFor(draft);
-  useLabelScrub({
-    origin:
-      (typeof typed === "string" || typeof typed === "number") &&
-      typedLeaf !== undefined &&
-      steppedValue(typedLeaf, typed, 0) !== undefined
-        ? typed
-        : undefined,
-    at: (from, delta) => {
-      const leaf = lineHeightLeafFor(String(from));
-      return leaf === undefined ? undefined : scrubbedValue(leaf, from, delta);
-    },
-    draft,
-    show: setDraft,
-    commit: value => {
-      if (onCommit(value) === "unchanged") setDraft(storedText(stored));
-    },
-  });
+  const owning = useLineHeightLabelScrub({ draft, setDraft, stored, onCommit });
   return (
     <Input
       id={id}
@@ -2943,7 +2924,8 @@ function LengthOrNumberField({
       aria-describedby={describedBy}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
-      onBlur={commit}
+      // Nothing of its own is written while a drag on the label owns it.
+      onBlur={() => owning() || commit()}
       onKeyDown={event => {
         if (commitOnEnter(event, commit)) return;
         // An arrow steps the value as its kind steps, a number or a length,
@@ -2962,6 +2944,45 @@ function LengthOrNumberField({
       }}
     />
   );
+}
+
+/**
+ * A line height offered to its row's label to drag, as its kind steps: a
+ * number or a length. Written once on release, as a typed value is.
+ *
+ * @returns whether a drag owns the value now, so the field writes nothing of
+ *   its own meanwhile
+ */
+function useLineHeightLabelScrub({
+  draft,
+  setDraft,
+  stored,
+  onCommit,
+}: {
+  draft: string;
+  setDraft: (value: string) => void;
+  stored: StyleValue | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): () => boolean {
+  const typed = lineHeightFromText(draft);
+  const typedLeaf = lineHeightLeafFor(draft);
+  return useLabelScrub({
+    origin:
+      (typeof typed === "string" || typeof typed === "number") &&
+      typedLeaf !== undefined &&
+      steppedValue(typedLeaf, typed, 0) !== undefined
+        ? typed
+        : undefined,
+    at: (from, delta) => {
+      const leaf = lineHeightLeafFor(String(from));
+      return leaf === undefined ? undefined : scrubbedValue(leaf, from, delta);
+    },
+    draft,
+    show: setDraft,
+    commit: value => {
+      if (onCommit(value) === "unchanged") setDraft(storedText(stored));
+    },
+  });
 }
 
 function actionNameFor(propertyLabel: string, label: string): string {
@@ -5033,17 +5054,14 @@ function NumericField({
   // doing something. Offered verbatim as its own item, which is what the
   // keyword select above already does for a value outside its vocabulary.
   const extraUnit = unlistedUnit(measurement, units);
-  // A bare number takes the unit the field shows: "24" is 24px.
-  const commitText = (value: StyleValue | null) =>
-    onCommit(withDefaultUnit(control.leaf, value, unit));
-  useNumericLabelScrub({
+  const commitText = useNumericLabelScrub({
     control,
     stored,
     draft,
     unit,
     setDraft,
     setTyping,
-    commitText,
+    onCommit,
   });
 
   return (
@@ -5141,6 +5159,10 @@ function unlistedUnit(
  * The number field's value, offered to its row's label to drag: shown in the
  * field while the pointer is down, and written once on release through the
  * same commit as a typed value, so one drag is one undo step.
+ *
+ * @returns the field's own commit for its text: a bare number given the unit
+ *   the field shows ("24" is 24px), and nothing written while a drag owns the
+ *   value — a blur mid-drag would write the preview, and the release again.
  */
 function useNumericLabelScrub({
   control,
@@ -5149,7 +5171,7 @@ function useNumericLabelScrub({
   unit,
   setDraft,
   setTyping,
-  commitText,
+  onCommit,
 }: {
   control: StyleControl;
   stored: StyleValue | undefined;
@@ -5157,10 +5179,12 @@ function useNumericLabelScrub({
   unit: string;
   setDraft: (value: string) => void;
   setTyping: (typing: boolean) => void;
-  commitText: (value: StyleValue | null) => CommitOutcome;
-}): void {
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): (value: StyleValue | null) => CommitOutcome {
   const inherited = React.useContext(InheritedValue);
-  useLabelScrub({
+  const commitText = (value: StyleValue | null): CommitOutcome =>
+    onCommit(withDefaultUnit(control.leaf, value, unit));
+  const owning = useLabelScrub({
     origin: scrubOrigin(control.leaf, draft, unit, inherited),
     at: (from, delta) => scrubbedValue(control.leaf, from, delta),
     draft,
@@ -5178,6 +5202,8 @@ function useNumericLabelScrub({
         setDraft,
       }),
   });
+  // "refused" keeps the text on screen, which is the drag's live value.
+  return value => (owning() ? "refused" : commitText(value));
 }
 
 /**

@@ -151,6 +151,32 @@ describe("followScrub", () => {
     expect(on.onEnd).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps every other key from the page while the pointer is down, and lets the modifiers through", () => {
+    const on = handlers();
+    followScrub({ pointerId: 1, clientX: 0, clientY: 0, host: host() }, on);
+    document.dispatchEvent(pointer("pointermove", { clientX: 40 }));
+    const heard = vi.fn();
+    document.body.addEventListener("keydown", heard);
+
+    const arrow = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.body.dispatchEvent(arrow);
+    expect(arrow.defaultPrevented).toBe(true);
+    expect(heard).not.toHaveBeenCalled();
+
+    const shift = new KeyboardEvent("keydown", {
+      key: "Shift",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.body.dispatchEvent(shift);
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(on.onEnd).not.toHaveBeenCalled();
+  });
+
   it("ends without a release on a cancel, and end() is safe twice", () => {
     const on = handlers();
     const session = followScrub(
@@ -198,6 +224,14 @@ describe("fieldScrubMove", () => {
     const plain = fieldScrubMove(FIELD_SCRUB_START, 5, NONE);
     // Five more pixels with Shift: 5 + 50, not (5 + 5) × 10.
     expect(fieldScrubMove(plain, 10, SHIFT).delta).toBe(55);
+  });
+
+  it("continues from the change on screen when Alt widens the precision", () => {
+    // 4.6px of travel reads as 5; one more pixel with Alt is 5.1, never 4.7,
+    // which would step back while the pointer moves on.
+    const plain = fieldScrubMove(FIELD_SCRUB_START, 4.6, NONE);
+    expect(plain.delta).toBe(5);
+    expect(fieldScrubMove(plain, 5.6, ALT).delta).toBe(5.1);
   });
 
   it("keeps a fine step's tenth after Alt is let go", () => {

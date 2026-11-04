@@ -43,6 +43,14 @@ import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
 export const SCRUB_ACTIVATION_PX: typeof DEFAULT_ACTIVATION_PX =
   DEFAULT_ACTIVATION_PX;
 
+/** The keys that only steer a drag, which it leaves to reach the page. */
+const MODIFIER_KEYS: ReadonlySet<string> = new Set([
+  "Shift",
+  "Alt",
+  "Control",
+  "Meta",
+]);
+
 /** What the author is holding down while dragging or pressing a key. */
 export interface ScrubModifiers {
   readonly shift: boolean;
@@ -99,11 +107,13 @@ export interface ScrubSession {
  * or a pen beside the mouse says nothing about this gesture, and ending on its
  * cancel would erase the preview and leave the real release nothing to commit.
  *
- * Escape is heard on the document as well, in the capture phase. A surface
- * that keeps focus where it was — a press that prevents the default so text is
- * not selected — would otherwise send the key to whatever had focus, and the
- * release would commit the edit the author was trying to abandon. During a
- * drag Escape means only "abandon it", so nothing else is given the key.
+ * The keyboard is heard on the document as well, in the capture phase, for
+ * the life of the gesture. A surface that keeps focus where it was — a press
+ * that prevents the default so text is not selected — would otherwise send a
+ * key to whatever had focus: Escape there would not abandon the drag, and an
+ * arrow or Enter on a focused field would write while the pointer still owns
+ * the value. So Escape ends the gesture, the modifiers pass, and no other key
+ * reaches anything until the gesture is over.
  */
 export function followScrub(
   press: ScrubPress,
@@ -157,12 +167,17 @@ export function followScrub(
   }
 
   function onKey(pressed: KeyboardEvent): void {
-    if (pressed.key !== "Escape") return;
-    // Stopped here, in the capture phase, before anything else hears it: the
-    // editor's own Escape moves the selection up, which would take the field
+    // A modifier is how the drag is steered, and its state reaches the
+    // gesture on the pointer events, so its own key is left alone.
+    if (MODIFIER_KEYS.has(pressed.key)) return;
+    // Every other key is stopped here, in the capture phase, before anything
+    // else hears it. The pointer owns the value until it is released: an
+    // arrow or Enter on a focused field would write mid-drag, and the
+    // editor's own Escape moves the selection up, which would take the value
     // being dragged off screen along with the edit it abandons.
     pressed.preventDefault();
     pressed.stopPropagation();
+    if (pressed.key !== "Escape") return;
     handlers.onEscape?.(pressed);
     end();
   }
@@ -237,9 +252,12 @@ export function fieldScrubMove(
   modifiers: ScrubModifiers
 ): FieldScrub {
   const step = fieldStep(modifiers);
-  const amount =
-    state.amount + ((dx - state.dx) / FIELD_SCRUB_PX_PER_STEP) * step;
   const decimals = Math.max(state.decimals, step < 1 ? 1 : 0);
+  // A precision that widens continues from the change ON SCREEN, not from the
+  // unrounded amount under it: a fraction of a pixel rounded away at whole
+  // steps would otherwise appear as the drag steps back.
+  const from = decimals > state.decimals ? state.delta : state.amount;
+  const amount = from + ((dx - state.dx) / FIELD_SCRUB_PX_PER_STEP) * step;
   const rounded = Number(amount.toFixed(decimals));
   // `-0` normalised: it passes every comparison and then prints as a value
   // nobody wrote.

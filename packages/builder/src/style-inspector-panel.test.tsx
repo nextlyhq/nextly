@@ -2252,6 +2252,49 @@ describe("dragging a number field's label", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
+  it("writes the value at the release, where the last move fell short of it", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [10], {}, false);
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 125 }));
+    });
+    expect(written(editor)).toEqual(['"37px"']);
+  });
+
+  it("puts the value back when the pointer is cancelled mid-drag, writing nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [30], {}, false);
+    expect(field.value).toBe("42");
+    act(() => {
+      document.dispatchEvent(pointer("pointercancel", { clientX: 130 }));
+    });
+
+    expect(field.value).toBe("12");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing from the focused field while the drag owns its value", () => {
+    // Focus stays in the field through the press, so its blur can come
+    // mid-drag: it must not write the preview, leaving the release to write
+    // once.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+    field.focus();
+
+    drag(label, [20], {}, false);
+    act(() => {
+      field.blur();
+    });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 120 }));
+    });
+    expect(written(editor)).toEqual(['"32px"']);
+  });
+
   it("does not scrub on touch, so a tap still reaches the field", () => {
     const editor = mount({ spacing: true }, withPadding("12px"));
     const { label } = side("Block start");

@@ -65,6 +65,8 @@ export interface LabelScrubField {
 interface LabelScrubSlot {
   readonly field: React.RefObject<LabelScrubField | null>;
   readonly setEnabled: (enabled: boolean) => void;
+  /** Whether a drag holds the value now, so the field's own writes wait. */
+  readonly owning: React.RefObject<boolean>;
 }
 
 /** What a row shares: the slot its field fills, and the props its label takes. */
@@ -115,7 +117,11 @@ function useLabelScrubSlot(): LabelScrubRowValue {
   const [dragging, setDragging] = React.useState(false);
   const session = React.useRef<ScrubSession | null>(null);
   const swallowClick = React.useRef(false);
-  const slot = React.useMemo<LabelScrubSlot>(() => ({ field, setEnabled }), []);
+  const owning = React.useRef(false);
+  const slot = React.useMemo<LabelScrubSlot>(
+    () => ({ field, setEnabled, owning }),
+    []
+  );
   // A drag does not outlive the row: taken away mid-drag, as selecting another
   // block does, it ends without writing.
   React.useEffect(() => () => session.current?.end(), []);
@@ -134,6 +140,23 @@ function useLabelScrubSlot(): LabelScrubRowValue {
     event.preventDefault();
     let progress = FIELD_SCRUB_START;
     let shown: ScrubbedValue = origin;
+    // The modifiers the field last showed a value with. The release uses
+    // these rather than its own: letting go of Shift before the button is
+    // ordinary, and the write must be the value on screen.
+    let held = scrubModifiersOf(event);
+    // Whether the field shows a value of the drag's that is not written.
+    let previewing = false;
+    const showAt = (dx: number): void => {
+      progress = fieldScrubMove(progress, dx, held);
+      const live = field.current;
+      if (live === null) return;
+      const next =
+        progress.delta === 0 ? origin : live.at(origin, progress.delta);
+      // A step the property refuses outright keeps the last value shown.
+      if (next === undefined) return;
+      shown = next;
+      live.show(String(next));
+    };
     session.current = followScrub(
       {
         pointerId: event.pointerId,
@@ -143,23 +166,21 @@ function useLabelScrubSlot(): LabelScrubRowValue {
       },
       {
         onMove: (moved, travel) => {
-          const live = field.current;
-          if (live === null) return;
+          // From here the drag owns the value: the field writes nothing of
+          // its own (a blur, a key) until the drag is released or abandoned.
+          owning.current = true;
+          previewing = true;
           setDragging(true);
-          progress = fieldScrubMove(
-            progress,
-            travel.dx,
-            scrubModifiersOf(moved)
-          );
-          const next =
-            progress.delta === 0 ? origin : live.at(origin, progress.delta);
-          // A step the property refuses outright keeps the last value shown.
-          if (next === undefined) return;
-          shown = next;
-          live.show(String(next));
+          held = scrubModifiersOf(moved);
+          showAt(travel.dx);
         },
-        onRelease: () => {
+        onRelease: (_lifted, travel) => {
           swallowClick.current = true;
+          // The release's own position: the last move delivered can be short
+          // of it when the browser coalesces pointer movement.
+          showAt(travel.dx);
+          owning.current = false;
+          previewing = false;
           const live = field.current;
           if (live === null) return;
           // Back where it started, the field shows what it did before the
@@ -167,10 +188,13 @@ function useLabelScrubSlot(): LabelScrubRowValue {
           if (shown === origin) live.show(before);
           else live.commit(shown);
         },
-        onEscape: () => field.current?.show(before),
+        // Escape, a cancelled pointer and a row taken away all end here
+        // without a release: the field goes back to its text before the press.
         onEnd: () => {
+          owning.current = false;
           session.current = null;
           setDragging(false);
+          if (previewing) field.current?.show(before);
         },
       }
     );
@@ -199,8 +223,12 @@ function useLabelScrubSlot(): LabelScrubRowValue {
  *
  * Outside a row that provides a slot it does nothing, so a field drawn on its
  * own keeps only its keyboard stepping.
+ *
+ * @returns whether a drag owns the value now. The field's own commits — a
+ *   blur, Enter, an arrow — must write nothing then: the drag writes once on
+ *   release, and a write mid-drag is one Escape could no longer take back.
  */
-export function useLabelScrub(field: LabelScrubField): void {
+export function useLabelScrub(field: LabelScrubField): () => boolean {
   const slot = React.useContext(LabelScrubContext)?.slot ?? null;
   // The latest closures, for a drag that reads them as the pointer moves.
   React.useLayoutEffect(() => {
@@ -218,4 +246,5 @@ export function useLabelScrub(field: LabelScrubField): void {
     },
     [slot]
   );
+  return () => slot?.owning.current === true;
 }
