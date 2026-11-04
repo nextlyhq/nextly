@@ -37,6 +37,7 @@
 import {
   hasBlock,
   resolveSiteTokens,
+  tokenIdentity,
   usableNamedClasses,
   COMPONENT_INSTANCE_TYPE,
   type BlockDocument,
@@ -801,8 +802,7 @@ async function applyPlan(
 /**
  * Upload the plan's new media as the caller, recording each as it lands so a
  * later failure can take it back. A caption is set on the new file once it
- * exists, as the system: the upload takes none, and the file is the import's
- * own.
+ * exists (the upload takes none), as the caller, when it may update media.
  */
 async function uploadMedia(
   ctx: ImportContext,
@@ -826,8 +826,17 @@ async function uploadMedia(
     );
     const id = String(made.id);
     uploaded.set(entry.id, id);
-    if (entry.caption !== undefined) {
-      await ctx.services.media.update(id, { caption: entry.caption });
+    // As the caller, and only for one who may update media: setting a
+    // caption is an update, whoever made the file.
+    if (
+      entry.caption !== undefined &&
+      (await ctx.caller?.can("update", "media")) === true
+    ) {
+      await ctx.services.media.update(
+        id,
+        { caption: entry.caption },
+        asCaller(ctx)
+      );
     }
   }
 }
@@ -840,6 +849,7 @@ async function uploadMedia(
  */
 interface StyleUndo {
   readonly classIds: Set<string>;
+  /** The variables added, by identity (`id`, else `name`), as `$token` names them. */
   readonly tokenNames: Set<string>;
   readonly breakpointIds: Set<string>;
   readonly slug: string;
@@ -897,11 +907,7 @@ async function plannedStyle(
   const heldIds = new Set(
     storedClasses.map(entry => String((entry as { id?: unknown }).id))
   );
-  const heldNames = new Set(
-    arrayOf(storedTokens.tokens).map(token =>
-      String((token as { name?: unknown }).name)
-    )
-  );
+  const heldNames = new Set(arrayOf(storedTokens.tokens).map(storedIdentity));
   const lastIndex = storedClasses.reduce<number>((most, entry) => {
     const index = (entry as { orderIndex?: unknown }).orderIndex;
     return typeof index === "number" && index > most ? index : most;
@@ -921,7 +927,9 @@ async function plannedStyle(
       .map((entry, at) =>
         rewriteClass(entry.from, entry.id, entry.slug, lastIndex + 1 + at, maps)
       ),
-    tokens: plan.tokens.create.filter(token => !heldNames.has(token.name)),
+    tokens: plan.tokens.create.filter(
+      token => !heldNames.has(tokenIdentity(token))
+    ),
   };
 }
 
@@ -980,7 +988,7 @@ async function appendStylesAndVariables(
     ...(await readingAsUser(ctx)),
   });
   for (const entry of planned.classes) undo.classIds.add(entry.id);
-  for (const token of planned.tokens) undo.tokenNames.add(token.name);
+  for (const token of planned.tokens) undo.tokenNames.add(tokenIdentity(token));
 }
 
 async function appendBreakpoints(
@@ -1026,7 +1034,7 @@ async function requireStyleHeld(
 ): Promise<void> {
   const named = {
     classes: new Set(plan.classes.create.map(entry => entry.id)),
-    tokens: new Set(plan.tokens.create.map(token => token.name)),
+    tokens: new Set(plan.tokens.create.map(tokenIdentity)),
     breakpoints: new Set(plan.addBreakpoints.map(entry => entry.id)),
   };
   if (named.classes.size + named.tokens.size + named.breakpoints.size === 0)
@@ -1038,7 +1046,7 @@ async function requireStyleHeld(
   });
   const held = {
     classes: new Set((now.classes ?? []).map(entry => entry.id)),
-    tokens: new Set((now.tokens?.tokens ?? []).map(token => token.name)),
+    tokens: new Set((now.tokens?.tokens ?? []).map(tokenIdentity)),
     breakpoints: new Set(
       [
         ...(now.breakpoints?.viewport ?? []),
@@ -1106,7 +1114,7 @@ async function takeBack(
     );
     const tokens = recordOf(stored?.tokens);
     const keptTokens = arrayOf(tokens.tokens).filter(
-      token => !style.tokenNames.has(String((token as { name?: unknown }).name))
+      token => !style.tokenNames.has(storedIdentity(token))
     );
     if (style.classIds.size > 0 || style.tokenNames.size > 0) {
       await nextly.updateSingle({
@@ -1136,6 +1144,12 @@ async function takeBack(
       { error }
     );
   }
+}
+
+/** A stored variable's identity, as `tokenIdentity` reads it, whatever its shape. */
+function storedIdentity(token: unknown): string {
+  const record = (token ?? {}) as { id?: unknown; name?: unknown };
+  return typeof record.id === "string" ? record.id : String(record.name);
 }
 
 function arrayOf(value: unknown): unknown[] {

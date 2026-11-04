@@ -147,6 +147,28 @@ describe("TransferImport", () => {
     expect(sent.at(-1)).toEqual({ file: FILE, choices: {}, expect: "f1" });
   });
 
+  it("shows a variable by its name, its path beside", async () => {
+    answer = async () =>
+      envelope(
+        preview({
+          added: [
+            {
+              kind: "token",
+              fileId: "color.accent",
+              name: "Accent",
+              detail: "color.accent",
+            },
+          ],
+        })
+      );
+    await choose();
+
+    expect(await screen.findByText("Accent")).toBeTruthy();
+    expect(screen.getByText("color.accent").className).toContain(
+      "nx-pb-transfer__detail"
+    );
+  });
+
   it("lists the block types the site lacks and cannot be confirmed", async () => {
     answer = async () =>
       envelope(preview({ missingBlockTypes: ["acme/widget"], ready: false }));

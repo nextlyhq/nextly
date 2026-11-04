@@ -389,19 +389,10 @@ function PreviewBody({
           </AlertDescription>
         </Alert>
       )}
-      <Names
-        title="New on this site"
-        entries={preview.added.map(entry => ({
-          kind: entry.kind,
-          name: entry.name,
-        }))}
-      />
+      <Names title="New on this site" entries={preview.added} />
       <Names
         title="Already on this site, used as they are"
-        entries={preview.reused.map(entry => ({
-          kind: entry.kind,
-          name: entry.name,
-        }))}
+        entries={preview.reused}
       />
       {preview.conflicts.length === 0 ? null : (
         <section
@@ -486,7 +477,7 @@ function ConflictRow({
     <li className="nx-pb-transfer__row">
       <div className="nx-pb-transfer__what">
         <span className="nx-pb-transfer__name" id={`${id}-name`}>
-          {conflict.name}
+          <NameWithDetail name={conflict.name} detail={conflict.detail} />
         </span>
         <span className="nx-pb-transfer__kind">
           {sentenceCase(KIND_WORDS[conflict.kind][0])}
@@ -591,12 +582,19 @@ function Names({
   entries,
 }: {
   title: string;
-  entries: readonly { kind: ImportConflictKind; name: string }[];
+  entries: readonly {
+    kind: ImportConflictKind;
+    name: string;
+    detail?: string;
+  }[];
 }): React.JSX.Element | null {
   if (entries.length === 0) return null;
-  const byKind = new Map<ImportConflictKind, string[]>();
+  const byKind = new Map<
+    ImportConflictKind,
+    { name: string; detail?: string }[]
+  >();
   for (const entry of entries) {
-    byKind.set(entry.kind, [...(byKind.get(entry.kind) ?? []), entry.name]);
+    byKind.set(entry.kind, [...(byKind.get(entry.kind) ?? []), entry]);
   }
   return (
     <section className="nx-pb-transfer__section">
@@ -605,11 +603,40 @@ function Names({
         {[...byKind].map(([kind, names]) => (
           <div key={kind}>
             <dt>{KIND_WORDS[kind][names.length === 1 ? 0 : 1]}</dt>
-            <dd>{names.join(", ")}</dd>
+            <dd>
+              {names.map((entry, at) => (
+                <React.Fragment key={`${String(at)}-${entry.name}`}>
+                  {at === 0 ? null : ", "}
+                  <NameWithDetail name={entry.name} detail={entry.detail} />
+                </React.Fragment>
+              ))}
+            </dd>
           </div>
         ))}
       </dl>
     </section>
+  );
+}
+
+/**
+ * A name as an author knows it, with the code name beside it muted where the
+ * two differ: a variable reads "Accent", with `color.accent` after it, as the
+ * Variables panel shows it.
+ */
+function NameWithDetail({
+  name,
+  detail,
+}: {
+  name: string;
+  detail: string | undefined;
+}): React.JSX.Element {
+  return (
+    <>
+      {name}
+      {detail === undefined || detail === name ? null : (
+        <span className="nx-pb-transfer__detail"> {detail}</span>
+      )}
+    </>
   );
 }
 

@@ -354,6 +354,51 @@ describe("planImport", () => {
     expect(plan.componentOrder).toEqual(["a"]);
   });
 
+  it("names a variable as an author knows it, its path beside", () => {
+    const plan = planImport(
+      file({
+        tokens: [
+          {
+            name: "color.accent",
+            label: "Accent",
+            kind: "color",
+            values: { light: "#0050ff" },
+          },
+        ],
+      }),
+      site()
+    );
+    expect(plan.preview.added).toEqual([
+      { kind: "component", fileId: "a", name: "Title a" },
+      {
+        kind: "token",
+        fileId: "color.accent",
+        name: "Accent",
+        detail: "color.accent",
+      },
+    ]);
+  });
+
+  it("judges an apply choosing otherwise than its preview as a different preview", () => {
+    const clashing = site({
+      items: {
+        component: {
+          bySlug: new Map([
+            ["slug-a", { id: "mine", title: "Mine", slug: "slug-a" }],
+          ]),
+          taken: new Set(["slug-a"]),
+        },
+        pattern: { bySlug: new Map(), taken: new Set() },
+        layout: { bySlug: new Map(), taken: new Set() },
+      },
+    });
+    const renamed = planImport(file(), clashing).preview.fingerprint;
+    const existing = planImport(file(), clashing, {
+      conflicts: { "component:a": "existing" },
+    }).preview.fingerprint;
+    expect(existing).not.toBe(renamed);
+  });
+
   it("refuses a file showing media it does not carry", () => {
     const plan = planImport(
       file({

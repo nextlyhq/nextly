@@ -34,6 +34,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   MAX_BREAKPOINTS_PER_AXIS,
   sameJsonValue,
+  tokenDisplayLabel,
   tokenIdentity,
   walkNodes,
   type BlockDocument,
@@ -266,7 +267,7 @@ export function planImport(
     missingBlockTypes,
     problems: ledger.problems,
     ready: missingBlockTypes.length === 0 && ledger.problems.length === 0,
-    fingerprint: fingerprintOf(site, ledger, missingBlockTypes),
+    fingerprint: fingerprintOf(site, ledger, missingBlockTypes, choices),
   };
   return {
     preview,
@@ -344,7 +345,8 @@ function settle(
   fileId: string,
   name: string,
   existing: { id: string; name: string },
-  renamedTo: string
+  renamedTo: string,
+  detail?: string
 ): ImportConflictChoice {
   const choice = ledger.choiceOf(kind, fileId);
   ledger.conflicts.push({
@@ -352,6 +354,7 @@ function settle(
     kind,
     fileId,
     name,
+    ...(detail === undefined ? {} : { detail }),
     existing,
     renamedTo,
     choice,
@@ -444,7 +447,8 @@ function planTokens(
       ledger.reused.push({
         kind: "token",
         fileId: identity,
-        name: token.name,
+        name: tokenDisplayLabel(token),
+        detail: token.name,
         existingId: identity,
       });
       continue;
@@ -453,15 +457,27 @@ function planTokens(
       map.set(identity, identity);
       identities.add(identity);
       create.push(token);
-      ledger.added.push({ kind: "token", fileId: identity, name: token.name });
+      ledger.added.push({
+        kind: "token",
+        fileId: identity,
+        name: tokenDisplayLabel(token),
+        detail: token.name,
+      });
       continue;
     }
     const free = (name: string) => !identities.has(name);
     const renamed = renameIn(identity, free);
-    const existing = { id: identity, name: clash.name };
+    const existing = { id: identity, name: tokenDisplayLabel(clash) };
     if (
-      settle(ledger, "token", identity, token.name, existing, renamed) ===
-      "existing"
+      settle(
+        ledger,
+        "token",
+        identity,
+        tokenDisplayLabel(token),
+        existing,
+        renamed,
+        token.name
+      ) === "existing"
     ) {
       map.set(identity, identity);
       continue;
@@ -788,18 +804,23 @@ function renamedFilename(filename: string): string {
 function fingerprintOf(
   site: ImportSite,
   ledger: Pick<Ledger, "added" | "conflicts" | "reused">,
-  missing: readonly string[]
+  missing: readonly string[],
+  choices: ImportChoices
 ): string {
   const { added, conflicts, reused } = ledger;
   const judged = {
     breakpoints: site.breakpoints,
     mayAddBreakpoints: site.mayAddBreakpoints,
     added: added.map(entry => [entry.kind, entry.fileId, entry.name]),
+    // The choice in force too: an apply choosing otherwise than the
+    // confirmed preview is not the import that was confirmed.
     conflicts: conflicts.map(entry => [
       entry.key,
       entry.existing.id,
       entry.renamedTo,
+      entry.choice,
     ]),
+    breakpointChoices: Object.entries(choices.breakpoints ?? {}).sort(),
     reused: reused.map(entry => [entry.kind, entry.fileId, entry.existingId]),
     missing,
   };

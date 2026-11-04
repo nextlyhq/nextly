@@ -253,6 +253,8 @@ export interface ImportAddition {
   readonly kind: ImportConflictKind;
   readonly fileId: string;
   readonly name: string;
+  /** A variable's path beside its name, which `$token`s name it by. */
+  readonly detail?: string;
 }
 
 /** One thing already on the site, identical to the file's, used as it is. */
@@ -260,6 +262,8 @@ export interface ImportReuse {
   readonly kind: "class" | "token" | "media";
   readonly fileId: string;
   readonly name: string;
+  /** A variable's path beside its name, which `$token`s name it by. */
+  readonly detail?: string;
   readonly existingId: string;
 }
 
@@ -270,6 +274,8 @@ export interface ImportConflict {
   readonly kind: ImportConflictKind;
   readonly fileId: string;
   readonly name: string;
+  /** A variable's path beside its name, which `$token`s name it by. */
+  readonly detail?: string;
   readonly existing: { readonly id: string; readonly name: string };
   /** The name the item is added under if renamed. */
   readonly renamedTo: string;

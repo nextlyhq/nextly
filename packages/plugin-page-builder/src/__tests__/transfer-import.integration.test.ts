@@ -75,6 +75,7 @@ const WRITES_EVERYTHING = [
   "publish-layouts",
   "update-site-style",
   "create-media",
+  "update-media",
 ];
 
 /** A second PNG, other bytes under the same name. */
@@ -1144,6 +1145,79 @@ describe.each(getConfiguredTestDialects())(
         return parsed;
       };
       expect(unchanged(await snapshot(t))).toEqual(unchanged(before));
+    });
+
+    it("adds a variable by its stable id when this site has another under the same name", async () => {
+      const t = await boot();
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: {
+            tokens: [
+              {
+                id: "brand-here",
+                name: "color.brand",
+                kind: "color",
+                values: { light: "#000000" },
+              },
+            ],
+          },
+        },
+      });
+      const { cookie } = await holding(t, WRITES_EVERYTHING);
+      const node: BlockNode = {
+        ...heading("h"),
+        styles: { base: { base: { color: { $token: "brand-there" } } } },
+      };
+      const file = fileOf([{ id: "c", nodes: [node] }], {
+        tokens: [
+          {
+            id: "brand-there",
+            name: "color.brand",
+            kind: "color",
+            values: { light: "#123456" },
+          },
+        ],
+      });
+
+      const answer = await apply(cookie, file);
+
+      expect(answer.status).toBe(201);
+      const tokens = (await siteStyle(t)).tokens?.tokens as {
+        id?: string;
+        name: string;
+      }[];
+      expect(tokens.map(token => token.id ?? token.name).sort()).toEqual([
+        "brand-here",
+        "brand-there",
+      ]);
+      const stored = await row(t, COMPONENTS_SLUG, answer.result.rootId ?? "");
+      expect(
+        (stored.content as { nodes: BlockNode[] }).nodes[0]?.styles
+      ).toEqual({
+        base: { base: { color: { $token: "brand-there" } } },
+      });
+    });
+
+    it("sets an imported image's caption only for a caller who may update media", async () => {
+      const { file, site } = await exported("components", s => s.inner);
+      const t = await boot();
+      const { cookie } = await holding(
+        t,
+        WRITES_EVERYTHING.filter(slug => slug !== "update-media")
+      );
+
+      const answer = await apply(cookie, file, {
+        breakpoints: Object.fromEntries(
+          file.breakpoints.map(entry => [entry.id, "drop" as const])
+        ),
+      });
+
+      expect(answer.status).toBe(201);
+      const mediaId = answer.result.created?.media[site.mediaId] ?? "";
+      const image = await t.nextly.media.findByID({ id: mediaId });
+      expect(image?.originalFilename).toBe("dot.png");
+      expect(image?.caption ?? null).toBeNull();
     });
 
     it("tells the hooks a write is judged, and commits without saying so", async () => {
