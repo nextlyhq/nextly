@@ -11,6 +11,7 @@ import {
   render,
   screen,
   waitFor,
+  renderHook,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { cloneElement, type ReactElement } from "react";
@@ -18,7 +19,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteSettingsRead } from "../../library-contract";
 import type { PageAddressResponse } from "../../pages-search-contract";
-import { settingsAddressOf, type SettingsAddress } from "./settings-address";
+import {
+  settingsAddressOf,
+  useSavedRevision,
+  type SettingsAddress,
+} from "./settings-address";
 
 let siteRead: SiteSettingsRead | undefined;
 // The page address read's answer, and the paths it was asked at.
@@ -121,12 +126,16 @@ const MANAGER: SiteSettingsRead = {
 /** Renders the dialog again with the current read, as a refetch would. */
 let reshow: () => void = () => {};
 
+/** The address the dialog is drawn with; a case may change it and reshow. */
+let shownAddress: SettingsAddress | null = null;
+
 function show(
   onOpenChange = vi.fn(),
   pageLayout?: ReactElement,
   seoFields = true,
   address: SettingsAddress | null = null
 ) {
+  shownAddress = address;
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
   const element = (): ReactElement => (
@@ -139,7 +148,7 @@ function show(
         {...(pageLayout === undefined ? {} : { pageLayout })}
         share={{ title: "Who we are", description: "We build tools." }}
         seoFields={seoFields}
-        address={address}
+        address={shownAddress}
         breakpoints={{
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
@@ -228,6 +237,7 @@ describe("the Settings dialog", () => {
       locale: "fr",
       savedSlug: "about-us",
       slugChanged: false,
+      savedRevision: 0,
     });
     expect(
       screen.getByRole("region", { name: "Address on your site" }).textContent
@@ -240,12 +250,34 @@ describe("the Settings dialog", () => {
     expect(screen.queryByText(/changes when you save/)).toBeNull();
   });
 
+  it("reads the address again after every save, whichever field it changed", () => {
+    // A host's path can name fields besides the slug: a save that changes
+    // one of them moves the page while the slug stays as it was.
+    addressRead = { path: "/news/about-us" };
+    refetch.mockClear();
+    const address: SettingsAddress = {
+      page: { collection: "pages", id: "p-1" },
+      savedSlug: "about-us",
+      slugChanged: false,
+      savedRevision: 0,
+    };
+    show(vi.fn(), undefined, true, address);
+    expect(refetch).not.toHaveBeenCalled();
+    shownAddress = { ...address, savedRevision: 1 };
+    reshow();
+    expect(refetch).toHaveBeenCalledTimes(1);
+    // Drawn again with nothing saved since: not read again.
+    reshow();
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
   it("says the saved address changes on save while the slug differs", () => {
     addressRead = { path: "/about-us" };
     show(vi.fn(), undefined, true, {
       page: { collection: "pages", id: "p-1" },
       savedSlug: "about-us",
       slugChanged: true,
+      savedRevision: 0,
     });
     // Still the SAVED address: the server knows nothing of the typed slug.
     expect(
@@ -263,6 +295,7 @@ describe("the Settings dialog", () => {
     show(vi.fn(), undefined, true, {
       page: { collection: "posts", id: "x" },
       slugChanged: false,
+      savedRevision: 0,
     });
     expect(
       screen.queryByRole("region", { name: "Address on your site" })
@@ -275,25 +308,47 @@ describe("the Settings dialog", () => {
     ).toBeNull();
   });
 
+  it("counts a save each time the form takes in new stored values", () => {
+    // Every load or save installs a fresh defaults object; drawing again
+    // with the same one is not a save.
+    const first = { slug: "about-us" };
+    const { result, rerender } = renderHook(
+      ({ saved }: { saved: unknown }) => useSavedRevision(saved),
+      { initialProps: { saved: first as unknown } }
+    );
+    expect(result.current).toBe(0);
+    rerender({ saved: first });
+    expect(result.current).toBe(0);
+    rerender({ saved: { slug: "about-us" } });
+    expect(result.current).toBe(1);
+  });
+
   it("reads the saved entry's address, and a slug typed since as a change", () => {
     const saved = { kind: "collection", slug: "pages", documentId: "p-1" };
-    expect(settingsAddressOf(saved, "about-us", "about-us")).toEqual({
+    expect(settingsAddressOf(saved, "about-us", "about-us", 0)).toEqual({
       page: { collection: "pages", id: "p-1" },
       savedSlug: "about-us",
       slugChanged: false,
+      savedRevision: 0,
     });
-    expect(settingsAddressOf(saved, "about", "about-us")?.slugChanged).toBe(
+    expect(settingsAddressOf(saved, "about", "about-us", 0)?.slugChanged).toBe(
       true
     );
     // Never saved, or a Single: no page address to read.
     expect(
-      settingsAddressOf({ kind: "collection", slug: "pages" }, "a", undefined)
+      settingsAddressOf(
+        { kind: "collection", slug: "pages" },
+        "a",
+        undefined,
+        0
+      )
     ).toBeNull();
     expect(
       settingsAddressOf(
         { kind: "single", slug: "home", documentId: "1" },
         "a",
-        "a"
+        "a",
+        0
       )
     ).toBeNull();
   });

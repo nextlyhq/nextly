@@ -88,7 +88,11 @@ import {
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { useReveal, type Reveal } from "./reveal-hidden";
-import { settingsAddressOf, type SettingsAddress } from "./settings-address";
+import {
+  settingsAddressOf,
+  useSavedRevision,
+  type SettingsAddress,
+} from "./settings-address";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -815,7 +819,12 @@ function usePageFacts<TFieldValues extends FieldValues>(
   return {
     title: typeof title === "string" ? title : undefined,
     seo: seo !== null && typeof seo === "object" ? seo : undefined,
-    address: settingsAddressOf(useDocumentIdentity(), slug, saved),
+    address: settingsAddressOf(
+      useDocumentIdentity(),
+      slug,
+      saved,
+      useSavedRevision(defaultValues)
+    ),
   };
 }
 

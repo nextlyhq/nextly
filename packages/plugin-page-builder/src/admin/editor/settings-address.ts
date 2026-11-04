@@ -5,6 +5,8 @@
  *
  * @module admin/editor/settings-address
  */
+import { useRef } from "react";
+
 import type { PageReference } from "../../pages-search-contract";
 
 /**
@@ -20,6 +22,12 @@ export interface SettingsAddress {
   readonly savedSlug?: string;
   /** Whether the slug on screen differs from the one saved. */
   readonly slugChanged: boolean;
+  /**
+   * Advances with each save, so the address is read again after any saved
+   * change: a host's path can name fields besides the slug, and a save of any
+   * of them can move the page.
+   */
+  readonly savedRevision: number;
 }
 
 /**
@@ -31,7 +39,8 @@ export interface SettingsAddress {
 export function settingsAddressOf(
   identity: { kind: string; slug: string; documentId?: string } | null,
   slug: unknown,
-  savedSlug: unknown
+  savedSlug: unknown,
+  savedRevision: number
 ): Omit<SettingsAddress, "locale"> | null {
   if (identity?.kind !== "collection" || identity.documentId === undefined) {
     return null;
@@ -41,5 +50,19 @@ export function settingsAddressOf(
     page: { collection: identity.slug, id: identity.documentId },
     ...(saved === undefined ? {} : { savedSlug: saved }),
     slugChanged: typeof slug === "string" && slug !== saved,
+    savedRevision,
   };
+}
+
+/**
+ * A count that advances each time the form takes in what was stored: a load
+ * or a save installs new defaults, a fresh object each time, so its identity
+ * changing is the form's own signal that the stored document moved.
+ */
+export function useSavedRevision(saved: unknown): number {
+  const seen = useRef({ saved, revision: 0 });
+  if (seen.current.saved !== saved) {
+    seen.current = { saved, revision: seen.current.revision + 1 };
+  }
+  return seen.current.revision;
 }

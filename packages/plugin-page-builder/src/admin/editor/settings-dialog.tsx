@@ -56,6 +56,7 @@ import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentProps,
   type JSX,
@@ -205,13 +206,7 @@ export function SettingsDialog({
                 seoFields={seoFields}
                 address={
                   address === null ? null : (
-                    <AddressLine
-                      // Read again once a save moves the saved slug, so the
-                      // line never shows the address the page had before.
-                      key={address.savedSlug ?? ""}
-                      address={address}
-                      open={open}
-                    />
+                    <AddressLine address={address} open={open} />
                   )
                 }
               />
@@ -399,6 +394,15 @@ function AddressLine({
     staleTime: 0,
     enabled: open,
   });
+  // Read again after each save, whichever field it changed: the host's path
+  // can name more than the slug, and the query's own key would not move.
+  const { refetch } = read;
+  const revisionSeen = useRef(address.savedRevision);
+  useEffect(() => {
+    if (revisionSeen.current === address.savedRevision) return;
+    revisionSeen.current = address.savedRevision;
+    void refetch();
+  }, [address.savedRevision, refetch]);
   if (read.data === undefined) {
     return read.error === null ? null : (
       <p className="text-xs text-muted-foreground">
