@@ -4,7 +4,10 @@
  *
  * @module components/features/entries/EntryList/collection-for-columns
  */
-import type { CollectionForColumns } from "./EntryTableColumns";
+import {
+  isDefaultColumnField,
+  type CollectionForColumns,
+} from "./EntryTableColumns";
 
 /**
  * Creates a CollectionForColumns object from collection data.
@@ -52,16 +55,9 @@ export function toCollectionForColumns(
     collection.schemaDefinition?.fields || collection.fields || [];
   const fields = rawFields as CollectionForColumns["fields"];
 
-  // Determine default columns: use admin config or auto-generate from first few fields
-  // Filter to only data fields (those with name property, excluding layout fields)
-  const layoutTypes = ["group", "relationship", "repeater", "component"];
-  const dataFields = rawFields.filter(
-    (f): f is { name: string; type: string } =>
-      typeof f.name === "string" &&
-      f.name.length > 0 &&
-      typeof f.type === "string" &&
-      !layoutTypes.includes(f.type)
-  );
+  // Determine default columns: use admin config or auto-generate from the
+  // first few fields the list would pick by itself (no layout or hidden field).
+  const dataFields = rawFields.filter(isDefaultColumnField);
 
   const defaultColumns =
     collection.admin?.defaultColumns || dataFields.slice(0, 4).map(f => f.name);

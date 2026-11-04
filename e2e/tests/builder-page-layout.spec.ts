@@ -192,21 +192,25 @@ test("offers one Layout choice and says which Layout is in effect and why", asyn
   await gotoAdmin(page, `/collections/pages/${pageId}`);
   const cardPicker = page.getByRole("combobox", { name: "Layout" });
   await expect(cardPicker).toBeVisible({ timeout: 30_000 });
-  await expect(cardPicker).toContainText(`Site default (${MAIN})`);
+  await expect(cardPicker).toContainText(`Site default · ${MAIN}`);
 
   // And in the editor's Settings.
   await openBuilder(page, pageId);
   await openSettings(page);
   const picker = page.getByRole("combobox", { name: "Layout" });
   await expect(picker).toBeVisible();
-  await expect(page.getByText(`Site default: ${MAIN}`)).toBeVisible();
+  await expect(
+    page.getByText(
+      `Follows the site default, ${MAIN}, because this page doesn't choose its own Layout.`
+    )
+  ).toBeVisible();
 
   await picker.click();
   // The site default first, by name; published Layouts; an unpublished one
   // marked; and no header or footer last. Other Layouts the suite's database
   // holds sit among them, so the order is asserted between these.
   const options = await page.getByRole("option").allTextContents();
-  expect(options[0]).toBe(`Site default (${MAIN})`);
+  expect(options[0]).toBe(`Site default · ${MAIN}`);
   expect(options.at(-1)).toBe("No header or footer");
   const unfinished = options.indexOf(
     `${UNFINISHED} (not published: the site default shows until it is)`

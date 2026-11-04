@@ -37,15 +37,16 @@ Both settings are one choice, made in one place. The **Layout** picker sits at t
 of the editor's **Settings** and on the page's Page Builder card in the entry form. It
 offers:
 
-- **Site default (Main)**: the site's default Layout, named. It reads **Site default
-  (none set)** when the site has no published default.
+- **Site default**, with the default Layout's name beside it in grey, such as
+  "Main". It reads **Site default (none set)** when the site has no published default.
 - Each published Layout, by its title.
 - Each Layout that is not published yet, marked "(not published: the site default
   shows until it is)".
 - **No header or footer**.
 
-The line under the picker says which Layout is in effect and why, for example "Site
-default: Main" or "Landing (not published, so the site default shows)". A page whose
+The line under the picker says which Layout is in effect and why, for example "Follows
+the site default, Main, because this page doesn't choose its own Layout." or "Landing
+(not published, so the site default shows)". A page whose
 Layout was deleted shows "Site default (the chosen Layout was deleted)". An author who
 may not read Layouts sees the choice but cannot change it.
 
@@ -69,12 +70,14 @@ are told that the site default shows until that Layout is published.
 ## The default Layout
 
 Your site always has exactly one default Layout. On a new site the plugin creates a
-published Layout called **Default (site)**, with no areas filled in, and makes it the
-default. Fill in its areas, or make another Layout the default.
+published Layout called **Site layout**, with no areas filled in, and makes it the
+default. Fill in its areas, or make another Layout the default. A site set up on an
+earlier version keeps the name it was given then, **Default (site)**; the plugin never
+renames it.
 
-If you already have a Layout called "Default (site)", or one at the address
-`default-site`, the plugin never takes it over. It gives its own Layout the next free
-name or address instead, such as "Default (site) 2" or `default-site-2`.
+If you already have a Layout called "Site layout", or one at the address `site-layout`,
+the plugin never takes it over. It gives its own Layout the next free name or address
+instead, such as "Site layout 2" or `site-layout-2`.
 
 ### Make another Layout the default
 
@@ -104,7 +107,8 @@ the API with access checks turned off.
 
 If the default disappears another way, such as an import that skips hooks, the plugin
 repairs it. A background job checks the default every time the jobs runner runs, and
-points the default back at the **Default (site)** Layout, creating it again if needed.
+points the default back at the Layout the plugin created (**Site layout**), creating it
+again if needed.
 
 ### Components a Layout uses are protected
 
@@ -168,7 +172,7 @@ something stops answers `409 CONFLICT`, with the reason in the message.
 If a Layout is made the default at the very moment it is being deleted, the delete loses:
 the Layout comes back from a copy taken just before, under a new id, and the default
 points at it. Unpublishing in that race leaves the default to the background repair,
-which points it back at **Default (site)**.
+which points it back at the Layout the plugin created.
 
 Some writes skip collection hooks: a batch write with hooks turned off, and publishing or
 unpublishing every language at once (`POST
