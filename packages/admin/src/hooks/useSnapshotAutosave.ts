@@ -146,7 +146,7 @@ const RECORDINGS_WAIT_MS = 5000;
  */
 export async function recordingsSettled(
   document: string | null,
-  atMostMs = RECORDINGS_WAIT_MS
+  atMostMs: number = RECORDINGS_WAIT_MS
 ): Promise<void> {
   if (document === null) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
