@@ -34,8 +34,13 @@ export async function readLayoutScanEntities(
     ["collection", "dynamic_collections"],
     ["single", "dynamic_singles"],
   ];
+  // Which of its two names the component registry carries is a catalog read. One that fails is
+  // not a database without components, so under the setting it refuses as an unread registry does.
   const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter).catch(
-    () => undefined
+    (error: unknown) => {
+      if (perLanguage) throw unreadRegistry("component", error);
+      return undefined;
+    }
   );
   if (fieldGroupRegistry) registries.push(["component", fieldGroupRegistry]);
   for (const [kind, registry] of registries) {
@@ -60,22 +65,22 @@ export async function readLayoutScanEntities(
     // The loader records a failed read rather than throwing it, so the entities it could not
     // read would otherwise go unjudged and the boot carry on over them.
     const unread = failures.find(failure => failure.scope === "read");
-    if (unread && perLanguage) {
-      throw new NextlyError({
-        code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
-        publicMessage:
-          `The Schema Builder's ${registry} registry could not be read, so whether its ` +
-          `entities keep their translatable values as experimental.perLanguageStorage lays ` +
-          `them out cannot be checked. Restart once the database answers.`,
-        logContext: {
-          registry,
-          error:
-            unread.error instanceof Error
-              ? unread.error.message
-              : String(unread.error),
-        },
-      });
-    }
+    if (unread && perLanguage) throw unreadRegistry(registry, unread.error);
   }
   return entities;
+}
+
+/** The refusal of a boot whose Schema Builder registry (`registry`) could not be read. */
+function unreadRegistry(registry: string, error: unknown): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
+    publicMessage:
+      `The Schema Builder's ${registry} registry could not be read, so whether its entities ` +
+      `keep their translatable values as experimental.perLanguageStorage lays them out cannot ` +
+      `be checked. Restart once the database answers.`,
+    logContext: {
+      registry,
+      error: error instanceof Error ? error.message : String(error),
+    },
+  });
 }
