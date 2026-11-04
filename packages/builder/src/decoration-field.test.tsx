@@ -272,6 +272,25 @@ describe("DecorationField", () => {
     expect(onCommit).toHaveBeenLastCalledWith("overline red");
   });
 
+  it("returns a styled line to its default style", () => {
+    const onCommit = mount("underline wavy");
+    openStyle();
+    fireEvent.click(screen.getByRole("combobox", { name: "Line style" }));
+    fireEvent.click(screen.getByRole("option", { name: "Default" }));
+    expect(onCommit).toHaveBeenLastCalledWith("underline");
+  });
+
+  it("keeps a value written as CSS when a part changes before it is stored", () => {
+    const onCommit = mount("underline");
+    openStyle();
+    const css = screen.getByRole("textbox", { name: "Decoration as CSS" });
+    fireEvent.change(css, { target: { value: "underline wavy" } });
+    fireEvent.blur(css);
+    expect(onCommit).toHaveBeenLastCalledWith("underline wavy");
+    fireEvent.click(screen.getByRole("radio", { name: "Overline" }));
+    expect(onCommit).toHaveBeenLastCalledWith("overline wavy");
+  });
+
   it("starts the next part from the stored value after a refused write", () => {
     const onCommit = vi.fn(
       (): "applied" | "refused" => "refused"

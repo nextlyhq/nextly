@@ -1884,7 +1884,7 @@ function StyleControlField({
         id={labelId}
         htmlFor={id}
         readOnly={readOnly}
-        focusOnly={drawsIcons(control.leaf)}
+        focusOnly={labelFocusOnly(control.leaf, stored)}
         title={summary}
         label={label}
         answer={answer}
@@ -4913,12 +4913,36 @@ const OWN_FIELDS: Readonly<
     {
       draws: (stored: StyleValue | undefined) => boolean;
       Field: typeof AspectRatioField;
+      /** Whether its tab stop is a button a label's `for` would click. */
+      buttons: boolean;
     }
   >
 > = {
-  "aspect-ratio": { draws: drawsAspectRatio, Field: AspectRatioField },
-  "text-decoration": { draws: drawsDecoration, Field: DecorationField },
+  "aspect-ratio": {
+    draws: drawsAspectRatio,
+    Field: AspectRatioField,
+    buttons: false,
+  },
+  "text-decoration": {
+    draws: drawsDecoration,
+    Field: DecorationField,
+    buttons: true,
+  },
 };
+
+/**
+ * Whether a field's label only moves focus: where the control drawn is a
+ * group of buttons, whose tab stop a label's `for` would click. Read from the
+ * same decision that picks the control, so the two never disagree.
+ */
+function labelFocusOnly(
+  leaf: StyleControl["leaf"],
+  stored: StyleValue | undefined
+): boolean {
+  if (drawsIcons(leaf)) return true;
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own !== undefined && own.buttons && own.draws(stored);
+}
 
 /** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({

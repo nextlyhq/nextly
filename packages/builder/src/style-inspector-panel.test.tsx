@@ -4871,6 +4871,38 @@ describe("text decoration", () => {
     expect(row.queryByRole("radio")).toBeNull();
     expect(row.getByRole("textbox")).toBeDefined();
   });
+
+  it("focuses the icons from the label without choosing or clearing a line", () => {
+    // A label's `for` would CLICK the tab stop's radio, clearing the line
+    // chosen or writing the first.
+    const editor = mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline dotted" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe("");
+    fireEvent.click(label);
+    expect(document.activeElement?.getAttribute("role")).toBe("radio");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Underline"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps the label's `for` on the text field the icons give way to", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline overline" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe(
+      fieldsOf("textDecoration").getByRole("textbox").id
+    );
+  });
 });
 
 describe("letter case", () => {

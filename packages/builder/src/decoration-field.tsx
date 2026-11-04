@@ -237,7 +237,7 @@ export function DecorationField({
               stored={typeof stored === "string" ? stored : undefined}
               actionName={actionName}
               describedBy={describedBy}
-              onCommit={onCommit}
+              onCommit={value => parts.writeCss(value, onCommit)}
             />
           </DecorationStyle>
         </PopoverContent>
@@ -263,6 +263,10 @@ function useQueuedParts(
     next: Partial<DecorationParts>,
     onCommit: (value: StyleValue | null) => CommitOutcome
   ) => CommitOutcome;
+  writeCss: (
+    value: string | null,
+    onCommit: (value: StyleValue | null) => CommitOutcome
+  ) => CommitOutcome;
 } {
   const queue = React.useRef<{ value: string; parts: DecorationParts }[]>([]);
   const [, rendered] = React.useReducer((count: number) => count + 1, 0);
@@ -273,25 +277,47 @@ function useQueuedParts(
     queue.current = arrived === -1 ? [] : queue.current.slice(arrived + 1);
   }
   const current = queue.current.at(-1)?.parts ?? base;
+  /** Sends a value, queued as its parts when they can be read from it. */
+  const send = (
+    value: string | null,
+    parts: DecorationParts | undefined,
+    onCommit: (value: StyleValue | null) => CommitOutcome
+  ): CommitOutcome => {
+    const outcome = onCommit(value);
+    // A value the parts cannot hold (cleared, two lines) leaves the queue
+    // with nothing to start from, so the next part starts from what is stored.
+    queue.current =
+      outcome === "applied" && value !== null && parts !== undefined
+        ? [...queue.current, { value, parts }]
+        : [];
+    // Drawn again, so the controls show the part just written.
+    rendered();
+    return outcome;
+  };
   const write = (
     next: Partial<DecorationParts>,
     onCommit: (value: StyleValue | null) => CommitOutcome
   ): CommitOutcome => {
     const parts = { line: current?.line ?? "underline", ...current, ...next };
-    const value = composeDecoration(parts);
-    const outcome = onCommit(value);
-    queue.current =
-      outcome === "applied" ? [...queue.current, { value, parts }] : [];
-    // Drawn again, so the controls show the part just written.
-    rendered();
-    return outcome;
+    return send(composeDecoration(parts), parts, onCommit);
   };
-  return { current, write };
+  // Written as CSS: queued too, so a part changed next keeps it.
+  const writeCss = (
+    value: string | null,
+    onCommit: (value: StyleValue | null) => CommitOutcome
+  ): CommitOutcome =>
+    send(value, value === null ? undefined : parseDecoration(value), onCommit);
+  return { current, write, writeCss };
 }
 
-/** A line style's words, each as the keyword it writes. */
+/**
+ * A line style's words, each as the keyword it writes. Default writes none,
+ * so the line takes CSS's own, solid; a select's item cannot carry an empty
+ * value, so it carries this word, which no style is spelled as.
+ */
+const DEFAULT_STYLE = "default";
 const STYLE_LABELS: Readonly<Record<string, string>> = {
-  "": "Default",
+  [DEFAULT_STYLE]: "Default",
   solid: "Solid",
   double: "Double",
   dotted: "Dotted",
@@ -354,23 +380,21 @@ function DecorationStyle({
       <label className="nx-style-inspector__decoration-part">
         <span>Line style</span>
         <Select
-          value={parts?.style ?? ""}
+          value={parts?.style ?? DEFAULT_STYLE}
           disabled={disabled}
           onValueChange={style =>
-            write({ style: style === "" ? undefined : style })
+            write({ style: style === DEFAULT_STYLE ? undefined : style })
           }
         >
           <SelectTrigger aria-label="Line style" {...refusal}>
-            <SelectValue placeholder="Default" />
+            <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {Object.entries(STYLE_LABELS)
-              .filter(([value]) => value !== "")
-              .map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
+            {Object.entries(STYLE_LABELS).map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </label>
@@ -419,7 +443,7 @@ function DecorationCss({
   stored: string | undefined;
   actionName: string;
   describedBy: string | undefined;
-  onCommit: (value: StyleValue | null) => CommitOutcome;
+  onCommit: (value: string | null) => CommitOutcome;
 }): React.JSX.Element {
   const [text, setText] = useDraft(stored);
   const commit = () => {
