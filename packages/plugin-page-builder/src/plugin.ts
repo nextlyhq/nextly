@@ -26,7 +26,11 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
+import {
+  BUILDER_VIEW_COMPONENT,
+  BUILDER_VIEW_PATH,
+  REMOVE_LAYOUT_ACTION_COMPONENT,
+} from "./builder-view";
 import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
@@ -100,6 +104,8 @@ import {
 } from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
+import { layoutFenceFloor } from "./layout-removal/page-reference-guard";
+import { removeLayoutRoute } from "./layout-removal/remove-route";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   type SharedStyleUsageKind,
@@ -168,9 +174,11 @@ import { variantUseRoute } from "./variant-use-route";
  */
 function pagesOptions(
   opts: PageBuilderOptions,
-  configStyle: SiteStyleData
+  configStyle: SiteStyleData,
+  validateLayout: PagesCollectionOptions["validateLayout"]
 ): PagesCollectionOptions {
   return {
+    ...(validateLayout === undefined ? {} : { validateLayout }),
     ...(opts.pagePreviewPath === undefined
       ? {}
       : { previewPath: opts.pagePreviewPath }),
@@ -1302,7 +1310,15 @@ export const pageBuilder = (
       // A single table discriminated by a column would leave both behind one
       // permission and could not declare a slug unique per kind.
       collections: [
-        pagesCollection(pagesOptions(opts, configStyle)),
+        pagesCollection(
+          pagesOptions(
+            opts,
+            configStyle,
+            // Read per write through the holder `init` fills: the field is
+            // declared before the plugin is installed.
+            layoutFenceFloor(() => defaultLayoutSetup?.removals)
+          )
+        ),
         patternsCollection(),
         componentsCollection(),
         layoutsCollection(),
@@ -1531,6 +1547,11 @@ export const pageBuilder = (
         // preconditions (the Layout is published, the caller may publish
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
+        // Remove Layout: the one way a Layout is deleted or unpublished, fenced
+        // and checked so no page and not the site's default is taken from
+        // under it. The Layout's own delete and unpublish refuse every write
+        // that does not come through here.
+        removeLayoutRoute(),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the
@@ -1690,6 +1711,11 @@ export const pageBuilder = (
             label: "Page Builder",
           },
         ],
+        // "Remove Layout…" in a Layout's document bar, beside History: the one
+        // way an author deletes or unpublishes a Layout, since the form's own
+        // delete and unpublish are refused. The slot is offered to every entry
+        // form; the component draws only on a saved Layout's own.
+        entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
         menu: [
           {
             label: "Patterns",
@@ -1710,20 +1736,13 @@ export const pageBuilder = (
             icon: "PanelsTopLeft",
           },
         ],
-        // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.
-        //
-        // Both named components this package no longer ships: a schema-builder
-        // toggle for turning a collection into a page-builder one, and a
-        // per-entry Normal / Page Builder switch. They belonged to an editor
-        // that stored its own document format, so the choice they offered was
-        // between two storage shapes rather than between two ways of editing
-        // one.
-        //
-        // A slot is registered by SPECIFIER, so nothing type-checks the name:
-        // pointing at a component that is not exported resolves to nothing at
-        // render time, in the admin, at the moment an author opens the form.
-        // Declaring them is therefore worse than omitting them — the admin
-        // reserves the slot either way and only the populated case works.
+        // No `schemaBuilderSlot`. It named a component this package no longer
+        // ships: a schema-builder toggle for turning a collection into a
+        // page-builder one, from an editor that stored its own document
+        // format. A slot is registered by SPECIFIER, so nothing type-checks
+        // the name: pointing at a component that is not exported resolves to
+        // nothing at render time. The toolbar slot above names one this entry
+        // registers (`admin/index.ts`).
       },
     },
   });

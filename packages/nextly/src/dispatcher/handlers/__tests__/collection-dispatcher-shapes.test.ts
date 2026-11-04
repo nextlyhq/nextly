@@ -41,7 +41,17 @@ vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getSchemaRegistryFromDI: vi.fn(),
   getConfigFromDI: vi.fn(),
+  getLoggerFromDI: vi.fn(),
 }));
+
+// The exclusion is not what is judged here: it runs the guarded work at once.
+vi.mock(
+  "../../../domains/schema/services/schema-change-exclusion",
+  async importOriginal => ({
+    ...(await importOriginal<object>()),
+    withSchemaChangeExcluded: (_opts: unknown, work: () => unknown) => work(),
+  })
+);
 
 // Observed at the reader the removed-from-code mark derives its state from:
 // which entities a handler asks about, and that it hands back the answer.

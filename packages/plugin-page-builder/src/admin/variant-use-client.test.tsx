@@ -3,7 +3,7 @@
  * The count the variant delete dialog shows, asked of the plugin's route.
  *
  * The property a plausible client gets wrong: answering a failed request as
- * zero placements, which the dialog would say as "No placement uses this
+ * zero placements, which the dialog would say as "Nothing uses this
  * variant" about one that may be used everywhere. A failure must reach the
  * dialog as a count that could not be made.
  *

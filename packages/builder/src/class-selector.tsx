@@ -12,12 +12,12 @@
  * element being styled — so it must not cost a context switch to a separate
  * surface. Webflow puts its selector field at the top of the Style panel for
  * the same reason, and splits the occasional work (auditing, deleting) into a
- * list built for reading. {@link class-manager-panel} is that half.
+ * list built for reading. {@link shared-styles-panel} is that half.
  *
  * ## Renaming is NOT here
  *
  * A chip menu offering rename would be a second rename policy: the manager's
- * table already edits a name where it is read, and two surfaces deciding
+ * row already edits a name in its details, and two surfaces deciding
  * separately what a name may become is how they come to disagree about a
  * collision. Removing a class from THIS node is a different action — it changes
  * the document, not the library — so that one belongs on the chip.

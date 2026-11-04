@@ -28,6 +28,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import type { SavedComponent } from "./inserter";
+import type { ContentServices, MediaPickerProps } from "./content-controls";
 import { InspectorPanel } from "./inspector-panel";
 
 afterEach(cleanup);
@@ -153,6 +154,32 @@ function mount(
     />
   );
   return editor;
+}
+
+/** The panel with the host's content services, the media library among them. */
+function mountWithServices(node: BlockNode, services: ContentServices) {
+  const lookup: ComponentLookup = new Map([["header", header()]]);
+  const editor = editorFor(pageOf(node));
+  render(
+    <InspectorPanel
+      editor={editor}
+      componentLibrary={{ definitions: lookup, components: LIBRARY }}
+      contentServices={services}
+    />
+  );
+  return editor;
+}
+
+/** A media library that returns one file when its button is pressed. */
+function OnePick({ onSelect }: MediaPickerProps): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect([{ id: "m2", filename: "new.png" }])}
+    >
+      Pick new.png
+    </button>
+  );
 }
 
 /** The props the one applied op carries, read off the spy. */
@@ -649,13 +676,71 @@ describe("two options the control once spelled alike", () => {
   });
 });
 
+describe("an exposed image", () => {
+  it("is chosen from the media library, as the Content tab's image is", () => {
+    // "Not editable here yet (image)" left a placement's picture fixed to
+    // the component's.
+    const editor = mountWithServices(instance(), { MediaPicker: OnePick });
+    expect(screen.queryByText(/Not editable here yet \(image\)/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Choose Picture" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pick new.png" }));
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { picture: "m2" },
+    });
+  });
+
+  it("removes the placement's image, leaving it cleared rather than inherited", () => {
+    const editor = mountWithServices(
+      instance({ overrides: { picture: "m2" } }),
+      { MediaPicker: OnePick }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove Picture" }));
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { picture: { $unset: true } },
+    });
+  });
+
+  it("names the picker by its row's label, which points at it", () => {
+    mountWithServices(instance(), { MediaPicker: OnePick });
+    // The label targets the Choose button, a labelable control, so pressing
+    // the label reaches the picker as it reaches every other row's control.
+    const label = screen.getByText("Picture", { selector: "label" });
+    const target = document.getElementById(label.getAttribute("for") ?? "");
+    expect(target?.tagName).toBe("BUTTON");
+    expect(target?.getAttribute("aria-label")).toBe("Choose Picture");
+  });
+
+  it("keeps a malformed image value visible and out of the picker's reach", () => {
+    // A number is not an image id; offered to the picker it read as "Nothing
+    // chosen" and could be replaced unseen.
+    mountWithServices(instance({ overrides: { picture: 42 } }), {
+      MediaPicker: OnePick,
+    });
+    expect(
+      screen.getByText(/Not editable here yet \(image\)/).textContent
+    ).toContain("42");
+    expect(screen.queryByRole("button", { name: "Choose Picture" })).toBeNull();
+  });
+
+  it("says the library is not available where the host offers none", () => {
+    mountWithServices(instance(), {});
+    expect(
+      screen.getByText("The media library is not available here.")
+    ).toBeDefined();
+  });
+});
+
 describe("rows with no control", () => {
-  it("lists a type it cannot edit yet, with its value, rather than hiding it", () => {
-    mount(instance());
+  it("lists a value its control cannot hold, with the value, rather than hiding it", () => {
+    // An image row chooses a file by id; a host block holding its image as
+    // an object is shown, not offered to a picker that would replace it.
+    mount(instance({ overrides: { picture: { src: "hero.png" } } }));
 
     const note = screen.getByText(/Not editable here yet \(image\)/);
     expect(note.textContent).toContain("hero.png");
-    expect(screen.queryByRole("textbox", { name: "Picture" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose Picture" })).toBeNull();
   });
 
   it("shows a structured value in words — rich text as its text, a list by its count, other data as data — rather than as nothing", () => {

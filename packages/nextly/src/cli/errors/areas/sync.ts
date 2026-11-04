@@ -54,6 +54,10 @@ export const SYNC_CODES = defineCodes({
     cause:
       "`db:sync --demote` names a collection that `nextly.config.ts` does not define.",
   },
+  SYNC_CONFIRMATION_REQUIRED: {
+    cause:
+      "`db:sync --promote` or `--demote` has a confirmation to ask, no terminal is attached to ask it, and `--yes` was not given, so nothing was changed.",
+  },
   I18N_RESTORE_COLLECTION_REQUIRED: {
     cause:
       "`i18n:restore` was run without `--collection`, so it has no entity to restore.",
@@ -145,6 +149,18 @@ export function demoteCollectionNotFound(slug: string): CliError {
     what: `Collection '${slug}' not found in nextly.config.ts collections.`,
     why: "`--demote` moves a collection defined in `nextly.config.ts` to the Schema Builder, and its `collections` array has none with this slug.",
     next: "Check the slug against the `collections` array in `nextly.config.ts`. A collection built in the Schema Builder is already there and needs no demotion.",
+  });
+}
+
+/** `--promote`/`--demote` cannot ask its confirmation, and `--yes` was not given. */
+export function syncConfirmationRequired(
+  flag: "--promote" | "--demote",
+  slug: string
+): CliError {
+  return new CliError("SYNC_CONFIRMATION_REQUIRED", {
+    what: `\`db:sync ${flag} ${slug}\` changed nothing: it asks before it changes anything.`,
+    why: "No terminal is attached to ask (or `--non-interactive` was given, or `CI` is set), and `--yes` was not given.",
+    next: `Run \`nextly db:sync ${flag} ${slug} --yes\` to answer it yes.`,
   });
 }
 

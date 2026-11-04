@@ -95,6 +95,151 @@ describe("a field's provenance dot", () => {
   });
 });
 
+describe("a jump to another tier's value", () => {
+  it("sits under the label, where every other source is named", () => {
+    // "From H2 defaults" sat under the label and "From Desktop" under the
+    // control, on a row of its own. Under the label, beside a control that
+    // spans both lines, it costs no row.
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"] { grid-column: 1; grid-row: 2; justify-self: start; padding-inline: 0; }'
+    );
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field:has(> [data-action="jump"]) > :not(label, [data-action="jump"], .nx-inspector__error) { grid-row: 1 / span 2; }'
+    );
+  });
+
+  it("follows the control again where the row stacks", () => {
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field:has(> [data-action="jump"]) > :not(label, [data-action="jump"], .nx-inspector__error) { grid-row: auto; }'
+    );
+  });
+});
+
+describe("a length field's unit", () => {
+  it("is a small suffix inside the field, the two one bordered control", () => {
+    const box = ruleBody(
+      ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit)"
+    );
+    expect(box).toContain("border: 1px solid var(--nx-input)");
+    expect(box).toContain("background: var(--nx-background)");
+    // The field inside gives its own border up to the box.
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child"
+      )
+    ).toContain("border: 0");
+    const unit = ruleBody(
+      ".nx-style-inspector__numeric .nx-style-inspector__unit"
+    );
+    expect(unit).toContain("border: 0");
+    expect(unit).toContain("color: var(--nx-muted-foreground)");
+    expect(unit).toContain("font-size: var(--text-xs)");
+  });
+
+  it("draws a refusal's border on the whole control", () => {
+    // The field gave its border up to the box, so the box shows the refusal.
+    expect(
+      ruleBody(
+        '.nx-style-inspector__numeric:has(> .nx-style-inspector__unit):has( [aria-invalid="true"] )'
+      )
+    ).toContain("border-color: var(--nx-destructive)");
+  });
+
+  it("keeps four characters of the number in view beside the unit", () => {
+    // A narrow control column used to cut "-0.035" to "-0.03" beside the menu.
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child"
+      )
+    ).toContain("min-width: calc(4ch + 1.5rem)");
+  });
+
+  it("draws the focus ring on the whole control, the field's own given up", () => {
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit):focus-within"
+      )
+    ).toContain("outline: 2px solid var(--nx-ring)");
+  });
+});
+
+describe("the Font control in a style row", () => {
+  it("is as tall as the lists and fields beside it", () => {
+    // The shared list trigger and text field are 40px (2.5rem); the font
+    // picker was 28px, the one short control in Typography.
+    expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
+      "height: 2.5rem"
+    );
+  });
+});
+
+describe("a field under its form toggle", () => {
+  it("hides its label's words from sight only, the toggle's row saying them", () => {
+    const words = ruleBody(
+      "label[data-named-above] .nx-style-inspector__field-label-text"
+    );
+    // Clipped, not removed: the control keeps its name for assistive
+    // technology, and `display: none` would take it away.
+    expect(words).toContain("clip-path: inset(50%)");
+    expect(words).toContain("position: absolute");
+    expect(words).not.toContain("display: none");
+  });
+});
+
+describe("an inherited value's icon", () => {
+  it("is ringed, dashed and muted, never filled as a chosen one is", () => {
+    // More too, when the inherited value is one of its own.
+    const ring = ruleBody(
+      ".nx-icon-choice__option[data-inherited], .nx-icon-choice .nx-icon-choice__more[data-inherited]"
+    );
+    expect(ring).toContain("outline: 1px dashed var(--nx-builder-text-muted)");
+    expect(ring).not.toContain("background");
+  });
+});
+
+describe("an inherited colour's swatch", () => {
+  it("is drawn with a dashed border, as the inherited icon is ringed", () => {
+    expect(ruleBody(".nx-style-inspector__swatch[data-inherited]")).toContain(
+      "border-style: dashed"
+    );
+  });
+});
+
+describe("an inherited value's source", () => {
+  it("sits muted at the end of the label's row, cut short rather than wrapped", () => {
+    // Always shown, unlike the dot: it is half of what the greyed value in
+    // the control means.
+    const source = ruleBody(".nx-style-inspector__provenance-source");
+    expect(source).toContain("margin-inline-start: auto");
+    expect(source).toContain("color: var(--nx-builder-text-muted)");
+    expect(source).toContain("font-size: var(--text-xs)");
+    expect(source).toContain("text-overflow: ellipsis");
+    expect(source).toContain("white-space: nowrap");
+    expect(source).not.toContain("opacity: 0");
+  });
+
+  it("takes a line of its own under the label in the wide layout", () => {
+    // Beside its control the label has a 7rem column, which the label and
+    // its source cannot share on one line.
+    expect(
+      ruleBody(".nx-style-inspector .nx-inspector__field > label")
+    ).toContain("flex-wrap: wrap");
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field > label > .nx-style-inspector__provenance-source { flex-basis: 100%; margin-inline-start: 0; }"
+    );
+    // Stacked, the label has the row to itself, so the source shares it.
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > label > .nx-style-inspector__provenance-source { flex-basis: auto; margin-inline-start: auto; }"
+    );
+  });
+});
+
 describe("the spacing box", () => {
   it("draws a side's action and a refusal over the box, bounded to the inspector", () => {
     // Inside a 3.5rem side, a sentence became a tall column and pushed the

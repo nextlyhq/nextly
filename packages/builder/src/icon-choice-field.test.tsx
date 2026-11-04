@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
 import { IconChoiceField } from "./icon-choice-field";
+import { InheritedValue } from "./inherited-value";
 import { alignmentGroupFor } from "./style-alignment-icons";
 
 afterEach(cleanup);
@@ -25,10 +26,10 @@ const group = alignmentGroupFor(
   }
 )!;
 
-function mount(stored?: string, describedBy?: string) {
+function mount(stored?: string, describedBy?: string, inherited?: string) {
   const onCommit = vi.fn(() => "applied" as const);
   render(
-    <>
+    <InheritedValue.Provider value={inherited}>
       <span id="label">Justify content</span>
       <IconChoiceField
         id="field"
@@ -39,12 +40,51 @@ function mount(stored?: string, describedBy?: string) {
         describedBy={describedBy}
         onCommit={onCommit}
       />
-    </>
+    </InheritedValue.Provider>
   );
   return onCommit;
 }
 
 describe("IconChoiceField", () => {
+  it("marks the inherited value's icon, without choosing it, while nothing is set here", () => {
+    mount(undefined, undefined, "center");
+    const marked = screen
+      .getAllByRole("radio")
+      .filter(radio => radio.hasAttribute("data-inherited"));
+    expect(marked.map(radio => radio.getAttribute("aria-label"))).toEqual([
+      screen.getByRole("radio", { name: /center/i }).getAttribute("aria-label"),
+    ]);
+    // Marked, not checked: nothing is stored on this block.
+    expect(marked[0]?.getAttribute("aria-checked")).toBe("false");
+    // Said as well as drawn: a screen reader otherwise hears every option
+    // unchecked and cannot tell which value applies.
+    expect(marked[0]?.getAttribute("aria-label")).toBe("Center, inherited");
+  });
+
+  it("rings More when the inherited value is one of its values", () => {
+    // "normal" has no icon: it lives in More, which then says what applies.
+    mount(undefined, undefined, "normal");
+    const more = screen.getByLabelText(/^More Justify content values/);
+    expect(more.hasAttribute("data-inherited")).toBe(true);
+    expect(more.getAttribute("aria-label")).toBe(
+      "More Justify content values, showing normal"
+    );
+    expect(
+      screen
+        .getAllByRole("radio")
+        .some(radio => radio.hasAttribute("data-inherited"))
+    ).toBe(false);
+  });
+
+  it("marks nothing once a value is set here", () => {
+    mount("start", undefined, "center");
+    expect(
+      screen
+        .getAllByRole("radio")
+        .some(radio => radio.hasAttribute("data-inherited"))
+    ).toBe(false);
+  });
+
   it("is one radio group named by its label, each icon named in words", () => {
     mount("center");
 

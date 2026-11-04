@@ -75,6 +75,7 @@ import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
+import { useReveal, type Reveal } from "./reveal-hidden";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -118,6 +119,10 @@ type EditorView = EditorMount &
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** The block verbs shared for the surfaces drawn outside the provider. */
+    layerVerbs: CardVerbs;
+    /** What the canvas draws: the document, with selected hidden blocks shown. */
+    reveal: Reveal;
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
   };
@@ -312,11 +317,12 @@ function editorTopBar(
           state opens towards the panel buttons rather than between it and
           what it describes. Reserved only where the bar has the room: below
           1400px it takes what it shows, as the device labels give way there,
-          so the end column never runs into the zoom. */}
+          so the end column never runs into the zoom. Set in the bar's own
+          text size, as Preview beside it is. */}
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end @max-[1400px]/topbar:min-w-0" />
+        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end text-sm @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
           document's leading action with its other ways to publish on its
@@ -459,6 +465,9 @@ function editorInspector(
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
+      // The set above is the config's defaults until the stored one is read,
+      // so a per-device hide waits for it.
+      breakpointsStatus={siteStyleStatus(siteStylePending, siteStyleError)}
       // Which tier the Style tab writes to, and which tiers are live: the
       // canvas's answer rather than the panel's, as the frame's width is
       // what the page's media queries answer for.
@@ -624,7 +633,15 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             overlay={
               <>
                 <VariantPreviewTag name={view.preview.previewing} />
-                <CanvasMarks />
+                {/* A selected block the page hides on this device is drawn
+                    anyway, and its ring says so. */}
+                <CanvasMarks
+                  revealed={view.reveal.ids}
+                  device={{
+                    breakpoints: canvasRender.styleContext.breakpoints,
+                    id: view.editedBreakpoint,
+                  }}
+                />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
                 {/*
@@ -676,8 +693,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
           >
             <Canvas
               // The document as the open variant draws it, in a component's
-              // view; the document itself otherwise.
-              document={view.preview.document}
+              // view, with a selected block it hides on this device drawn
+              // while selected; the document itself otherwise.
+              document={view.reveal.document}
               rootRef={canvasRoot}
               onRoot={setCanvasElement}
               forcedState={shownStyleState}
@@ -935,6 +953,14 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   // The page's title, for the canvas frame's accessible name.
   const pageTitle = page.title;
+  // Over the document the canvas draws: in a component's view, the open
+  // variant's.
+  const reveal = useReveal(
+    componentView.preview.document,
+    mount.editor.selection.ids,
+    canvas.canvasRender.styleContext.breakpoints,
+    canvas.editedBreakpoint
+  );
   const view: EditorView = {
     ...mount,
     ...style,
@@ -943,6 +969,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     documentDirty,
     pageTitle,
     componentView,
+    layerVerbs: cardVerbs,
+    reveal,
     preview: componentView.preview,
   };
   useOpenAtSection({
