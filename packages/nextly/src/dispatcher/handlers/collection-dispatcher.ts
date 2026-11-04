@@ -132,6 +132,7 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
+import { versionInputOf } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -238,7 +239,7 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p) => {
+    execute: async (svc, p, body) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
@@ -250,6 +251,8 @@ function allLocalesLifecycle(
         ...callerUser(),
         routeAuthorized: false,
         authenticatedScope: readAuthenticatedScope(),
+        // The version the move was made from, judged on every language.
+        data: versionInputOf(body),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);

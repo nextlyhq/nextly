@@ -1030,6 +1030,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** `_rev` and `_overwrite`, judged as a save's are; see the entry service. */
+    data?: Readonly<Record<string, unknown>>;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
@@ -1070,6 +1072,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** `_rev` and `_overwrite`, judged as a save's are; see the entry service. */
+    data?: Readonly<Record<string, unknown>>;
   }) {
     return this.entryService.unpublishAllLocales(this.resolveUserParam(params));
   }

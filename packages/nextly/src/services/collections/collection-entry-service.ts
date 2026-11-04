@@ -141,6 +141,12 @@ type EveryLanguageLifecycleParams = {
   routeAuthorized?: boolean;
   /** API-key scope; gates the unconditional publish or unpublish check. */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   */
+  data?: Readonly<Record<string, unknown>>;
 };
 
 /**

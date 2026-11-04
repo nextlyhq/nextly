@@ -273,7 +273,7 @@ function languageCounters(
  * One answer for every read and write, so the version a save returns and the
  * version the next read returns are spelled from the same languages.
  */
-function versionLanguagesFor(args: {
+export function versionLanguagesFor(args: {
   localized: boolean;
   localization: SanitizedLocalizationConfig | undefined;
   locale: string | undefined;

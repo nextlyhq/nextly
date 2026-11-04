@@ -270,6 +270,7 @@ import {
   revisionBumpColumns,
   setDocumentVersion,
   translationTableOf,
+  versionLanguagesFor,
   withDocumentVersion,
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
@@ -285,6 +286,7 @@ import {
   sweepDeletedDocument,
 } from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { overwriteRecordOf } from "../../versions/overwrite-record";
 import { hasLifecycle } from "../../versions/recorded-status";
 import {
   buildRestorePayload,
@@ -304,16 +306,17 @@ import {
   takeLiveSharedValuesInto,
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
-import { overwriteRecordOf } from "../../versions/overwrite-record";
 import {
   certainlyStale,
   type DecodedVersion,
   givenOf,
   judgedLanguage,
+  judgedLanguages,
   judgeLanguageRow,
   judgeMainRow,
   type PartState,
   poolRevisionReader,
+  refuseIfAnyLanguageMoved,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
@@ -7917,6 +7920,13 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code: publishing or
     // withdrawing every language is a write to the entry like any other.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // Judged against the version the caller read, when it sent one, as a save
+    // is: a publish from an out-of-date view would put live what the publisher
+    // never saw. Decided before anything is read.
+    const versionCheck = this.versionCheckOf(params, params.data ?? {});
+    if ("success" in versionCheck) return versionCheck;
+    // Set by a refusal inside the transaction, answered once it rolls back.
+    const staleWrite: StaleWriteHolder = {};
     // Set when the publish rule, asked inside the transaction once for each
     // language going live, refuses one of them. Declared out here so the
     // catch can read it: the adapter re-wraps the thrown sentinel in a
@@ -8003,6 +8013,20 @@ export class CollectionMutationService extends BaseService {
           data: { id: params.entryId },
         };
       }
+
+      // Every language this moves is judged, so the version must name each
+      // one: a read of one language cannot say whether another changed since.
+      // Asked only where there is something to move, and before any work.
+      const judgedLocales = companionPublishable
+        ? judgedLanguages(
+            givenOf(versionCheck),
+            versionLanguagesFor({
+              localized: true,
+              localization: this.localization,
+              locale: EVERY_LOCALE,
+            })
+          )
+        : undefined;
 
       // This method exists to publish every locale, so it is unconditionally a
       // publish and needs the publish permission — checked
@@ -8156,6 +8180,31 @@ export class CollectionMutationService extends BaseService {
             entryVanished = true;
             return;
           }
+          // Judged under the lock, before anything is written: the entry's own
+          // row, then every language it moves. A refusal throws, rolling back
+          // whatever this transaction would have moved.
+          const mainBefore = await refuseIfMainMoved(
+            tx,
+            this.dialect,
+            versionCheck,
+            { table: tableName, id: params.entryId },
+            staleWrite
+          );
+          const languagesBefore =
+            companion && companionPublishable
+              ? await refuseIfAnyLanguageMoved(
+                  tx,
+                  this.dialect,
+                  versionCheck,
+                  {
+                    table: tableName,
+                    id: params.entryId,
+                    languagesTable: companion.companionTableName,
+                    judged: judgedLocales,
+                  },
+                  staleWrite
+                )
+              : undefined;
           const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
           lockedPreviousStatus =
             typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
@@ -8708,6 +8757,25 @@ export class CollectionMutationService extends BaseService {
             fields,
           });
 
+          // An overwrite is recorded whatever the document keeps, in this
+          // transaction, so a move that cannot record it is not kept either.
+          if (versionCheck.kind === "overwrite") {
+            await this.recordOverwriteHistory(
+              tx,
+              params.collectionName,
+              params.entryId,
+              {
+                actor: publishActor,
+                personName: params.user?.name ?? null,
+                locale: null,
+                ...overwriteRecordOf(versionCheck, {
+                  main: mainBefore?.main,
+                  languages: languagesBefore,
+                }),
+              }
+            );
+          }
+
           // One history event for the whole publish, naming the languages it
           // moved, rather than one per language as the deliveries above are.
           await this.recordTransitionHistory(
@@ -8860,6 +8928,15 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     } catch (error) {
+      // Answered after the rollback, from the entry as it now is, so the
+      // refusal names the save that came in between.
+      if (staleWrite.at && versionCheck.kind === "judge") {
+        return this.staleVersionAnswer(
+          params,
+          versionCheck.given,
+          staleWrite.at
+        );
+      }
       // A publish refused by the under-lock document-rule re-check aborts the
       // transaction; return the 403 it resolved, not a 500.
       if (publishDocDenied) {
@@ -11057,11 +11134,21 @@ export class CollectionMutationService extends BaseService {
       );
       // A translated save is judged on its own language too, so the version
       // must name it; one from a read of another language is refused here,
-      // before anything is written.
-      const judgedLocale = judgedLanguage(
-        givenOf(versionCheck),
-        localizedUpdate?.writeLocale
-      );
+      // before anything is written. A move of every language's status is
+      // judged on every language instead, so its version must name them all.
+      const judgedLocale = sweepAllLocales
+        ? undefined
+        : judgedLanguage(givenOf(versionCheck), localizedUpdate?.writeLocale);
+      const judgedLocales = sweepAllLocales
+        ? judgedLanguages(
+            givenOf(versionCheck),
+            versionLanguagesFor({
+              localized: Boolean(localizedUpdate),
+              localization: this.localization,
+              locale: EVERY_LOCALE,
+            })
+          )
+        : undefined;
 
       // Whether this write targets a non-default locale's companion `_status`
       // (which the in-transaction check below reads under the lock) rather than
@@ -11437,6 +11524,22 @@ export class CollectionMutationService extends BaseService {
           // The save's language row as it stood before this save wrote it,
           // for an overwrite's history; set where the row is written below.
           let languageBefore: PartState | undefined;
+          // A move of every language's status: each translation row judged
+          // now, under the entry's lock and before any of them is written.
+          const languagesBefore = localizedUpdate
+            ? await refuseIfAnyLanguageMoved(
+                tx,
+                this.dialect,
+                versionCheck,
+                {
+                  table: tableName,
+                  id: params.entryId,
+                  languagesTable: localizedUpdate.companionTableName,
+                  judged: judgedLocales,
+                },
+                staleWrite
+              )
+            : undefined;
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -13046,6 +13149,7 @@ export class CollectionMutationService extends BaseService {
                 ...overwriteRecordOf(versionCheck, {
                   main: mainBefore?.main,
                   language: languageBefore,
+                  languages: languagesBefore,
                 }),
               }
             );
