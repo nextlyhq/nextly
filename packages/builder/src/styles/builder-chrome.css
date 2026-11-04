@@ -7757,8 +7757,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 .nx-style-inspector__decoration-style {
+  display: grid;
+  place-items: center;
   block-size: var(--nx-builder-control-height);
-  padding-inline: 0.5rem;
+  inline-size: var(--nx-builder-control-height);
+  padding: 0;
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
   background: transparent;
@@ -7770,6 +7773,25 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 .nx-style-inspector__decoration-style:disabled {
   color: var(--nx-builder-text-muted);
   cursor: default;
+}
+
+/*
+ * The popover is mounted outside the inspector, so it takes the inspector's
+ * density itself: 12px text, and the shared controls at the control height.
+ */
+[data-slot="popover-content"].nx-style-inspector__decoration-popover {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  inline-size: auto;
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-style-inspector__decoration-popover
+  :is(input, button, label, [data-slot="select-trigger"]) {
+  font-size: var(--nx-builder-font-size);
 }
 
 .nx-style-inspector__decoration-parts {

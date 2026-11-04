@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { MoreHorizontal } from "lucide-react";
 import * as React from "react";
 
 // Enter commits without submitting the entry form the builder sits in.
@@ -179,12 +180,18 @@ export function DecorationField({
             type="button"
             className="nx-style-inspector__decoration-style"
             aria-label={`${actionName} style`}
+            title="Style…"
             disabled={!styled}
           >
-            Style…
+            {/* The strip's last segment, as More is on the other icon
+                choices: its name says what it opens. */}
+            <MoreHorizontal size={16} aria-hidden="true" />
           </button>
         </PopoverTrigger>
-        <PopoverContent className="nx-style-inspector__decoration-popover">
+        {/* Mounted outside the editor's root: the builder's tokens come
+            with it, and the popover's own rule gives it the inspector's
+            density. */}
+        <PopoverContent className="nx-builder-tokens nx-style-inspector__decoration-popover">
           {parts === undefined ? null : (
             <DecorationStyle parts={parts} write={write} />
           )}

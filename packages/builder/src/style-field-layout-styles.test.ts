@@ -300,5 +300,17 @@ describe("text decoration's icons and style", () => {
     expect(ruleBody(CHROME, ".nx-style-inspector__decoration-part")).toContain(
       "grid-template-columns: 5.5rem minmax(0, 1fr)"
     );
+    // A square segment, so the four icons and it fit the control column.
+    expect(style).toContain("inline-size: var(--nx-builder-control-height)");
+    // Mounted outside the inspector, the popover takes its density itself:
+    // without it, its text and fields were the page's 16px and 40px.
+    const popover = ruleBody(
+      CHROME,
+      '[data-slot="popover-content"].nx-style-inspector__decoration-popover'
+    );
+    expect(popover).toContain("font-size: var(--nx-builder-font-size)");
+    expect(popover).toContain(
+      "--nx-control-height: var(--nx-builder-control-height)"
+    );
   });
 });
