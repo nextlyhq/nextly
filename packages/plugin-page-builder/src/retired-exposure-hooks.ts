@@ -61,7 +61,9 @@ import { asDocument } from "./component-store-source";
 import {
   exposureIdsOf,
   reconcileRetired,
+  repairRetired,
   type ComponentHistory,
+  type ReconcileArgs,
   type RetiredHistoryMemo,
 } from "./retired-history";
 import type { RetiredStore } from "./retired-store";
@@ -190,18 +192,7 @@ async function repair(
   if (live?.live !== true || componentId === undefined) return;
   const lifecycle = live.lifecycle;
   try {
-    await reconcileRetired(
-      {
-        history: args.ctx.services.versions,
-        componentCollection: args.componentCollection,
-        componentField: args.componentField,
-        lifecycle,
-        store: args.store,
-        logger: args.ctx.logger,
-        ...(args.memo === undefined ? {} : { memo: args.memo }),
-      },
-      componentId
-    );
+    await reconcileRetired(repairArgs(args, lifecycle), componentId);
   } catch (error) {
     args.ctx.logger.error(
       `[page-builder] the retired fields of component "${componentId}" ` +
@@ -210,6 +201,22 @@ async function repair(
       { componentId, error }
     );
   }
+}
+
+/** What a repair of this store's retired ids reads and writes through. */
+function repairArgs(
+  args: RetiredExposureHooksArgs,
+  lifecycle: boolean
+): ReconcileArgs {
+  return {
+    history: args.ctx.services.versions,
+    componentCollection: args.componentCollection,
+    componentField: args.componentField,
+    lifecycle,
+    store: args.store,
+    logger: args.ctx.logger,
+    ...(args.memo === undefined ? {} : { memo: args.memo }),
+  };
 }
 
 /** Whether a write puts its removal live, and how the store decides that. */
@@ -331,9 +338,15 @@ async function stripped(
     slug === args.componentCollection
       ? (idOf(fields.originalData) ?? idOf(data))
       : undefined;
-  const retired = await args.store.of(
-    placedComponentIds(written, own, limits.maxNodes)
+  const retired = new Map(
+    await args.store.of(placedComponentIds(written, own, limits.maxNodes))
   );
+  if (own !== undefined) {
+    // `fields` is the hook context, read as a record above.
+    const context = fields as unknown as HookContext<unknown>;
+    const repaired = await ownRetired(args, own, context);
+    if (repaired !== undefined) retired.set(own, repaired);
+  }
   if (retired.size === 0) return undefined;
 
   let next: Record<string, unknown> | undefined;
@@ -353,6 +366,45 @@ async function stripped(
         : self.document;
   }
   return next;
+}
+
+/**
+ * A written component's own retired ids, repaired from its history first.
+ *
+ * The table alone is not enough here: a retirement whose record was lost is
+ * missing from it, and a restore or publish exposing that id again would put
+ * the field back live with the values placements still hold. History says
+ * the id was dropped, so the write drops it, and the table learns it.
+ *
+ * `undefined` where the store records no retirements (a localized one), or
+ * where history cannot be read: the table's ids then stand alone, as the
+ * strip lets a write through whenever it cannot run.
+ */
+async function ownRetired(
+  args: RetiredExposureHooksArgs,
+  componentId: string,
+  context: HookContext<unknown>
+): Promise<RetiredExposures | undefined> {
+  try {
+    const collection = (await args.ctx.services.collections.getCollection(
+      args.componentCollection,
+      requestContextFor(context)
+    )) as { localized?: unknown; status?: unknown } | null;
+    if (collection?.localized === true) return undefined;
+    const repaired = await repairRetired(
+      repairArgs(args, collection?.status === true),
+      componentId
+    );
+    return repaired.retired;
+  } catch (error) {
+    args.ctx.logger.error(
+      `[page-builder] the retired fields of component "${componentId}" ` +
+        "could not be derived from its history before this write; only the " +
+        "recorded ones are dropped from it.",
+      { componentId, error }
+    );
+    return undefined;
+  }
 }
 
 /**

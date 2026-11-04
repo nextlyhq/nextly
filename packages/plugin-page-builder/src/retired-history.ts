@@ -365,20 +365,26 @@ export interface ReconcileArgs extends RetiredHistoryArgs {
   };
 }
 
+/** What a repair found, and whether history was read whole. */
+export interface RepairedRetired {
+  /** The table's ids and the derived ones together. */
+  readonly retired: RetiredExposures;
+  /** As {@link DerivedRetired.complete}. */
+  readonly complete: boolean;
+}
+
 /**
- * The component's retired ids, the table's and history's together, with any
- * the table lacks recorded.
+ * Record the retired ids history implies that the table lacks, and answer the
+ * table's and history's together, read whole or not.
  *
- * Raises when either read fails, or when history could not be read whole,
- * so a caller about to mint never goes ahead on a partial answer: what was
- * found is recorded first. A record that fails is logged, and the derived ids
- * are still answered: they are retired whether or not the table holds them
- * yet, and the next repair records them.
+ * Raises when either read fails. A record that fails is logged, and the
+ * derived ids are still answered: they are retired whether or not the table
+ * holds them yet, and the next repair records them.
  */
-export async function reconcileRetired(
+export async function repairRetired(
   args: ReconcileArgs,
   componentId: string
-): Promise<RetiredExposures> {
+): Promise<RepairedRetired> {
   const derived = await deriveRetired(args, componentId);
   const held = (await args.store.of([componentId])).get(componentId) ?? NONE;
   const missing: RetiredExposures = {
@@ -398,15 +404,31 @@ export async function reconcileRetired(
       );
     }
   }
-  if (!derived.complete) {
+  return {
+    retired: {
+      properties: [...held.properties, ...missing.properties],
+      slots: [...held.slots, ...missing.slots],
+    },
+    complete: derived.complete,
+  };
+}
+
+/**
+ * The component's retired ids for a caller about to mint: {@link repairRetired},
+ * failing when history could not be read whole, so a new id is never chosen
+ * from a partial answer. What was found is recorded first.
+ */
+export async function reconcileRetired(
+  args: ReconcileArgs,
+  componentId: string
+): Promise<RetiredExposures> {
+  const repaired = await repairRetired(args, componentId);
+  if (!repaired.complete) {
     throw new Error(
       `[page-builder] the history of component "${componentId}" could not ` +
         "be read whole, so a field it retired may be missing from its " +
         "retired ids; no field id is offered until it can."
     );
   }
-  return {
-    properties: [...held.properties, ...missing.properties],
-    slots: [...held.slots, ...missing.slots],
-  };
+  return repaired.retired;
 }

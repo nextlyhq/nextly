@@ -116,6 +116,8 @@ function harness(
     collections?: Record<string, Row[]>;
     /** The component's published definitions, oldest first. */
     history?: Row[];
+    /** A history read in place of `history`'s. */
+    versions?: ComponentHistory;
   } = {}
 ) {
   const handlers = new Map<string, Handler>();
@@ -159,7 +161,7 @@ function harness(
             ),
           }),
         },
-        versions: publishedHistory(options.history ?? []),
+        versions: options.versions ?? publishedHistory(options.history ?? []),
       },
       logger: {
         warn: (message, meta) => warnings.push({ message, meta }),
@@ -599,6 +601,59 @@ describe("stripping retired values on every write", () => {
 });
 
 describe("a component dropping its own retired ids", () => {
+  it("drops an id its history retired when the table lost the record", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({
+      store,
+      history: [definition(["title", "body"]), definition(["body"])],
+    });
+
+    const result = (await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      operation: "update",
+      originalData: { id: "hero", content: definition(["body"]) },
+      data: { content: definition(["title", "body"]), status: "published" },
+    })) as Row;
+
+    expect(
+      (result.content as { exposed: { id: string }[] }).exposed.map(
+        entry => entry.id
+      )
+    ).toEqual(["body"]);
+    expect(retired).toEqual([
+      { componentId: "hero", retired: { properties: ["title"], slots: [] } },
+    ]);
+  });
+
+  it("keeps a component write going when its history cannot be read", async () => {
+    const { store } = memoryStore({
+      hero: { properties: ["title"], slots: [] },
+    });
+    const { run, errors } = harness({
+      store,
+      versions: {
+        list: async () => {
+          throw new Error("database down");
+        },
+        get: async () => ({ snapshot: null }),
+      },
+    });
+
+    const result = (await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      operation: "update",
+      originalData: { id: "hero", content: definition(["body"]) },
+      data: { content: definition(["title", "body"]) },
+    })) as Row;
+
+    expect(
+      (result.content as { exposed: { id: string }[] }).exposed.map(
+        entry => entry.id
+      )
+    ).toEqual(["body"]);
+    expect(errors.some(error => error.message.includes('"hero"'))).toBe(true);
+  });
+
   it("drops them from exposed, slots and variants, keeping an emptied variant", async () => {
     const { store } = memoryStore({
       hero: { properties: ["title"], slots: ["aside"] },

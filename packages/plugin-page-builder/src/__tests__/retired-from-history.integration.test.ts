@@ -216,7 +216,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await retiredRows(t)).toHaveLength(1);
     });
 
-    it("keeps a lost retirement after a later publish exposes the id again", async () => {
+    it("keeps a lost retirement when a later publish exposes the id again", async () => {
       const t = await boot();
       const heroId = await publishedHero(t);
       await save(t, heroId, ["body"], "published");
@@ -227,9 +227,22 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         });
       }
-      // With the record lost, nothing strips the id from a definition that
-      // brings it back, so this publish exposes it again.
+      // The record lost, the write is told by history that the id went: the
+      // publish bringing it back has it taken out again, and the table learns
+      // it on the way.
       await save(t, heroId, ["title", "body"], "published");
+      const live = (await t.nextly.findByID({
+        collection: COMPONENTS_SLUG,
+        id: heroId,
+        depth: 0,
+        overrideAccess: true,
+      })) as Row;
+      const content = (
+        typeof live.content === "string"
+          ? JSON.parse(live.content)
+          : live.content
+      ) as { exposed: Row[] };
+      expect(content.exposed.map(entry => entry.id)).toEqual(["body"]);
       const cookie = await reader(t);
 
       expect((await facts(cookie, heroId)).retired).toEqual({
