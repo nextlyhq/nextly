@@ -30,6 +30,7 @@ interface Listed {
   resource: string;
   slug: string;
   owner: string | null;
+  group: string | null;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -96,9 +97,11 @@ describe.each(getConfiguredTestDialects())(
             1
           );
         }
+        // Marked as a workflow's own, which the presets read, rather than by their shape.
         expect(rows("publish-without-review", resource)[0]).toMatchObject({
           slug: `publish-without-review-${resource}`,
           owner: null,
+          group: "workflow",
         });
       }
       expect(rows("approve", "posts")[0]?.owner).toBeNull();
@@ -162,9 +165,19 @@ describe.each(getConfiguredTestDialects())(
           action,
           "posts",
           `${action} posts`,
-          `${action}-posts`
+          `${action}-posts`,
+          undefined,
+          { group: "workflow" }
         );
       }
+      // An admin's own permission, owned by no one and with an action no entity is built with,
+      // is the admin's: the presets keep granting it.
+      await permissions.ensurePermission(
+        "export",
+        "posts",
+        "Export posts",
+        "export-posts"
+      );
 
       await seedRolePresets(current.adapter, current.getService("logger"));
 
@@ -179,6 +192,13 @@ describe.each(getConfiguredTestDialects())(
         expect(held, preset).not.toContain("approve-posts");
         expect(held, preset).not.toContain("publish-without-review-posts");
       }
+      const admin = await services.roles.findRoleIdBySlug("admin");
+      if (!admin) throw new Error("no admin role");
+      expect(
+        (await services.rolePermissions.listRolePermissions(admin.id)).map(
+          p => `${p.action}-${p.resource}`
+        )
+      ).toContain("export-posts");
     });
   }
 );
