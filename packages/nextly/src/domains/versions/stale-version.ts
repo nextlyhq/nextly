@@ -558,6 +558,8 @@ async function callerMayReadDocument(args: {
   trusted: boolean;
   authenticatedScope?: AuthenticatedScope;
   hookInputs?: { request?: Request; context?: Record<string, unknown> };
+  /** The languages the refusal is about, each of which the caller must be able to read. */
+  locales?: readonly string[];
 }): Promise<boolean> {
   if (args.trusted) return true;
   if (!args.user) return false;
@@ -573,7 +575,8 @@ async function callerMayReadDocument(args: {
       args.entryId,
       args.user,
       args.authenticatedScope,
-      args.hookInputs ?? {}
+      args.hookInputs ?? {},
+      args.locales ?? []
     );
     return true;
   } catch (error) {
@@ -623,14 +626,21 @@ export async function certainlyStale(
     table: string;
     id: string;
     given: DecodedVersion;
+    /** The languages the save is judged on, compared as the main row is. */
+    languages?: StaleWrite["languages"];
   }
 ): Promise<boolean> {
   const inHand = await readDocumentRevision(db, {
     dialect: args.dialect,
     table: args.table,
     id: args.id,
+    ...(args.languages ? { languages: args.languages } : {}),
   });
-  return inHand !== undefined && inHand.main.counter > args.given.main;
+  if (inHand === undefined) return false;
+  if (inHand.main.counter > args.given.main) return true;
+  return Object.values(inHand.languages).some(
+    language => language.counter > (args.given.languages[language.part] ?? 0)
+  );
 }
 
 /**
@@ -645,7 +655,18 @@ export async function judgeMainRow(
   tx: RevisionReader,
   dialect: SupportedDialect,
   check: VersionCheck,
-  row: { table: string; id: string }
+  row: {
+    table: string;
+    id: string;
+    /**
+     * The languages the save is judged on, compared before any write as the
+     * main row is: read plainly, under the main-row lock every writer of a
+     * translation row takes first, so no gap of the table's key is locked.
+     * The save's own write of its language claims that row's version again,
+     * for a caller whose transaction saw an older snapshot.
+     */
+    languages?: StaleWrite["languages"];
+  }
 ): Promise<{ stale: boolean; before?: DocumentRevisionState }> {
   if (check.kind === "unjudged") return { stale: false };
   const before = await readDocumentRevision(tx, {
@@ -654,10 +675,23 @@ export async function judgeMainRow(
     id: row.id,
     forUpdate: true,
   });
+  const languages =
+    before && row.languages && row.languages.locales.length > 0
+      ? await readDocumentRevision(tx, {
+          dialect,
+          table: row.table,
+          id: row.id,
+          languages: row.languages,
+        })
+      : undefined;
+  if (before && languages) before.languages = languages.languages;
   const stale =
     before !== undefined &&
     check.kind === "judge" &&
-    staleParts(check.given, { main: before.main }).length > 0;
+    staleParts(check.given, {
+      main: before.main,
+      languages: Object.values(before.languages),
+    }).length > 0;
   return { stale, before };
 }
 
@@ -764,45 +798,6 @@ export async function refuseIfLanguageMoved(
 }
 
 /**
- * Refuse a write over every language at once (a status sweep with `locale:
- * "*"`) when any language's row moved since the version given, which names
- * every language: read before any write, under the main-row lock every
- * writer of a translation row takes first, so a plain read sees what is
- * committed. A language the version names as 0, or does not name, must
- * still have no row.
- */
-export async function refuseIfLanguagesMoved(
-  tx: RevisionReader,
-  dialect: SupportedDialect,
-  check: VersionCheck,
-  row: {
-    table: string;
-    id: string;
-    /** Whether the write sweeps every language; nothing is judged here otherwise. */
-    sweep: boolean;
-    languages: StaleWrite["languages"];
-  },
-  holder: StaleWriteHolder
-): Promise<void> {
-  const languages = row.languages;
-  if (!row.sweep || check.kind !== "judge" || !languages) return;
-  if (languages.locales.length === 0) return;
-  const read = await readDocumentRevision(tx, {
-    dialect,
-    table: row.table,
-    id: row.id,
-    languages,
-  });
-  if (!read) return;
-  const stale = staleParts(check.given, {
-    languages: languages.locales.map(locale => read.languages[locale]),
-  });
-  if (stale.length === 0) return;
-  holder.at = { table: row.table, languages };
-  throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
-}
-
-/**
  * The refusal of an update found out of date, read from the document as it
  * now is, once the write's transaction has rolled back: so it names the save
  * that came in between, never the refused one.
@@ -871,6 +866,7 @@ export async function staleVersionErrorFor(
             slug: args.slug,
             entryId: args.id,
             ...args.reader,
+            locales,
           }),
     namePeople: !args.inSharedTransaction,
     // History is read on the pool, so not inside a shared transaction.

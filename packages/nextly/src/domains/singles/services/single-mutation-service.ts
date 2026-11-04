@@ -209,7 +209,6 @@ import {
   judgedLanguage,
   poolRevisionReader,
   refuseIfLanguageMoved,
-  refuseIfLanguagesMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
   type StaleWriteHolder,
@@ -2020,6 +2019,7 @@ export class SingleMutationService extends BaseService {
           table: singleMeta.tableName,
           id: existingDoc.id,
           given: versionCheck.given,
+          languages: judgedLanguages,
         }))
       ) {
         return buildSingleErrorResult(
@@ -2890,20 +2890,6 @@ export class SingleMutationService extends BaseService {
               {
                 table: singleMeta.tableName,
                 id: existingDoc.id,
-                languages: judgedLanguages,
-              },
-              staleWrite
-            );
-            // A sweep of every language moves each language's status, so each
-            // must still be as the version gave it.
-            await refuseIfLanguagesMoved(
-              tx,
-              this.adapter.dialect,
-              versionCheck,
-              {
-                table: singleMeta.tableName,
-                id: existingDoc.id,
-                sweep: sweepAllLocales,
                 languages: judgedLanguages,
               },
               staleWrite

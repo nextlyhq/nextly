@@ -334,7 +334,6 @@ import {
   judgeMainRow,
   poolRevisionReader,
   refuseIfLanguageMoved,
-  refuseIfLanguagesMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
   type PartState,
@@ -12365,16 +12364,10 @@ export class CollectionMutationService extends BaseService {
     table: string
   ): Promise<CollectionServiceResult | null> {
     if (check.kind !== "judge") return null;
-    const stale = await certainlyStale(poolRevisionReader(this.adapter), {
-      dialect: this.dialect,
-      table,
-      id: params.entryId,
-      given: check.given,
-    });
-    if (!stale) return null;
-    // The save's language, when the version names it, so the answer can be
-    // sent back with the same save. Read before any hook has split the body,
-    // so taken from the request: the language it names, or the default.
+    // The save's language, when the version names it: compared here as the
+    // main row is, and named in the answer so it can be sent back with the
+    // same save. Read before any hook has split the body, so taken from the
+    // request: the language it names, or the default.
     const locale = this.localization
       ? resolveRequestedLocale(this.localization, params.locale)
       : undefined;
@@ -12382,9 +12375,7 @@ export class CollectionMutationService extends BaseService {
       locale !== undefined && locale in check.given.languages
         ? await this.fileManager.loadCompanionSchema(params.collectionName)
         : null;
-    return this.staleVersionAnswer(
-      params,
-      check.given,
+    const at: StaleWrite =
       companion && locale !== undefined
         ? {
             table,
@@ -12393,8 +12384,15 @@ export class CollectionMutationService extends BaseService {
               locales: [locale],
             },
           }
-        : { table }
-    );
+        : { table };
+    const stale = await certainlyStale(poolRevisionReader(this.adapter), {
+      dialect: this.dialect,
+      table,
+      id: params.entryId,
+      given: check.given,
+      languages: at.languages,
+    });
+    return stale ? this.staleVersionAnswer(params, check.given, at) : null;
   }
 
   /**
@@ -13552,20 +13550,6 @@ export class CollectionMutationService extends BaseService {
             {
               table: tableName,
               id: params.entryId,
-              languages: judgedLanguages,
-            },
-            staleWrite
-          );
-          // A sweep of every language moves each language's status, so each
-          // must still be as the version gave it.
-          await refuseIfLanguagesMoved(
-            tx,
-            this.dialect,
-            versionCheck,
-            {
-              table: tableName,
-              id: params.entryId,
-              sweep: sweepCompanion !== null,
               languages: judgedLanguages,
             },
             staleWrite
@@ -18036,36 +18020,46 @@ export class CollectionMutationService extends BaseService {
       // The main row's version, under the lock just taken and before this
       // item writes anything, so a refused item leaves nothing behind in a
       // transaction that goes on with the rest of a batch.
+      // The default language, the one a batch writes, when the version names
+      // it: judged with the main row, and named in a refusal so the answer
+      // can be sent back with the same save.
+      const defaultLocale = this.localization?.defaultLocale;
+      const batchCompanion =
+        versionCheck.kind !== "unjudged" &&
+        defaultLocale !== undefined &&
+        versionCheck.given !== undefined &&
+        defaultLocale in versionCheck.given.languages
+          ? await this.fileManager.loadCompanionSchema(
+              params.collectionName,
+              tx.getDrizzle()
+            )
+          : null;
+      const batchAt: StaleWrite =
+        batchCompanion && defaultLocale !== undefined
+          ? {
+              table: tableName,
+              languages: {
+                table: batchCompanion.companionTableName,
+                locales: [defaultLocale],
+              },
+            }
+          : { table: tableName };
+      // The main row's version and that language's, under the lock just
+      // taken and before this item writes or runs anything, so a refused
+      // item leaves nothing behind in a transaction that goes on with the
+      // rest of a batch.
       const mainJudged = await judgeMainRow(tx, this.dialect, versionCheck, {
         table: tableName,
         id: entryId,
+        languages: batchAt.languages,
       });
       if (mainJudged.stale && versionCheck.kind === "judge") {
-        // Named in the default language, the one a batch writes, when the
-        // version names it, so the answer can be sent back with the same save.
-        const defaultLocale = this.localization?.defaultLocale;
-        const companion =
-          defaultLocale !== undefined &&
-          defaultLocale in versionCheck.given.languages
-            ? await this.fileManager.loadCompanionSchema(
-                params.collectionName,
-                tx.getDrizzle()
-              )
-            : null;
         return this.staleVersionAnswerInTransaction(
           tx,
           params,
           entryId,
           versionCheck.given,
-          companion && defaultLocale !== undefined
-            ? {
-                table: tableName,
-                languages: {
-                  table: companion.companionTableName,
-                  locales: [defaultLocale],
-                },
-              }
-            : { table: tableName }
+          batchAt
         );
       }
       if (rowFilter) {

@@ -32,6 +32,8 @@ afterEach(async () => {
 /** Translated, with a shared field, so an entry can exist with no translation row. */
 const DOCS = "docs";
 const LANGUAGES = `dc_${DOCS}_locales`;
+/** Runs of the translated collection's before-change hook. */
+let docsBeforeChangeCalls = 0;
 /** No languages: the plainest entry there is. */
 const NOTES = "notes";
 /** Draft and published, so a published entry holds an edit as a working draft. */
@@ -64,6 +66,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: DOCS,
         localized: true,
         access: OPEN,
+        hooks: {
+          beforeChange: [
+            ({ data }: { data?: unknown }) => {
+              docsBeforeChangeCalls += 1;
+              return data;
+            },
+          ],
+        },
         fields: [
           text({ name: "title", localized: true }),
           text({ name: "note", localized: false }),
@@ -1078,6 +1088,83 @@ describe.each(getConfiguredTestDialects())(
         { locale: "*" }
       );
       expect(fresh.success, JSON.stringify(fresh)).toBe(true);
+    });
+
+    it("refuses a save whose translation is already behind before any hook runs, alone and in a batch", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      const es = await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      // Spanish alone moves: the main counter stays where the version has it.
+      await update(t, DOCS, id, { title: "hola otra vez" }, { locale: "es" });
+      const before = docsBeforeChangeCalls;
+      const refused = await update(
+        t,
+        DOCS,
+        id,
+        { title: "mía", _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(docsBeforeChangeCalls).toBe(before);
+
+      // The same in a batch, which writes the default language.
+      const en = revOf(
+        await update(t, DOCS, id, { title: "hello" }, { locale: "en" })
+      );
+      await update(t, DOCS, id, { title: "hello again" }, { locale: "en" });
+      const beforeBatch = docsBeforeChangeCalls;
+      const batch = await serviceOf(t).updateMany(
+        DOCS,
+        [{ id, data: { title: "mine", _rev: en } }],
+        { overrideAccess: true } as never
+      );
+      expect(batch.errors.map(e => e.code)).toEqual(["STALE_VERSION"]);
+      expect(docsBeforeChangeCalls).toBe(beforeBatch);
+    });
+
+    it("accepts a version of every language on a save of one, judging that language and the shared fields alone", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      const everyLanguage = String(
+        (
+          (await t.nextly.findByID({
+            collection: DOCS as never,
+            id,
+            locale: "*",
+            overrideAccess: true,
+          } as never)) as { _rev: string }
+        )._rev
+      );
+      expect(everyLanguage).toMatch(/\.en:\d+,es:\d+$/);
+      // English moves after the read: a Spanish save from it is still current.
+      await update(t, DOCS, id, { title: "hello again" }, { locale: "en" });
+      const spanish = await update(
+        t,
+        DOCS,
+        id,
+        { title: "hola de nuevo", _rev: everyLanguage },
+        { locale: "es" }
+      );
+      expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+      // Spanish has now moved too: an English save from the same read is
+      // refused only because English moved, not because Spanish did.
+      const english = await update(
+        t,
+        DOCS,
+        id,
+        { title: "mine", _rev: everyLanguage },
+        { locale: "en" }
+      );
+      expect(english).toMatchObject({ code: "STALE_VERSION" });
     });
   }
 );

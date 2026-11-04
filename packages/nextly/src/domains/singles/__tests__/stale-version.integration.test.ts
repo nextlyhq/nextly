@@ -26,6 +26,7 @@ afterEach(async () => {
 
 /** Two languages, with a shared field. */
 const PREFS = "prefs";
+let prefsBeforeChangeCalls = 0;
 /** No languages; counts its before-change hook's runs. */
 const PLAIN = "plain";
 let beforeChangeCalls = 0;
@@ -48,6 +49,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: PREFS,
         localized: true,
         access: OPEN,
+        hooks: {
+          beforeChange: [
+            ({ data }: { data?: unknown }) => {
+              prefsBeforeChangeCalls += 1;
+              return data;
+            },
+          ],
+        },
         fields: [
           text({ name: "siteName", localized: true }),
           text({ name: "contact", localized: false }),
@@ -347,6 +356,27 @@ describe.each(getConfiguredTestDialects())(
         { locale: "*" }
       );
       expect(fresh.success, JSON.stringify(fresh)).toBe(true);
+    });
+
+    it("refuses a save whose translation is already behind before any hook runs", async () => {
+      const t = await boot(dialect);
+      await save(
+        t,
+        PREFS,
+        { siteName: "Hello", contact: "c" },
+        { locale: "en" }
+      );
+      const es = await save(t, PREFS, { siteName: "Hola" }, { locale: "es" });
+      await save(t, PREFS, { siteName: "Hola otra vez" }, { locale: "es" });
+      const before = prefsBeforeChangeCalls;
+      const refused = await save(
+        t,
+        PREFS,
+        { siteName: "Mía", _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(prefsBeforeChangeCalls).toBe(before);
     });
   }
 );
