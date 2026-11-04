@@ -452,25 +452,29 @@ async function readPostgresCarryFacts(
             AND (oc.opcintype = ${newType}
                  OR EXISTS (SELECT 1 FROM pg_cast c WHERE c.castsource = ${newType}
                             AND c.casttarget = oc.opcintype AND c.castmethod = 'b')))`;
+  // A position among the index's keys holding the column. The positions past `indnkeyatts` are its
+  // INCLUDE columns, carried as stored values with no operator class (their `indclass` is 0),
+  // which any type keeps.
+  const keyPosition = sql`x.indkey[k] = ${attnum} AND k < x.indnkeyatts`;
   const indexes = await querySqlRows<IndexRow>(
     db,
     "postgresql",
     sql`SELECT ic.relname AS name,
-          EXISTS (SELECT 1 FROM generate_subscripts(x.indkey, 1) k WHERE x.indkey[k] = ${attnum}) AS keyed,
+          EXISTS (SELECT 1 FROM generate_subscripts(x.indkey, 1) k WHERE ${keyPosition}) AS keyed,
           ((x.indexprs IS NOT NULL OR x.indpred IS NOT NULL)
             AND EXISTS (SELECT 1 FROM pg_depend dep WHERE dep.classid = 'pg_class'::regclass
                         AND dep.objid = x.indexrelid AND dep.refclassid = 'pg_class'::regclass
                         AND dep.refobjid = x.indrelid AND dep.refobjsubid = ${attnum})
-            AND (NOT EXISTS (SELECT 1 FROM generate_subscripts(x.indkey, 1) k WHERE x.indkey[k] = ${attnum})
+            AND (NOT EXISTS (SELECT 1 FROM generate_subscripts(x.indkey, 1) k WHERE ${keyPosition})
                  OR position(quote_ident(${request.column}) IN
                     COALESCE(pg_get_expr(x.indexprs, x.indrelid), '') || ' ' ||
                     COALESCE(pg_get_expr(x.indpred, x.indrelid), '')) > 0)
           ) AS in_expression,
           (SELECT string_agg(o.opcname, ', ') FROM generate_subscripts(x.indkey, 1) k
              JOIN pg_opclass o ON o.oid = x.indclass[k]
-             WHERE x.indkey[k] = ${attnum} AND NOT o.opcdefault) AS explicit_opclass,
+             WHERE ${keyPosition} AND NOT o.opcdefault) AS explicit_opclass,
           COALESCE((SELECT bool_and(${keeps(sql`x.indclass[k]`)})
-             FROM generate_subscripts(x.indkey, 1) k WHERE x.indkey[k] = ${attnum}), true) AS kept
+             FROM generate_subscripts(x.indkey, 1) k WHERE ${keyPosition}), true) AS kept
         FROM pg_index x
         JOIN pg_class ic ON ic.oid = x.indexrelid
         WHERE x.indrelid = ${relation}

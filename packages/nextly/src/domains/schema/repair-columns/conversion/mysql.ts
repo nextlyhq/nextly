@@ -499,6 +499,11 @@ async function readMysqlCarryFacts(
         ORDER BY INDEX_NAME, SEQ_IN_INDEX`
   );
   const checks = await readMysqlChecks(db, request, mysqlCheckSource(catalog));
+  // A key out of the column is this database's; a key into it may be any schema's, which MySQL
+  // checks as it checks its own, so a table elsewhere is named with its schema.
+  const outOf = sql`(k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = ${request.table} AND k.COLUMN_NAME = ${request.column})`;
+  const into = sql`(k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = ${request.table}
+                    AND k.REFERENCED_COLUMN_NAME = ${request.column})`;
   const foreignKeys = await querySqlRows<{
     name: string;
     table: string;
@@ -508,17 +513,17 @@ async function readMysqlCarryFacts(
     db,
     "mysql",
     sql`SELECT DISTINCT k.CONSTRAINT_NAME AS name,
-          IF(k.TABLE_NAME = ${request.table} AND k.COLUMN_NAME = ${request.column}, k.REFERENCED_TABLE_NAME, k.TABLE_NAME) AS \`table\`,
-          IF(k.TABLE_NAME = ${request.table} AND k.COLUMN_NAME = ${request.column}, 'out-of', 'into') AS direction,
+          IF(${outOf},
+             IF(k.REFERENCED_TABLE_SCHEMA = DATABASE(), k.REFERENCED_TABLE_NAME,
+                CONCAT(k.REFERENCED_TABLE_SCHEMA, '.', k.REFERENCED_TABLE_NAME)),
+             IF(k.TABLE_SCHEMA = DATABASE(), k.TABLE_NAME, CONCAT(k.TABLE_SCHEMA, '.', k.TABLE_NAME))) AS \`table\`,
+          IF(${outOf}, 'out-of', 'into') AS direction,
           (rc.DELETE_RULE = 'SET NULL' OR rc.UPDATE_RULE = 'SET NULL') AS setsNull
         FROM information_schema.KEY_COLUMN_USAGE k
         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
           ON rc.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND rc.CONSTRAINT_NAME = k.CONSTRAINT_NAME
             AND rc.TABLE_NAME = k.TABLE_NAME
-        WHERE k.TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME IS NOT NULL
-          AND ((k.TABLE_NAME = ${request.table} AND k.COLUMN_NAME = ${request.column})
-               OR (k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = ${request.table}
-                   AND k.REFERENCED_COLUMN_NAME = ${request.column}))
+        WHERE k.REFERENCED_TABLE_NAME IS NOT NULL AND (${outOf} OR ${into})
         ORDER BY k.CONSTRAINT_NAME`
   );
   return {

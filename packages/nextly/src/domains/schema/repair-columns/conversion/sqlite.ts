@@ -270,9 +270,12 @@ export function planSqliteConversion(
       ]
     );
   }
+  // Only a type change can change what the key is: a nullability change keeps the declared type,
+  // and with it whether the key is the table's rowid.
   const cannotCarry: CannotCarry[] = facts.columns
     .filter(
       column =>
+        typeChanges(request) &&
         column.primaryKey &&
         column.name.toLowerCase() === request.column.toLowerCase()
     )
@@ -498,23 +501,34 @@ function indexReadingInExpression(
   indexSql: string,
   column: string
 ): string | undefined {
+  const parts = indexParts(indexSql);
+  if (parts === undefined) return indexSql;
+  const reads =
+    parts.keys.some(key => isExpressionKey(key) && namesColumn(key, column)) ||
+    namesColumn(parts.predicate, column);
+  return reads ? parts.name : undefined;
+}
+
+/**
+ * A CREATE INDEX statement's index name, its keys (each its tokens) and the tokens of its WHERE
+ * predicate, or undefined where the statement cannot be read that far.
+ */
+function indexParts(
+  indexSql: string
+): { name: string; keys: Token[][]; predicate: Token[] } | undefined {
   const words = significant(tokenize(indexSql) ?? []);
   const on = words.findIndex(token => isWord(token, "ON"));
   const open = words.findIndex((token, k) => k > on && isPunct(token, "("));
   const close = open < 0 ? undefined : closingParen(words, open);
-  if (on < 1 || close === undefined) return indexSql;
-  const keys: Token[][] = [[]];
-  let depth = 0;
-  for (const token of words.slice(open + 1, close)) {
-    if (isPunct(token, "(")) depth += 1;
-    if (isPunct(token, ")")) depth -= 1;
-    if (depth === 0 && isPunct(token, ",")) keys.push([]);
-    else keys.at(-1)?.push(token);
-  }
-  const reads =
-    keys.some(key => isExpressionKey(key) && namesColumn(key, column)) ||
-    namesColumn(words.slice(close + 1), column);
-  return reads ? identifierOf(words[on - 1]) : undefined;
+  // The key list splits as a table's column list does: at its top-level commas.
+  const keys =
+    close === undefined ? undefined : columnListItems(words, words[open]);
+  if (on < 1 || close === undefined || keys === undefined) return undefined;
+  return {
+    name: identifierOf(words[on - 1]),
+    keys,
+    predicate: words.slice(close + 1),
+  };
 }
 
 /** Whether an index key is an expression, not a column with its COLLATE and ASC or DESC. */

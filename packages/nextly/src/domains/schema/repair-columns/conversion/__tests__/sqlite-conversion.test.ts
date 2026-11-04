@@ -319,6 +319,21 @@ describe("planSqliteConversion: what blocks it", () => {
     ]);
   });
 
+  it("does not block a primary-key column whose nullability alone changes, which keeps its declared type", () => {
+    const plan = planSqliteConversion(
+      facts(`CREATE TABLE t (id text PRIMARY KEY NOT NULL, c text, d text)`),
+      request({
+        column: "id",
+        from: { type: "text", nullable: false },
+        to: { type: "text", nullable: true },
+      })
+    );
+    expect(plan.cannotCarry).toEqual([]);
+    expect(twinOf(plan)).toBe(
+      `CREATE TABLE "__new_t" (id text PRIMARY KEY, c text, d text)`
+    );
+  });
+
   it("blocks a STRICT table's column becoming a type STRICT does not take, naming the table and the types", () => {
     const plan = planSqliteConversion(
       facts(

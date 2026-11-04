@@ -122,46 +122,74 @@ async function runPlan(
   plan: ColumnConversionPlan,
   afterStep?: (step: number) => Promise<void>
 ): Promise<void> {
-  const sqlite = connection.dialect === "sqlite";
   for (const [step, group] of plan.steps.entries()) {
-    const transactional = connection.dialect !== "mysql";
-    const [{ foreign_keys: enforced }] = sqlite
-      ? await connection.query<{ foreign_keys: number }>("PRAGMA foreign_keys")
-      : [{ foreign_keys: 0 }];
-    if (sqlite) await connection.exec("PRAGMA foreign_keys = OFF");
-    try {
-      if (transactional) {
-        await connection.exec(sqlite ? "BEGIN IMMEDIATE" : "BEGIN");
-      }
-      try {
-        if (sqlite) {
-          const [{ foreign_keys: inside }] = await connection.query<{
-            foreign_keys: number;
-          }>("PRAGMA foreign_keys");
-          if (inside !== 0) throw new Error("foreign keys are still on");
-        }
-        for (const statement of group) await connection.exec(statement);
-        if (sqlite) {
-          const dangling = await connection.query("PRAGMA foreign_key_check");
-          if (dangling.length > 0) {
-            throw new Error(
-              `the step left references dangling: ${JSON.stringify(dangling)}`
-            );
-          }
-        }
-        if (transactional) await connection.exec("COMMIT");
-      } catch (error) {
-        if (transactional) await connection.exec("ROLLBACK");
-        throw error;
-      }
-    } finally {
-      if (sqlite) {
-        await connection.exec(
-          `PRAGMA foreign_keys = ${enforced === 0 ? "OFF" : "ON"}`
+    await runGroup(connection, group);
+    await afterStep?.(step);
+  }
+}
+
+/** One group of a plan's statements, run as the dialect commits them. */
+async function runGroup(
+  connection: Connection,
+  group: readonly string[]
+): Promise<void> {
+  if (connection.dialect === "sqlite") return runSqliteGroup(connection, group);
+  if (connection.dialect === "mysql") return runStatements(connection, group);
+  return inTransaction(connection, "BEGIN", () =>
+    runStatements(connection, group)
+  );
+}
+
+async function runStatements(
+  connection: Connection,
+  group: readonly string[]
+): Promise<void> {
+  for (const statement of group) await connection.exec(statement);
+}
+
+/** `work` inside one transaction, committed when it succeeds and rolled back when it throws. */
+async function inTransaction(
+  connection: Connection,
+  begin: string,
+  work: () => Promise<void>
+): Promise<void> {
+  await connection.exec(begin);
+  try {
+    await work();
+    await connection.exec("COMMIT");
+  } catch (error) {
+    await connection.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** A SQLite group as `executeTransaction` runs a unit, its foreign-key setting restored after. */
+async function runSqliteGroup(
+  connection: Connection,
+  group: readonly string[]
+): Promise<void> {
+  const [{ foreign_keys: enforced }] = await connection.query<{
+    foreign_keys: number;
+  }>("PRAGMA foreign_keys");
+  await connection.exec("PRAGMA foreign_keys = OFF");
+  try {
+    await inTransaction(connection, "BEGIN IMMEDIATE", async () => {
+      const [{ foreign_keys: inside }] = await connection.query<{
+        foreign_keys: number;
+      }>("PRAGMA foreign_keys");
+      if (inside !== 0) throw new Error("foreign keys are still on");
+      await runStatements(connection, group);
+      const dangling = await connection.query("PRAGMA foreign_key_check");
+      if (dangling.length > 0) {
+        throw new Error(
+          `the step left references dangling: ${JSON.stringify(dangling)}`
         );
       }
-    }
-    await afterStep?.(step);
+    });
+  } finally {
+    await connection.exec(
+      `PRAGMA foreign_keys = ${enforced === 0 ? "OFF" : "ON"}`
+    );
   }
 }
 
@@ -464,6 +492,11 @@ const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
 describe.each(DIALECTS)("a column conversion on %s", dialect => {
   const available = dialect === "sqlite" || readDialectUrl(dialect) !== null;
+  // Whether this run can reach each database, so a case written for one skips on the others.
+  const onPostgres = available && dialect === "postgresql";
+  const onMysql = available && dialect === "mysql";
+  const onSqlite = available && dialect === "sqlite";
+  const onServer = onPostgres || onMysql;
   let scratch: ScratchDatabase | null = null;
   let connection: Connection;
 
@@ -546,7 +579,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "postgresql" || !available)(
+  it.skipIf(!onPostgres)(
     "a view that reads the column and a default the new type cannot hold block it",
     async () => {
       await build({
@@ -577,7 +610,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "mysql" || !available)(
+  it.skipIf(!onMysql)(
     "an index on a text column becoming JSON blocks it",
     async () => {
       await build({
@@ -597,7 +630,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "mysql" || !available)(
+  it.skipIf(!onMysql)(
     "a text column keyed by a 191-character prefix: blocked becoming varchar(36), kept becoming varchar(255)",
     async () => {
       // On a string no longer than the prefix MySQL would key the whole column instead, changing
@@ -647,7 +680,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect === "sqlite" || !available)(
+  it.skipIf(!onServer)(
     "a text column with a non-default collation and no index becomes JSON, its collation named as not carried",
     async () => {
       const shape: Shape =
@@ -680,7 +713,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "postgresql" || !available)(
+  it.skipIf(!onPostgres)(
     'a column with COLLATE "C" becoming a type that takes a collation keeps "C"',
     async () => {
       const shape: Shape = {
@@ -719,7 +752,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "postgresql" || !available).each([
+  it.skipIf(!onPostgres).each([
     {
       property: "generated column",
       name: "conv_g",
@@ -754,7 +787,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "postgresql" || !available)(
+  it.skipIf(!onPostgres)(
     'a mixed-case table keeps the converted column\'s COLLATE "C"',
     async () => {
       // The table is found by its quoted name: read unquoted, PostgreSQL folds it to lower case,
@@ -784,7 +817,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "mysql" || !available)(
+  it.skipIf(!onMysql)(
     "a SET NULL key out of the column blocks making it NOT NULL, as MySQL refuses it (1830)",
     async () => {
       const shape: Shape = {
@@ -821,7 +854,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "mysql" || !available)(
+  it.skipIf(!onMysql)(
     "a check and a functional key part that read the column are read from this server's catalog",
     async () => {
       // MySQL 8.0.16 reports both; a read that took this server for one without them would find
@@ -867,7 +900,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     };
   }
 
-  it.skipIf(dialect !== "postgresql" || !available)(
+  it.skipIf(!onPostgres)(
     "an identity column becoming text blocks it, as PostgreSQL refuses the type change",
     async () => {
       await connection.exec(
@@ -895,7 +928,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "postgresql" || !available).each([
+  it.skipIf(!onPostgres).each([
     {
       shape: "inheritance children",
       statements: [
@@ -947,7 +980,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "mysql" || !available)(
+  it.skipIf(!onMysql)(
     "a primary-key column becoming JSON blocks it as the key, as MySQL refuses it",
     async () => {
       await connection.exec(
@@ -964,7 +997,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "mysql" || !available)(
+  it.skipIf(!onMysql)(
     "an AUTO_INCREMENT column becoming varchar blocks it, as MySQL refuses it",
     async () => {
       await connection.exec(
@@ -993,7 +1026,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "sqlite" || !available)(
+  it.skipIf(!onSqlite)(
     "a stored generated column that reads the column blocks a type change; a virtual one does not",
     async () => {
       await connection.exec(
@@ -1009,7 +1042,7 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
     }
   );
 
-  it.skipIf(dialect !== "sqlite" || !available)(
+  it.skipIf(!onSqlite)(
     "a unique key and foreign keys on the column, read from the catalog, block a change of affinity; the same affinity keeps them",
     async () => {
       await connection.exec("CREATE TABLE conv_parent (k text PRIMARY KEY)");
@@ -1040,6 +1073,61 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
           )
         ).named
       ).toEqual([]);
+    }
+  );
+
+  it.skipIf(!onPostgres)(
+    "a column carried only in an index's INCLUDE list keeps the index across a type change",
+    async () => {
+      // An INCLUDE column has no operator class, so it is not judged as a key.
+      await build({ ...SHAPES.postgresql[0], indexOn: null });
+      await connection.exec(
+        `CREATE INDEX conv_t_inc ON ${TABLE} (id) INCLUDE (c)`
+      );
+      const plan = await buildColumnConversion(
+        connection.db,
+        request(dialect, SHAPES.postgresql[0])
+      );
+      expect(plan.cannotCarry).toEqual([]);
+      await runPlan(connection, plan);
+      const after = await snapshot(connection);
+      expect(after.table.indexes.map(item => item.name)).toContain(
+        "conv_t_inc"
+      );
+    }
+  );
+
+  it.skipIf(!onMysql)(
+    "a foreign key from a table in another schema into the column blocks a type change",
+    async () => {
+      const [{ name: database }] = await connection.query<{ name: string }>(
+        "SELECT DATABASE() AS name"
+      );
+      const other = `${database}_x`;
+      await connection.exec(
+        "CREATE TABLE conv_ref (c varchar(36) PRIMARY KEY, d int)"
+      );
+      await connection.exec(`CREATE DATABASE \`${other}\``);
+      try {
+        await connection.exec(
+          `CREATE TABLE \`${other}\`.conv_child_x (id int PRIMARY KEY, ref varchar(36), CONSTRAINT conv_x_ref FOREIGN KEY (ref) REFERENCES \`${database}\`.conv_ref (c))`
+        );
+        const plan = await buildColumnConversion(connection.db, {
+          dialect,
+          table: "conv_ref",
+          column: "c",
+          from: { type: "varchar(36)", nullable: false },
+          to: { type: "varchar(255)", nullable: false },
+        });
+        expect(
+          plan.cannotCarry.map(item => [item.property, item.name])
+        ).toEqual([["key", "conv_x_ref"]]);
+        expect(plan.cannotCarry[0].reason).toContain(`${other}.conv_child_x`);
+        // MySQL refuses the change while the other schema's key names the column.
+        await expect(runPlan(connection, plan)).rejects.toThrow(/foreign key/i);
+      } finally {
+        await connection.exec(`DROP DATABASE IF EXISTS \`${other}\``);
+      }
     }
   );
 });
