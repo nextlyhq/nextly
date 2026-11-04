@@ -741,6 +741,51 @@ describe("undoing an edit to a shared style the site's code supplies", () => {
   });
 });
 
+describe("replaying an edit to a code-supplied style after the code changed", () => {
+  it("rebuilds the redo from the code as it is when redone", async () => {
+    // The code's style gains an opacity while the edit is undone; the redo
+    // stores the edit over the code as it now is, not as it was when made.
+    const before = {
+      id: "c-code",
+      slug: "code",
+      label: "Code",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#111111" } } },
+    };
+    const after = {
+      ...before,
+      styles: { base: { base: { color: "#111111", opacity: 0.5 } } },
+    };
+    clientConfig = { siteStyle: { classes: [before] } };
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    expect(saved.at(-1)).toEqual({ classes: [] });
+
+    clientConfig = { siteStyle: { classes: [after] } };
+    rerender(<Host />);
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual({
+      classes: [
+        {
+          ...after,
+          styles: { base: { base: { color: "#222222", opacity: 0.5 } } },
+        },
+      ],
+    });
+  });
+});
+
 describe("undoing a shared style's edit after the library changed elsewhere", () => {
   const card = {
     id: "c-card",

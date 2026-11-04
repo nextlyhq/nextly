@@ -841,6 +841,10 @@ function useWriteClassStyles(
   configured: readonly NamedClass[] | undefined
 ) {
   const { reserve } = useSaveSiteStyle();
+  // The code's styles as they are when a step is undone or redone, not when
+  // it was made: the code may change while the step waits in the history.
+  const configuredNow = useRef(configured);
+  configuredNow.current = configured;
   return useCallback(
     async (
       classId: string,
@@ -889,8 +893,10 @@ function useWriteClassStyles(
          */
         const undo = change.invert(entry.styles);
         const result = await slot.save(classOverrideOf(configured, next), {
-          undo: held => classChangeOn(held, configured, classId, undo),
-          redo: held => classChangeOn(held, configured, classId, change),
+          undo: held =>
+            classChangeOn(held, configuredNow.current, classId, undo),
+          redo: held =>
+            classChangeOn(held, configuredNow.current, classId, change),
         });
         const refused = refusalOf(
           result,
