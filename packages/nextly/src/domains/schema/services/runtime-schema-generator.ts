@@ -761,25 +761,25 @@ export function languageRevisionTable(
       logContext: { reason: "unknown-system-column", name: "_revision" },
     });
   }
-  const revision = buildSystemDrizzleColumn(descriptor, dialect);
+  const _revision = buildSystemDrizzleColumn(descriptor, dialect);
   const table = (
     dialect === "postgresql"
       ? pgTable(tableName, {
           _parent: pgText("_parent"),
           _locale: pgText("_locale"),
-          _revision: revision as never,
-        })
+          _revision,
+        } as never)
       : dialect === "mysql"
         ? mysqlTable(tableName, {
             _parent: mysqlVarchar("_parent", { length: 255 }),
             _locale: mysqlVarchar("_locale", { length: 255 }),
-            _revision: revision as never,
-          })
+            _revision,
+          } as never)
         : sqliteTable(tableName, {
             _parent: sqliteText("_parent"),
             _locale: sqliteText("_locale"),
-            _revision: revision as never,
-          })
+            _revision,
+          } as never)
   ) as Record<string, unknown>;
   languageRevisionTables.set(key, table);
   return table;
