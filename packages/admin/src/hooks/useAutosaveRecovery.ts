@@ -287,8 +287,9 @@ export interface UseAutosaveRecoveryResult {
  * An offer, asked about again before it is restored: still as offered, or the
  * answer the offer should now be drawn from (from an older version, or gone).
  * One already shown as older is not asked again, since the author chose it
- * with the warning in front of them; and a read that fails leaves the answer
- * the offer was made on standing.
+ * with the warning in front of them. A read that fails restores nothing: the
+ * offer stays as it was, to be chosen again, since restoring an answer that
+ * could not be checked could put back an older version without its warning.
  */
 async function askedAgain(
   offer: AutosaveRecoveryOffer,
@@ -308,7 +309,7 @@ async function askedAgain(
       ? { stillCurrent: true }
       : { stillCurrent: false, fresh };
   } catch {
-    return { stillCurrent: true };
+    return { stillCurrent: false, fresh: point };
   }
 }
 

@@ -677,6 +677,25 @@ describe("after a save", () => {
       expect(result.current.form.getValues()).toEqual(STORED);
     });
 
+    it("restores nothing when it cannot be asked about again", async () => {
+      // Unchecked, it may be an older version shown without its warning.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockRejectedValueOnce(new Error("network"));
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.form.getValues()).toEqual(STORED);
+      // Still on offer, to be chosen again.
+      expect(result.current.recovery.offer?.snapshot).toEqual(CURRENT.snapshot);
+    });
+
     it("restores it when it is still current, which is the control", async () => {
       getSpy.mockResolvedValue(CURRENT);
       const { result } = renderRecovery(SCOPE);
