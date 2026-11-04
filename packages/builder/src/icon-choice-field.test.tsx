@@ -26,6 +26,31 @@ const group = alignmentGroupFor(
   }
 )!;
 
+/** Display as icons, with a stored and an inherited value. */
+function mountDisplay(stored?: string, inherited?: string) {
+  const onCommit = vi.fn(() => "applied" as const);
+  const display = alignmentGroupFor(
+    "display",
+    ["block", "flex", "grid", "none", "inline", "table"],
+    { writingMode: "horizontal-tb", rtl: false, flex: false, direction: "row" }
+  )!;
+  render(
+    <InheritedValue.Provider value={inherited}>
+      <span id="display-label">Display</span>
+      <IconChoiceField
+        id="display"
+        labelledBy="display-label"
+        group={display}
+        stored={stored}
+        actionName="Display"
+        describedBy={undefined}
+        onCommit={onCommit}
+      />
+    </InheritedValue.Provider>
+  );
+  return onCommit;
+}
+
 function mount(stored?: string, describedBy?: string, inherited?: string) {
   const onCommit = vi.fn(() => "applied" as const);
   render(
@@ -183,6 +208,28 @@ describe("IconChoiceField", () => {
         "lucide-circle"
       );
     }
+  });
+
+  it("chooses the icon a stored spelling names, as CSS reads a keyword", () => {
+    // An imported `FLEX` is the flex the Flex icon stands for: chosen, not a
+    // second "Flex" under More, and pressing it clears the value.
+    const onCommit = mountDisplay("FLEX");
+    const flex = screen.getByRole("radio", { name: "Flex" });
+    expect(flex.getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen.getByLabelText("More Display values").textContent
+    ).not.toContain("Flex");
+    fireEvent.click(flex);
+    expect(onCommit).toHaveBeenCalledWith(null);
+  });
+
+  it("shows an inherited value no icon or listed value carries, in More", () => {
+    // A `table` reaching this block from another tier is live on the canvas,
+    // so the field says so rather than showing nothing at all.
+    mountDisplay(undefined, "table");
+    expect(
+      screen.getByLabelText(/^More Display values, showing /)
+    ).toBeDefined();
   });
 
   it("shows a stored spelling neither the icons nor the list carry, in More", () => {

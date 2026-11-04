@@ -4635,6 +4635,23 @@ describe("a per-side property is drawn as a box", () => {
   });
 });
 
+describe("letter case", () => {
+  it("is named in plain words, its CSS name in the label's tooltip", () => {
+    // "Text transform" says how CSS does it; "Letter case" says what it is.
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textTransform: "uppercase" } } }
+    );
+    const group = screen.getByRole("radiogroup", { name: "Letter case" });
+    expect(screen.getByText("Letter case").closest("label")?.title).toMatch(
+      /^Text transform/
+    );
+    expect(
+      within(group).getByRole("radio", { name: "Uppercase" })
+    ).toBeDefined();
+  });
+});
+
 describe("a font size's unit menu", () => {
   it("leaves the absolute size keywords out, where they read as nothing", () => {
     // "x-large" says no size an author can picture; the site's variables,

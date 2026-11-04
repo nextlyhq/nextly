@@ -71,7 +71,11 @@ import * as React from "react";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { InheritedValue } from "./inherited-value";
 import type { AlignmentGroup, AlignmentOption } from "./style-alignment-icons";
-import { keywordLabel, menuKeywords } from "./style-keyword-labels";
+import {
+  foldKeyword,
+  keywordLabel,
+  menuKeywords,
+} from "./style-keyword-labels";
 
 /** The icons the mapping names, by their lucide export name. */
 const ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -135,7 +139,7 @@ function inheritedMark(
   option: AlignmentOption,
   inherited: string | undefined
 ): { "aria-label": string; "data-inherited"?: "" } {
-  return option.value === inherited
+  return inherited !== undefined && option.value === foldKeyword(inherited)
     ? { "aria-label": `${option.label}, inherited`, "data-inherited": "" }
     : { "aria-label": option.label };
 }
@@ -165,7 +169,12 @@ export function IconChoiceField({
   const inherited = React.useContext(InheritedValue);
   const shownInherited = stored === undefined ? inherited : undefined;
   const { options } = group;
-  const chosen = options.findIndex(option => option.value === current);
+  // Matched as CSS reads a keyword, so an imported `FLEX` chooses Flex.
+  const iconFor = (value: string | undefined) =>
+    value === undefined
+      ? -1
+      : options.findIndex(option => option.value === foldKeyword(value));
+  const chosen = iconFor(current);
   const buttons = React.useRef<(HTMLButtonElement | null)[]>([]);
 
   // Moves and chooses together, as a radio group's arrow keys do.
@@ -197,11 +206,17 @@ export function IconChoiceField({
   // and other spellings): in More, as stored, in the place of a value it
   // reads the same as or else first, so an active declaration never reads as
   // unset and is never listed twice.
-  const more = menuKeywords(
-    group.cssProperty,
-    group.rest,
-    chosen === -1 ? (current ?? "") : ""
-  );
+  // So is an inherited value no icon draws, so the field shows what the
+  // canvas uses rather than nothing at all.
+  const unlisted =
+    current !== undefined
+      ? chosen === -1
+        ? current
+        : ""
+      : shownInherited !== undefined && iconFor(shownInherited) === -1
+        ? shownInherited
+        : "";
+  const more = menuKeywords(group.cssProperty, group.rest, unlisted);
 
   return (
     <TooltipProvider delayDuration={300}>
