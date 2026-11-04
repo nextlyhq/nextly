@@ -540,7 +540,7 @@ function SelectControl({
  * keys move the choice, as in any radio group, and only the chosen one (or the
  * first, with none chosen) is in the tab order.
  */
-function SegmentedChoice({
+export function SegmentedChoice({
   id,
   labelledBy,
   options,
@@ -607,11 +607,52 @@ function MediaControl({
   onCommit,
   services,
 }: ContentControlProps): React.JSX.Element {
+  return (
+    <MediaField
+      id={id}
+      label={propLabel(prop.name, prop.schema)}
+      stored={
+        typeof prop.value === "string" && prop.value !== "" ? prop.value : null
+      }
+      accept={
+        typeof prop.schema.accept === "string" ? prop.schema.accept : undefined
+      }
+      disabled={disabled}
+      services={services}
+      onChange={next => onCommit(prop.name, next)}
+    />
+  );
+}
+
+/**
+ * A media field: the chosen file, the button that opens the host's picker,
+ * and Remove. Shared by the media control and an image's source, which
+ * writes the same id alongside the props it keeps in step.
+ */
+export function MediaField({
+  id,
+  label,
+  stored,
+  accept,
+  disabled,
+  services,
+  showAlt = true,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  /** The stored id, or `null` for none. */
+  stored: string | null;
+  accept: string | undefined;
+  disabled: boolean;
+  services: ContentServices | undefined;
+  /** Whether to show the library's alt text under the file's name. */
+  showAlt?: boolean;
+  /** Store an id, or `undefined` to remove it. */
+  onChange: (mediaId: string | undefined) => void;
+}): React.JSX.Element {
   // What the last pick was called, for this session; a stored id shows as set.
   const [picked, setPicked] = React.useState<PickedMedia | null>(null);
-  const label = propLabel(prop.name, prop.schema);
-  const stored =
-    typeof prop.value === "string" && prop.value !== "" ? prop.value : null;
   const Picker = services?.MediaPicker;
   const name = picked?.id === stored ? picked?.filename : undefined;
   return (
@@ -629,6 +670,7 @@ function MediaControl({
           read={services?.readMedia}
           pickedName={name}
           fallback="A file from the media library."
+          showAlt={showAlt}
         />
         {Picker === undefined ? (
           <p className="nx-inspector__note">
@@ -639,15 +681,11 @@ function MediaControl({
             Picker={Picker}
             label={label}
             stored={stored}
-            accept={
-              typeof prop.schema.accept === "string"
-                ? prop.schema.accept
-                : undefined
-            }
+            accept={accept}
             disabled={disabled}
             onChoose={first => {
               setPicked(first);
-              onCommit(prop.name, first.id);
+              onChange(first.id);
             }}
           />
         )}
@@ -658,7 +696,7 @@ function MediaControl({
             variant="ghost"
             disabled={disabled}
             aria-label={`Remove ${label}`}
-            onClick={() => onCommit(prop.name, undefined)}
+            onClick={() => onChange(undefined)}
           >
             Remove
           </Button>
@@ -679,11 +717,14 @@ export function ChosenMedia({
   read,
   pickedName,
   fallback,
+  showAlt = true,
 }: {
   mediaId: string | null;
   read: ContentServices["readMedia"];
   pickedName: string | undefined;
   fallback: string;
+  /** Whether to show its library alt text, where a row of its own does not. */
+  showAlt?: boolean;
 }): React.JSX.Element {
   const summary = useMediaSummary(read, mediaId);
   if (mediaId === null) {
@@ -704,7 +745,7 @@ export function ChosenMedia({
         <p className="nx-inspector__media-name" title={name}>
           {name}
         </p>
-        {summary?.alt === undefined ? null : (
+        {summary?.alt === undefined || !showAlt ? null : (
           // Named as the library's: a page's own Alt text, where the block
           // has one, wins over it, and this is only the fallback.
           <p className="nx-inspector__note">Library alt text: {summary.alt}</p>
@@ -719,7 +760,7 @@ export function ChosenMedia({
  * and for the id it was read for only, so a summary never shows beside
  * another file's id.
  */
-function useMediaSummary(
+export function useMediaSummary(
   read: ContentServices["readMedia"],
   mediaId: string | null
 ): MediaSummary | null | undefined {
