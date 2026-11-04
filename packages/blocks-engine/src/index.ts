@@ -638,7 +638,14 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock, ITEM_SCHEMA_MAX_DEPTH } from "./block";
+export {
+  BLOCK_ICONS,
+  defineBlock,
+  ITEM_SCHEMA_MAX_DEPTH,
+  // What a select's option is called. Public because the builder names a
+  // choice with it as the engine's exposure planner does.
+  optionLabel,
+} from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
@@ -747,6 +754,7 @@ export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";
 export {
   validateStyleValues,
+  leafAcceptsValue,
   newStyleIssueBudget,
   MAX_STYLE_ISSUES,
   MAX_STYLE_ISSUE_PATH_BYTES,

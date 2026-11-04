@@ -50,7 +50,10 @@ import {
   type SiteTokenSet,
   type TokenKind,
   type TokenMode,
+  validateStyleValues,
 } from "@nextlyhq/blocks-engine";
+
+import { lineHeightFromText } from "./style-folded";
 
 /**
  * What each kind is called in the interface.
@@ -442,6 +445,115 @@ export function setTokenValue(
   });
 }
 
+/** What a line height that cannot be stored is told, in words. */
+const LINE_HEIGHT_REFUSAL =
+  "A line height is a number like 1.4, or a length like 24px.";
+
+/**
+ * What a dark line height is told when it would need a kind other than
+ * light's. A token has one kind, and a number token refuses a length as surely
+ * as a length token refuses a number; the light value is the one that sets it.
+ */
+export const LINE_HEIGHT_MIXED =
+  "Light and dark line heights are both numbers, like 1.4, or both lengths, like 24px. Use the light value first to change which.";
+
+/** Whether a variable is a line height of the type scale, by its code name. */
+function isLineHeightToken(token: { name: string }): boolean {
+  return token.name.startsWith(LINE_HEIGHT_PREFIX);
+}
+
+/**
+ * The kind a line height is held as for a value: a plain number (`1.4`, a
+ * multiple of the font size, which is what scales with it) is a `number`
+ * token, and anything else (`24px`, `150%`, `calc()`) a `dimension`. Read
+ * with the inspector's own rule for a typed line height, so the two agree on
+ * what a plain number is.
+ */
+function lineHeightKindOf(value: string): TokenKind {
+  return typeof lineHeightFromText(value) === "number" ? "number" : "dimension";
+}
+
+/**
+ * Why a value cannot be a line height, or nothing. Judged by the catalogue's
+ * rule for a block's line height, the value a token here is read into, rather
+ * than by a second list of what a line height may be.
+ */
+function lineHeightValueIssue(value: string): string | undefined {
+  const typed = lineHeightFromText(value);
+  if (typed === null) return LINE_HEIGHT_REFUSAL;
+  const issues = validateStyleValues({ lineHeight: typed }, "", "strict");
+  return issues.some(issue => issue.severity === "error")
+    ? LINE_HEIGHT_REFUSAL
+    : undefined;
+}
+
+/** What writing a variable's value comes to: the new set, or why not. */
+export type TokenValueWrite =
+  | {
+      readonly tokens: SiteTokenSet;
+      /** Something the write changed beyond the field, said in words. */
+      readonly note?: string;
+    }
+  | { readonly issue: string };
+
+/** What the author is told when a light line height's new kind drops dark. */
+export const DARK_FOLLOWS_LIGHT =
+  "Dark now follows the light value; set a dark value again if you need one.";
+
+/**
+ * The set with one variable's value changed for one mode, or why it cannot be.
+ *
+ * Every variable but one is {@link setTokenValue}. A line height is the one
+ * value that is right as a plain number or as a length, so its KIND follows
+ * what is written: held as a `dimension`, `1.4` is a number where a length
+ * belongs, and the save is refused for it. A value no line height can be is
+ * refused here, in words, rather than stored for the page to drop.
+ *
+ * The LIGHT value sets the kind. A light edit of the other kind drops a dark
+ * value that no longer fits, so dark follows light, and says so; a dark edit
+ * of a kind other than light's is refused. Otherwise, with both modes set as
+ * lengths, neither could be the first to become a number.
+ */
+export function writeTokenValue(
+  tokens: SiteTokenSet,
+  at: number,
+  mode: TokenMode,
+  value: string
+): TokenValueWrite {
+  const token = tokens.tokens[at];
+  if (token === undefined || !isLineHeightToken(token)) {
+    return { tokens: setTokenValue(tokens, at, mode, value) };
+  }
+  const issue = lineHeightValueIssue(value);
+  if (issue !== undefined) return { issue };
+  const kind = lineHeightKindOf(value);
+  if (mode === "dark") {
+    if (lineHeightKindOf(token.values.light) !== kind) {
+      return { issue: LINE_HEIGHT_MIXED };
+    }
+    return {
+      tokens: withToken(tokens, at, {
+        ...token,
+        // The kind both values are read as, set rather than kept: a legacy
+        // unitless zero held as a length is a number to this rule, and a
+        // number dark beside it would otherwise be refused as not a length.
+        kind,
+        values: { ...token.values, dark: value },
+      }),
+    };
+  }
+  const dark = token.values.dark;
+  const darkFits = dark === undefined || lineHeightKindOf(dark) === kind;
+  return {
+    tokens: withToken(tokens, at, {
+      ...token,
+      kind,
+      values: darkFits ? { ...token.values, light: value } : { light: value },
+    }),
+    ...(darkFits ? {} : { note: DARK_FOLLOWS_LIGHT }),
+  };
+}
+
 /**
  * The set with one token's dark value REMOVED, so it follows light again.
  *
@@ -560,38 +672,88 @@ const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
   other: "Other",
 };
 
+/**
+ * Every group with its heading, in the order the Design panel lists them, for
+ * a list elsewhere that groups variables the same way.
+ */
+export function variableGroupHeadings(): readonly {
+  group: VariableGroup;
+  heading: string;
+}[] {
+  return VARIABLE_GROUPS.map(group => ({
+    group,
+    heading: VARIABLE_GROUP_LABELS[group],
+  }));
+}
+
 /** The code-name prefixes of a type size and of its line height. */
 const SIZE_PREFIX = "font-size.";
 const LINE_HEIGHT_PREFIX = "line-height.";
 
-/** Code-name prefixes that put a length in the spacing group. */
-const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "radius."];
+/** Code-name prefixes of a spacing step, and of a radius. */
+const SPACING_PREFIXES = ["space.", "spacing.", "gap."];
+const RADIUS_PREFIX = "radius.";
+
+/** The families a length variable belongs to, each made for its own fields. */
+export type LengthFamily = "font-size" | "line-height" | "spacing" | "radius";
+
+/**
+ * The family a length variable belongs to, read from its code name as the
+ * Design panel groups it, or `undefined` for a length that names none (a
+ * content width) and for anything that is not a length.
+ *
+ * The inspector offers each field its own family, so a padding lists the
+ * spacing steps and a radius the radii; asked here so the Design panel's
+ * groups and the inspector's lists cannot disagree about what a variable is.
+ */
+export function lengthFamilyOf(token: {
+  name: string;
+  kind: TokenKind;
+}): LengthFamily | undefined {
+  const type = typeScaleProperty(token);
+  if (type !== undefined) return type;
+  if (token.kind !== "dimension") return undefined;
+  if (token.name.startsWith(RADIUS_PREFIX)) return "radius";
+  return SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
+    ? "spacing"
+    : undefined;
+}
+
+/**
+ * The CSS property a type-scale variable is made for: `font-size` for a type
+ * size, `line-height` for its paired line height, or `undefined` for any other
+ * variable.
+ *
+ * Read from the code name, as the Design panel groups by it, and asked here
+ * once so the panel's "Type scale" group and the inspector's offer of a type
+ * size only where text is sized cannot disagree about what a type size is.
+ */
+export function typeScaleProperty(token: {
+  name: string;
+  kind: TokenKind;
+}): "font-size" | "line-height" | undefined {
+  if (token.kind !== "dimension" && token.kind !== "number") return undefined;
+  if (token.name.startsWith(SIZE_PREFIX)) return "font-size";
+  if (token.name.startsWith(LINE_HEIGHT_PREFIX)) return "line-height";
+  return undefined;
+}
 
 /**
  * Which group a variable belongs in: by kind for colours and shadows, and by
  * its code name for the lengths, since a size, a gap and a radius are all
  * dimensions.
+ *
+ * Exported so the inspector's variable list groups exactly as Design does.
  */
-function variableGroupOf(token: {
+export function variableGroupOf(token: {
   name: string;
   kind: TokenKind;
 }): VariableGroup {
   if (token.kind === "color") return "colours";
   if (token.kind === "shadow") return "spacing";
-  const lengthish = token.kind === "dimension" || token.kind === "number";
-  if (
-    lengthish &&
-    (token.name.startsWith(SIZE_PREFIX) ||
-      token.name.startsWith(LINE_HEIGHT_PREFIX))
-  ) {
-    return "type";
-  }
-  if (
-    token.kind === "dimension" &&
-    SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
-  ) {
-    return "spacing";
-  }
+  const family = lengthFamilyOf(token);
+  if (family === "font-size" || family === "line-height") return "type";
+  if (family === "spacing" || family === "radius") return "spacing";
   return "other";
 }
 
@@ -648,9 +810,9 @@ export function variableGroups(
       ...(lineHeight === undefined ? {} : { lineHeight }),
     });
   }
-  return VARIABLE_GROUPS.map(group => ({
+  return variableGroupHeadings().map(({ group, heading }) => ({
     group,
-    heading: VARIABLE_GROUP_LABELS[group],
+    heading,
     entries: (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
   }));
 }
@@ -766,8 +928,14 @@ const NEW_VARIABLES: Readonly<
   custom: { prefix: "custom", kind: "custom", value: "0" },
 };
 
-/** The line height a new type size starts with. */
-const NEW_LINE_HEIGHT = "24px";
+/**
+ * The line height a new type size starts with: unitless, so it is a multiple
+ * of the size and follows it when the size changes, where a fixed length is
+ * right for one size only. 1.25 sits between the tighter leading a heading
+ * wants and the looser one body text wants, since a new size starts at 16px
+ * and is usually given a heading's size next.
+ */
+const NEW_LINE_HEIGHT = "1.25";
 
 /** The words a new variable's code name is made from, before it is named. */
 const NEW_WORDS: Readonly<Record<NewVariable, string>> = {
@@ -813,7 +981,9 @@ export function addVariable(
   if (what === "type size") {
     added.push({
       name: `${LINE_HEIGHT_PREFIX}${words}`,
-      kind: "dimension",
+      // A plain number, so a number token: as a `dimension` it would be a
+      // value the engine reports as not a length.
+      kind: "number",
       values: { light: NEW_LINE_HEIGHT },
     });
   }

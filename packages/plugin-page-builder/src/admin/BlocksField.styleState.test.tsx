@@ -68,6 +68,12 @@ const seen: {
  */
 let selectionIds: string[] = ["a"];
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
   const record =
@@ -212,6 +218,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveIndicator: () => null,

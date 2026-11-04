@@ -449,6 +449,50 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_version_views" ("scope_kind", "scope_slug", "entry_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_version_views_user_idx"
       ON "nextly_version_views" ("user_id")`,
+    // A workflow's review state per document and part. Columns match
+    // schemas/review-states/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_review_states" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "part" TEXT,
+      "part_key" TEXT NOT NULL,
+      "stage" TEXT NOT NULL,
+      "entered_at" INTEGER NOT NULL,
+      "entered_by" TEXT,
+      "assignee_kind" TEXT,
+      "assignee_id" TEXT,
+      "due_at" INTEGER,
+      "approved_version_no" INTEGER,
+      "approved_digest" TEXT,
+      "approved_by" TEXT,
+      "approved_at" INTEGER,
+      "definition_hash" TEXT NOT NULL,
+      "revision" INTEGER NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_review_states_key_uidx"
+      ON "nextly_review_states" ("part_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_doc_idx"
+      ON "nextly_review_states" ("scope_kind", "scope_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_stage_idx"
+      ON "nextly_review_states" ("scope_kind", "scope_slug", "stage")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_assignee_idx"
+      ON "nextly_review_states" ("assignee_kind", "assignee_id")`,
+    // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "workflow" TEXT NOT NULL,
+      "settings" TEXT NOT NULL,
+      "revision" INTEGER NOT NULL,
+      "updated_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_workflow_settings_workflow_uidx"
+      ON "nextly_workflow_settings" ("workflow")`,
     // The record of content events. Columns match
     // schemas/content-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_content_events" (

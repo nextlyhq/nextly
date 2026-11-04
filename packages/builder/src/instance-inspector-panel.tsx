@@ -40,7 +40,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
-  Checkbox,
   Input,
   Label,
   Select,
@@ -48,6 +47,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
 } from "@nextlyhq/ui";
 import {
   CircleSlash,
@@ -367,7 +367,24 @@ function ExposedField({
       className="nx-inspector__field nx-inspector__field--exposed"
       data-source={state}
     >
-      <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
+      {/*
+        The row's name and where its value comes from, in the label column:
+        the source a quiet note under the label, as an inherited Style value
+        says where it comes from, so the row is one row beside the 28px
+        Style rows rather than a label, a field and a line under it.
+      */}
+      <div className="nx-inspector__exposed-name">
+        <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
+        {/*
+          The source is VISIBLE, and words rather than the label's styling:
+          "Set on this page" is what tells an author the reset beside the field
+          undoes their own edit rather than the component's design.
+        */}
+        <span className="nx-inspector__source" data-source={state}>
+          <Icon aria-hidden="true" className="nx-inspector__source-icon" />
+          {sourceBadgeLabel(row)}
+        </span>
+      </div>
       <div className="nx-inspector__exposed">
         {/*
           Only the value is held. Reset stays live: a value the page gave
@@ -377,40 +394,10 @@ function ExposedField({
         <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
           <ExposedControl id={id} row={row} onSet={onSet} />
         </HeldByLock>
-        <div className="nx-inspector__provenance">
-          {/*
-            The badge is VISIBLE, and it is a badge rather than the label's
-            styling: "Overridden" beside a value is what tells an author the
-            reset below undoes their own edit rather than the component's
-            design.
-          */}
-          <span className="nx-inspector__source" data-source={state}>
-            <Icon aria-hidden="true" className="nx-inspector__source-icon" />
-            {sourceBadgeLabel(row)}
-          </span>
-          {overridden ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="nx-inspector__exposed-reset"
-              // Named for the row, because six rows each offering "Reset"
-              // are six identical controls to a screen reader. Not "to the
-              // component's value": under a variant the value a reset returns
-              // to is the variant's, and undoing this page's change is true
-              // either way.
-              aria-label={`Reset ${row.label}`}
-              title="Undo this page's change"
-              onClick={() => onReset(row.id)}
-            >
-              <RotateCcw size={14} aria-hidden="true" />
-            </Button>
-          ) : null}
-        </div>
         {/*
-          Why the row is held, UNDER the field as its helper text, as the
-          provenance note is: the field keeps its place beside its label, and
-          the reason reads as a fact about the value above it.
+          Why the row is held, UNDER the field as its helper text: the field
+          keeps its place beside its label, and the reason reads as a fact
+          about the value above it.
         */}
         {row.heldBy === undefined ? null : (
           <p id={reasonId} className="nx-inspector__held-reason">
@@ -419,6 +406,22 @@ function ExposedField({
           </p>
         )}
       </div>
+      {/* Kept when empty, so every control ends at one edge, set or not. */}
+      <span className="nx-inspector__exposed-reset-slot">
+        {overridden ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="nx-inspector__exposed-reset"
+            aria-label={`Reset ${row.label}`}
+            title="Undo this page's change"
+            onClick={() => onReset(row.id)}
+          >
+            <RotateCcw size={14} aria-hidden="true" />
+          </Button>
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -757,14 +760,13 @@ function ExposedVisibilityField({
 }): React.JSX.Element {
   const shown = row.value !== false && !row.cleared;
   return (
-    <div className="nx-inspector__check">
-      <Checkbox
-        id={id}
-        checked={shown}
-        onCheckedChange={checked => onSet(row.id, checked === true)}
-      />
-      <span className="nx-inspector__note">Shown on this page</span>
-    </div>
+    // A switch named by its row, whose state says whether it is shown: a
+    // checkbox beside "Shown on this page" wrapped onto two lines.
+    <Switch
+      id={id}
+      checked={shown}
+      onCheckedChange={checked => onSet(row.id, checked === true)}
+    />
   );
 }
 

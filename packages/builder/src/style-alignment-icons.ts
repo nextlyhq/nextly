@@ -27,6 +27,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { SideOrientation } from "./side-orientation";
+import { keywordLabel } from "./style-keyword-labels";
 import { readStyleValue } from "./style-values";
 
 /** How the edited container lays its content out. */
@@ -145,21 +146,16 @@ const MIRRORED: Readonly<Record<string, string>> = Object.fromEntries(
   ])
 );
 
+/** An icon choice; its words come from the keyword labels, by its value. */
 interface Entry {
   readonly value: string;
-  readonly label: string;
   /** The icon along a horizontal axis, and along a vertical one. */
   readonly horizontal: string;
   readonly vertical: string;
 }
 
-function entry(
-  value: string,
-  label: string,
-  horizontal: string,
-  vertical: string
-): Entry {
-  return { value, label, horizontal, vertical };
+function entry(value: string, horizontal: string, vertical: string): Entry {
+  return { value, horizontal, vertical };
 }
 
 /** Which axis a property's values point along. */
@@ -173,25 +169,17 @@ const GROUPS: Readonly<
     entries: [
       entry(
         "start",
-        "Start",
         "AlignHorizontalJustifyStart",
         "AlignVerticalJustifyStart"
       ),
       entry(
         "center",
-        "Center",
         "AlignHorizontalJustifyCenter",
         "AlignVerticalJustifyCenter"
       ),
-      entry(
-        "end",
-        "End",
-        "AlignHorizontalJustifyEnd",
-        "AlignVerticalJustifyEnd"
-      ),
+      entry("end", "AlignHorizontalJustifyEnd", "AlignVerticalJustifyEnd"),
       entry(
         "space-between",
-        "Space between",
         "AlignHorizontalSpaceBetween",
         "AlignVerticalSpaceBetween"
       ),
@@ -202,11 +190,11 @@ const GROUPS: Readonly<
   "align-items": {
     along: "cross",
     entries: [
-      entry("start", "Start", "AlignStartVertical", "AlignStartHorizontal"),
-      entry("center", "Center", "AlignCenterVertical", "AlignCenterHorizontal"),
-      entry("end", "End", "AlignEndVertical", "AlignEndHorizontal"),
-      entry("stretch", "Stretch", "StretchHorizontal", "StretchVertical"),
-      entry("baseline", "Baseline", "Baseline", "Baseline"),
+      entry("start", "AlignStartVertical", "AlignStartHorizontal"),
+      entry("center", "AlignCenterVertical", "AlignCenterHorizontal"),
+      entry("end", "AlignEndVertical", "AlignEndHorizontal"),
+      entry("stretch", "StretchHorizontal", "StretchVertical"),
+      entry("baseline", "Baseline", "Baseline"),
     ],
   },
   "align-content": {
@@ -214,38 +202,30 @@ const GROUPS: Readonly<
     entries: [
       entry(
         "start",
-        "Start",
         "AlignHorizontalJustifyStart",
         "AlignVerticalJustifyStart"
       ),
       entry(
         "center",
-        "Center",
         "AlignHorizontalJustifyCenter",
         "AlignVerticalJustifyCenter"
       ),
-      entry(
-        "end",
-        "End",
-        "AlignHorizontalJustifyEnd",
-        "AlignVerticalJustifyEnd"
-      ),
+      entry("end", "AlignHorizontalJustifyEnd", "AlignVerticalJustifyEnd"),
       entry(
         "space-between",
-        "Space between",
         "AlignHorizontalSpaceBetween",
         "AlignVerticalSpaceBetween"
       ),
-      entry("stretch", "Stretch", "StretchHorizontal", "StretchVertical"),
+      entry("stretch", "StretchHorizontal", "StretchVertical"),
     ],
   },
   "text-align": {
     along: "inline",
     entries: [
-      entry("start", "Start", "AlignLeft", "AlignLeft"),
-      entry("center", "Center", "AlignCenter", "AlignCenter"),
-      entry("end", "End", "AlignRight", "AlignRight"),
-      entry("justify", "Justify", "AlignJustify", "AlignJustify"),
+      entry("start", "AlignLeft", "AlignLeft"),
+      entry("center", "AlignCenter", "AlignCenter"),
+      entry("end", "AlignRight", "AlignRight"),
+      entry("justify", "AlignJustify", "AlignJustify"),
     ],
   },
 };
@@ -258,19 +238,14 @@ function directionOptions(
   const inline = inlineAxis(flow);
   const block = blockAxis(flow);
   const options: AlignmentOption[] = [
-    { value: "row", label: "Row", icon: ARROWS[OPPOSITE[inline.start]] },
-    {
-      value: "row-reverse",
-      label: "Row, reversed",
-      icon: ARROWS[inline.start],
-    },
-    { value: "column", label: "Column", icon: ARROWS[OPPOSITE[block.start]] },
-    {
-      value: "column-reverse",
-      label: "Column, reversed",
-      icon: ARROWS[block.start],
-    },
-  ];
+    { value: "row", icon: ARROWS[OPPOSITE[inline.start]] },
+    { value: "row-reverse", icon: ARROWS[inline.start] },
+    { value: "column", icon: ARROWS[OPPOSITE[block.start]] },
+    { value: "column-reverse", icon: ARROWS[block.start] },
+  ].map(option => ({
+    ...option,
+    label: keywordLabel("flex-direction", option.value),
+  }));
   return options.filter(option => values.includes(option.value));
 }
 
@@ -304,20 +279,19 @@ function wrapOptions(values: readonly string[], flow: Flow): AlignmentOption[] {
   };
   const forward = matrixFor(OPPOSITE[cross.start]);
   const options: AlignmentOption[] = [
-    { value: "nowrap", label: "No wrap", icon: "ArrowRightToLine", ...forward },
-    { value: "wrap", label: "Wrap", icon: "WrapText", ...forward },
-    {
-      value: "wrap-reverse",
-      label: "Wrap, reversed",
-      icon: "WrapText",
-      ...matrixFor(cross.start),
-    },
-  ];
+    { value: "nowrap", icon: "ArrowRightToLine", ...forward },
+    { value: "wrap", icon: "WrapText", ...forward },
+    { value: "wrap-reverse", icon: "WrapText", ...matrixFor(cross.start) },
+  ].map(option => ({
+    ...option,
+    label: keywordLabel("flex-wrap", option.value),
+  }));
   return options.filter(option => values.includes(option.value));
 }
 
 /** The icon buttons for one aligned property, in this flow. */
 function alignedOptions(
+  property: string,
   group: { along: Along; entries: readonly Entry[] },
   values: readonly string[],
   flow: Flow
@@ -333,7 +307,8 @@ function alignedOptions(
         axis.horizontal || rotated ? candidate.horizontal : candidate.vertical;
       return {
         value: candidate.value,
-        label: candidate.label,
+        // In the words every keyword is offered in; see style-keyword-labels.
+        label: keywordLabel(property, candidate.value),
         icon: swap ? (MIRRORED[drawn] ?? drawn) : drawn,
         ...(rotated ? { rotated: true as const } : {}),
       };
@@ -358,7 +333,7 @@ export function alignmentGroupFor(
   } else if (Object.hasOwn(GROUPS, cssProperty)) {
     const group = GROUPS[cssProperty];
     if (group === undefined) return undefined;
-    options = alignedOptions(group, values, flow);
+    options = alignedOptions(cssProperty, group, values, flow);
   } else {
     return undefined;
   }

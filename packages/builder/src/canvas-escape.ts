@@ -102,6 +102,21 @@ const NON_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
   "submit",
 ]);
 
+/**
+ * Whether focus is inside something floating over the editor: a picker's
+ * list, a unit menu, a select's options.
+ *
+ * Each closes on Escape, and the editor moving its selection on the same press
+ * would do two things for one key: the list closes AND the canvas selects the
+ * block's parent. Most of them mark the key as handled, which the shortcut
+ * manager already honours; this covers every one that does not, by where focus
+ * is rather than by a list of components. The wrapper is the one every floating
+ * layer of the design system is positioned in, so a new menu inherits the rule.
+ */
+function inFloatingLayer(element: Element | null): boolean {
+  return element?.closest("[data-radix-popper-content-wrapper]") != null;
+}
+
 /** What pressing Escape over the editor should do. */
 export type EscapeOutcome =
   | "defer-to-modal"
@@ -128,7 +143,10 @@ export function escapeOutcome(root: Document | undefined): EscapeOutcome {
   // Through any focused frame: from the host, focus inside the canvas frame is
   // the iframe itself, which is no field, and Escape would deselect under an
   // author who is typing.
-  if (isTextEntry(root === undefined ? null : deepActiveElement(root))) {
+  const active = root === undefined ? null : deepActiveElement(root);
+  // A field, or a menu or list floating over the editor: Escape belongs to
+  // the focused control, and is still consumed so the page cannot take it.
+  if (isTextEntry(active) || inFloatingLayer(active)) {
     return "leave-to-field";
   }
   // Moving the selection with nothing selected is a no-op that still consumes

@@ -23,6 +23,7 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -34,12 +35,15 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
+import { NoticeSinkProvider } from "./builder-notices";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
+import { keywordLabel } from "./style-keyword-labels";
+import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
 
 afterEach(() => {
@@ -230,21 +234,35 @@ describe("when there is nothing to style", () => {
   });
 });
 
-describe("the class selector, mounted above the style sections", () => {
-  const LIBRARY = [
-    { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
-    { id: "id-card", slug: "card", orderIndex: 1, styles: {} },
-  ];
+describe("the shared style target", () => {
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 1,
+    styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
+  };
+  const hero = { id: "c-hero", slug: "hero", orderIndex: 0, styles: {} };
+  const promo = { id: "c-promo", slug: "promo", orderIndex: 2, styles: {} };
 
-  /** The panel with a node carrying classes, and a host that opted in. */
-  function mountWithClasses(
+  /** The inspector's Style tab, a block wearing `classes`, and a host. */
+  function mountTarget(
     options: {
-      classIds?: string[];
-      library?: typeof LIBRARY | undefined;
-      optIn?: boolean;
+      classes?: string[];
+      styles?: NodeStyles;
+      library?: (typeof card | typeof hero)[];
+      mayChange?: boolean;
+      writeStyles?: (
+        classId: string,
+        change: never
+      ) => Promise<string | undefined>;
+      usage?: NonNullable<SharedStylesHost["usage"]>;
+      supports?: Record<string, boolean>;
+      /** Where a refusal that outlives its field is raised. */
+      raise?: (message: string) => void;
     } = {}
   ) {
-    register({ spacing: true });
+    register(options.supports ?? { effects: true });
     const document = {
       formatVersion: 1,
       kind: "page",
@@ -254,281 +272,589 @@ describe("the class selector, mounted above the style sections", () => {
           type: "acme/box",
           version: 1,
           props: {},
-          ...(options.classIds === undefined
+          ...(options.classes === undefined
             ? {}
-            : { classes: options.classIds }),
+            : { classes: options.classes }),
+          ...(options.styles === undefined ? {} : { styles: options.styles }),
         },
       ] as BlockNode[],
     } as BlockDocument;
     const editor = editorFor(document);
-    const onCreateClass = vi.fn(async () => ({
-      ok: true as const,
-      classId: "id-new",
-    }));
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        {...(options.optIn === false ? {} : { onCreateClass })}
-        {...(options.library === undefined
-          ? {}
-          : { classLibrary: options.library })}
+    const writeStyles = vi.fn(
+      options.writeStyles ?? (async () => undefined as string | undefined)
+    );
+    const panelFor = (current: EditorState) => (
+      <InspectorPanel
+        editor={current}
+        classLibrary={options.library ?? [hero, card, promo]}
+        sharedStyles={{
+          mayChange: options.mayChange ?? true,
+          writeStyles:
+            writeStyles as unknown as SharedStylesHost["writeStyles"],
+          pageBlocks: { counts: new Map([["c-card", 3]]), complete: true },
+          ...(options.usage === undefined ? {} : { usage: options.usage }),
+        }}
       />
     );
-    return { editor, onCreateClass };
+    const tree = (current: EditorState) =>
+      options.raise === undefined ? (
+        panelFor(current)
+      ) : (
+        <NoticeSinkProvider raise={options.raise}>
+          {panelFor(current)}
+        </NoticeSinkProvider>
+      );
+    const view = render(tree(editor));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    /** The block as an edit made meanwhile leaves it, drawn again. */
+    const withStyles = (styles: NodeStyles) => {
+      const next = editorFor({
+        ...document,
+        nodes: [{ ...document.nodes[0], styles } as BlockNode],
+      });
+      view.rerender(tree(next));
+      return next;
+    };
+    return { editor, writeStyles, withStyles };
   }
 
-  it("is absent entirely when the host never opted in", () => {
-    /*
-     * `onCreateClass` is what opts in, NOT the library. A host that cannot
-     * write the site style has no way to create a class, and a selector that
-     * offered to would report an intent nobody acts on.
-     */
-    mountWithClasses({ optIn: false, library: LIBRARY });
-    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+  /**
+   * What the first write to Card stores, over the styles it started from: a
+   * change applied to them, or a whole envelope.
+   */
+  function writtenTo(
+    writeStyles: ReturnType<typeof vi.fn>,
+    from: NodeStyles
+  ): unknown {
+    const [id, change] = writeStyles.mock.calls[0] ?? [];
+    expect(id).toBe("c-card");
+    if (typeof change !== "function") return change;
+    const out = (
+      change as (styles: NodeStyles) => { kind: string; styles?: NodeStyles }
+    )(from);
+    return out.kind === "write" ? out.styles : from;
+  }
+
+  /**
+   * A host that stores Card's styles as the site does: one write at a time,
+   * each answered when the test says, each applied to what the last one left.
+   */
+  function queuedHost() {
+    let stored: NodeStyles = card.styles;
+    const pending: (() => void)[] = [];
+    const writeStyles = (_id: string, change: unknown) =>
+      new Promise<string | undefined>(resolve => {
+        pending.push(() => {
+          if (typeof change === "function") {
+            const out = (
+              change as (styles: NodeStyles) => {
+                kind: string;
+                styles?: NodeStyles;
+              }
+            )(stored);
+            if (out.kind === "write" && out.styles !== undefined)
+              stored = out.styles;
+          } else {
+            stored = change as NodeStyles;
+          }
+          resolve(undefined);
+        });
+      });
+    return {
+      writeStyles,
+      stored: () => stored,
+      settle: async () => {
+        while (pending.length > 0) {
+          await act(async () => {
+            pending.shift()?.();
+          });
+        }
+      },
+    };
+  }
+
+  const bar = () => screen.getByRole("region", { name: "What you're editing" });
+  const chip = (name: string) =>
+    within(bar()).getByRole("button", { name, pressed: undefined });
+
+  it("lists every shared style a block wears, in library order, after This block", () => {
+    mountTarget({ classes: ["c-promo", "c-card", "c-hero"] });
+    const chips = within(bar())
+      .getAllByRole("button")
+      .filter(button => button.hasAttribute("aria-pressed"));
+    expect(chips.map(button => button.textContent)).toEqual([
+      "This block",
+      "hero",
+      "Card",
+      "promo",
+    ]);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    // Each chip's tooltip names the class the page carries.
+    expect(chip("Card").title).toBe("Edit shared style Card, .nx-c-card");
   });
 
-  it("shows the loading state when the host opted in but is still reading", () => {
-    // The distinction that would otherwise collapse: an absent library means
-    // "in flight" only BECAUSE opting in is signalled separately. Drawn the
-    // same way, a host mid-load and a host with no class surface at all would
-    // be indistinguishable, and only one of them has a field about to fill.
-    mountWithClasses({ library: undefined });
-    expect(screen.getByText(/loading classes/i)).toBeDefined();
+  it("makes a chip the target: pressed, named with its reach, and announced", async () => {
+    const usage = vi.fn(async () => ({
+      whole: false,
+      mayLock: false,
+      styles: new Map([
+        [
+          "c-card",
+          {
+            documents: 5,
+            byKind: { pages: 4, components: 1, patterns: 0, layouts: 0 },
+            complete: false,
+          },
+        ],
+      ]),
+    }));
+    mountTarget({ classes: ["c-card"], usage });
+    const device = bar().querySelector("[data-edit-device]")?.textContent;
+    fireEvent.click(chip("Card"));
+
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("false");
+    expect(bar().textContent).toContain(
+      "Editing shared style Card · .nx-c-card"
+    );
+    expect(
+      await within(bar()).findByText(
+        "3 blocks on this page · on at least 4 pages and 1 component"
+      )
+    ).toBeDefined();
+    expect(within(bar()).getByRole("status").textContent).toBe(
+      "Now editing shared style Card"
+    );
+    // The device and the state stay the canvas's own.
+    expect(bar().querySelector("[data-edit-device]")?.textContent).toBe(device);
+    expect(bar().querySelector("[data-edit-state]")?.textContent).toBe(
+      "Normal"
+    );
   });
 
-  it("shows the classes the selected node carries", () => {
-    mountWithClasses({ classIds: ["id-card"], library: LIBRARY });
-    expect(screen.getByRole("button", { name: /remove card/i })).toBeDefined();
+  it("returns to This block on Escape, and with Edit this block only", () => {
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    fireEvent.keyDown(chip("Card"), { key: "Escape" });
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    expect(within(bar()).getByRole("status").textContent).toBe(
+      "Now editing this block"
+    );
+
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      within(bar()).getByRole("button", { name: "Edit this block only" })
+    );
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("writes an applied class through the editor, with no host callback", () => {
-    // Applying an EXISTING class is a node edit, which this panel already
-    // knows how to write. Requiring a callback for it would make the host
-    // rebuild an op the panel is holding all the parts of.
-    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
-    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
-      target: { value: "hero" },
-    });
-    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
-      key: "Enter",
-    });
+  it("takes Escape only when it switches back, so the editor's own Escape stands down", () => {
+    // The editor's Escape (select the parent block) skips a key already
+    // answered, so the bar marks the one it answers and leaves the rest.
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    expect(fireEvent.keyDown(chip("Card"), { key: "Escape" })).toBe(false);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    // Already on this block: nothing to answer, so the editor's Escape runs.
+    expect(fireEvent.keyDown(chip("This block"), { key: "Escape" })).toBe(true);
+  });
 
-    expect(onCreateClass).not.toHaveBeenCalled();
-    expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
-      kind: "update",
-      id: "a",
-      patch: { classes: ["id-hero"] },
+  it("lets the chip's menu take Escape without leaving the shared target", async () => {
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    const menu = within(bar()).getByRole("button", {
+      name: "Actions for shared style Card",
+    });
+    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    const item = await screen.findByRole("menuitem", { name: /^Detach/ });
+    fireEvent.keyDown(item, { key: "Escape" });
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    // The menu closed; the target is still the shared style.
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("moves between the chips with the arrow keys, one tab stop for the group", () => {
+    mountTarget({ classes: ["c-card", "c-hero"] });
+    expect(chip("This block").tabIndex).toBe(0);
+    expect(chip("Card").tabIndex).toBe(-1);
+    chip("This block").focus();
+    fireEvent.keyDown(chip("This block"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(chip("hero"));
+    fireEvent.keyDown(chip("hero"), { key: "End" });
+    expect(document.activeElement).toBe(chip("Card"));
+    fireEvent.keyDown(chip("Card"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(chip("This block"));
+  });
+
+  it("shows the style's value and writes the style, never the block", async () => {
+    const { editor, writeStyles } = mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", {
+      name: "Opacity",
+    }) as HTMLInputElement;
+    expect(field.value).toBe("0.5");
+
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+
+    expect(writtenTo(writeStyles, card.styles)).toEqual({
+      base: { [BASE_BREAKPOINT]: { opacity: 0.8 } },
+    });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps both of two quick edits to the style, the second built on the first", async () => {
+    const host = queuedHost();
+    mountTarget({
+      classes: ["c-card"],
+      supports: { effects: true, spacing: true },
+      writeStyles: host.writeStyles as never,
+    });
+    fireEvent.click(chip("Card"));
+    const side = fieldsOf("padding").getByLabelText("Block start");
+    fireEvent.change(side, { target: { value: "12px" } });
+    fireEvent.blur(side);
+    // The second edit is made before the first has been stored and read back.
+    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    const opacity = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(opacity, { target: { value: "0.8" } });
+    fireEvent.blur(opacity);
+
+    await host.settle();
+
+    expect(host.stored()).toEqual({
+      base: {
+        [BASE_BREAKPOINT]: { opacity: 0.8, padding: { blockStart: "12px" } },
+      },
     });
   });
 
-  it("UNSETS the field when the last class is removed", () => {
-    /*
-     * Not `classes: []`. The field is optional and the two mean the same to
-     * every reader, so writing the empty array leaves a key that says nothing
-     * — and an inverse built from it would restore that key on undo.
-     */
-    const { editor } = mountWithClasses({
-      classIds: ["id-hero"],
-      library: LIBRARY,
+  it("stores a value changed and changed back before the first is read back", async () => {
+    const host = queuedHost();
+    mountTarget({
+      classes: ["c-card"],
+      writeStyles: host.writeStyles as never,
     });
-    fireEvent.click(screen.getByRole("button", { name: /remove hero/i }));
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+    // Back to the value the last read shows, before 0.8 has been stored.
+    fireEvent.change(field, { target: { value: "0.5" } });
+    fireEvent.blur(field);
 
+    await host.settle();
+
+    expect(host.stored()).toEqual({
+      base: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    });
+  });
+
+  it("clears only the moved value from the block, as it stands once the style has it", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const { withStyles } = mountTarget({
+      classes: ["c-card"],
+      supports: { effects: true, spacing: true },
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    // A local edit lands on another address while Card's write is in flight.
+    const later = withStyles({
+      base: {
+        [BASE_BREAKPOINT]: { opacity: 0.2, padding: { blockStart: "12px" } },
+      },
+    });
+
+    await act(async () => {
+      store(undefined);
+    });
+
+    expect(later.applyAll).toHaveBeenCalledWith([
+      {
+        kind: "update",
+        id: "a",
+        patch: {
+          styles: {
+            base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("keeps a new value the author gives the same control while Move to is on its way", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const { withStyles } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    // The author sets the same control again on the block meanwhile.
+    const later = withStyles({ base: { [BASE_BREAKPOINT]: { opacity: 0.7 } } });
+
+    await act(async () => {
+      store(undefined);
+    });
+
+    // 0.2 went to Card; 0.7 is the block's new value and is not cleared.
+    expect(later.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("says through the shell when Detach could not be applied to the page", () => {
+    const raise = vi.fn();
+    const { editor } = mountTarget({ classes: ["c-card"], raise });
+    editor.applyAll.mockReturnValue(null);
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /^Detach: keep the look/ })
+    );
+    expect(raise).toHaveBeenCalledWith(
+      "Card could not be detached from this block: the page could not take the change."
+    );
+  });
+
+  it("raises a refusal through the shell once the author has switched target", async () => {
+    let refuse: (reason: string) => void = () => {};
+    const raise = vi.fn();
+    mountTarget({
+      classes: ["c-card"],
+      raise,
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          refuse = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+    // The author goes back to this block while Card's write is on its way.
+    fireEvent.click(chip("This block"));
+
+    await act(async () => {
+      refuse("Card is locked.");
+    });
+
+    // Not beside a field that now edits the block, which never asked.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(raise).toHaveBeenCalledWith("Card is locked.");
+  });
+
+  it("says a later refusal of the style's write beside the field", async () => {
+    const writeStyles = vi.fn(async () => "Card is locked.");
+    mountTarget({ classes: ["c-card"], writeStyles });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Card is locked."
+    );
+  });
+
+  it("holds a locked style's values read-only, and says why", () => {
+    mountTarget({
+      classes: ["c-card"],
+      library: [{ ...card, locked: true } as typeof card],
+    });
+    // The chip carries a lock, named in words.
+    fireEvent.click(chip("Card, locked"));
+    expect(bar().textContent).toContain(
+      "Card is locked. Its properties can't be changed."
+    );
+    // Said once, in the bar, not again above the sections.
+    expect(
+      screen.getAllByText("Card is locked. Its properties can't be changed.")
+    ).toHaveLength(1);
+    expect(
+      (
+        screen.getByRole("textbox", { name: "Opacity" }) as HTMLInputElement
+      ).closest("fieldset")?.disabled ??
+        (screen.getByRole("textbox", { name: "Opacity" }) as HTMLInputElement)
+          .readOnly
+    ).toBe(true);
+  });
+
+  it("holds a shared target read-only for an author who may not change design", () => {
+    const { writeStyles } = mountTarget({
+      classes: ["c-card"],
+      mayChange: false,
+    });
+    fireEvent.click(chip("Card"));
+    expect(bar().textContent).toContain("You can't change this site's design.");
+    expect(
+      screen.getAllByText("You can't change this site's design.")
+    ).toHaveLength(1);
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.9" } });
+    fireEvent.blur(field);
+    expect(writeStyles).not.toHaveBeenCalled();
+  });
+
+  it("says the block overrides its style, and Reset shows the style's value again", () => {
+    const { editor } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+    });
+    expect(
+      screen.getByText(/Set on this block · overrides Card/)
+    ).toBeDefined();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Reset Opacity on this block, showing Card's value/,
+      })
+    );
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
       kind: "update",
       id: "a",
       patch: {},
-      unset: ["classes"],
+      unset: ["styles"],
     });
   });
 
-  it("appears for a block that offers no style properties at all", () => {
-    /*
-     * Named classes compile independently of a block's own style support, so
-     * such a block can still carry one. Exiting early on an empty section list
-     * left the only surface that can apply a class unreachable for exactly the
-     * blocks whose styling has to come from classes.
-     */
-    register({});
-    const editor = editorFor(documentOf());
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
+  it("never ends a line of the shared-style words on a separator", () => {
+    mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+    });
+    const line = document.querySelector('[data-shared-line="override"]');
+    const words = line?.querySelector("[data-shared-line-text]");
+    // The separator is held to the words on both sides, so a wrap falls
+    // between other words; the action sits on its own line, after them.
+    // The style's name is held to "overrides" too, so it never wraps alone.
+    expect(words?.textContent).toBe(
+      "Set on this block\u00a0·\u00a0overrides\u00a0Card"
     );
+    const reset = within(line as HTMLElement).getByRole("button", {
+      name: /^Reset Opacity on this block/,
+    });
+    expect(words?.contains(reset)).toBe(false);
 
+    fireEvent.click(chip("Card"));
+    const move = document.querySelector('[data-shared-line="move"]');
+    expect(move?.querySelector("[data-shared-line-text]")?.textContent).toBe(
+      "Set on this block"
+    );
     expect(
-      screen.getByRole("combobox", { name: /add a class/i })
-    ).toBeDefined();
-    // And it still says the block has no style controls, rather than pretending.
-    expect(screen.getByText(/does not offer style properties/i)).toBeDefined();
+      move
+        ?.querySelector("[data-shared-line-text]")
+        ?.contains(within(move as HTMLElement).getByRole("button"))
+    ).toBe(false);
   });
 
-  it("forgets a typed query when the selection moves to another block", () => {
-    /*
-     * The query and the highlighted row are state about the node in hand.
-     * Unkeyed, React reuses the component across a selection change while the
-     * write callback switches to the new node — so Enter applies the PREVIOUS
-     * block's pending choice to the block now selected.
-     */
-    register({ spacing: true });
-    const first = {
-      formatVersion: 1,
-      kind: "page",
-      nodes: [
-        { id: "a", type: "acme/box", version: 1, props: {} },
-        { id: "b", type: "acme/box", version: 1, props: {} },
-      ] as BlockNode[],
-    } as BlockDocument;
-
-    const view = render(
-      <StyleInspectorPanel
-        editor={editorFor(first, "a")}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
-    );
-    const field = () => screen.getByRole("combobox", { name: /add a class/i });
-    fireEvent.change(field(), { target: { value: "hero" } });
-    expect((field() as HTMLInputElement).value).toBe("hero");
-
-    view.rerender(
-      <StyleInspectorPanel
-        editor={editorFor(first, "b")}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
-    );
-    expect((field() as HTMLInputElement).value).toBe("");
+  it("quiets a field's provenance caption once a value is committed, until it is focused again", () => {
+    mountTarget({});
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    const row = field.closest(".nx-inspector__field");
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: "0.4" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    // Typing put focus there, so the caption would linger over the row above.
+    expect(row?.hasAttribute("data-provenance-quiet")).toBe(true);
+    fireEvent.blur(field);
+    fireEvent.focus(field);
+    expect(row?.hasAttribute("data-provenance-quiet")).toBe(false);
   });
 
-  it("tells the selector when the document refused the write", () => {
-    /*
-     * `applyAll` answers null when the store refuses — a page at its byte limit
-     * rejects an edit the class rules found valid. Discarded, the selector
-     * clears the query and resets as though the class had been applied, so the
-     * author loses the typed choice and is told nothing.
-     */
-    register({ spacing: true });
-    const document = {
-      formatVersion: 1,
-      kind: "page",
-      nodes: [
-        { id: "a", type: "acme/box", version: 1, props: {} },
-      ] as BlockNode[],
-    } as BlockDocument;
-    const editor = editorFor(document);
-    editor.applyAll.mockReturnValue(null);
-
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
-    );
-    const field = () => screen.getByRole("combobox", { name: /add a class/i });
-    fireEvent.change(field(), { target: { value: "hero" } });
-    fireEvent.keyDown(field(), { key: "Enter" });
-
-    expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect((field() as HTMLInputElement).value).toBe("hero");
-    expect(screen.getByRole("alert").textContent).toMatch(
-      /could not be applied/i
-    );
-  });
-
-  it("reports a creation to the host, then writes the id it answers with", async () => {
-    /*
-     * Asserting only that no write happened YET is satisfied by the promise not
-     * having settled, and would hold for a panel that never applies the class.
-     * The write has to be observed after the microtask runs.
-     */
-    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
-    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
-      target: { value: "call-to-action" },
+  it("moves a block's value into its style, then clears it from the block", async () => {
+    const { editor, writeStyles } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
     });
-    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
-      key: "Enter",
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    expect(writtenTo(writeStyles, card.styles)).toEqual({
+      base: { [BASE_BREAKPOINT]: { opacity: 0.2 } },
     });
-
-    expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
-    expect(editor.applyAll).not.toHaveBeenCalled();
-
-    await React.act(async () => {});
-
+    await vi.waitFor(() => expect(editor.applyAll).toHaveBeenCalledTimes(1));
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
       kind: "update",
       id: "a",
-      patch: { classes: ["id-new"] },
+      patch: {},
+      unset: ["styles"],
     });
   });
 
-  it("refuses a created class once the block was locked while it was in flight", async () => {
-    /*
-     * The creation resolves through the callback of the render that began it.
-     * The block is locked in a LATER render, by a new editor object, the way
-     * the store hands one down; the write must ask that one, not the editor
-     * the pending callback closed over.
-     */
-    register({ spacing: true });
-    const node = { id: "a", type: "acme/box", version: 1, props: {} };
-    const free = editorFor({
-      formatVersion: 1,
-      kind: "page",
-      nodes: [node] as BlockNode[],
-    } as BlockDocument);
-    let settle: (value: { ok: true; classId: string }) => void = () => {};
-    const onCreateClass = vi.fn(
-      () =>
-        new Promise<{ ok: true; classId: string }>(resolve => {
-          settle = resolve;
-        })
-    );
-    const { rerender } = render(
-      <StyleInspectorPanel
-        editor={free}
-        onCreateClass={onCreateClass}
-        classLibrary={LIBRARY}
-      />
-    );
-    const field = () => screen.getByRole("combobox", { name: /add a class/i });
-    fireEvent.change(field(), { target: { value: "call-to-action" } });
-    fireEvent.keyDown(field(), { key: "Enter" });
-    expect(onCreateClass).toHaveBeenCalledTimes(1);
-
-    const locked = editorFor({
-      formatVersion: 1,
-      kind: "page",
-      nodes: [{ ...node, locked: true }] as BlockNode[],
-    } as BlockDocument);
-    rerender(
-      <StyleInspectorPanel
-        editor={locked}
-        onCreateClass={onCreateClass}
-        classLibrary={LIBRARY}
-      />
-    );
-    await React.act(async () => {
-      settle({ ok: true, classId: "id-new" });
+  it("leaves the block as it was when the style refuses the moved value", async () => {
+    const writeStyles = vi.fn(async () => "Refused.");
+    const { editor } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles,
     });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe("Refused.");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
 
-    expect(free.applyAll).not.toHaveBeenCalled();
-    expect(locked.applyAll).not.toHaveBeenCalled();
+  it("applies an existing style to a block that wears none, and offers no new empty one", () => {
+    const { editor } = mountTarget({});
+    fireEvent.click(
+      within(bar()).getByRole("button", { name: "Apply shared style" })
+    );
+    const search = screen.getByRole("combobox", {
+      name: "Search shared styles",
+    });
+    fireEvent.change(search, { target: { value: "brand-new" } });
+    expect(screen.getByText("No shared style matches.")).toBeDefined();
+    fireEvent.change(search, { target: { value: "ca" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { classes: ["c-card"] },
+    });
+  });
+
+  it("offers no second style while the block wears one", () => {
+    mountTarget({ classes: ["c-card"] });
+    expect(
+      within(bar()).queryByRole("button", { name: "Apply shared style" })
+    ).toBeNull();
+  });
+
+  it("takes a style off the block, or detaches it, from the chip's menu", () => {
+    const { editor } = mountTarget({ classes: ["c-card"] });
+    const menu = within(bar()).getByRole("button", {
+      name: "Actions for shared style Card",
+    });
+    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: /Detach: keep the look on this block only/,
+      })
+    );
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } },
+      unset: ["classes"],
+    });
   });
 });
 
@@ -662,7 +988,7 @@ describe("controls", () => {
 
     // `multiply` is the catalog's, not a list written here — a value absent
     // from `mix-blend-mode` would fail to appear.
-    expect(screen.getByRole("option", { name: "multiply" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Multiply" })).toBeDefined();
   });
 
   it("writes on Enter, and stops the entry form from submitting", () => {
@@ -905,7 +1231,8 @@ describe("controls", () => {
     } as NodeStyles;
     mount({ effects: true }, styles);
 
-    expect(fieldsOf("mixBlendMode").getByText("inherit")).toBeDefined();
+    // In words, like every keyword; its CSS spelling is the tooltip.
+    expect(fieldsOf("mixBlendMode").getByText("Inherit")).toBeDefined();
   });
 
   it("reports an edit the op store refused, which the validator cannot anticipate", () => {
@@ -1238,10 +1565,14 @@ describe("controls", () => {
     // `margin` both have a block start, so a name built from the side alone
     // says the same thing twice.
     expect(
-      screen.getByRole("button", { name: "Clear Padding block start" })
+      screen.getByRole("button", {
+        name: "Clear Padding block start",
+      })
     ).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Clear Margin block start" })
+      screen.getByRole("button", {
+        name: "Clear Margin block start",
+      })
     ).toBeDefined();
   });
 
@@ -1350,7 +1681,9 @@ describe("controls", () => {
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
     fireEvent.click(
-      padding.getByRole("button", { name: "Clear Padding block start" })
+      padding.getByRole("button", {
+        name: "Clear Padding block start",
+      })
     );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1618,7 +1951,7 @@ describe("a free-form value the panel must let an author repair", () => {
 
     expect(fieldsOf("fontStyle").queryByRole("textbox")).toBeNull();
     expect(
-      fieldsOf("fontStyle").getByRole("button", { name: "italic" })
+      fieldsOf("fontStyle").getByRole("button", { name: "Italic" })
     ).toBeDefined();
   });
 });
@@ -2036,8 +2369,9 @@ describe("a length field's unit", () => {
     const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
     expect(width.value).toBe("");
     expect(width.placeholder).toBe("");
+    // In words, as every keyword is offered.
     expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
-      "auto"
+      keywordLabel("width", "auto")
     );
   });
 
@@ -2189,7 +2523,7 @@ describe("a length field's unit", () => {
   it("offers the property's keywords after its units", () => {
     const editor = mount({ dimensions: true });
     fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
-    fireEvent.click(screen.getByRole("option", { name: "auto" }));
+    fireEvent.click(screen.getByRole("option", { name: "Auto" }));
     expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
       '"width":"auto"'
     );
@@ -2565,7 +2899,7 @@ describe("where a control's value came from", () => {
     );
     const dot = dotIn("color");
     expect(dot?.getAttribute("data-provenance")).toBe("inherited");
-    expect(dot?.getAttribute("aria-label")).toBe("Inherited from .card");
+    expect(dot?.getAttribute("aria-label")).toBe("From .card");
   });
 
   it("refuses to style a block whose id another block also uses", () => {
@@ -2657,9 +2991,7 @@ describe("where a control's value came from", () => {
       />
     );
 
-    expect(dotIn("color")?.getAttribute("aria-label")).toBe(
-      "Inherited from .card"
-    );
+    expect(dotIn("color")?.getAttribute("aria-label")).toBe("From .card");
   });
 
   it("puts the same sentence in TEXT, for someone who tabs rather than points", () => {
@@ -3094,8 +3426,22 @@ describe("naming the place a value came from", () => {
     // The id is storage and must not reach anything rendered or queried; the
     // slug is what the author typed and what the canvas shows.
     expect(nameFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
-      "Inherited from .card"
+      "From .card"
     );
+  });
+
+  it("names a shared style by its name where the panel knows it", () => {
+    // "From Card": the style the author chose for the block, by the name the
+    // Shared styles tab gives it, rather than its class name.
+    const named = describeProvenance(
+      {
+        kind: "inherited",
+        entry: at(),
+        from: { kind: "class", id: "cls-1", slug: "card" },
+      } as never,
+      { ...editing, sharedStyleName: () => "Card" } as never
+    )?.text;
+    expect(named).toBe("From Card");
   });
 
   it("names the block's own defaults and the page", () => {
@@ -3200,7 +3546,7 @@ describe("naming the place a value came from", () => {
     );
 
     expect(label).toContain("at Medium");
-    expect(label).toBe("Inherited from .card at Medium");
+    expect(label).toBe("From .card at Medium");
   });
 
   it("says which control a non-node rule came THROUGH, without moving the place", () => {
@@ -3215,7 +3561,7 @@ describe("naming the place a value came from", () => {
       at({ property: "color", descendant: " a" })
     );
 
-    expect(label).toContain(".card");
+    expect(label).toMatch(/^From \.card /);
     expect(label).toContain("via");
   });
 
@@ -3828,8 +4174,12 @@ describe("the action a control's breakpoint provenance earns", () => {
  */
 describe("a segmented keyword control behaves as a toggle", () => {
   /** The buttons of the `fontStyle` toggle, by their option name. */
-  const optionButton = (name: string) =>
-    fieldsOf("fontStyle").getByRole("button", { name });
+  // Found by its words, which name a keyword's button (its CSS spelling is the
+  // tooltip): the cases below speak in keywords, which is what is stored.
+  const optionButton = (keyword: string) =>
+    fieldsOf("fontStyle").getByRole("button", {
+      name: keywordLabel("font-style", keyword),
+    });
 
   /**
    * Every option button, found through the group BY ITS ACCESSIBLE NAME.
@@ -3899,8 +4249,9 @@ describe("a segmented keyword control behaves as a toggle", () => {
       mountWith(stored);
 
       for (const button of allOptions()) {
+        // The button's keyword is its tooltip; its words are its text.
         expect(button.getAttribute("aria-pressed")).toBe(
-          String(button.textContent?.trim() === stored)
+          String(button.getAttribute("title") === stored)
         );
       }
     }
@@ -4223,6 +4574,24 @@ describe("a per-side property is drawn as a box", () => {
     ).toBeDefined();
   });
 
+  it("names a side's whole value in its tooltip, for a value its cell cannot show", () => {
+    // A value wider than its cell was cut short with no way to read it.
+    register({ spacing: true });
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { padding: { inlineStart: "12.375rem" } } },
+    } as NodeStyles;
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        sideOrientation={{ writingMode: "horizontal-tb", direction: "ltr" }}
+      />
+    );
+    const side = document.querySelector(
+      '[data-property="padding"] [data-side="inlineStart"] input'
+    ) as HTMLInputElement;
+    expect(side.getAttribute("title")).toBe("12.375rem");
+  });
+
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*
      * The forwarding hop, and the only test here that measures rather than is
@@ -4274,8 +4643,30 @@ describe("the Baseline gate on the panel", () => {
 
     fireEvent.click(screen.getByLabelText("Display"));
 
-    expect(screen.getByRole("option", { name: "flex" })).toBeDefined();
-    expect(screen.queryByRole("option", { name: "contents" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Flex" })).toBeDefined();
+    expect(screen.queryByRole("option", { name: "Contents only" })).toBeNull();
+  });
+
+  it("names a keyword in words, with its CSS spelling in the tooltip", () => {
+    // "inline-flex" read as code; the words are what an author picks from.
+    mount({ layout: true });
+    fireEvent.click(screen.getByLabelText("Display"));
+    const option = screen.getByRole("option", { name: "Inline flex" });
+    expect(option.getAttribute("title")).toBe("inline-flex");
+  });
+
+  it("offers a stored spelling once, in words, in the place of the keyword it spells", () => {
+    // The validator stores `INLINE-FLEX` as the inline-flex it is, so the menu
+    // names it once in words rather than adding a second item read as code.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "INLINE-FLEX" } },
+    } as NodeStyles;
+    mount({ layout: true }, styles);
+    fireEvent.click(screen.getByLabelText("Display"));
+    const options = screen.getAllByRole("option", { name: "Inline flex" });
+    expect(options).toHaveLength(1);
+    expect(options[0]?.getAttribute("title")).toBe("INLINE-FLEX");
+    expect(screen.queryByRole("option", { name: "INLINE FLEX" })).toBeNull();
   });
 
   it("shows a stored withheld value clear-only, and says why", () => {

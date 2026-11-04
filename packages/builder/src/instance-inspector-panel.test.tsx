@@ -538,12 +538,28 @@ describe("a link and a visibility exposure", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
-  it("sets the visibility box apart from its words", () => {
-    // The box sat against "Shown on this page": the row's spacing rule needed
-    // a class the row did not carry.
+  it("keeps a visibility row's source under its name, the switch in the control cell", () => {
+    // One row like every other placement field: the note under the name, not
+    // under the control, which made each field two rows.
     mount(instance(), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
-    expect(box.parentElement?.className).toBe("nx-inspector__check");
+    const toggle = screen.getByRole("switch", { name: "Newsletter form" });
+    const row = toggle.closest(".nx-inspector__field--exposed");
+    expect(toggle.closest(".nx-inspector__exposed")).not.toBeNull();
+    const name = row?.querySelector(".nx-inspector__exposed-name");
+    expect(name?.querySelector(".nx-inspector__source")).not.toBeNull();
+    expect(
+      row?.querySelector(".nx-inspector__exposed .nx-inspector__source")
+    ).toBeNull();
+  });
+
+  it("is a switch named by its row, with no words beside it", () => {
+    // A checkbox beside "Shown on this page" wrapped onto two lines; the
+    // switch's state says it, and the row's label names it.
+    mount(instance(), linked());
+    expect(
+      screen.getByRole("switch", { name: "Newsletter form" })
+    ).toBeDefined();
+    expect(screen.queryByText("Shown on this page")).toBeNull();
   });
 
   it("shows an inherited visibility row as shown, and hides it by writing false", () => {
@@ -551,7 +567,7 @@ describe("a link and a visibility exposure", () => {
     // definition gates the node itself; the resolver reads `false` as hidden
     // and `true` as shown, and nothing else.
     const editor = mount(instance(), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
 
     expect(box.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(box);
@@ -597,7 +613,7 @@ describe("a link and a visibility exposure", () => {
         ],
       });
     const editor = mount(instance(), gated());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
 
     expect(box.getAttribute("aria-checked")).toBe("false");
     // And not as the author's own doing: there is nothing of theirs to reset.
@@ -613,7 +629,7 @@ describe("a link and a visibility exposure", () => {
 
   it("shows a hidden row unchecked — cleared included, which the page reads as hidden — and shows it again by writing true", () => {
     const hidden = mount(instance({ overrides: { shown: false } }), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
     expect(box.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(box);
     expect(appliedProps(hidden)).toEqual({
@@ -625,7 +641,7 @@ describe("a link and a visibility exposure", () => {
     mount(instance({ overrides: { shown: { $unset: true } } }), linked());
     expect(
       screen
-        .getByRole("checkbox", { name: "Newsletter form" })
+        .getByRole("switch", { name: "Newsletter form" })
         .getAttribute("aria-checked")
     ).toBe("false");
     expect(screen.getByText("Cleared on this page")).toBeDefined();
@@ -704,6 +720,33 @@ describe("two options the control once spelled alike", () => {
       componentId: "header",
       overrides: { tone: "" },
     });
+  });
+});
+
+describe("a placement's row", () => {
+  it("is one row, its source a note under its label and Reset in its own slot", () => {
+    // Label, field, then "Set on this page" stacked made each row about 68px
+    // beside the 28px Style rows.
+    mount(instance({ overrides: { title: "Hello" } }));
+    const note = screen.getByText("Set on this page");
+    const name = note.closest(".nx-inspector__exposed-name");
+    expect(name?.querySelector("label")?.textContent).toBe("Title");
+    const reset = screen.getByRole("button", { name: "Reset Title" });
+    const slot = reset.parentElement;
+    expect(slot?.className).toBe("nx-inspector__exposed-reset-slot");
+    expect(slot?.parentElement?.className).toContain(
+      "nx-inspector__field--exposed"
+    );
+  });
+
+  it("keeps the reset slot when there is nothing to reset", () => {
+    // So every control ends at one edge, set or not.
+    mount(instance());
+    expect(
+      document.querySelectorAll(
+        ".nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot"
+      ).length
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -1226,7 +1269,10 @@ describe("a row a lock the component sets holds", () => {
     const free = rowOf("Strap");
     const heldRow = rowOf("Title");
     expect(heldRow?.className).toBe(free?.className);
-    expect(heldRow?.firstElementChild?.tagName).toBe("LABEL");
+    // The label leads the row's name cell, which leads the row.
+    expect(heldRow?.firstElementChild?.firstElementChild?.tagName).toBe(
+      "LABEL"
+    );
     // The cell beside it starts with the field, held or free, so the field
     // stays level with its label and the reason follows it.
     const leads = (row: Element | null | undefined, name: string) =>

@@ -25,6 +25,7 @@
 import {
   isRichTextValue,
   ITEM_SCHEMA_MAX_DEPTH,
+  optionLabel,
   richTextToPlainText,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -48,7 +49,7 @@ import {
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
-import { optionLabel, propLabel, type EditableProp } from "./inspector";
+import { propLabel, type EditableProp } from "./inspector";
 import type { OpenPassages } from "./open-passages";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
@@ -274,17 +275,16 @@ function CheckboxControl({
   label,
 }: ContentControlProps): React.JSX.Element {
   return (
-    <div
-      className="nx-inspector__field nx-inspector__field--inline"
-      data-content-control="checkbox"
-    >
+    // As every other row is: the label in the label column, the switch in the
+    // control column, where a switch drawn before its label broke the column.
+    <div className="nx-inspector__field" data-content-control="checkbox">
+      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
       <Switch
         id={id}
         disabled={disabled}
         checked={(prop.value ?? prop.defaultValue) === true}
         onCheckedChange={checked => onCommit(prop.name, checked)}
       />
-      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
     </div>
   );
 }
@@ -357,6 +357,12 @@ function SelectControl({
           {prop.options.map((option, index) => (
             <SelectItem key={option} value={option}>
               {labels[index]}
+              {/* The value itself, muted, where the block asks for it: an
+                  HTML tag reads as words, with the tag still there. */}
+              {prop.schema.showOptionValue === true &&
+              labels[index] !== option ? (
+                <span className="nx-inspector__option-value">{option}</span>
+              ) : null}
             </SelectItem>
           ))}
         </SelectContent>
@@ -844,6 +850,9 @@ function itemProp(
     value,
     supported: hasContentControl(schema.type),
     options,
+    // An item's fields are drawn whole: the rules that leave a block's prop
+    // out read the block's other props, which an item does not have.
+    offered: true,
     // The parent array control's `disabled` already holds the item fields.
     readOnly: false,
   };

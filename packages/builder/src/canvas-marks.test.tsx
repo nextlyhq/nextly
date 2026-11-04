@@ -18,7 +18,7 @@ import {
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 import { Canvas } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
@@ -95,6 +95,57 @@ beforeAll(() => {
             { className },
             createElement("div", { key: "one", [NODE_ID_ATTRIBUTE]: "child" }),
             createElement("div", { key: "two", [NODE_ID_ATTRIBUTE]: "child" })
+          ),
+      },
+      {
+        // A component placement as the renderer draws it: the definition's
+        // two parts, each carrying the placement's address and no element of
+        // the placement's own around them.
+        name: "acme/placed",
+        version: 1,
+        description: "A placement of a two-part component.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement(
+            "div",
+            { className },
+            createElement("div", {
+              key: "one",
+              [NODE_ID_ATTRIBUTE]: "part-1",
+              [INSTANCE_ATTRIBUTE]: "place",
+            }),
+            createElement("div", {
+              key: "two",
+              [NODE_ID_ATTRIBUTE]: "part-2",
+              [INSTANCE_ATTRIBUTE]: "place",
+            })
+          ),
+      },
+      {
+        // A block that draws a placement twice, as a loop draws its slot once
+        // per entry: each copy's parts sit in a wrapper of their own.
+        name: "acme/placed-twice",
+        version: 1,
+        description: "Two copies of one placement.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement(
+            "div",
+            { className },
+            ...["first", "second"].map(copy =>
+              createElement(
+                "div",
+                { key: copy, "data-copy": copy },
+                createElement("div", {
+                  [NODE_ID_ATTRIBUTE]: `${copy}-1`,
+                  [INSTANCE_ATTRIBUTE]: "place",
+                }),
+                createElement("div", {
+                  [NODE_ID_ATTRIBUTE]: `${copy}-2`,
+                  [INSTANCE_ATTRIBUTE]: "place",
+                })
+              )
+            )
           ),
       },
     ] as never,
@@ -273,6 +324,189 @@ describe("selection marks", () => {
     await waitFor(() => expect(exposedIn()).toHaveLength(0));
   });
 
+  it("draws a selected placement as one frame around all its parts, tagged with its name", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "part-1") return new DOMRect(100, 100, 200, 50);
+        if (id === "part-2") return new DOMRect(100, 200, 200, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "host", type: "acme/placed", version: 1, props: {} }],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="place"
+        overlay={
+          <CanvasMarks
+            nameOf={id => (id === "place" ? "Promo card" : undefined)}
+          />
+        }
+      />
+    );
+    await act(async () => undefined);
+    // One frame, not a ring per part.
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    const frame = halosIn(container)[0] as HTMLElement;
+    expect(frame.hasAttribute("data-component")).toBe(true);
+    expect(frame.getAttribute("data-placement-label")).toBe("◇ Promo card");
+    // Room above it on the page, so the tag sits outside the frame.
+    expect(frame.hasAttribute("data-placement-tag-inside")).toBe(false);
+    // Around both parts, and outside them by the ring and its halo.
+    expect({
+      left: frame.style.left,
+      top: frame.style.top,
+      width: frame.style.width,
+      height: frame.style.height,
+    }).toEqual({ left: "96px", top: "96px", width: "208px", height: "158px" });
+
+    // An exposed part keeps its dash while the placement is selected.
+    act(() => {
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="part-2"]`)
+        ?.setAttribute(EXPOSED_ATTRIBUTE, "");
+    });
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="exposed"]')
+      ).toHaveLength(1)
+    );
+  });
+
+  it("puts a placement's tag inside its frame at the top of what is on screen, wherever that is in the page", async () => {
+    // Scrolled 600px down: the screen shows the page from 600 on, and the
+    // placement sits just below the screen's top, far down the page.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        if (this.classList.contains("nx-canvas")) {
+          return new DOMRect(0, -600, 1000, 2000);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "part-1") return new DOMRect(100, 10, 200, 50);
+        if (id === "part-2") return new DOMRect(100, 70, 200, 50);
+        return new DOMRect(0, -600, 1000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={{
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "host", type: "acme/placed", version: 1, props: {} }],
+          }}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="place"
+          overlay={<CanvasMarks />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    // A tag above the frame would be above the screen, cut off.
+    expect(
+      halosIn(container)[0]?.hasAttribute("data-placement-tag-inside")
+    ).toBe(true);
+  });
+
+  it("draws each copy of a placement a block repeats in a frame of its own", async () => {
+    // One frame around both copies would ring whatever lies between them.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE) ?? "";
+        if (id.startsWith("first")) return new DOMRect(100, 100, 200, 50);
+        if (id.startsWith("second")) return new DOMRect(100, 600, 200, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "host", type: "acme/placed-twice", version: 1, props: {} },
+          ],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="place"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    expect(
+      halosIn(container).map(mark => (mark as HTMLElement).style.top)
+    ).toEqual(["96px", "596px"]);
+  });
+
+  it("names a placement whose component has no name a component", async () => {
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "host", type: "acme/placed", version: 1, props: {} }],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="place"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    expect(halosIn(container)[0]?.getAttribute("data-placement-label")).toBe(
+      "◇ Component"
+    );
+    // At the top of the page, where a tag above would leave it.
+    expect(
+      halosIn(container)[0]?.hasAttribute("data-placement-tag-inside")
+    ).toBe(true);
+  });
+
+  it("draws the ring outside the block, at the page's edge too", async () => {
+    /*
+     * Drawn inside, the ring covered the first glyph of a heading set flush
+     * with its box. Outside, for a block flush with the page's edge, it runs
+     * past the page, into the room the layer keeps past the frame for it.
+     */
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "a") return new DOMRect(0, 0, 100, 50);
+        if (id === "b") return new DOMRect(100, 100, 200, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={leaves}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="b"
+        selectedIds={["a", "b"]}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    const boxes = halosIn(container).map(mark => {
+      const { left, top, width, height } = (mark as HTMLElement).style;
+      return { left, top, width, height };
+    });
+    expect(boxes).toEqual([
+      { left: "-4px", top: "-4px", width: "108px", height: "58px" },
+      { left: "96px", top: "96px", width: "208px", height: "58px" },
+    ]);
+  });
+
   it("draws only the part of a block its clipping ancestor leaves visible", async () => {
     /*
      * The page's own outline used to be clipped with the block; over the
@@ -386,6 +620,37 @@ describe("the hovered block's mark", () => {
     await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
     rerender(drawn(null));
     await waitFor(() => expect(hoveredIn(container)).toHaveLength(0));
+  });
+
+  it("is tagged with the block's name, as its Layers row reads", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "b") {
+          return new DOMRect(100, 100, 200, 50);
+        }
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={
+            <CanvasMarks
+              nameOf={id => (id === "b" ? "Intro text" : undefined)}
+            />
+          }
+        />
+      </HoveredBlockProvider>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    const mark = hoveredIn(container)[0];
+    expect(mark?.getAttribute("data-hover-label")).toBe("Intro text");
+    // Room above it on the page, so the tag sits outside, over its corner.
+    expect(mark?.hasAttribute("data-hover-tag-inside")).toBe(false);
   });
 
   it("is left to the ring on a block already selected", async () => {
@@ -544,7 +809,9 @@ describe("a selected block shown although the page hides it", () => {
           `${mark.getAttribute("data-tag")}:${(mark as HTMLElement).style.getPropertyValue("--nx-tag-inset-bottom")}`
       )
       .sort();
-    expect(insets).toEqual(["inside:304px", "inside:4px"]);
+    // The ring stands 4px outside the block, so it runs 4px further past the
+    // screen, and the tag moves in by as much to stay on it.
+    expect(insets).toEqual(["inside:308px", "inside:8px"]);
   });
 
   it("moves an outside tag in from the screen's right edge when the ring runs past it", async () => {
@@ -575,7 +842,9 @@ describe("a selected block shown although the page hides it", () => {
     const mark = halosIn(container)[0] as HTMLElement;
     expect(mark.getAttribute("data-tag")).toBe("below");
     expect(mark.getAttribute("data-tag-edge")).toBe("right");
-    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("500px");
+    // The ring stands 4px outside the 1500px block, so it runs 504px past
+    // the 1000px screen, and the tag moves in by as much.
+    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("504px");
   });
 
   it("does not put the primary block's tag above it where the block toolbar sits", async () => {
