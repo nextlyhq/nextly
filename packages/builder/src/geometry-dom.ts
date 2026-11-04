@@ -771,18 +771,21 @@ export function hostScrollerBandOf(
 }
 
 /**
- * Every target whose `scroll` moves what of the canvas is on screen: the
- * canvas's own scroller, and the host's scroller around a frame. Chrome kept
- * to the screen band listens to all of them, so the band it reads and the
- * scrolls it hears are one set.
+ * Every scroller whose scroll or size moves what of the canvas is on screen:
+ * the canvas's own, and the host's around a frame. The same two
+ * {@link onScreenOf} reads, so the band chrome keeps to and what it listens to
+ * are one set.
  */
-export function screenScrollTargets(space: OverlaySpace): EventTarget[] {
-  const targets: EventTarget[] = [];
-  const scroller = canvasScroller(space.root, space.frame !== null);
-  if (scroller !== null) targets.push(scrollEventTarget(scroller));
-  const host = space.frame === null ? null : scrollableAncestor(space.frame);
-  if (host !== null) targets.push(host);
-  return targets;
+export function screenScrollers(
+  root: HTMLElement,
+  frame: HTMLIFrameElement | null
+): Element[] {
+  const scrollers: Element[] = [];
+  const own = canvasScroller(root, frame !== null);
+  if (own !== null) scrollers.push(own);
+  const host = frame === null ? null : scrollableAncestor(frame);
+  if (host !== null) scrollers.push(host);
+  return scrollers;
 }
 
 /**

@@ -40,6 +40,7 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
@@ -50,7 +51,6 @@ import {
   onScreenOf,
   overlaySpaceOf,
   renderedScale,
-  screenScrollTargets,
   usedRadiiOf,
   visiblePartOf,
   type OverlaySpace,
@@ -712,15 +712,7 @@ export function CanvasMarks({
     const space =
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     if (space === null) return;
-    const sources = screenScrollTargets(space);
-    for (const source of sources) {
-      source.addEventListener("scroll", measure, { passive: true });
-    }
-    return () => {
-      for (const source of sources) {
-        source.removeEventListener("scroll", measure);
-      }
-    };
+    return watchScreenBand(space.root, space.frame, measure);
   }, [measure, canvasFrame]);
 
   return (
