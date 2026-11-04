@@ -39,10 +39,7 @@ import {
   normalizeJobSlug,
   type JobRegistry,
 } from "../../domains/jobs/job-registry";
-import {
-  runSweepNow,
-  type JobsPassDatabase,
-} from "../../domains/jobs/jobs-runner";
+import type { JobsPassDatabase } from "../../domains/jobs/jobs-runner";
 import type { RunJobsResult } from "../../domains/jobs/run-jobs";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../plugin-context";
@@ -87,12 +84,16 @@ export interface PluginSweepRunner {
  * drain is, so the sweep is judged as a scheduled pass would be.
  */
 const BOOTED_RUNNER: PluginSweepRunner = {
-  run: (slug, maxDurationMs) => {
+  run: async (slug, maxDurationMs) => {
     if (!container.has("jobRegistry")) {
       throw NextlyError.internal({
         logContext: { reason: "job-registry-unregistered", slug },
       });
     }
+    // Imported when a sweep runs, not with the context: the runner reaches
+    // the Direct API, and every module that builds a plugin context would
+    // otherwise load all of it to offer a method most never call.
+    const { runSweepNow } = await import("../../domains/jobs/jobs-runner");
     const adapter = container.get<JobsPassDatabase>("adapter");
     const registry = container.get<JobRegistry>("jobRegistry");
     return runDetachedFromRequest(() =>
