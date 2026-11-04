@@ -236,6 +236,11 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
         lazy: "Load when near the screen",
         eager: "Load immediately",
       },
+      // Drawn as one switch named by `eager`'s words: two states with a safe
+      // default are a yes-or-no question. The stored values stay as they are.
+      display: "switch",
+      switchOn: "eager",
+      hint: "Turn on for images at the top of the page.",
       type: "select",
       options: [...IMAGE_LOADING],
     },

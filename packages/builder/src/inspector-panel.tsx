@@ -1292,6 +1292,11 @@ function ContentFields({
       </p>
     );
   }
+  // What the block holds, for a control whose choices depend on another of
+  // its props: a loop's sort offers its collection's fields.
+  const values = Object.fromEntries(
+    inspection.props.map(prop => [prop.name, prop.value])
+  );
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
@@ -1314,6 +1319,7 @@ function ContentFields({
               disabled={!writable(prop.name)}
               onCommit={onCommit}
               services={services}
+              values={values}
             />
           </HeldByLock>
         );
@@ -1344,11 +1350,14 @@ function PropField({
   disabled,
   onCommit,
   services,
+  values,
 }: {
   prop: EditableProp;
   disabled: boolean;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   services: ContentServices | undefined;
+  /** The block's props as stored, for a control that reads another of them. */
+  values: Readonly<Record<string, unknown>>;
 }): React.JSX.Element {
   // Unique per mount, so two editors on one page never share a field id and a
   // label never points at the other editor's control.
@@ -1366,6 +1375,7 @@ function PropField({
       disabled={disabled}
       onCommit={onCommit}
       services={services}
+      values={values}
     />
   );
 }

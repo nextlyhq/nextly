@@ -136,6 +136,7 @@ import {
   patternLibraryRoute,
   type ComponentStore,
 } from "./library-route";
+import { loopCollectionsRoute } from "./loop-collections-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pagesSearchRoute } from "./pages-search-route";
@@ -1857,6 +1858,9 @@ export const pageBuilder = (
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
         pagesSearchRoute(componentStoreOf(opts)),
+        // A collection loop's menus: the collections the author may read,
+        // the plugin's own stores left out, with each one's sortable fields.
+        loopCollectionsRoute(componentStoreOf(opts)),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.

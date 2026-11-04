@@ -7736,8 +7736,28 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * An on/off row's switch at the start of the control column, its own size,
  * rather than stretched across it.
  */
-.nx-inspector__field[data-content-control="checkbox"] > [role="switch"] {
+.nx-inspector__field[data-content-control="checkbox"] > [role="switch"],
+.nx-inspector__field[data-display="switch"] > [role="switch"] {
   justify-self: start;
+}
+
+/*
+ * A loop's sort on one row: the field menu takes the room, the direction
+ * toggle beside it keeps its own square.
+ */
+.nx-inspector__sort {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-inspector__sort > .nx-font-pick {
+  flex: 1;
+}
+
+.nx-inspector__sort-direction {
+  flex: none;
 }
 
 .nx-inspector__exposed [role="switch"] {
