@@ -1349,6 +1349,7 @@ function ContentFields({
                 writable,
                 reasonId,
                 services,
+                placedWith: inspection.placedWith,
                 onCommitMany,
               })}
             </React.Fragment>

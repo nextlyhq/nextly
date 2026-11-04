@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addressChanges,
+  mediaPickChanges,
   altModeChanges,
   altModeOf,
   imageGroupOf,
@@ -29,8 +30,8 @@ const alt = group?.alt as ImageAltGroup;
 
 describe("which props join", () => {
   it("joins an image's source and its alt text, and nothing else", () => {
-    expect([...source.drawn]).toEqual(["mediaId", "src"]);
-    expect([...alt.drawn]).toEqual(["alt", "decorative"]);
+    expect([...source.drawn]).toStrictEqual(["mediaId", "src"]);
+    expect([...alt.drawn]).toStrictEqual(["alt", "decorative"]);
     expect(alt.media).toBe("mediaId");
   });
 
@@ -69,20 +70,48 @@ describe("where the picture comes from", () => {
   });
 
   it("writes a typed address over a stored file, in one edit", () => {
-    expect(addressChanges(source, " /b.jpg ", { mediaId: "m-1" })).toEqual({
+    expect(
+      addressChanges(source, " /b.jpg ", { mediaId: "m-1" })
+    ).toStrictEqual({
       src: "/b.jpg",
       mediaId: undefined,
     });
   });
 
   it("names no file where none is stored, so a lock on it does not refuse", () => {
-    expect(addressChanges(source, "/b.jpg", {})).toEqual({ src: "/b.jpg" });
+    expect(addressChanges(source, "/b.jpg", {})).toStrictEqual({
+      src: "/b.jpg",
+    });
   });
 
   it("removes the address for an emptied field, and keeps the file", () => {
-    expect(addressChanges(source, "  ", { mediaId: "m-1", src: "/a" })).toEqual(
-      { src: undefined }
-    );
+    expect(
+      addressChanges(source, "  ", { mediaId: "m-1", src: "/a" })
+    ).toStrictEqual({ src: undefined });
+  });
+});
+
+describe("what picking a library file writes", () => {
+  // Strict: a change naming `src: undefined` removes the address, so its
+  // presence is the property, and a loose match would ignore it.
+  const placed = [{ src: "/example.jpg" }, { src: "/variant.jpg" }];
+
+  it("keeps an author's own address, as the file's fallback", () => {
+    expect(
+      mediaPickChanges(source, "m-2", { src: "/photo.jpg" }, placed)
+    ).toStrictEqual({ mediaId: "m-2" });
+  });
+
+  it("removes an address the block was placed with, in the same edit", () => {
+    expect(
+      mediaPickChanges(source, "m-2", { src: "/variant.jpg" }, placed)
+    ).toStrictEqual({ mediaId: "m-2", src: undefined });
+  });
+
+  it("names no address where none is stored", () => {
+    expect(mediaPickChanges(source, "m-2", {}, placed)).toStrictEqual({
+      mediaId: "m-2",
+    });
   });
 });
 
@@ -104,27 +133,33 @@ describe("what a screen reader is given", () => {
   it("writes From library by removing the page's alt and the mark", () => {
     expect(
       altModeChanges(alt, "library", { alt: "Words", decorative: true }, "Lib")
-    ).toEqual({ alt: undefined, decorative: undefined });
-    expect(altModeChanges(alt, "library", { alt: "Words" }, "Lib")).toEqual({
+    ).toStrictEqual({ alt: undefined, decorative: undefined });
+    expect(
+      altModeChanges(alt, "library", { alt: "Words" }, "Lib")
+    ).toStrictEqual({
       alt: undefined,
     });
   });
 
   it("writes Custom from the library's words, so a reader hears the same", () => {
-    expect(altModeChanges(alt, "custom", {}, "A tabby cat")).toEqual({
+    expect(altModeChanges(alt, "custom", {}, "A tabby cat")).toStrictEqual({
       alt: "A tabby cat",
     });
-    expect(altModeChanges(alt, "custom", {}, undefined)).toEqual({ alt: "" });
+    expect(altModeChanges(alt, "custom", {}, undefined)).toStrictEqual({
+      alt: "",
+    });
   });
 
   it("keeps the page's own alt when Custom unmarks a decorative image", () => {
     expect(
       altModeChanges(alt, "custom", { alt: "Kept", decorative: true }, "Lib")
-    ).toEqual({ decorative: undefined });
+    ).toStrictEqual({ decorative: undefined });
   });
 
   it("writes Decorative as the mark alone, keeping the alt for switching back", () => {
-    expect(altModeChanges(alt, "decorative", { alt: "Kept" }, "Lib")).toEqual({
+    expect(
+      altModeChanges(alt, "decorative", { alt: "Kept" }, "Lib")
+    ).toStrictEqual({
       decorative: true,
     });
   });

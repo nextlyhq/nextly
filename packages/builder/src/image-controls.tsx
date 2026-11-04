@@ -46,6 +46,7 @@ import {
   ALT_MODES,
   altModeChanges,
   altModeOf,
+  mediaPickChanges,
   sourceModeOf,
   storedAlt,
   type AltMode,
@@ -66,6 +67,8 @@ interface ImageGroupFieldProps {
   /** The id of the lock reason a held control points to. */
   readonly reasonId: string;
   readonly services: ContentServices | undefined;
+  /** Every set of props the block can be placed with. */
+  readonly placedWith: ReadonlyArray<Readonly<Record<string, unknown>>>;
   /** Write several props as one edit. */
   readonly onCommitMany: (changes: ImageChanges) => unknown;
 }
@@ -141,9 +144,11 @@ function LibrarySide({
   write,
   services,
   showLibraryAlt,
+  placedWith,
 }: SourceSideProps & {
   services: ContentServices | undefined;
   showLibraryAlt: boolean;
+  placedWith: ImageGroupFieldProps["placedWith"];
 }): React.JSX.Element {
   const id = React.useId();
   const media = props.find(prop => prop.name === group.media);
@@ -162,7 +167,13 @@ function LibrarySide({
         disabled={!writable(group.media)}
         services={services}
         showAlt={showLibraryAlt}
-        onChange={next => write({ [group.media]: next })}
+        onChange={next =>
+          write(
+            next === undefined
+              ? { [group.media]: undefined }
+              : mediaPickChanges(group, next, values, placedWith)
+          )
+        }
       />
       {storedMedia === undefined || storedAddress === undefined ? null : (
         <p className="nx-inspector__note">
@@ -225,6 +236,7 @@ export function ImageSourceField({
   writable,
   reasonId,
   services,
+  placedWith,
   onCommitMany,
   showLibraryAlt,
 }: ImageGroupFieldProps & {
@@ -271,6 +283,7 @@ export function ImageSourceField({
           {...side}
           services={services}
           showLibraryAlt={showLibraryAlt}
+          placedWith={placedWith}
         />
       ) : (
         <AddressSide {...side} />

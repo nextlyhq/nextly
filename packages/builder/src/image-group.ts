@@ -126,6 +126,29 @@ export function addressChanges(
   };
 }
 
+/**
+ * What picking a library file writes. A stored address is kept as the file's
+ * fallback, since an author may have typed it, unless it is still one the
+ * block was placed with (`placedWith`: its example's placeholder, not
+ * anyone's address): that one is removed in the same edit, so a fresh image
+ * holds the picked file alone.
+ */
+export function mediaPickChanges(
+  group: ImageSourceGroup,
+  mediaId: string,
+  values: Readonly<Record<string, unknown>>,
+  placedWith: ReadonlyArray<Readonly<Record<string, unknown>>>
+): ImageChanges {
+  const address = values[group.address];
+  const placeholder =
+    typeof address === "string" &&
+    placedWith.some(props => props[group.address] === address);
+  return {
+    [group.media]: mediaId,
+    ...(placeholder ? { [group.address]: undefined } : {}),
+  };
+}
+
 /** What a screen reader is given for the image. */
 export type AltMode = "library" | "custom" | "decorative";
 

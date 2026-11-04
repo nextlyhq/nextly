@@ -62,7 +62,8 @@ function register(): void {
         name: "acme/picture",
         version: 1,
         description: "A picture.",
-        example: { props: {} },
+        // Placed with a placeholder address, as `core/image` is.
+        example: { props: { src: "/example.jpg" } },
         editor: { label: "Picture" },
         props: {
           mediaId: {
@@ -187,6 +188,16 @@ describe("where an image's picture comes from", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose Image" }));
     await waitFor(() => expect(editor.apply).toHaveBeenCalled());
     expect(written(editor)).toEqual({ src: "/photo.jpg", mediaId: "m-2" });
+  });
+
+  it("drops the address the block was placed with when a library file is picked, in one edit", async () => {
+    // A fresh image's address is the block's own placeholder, nobody's
+    // fallback, so the picked file stands alone.
+    const editor = mount({ src: "/example.jpg", loading: "lazy" });
+    fireEvent.click(radio("Library"));
+    fireEvent.click(screen.getByRole("button", { name: "Choose Image" }));
+    await waitFor(() => expect(editor.apply).toHaveBeenCalled());
+    expect(written(editor)).toEqual({ loading: "lazy", mediaId: "m-2" });
   });
 
   it("shows a file and an address stored together as they are, and writes nothing", () => {

@@ -31,6 +31,8 @@ export interface PropGroupContext {
   /** The id of the lock reason a held control points to. */
   readonly reasonId: string;
   readonly services: ContentServices | undefined;
+  /** Every set of props the block can be placed with: see `BlockInspection`. */
+  readonly placedWith: ReadonlyArray<Readonly<Record<string, unknown>>>;
   /** Write several props as one edit. */
   readonly onCommitMany: (
     changes: Readonly<Record<string, unknown>>
