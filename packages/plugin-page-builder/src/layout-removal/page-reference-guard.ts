@@ -57,7 +57,11 @@ import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
 
-import { confirmedGone, unlessGone } from "./layout-references";
+import {
+  confirmedGone,
+  unlessGone,
+  type PersonReads,
+} from "./layout-references";
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
 import { pageLayoutRefusal, type FencedLayoutState } from "./words";
 
@@ -228,12 +232,19 @@ function pastItsFinalCheck(removal: LayoutRemoval): boolean {
  * publishing anything: the working draft of a published page, or the row of an
  * unpublished one. Answers whether it cleared anything. The write leaves the
  * status out, so a published page's live row is untouched.
+ *
+ * The write runs as the system, for a page write already in flight that the
+ * fence could not stop, unless `writeAs` names a person: then it runs as them,
+ * their own access deciding, and a page they may not edit is refused with
+ * their write's own error. The read of where the page stands is the system's
+ * either way: it decides only whether there is anything to clear.
  */
 export async function clearPageReference(
   nextly: PageReads,
   pages: string,
   pageId: string,
-  layoutId: string
+  layoutId: string,
+  writeAs?: PersonReads
 ): Promise<boolean> {
   const current = await currentPage(nextly, pages, pageId);
   if (current === null || relationId(current.layout) !== layoutId) {
@@ -247,7 +258,7 @@ export async function clearPageReference(
       collection: pages,
       id: pageId,
       data: { layout: null },
-      overrideAccess: true,
+      ...(writeAs ?? { overrideAccess: true }),
     }),
     () => confirmedGone(nextly, pages, pageId)
   );

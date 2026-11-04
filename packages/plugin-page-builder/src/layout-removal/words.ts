@@ -148,3 +148,16 @@ export function stillUsedAfterDelete(found: {
     ? `${namedPages(found.titles, found.unreadable)} still uses this Layout. It shows the site default until it is published with another Layout.`
     : `${namedPages(found.titles, found.unreadable)} still use this Layout. They show the site default until they are published with another Layout.`;
 }
+
+/** Why a move left a page the person may not edit, or may not read. */
+export const CANT_EDIT_PAGE = "You can't edit this page.";
+
+/** Why a move left a page whose save failed for a reason it can't name. */
+export const PAGE_NOT_SAVED = "This page couldn't be saved. Try again.";
+
+/**
+ * A move's tick that finds its move gone: stopped, swept after its dialog
+ * closed, or taken up again elsewhere.
+ */
+export const MOVE_STOPPED =
+  "Moving stopped, so the Layout was not removed. Pages already moved stay on the site default.";
