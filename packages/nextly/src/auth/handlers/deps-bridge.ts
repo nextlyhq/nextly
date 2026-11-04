@@ -538,6 +538,9 @@ export function buildAuthRouterDeps(
       // the context can be built before the database is connected.
       return getService(name);
     }
+    // The jobs runner's database is the container's adapter, under the
+    // name the plugin context asks for it by.
+    if (name === "jobsDatabase") return getService("adapter");
     return getService(name);
   }) as Parameters<typeof createPluginContext>[0];
   const pluginCtx = createPluginContext(ctxGetService, getHookRegistry());

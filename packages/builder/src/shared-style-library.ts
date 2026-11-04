@@ -60,9 +60,33 @@ export interface SharedStylesUsage {
   readonly counting?: boolean;
   /** Whether this author may lock and unlock shared styles. */
   readonly mayLock: boolean;
+  /**
+   * Whether this author may ask for the pages to be counted now
+   * ({@link SharedStylesAccess.count}). Optional, so a host written before it
+   * existed still compiles; absent means no.
+   *
+   * @experimental Settles with the Shared styles tab.
+   */
+  readonly mayCount?: boolean;
   /** Each style asked about, by id. */
   readonly styles: ReadonlyMap<string, SharedStyleReach>;
 }
+
+/**
+ * What asking for the pages to be counted now answered: how far the counting
+ * got, in the usage read's terms, or why it was refused.
+ *
+ * @experimental Settles with the Shared styles tab.
+ */
+export type SharedStylesCount =
+  | {
+      readonly kind: "counted";
+      /** Every page is counted now, so the counts can be exact. */
+      readonly whole: boolean;
+      /** Pages are left that a further count would reach. */
+      readonly counting: boolean;
+    }
+  | { readonly kind: "refused"; readonly reason: string };
 
 /** One document a shared style is used on. */
 export interface SharedStyleUse {

@@ -4403,6 +4403,13 @@
 .nx-block-toolbar {
   position: absolute;
   z-index: 3;
+  /*
+   * Only the buttons take the pointer: the bar sits over the block above the
+   * selection, and a press in a gap between two buttons, or on the bar's
+   * edge, reaches that block instead of landing on nothing.
+   */
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
   display: flex;
   align-items: center;
   gap: 0.125rem;
@@ -4427,6 +4434,25 @@
   color: var(--nx-builder-ink-text);
   box-shadow: 0 1px 3px
     color-mix(in srgb, var(--nx-builder-ink) 40%, transparent);
+}
+
+.nx-block-toolbar button {
+  pointer-events: auto;
+}
+
+/*
+ * Faded while the pointer is over another block, so the block it points at is
+ * not covered; still there to press, and back once the pointer is on it or the
+ * keyboard is in it.
+ */
+.nx-block-toolbar[data-faded]:not(:focus-within) {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-block-toolbar {
+    transition: none;
+  }
 }
 
 /*
@@ -5040,6 +5066,13 @@
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
+}
+
+/* While its work is under way ("Counting…"): muted, and no press. */
+.nx-vars__link:disabled {
+  color: var(--nx-muted-foreground);
+  text-decoration: none;
+  cursor: progress;
 }
 
 .nx-vars__report {
@@ -5763,13 +5796,171 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 0.375rem;
+  min-width: 0;
   pointer-events: auto;
-  padding: 0;
+  padding: 0 0.5rem;
+  font:
+    400 0.78125rem/1 var(--font-sans, system-ui),
+    sans-serif;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--nx-muted-foreground);
   cursor: pointer;
+}
+
+/*
+ * The controls that add a section to the page: a start card on an empty page,
+ * and a "+" in each gap between two top-level sections. The layer spans the
+ * canvas and takes no pointer events itself, so the page under it stays
+ * clickable; each control opts back in. Editor chrome, in the admin's own
+ * surface and the select colour, so it reads on any page.
+ */
+.nx-page-inserters {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Centred on the part of the canvas on screen, where the component puts it. */
+.nx-page-inserters__start {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-card);
+  color: var(--nx-card-foreground);
+  text-align: center;
+  font-family: var(--font-sans, system-ui), sans-serif;
+}
+
+.nx-page-inserters__title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.nx-page-inserters__hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.78125rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-page-inserters__start-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 2rem;
+  padding: 0 0.75rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+  font:
+    500 0.8125rem/1 var(--font-sans, system-ui),
+    sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.nx-page-inserters__start-button:focus-visible,
+.nx-page-inserters__add:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+/* A gap: a zero-height row across the page, at the gap's middle. */
+.nx-page-inserters__gap {
+  position: absolute;
+  height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The line across the gap, drawn while its "+" is pointed at or focused. */
+.nx-page-inserters__line {
+  position: absolute;
+  inset-inline: 0;
+  top: -1px;
+  height: 2px;
+  background: var(--nx-builder-select);
+  opacity: 0;
+}
+
+/*
+ * 1.5rem is 24px, the WCAG 2.2 SC 2.5.8 floor. Not drawn at rest, and taking
+ * no pointer events then, so an unseen "+" never takes a press meant for the
+ * block beside its gap; still in the tab order. Shown, and pressable, while
+ * the pointer is near its gap or on it, and on keyboard focus.
+ */
+.nx-page-inserters__add {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+  cursor: pointer;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-page-inserters__gap[data-near] .nx-page-inserters__add {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.nx-page-inserters__add:focus-visible {
+  opacity: 1;
+}
+
+/*
+ * A touch screen has no pointer moving near a gap to reveal its "+", and a tap
+ * is hit-tested before any movement, so there the "+" stays shown and
+ * pressable: seen, it cannot take a tap meant for something else unawares.
+ */
+@media (pointer: coarse) {
+  .nx-page-inserters__add {
+    pointer-events: auto;
+    opacity: 1;
+  }
+}
+
+.nx-page-inserters__gap:has(.nx-page-inserters__add:hover)
+  .nx-page-inserters__line,
+.nx-page-inserters__gap:has(.nx-page-inserters__add:focus-visible)
+  .nx-page-inserters__line {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-page-inserters__add {
+    transition: none;
+  }
+}
+
+/* The words shorten in a narrow container, and the "+" stays whole. */
+.nx-empty-container-appenders__button > svg {
+  flex: none;
+}
+
+.nx-empty-container-appenders__words {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nx-empty-container-appenders__button:hover {
@@ -6103,6 +6294,35 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* The note that counts are minimums, under the list's head, and the row
+   that counts them now. */
+.nx-shared-styles__counting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-block: 0.25rem 0.5rem;
+}
+
+.nx-shared-styles__count-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+/* The design system's small button, at the panel's scale: the panel's
+   other controls are 24px rows in its extra-small type. */
+.nx-shared-styles__count-row .nx-shared-styles__count-now {
+  height: 1.5rem;
+  padding-inline: 0.5rem;
+  font-size: var(--text-xs);
+}
+
+/* Empty until a count says something: takes no room in the row. */
+.nx-shared-styles__count-row [role="status"]:empty {
+  display: none;
 }
 
 /* A zero not counted yet is words, not a count: no box, the panel's own
@@ -7432,6 +7652,355 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-inspector__relation-matches button[aria-pressed="true"] {
   font-weight: 600;
+}
+
+/*
+ * A block's link group: the link, and under a set link its new-tab switch
+ * and its Link options, spaced as the rows around them are.
+ */
+.nx-link-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nx-builder-row-gap);
+}
+
+/*
+ * The link control: one field the height of every other row, holding the
+ * empty trigger or the chosen link's chip, with the chip's clear button
+ * inside it on the right, as a select's chevron sits inside a select.
+ */
+.nx-link-pick {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: var(--nx-control-height);
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+}
+
+.nx-link-pick:hover,
+.nx-link-pick:has(> .nx-link-pick__trigger[data-state="open"]) {
+  background: var(--nx-muted);
+}
+
+.nx-link-pick__trigger {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 100%;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--nx-builder-font-size);
+  text-align: start;
+  cursor: pointer;
+}
+
+.nx-link-pick__trigger:focus-visible,
+.nx-link-pick__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-link-pick__trigger:disabled,
+.nx-link-pick__clear:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.nx-link-pick__icon {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The title keeps its width and the address beside it gives way first: the
+ * title is what tells two links apart, the address what confirms one.
+ */
+.nx-link-pick__placeholder,
+.nx-link-pick__title,
+.nx-link-pick__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-link-pick__placeholder {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-link-pick__title {
+  flex: 0 1 auto;
+  font-weight: 500;
+}
+
+.nx-link-pick__detail {
+  flex: 1 1 0;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-link-pick__clear {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.5rem;
+  height: 100%;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-link-pick__clear:hover {
+  color: var(--nx-foreground);
+}
+
+/* Two classes, to outrank the popover's own width and padding. */
+[data-slot="popover-content"].nx-link-pick__popover {
+  width: max(var(--radix-popover-trigger-width), 17rem);
+  padding: 0;
+}
+
+.nx-link-pick__body {
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
+}
+
+.nx-link-pick__list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0.25rem;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.nx-link-pick__heading {
+  display: block;
+  padding: 0.5rem 0.5rem 0.125rem;
+}
+
+.nx-link-pick__group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-link-pick__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.3125rem 0.5rem;
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--nx-foreground);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+/* The row Enter picks, marked as the font list marks it. */
+.nx-link-pick__option[aria-selected="true"] {
+  background: var(--nx-muted);
+  outline: 1px solid var(--nx-ring);
+  outline-offset: -1px;
+}
+
+/* A page this block cannot link to: listed, so it is not mistaken for
+   missing, with the reason where its address would be. */
+.nx-link-pick__option[aria-disabled="true"] {
+  color: var(--nx-muted-foreground);
+  cursor: default;
+}
+
+.nx-link-pick__option-title,
+.nx-link-pick__option-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The title keeps its whole width while the row has room for it. */
+.nx-link-pick__option-title {
+  flex: 0 1 auto;
+}
+
+/*
+ * A page's address, at the row's end, taking only the room the title leaves:
+ * from a basis of nothing, so it is the one cut short.
+ */
+.nx-link-pick__option-detail {
+  flex: 1 1 0;
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  text-align: end;
+}
+
+/* The Enter hint, on the active row only. */
+.nx-link-pick__enter {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--nx-muted-foreground);
+  visibility: hidden;
+}
+
+.nx-link-pick__option[aria-selected="true"] > .nx-link-pick__enter {
+  visibility: visible;
+}
+
+/* After an address the hint needs no push of its own. */
+.nx-link-pick__option-detail + .nx-link-pick__enter {
+  margin-inline-start: 0;
+}
+
+/*
+ * The address after a list of pages: kept at the list's foot as it scrolls,
+ * on the popover's own fill, with a rule above it. Offset by the list's
+ * padding so it sits flush with the list's edge.
+ */
+.nx-link-pick__option--pinned {
+  position: sticky;
+  bottom: -0.25rem;
+  margin-top: 0.25rem;
+  background: var(--nx-popover);
+  box-shadow: 0 -1px 0 var(--nx-border);
+}
+
+.nx-link-pick__status {
+  padding: 0.375rem 0.5rem;
+}
+
+/*
+ * Link options: a quiet disclosure under the link, its chevron turning as
+ * Advanced's does, with what is set said beside it while it is closed.
+ */
+.nx-link-options {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-link-options__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  justify-self: start;
+  max-width: 100%;
+  min-width: 0;
+  height: var(--nx-control-height);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nx-link-options__toggle:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-link-options__chevron {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-link-options__toggle[aria-expanded="true"] > .nx-link-options__chevron {
+  rotate: 90deg;
+}
+
+.nx-link-options__summary {
+  min-width: 0;
+  margin-inline-start: 0.25rem;
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Indented to the toggle's words, so the flags read as belonging to it. */
+.nx-link-options__body {
+  display: grid;
+  gap: 0.5rem;
+  padding-inline-start: 1.125rem;
+}
+
+/* One flag a line: three wrapped into a ragged two lines in the rail. */
+.nx-link-options__flags {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-link-options__flag {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-link-options__flag > label {
+  font-size: var(--nx-builder-font-size);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+/* A stored token none of the checkboxes names, as a chip with its remove. */
+.nx-link-options__others {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-link-options__token {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  height: 1.375rem;
+  padding: 0 0.125rem 0 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-link-options__token > button {
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-link-options__token > button:hover {
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+}
+
+.nx-link-options__token > button:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
 }
 
 /*

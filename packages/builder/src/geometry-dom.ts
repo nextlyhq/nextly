@@ -832,6 +832,20 @@ export function layoutFragments(element: Element): number {
 }
 
 /**
+ * The elements that draw an element's boxes: itself when it generates one, its
+ * children's drawing when it is `display: contents` (which generates no box of
+ * its own and leaves its children on the page), nothing when it is hidden or
+ * skipped. What a rectangle for the element is read from.
+ */
+export function drawnBoxes(element: Element): Element[] {
+  if (renderSkips(element)) return [];
+  if (layoutFragments(element) > 0) return [element];
+  const view = element.ownerDocument.defaultView;
+  if (view?.getComputedStyle(element).display !== "contents") return [];
+  return Array.from(element.children).flatMap(drawnBoxes);
+}
+
+/**
  * Whether the render SKIPS this element, so a rectangle read from it describes
  * nothing that is on the page.
  *
