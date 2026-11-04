@@ -15,7 +15,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { storedPageNodes } from "./support/stored-page";
-import { test } from "./support/test";
+import { ownSeat, test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
@@ -493,44 +493,57 @@ async function expectShown(page: Page, edit: Edit): Promise<void> {
   }
 }
 
+/**
+ * How many cases read through one account. Each opens the builder twice, and
+ * a builder load is some thirty reads, so through ONE account the file spends
+ * more than the 500 reads a minute a session is given: the cases after that
+ * met a 429 on the admin's permissions and an admin that answered "not found"
+ * for the builder. Four cases a seat keep each account well under it.
+ */
+const CASES_PER_SEAT = 4;
+
 test.describe("the Content tab over every core block", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  for (const each of CASES) {
-    test(`edits ${each.type}`, async ({ page, request }) => {
-      const id = await createPage(request, each);
-      await openAndSelect(page, id, each.label);
+  for (const [index, each] of CASES.entries()) {
+    // Untitled, so the group adds nothing to the case's name.
+    test.describe(() => {
+      ownSeat(1 + Math.floor(index / CASES_PER_SEAT));
+      test(`edits ${each.type}`, async ({ page, request }) => {
+        const id = await createPage(request, each);
+        await openAndSelect(page, id, each.label);
 
-      const inspector = page.locator(".nx-inspector");
-      await expect(inspector.locator("[data-unsupported]")).toHaveCount(0);
-      expect(await unresolvedLabels(page)).toEqual([]);
-      expect(await axe(page)).toEqual([]);
+        const inspector = page.locator(".nx-inspector");
+        await expect(inspector.locator("[data-unsupported]")).toHaveCount(0);
+        expect(await unresolvedLabels(page)).toEqual([]);
+        expect(await axe(page)).toEqual([]);
 
-      const edit = each.edit;
-      if (edit === undefined) {
-        // A block that declares no props draws no content controls.
-        await expect(inspector.locator("[data-content-control]")).toHaveCount(
-          0
-        );
-        return;
-      }
-      // The positive control for the unsupported check above: controls drew.
-      await expect(
-        inspector.locator("[data-content-control]").first()
-      ).toBeVisible();
+        const edit = each.edit;
+        if (edit === undefined) {
+          // A block that declares no props draws no content controls.
+          await expect(inspector.locator("[data-content-control]")).toHaveCount(
+            0
+          );
+          return;
+        }
+        // The positive control for the unsupported check above: controls drew.
+        await expect(
+          inspector.locator("[data-content-control]").first()
+        ).toBeVisible();
 
-      await makeEdit(page, edit);
-      await saveDraft(page);
-      const stored = await storedProps(request, id);
-      if (edit.kind === "richText") {
-        expect(JSON.stringify(stored[edit.prop])).toContain(edit.text.trim());
-      } else {
-        expect(stored[edit.prop]).toEqual(edit.stored);
-      }
+        await makeEdit(page, edit);
+        await saveDraft(page);
+        const stored = await storedProps(request, id);
+        if (edit.kind === "richText") {
+          expect(JSON.stringify(stored[edit.prop])).toContain(edit.text.trim());
+        } else {
+          expect(stored[edit.prop]).toEqual(edit.stored);
+        }
 
-      // Opened afresh, so what shows is what was stored.
-      await openAndSelect(page, id, each.label);
-      await expectShown(page, edit);
+        // Opened afresh, so what shows is what was stored.
+        await openAndSelect(page, id, each.label);
+        await expectShown(page, edit);
+      });
     });
   }
 });
