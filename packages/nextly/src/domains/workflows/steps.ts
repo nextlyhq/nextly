@@ -18,6 +18,9 @@
  * version, the one the reviewer was shown, with a digest of that version's content
  * (`approvalDigest`), and each step's event names the version concerned.
  *
+ * `"all"` parts are a translated collection's every configured language and its shared part, and
+ * an untranslated collection's shared part alone: its content and versions belong to no language.
+ *
  * Refusals, and what each carries in `publicData`:
  * - an unknown step, a document with no workflow, a missing or too long comment:
  *   `VALIDATION_ERROR`, with `errors` naming the field (`step`, `document`, `comment`) and a
@@ -122,9 +125,10 @@ export interface TakeStepInput {
   /** The step's name in the workflow attached to the document's collection or Single. */
   step: string;
   /**
-   * The parts to move: languages, and null for the shared part. `"all"` is every configured
-   * language and the shared part; those whose stage the step does not leave from are named in
-   * the result's `left`.
+   * The parts to move: languages, and null for the shared part. `"all"` is, for a collection that
+   * keeps translations, every configured language and the shared part, and for one that does not,
+   * the shared part alone; those whose stage the step does not leave from are named in the
+   * result's `left`. A language named on its own is taken as named.
    */
   parts: readonly (string | null)[] | "all";
   /** Each part the step moves, as the caller saw it. A part the caller did not see is stale. */
@@ -508,9 +512,17 @@ async function defaultReviewer(
     : { reviewer: null, skippedReviewer: { assignee, reason: refusal } };
 }
 
-/** The parts a step names: each once, and for `"all"` every configured language and shared. */
-function namedParts(parts: TakeStepInput["parts"]): (string | null)[] {
+/**
+ * The parts a step names: each once. For `"all"`, every configured language and the shared part
+ * of a collection that keeps translations; the shared part alone of one that does not, whose
+ * content and versions belong to no language.
+ */
+function namedParts(
+  parts: TakeStepInput["parts"],
+  localized: boolean
+): (string | null)[] {
   if (parts !== "all") return [...new Set(parts)];
+  if (!localized) return [null];
   return [...(configuredLocales() ?? []), null];
 }
 
@@ -647,7 +659,7 @@ export async function takeWorkflowStep(
       state: ReviewState | null;
       stage: string;
     }> = [];
-    for (const part of namedParts(input.parts)) {
+    for (const part of namedParts(input.parts, table.localized)) {
       const state = await readReviewState(tx, partOf(input.document, part));
       parts.push({ part, state, stage: state?.stage ?? workflow.firstStage });
     }

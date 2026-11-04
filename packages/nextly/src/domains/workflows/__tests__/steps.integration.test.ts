@@ -644,6 +644,84 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("all languages", () => {
+      it("approves all languages of an untranslated document as its shared part alone", async () => {
+        t = await bootSteps(dialect);
+        const bob = await person(t, "bob", [["sign-off", "pages"]]);
+        const page = await entry(t, "pages");
+        const shared = partOf("pages", page, null);
+        await seedState(t, shared, "legal", {
+          enteredBy: "alice",
+          definitionHash: HASH,
+        });
+
+        const result = await takeWorkflowStep(t.adapter, {
+          document: {
+            scopeKind: "collection",
+            scopeSlug: "pages",
+            entryId: page,
+          },
+          step: "clear",
+          parts: "all",
+          seen: [
+            {
+              part: null,
+              revision: 1,
+              version: await versionOf(t, "pages", page, null),
+            },
+          ],
+          caller: bob,
+        });
+
+        // Pages keeps no translations: its one part is the shared part, and there is nothing
+        // else to name as left.
+        expect(result.moved).toEqual([
+          { part: null, from: "legal", to: "cleared", revision: 2 },
+        ]);
+        expect(result.left).toEqual([]);
+        expect((await stateOf(t, shared))?.approval).toMatchObject({
+          versionNo: await shownVersion(t, "pages", page, null),
+          by: "bob",
+        });
+        for (const locale of ["en", "es", "ar"]) {
+          expect(await stateOf(t, partOf("pages", page, locale))).toBeNull();
+        }
+      });
+
+      it("submits all languages of an untranslated document as its shared part alone", async () => {
+        t = await bootSteps(dialect);
+        const dave = await person(t, "dave", [["update", "pages"]]);
+        const page = await entry(t, "pages");
+
+        const result = await takeWorkflowStep(t.adapter, {
+          document: {
+            scopeKind: "collection",
+            scopeSlug: "pages",
+            entryId: page,
+          },
+          step: "send",
+          parts: "all",
+          seen: [
+            {
+              part: null,
+              revision: 0,
+              version: await versionOf(t, "pages", page, null),
+            },
+          ],
+          caller: dave,
+        });
+
+        expect(result.moved).toEqual([
+          { part: null, from: "writing", to: "legal", revision: 1 },
+        ]);
+        expect(result.left).toEqual([]);
+        expect((await stateOf(t, partOf("pages", page, null)))?.stage).toBe(
+          "legal"
+        );
+        for (const locale of ["en", "es", "ar"]) {
+          expect(await stateOf(t, partOf("pages", page, locale))).toBeNull();
+        }
+      });
+
       it("sends every part it can from its stage in one step, naming the parts it left", async () => {
         t = await bootSteps(dialect);
         const dave = await person(t, "dave", [["update", "posts"]]);
