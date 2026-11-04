@@ -189,6 +189,45 @@ export function blocksDocumentOf(
 }
 
 /**
+ * The key a read gives a document's version under, and an update sends it
+ * back under: the update then applies only to the version it was read from.
+ */
+export const DOCUMENT_VERSION_KEY = "_rev";
+
+/** A stored page's blocks document, and the version of the read it came from. */
+export interface StoredPageRead {
+  readonly document: BlockDocument;
+  /** The row's version as read; absent from a server that issues none. */
+  readonly rev: string | undefined;
+}
+
+/** A row's version, as a read gave it, or `undefined` when it gave none. */
+export function documentVersionOf(row: unknown): string | undefined {
+  const value = (row as Record<string, unknown> | null)?.[DOCUMENT_VERSION_KEY];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** A row's blocks field with the row's version, or `null` when it holds none. */
+export function storedPageReadOf(
+  row: unknown,
+  field: string
+): StoredPageRead | null {
+  const document = blocksDocumentOf(row, field);
+  return document === null ? null : { document, rev: documentVersionOf(row) };
+}
+
+/**
+ * The data of an update made from a read: it carries the version that read
+ * gave, so a save made since refuses it rather than being overwritten.
+ */
+export function withVersionFrom(
+  data: Record<string, unknown>,
+  rev: string | undefined
+): Record<string, unknown> {
+  return rev === undefined ? data : { ...data, [DOCUMENT_VERSION_KEY]: rev };
+}
+
+/**
  * A slug from the title, with a random suffix so two rows named alike never
  * collide on the unique column; a title `slugify` cannot spell yields the
  * suffix alone.
@@ -214,17 +253,17 @@ export function createdId(item: unknown): string {
 
 /**
  * Refuse, rolling back what the transaction made, when the stored page
- * changed since the action was planned against it. The write has no
- * compare-and-swap on the page's version, so the page is read again as late
- * as the write allows: an edit landing between this read and the update is
- * still overwritten, a window of one statement rather than the whole request.
+ * changed since the action was planned against it, and give the version of
+ * the page as read here. The page is read again as late as the write allows,
+ * and the write sends this read's version back, so an edit landing between
+ * the two is refused by the update rather than overwritten.
  */
 export async function requireUnchangedPage(
-  readNow: () => Promise<BlockDocument | null>,
+  readNow: () => Promise<StoredPageRead | null>,
   planned: BlockDocument
-): Promise<void> {
+): Promise<string | undefined> {
   const now = await readNow();
-  if (now !== null && sameStoredValue(now, planned)) return;
+  if (now !== null && sameStoredValue(now.document, planned)) return now.rev;
   throw NextlyError.conflict({
     reason: "state",
     message:
