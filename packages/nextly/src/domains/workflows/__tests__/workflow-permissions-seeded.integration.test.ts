@@ -30,6 +30,7 @@ interface Listed {
   resource: string;
   slug: string;
   owner: string | null;
+  group: string | null;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -96,15 +97,58 @@ describe.each(getConfiguredTestDialects())(
             1
           );
         }
+        // Marked as a workflow's own, which the presets read, rather than by their shape.
         expect(rows("publish-without-review", resource)[0]).toMatchObject({
           slug: `publish-without-review-${resource}`,
           owner: null,
+          group: "workflow",
         });
       }
       expect(rows("approve", "posts")[0]?.owner).toBeNull();
       expect(rows("approve", "articles")[0]?.owner).toBe("my-app");
       expect(rows("approve", "tags")).toEqual([]);
       expect(rows("publish-without-review", "tags")).toEqual([]);
+    });
+
+    it("leaves an admin's own permission a workflow step uses unmarked, so a detached workflow can't take it", async () => {
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            versions: { drafts: true },
+            workflow: reviewWorkflow(),
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const permissions = new PermissionService(
+        current.getService("adapter"),
+        current.getService("logger")
+      );
+      // The admin made `approve-posts` before the workflow asked for it: owned by no one, in no group.
+      await permissions.ensurePermission(
+        "approve",
+        "posts",
+        "Approve posts",
+        "approve-posts"
+      );
+
+      await seedAllPermissions();
+
+      const listed = (
+        await permissions.listPermissions({
+          limit: 100000,
+          includeOrphaned: true,
+        })
+      ).data as unknown as Listed[];
+      const row = (action: string) =>
+        listed.find(p => p.action === action && p.resource === "posts");
+      // Not marked as the workflow's, so the presets go on granting it once the workflow is gone.
+      expect(row("approve")?.group).toBeNull();
+      // The row the seeder made is the workflow's.
+      expect(row("publish-without-review")?.group).toBe("workflow");
     });
 
     it("gives no preset role a permission the workflow seeds", async () => {
@@ -162,9 +206,19 @@ describe.each(getConfiguredTestDialects())(
           action,
           "posts",
           `${action} posts`,
-          `${action}-posts`
+          `${action}-posts`,
+          undefined,
+          { group: "workflow" }
         );
       }
+      // An admin's own permission, owned by no one and with an action no entity is built with,
+      // is the admin's: the presets keep granting it.
+      await permissions.ensurePermission(
+        "export",
+        "posts",
+        "Export posts",
+        "export-posts"
+      );
 
       await seedRolePresets(current.adapter, current.getService("logger"));
 
@@ -179,6 +233,13 @@ describe.each(getConfiguredTestDialects())(
         expect(held, preset).not.toContain("approve-posts");
         expect(held, preset).not.toContain("publish-without-review-posts");
       }
+      const admin = await services.roles.findRoleIdBySlug("admin");
+      if (!admin) throw new Error("no admin role");
+      expect(
+        (await services.rolePermissions.listRolePermissions(admin.id)).map(
+          p => `${p.action}-${p.resource}`
+        )
+      ).toContain("export-posts");
     });
   }
 );
