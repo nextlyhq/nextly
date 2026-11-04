@@ -163,6 +163,23 @@ export function versionCheckFor(
     : { kind: "unjudged" };
 }
 
+/**
+ * Refuse a version given in the one set of values an update of several
+ * documents writes to all of them (by ids or by query): it names one
+ * document's version, and judged against the others it would refuse each of
+ * them or, worse, be taken as current for one it was never read from.
+ *
+ * @throws NextlyError.validation when `data` carries `_rev`.
+ */
+export function refuseVersionInSharedData(
+  data: Readonly<Record<string, unknown>>
+): void {
+  if (data[DOCUMENT_VERSION_KEY] === undefined) return;
+  throw unjudgeable(
+    `${DOCUMENT_VERSION_KEY} names one document's version, so an update of several documents with the same values can't carry it. Update each document with its own version.`
+  );
+}
+
 /** The document a release run's mark is for. */
 export interface ReleaseRunTarget {
   scopeKind: "collection" | "single";

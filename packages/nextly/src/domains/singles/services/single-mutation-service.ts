@@ -178,18 +178,6 @@ import {
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
 import {
-  givenOf,
-  judgedLanguage,
-  poolRevisionReader,
-  refuseIfLanguageMoved,
-  refuseIfMainMoved,
-  releaseRunExemptFor,
-  type StaleWriteHolder,
-  staleVersionErrorFor,
-  type VersionCheck,
-  versionCheckFor,
-} from "../../versions/stale-version";
-import {
   draftComponentValues,
   mergeComponentPatches,
 } from "../../versions/draft-components";
@@ -213,6 +201,18 @@ import {
   type TakenLiveValues,
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
+import {
+  givenOf,
+  judgedLanguage,
+  poolRevisionReader,
+  refuseIfLanguageMoved,
+  refuseIfMainMoved,
+  releaseRunExemptFor,
+  type StaleWriteHolder,
+  staleVersionErrorFor,
+  type VersionCheck,
+  versionCheckFor,
+} from "../../versions/stale-version";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -5136,11 +5136,7 @@ export class SingleMutationService extends BaseService {
       }
       // Answered after the rollback, from the Single as it now is, so the
       // refusal names the save that came in between rather than this one.
-      if (
-        staleWrite.at &&
-        lockedDocumentId &&
-        versionCheck.kind === "judge"
-      ) {
+      if (staleWrite.at && lockedDocumentId && versionCheck.kind === "judge") {
         return buildSingleErrorResult(
           await staleVersionErrorFor(poolRevisionReader(this.adapter), {
             dialect: this.adapter.dialect,
@@ -5153,7 +5149,10 @@ export class SingleMutationService extends BaseService {
               user: options.user,
               trusted: fieldTrustOf(options),
               authenticatedScope: options.authenticatedScope,
-              hookInputs: { request: options.request, context: options.context },
+              hookInputs: {
+                request: options.request,
+                context: options.context,
+              },
             },
           }),
           "Failed to update Single document"
