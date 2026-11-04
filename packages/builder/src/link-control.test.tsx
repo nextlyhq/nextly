@@ -212,7 +212,7 @@ async function typeInto(text: string): Promise<void> {
 describe("the link group", () => {
   it("draws one link row, and the new-tab and rel rows only once a link is set", () => {
     mount("acme/heading", {}, { findLinkTargets: targetsService() });
-    expect(trigger().textContent).toBe("Search pages or paste a URL");
+    expect(trigger().textContent).toBe("Search or paste a URL");
     expect(screen.queryByText("Open link in")).toBeNull();
     expect(screen.queryByText("Link relationship")).toBeNull();
     expect(

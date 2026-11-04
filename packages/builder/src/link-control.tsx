@@ -373,10 +373,11 @@ function TriggerContent({
         <Link2 aria-hidden="true" size={14} className="nx-link-pick__icon" />
         <span
           className="nx-link-pick__placeholder"
-          // Whole on hover where the column cuts it short.
+          // Short enough for the control column; the search field it opens
+          // says it in full.
           title="Search pages or paste a URL"
         >
-          Search pages or paste a URL
+          Search or paste a URL
         </span>
       </>
     );
