@@ -442,6 +442,44 @@ describe("useAutosaveRecovery", () => {
     }
   });
 
+  it("drops a point its author wrote over, and offers any other older one as such", async () => {
+    const point = (superseded?: "by-you" | "by-another" | "unknown") => ({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+      ...(superseded === undefined ? {} : { superseded }),
+    });
+
+    // Their own later save holds what they meant to keep (a1).
+    getSpy.mockResolvedValue(point("by-you"));
+    const own = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(own.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(own.result.current.recovery.offer).toBeNull();
+    own.unmount();
+
+    // Anyone else, or no one the server can name: offered, and said to be
+    // older (a2).
+    for (const superseded of ["by-another", "unknown"] as const) {
+      getSpy.mockResolvedValue(point(superseded));
+      const other = renderRecovery(SCOPE);
+      await waitFor(() =>
+        expect(other.result.current.recovery.offer).not.toBeNull()
+      );
+      expect(other.result.current.recovery.offer?.olderVersion).toBe(true);
+      other.unmount();
+    }
+
+    // Current: offered as it always was.
+    getSpy.mockResolvedValue(point());
+    const current = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(current.result.current.recovery.offer).not.toBeNull()
+    );
+    expect(current.result.current.recovery.offer?.olderVersion).toBe(false);
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },
