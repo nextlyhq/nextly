@@ -29,6 +29,9 @@ let siteFetching = false;
 const refetch = vi.fn();
 const writes: Array<{ path: string }> = [];
 let writeAnswer: () => Promise<unknown> = async () => ({});
+/** What the readiness question answers; nothing to publish by default. */
+let readinessAnswer: unknown = { dependencies: [], missing: 0 };
+const asked: unknown[] = [];
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: ({ path }: { path: string }) => {
@@ -50,7 +53,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       refetch,
     };
   },
-  writePluginRoute: async (write: { path: string }) => {
+  writePluginRoute: async (write: { path: string; body?: unknown }) => {
+    if (write.path === "/publish-readiness") {
+      asked.push(write.body);
+      return readinessAnswer;
+    }
     writes.push(write);
     return writeAnswer();
   },
@@ -154,6 +161,8 @@ beforeEach(() => {
   siteFetching = false;
   writes.length = 0;
   writeAnswer = async () => ({});
+  asked.length = 0;
+  readinessAnswer = { dependencies: [], missing: 0 };
   refetch.mockClear();
 });
 afterEach(cleanup);
@@ -390,6 +399,88 @@ describe("the Settings dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("Saved");
     expect(writes).toHaveLength(2);
+  });
+
+  it("asks about the Layout's unpublished components before making it the default", async () => {
+    readinessAnswer = {
+      dependencies: [
+        {
+          kind: "component",
+          id: "hdr",
+          title: "Site header",
+          mayPublish: true,
+        },
+      ],
+      missing: 0,
+    };
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await chooseLayout("No header or footer");
+    const question = await screen.findByRole("alertdialog");
+    expect(question.textContent).toContain(
+      "This Layout uses 1 component that isn't published"
+    );
+    expect(asked).toEqual([{ documents: [], layout: "bare" }]);
+    // Nothing is written while the author is being asked.
+    expect(writes).toEqual([]);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Make default anyway" })
+    );
+    await screen.findByText("Saved");
+    expect(writes).toEqual([
+      expect.objectContaining({ path: "/layouts/bare/make-default" }),
+    ]);
+  });
+
+  it("publishes the components first, then makes the Layout the default", async () => {
+    readinessAnswer = {
+      dependencies: [
+        {
+          kind: "component",
+          id: "hdr",
+          title: "Site header",
+          mayPublish: true,
+        },
+      ],
+      missing: 0,
+    };
+    writeAnswer = async () => ({ item: { published: [], refused: [] } });
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await chooseLayout("No header or footer");
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Publish it, then make default",
+      })
+    );
+    await screen.findByText("Saved");
+    expect(writes.map(write => write.path)).toEqual([
+      "/publish-dependencies",
+      "/layouts/bare/make-default",
+    ]);
+  });
+
+  it("changes nothing when the author cancels the question", async () => {
+    readinessAnswer = {
+      dependencies: [
+        {
+          kind: "component",
+          id: "hdr",
+          title: "Site header",
+          mayPublish: true,
+        },
+      ],
+      missing: 0,
+    };
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await chooseLayout("No header or footer");
+    await screen.findByRole("alertdialog");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(writes).toEqual([]);
+    expect(screen.queryByText("Saving…")).toBeNull();
   });
 
   it("shows the default read-only, naming it, without the Layout rights", async () => {

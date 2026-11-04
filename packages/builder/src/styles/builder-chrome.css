@@ -5542,6 +5542,22 @@ fieldset.nx-inspector__fields {
   row-gap: 0.125rem;
 }
 
+/*
+ * A number field's label drags its value: the resize cursor says so, and the
+ * words are not selected by the drag. Touch is left to scroll and tap.
+ *
+ * Important because the admin gives every `[data-slot="label"]` a pointer
+ * cursor with `!important`, which reads as "click me" here and outranks any
+ * plain rule; this selector is the more specific of the two.
+ */
+.nx-style-inspector .nx-inspector__field > label[data-scrub] {
+  cursor: ew-resize !important;
+  user-select: none;
+  /* A pen's horizontal drag is the scrub's, where the browser would take it
+     and cancel the pointer; a finger still scrolls the panel and taps. */
+  touch-action: pan-y;
+}
+
 .nx-style-inspector
   .nx-inspector__field
   > label
@@ -5930,8 +5946,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * A touch screen has no pointer moving near a gap to reveal its "+", and a tap
  * is hit-tested before any movement, so there the "+" stays shown and
  * pressable: seen, it cannot take a tap meant for something else unawares.
+ * `any-pointer`, not `pointer`: a touchscreen laptop's PRIMARY pointer is
+ * its trackpad, and its screen still takes taps.
  */
-@media (pointer: coarse) {
+@media (any-pointer: coarse) {
   .nx-page-inserters__add {
     pointer-events: auto;
     opacity: 1;

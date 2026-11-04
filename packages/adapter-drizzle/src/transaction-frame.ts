@@ -12,7 +12,14 @@
  * @packageDocumentation
  */
 
-import type { TransactionContext, TransactionOptions } from "./types";
+import type { AnyRelations } from "drizzle-orm";
+
+import type { DrizzleTransactor } from "./pinned-transaction";
+import type {
+  AdapterLogger,
+  TransactionContext,
+  TransactionOptions,
+} from "./types";
 
 /** One transaction, or one part joined to it, as the calls made inside it see it. */
 export interface TransactionFrame {
@@ -53,12 +60,30 @@ export interface TransactionFrame {
    */
   open: TransactionFrame[];
   /**
+   * Effects held with `afterRollback` from any frame of the outermost
+   * transaction, in registration order, run once it has rolled back for
+   * good. Only the outermost transaction's list is used.
+   */
+  rollbackHeld: HeldEffect[];
+  /**
+   * Set once a part joined to this outermost transaction failed in a way the
+   * transaction cannot commit past (`TransactionSteps.dooms`): its COMMIT is
+   * then refused, it rolls back and rejects with this error, and every later
+   * joined call fails with it at once.
+   */
+  doomed: { error: unknown } | undefined;
+  /**
    * True once the outermost transaction holds a connection of its own. From
    * then on anything the flow takes from the pool runs outside it.
    */
   connected: boolean;
-  /** The connection the transaction runs on, once the adapter knows it. */
-  connection: unknown;
+  /**
+   * How a call made inside the transaction joins it, on its connection. The
+   * dialect built it over that connection when it opened the transaction.
+   * Undefined for a frame that only tracks a transaction a dialect runs
+   * itself (`runInFlowTransaction`): nothing joins that one.
+   */
+  join: JoinSteps | undefined;
   /** The options the transaction, or the part, was opened with. */
   options: TransactionOptions | undefined;
   /**
@@ -81,6 +106,15 @@ export interface HeldEffect {
   writesBefore: number;
 }
 
+/**
+ * How an outermost transaction ended: committed, with the work's result and
+ * the `afterCommit` effects to run, or rolled back, with the error that ended
+ * it and the `afterRollback` effects to run once it is the last attempt.
+ */
+export type Settled<T> =
+  | { committed: true; result: T; effects: HeldEffect[] }
+  | { committed: false; error: unknown; effects: HeldEffect[] };
+
 /** What a committed outermost transaction hands back: its result and the effects to run. */
 export interface Committed<T> {
   result: T;
@@ -92,27 +126,94 @@ export interface Committed<T> {
  * connection. Each returns nothing when the driver is synchronous, so the
  * work starts in the same tick as the statement that opened it.
  */
-export interface TransactionSteps {
+export interface TransactionSteps<C = TransactionContext> {
   /** What the work is handed. */
-  context: TransactionContext;
+  context: C;
   /** Opens it: BEGIN, or SAVEPOINT. */
   begin(): void | Promise<void>;
   /** Ends it: COMMIT, or RELEASE. */
   commit(): void | Promise<void>;
   /** Undoes it: ROLLBACK, or ROLLBACK TO. Its failure is ignored. */
   rollback(): void | Promise<void>;
+  /**
+   * For a joined part: whether `error`, raised inside it, leaves the whole
+   * transaction unable to commit. On a dialect whose join is flat, with no
+   * savepoint to undo the part alone, every failure does; on PostgreSQL a
+   * serialization failure or a deadlock does, which only a retry of the
+   * outermost transaction can answer. Absent, none does.
+   */
+  dooms?(error: unknown): boolean;
 }
 
-/** The steps of an outermost transaction, with the connection it runs on. */
-export interface OutermostSteps extends TransactionSteps {
-  connection: unknown;
+/**
+ * How calls made inside a transaction join it: the steps of a part joined
+ * `depth` deep, on the transaction's own connection.
+ */
+export interface JoinSteps {
+  /** For a `transaction()` call: its work is handed a transaction context. */
+  adapter(depth: number): TransactionSteps;
+  /**
+   * For the Drizzle handle's `transaction`, or Drizzle's own `tx.transaction`:
+   * its work is handed a Drizzle handle on the same connection, with
+   * `relations` when the handle it was called on had them. Absent on a
+   * dialect whose handle takes no async work.
+   */
+  drizzle?: (
+    depth: number,
+    relations: AnyRelations | undefined
+  ) => TransactionSteps<DrizzleTransactor>;
+}
+
+/** The steps of an outermost transaction, with how calls inside it join it. */
+export interface OutermostSteps<C = TransactionContext>
+  extends TransactionSteps<C> {
+  /**
+   * How calls made inside the transaction join it. Without it, nothing
+   * joins the transaction: calls made inside open transactions of their own.
+   */
+  join?: JoinSteps;
+  /**
+   * The connection the transaction runs on.
+   *
+   * @deprecated Unused: how calls inside join the transaction (`join`) is
+   *   built over the connection instead.
+   */
+  connection?: unknown;
+  /**
+   * The stack that opened the transaction, captured by the dialect before it
+   * awaited anything, while a test harness observes escapes.
+   */
+  openedAt?: string;
 }
 
 /** Where a new frame sits: in a frame it joins, or as an outermost transaction. */
+/**
+ * What a dialect hands the base to run an outermost transaction: one attempt
+ * at a time, and which of the errors that end one it retries of its own
+ * accord.
+ */
+export interface TransactionAttempts<T> {
+  /**
+   * Runs attempt `attempt`: takes a connection, runs the transaction on it
+   * (`runOutermost`, handed `openedAt`), and gives the connection back
+   * before settling, so what was held runs where it holds none.
+   */
+  run(attempt: number, openedAt: string | undefined): Promise<Settled<T>>;
+  /** Whether the dialect retries `error` itself: a serialization failure or a deadlock. */
+  retryable(error: unknown): boolean;
+  /** How a retry's log line names `error`, and what it records of it. */
+  describe(error: unknown): { label: string; detail: Record<string, unknown> };
+  /** The adapter's logger, if it was given one. */
+  logger: AdapterLogger | undefined;
+}
+
+/** A frame that calls made inside it can join. */
+export type JoinableFrame = TransactionFrame & { join: JoinSteps };
+
 interface FramePlace {
   parent?: TransactionFrame;
   enclosing?: TransactionFrame;
-  connection?: unknown;
+  join: JoinSteps | undefined;
   options?: TransactionOptions;
   openedAt?: string;
 }
@@ -133,10 +234,13 @@ export function openFrame(place: FramePlace): TransactionFrame {
     finished: false,
     writesAfterClosing: 0,
     held: [],
+    rollbackHeld: [],
+    doomed: undefined,
     queue: Promise.resolve(),
     open: parent ? parent.open : [],
-    connected: false,
-    connection: place.connection,
+    // A frame is opened only once its transaction holds its connection.
+    connected: true,
+    join: place.join,
     options: place.options,
     openedAt: place.openedAt,
   };
@@ -168,8 +272,14 @@ export function outermost(frame: TransactionFrame): TransactionFrame {
  */
 export function joinable(
   own: TransactionFrame | undefined
-): TransactionFrame | undefined {
-  return own?.active ? own : own?.open.at(-1);
+): JoinableFrame | undefined {
+  const frame = own?.active ? own : own?.open.at(-1);
+  return frame !== undefined && isJoinable(frame) ? frame : undefined;
+}
+
+/** Whether calls made inside `frame` can join it. */
+function isJoinable(frame: TransactionFrame): frame is JoinableFrame {
+  return frame.join !== undefined;
 }
 
 /**

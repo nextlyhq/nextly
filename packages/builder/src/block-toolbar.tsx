@@ -88,6 +88,7 @@ import {
 } from "./keyboard-actions";
 import { layerLabel } from "./layers";
 import { lockBlockingEdit } from "./locking";
+import { clearanceWith } from "./scroll-clearance";
 import { useSelectionActions } from "./selection-actions";
 import {
   TOOLBAR_GAP_PX,
@@ -149,12 +150,11 @@ function useScrollClearance(
     // The larger of the bar's and what the scroller already keeps clear: a
     // site keeping focused blocks below its sticky header sets its own, and
     // the bar must not shrink that to the bar alone.
-    const own = Number.parseFloat(
+    scroller.style.scrollPaddingTop = clearanceWith(
       scroller.ownerDocument.defaultView?.getComputedStyle(scroller)
-        .scrollPaddingTop ?? ""
+        .scrollPaddingTop ?? "",
+      height
     );
-    const clearance = Number.isFinite(own) ? Math.max(own, height) : height;
-    scroller.style.scrollPaddingTop = `${String(clearance)}px`;
     return () => {
       scroller.style.scrollPaddingTop = before;
     };
