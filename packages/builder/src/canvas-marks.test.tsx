@@ -622,6 +622,37 @@ describe("the hovered block's mark", () => {
     await waitFor(() => expect(hoveredIn(container)).toHaveLength(0));
   });
 
+  it("is tagged with the block's name, as its Layers row reads", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "b") {
+          return new DOMRect(100, 100, 200, 50);
+        }
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={
+            <CanvasMarks
+              nameOf={id => (id === "b" ? "Intro text" : undefined)}
+            />
+          }
+        />
+      </HoveredBlockProvider>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    const mark = hoveredIn(container)[0];
+    expect(mark?.getAttribute("data-hover-label")).toBe("Intro text");
+    // Room above it on the page, so the tag sits outside, over its corner.
+    expect(mark?.hasAttribute("data-hover-tag-inside")).toBe(false);
+  });
+
   it("is left to the ring on a block already selected", async () => {
     const { container } = render(
       <HoveredBlockProvider>

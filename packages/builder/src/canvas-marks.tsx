@@ -105,6 +105,13 @@ interface Mark {
    * close to the top of what is on screen for a tag above it to show.
    */
   readonly placementTagInside?: boolean;
+  /** The block a hovered mark points at, by its address, for its name tag. */
+  readonly hoveredAddress?: string;
+  /**
+   * A hovered block's tag is drawn inside its outline: the outline's top is
+   * too close to the top of what is on screen for a tag above it to show.
+   */
+  readonly hoverTagInside?: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -163,11 +170,12 @@ export interface CanvasMarksProps {
 const RING_OUTSIDE = CHROME_BLEED;
 
 /**
- * The height of a placement's tag, drawn above its frame. A frame closer than
+ * The height of a mark's tag (a placement's, a hovered block's), drawn above
+ * its outline. An outline closer than
  * this to the top of what is on screen has its tag drawn inside instead,
  * where it still shows.
  */
-const PLACEMENT_TAG_HEIGHT = 18;
+const MARK_TAG_HEIGHT = 18;
 
 /** Everything that decides how a mark is drawn, as one comparable value. */
 function markKey(mark: Mark): string {
@@ -183,6 +191,8 @@ function markKey(mark: Mark): string {
     clipped,
     placement,
     placementTagInside,
+    hoveredAddress,
+    hoverTagInside,
     radius,
     rect,
   } = mark;
@@ -199,6 +209,8 @@ function markKey(mark: Mark): string {
     clipped,
     placement,
     placementTagInside,
+    hoveredAddress,
+    hoverTagInside,
     radius,
     rect.x,
     rect.y,
@@ -582,7 +594,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       ...selectedMark(ring, look, placedTag, placement),
       // Measured from the top of what is on screen rather than of the page:
       // a placement scrolled to the top keeps its tag in view.
-      placementTagInside: ring.rect.y - onScreen.y < PLACEMENT_TAG_HEIGHT,
+      placementTagInside: ring.rect.y - onScreen.y < MARK_TAG_HEIGHT,
     });
   });
   const { hovered } = inputs;
@@ -610,6 +622,9 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         tag: "below",
         tagEdge: "right",
         tagInset: NO_INSET,
+        hoveredAddress: hovered,
+        // From the top of what is on screen, as the placement's tag is.
+        hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
       });
     });
   }
@@ -706,6 +721,14 @@ export function CanvasMarks({
           data-placement-tag-inside={
             mark.placementTagInside === true ? "" : undefined
           }
+          // The hovered block's name, drawn by the stylesheet as a small tag
+          // over its outline's corner, as the editor's design draws it.
+          data-hover-label={
+            mark.hoveredAddress === undefined
+              ? undefined
+              : nameOf?.(mark.hoveredAddress)?.trim() || undefined
+          }
+          data-hover-tag-inside={mark.hoverTagInside === true ? "" : undefined}
           style={markStyle(mark)}
         />
       ))}

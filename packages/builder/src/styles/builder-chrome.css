@@ -156,6 +156,7 @@
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
   --nx-builder-component-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
   /*
@@ -210,6 +211,8 @@
   --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
   --nx-builder-component-text-on-light: #ffffff; /* design-lint-ok: text on the deep purple */
   --nx-builder-component-text-on-dark: #15171c; /* design-lint-ok: text on the light purple */
+  --nx-builder-select-text-on-light: #ffffff; /* design-lint-ok: text on the deep select blue */
+  --nx-builder-select-text-on-dark: #15171c; /* design-lint-ok: text on the light select blue */
   --nx-builder-halo: #ffffff; /* design-lint-ok: mode-invariant halo on site content */
 }
 
@@ -230,6 +233,7 @@
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
 }
 
@@ -2950,12 +2954,14 @@
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
   --nx-builder-component-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-light);
 }
 
 .nx-canvas-layer[data-nx-page-scheme="dark"] {
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
 }
 
 .nx-canvas-layer__content {
@@ -3156,6 +3162,41 @@
 
 .nx-canvas-mark[data-mark="hovered"][data-component] {
   outline-color: var(--nx-builder-component);
+}
+
+/*
+ * The hovered block's name, as a small tag over its outline's top left
+ * corner, outside it, in the outline's colour; inside it at the top of what
+ * is on screen, where it still shows. The selected block's toolbar takes that
+ * corner on the block it acts on, which is never the hovered one.
+ */
+.nx-canvas-mark[data-mark="hovered"][data-hover-label]::before {
+  content: attr(data-hover-label);
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-component][data-hover-label]::before {
+  background: var(--nx-builder-component);
+  color: var(--nx-builder-component-text);
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-hover-label][data-hover-tag-inside]::before {
+  top: 0;
+  bottom: auto;
+  border-radius: 0 0 4px 4px;
 }
 
 /*
