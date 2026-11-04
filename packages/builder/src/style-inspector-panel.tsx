@@ -2724,7 +2724,12 @@ function foldedLeafFor(property: string, fallback: StyleLeaf): StyleLeaf {
   const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
   const arms =
     shape?.kind === "union" ? shape.of.filter(isStyleLeaf) : [fallback];
-  const leaf = foldedLeaf(arms.length > 0 ? arms : [fallback]);
+  // With its union, so each variable is judged by the arm the engine picks
+  // for its value.
+  const leaf =
+    shape?.kind === "union" && arms.length > 0
+      ? foldedLeaf(arms, shape)
+      : foldedLeaf(arms.length > 0 ? arms : [fallback]);
   FOLDED_LEAVES.set(property, leaf);
   return leaf;
 }
