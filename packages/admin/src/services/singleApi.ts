@@ -16,6 +16,7 @@ import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
+import { keepaliveOptions } from "../lib/api/keepalive";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   ActionResponse,
@@ -121,7 +122,7 @@ type SingleApiType = {
   readonly updateDocument: (
     slug: string,
     data: Record<string, unknown>,
-    options?: { locale?: string }
+    options?: { locale?: string; keepalive?: boolean }
   ) => Promise<SingleDocument>;
   readonly publishAllLocales: (
     slug: string
@@ -324,14 +325,16 @@ export const singleApi: SingleApiType = {
     data: Record<string, unknown>,
     // i18n: `?locale=de` stores the translatable values for German only (the shared
     // columns are still updated). Omitted for non-localized singles.
-    options?: { locale?: string }
+    // `keepalive` asks for an update that outlives the page (lib/api/keepalive).
+    options?: { locale?: string; keepalive?: boolean }
   ): Promise<SingleDocument> => {
     const query = new URLSearchParams();
     if (options?.locale) query.set("locale", options.locale);
     const qs = query.toString();
     const result = await protectedApi.patch<MutationResponse<SingleDocument>>(
       `/singles/${slug}${qs ? `?${qs}` : ""}`,
-      data
+      data,
+      keepaliveOptions(data, options?.keepalive)
     );
     return result.item;
   },
