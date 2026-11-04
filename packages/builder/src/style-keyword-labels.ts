@@ -14,7 +14,11 @@
  *
  * @module style-keyword-labels
  */
-import { asciiLower, trimCssWhitespace } from "@nextlyhq/blocks-engine";
+import {
+  asciiLower,
+  decodeIdentifier,
+  trimCssWhitespace,
+} from "@nextlyhq/blocks-engine";
 
 const SIZE_KEYWORDS: Readonly<Record<string, string>> = {
   auto: "Auto",
@@ -187,14 +191,14 @@ const SHARED_LABELS: Readonly<Record<string, string>> = {
  * between"), so no keyword is ever shown in its CSS spelling.
  */
 export function keywordLabel(cssProperty: string, keyword: string): string {
-  // Looked up as CSS reads a keyword: case-folded the ASCII way, with its CSS
-  // whitespace trimmed and collapsed, since the validator stores `INLINE-FLEX`
-  // and `row  dense` as the keywords they spell. Only the lookup is folded;
-  // the stored value and its tooltip keep the spelling they were given.
-  const folded = asciiLower(trimCssWhitespace(keyword)).replace(
-    /[ \t\n\r\f]+/g,
-    " "
-  );
+  // Looked up as CSS reads a keyword: its escapes decoded, case-folded the
+  // ASCII way, with its CSS whitespace trimmed and collapsed, since the
+  // validator stores `INLINE-FLEX`, `inline\2d flex` and `row  dense` as the
+  // keywords they spell. Only the lookup is folded; the stored value and its
+  // tooltip keep the spelling they were given.
+  const folded = asciiLower(
+    decodeIdentifier(trimCssWhitespace(keyword))
+  ).replace(/[ \t\n\r\f]+/g, " ");
   return (
     KEYWORD_LABELS[cssProperty]?.[folded] ??
     SHARED_LABELS[folded] ??

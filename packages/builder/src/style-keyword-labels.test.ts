@@ -88,6 +88,9 @@ describe("a style keyword's words", () => {
       "Row, fill gaps"
     );
     expect(keywordLabel("unknown-property", "SOME-WORD")).toBe("Some word");
+    // A CSS escape is the character it spells, so `inline\2d flex` is the
+    // inline-flex the validator decodes it to.
+    expect(keywordLabel("display", "inline\\2d flex")).toBe("Inline flex");
   });
 });
 
@@ -128,6 +131,9 @@ describe("the keywords a menu offers", () => {
     expect(
       menuKeywords("display", ["block", "inline-flex"], "INLINE-FLEX")
     ).toEqual(["block", "INLINE-FLEX"]);
+    expect(
+      menuKeywords("display", ["block", "inline-flex"], "inline\\2d flex")
+    ).toEqual(["block", "inline\\2d flex"]);
   });
 
   it("offers a stored keyword the list lacks first, so the menu is never empty over it", () => {
