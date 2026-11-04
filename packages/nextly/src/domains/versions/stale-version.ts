@@ -28,7 +28,12 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { NextlyError } from "../../errors/nextly-error";
 import type { StaleVersionPublicData } from "../../errors/public-data";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
+import type { RequestActor } from "../../auth/request-actor";
 import { COMPANION_UPDATED_AT_COLUMN } from "../i18n/companion-columns";
+import {
+  claimCompanionRevision,
+  companionWriteVia,
+} from "../i18n/runtime/companion-io";
 import type { UserContext } from "../singles/types";
 
 import { peopleById } from "./author-hydration";
@@ -356,24 +361,23 @@ export function judgedLanguage(
  * save may go ahead.
  *
  * `main` compares the main row as read under the lock, before the write.
- * `languageAfterWrite`, where the save wrote its language's row, compares that
- * row as the write left it: its counter is then the given one plus this
- * save's own increment, and anything more is someone else's save.
+ * `languages` compares each language row as read before any write, for a
+ * write over several languages at once, such as publishing every language:
+ * a language the version does not name counts as 0.
  */
 export function staleParts(
   given: DecodedVersion,
   args: {
     main?: PartState;
-    languageAfterWrite?: { locale: string; state: PartState; bumped: boolean };
+    languages?: readonly PartState[];
   }
 ): string[] {
   const stale: string[] = [];
   if (args.main && args.main.counter !== given.main) stale.push("main");
-  const language = args.languageAfterWrite;
-  if (language) {
-    const expected =
-      (given.languages[language.locale] ?? 0) + (language.bumped ? 1 : 0);
-    if (language.state.counter !== expected) stale.push(language.locale);
+  for (const language of args.languages ?? []) {
+    if (language.counter !== (given.languages[language.part] ?? 0)) {
+      stale.push(language.part);
+    }
   }
   return stale;
 }
@@ -445,7 +449,8 @@ const CHANGER_KINDS: ReadonlySet<string> = new Set([
  * Undefined for a kind this version of Nextly does not know.
  */
 async function shownChanger(
-  changer: LastChanger
+  changer: LastChanger,
+  namePeople: boolean
 ): Promise<StaleVersionPublicData["changedBy"]> {
   if (!CHANGER_KINDS.has(changer.kind)) return undefined;
   const kind = changer.kind as NonNullable<
@@ -461,7 +466,7 @@ async function shownChanger(
     };
   }
   const person =
-    kind === "person" && changer.id
+    namePeople && kind === "person" && changer.id
       ? (await peopleById([changer.id])).get(changer.id)
       : undefined;
   return { kind, name: person?.name || null };
@@ -486,12 +491,16 @@ async function staleVersionRefusal(args: {
   /** The parts the save writes, main first. */
   parts: readonly PartState[];
   mayRead: () => Promise<boolean>;
+  /** Whether a person may be looked up by name (a pooled read). */
+  namePeople: boolean;
   logContext: Record<string, unknown>;
 }): Promise<NextlyError> {
   const data: StaleVersionPublicData = { currentVersion: args.currentVersion };
   if (await args.mayRead()) {
     const changer = lastChangerOf(args.parts, args.given);
-    const changedBy = changer ? await shownChanger(changer) : undefined;
+    const changedBy = changer
+      ? await shownChanger(changer, args.namePeople)
+      : undefined;
     if (changedBy) data.changedBy = changedBy;
     if (changer?.at) data.changedAt = changer.at.toISOString();
   }
@@ -595,11 +604,34 @@ export async function certainlyStale(
 }
 
 /**
- * Refuse, inside the write's transaction, a save whose main row moved since
- * the version it gives. Read under the row lock (`forUpdate`): on MySQL a
- * plain read returns what the transaction saw when it began, which a save in
- * a caller's longer transaction could have read long before.
+ * Judge, inside the write's transaction and before it writes anything, a
+ * save's main row: whether it moved since the version given, and the state
+ * read. Read under the row lock (`forUpdate`): on MySQL a plain read returns
+ * what the transaction saw when it began, which a save in a caller's longer
+ * transaction could have read long before. An overwrite is never stale; what
+ * it saves over is in the state returned.
  */
+export async function judgeMainRow(
+  tx: Pick<TransactionContext, "select" | "execute">,
+  dialect: SupportedDialect,
+  check: VersionCheck,
+  row: { table: string; id: string }
+): Promise<{ stale: boolean; before?: DocumentRevisionState }> {
+  if (check.kind === "unjudged") return { stale: false };
+  const before = await readDocumentRevision(tx, {
+    dialect,
+    table: row.table,
+    id: row.id,
+    forUpdate: true,
+  });
+  const stale =
+    before !== undefined &&
+    check.kind === "judge" &&
+    staleParts(check.given, { main: before.main }).length > 0;
+  return { stale, before };
+}
+
+/** {@link judgeMainRow}, refusing a stale save by throwing, for a write whose refusal rolls everything back. */
 export async function refuseIfMainMoved(
   tx: Pick<TransactionContext, "select" | "execute">,
   dialect: SupportedDialect,
@@ -607,75 +639,89 @@ export async function refuseIfMainMoved(
   row: { table: string; id: string },
   holder: StaleWriteHolder
 ): Promise<DocumentRevisionState | undefined> {
-  if (check.kind === "unjudged") return undefined;
-  const locked = await readDocumentRevision(tx, {
-    dialect,
-    table: row.table,
-    id: row.id,
-    forUpdate: true,
-  });
-  // An overwrite is never refused; what it saves over is in what was read.
-  if (
-    !locked ||
-    check.kind === "overwrite" ||
-    staleParts(check.given, { main: locked.main }).length === 0
-  ) {
-    return locked;
-  }
+  const judged = await judgeMainRow(tx, dialect, check, row);
+  if (!judged.stale) return judged.before;
   holder.at = { table: row.table };
   throw NextlyError.staleVersion({
-    data: { currentVersion: String(locked.main.counter) },
+    data: { currentVersion: String(judged.before?.main.counter) },
   });
 }
 
+/** The translation row a save writes, and the language it is judged on. */
+export interface LanguageWrite {
+  table: string;
+  id: string;
+  languagesTable: string;
+  /** The language the save is judged on, if any (`judgedLanguage`). */
+  judged: string | undefined;
+  /** The language whose row the save writes. */
+  written: string;
+}
+
 /**
- * Refuse a save whose language moved since the version it gives, judged once
- * the save has written that language's row: the row then exists and this
- * transaction holds it, so its counter is the given one plus this save's
- * own. A read of it before the write would lock a row that may not exist
- * yet, which on MySQL locks a range of the table's key and deadlocks two
- * documents' first translations saved at once.
+ * Judge a save's language, as its first write of that language's row and
+ * before any other write: a judged save claims the row's next version by
+ * compare-and-set (`claimCompanionRevision`), so a stale one is found with
+ * nothing of it written, whatever the transaction goes on to do. An
+ * overwrite claims nothing; the row is read as it is before the write, so
+ * what it replaces can be told, and it is never stale.
+ *
+ * Call only when the save writes that row, or a first translation's claim
+ * would leave an empty row behind.
+ *
+ * @returns `claimed` when the version was taken here, so the write that
+ *   follows must not move it again.
  */
+export async function judgeLanguageRow(
+  tx: Pick<TransactionContext, "select" | "execute">,
+  dialect: SupportedDialect,
+  check: VersionCheck,
+  row: LanguageWrite,
+  savedBy: RequestActor
+): Promise<{ stale: boolean; claimed: boolean; before?: PartState }> {
+  if (check.kind === "unjudged" || row.judged !== row.written) {
+    return { stale: false, claimed: false };
+  }
+  if (check.kind === "overwrite") {
+    const read = await readDocumentRevision(tx, {
+      dialect,
+      table: row.table,
+      id: row.id,
+      languages: { table: row.languagesTable, locales: [row.written] },
+    });
+    return {
+      stale: false,
+      claimed: false,
+      before: read?.languages[row.written],
+    };
+  }
+  const claimed = await claimCompanionRevision(
+    companionWriteVia(tx, dialect),
+    row.languagesTable,
+    row.id,
+    row.written,
+    check.given.languages[row.written] ?? 0,
+    savedBy
+  );
+  return { stale: !claimed, claimed };
+}
+
+/** {@link judgeLanguageRow}, refusing a stale save by throwing, for a write whose refusal rolls everything back. */
 export async function refuseIfLanguageMoved(
   tx: Pick<TransactionContext, "select" | "execute">,
   dialect: SupportedDialect,
   check: VersionCheck,
-  row: {
-    table: string;
-    id: string;
-    languagesTable: string;
-    /** The language the save is judged on, if any. */
-    judged: string | undefined;
-    /** The language whose row this save just wrote. */
-    written: string;
-  },
+  row: LanguageWrite,
+  savedBy: RequestActor,
   holder: StaleWriteHolder
-): Promise<PartState | undefined> {
-  if (check.kind === "unjudged" || row.judged !== row.written) return undefined;
-  const after = await readDocumentRevision(tx, {
-    dialect,
-    table: row.table,
-    id: row.id,
-    languages: { table: row.languagesTable, locales: [row.written] },
-  });
-  const state = after?.languages[row.written];
-  if (
-    !state ||
-    check.kind === "overwrite" ||
-    staleParts(check.given, {
-      languageAfterWrite: { locale: row.written, state, bumped: true },
-    }).length === 0
-  ) {
-    // Read after this save's own write: its changer is this save's.
-    return state;
-  }
+): Promise<{ claimed: boolean; before?: PartState }> {
+  const judged = await judgeLanguageRow(tx, dialect, check, row, savedBy);
+  if (!judged.stale) return judged;
   holder.at = {
     table: row.table,
     languages: { table: row.languagesTable, locale: row.written },
   };
-  throw NextlyError.staleVersion({
-    data: { currentVersion: String(state.counter) },
-  });
+  throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
 }
 
 /**
@@ -692,6 +738,13 @@ export async function staleVersionErrorFor(
     id: string;
     given: DecodedVersion;
     at: StaleWrite;
+    /**
+     * Read inside a transaction the write shares with others: the read gate
+     * and the people lookup read on the pool, which waits behind that
+     * transaction on SQLite, so only a trusted caller is told who and when,
+     * and the changer is not named.
+     */
+    inSharedTransaction?: boolean;
     reader: Omit<
       Parameters<typeof callerMayReadDocument>[0],
       "scopeKind" | "slug" | "entryId"
@@ -726,12 +779,15 @@ export async function staleVersionErrorFor(
     ),
     parts: language ? [state.main, language] : [state.main],
     mayRead: () =>
-      callerMayReadDocument({
-        scopeKind: args.scopeKind,
-        slug: args.slug,
-        entryId: args.id,
-        ...args.reader,
-      }),
+      args.inSharedTransaction
+        ? Promise.resolve(args.reader.trusted)
+        : callerMayReadDocument({
+            scopeKind: args.scopeKind,
+            slug: args.slug,
+            entryId: args.id,
+            ...args.reader,
+          }),
+    namePeople: !args.inSharedTransaction,
     logContext: {
       reason: "stale-version",
       scopeKind: args.scopeKind,

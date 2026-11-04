@@ -17,6 +17,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import type { CollectionService } from "../collection-service";
 import {
   poolRevisionReader,
   readDocumentRevision,
@@ -123,6 +124,9 @@ async function stored(t: TestNextly, table: string, id: string) {
 
 const handlerOf = (t: TestNextly): CollectionsHandler =>
   t.getService("collectionsHandler") as CollectionsHandler;
+
+const serviceOf = (t: TestNextly): CollectionService =>
+  t.getService("collectionService") as unknown as CollectionService;
 
 function idOf(result: unknown): string {
   const id = (result as { data?: { id?: unknown } }).data?.id;
@@ -652,6 +656,117 @@ describe.each(getConfiguredTestDialects())(
           id: "no-such-entry",
         })
       ).toBeUndefined();
+    });
+
+    it("never writes a translation row for a save that writes none of that language's fields", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      // A Spanish save of a shared field alone, judged on its version.
+      const read = (await t.nextly.findByID({
+        collection: DOCS as never,
+        id,
+        locale: "es",
+        overrideAccess: true,
+      } as never)) as { _rev: string };
+      const saved = await update(
+        t,
+        DOCS,
+        id,
+        { note: "shared", _rev: read._rev },
+        { locale: "es" }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      // The same through a batch, in the default language, after its row is gone.
+      await t.adapter.executeQuery(`DELETE FROM ${q(t, LANGUAGES)}`, []);
+      const batch = await serviceOf(t).updateMany(
+        DOCS,
+        [
+          {
+            id,
+            data: { note: "batch", _rev: revOf(saved).split(".")[0] + ".en:0" },
+          },
+        ],
+        { overrideAccess: true } as never
+      );
+      expect(batch.errors, JSON.stringify(batch)).toEqual([]);
+      expect(await languageCounters(t, [id])).toEqual({});
+      expect((await stored(t, `dc_${DOCS}`, id)).note).toBe("batch");
+    });
+
+    describe("a batch judges each entry on its own and applies the rest", () => {
+      /** Three entries read at their current versions, in the default language. */
+      async function three(t: TestNextly) {
+        const ids: string[] = [];
+        const revs: string[] = [];
+        for (const title of ["a", "b", "c"]) {
+          const created = await handlerOf(t).createEntry(
+            { collectionName: DOCS, overrideAccess: true, locale: "en" },
+            { title, note: title }
+          );
+          ids.push(idOf(created));
+          revs.push(revOf(created));
+        }
+        return { ids, revs };
+      }
+
+      /** Every row an entry has, raw, to compare before and after. */
+      async function rowsOf(t: TestNextly, id: string) {
+        return {
+          main: await stored(t, `dc_${DOCS}`, id),
+          languages: await languageCounters(t, [id]),
+        };
+      }
+
+      it.each([
+        ["its translation moved", { title: "theirs" }, { title: "mine" }],
+        ["its shared fields moved", { note: "theirs" }, { title: "mine" }],
+        [
+          "its translation moved, and it also changes a shared field",
+          { title: "theirs" },
+          { title: "mine", note: "mine" },
+        ],
+      ])(
+        "refuses the entry whose %s, writing nothing of it",
+        async (_name, theirs, mine) => {
+          const t = await boot(dialect);
+          const { ids, revs } = await three(t);
+          await update(t, DOCS, ids[1], theirs, { locale: "en" });
+          const before = await rowsOf(t, ids[1]);
+
+          const batch = await serviceOf(t).updateMany(
+            DOCS,
+            ids.map((id, i) => ({
+              id,
+              data:
+                i === 1
+                  ? { ...mine, _rev: revs[i] }
+                  : { title: `new ${i}`, _rev: revs[i] },
+            })),
+            { overrideAccess: true } as never
+          );
+          expect(
+            batch.errors.map(e => ({ index: e.index, code: e.code })),
+            JSON.stringify(batch)
+          ).toEqual([{ index: 1, code: "STALE_VERSION" }]);
+          expect(batch.successful).toBe(2);
+          // The refused entry is exactly as it was: no shared value, no translation, no counter moved.
+          expect(await rowsOf(t, ids[1])).toEqual(before);
+          // The others were applied.
+          for (const i of [0, 2]) {
+            const doc = (await t.nextly.findByID({
+              collection: DOCS as never,
+              id: ids[i],
+              locale: "en",
+              overrideAccess: true,
+            } as never)) as { title: string };
+            expect(doc.title).toBe(`new ${i}`);
+          }
+        }
+      );
     });
   }
 );

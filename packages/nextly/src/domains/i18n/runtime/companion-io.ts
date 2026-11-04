@@ -17,6 +17,7 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { RequestActor } from "../../../auth/request-actor";
+import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
@@ -325,6 +326,12 @@ export async function upsertCompanionRow(
      * archive replay.
      */
     savedBy?: RequestActor;
+    /**
+     * Set when this save already took the row's next version with
+     * {@link claimCompanionRevision}: the counter is then not moved a second
+     * time. The changer is still written, the same one the claim wrote.
+     */
+    revisionClaimed?: boolean;
   } = {}
 ): Promise<void> {
   const withStatus =
@@ -417,7 +424,7 @@ export async function upsertCompanionRow(
   // An existing row's counter moves by one in the conflict branch, from the row's own value under
   // the lock the upsert holds; an inserted row takes the column default.
   const increment =
-    options.savedBy === undefined
+    options.savedBy === undefined || options.revisionClaimed
       ? []
       : [
           isMysql
@@ -436,6 +443,90 @@ export async function upsertCompanionRow(
       `VALUES (${valuePlaceholders}) ${conflict}`,
     params
   );
+}
+
+/**
+ * Take a translation row's next version for a save judged on it, as that
+ * save's first write of the row, before it writes anything else: a
+ * compare-and-set, so it succeeds only when the row still holds the version
+ * the save was made from (`expected`), and a stale save is found with
+ * nothing of it written.
+ *
+ * `expected` 0 means the save was made with no row in this language: the
+ * row is inserted bare, with its counter at the column default (1) and this
+ * save's changer, and its values follow in {@link upsertCompanionRow}. A row
+ * already there means someone else's save created it since.
+ *
+ * Takes no lock on a row that is not there. A locking read of an absent
+ * translation row locks a range of the table's key on MySQL, and two
+ * documents' first translations that each lock the same range and then
+ * insert into it deadlock. Every writer of a document's translation rows
+ * holds the document's own row lock first, so nothing else moves this row
+ * between the claim and the write that follows it.
+ *
+ * @returns Whether the row was claimed; false when it is out of date.
+ */
+export async function claimCompanionRevision(
+  adapter: CompanionWriteAdapter,
+  companionTableName: string,
+  parentId: string,
+  locale: string,
+  expected: number,
+  savedBy: RequestActor
+): Promise<boolean> {
+  const { dialect } = adapter;
+  const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
+  const p = (n: number) => (dialect === "postgresql" ? `$${n}` : "?");
+  const changer = changerColumns(savedBy);
+  const changerNames = Object.keys(changer);
+  const table = q(companionTableName);
+  // How many rows the statement just run changed: PostgreSQL answers with
+  // the rows it returns; SQLite and MySQL by asking the same connection.
+  const changed = async (rows: unknown[]): Promise<number> => {
+    if (dialect === "postgresql") return rows.length;
+    const [row] = await adapter.executeQuery<{ n: unknown }>(
+      dialect === "mysql" ? "SELECT ROW_COUNT() AS n" : "SELECT changes() AS n",
+      []
+    );
+    return Number(row?.n ?? 0);
+  };
+  const returning =
+    dialect === "postgresql" ? ` RETURNING ${q("_parent")}` : "";
+
+  if (expected > 0) {
+    const sets = [
+      `${q(DOCUMENT_REVISION_COLUMN)} = ${q(DOCUMENT_REVISION_COLUMN)} + 1`,
+      ...changerNames.map((name, i) => `${q(name)} = ${p(i + 1)}`),
+    ];
+    const at = changerNames.length;
+    const rows = await adapter.executeQuery(
+      `UPDATE ${table} SET ${sets.join(", ")} WHERE ${q("_parent")} = ${p(at + 1)} AND ${q("_locale")} = ${p(at + 2)} AND ${q(DOCUMENT_REVISION_COLUMN)} = ${p(at + 3)}${returning}`,
+      [...changerNames.map(name => changer[name]), parentId, locale, expected]
+    );
+    return (await changed(rows)) === 1;
+  }
+
+  const columns = ["_parent", "_locale", ...changerNames];
+  const values = [parentId, locale, ...changerNames.map(name => changer[name])];
+  const insert = `INSERT INTO ${table} (${columns.map(q).join(", ")}) VALUES (${columns.map((_, i) => p(i + 1)).join(", ")})`;
+  if (dialect === "mysql") {
+    // A duplicate fails this statement alone: MySQL keeps the transaction,
+    // which the rest of a batch goes on with.
+    try {
+      await adapter.executeQuery(insert, values);
+      return true;
+    } catch (error) {
+      if (isUniqueViolation(dialect, error)) return false;
+      throw error;
+    }
+  }
+  // PostgreSQL would abort the whole transaction on a failed insert, so the
+  // conflict is answered by the statement itself.
+  const rows = await adapter.executeQuery(
+    `${insert} ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO NOTHING${returning}`,
+    values
+  );
+  return (await changed(rows)) === 1;
 }
 
 /**
