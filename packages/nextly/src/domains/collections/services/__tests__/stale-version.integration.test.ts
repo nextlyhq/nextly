@@ -177,7 +177,10 @@ describe.each(getConfiguredTestDialects())("stale versions of a collection entry
           )
         );
         expect(gate.arrived()).toBe(2);
-        for (const result of saved) expect(result).toMatchObject({ success: true });
+        // The whole result on failure, so a refused save says why.
+        for (const result of saved) {
+          expect((result as { success?: unknown }).success, JSON.stringify(result)).toBe(true);
+        }
       } finally {
         gate.release();
       }
@@ -218,7 +221,10 @@ describe.each(getConfiguredTestDialects())("stale versions of a collection entry
           )
         );
         expect(gate.arrived()).toBe(2);
-        for (const result of saved) expect(result).toMatchObject({ success: true });
+        // The whole result on failure, so a refused save says why.
+        for (const result of saved) {
+          expect((result as { success?: unknown }).success, JSON.stringify(result)).toBe(true);
+        }
       } finally {
         gate.release();
       }
