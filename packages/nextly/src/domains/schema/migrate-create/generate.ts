@@ -623,11 +623,30 @@ export async function generateMigration(
   //      it, once the main table has the column to copy into.
   //    - A translated field's per-language unique index that goes: first of all, before any
   //      file drops or renames a column it keys on.
+  // A field unique before and after leaving translation has its per-language index dropped by a
+  // file that runs before the move's archive file, so that file carries the move's settings too and
+  // is checked before its drop.
+  const leavingSettingsByTable = new Map(
+    fieldLeavesPlans.map(({ plan, entity, settings }) => [
+      `${entity}|${plan.archive.spec.mainTable}`,
+      settings,
+    ])
+  );
   const beforeMain = [
     ...uniquePlans.flatMap(({ spec, plan, entity }) =>
       plan.drops === null
         ? []
-        : [{ spec, kind: "unique" as const, entity, ...plan.drops }]
+        : [
+            {
+              spec: withLeavingSettings(
+                spec,
+                leavingSettingsByTable.get(`${entity}|${spec.mainTable}`)
+              ),
+              kind: "unique" as const,
+              entity,
+              ...plan.drops,
+            },
+          ]
     ),
     ...disablePlans.map(({ plan, entity }) => ({
       spec: plan.spec,

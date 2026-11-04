@@ -57,18 +57,35 @@ interface LeavingValuesSource {
 }
 
 /**
+ * A clause true for an entry of the main table (`main`, quoted) with no companion row at all. The
+ * copy into a shared column leaves such an entry's main value as it is.
+ */
+function hasNoCompanionRow(source: LeavingValuesSource, main: string): string {
+  const { dialect } = source;
+  const comp = q(source.companionTable, dialect);
+  return `NOT EXISTS (SELECT 1 FROM ${comp} WHERE ${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)})`;
+}
+
+/**
  * How many entries have no default-language value in the companion column `col` (quoted): no
- * companion row in that language, or NULL there.
+ * companion row in that language, or NULL there. With `mainCol` (quoted), the main table's column
+ * the move copies into, which already exists when the shared file runs: an entry with no companion
+ * row at all keeps its main value, so it counts only where that is NULL too.
  */
 async function entriesWithoutDefaultValue(
   source: LeavingValuesSource,
-  col: string
+  col: string,
+  mainCol?: string
 ): Promise<number> {
   const { adapter, dialect } = source;
+  const keptOnMain =
+    mainCol === undefined
+      ? ""
+      : ` AND NOT (${hasNoCompanionRow(source, "m")} AND m.${mainCol} IS NOT NULL)`;
   const [row] = await adapter.executeQuery<{ n: number | string }>(
     `SELECT COUNT(*) AS n FROM ${q(source.mainTable, dialect)} m LEFT JOIN ${q(source.companionTable, dialect)} c ` +
       `ON c.${q("_parent", dialect)} = m.${q("id", dialect)} AND c.${q("_locale", dialect)} = ${lit(source.defaultLocale)} ` +
-      `WHERE c.${col} IS NULL`
+      `WHERE c.${col} IS NULL${keptOnMain}`
   );
   return Number(row?.n ?? 0);
 }
@@ -76,17 +93,24 @@ async function entriesWithoutDefaultValue(
 /**
  * How many entries would share a value in the companion column `col` (quoted) with another entry,
  * judged on the value the move writes (`restoredValue`): every entry of every value held more than
- * once, summed over those values, so two pairs count four. The values are never read.
+ * once, summed over those values, so two pairs count four. The values are never read. With
+ * `mainCol` (quoted, as above), an entry with no companion row is judged on its main value.
  */
 async function entriesSharingAValue(
   source: LeavingValuesSource,
-  col: string
+  col: string,
+  mainCol?: string
 ): Promise<number> {
   const { adapter, dialect } = source;
-  const shared = restoredValue(
+  const main = q(source.mainTable, dialect);
+  const restored = restoredValue(
     source,
     `${q(source.companionTable, dialect)}.${col}`
   );
+  const shared =
+    mainCol === undefined
+      ? restored
+      : `CASE WHEN ${hasNoCompanionRow(source, main)} THEN ${main}.${mainCol} ELSE ${restored} END`;
   const [row] = await adapter.executeQuery<{ n: number | string }>(
     `SELECT COALESCE(SUM(g.n), 0) AS n FROM (SELECT COUNT(*) AS n FROM (SELECT ${shared} AS v FROM ${q(source.mainTable, dialect)}) s ` +
       `WHERE s.v IS NOT NULL GROUP BY s.v HAVING COUNT(*) > 1) g`
@@ -232,6 +256,13 @@ async function refusalsForOneField(
  */
 type PreconditionSurface = TranslationSurface | "migrate";
 
+/**
+ * The step `nextly migrate`'s refusal adds: the check reads the values once, before the move's
+ * first file, so a write that lands while the move runs is not seen.
+ */
+const STOP_WRITES_STEP =
+  "Stop the app's writes while `nextly migrate` runs: the values are checked once, before the move starts.";
+
 function requiredRefusal(
   name: string,
   count: number,
@@ -250,6 +281,7 @@ function requiredRefusal(
         : surface === "migrate"
           ? `${give}, then run \`nextly migrate\` again.`
           : `${give}, or remove \`required\`, and run \`nextly migrate:create\` again.`,
+      ...(surface === "migrate" ? [STOP_WRITES_STEP] : []),
     ]
   );
 }
@@ -271,6 +303,7 @@ function uniqueRefusal(
         : surface === "migrate"
           ? "Give them their own values, then run `nextly migrate` again."
           : "Give them their own values, or remove `unique`, and run `nextly migrate:create` again.",
+      ...(surface === "migrate" ? [STOP_WRITES_STEP] : []),
     ]
   );
 }
@@ -297,7 +330,12 @@ export async function refuseLeavingFileThatCannotTakeItsSettings(
     | "defaultLocale"
     | "settings"
   >,
-  source: string
+  source: string,
+  /**
+   * Whether the main table already has the leaving fields' columns, as when the shared file runs
+   * after the main file: an entry with no companion row then keeps its main value through the copy.
+   */
+  mainHasColumns = false
 ): Promise<void> {
   if (spec.settings === undefined) return;
   const values: LeavingValuesSource = {
@@ -310,13 +348,22 @@ export async function refuseLeavingFileThatCannotTakeItsSettings(
   const language = languageName(spec.defaultLocale);
   const col = (column: string) => q(column, spec.dialect);
   const refusals: LeavingTranslationRefusal[] = [];
+  const onMain = (column: string) => (mainHasColumns ? col(column) : undefined);
   for (const { field, column } of spec.settings.required) {
-    const without = await entriesWithoutDefaultValue(values, col(column));
+    const without = await entriesWithoutDefaultValue(
+      values,
+      col(column),
+      onMain(column)
+    );
     if (without > 0)
       refusals.push(requiredRefusal(field, without, language, "migrate"));
   }
   for (const { field, column } of spec.settings.unique) {
-    const shared = await entriesSharingAValue(values, col(column));
+    const shared = await entriesSharingAValue(
+      values,
+      col(column),
+      onMain(column)
+    );
     if (shared > 0)
       refusals.push(uniqueRefusal(field, shared, language, "migrate"));
   }

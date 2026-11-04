@@ -935,6 +935,72 @@ for (const entry of DIALECTS) {
         expect(en?.body).toBe("Hello");
       });
 
+      // An entry written between the runs, once the main file has run, holds its value on the main
+      // table with no translations row; the shared file's copy keeps it, so the check counts it.
+      it("takes a Required main-only value an entry gained between the runs", async () => {
+        await migrateCreate(constrained(translated, { required: true }));
+        await migrate();
+        await seed();
+        await migrateCreate(constrained(shared, { required: true }));
+        await migrateStoppingBefore(f => f.includes("_shared_localization_"));
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) VALUES ('e2', 'Two', 'two', 'Two body')`
+        );
+
+        await migrate();
+
+        await expectShared();
+      });
+
+      it("refuses Unique at the shared file over a main-only value an entry gained between the runs", async () => {
+        await migrateCreate(constrained(translated, {}));
+        await migrate();
+        await seed();
+        await migrateCreate(constrained(shared, { unique: true }));
+        await migrateStoppingBefore(f => f.includes("_shared_localization_"));
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) VALUES ('e2', 'Two', 'two', 'Hello')`
+        );
+
+        await expect(migrate()).rejects.toThrow(
+          /UNIQUE_FIELD_LEAVES_OVER_DUPLICATES: 2 entries would share a value for body/
+        );
+        expect(await columnsOf(companion)).toContain("body");
+      });
+
+      // Unique before and after: the per-language index is dropped by a file that runs before the
+      // archive file, so the check runs before that file too.
+      it("refuses Unique before dropping the per-language index, where languages collide once shared", async () => {
+        await migrateCreate(constrained(translated, { unique: true }));
+        await migrate();
+        await seed();
+        // Unique within each language, but the second entry has no English, so its Spanish value
+        // becomes its shared one and repeats the first entry's English.
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e2', 'Two', 'two')`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e2', 'es', 'Hello')`
+        );
+        const before = new Set(await readdir(migrationsDir));
+        await migrateCreate(constrained(shared, { unique: true }));
+        const move = (await readdir(migrationsDir)).filter(
+          f => f.endsWith(".sql") && !before.has(f)
+        );
+
+        await expect(migrate()).rejects.toThrow(
+          /UNIQUE_FIELD_LEAVES_OVER_DUPLICATES: 2 entries would share a value for body/
+        );
+
+        // No file of the move ran, the index drop included.
+        const ledger = await new SchemaEventsRepository(
+          adapter.getDrizzle(),
+          dialect
+        ).listFileApplies();
+        expect(ledger.filter(row => move.includes(row.filename))).toEqual([]);
+        expect(await archived()).toEqual([]);
+      });
+
       /** The shared file made to fail: its companion column renamed out from under it. */
       async function failTheSharedFile(): Promise<void> {
         await migrateCreate(translated);

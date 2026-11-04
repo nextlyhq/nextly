@@ -2236,22 +2236,36 @@ async function refuseUniqueFileThatCannotHold(
 }
 
 /**
- * Refuses an `archive` or `shared` companion file whose fields' default-language values cannot take
- * the settings its header records (`refuseLeavingFileThatCannotTakeItsSettings`). Any other file,
- * and one written before headers recorded settings, passes untouched.
+ * Refuses a companion file whose header records the settings a move out of translation applies
+ * (an `archive` or `shared` file, or a `unique` file dropping a per-language index ahead of them),
+ * where the fields' default-language values cannot take them
+ * (`refuseLeavingFileThatCannotTakeItsSettings`). Any other file, and one written before headers
+ * recorded settings, passes untouched.
  */
 async function refuseLeavingFileThatCannotTakeItsSettings(
   adapter: DrizzleAdapter,
   localization: LocalizationMigrationIntent | undefined,
   filename: string
 ): Promise<void> {
-  if (localization?.kind !== "archive" && localization?.kind !== "shared")
+  // The archive and shared files of a move out of translation carry its settings, and so does a
+  // per-language unique-index drop that runs before them for a field unique before and after.
+  if (
+    localization?.kind !== "archive" &&
+    localization?.kind !== "shared" &&
+    localization?.kind !== "unique"
+  )
     return;
   if (localization.spec.settings === undefined) return;
   const { refuseLeavingFileThatCannotTakeItsSettings: refuse } = await import(
     "../../domains/i18n/migration/leaving-constraint-preconditions"
   );
-  await refuse(adapter, localization.spec, filename);
+  // The shared file runs after the main file, so the main table has the fields' columns by then.
+  await refuse(
+    adapter,
+    localization.spec,
+    filename,
+    localization.kind === "shared"
+  );
 }
 
 /**
