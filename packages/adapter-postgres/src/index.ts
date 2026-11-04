@@ -87,7 +87,6 @@ import type {
 import {
   createDatabaseError,
   isDatabaseError,
-  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
@@ -741,140 +740,71 @@ export class PostgresAdapter extends DrizzleAdapter {
    * or if the callback threw an error that does not carry the application brand
    * @throws The callback's own error, unchanged, when it carries that brand
    */
-  async transaction<T>(
+  transaction<T>(
     callback: (ctx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
-    const frame = this.beginTransactionCall();
-    if (frame) {
-      try {
-        return await this.runJoined(
-          frame,
-          depth => frame.join.adapter(depth),
-          callback,
-          options
-        );
-      } catch (error) {
-        if (isApplicationError(error)) throw error;
-        throw this.classifyError(error);
-      }
-    }
-    // Before anything is awaited, so the stack still reaches the caller.
-    return this.runTransactionAttempts(
-      callback,
-      options,
-      this.captureOpeningStack()
-    );
+    return this.openOrJoin(callback, options, {
+      run: (_attempt, openedAt) => this.runAttempt(callback, options, openedAt),
+      retryable: isSerializationFailure,
+      describe: error => {
+        const code = sqlStateOf(error);
+        return { label: code ?? "a retryable error", detail: { code } };
+      },
+      logger: this.config.logger,
+    });
   }
 
-  /**
-   * The attempts an outermost transaction makes, each on a client of its own,
-   * each its own transaction frame.
-   */
-  private async runTransactionAttempts<T>(
+  /** One attempt at an outermost transaction, on a client of its own. */
+  private async runAttempt<T>(
     callback: (ctx: TransactionContext) => Promise<T>,
     options: TransactionOptions | undefined,
     openedAt: string | undefined
-  ): Promise<T> {
+  ) {
     const pool = this.ensurePool();
-    const maxAttempts = (options?.retryCount ?? 0) + 1;
-    const retryDelayMs = options?.retryDelayMs ?? 100;
-
-    for (let attempt = 1; ; attempt++) {
-      // A checkout, taken from the pool like `executeQuery`'s queries are.
-      this.notePoolAccess();
-      const client = await pool.connect();
-      const startTime = Date.now();
-      // Set when the ROLLBACK failed. The client may then still be inside the
-      // transaction, so it is destroyed rather than pooled: the next request
-      // handed it would otherwise write into a transaction nobody commits.
-      let discard: Error | true | undefined;
-
-      const settled = await this.runOutermost(
-        {
-          context: this.createTransactionContext(client),
-          join: this.joinSteps(client),
-          openedAt,
-          begin: () => this.beginTransaction(client, options),
-          // A transaction a failed statement aborted is not refused at
-          // COMMIT: PostgreSQL rolls it back and answers with the ROLLBACK
-          // command tag, raising nothing. A callback that caught its failed
-          // statement and returned would otherwise be told its writes
-          // committed when none of them were kept, so that answer is an error.
-          commit: async () => {
-            const committed = await client.query("COMMIT");
-            if (committed?.command === "ROLLBACK") {
-              throw createDatabaseError({
-                kind: "query",
-                code: "25P02",
-                message:
-                  "The transaction was rolled back, not committed: a statement in it failed, and PostgreSQL ends such a transaction with a rollback when asked to commit.",
-              });
-            }
-          },
-          rollback: async () => {
-            await client.query("ROLLBACK").catch((rollbackError: unknown) => {
-              discard = rollbackError instanceof Error ? rollbackError : true;
+    // A checkout, taken from the pool like `executeQuery`'s queries are.
+    this.notePoolAccess();
+    const client = await pool.connect();
+    // Set when the ROLLBACK failed. The client may then still be inside the
+    // transaction, so it is destroyed rather than pooled: the next request
+    // handed it would otherwise write into a transaction nobody commits.
+    let discard: Error | true | undefined;
+    const settled = await this.runOutermost(
+      {
+        context: this.createTransactionContext(client),
+        join: this.joinSteps(client),
+        openedAt,
+        begin: () => this.beginTransaction(client, options),
+        // A transaction a failed statement aborted is not refused at COMMIT:
+        // PostgreSQL rolls it back and answers with the ROLLBACK command tag,
+        // raising nothing. A callback that caught its failed statement and
+        // returned would otherwise be told its writes committed when none of
+        // them were kept, so that answer is an error.
+        commit: async () => {
+          const committed = await client.query("COMMIT");
+          if (committed?.command === "ROLLBACK") {
+            throw createDatabaseError({
+              kind: "query",
+              code: "25P02",
+              message:
+                "The transaction was rolled back, not committed: a statement in it failed, and PostgreSQL ends such a transaction with a rollback when asked to commit.",
             });
-          },
+          }
         },
-        callback,
-        options
-      );
-      // node-postgres destroys a client released with an error or `true`,
-      // and pools one released with nothing. Released before anything held
-      // runs, so an effect that opens a transaction takes one client, not two.
-      client.release(discard);
-
-      if (settled.committed) {
-        if (this.config.logger?.debug) {
-          const durationMs = Date.now() - startTime;
-          this.config.logger.debug("Transaction committed", {
-            attempt,
-            durationMs,
+        rollback: async () => {
+          await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+            discard = rollbackError instanceof Error ? rollbackError : true;
           });
-        }
-        await this.runHeldEffects(settled.effects);
-        return settled.result;
-      }
-
-      const { error } = settled;
-      if (attempt < maxAttempts && this.retries(error, options)) {
-        if (this.config.logger?.warn) {
-          const code = sqlStateOf(error);
-          this.config.logger.warn(
-            `Transaction failed with ${code ?? "a retryable error"}, retrying (${attempt}/${maxAttempts})`,
-            { code, attempt }
-          );
-        }
-        // This attempt's rollback effects go with it: it is not the last.
-        await delay(retryDelayMs * attempt); // Exponential backoff
-        continue;
-      }
-
-      await this.runHeldEffects(settled.effects);
-      // Work inside a transaction may throw to roll the write back — a
-      // refused value, a denied permission — and that is the application's
-      // verdict, not the driver's failure: the caller receives the code and
-      // payload it raised rather than a generic database error.
-      if (isApplicationError(error)) throw error;
-      throw this.classifyError(error);
-    }
-  }
-
-  /**
-   * Whether an attempt that ended with `error` is tried again: when
-   * `retryWhen` accepts it, asked first and of every error, application ones
-   * included; otherwise when it is a serialization failure or a deadlock,
-   * never an application error.
-   */
-  private retries(
-    error: unknown,
-    options: TransactionOptions | undefined
-  ): boolean {
-    if (options?.retryWhen?.(error) === true) return true;
-    if (isApplicationError(error)) return false;
-    return isSerializationFailure(error);
+        },
+      },
+      callback,
+      options
+    );
+    // node-postgres destroys a client released with an error or `true`, and
+    // pools one released with nothing. Released before anything held runs,
+    // so an effect that opens a transaction takes one client, not two.
+    client.release(discard);
+    return settled;
   }
 
   /**
@@ -882,38 +812,29 @@ export class PostgresAdapter extends DrizzleAdapter {
    * each, on `client`, named for its depth.
    */
   private joinSteps(client: PoolClient) {
-    // Memoized per transaction, as a transaction context's handles are.
-    const handles = this.transactionDrizzleHandles(relations =>
-      relations ? drizzle({ client, relations }) : drizzle({ client })
+    return this.joinStepsOn(
+      () => this.createTransactionContext(client),
+      relations =>
+        relations ? drizzle({ client, relations }) : drizzle({ client }),
+      (context, depth) => {
+        const name = this.escapeIdentifier(`nextly_sp_${depth}`);
+        return {
+          context,
+          begin: async () => {
+            await client.query(`SAVEPOINT ${name}`);
+          },
+          commit: async () => {
+            await client.query(`RELEASE SAVEPOINT ${name}`);
+          },
+          rollback: async () => {
+            await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+            await client.query(`RELEASE SAVEPOINT ${name}`);
+          },
+          // Only a retry of the outermost transaction can answer these.
+          dooms: isSerializationFailure,
+        };
+      }
     );
-    const savepoint = <C>(context: C, depth: number) => {
-      const name = this.escapeIdentifier(`nextly_sp_${depth}`);
-      return {
-        context,
-        begin: async () => {
-          await client.query(`SAVEPOINT ${name}`);
-        },
-        commit: async () => {
-          await client.query(`RELEASE SAVEPOINT ${name}`);
-        },
-        rollback: async () => {
-          await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
-          await client.query(`RELEASE SAVEPOINT ${name}`);
-        },
-        dooms: isSerializationFailure,
-      };
-    };
-    return {
-      adapter: (depth: number) =>
-        savepoint(this.createTransactionContext(client), depth),
-      drizzle: (depth: number, relations: AnyRelations | undefined) =>
-        savepoint(
-          relations
-            ? handles.withRelations<ReturnType<typeof handles.bare>>(relations)
-            : handles.bare(),
-          depth
-        ),
-    };
   }
 
   /**
@@ -1101,20 +1022,17 @@ export class PostgresAdapter extends DrizzleAdapter {
     // The handle's own queries go to the pool, so it is handed a view of the
     // pool that reports them (`observedPool`).
     const reported = this.observedPool(pool, ["query"]);
-    return this.trackFlowTransactions(
-      this.pinDrizzleTransactions(
-        onClient(reported),
-        async () => {
-          const client = await pool.connect();
-          return {
-            drizzle: onClient(client),
-            rollback: () => client.query("ROLLBACK"),
-            release: dirty => client.release(dirty),
-            join: this.joinSteps(client),
-          };
-        },
-        relations
-      ),
+    return this.joiningHandle(
+      onClient(reported),
+      async () => {
+        const client = await pool.connect();
+        return {
+          drizzle: onClient(client),
+          rollback: () => client.query("ROLLBACK"),
+          release: dirty => client.release(dirty),
+          join: this.joinSteps(client),
+        };
+      },
       relations
     );
   }

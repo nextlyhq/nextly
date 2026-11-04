@@ -15,7 +15,11 @@
 import type { AnyRelations } from "drizzle-orm";
 
 import type { DrizzleTransactor } from "./pinned-transaction";
-import type { TransactionContext, TransactionOptions } from "./types";
+import type {
+  AdapterLogger,
+  TransactionContext,
+  TransactionOptions,
+} from "./types";
 
 /** One transaction, or one part joined to it, as the calls made inside it see it. */
 export interface TransactionFrame {
@@ -166,6 +170,26 @@ export interface OutermostSteps<C = TransactionContext>
 }
 
 /** Where a new frame sits: in a frame it joins, or as an outermost transaction. */
+/**
+ * What a dialect hands the base to run an outermost transaction: one attempt
+ * at a time, and which of the errors that end one it retries of its own
+ * accord.
+ */
+export interface TransactionAttempts<T> {
+  /**
+   * Runs attempt `attempt`: takes a connection, runs the transaction on it
+   * (`runOutermost`, handed `openedAt`), and gives the connection back
+   * before settling, so what was held runs where it holds none.
+   */
+  run(attempt: number, openedAt: string | undefined): Promise<Settled<T>>;
+  /** Whether the dialect retries `error` itself: a serialization failure or a deadlock. */
+  retryable(error: unknown): boolean;
+  /** How a retry's log line names `error`, and what it records of it. */
+  describe(error: unknown): { label: string; detail: Record<string, unknown> };
+  /** The adapter's logger, if it was given one. */
+  logger: AdapterLogger | undefined;
+}
+
 /** A frame that calls made inside it can join. */
 export type JoinableFrame = TransactionFrame & { join: JoinSteps };
 

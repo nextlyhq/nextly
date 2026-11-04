@@ -502,7 +502,7 @@ export class SqliteAdapter extends DrizzleAdapter {
    * Note: SQLite uses DEFERRED, IMMEDIATE, or EXCLUSIVE transaction modes
    * rather than isolation levels. This adapter uses IMMEDIATE.
    */
-  async transaction<T>(
+  transaction<T>(
     work: (tx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
@@ -521,54 +521,20 @@ export class SqliteAdapter extends DrizzleAdapter {
     // caller through the inner promise.
     // A call made inside an open transaction's work joins it as a savepoint;
     // see `joinableFrame` for which frame it joins.
-    const frame = this.beginTransactionCall();
-    if (frame) {
-      // Nested calls of one frame are serialized among themselves too
-      // (`runJoined`): two interleaved savepoints would release or roll back
-      // each other.
-      try {
-        return await this.runJoined(
-          frame,
-          depth => frame.join.adapter(depth),
-          work,
-          options
-        );
-      } catch (error) {
-        if (isApplicationError(error)) throw error;
-        throw this.classifyError(error);
-      }
-    }
-    // SQLite raises no serialization failure: an attempt is tried again only
-    // when `retryWhen` accepts the error that ended it.
-    const maxAttempts = (options?.retryCount ?? 0) + 1;
-    const retryDelayMs = options?.retryDelayMs ?? 100;
-    for (let attempt = 1; ; attempt++) {
-      const settled = await this.takeTurn(() =>
-        this.runTransaction(work, options)
-      );
-      // After the queue has moved on rather than inside it: an effect that
-      // opens a transaction of its own would otherwise wait behind the one
-      // running it.
-      if (settled.committed) {
-        await this.runHeldEffects(settled.effects);
-        return settled.result;
-      }
-      const { error } = settled;
-      if (attempt < maxAttempts && options?.retryWhen?.(error) === true) {
-        // This attempt's rollback effects go with it: it is not the last.
-        await delay(retryDelayMs * attempt);
-        continue;
-      }
-      await this.runHeldEffects(settled.effects);
-      // Work inside a transaction may throw to roll the write back — a
-      // refused value, a denied permission — and that is the application's
-      // verdict, not the driver's failure. Classifying it would replace its
-      // code and payload with a generic database error, so a caller that
-      // asked for a refusal is handed an unexplained failure and the
-      // per-field detail never arrives.
-      if (isApplicationError(error)) throw error;
-      throw this.classifyError(error);
-    }
+    // Nested calls of one frame are serialized among themselves too
+    // (`runJoined`): two interleaved savepoints would release or roll back
+    // each other.
+    return this.openOrJoin(work, options, {
+      // After the queue has moved on rather than inside it, the base runs
+      // what the transaction held: an effect that opens a transaction of its
+      // own would otherwise wait behind the one running it.
+      run: () => this.takeTurn(() => this.runTransaction(work, options)),
+      // SQLite raises no serialization failure: an attempt is tried again
+      // only when `retryWhen` accepts the error that ended it.
+      retryable: () => false,
+      describe: () => ({ label: "a retryable error", detail: {} }),
+      logger: this.config.logger,
+    });
   }
 
   /**
@@ -655,12 +621,11 @@ export class SqliteAdapter extends DrizzleAdapter {
     options: TransactionOptions | undefined
   ) {
     const db = this.ensureDb();
-    const startTime = Date.now();
 
     try {
       // Since better-sqlite3's db.transaction() doesn't support async functions,
       // we manually manage the transaction with BEGIN/COMMIT/ROLLBACK
-      const settled = await this.runOutermost(
+      return await this.runOutermost(
         {
           context: this.createTransactionContext(db),
           // A call made inside the transaction joins it as a savepoint.
@@ -679,16 +644,6 @@ export class SqliteAdapter extends DrizzleAdapter {
         work,
         options
       );
-
-      // Log success
-      if (settled.committed && this.config.logger?.debug) {
-        const durationMs = Date.now() - startTime;
-        this.config.logger.debug("Transaction committed", {
-          durationMs,
-        });
-      }
-
-      return settled;
     } catch (error) {
       // Building the transaction's context failed before it began: as
       // `transaction()` reports an attempt's failure.
@@ -1197,11 +1152,6 @@ export function createSqliteAdapter(
  */
 export function isSqliteAdapter(value: unknown): value is SqliteAdapter {
   return value instanceof SqliteAdapter;
-}
-
-/** Waits `ms` before a transaction's next attempt. */
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**

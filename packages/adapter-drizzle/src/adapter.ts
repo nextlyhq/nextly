@@ -47,6 +47,7 @@ import {
   type JoinSteps,
   type OutermostSteps,
   type Settled,
+  type TransactionAttempts,
   type TransactionFrame,
   type TransactionSteps,
 } from "./transaction-frame";
@@ -80,6 +81,7 @@ import type {
 } from "./types";
 import {
   createDatabaseError,
+  isApplicationError,
   isDatabaseError,
   tableNotRegisteredError,
 } from "./types";
@@ -160,6 +162,11 @@ function transactionAround(
     at = transaction.enclosing;
   }
   return undefined;
+}
+
+/** Waits `ms` before a transaction's next attempt. */
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -801,6 +808,140 @@ export abstract class DrizzleAdapter {
         throw error;
       }
     });
+  }
+
+  /**
+   * A dialect's `transaction()`: join the transaction the calling flow is
+   * inside, or run an outermost one, attempt by attempt.
+   *
+   * A joined call runs as a part of the open transaction, through the steps
+   * its frame offers ({@link runJoined}). An outermost one runs
+   * `attempts.run` until an attempt commits, or until one fails that is not
+   * tried again. An attempt is tried again, within `retryCount`, when
+   * `retryWhen` accepts its error, which is asked first and of every error,
+   * application ones included; otherwise when the dialect retries it of its
+   * own accord, which it never does for an application error. A committed
+   * attempt's effects run once its connection is back; a failed attempt that
+   * is retried drops its rollback effects, and the last one runs them.
+   *
+   * Whatever ends the transaction reaches the caller as it was thrown when it
+   * carries the application brand: the application refusing the write, whose
+   * code and payload must arrive intact. Every other error is classified.
+   *
+   * @param work - The transaction's work
+   * @param options - The options it was opened with
+   * @param attempts - How the dialect runs one attempt, and what it retries
+   * @returns What `work` resolves to, once it has committed
+   */
+  protected async openOrJoin<T>(
+    work: (tx: TransactionContext) => Promise<T>,
+    options: TransactionOptions | undefined,
+    attempts: TransactionAttempts<T>
+  ): Promise<T> {
+    const frame = this.beginTransactionCall();
+    if (frame) {
+      try {
+        return await this.runJoined(
+          frame,
+          depth => frame.join.adapter(depth),
+          work,
+          options
+        );
+      } catch (error) {
+        throw this.transactionError(error);
+      }
+    }
+    // Before anything is awaited, so the stack still reaches the caller.
+    const openedAt = this.captureOpeningStack();
+    const maxAttempts = (options?.retryCount ?? 0) + 1;
+    const retryDelayMs = options?.retryDelayMs ?? 100;
+    for (let attempt = 1; ; attempt++) {
+      const startTime = Date.now();
+      const settled = await attempts.run(attempt, openedAt);
+      if (settled.committed) {
+        attempts.logger?.debug?.("Transaction committed", {
+          attempt,
+          durationMs: Date.now() - startTime,
+        });
+        await this.runHeldEffects(settled.effects);
+        return settled.result;
+      }
+      const { error } = settled;
+      const retried =
+        options?.retryWhen?.(error) === true ||
+        (!isApplicationError(error) && attempts.retryable(error));
+      if (attempt < maxAttempts && retried) {
+        const { label, detail } = attempts.describe(error);
+        attempts.logger?.warn?.(
+          `Transaction failed with ${label}, retrying (${attempt}/${maxAttempts})`,
+          { ...detail, attempt }
+        );
+        // This attempt's rollback effects go with it: it is not the last.
+        await wait(retryDelayMs * attempt); // Exponential backoff
+        continue;
+      }
+      await this.runHeldEffects(settled.effects);
+      throw this.transactionError(error);
+    }
+  }
+
+  /**
+   * An error a transaction ended with, as its caller receives it: one that
+   * carries the application brand as it was thrown, any other classified.
+   */
+  private transactionError(error: unknown): unknown {
+    return isApplicationError(error) ? error : this.classifyError(error);
+  }
+
+  /**
+   * How calls made inside a transaction join it, built by a dialect over the
+   * transaction's own connection: a part each, its steps from `part`, handed
+   * a transaction context (`context`) or a Drizzle handle on the same
+   * connection (`drizzleOn`, with the calling handle's relations, memoized
+   * per transaction as a transaction context's handles are).
+   *
+   * @param context - A transaction context on the connection
+   * @param drizzleOn - A Drizzle handle on the connection, with `relations`
+   * @param part - The steps of a part joined `depth` deep, handed `context`
+   * @returns The join steps, for `OutermostSteps.join`
+   */
+  protected joinStepsOn<B extends DrizzleTransactor>(
+    context: () => TransactionContext,
+    drizzleOn: (relations?: AnyRelations) => B,
+    part: <C>(context: C, depth: number) => TransactionSteps<C>
+  ): JoinSteps {
+    const handles = this.transactionDrizzleHandles(drizzleOn);
+    return {
+      adapter: depth => part(context(), depth),
+      drizzle: (depth, relations) =>
+        part<DrizzleTransactor>(
+          relations ? handles.withRelations<B>(relations) : handles.bare(),
+          depth
+        ),
+    };
+  }
+
+  /**
+   * A pool-bound Drizzle handle whose transactions are this adapter's: each
+   * outermost one on a connection `checkout` hands it
+   * ({@link pinDrizzleTransactions}), each one made inside an open
+   * transaction joining it ({@link trackFlowTransactions}).
+   *
+   * @param db - A Drizzle handle on this adapter's pool
+   * @param checkout - Checks out a connection for one transaction, with how
+   *   calls made inside it join it
+   * @param relations - The relations the handle was built with, if any
+   * @returns The same handle, its `transaction` replaced
+   */
+  protected joiningHandle<D extends DrizzleTransactor>(
+    db: D,
+    checkout: () => Promise<PinnedConnection & { join: JoinSteps }>,
+    relations?: AnyRelations
+  ): D {
+    return this.trackFlowTransactions(
+      this.pinDrizzleTransactions(db, checkout, relations),
+      relations
+    );
   }
 
   /**
