@@ -56,6 +56,7 @@ import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentProps,
   type JSX,
@@ -68,6 +69,10 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
+import {
+  pageAddressPath,
+  type PageAddressResponse,
+} from "../../pages-search-contract";
 import type { PublishReadinessResponse } from "../../publish-readiness-contract";
 import {
   askReadiness,
@@ -77,6 +82,7 @@ import {
   type PublishChoice,
 } from "../publish-offer";
 
+import type { SettingsAddress } from "./settings-address";
 import type { SharePreview } from "./share-preview";
 
 /** What the shell hands the dialog. */
@@ -104,6 +110,11 @@ export interface SettingsDialogProps extends DialogState {
    * and a line says the SEO plugin adds them.
    */
   seoFields: boolean;
+  /**
+   * The page whose address to show, or null for a page never saved, which
+   * has no address to read yet.
+   */
+  address?: SettingsAddress | null;
   /** The site's breakpoints: what is saved, how to save, whether it is read. */
   breakpoints: Pick<
     ComponentProps<typeof BreakpointManager>,
@@ -131,6 +142,7 @@ export function SettingsDialog({
   pageLayout = null,
   share,
   seoFields,
+  address = null,
   breakpoints,
 }: SettingsDialogProps): JSX.Element {
   const site = usePluginRoute<SiteSettingsRead>({
@@ -192,6 +204,11 @@ export function SettingsDialog({
                 pageLayout={pageLayout}
                 share={share}
                 seoFields={seoFields}
+                address={
+                  address === null ? null : (
+                    <AddressLine address={address} open={open} />
+                  )
+                }
               />
             </TabsContent>
             {siteTab ? (
@@ -355,21 +372,98 @@ function SiteTab({
 }
 
 /**
- * The page's own fields, the Layout it is drawn inside, then how a shared link
- * to it would look.
+ * Where the page is served, as it is saved: read from the server, which
+ * resolves it as the pages search does, never built here from the slug, so
+ * it names the address visitors reach rather than a guess at it.
+ *
+ * A slug changed since the last save does not move it: the line says this is
+ * the saved address and that it changes when the page is saved. Nothing shows
+ * while it is read, or where the page has no address (another collection, a
+ * site that states none, a page whose fields cannot fill it yet).
+ */
+function AddressLine({
+  address,
+  open,
+}: {
+  address: SettingsAddress;
+  open: boolean;
+}): JSX.Element | null {
+  const read = usePluginRoute<PageAddressResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: pageAddressPath(address.page, address.locale),
+    staleTime: 0,
+    enabled: open,
+  });
+  // Read again after each save, whichever field it changed: the host's path
+  // can name more than the slug, and the query's own key would not move.
+  const { refetch } = read;
+  const revisionSeen = useRef(address.savedRevision);
+  useEffect(() => {
+    if (revisionSeen.current === address.savedRevision) return;
+    revisionSeen.current = address.savedRevision;
+    void refetch();
+  }, [address.savedRevision, refetch]);
+  if (read.data === undefined) {
+    return read.error === null ? null : (
+      <p className="text-xs text-muted-foreground">
+        {"This page's address could not be read."}
+      </p>
+    );
+  }
+  const path = read.data.path;
+  if (path === null) return null;
+  return (
+    // Drawn as the Address field's own line, right under it, rather than as
+    // a section of its own: it is the same address, written out in full.
+    <section
+      aria-label="Address on your site"
+      className="space-y-1 text-xs text-muted-foreground"
+    >
+      <p>
+        On your site:{" "}
+        <span
+          className="break-all font-mono text-sm text-foreground"
+          data-page-address=""
+        >
+          {path}
+        </span>
+      </p>
+      {address.slugChanged ? (
+        <p role="status">
+          This is the saved address. It changes when you save the page.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The page's own fields, its address, the Layout it is drawn inside, then how
+ * a shared link to it would look.
  */
 function ThisPage({
   pageFields,
   pageLayout,
   share,
   seoFields,
+  address,
 }: Pick<
   SettingsDialogProps,
   "pageFields" | "pageLayout" | "share" | "seoFields"
->): JSX.Element {
+> & {
+  /** The page's address line, or null where it has none to show. */
+  address: ReactNode | null;
+}): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
-      {pageFields === null ? null : <section>{pageFields}</section>}
+      {/* The address line sits with the page's own fields, under the
+          Address field it writes out. */}
+      {pageFields === null && address === null ? null : (
+        <section className="space-y-2">
+          {pageFields}
+          {address}
+        </section>
+      )}
       {pageLayout ?? null}
       <section aria-labelledby="settings-share-title" className="space-y-2">
         <h3 id="settings-share-title" className="text-sm font-semibold">
