@@ -7658,6 +7658,23 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * A switch in the inspector is a 24px target on its own. The shared switch is
+ * 18px tall, which passes only while no other target sits within 12px of its
+ * centre, and an on/off row ends directly above "Visible on". The thumb grows
+ * with the track, so the 18px its checked travel covers still ends one pixel
+ * inside the far edge.
+ */
+:is(.nx-inspector, .nx-style-inspector) [data-slot="switch"] {
+  block-size: 1.5rem;
+  inline-size: 2.5rem;
+}
+
+:is(.nx-inspector, .nx-style-inspector) [data-slot="switch-thumb"] {
+  block-size: 1.25rem;
+  inline-size: 1.25rem;
+}
+
+/*
  * A placement whose variant was deleted: said with an icon and words, in the
  * warning tone, with the way to let it go beside it.
  */
