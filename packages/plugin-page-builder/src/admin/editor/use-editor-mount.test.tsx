@@ -17,9 +17,9 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { CanvasFrameProvider } from "@nextlyhq/builder/shell";
 import { act, renderHook } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { useSavePatternVerb } from "./use-editor-mount";
+import { partOfToastOptions, useSavePatternVerb } from "./use-editor-mount";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -93,5 +93,21 @@ describe("where focus goes when the opener has gone", () => {
     opener.remove();
 
     expect(result.current.returnFocusTo() === frame).toBe(true);
+  });
+});
+
+describe("the toast after a double-click on a placement's own content", () => {
+  const inspection = { componentId: "card", nodeId: "p1" };
+
+  it("offers Edit component, opening that component from this placement", () => {
+    const open = vi.fn();
+    const options = partOfToastOptions(inspection, open);
+    expect(options.action?.label).toBe("Edit component");
+    options.action?.onClick();
+    expect(open).toHaveBeenCalledWith("card", "p1");
+  });
+
+  it("offers nothing to an author who may not edit components", () => {
+    expect(partOfToastOptions(inspection, undefined).action).toBeUndefined();
   });
 });

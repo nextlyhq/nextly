@@ -34,8 +34,10 @@ import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 import {
   parseCatalogue,
+  parseCatalogueStats,
   parseFontMetadata,
   parseVariableVersion,
+  withPopularity,
 } from "./catalogue";
 import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
@@ -106,6 +108,9 @@ const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** The most bytes the catalogue's list may have; it is about half a megabyte. */
 const CATALOGUE_MAX_BYTES = 2 * 1024 * 1024;
+
+/** The most bytes the catalogue's stats may have; they are about 600 KB. */
+const STATS_MAX_BYTES = 2 * 1024 * 1024;
 
 /** The most bytes one family's metadata may have. */
 const METADATA_MAX_BYTES = 512 * 1024;
@@ -190,6 +195,9 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
       return cached.read;
     }
     try {
+      // The stats are asked for beside the list rather than after it, so a
+      // read waits for the slower of the two, not both in turn.
+      const popularity = readPopularity(ctx);
       const bytes = await fetchFromCatalogue(
         fetchOf(ctx),
         new URL("/v1/fonts?type=google", fonts.api).href,
@@ -209,7 +217,7 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
         });
       }
       const read: FontCatalogueRead = {
-        families: parsed.families,
+        families: withPopularity(parsed.families, await popularity),
         previewBase: fonts.files.origin,
         fetchedAt: new Date(now()).toISOString(),
       };
@@ -224,6 +232,33 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
         publicMessage: READ_MESSAGES.refused,
         logContext: { reason: "catalogue-not-json", host: fonts.api.host },
       });
+    }
+  };
+
+  /**
+   * How popular each family is, or nothing when the stats cannot be had.
+   *
+   * Never a refusal: the order is a convenience, and the list is the answer
+   * an author is waiting for, so a stats answer that fails, is late or is not
+   * stats leaves the list unranked rather than failing it. Read only with the
+   * list, so it is kept for the list's day and never read per editor open.
+   */
+  const readPopularity = async (
+    ctx: SiteFontsRouteContext
+  ): Promise<ReadonlyMap<string, number> | undefined> => {
+    try {
+      const bytes = await fetchFromCatalogue(
+        fetchOf(ctx),
+        new URL("/v1/stats", fonts.api).href,
+        rules({
+          expect: "json",
+          maxBytes: STATS_MAX_BYTES,
+          messages: READ_MESSAGES,
+        })
+      );
+      return parseCatalogueStats(JSON.parse(new TextDecoder().decode(bytes)));
+    } catch {
+      return undefined;
     }
   };
 

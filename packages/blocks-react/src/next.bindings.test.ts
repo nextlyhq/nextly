@@ -89,6 +89,24 @@ vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
 
 import { nextlySingleTags, nextlySiteSettingsTags } from "nextly/runtime";
 
+// The real reader, told the faked instance's declarations: no Nextly services
+// are registered in this process, so the reader cannot read a schema and would
+// refuse every read. The fake declares no hidden field, which is what its rows
+// hold; the reader's own stripping and refusals still run.
+vi.mock("nextly/runtime", async importOriginal => {
+  const actual = await importOriginal<typeof import("nextly/runtime")>();
+  return {
+    ...actual,
+    createPublicReader: (
+      ...[source, binding]: Parameters<typeof actual.createPublicReader>
+    ) =>
+      actual.createPublicReader(source, {
+        ...binding,
+        declarations: { hiddenFields: () => [] },
+      }),
+  };
+});
+
 import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
 import type {

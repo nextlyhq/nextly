@@ -181,8 +181,8 @@ export function ComponentsPanel({
     onInsert,
   });
   const unplaceable = React.useMemo(
-    () => unplaceableComponentEntries(components, componentDefinitions),
-    [components, componentDefinitions]
+    () => unplaceableComponentEntries(components, catalog),
+    [components, catalog]
   );
   const listed = componentRows(components, catalog, unplaceable, "");
   const entries = componentRows(components, catalog, unplaceable, query);
@@ -487,8 +487,9 @@ function EmptyComponents({
       </p>
       {mayCreate ? (
         <p>
-          To make one, select blocks on the page and choose Save as component in
-          the block’s menu.
+          {/* The menu item's own name, so the author can find it. */}
+          To make one, select blocks on the page and choose Turn into component
+          in the block’s menu.
         </p>
       ) : null}
     </div>

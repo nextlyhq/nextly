@@ -1924,6 +1924,164 @@ describe("a step recorded from outside the document", () => {
     expect(undone).toBe(false);
   });
 
+  it("gives back the redo branch it ended when withdrawn before anything follows it", async () => {
+    // A held style change that came back to where it started changed
+    // nothing, so the redo it cut off is the author's again.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    expect(result.current.canRedo).toBe(true);
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "back to start"));
+    });
+    expect(result.current.canRedo).toBe(false);
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+    expect(calls).toEqual([]);
+  });
+
+  it("gives back the redo branch when a step undone before its change answered is withdrawn", async () => {
+    // An earlier edit undone, a held style change recorded, and that change
+    // undone before its save answers. The save is then refused, so the
+    // change never took effect: the earlier Redo is still the author's.
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    let answer: (took: boolean) => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep({
+        undo: () =>
+          new Promise<boolean>(resolve => {
+            answer = resolve;
+          }),
+        redo: () => Promise.resolve(true),
+      });
+    });
+    let undoing: Promise<boolean> | boolean = false;
+    act(() => {
+      undoing = result.current.undo();
+    });
+    act(() => withdraw());
+    await act(async () => {
+      answer(false);
+      await undoing;
+    });
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("ends the redo branch for good once undoing the step took effect", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("gives back the redo branch once every one of several unanswered steps is withdrawn", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let first: () => void = () => {};
+    let second: () => void = () => {};
+    act(() => {
+      first = result.current.recordStep(step(calls, "first"));
+      second = result.current.recordStep(step(calls, "second"));
+    });
+    act(() => first());
+    // One of them may still have taken effect: no redo yet.
+    expect(result.current.canRedo).toBe(false);
+    act(() => second());
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("keeps the redo branch ended when one of several unanswered steps stays", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let second: () => void = () => {};
+    act(() => {
+      result.current.recordStep(step(calls, "first"));
+      second = result.current.recordStep(step(calls, "second"));
+    });
+    act(() => second());
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("keeps the redo branch ended once another edit has followed it", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+      result.current.apply(insert("c", 1));
+    });
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(false);
+  });
+
   it("is withdrawn wherever it sits, even after it was undone", async () => {
     // Undone while its save is still pending, then refused: no Redo may be
     // left for a change that was never stored.

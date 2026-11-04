@@ -12,6 +12,7 @@
  *
  * @module components-panel.test
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -201,7 +202,7 @@ describe("the Components panel's list", () => {
     });
 
     expect(screen.getByText("This site has no components yet.")).toBeTruthy();
-    expect(screen.getByText(/choose Save as component/)).toBeTruthy();
+    expect(screen.getByText(/choose Turn into component/)).toBeTruthy();
     expect(rowNames()).toEqual([]);
   });
 
@@ -214,7 +215,7 @@ describe("the Components panel's list", () => {
     });
 
     expect(screen.getByText("This site has no components yet.")).toBeTruthy();
-    expect(screen.queryByText(/Save as component/)).toBeNull();
+    expect(screen.queryByText(/Turn into component/)).toBeNull();
   });
 
   it("says none can go inside the component being edited, not that the site has none", () => {
@@ -513,14 +514,18 @@ describe("Edit, on each row", () => {
 
 describe("the rail's Components item", () => {
   function railWith(available: readonly LeftPanel[]): void {
+    // Inside the shortcut owner, as the shell draws the rail: its items
+    // register their panels' keys.
     render(
-      <EditorRail
-        openPanel={null}
-        isAvailable={panel => available.includes(panel)}
-        onSelect={() => {}}
-        onHelp={() => {}}
-        railRef={() => {}}
-      />
+      <ShortcutProvider>
+        <EditorRail
+          openPanel={null}
+          isAvailable={panel => available.includes(panel)}
+          onSelect={() => {}}
+          onHelp={() => {}}
+          railRef={() => {}}
+        />
+      </ShortcutProvider>
     );
   }
 

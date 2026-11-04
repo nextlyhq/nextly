@@ -28,6 +28,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import type { SavedComponent } from "./inserter";
+import type { ContentServices, MediaPickerProps } from "./content-controls";
 import { InspectorPanel } from "./inspector-panel";
 
 afterEach(cleanup);
@@ -155,6 +156,32 @@ function mount(
   return editor;
 }
 
+/** The panel with the host's content services, the media library among them. */
+function mountWithServices(node: BlockNode, services: ContentServices) {
+  const lookup: ComponentLookup = new Map([["header", header()]]);
+  const editor = editorFor(pageOf(node));
+  render(
+    <InspectorPanel
+      editor={editor}
+      componentLibrary={{ definitions: lookup, components: LIBRARY }}
+      contentServices={services}
+    />
+  );
+  return editor;
+}
+
+/** A media library that returns one file when its button is pressed. */
+function OnePick({ onSelect }: MediaPickerProps): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect([{ id: "m2", filename: "new.png" }])}
+    >
+      Pick new.png
+    </button>
+  );
+}
+
 /** The props the one applied op carries, read off the spy. */
 function appliedProps(editor: { apply: ReturnType<typeof vi.fn> }): unknown {
   expect(editor.apply).toHaveBeenCalledTimes(1);
@@ -214,10 +241,33 @@ describe("what a selected instance is shown as", () => {
   it("says when the component exposes nothing, rather than showing an empty list", () => {
     mount(instance(), header({ exposed: [] }));
 
+    // With no Edit component on offer, the sentence points at nothing.
     expect(
-      screen.getByText(/exposes nothing to edit here/).textContent
-    ).toContain("Components screen");
+      screen.getByText(/has no fields to change on this page/).textContent
+    ).not.toContain("Edit component");
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("points at Edit component only where it is offered", () => {
+    const definition = header({ exposed: [] });
+    render(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance()))}
+        componentLibrary={{
+          definitions: new Map([["header", definition]]),
+          components: LIBRARY,
+        }}
+        verbs={{
+          actions: [
+            { id: "edit-component", label: "Edit component", enabled: true },
+          ],
+          run: vi.fn(),
+        }}
+      />
+    );
+    expect(
+      screen.getByText(/has no fields to change on this page/).textContent
+    ).toContain("Use Edit component");
   });
 });
 
@@ -319,7 +369,7 @@ describe("where a value came from, and the way back", () => {
   it("badges an inherited row as inherited and offers it no reset", () => {
     mount(instance());
 
-    expect(screen.getAllByText("Inherited").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("From the component").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /^Reset/ })).toBeNull();
   });
 
@@ -328,10 +378,10 @@ describe("where a value came from, and the way back", () => {
     // menu is the one whose users had to ask where it was.
     const editor = mount(instance({ overrides: { title: "Acme" } }));
 
-    expect(screen.getByText("Overridden")).toBeDefined();
+    expect(screen.getByText("Set on this page")).toBeDefined();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Title to inherited value",
+        name: "Reset Title",
       })
     );
 
@@ -342,13 +392,13 @@ describe("where a value came from, and the way back", () => {
   it("badges a cleared row as cleared, shows it empty, and still offers the reset", () => {
     mount(instance({ overrides: { title: { $unset: true } } }));
 
-    expect(screen.getByText("Cleared")).toBeDefined();
+    expect(screen.getByText("Cleared on this page")).toBeDefined();
     expect(
       (screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value
     ).toBe("");
     expect(
       screen.getByRole("button", {
-        name: "Reset Title to inherited value",
+        name: "Reset Title",
       })
     ).toBeDefined();
   });
@@ -488,12 +538,36 @@ describe("a link and a visibility exposure", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("keeps a visibility row's source under its name, the switch in the control cell", () => {
+    // One row like every other placement field: the note under the name, not
+    // under the control, which made each field two rows.
+    mount(instance(), linked());
+    const toggle = screen.getByRole("switch", { name: "Newsletter form" });
+    const row = toggle.closest(".nx-inspector__field--exposed");
+    expect(toggle.closest(".nx-inspector__exposed")).not.toBeNull();
+    const name = row?.querySelector(".nx-inspector__exposed-name");
+    expect(name?.querySelector(".nx-inspector__source")).not.toBeNull();
+    expect(
+      row?.querySelector(".nx-inspector__exposed .nx-inspector__source")
+    ).toBeNull();
+  });
+
+  it("is a switch named by its row, with no words beside it", () => {
+    // A checkbox beside "Shown on this page" wrapped onto two lines; the
+    // switch's state says it, and the row's label names it.
+    mount(instance(), linked());
+    expect(
+      screen.getByRole("switch", { name: "Newsletter form" })
+    ).toBeDefined();
+    expect(screen.queryByText("Shown on this page")).toBeNull();
+  });
+
   it("shows an inherited visibility row as shown, and hides it by writing false", () => {
     // Inherited is the component's own rule, which is shown unless the
     // definition gates the node itself; the resolver reads `false` as hidden
     // and `true` as shown, and nothing else.
     const editor = mount(instance(), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
 
     expect(box.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(box);
@@ -539,7 +613,7 @@ describe("a link and a visibility exposure", () => {
         ],
       });
     const editor = mount(instance(), gated());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
 
     expect(box.getAttribute("aria-checked")).toBe("false");
     // And not as the author's own doing: there is nothing of theirs to reset.
@@ -555,7 +629,7 @@ describe("a link and a visibility exposure", () => {
 
   it("shows a hidden row unchecked — cleared included, which the page reads as hidden — and shows it again by writing true", () => {
     const hidden = mount(instance({ overrides: { shown: false } }), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
     expect(box.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(box);
     expect(appliedProps(hidden)).toEqual({
@@ -567,10 +641,10 @@ describe("a link and a visibility exposure", () => {
     mount(instance({ overrides: { shown: { $unset: true } } }), linked());
     expect(
       screen
-        .getByRole("checkbox", { name: "Newsletter form" })
+        .getByRole("switch", { name: "Newsletter form" })
         .getAttribute("aria-checked")
     ).toBe("false");
-    expect(screen.getByText("Cleared")).toBeDefined();
+    expect(screen.getByText("Cleared on this page")).toBeDefined();
   });
 
   it("offers the reset on a visibility override, which returns it to the component's rule", () => {
@@ -578,7 +652,7 @@ describe("a link and a visibility exposure", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Newsletter form to inherited value",
+        name: "Reset Newsletter form",
       })
     );
 
@@ -649,13 +723,141 @@ describe("two options the control once spelled alike", () => {
   });
 });
 
-describe("rows with no control", () => {
-  it("lists a type it cannot edit yet, with its value, rather than hiding it", () => {
+describe("a placement's row", () => {
+  it("is one row, its source a note under its label and Reset in its own slot", () => {
+    // Label, field, then "Set on this page" stacked made each row about 68px
+    // beside the 28px Style rows.
+    mount(instance({ overrides: { title: "Hello" } }));
+    const note = screen.getByText("Set on this page");
+    const name = note.closest(".nx-inspector__exposed-name");
+    expect(name?.querySelector("label")?.textContent).toBe("Title");
+    const reset = screen.getByRole("button", { name: "Reset Title" });
+    const slot = reset.parentElement;
+    expect(slot?.className).toBe("nx-inspector__exposed-reset-slot");
+    expect(slot?.parentElement?.className).toContain(
+      "nx-inspector__field--exposed"
+    );
+  });
+
+  it("keeps the reset slot when there is nothing to reset", () => {
+    // So every control ends at one edge, set or not.
     mount(instance());
+    expect(
+      document.querySelectorAll(
+        ".nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot"
+      ).length
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("the panel's words", () => {
+  it("gives the card's name, cut short on screen, whole in its tooltip", () => {
+    mount({
+      ...instance(),
+      name: "A placement named at some considerable length",
+    });
+    const title = screen.getByRole("heading", { level: 2 });
+    expect(title.getAttribute("title")).toBe(
+      "A placement named at some considerable length · Header"
+    );
+  });
+
+  it("calls the rows Fields, where it said Exposed properties", () => {
+    mount(instance());
+    expect(screen.getByRole("heading", { name: "Fields" })).toBeDefined();
+    expect(screen.queryByText(/Exposed properties/i)).toBeNull();
+  });
+
+  it("resets with an icon named for its row, not a word button", () => {
+    mount(instance({ overrides: { title: "Hello" } }));
+    const reset = screen.getByRole("button", { name: "Reset Title" });
+    expect(reset.textContent).toBe("");
+    expect(reset.getAttribute("title")).toBe("Undo this page's change");
+  });
+});
+
+describe("an exposed image", () => {
+  it("shows the placement's file by its thumbnail, name and alt text", async () => {
+    // Every placement read "An image from the media library.", so six
+    // placements of one card looked the same.
+    mountWithServices(instance({ overrides: { picture: "m2" } }), {
+      MediaPicker: OnePick,
+      readMedia: async id =>
+        id === "m2"
+          ? { name: "team.jpg", thumbnail: "/t/m2.jpg", alt: "The team" }
+          : null,
+    });
+    expect(await screen.findByText("team.jpg")).toBeDefined();
+    expect(screen.getByText("Library alt text: The team")).toBeDefined();
+    expect(
+      document.querySelector(".nx-inspector__media-thumb")?.getAttribute("src")
+    ).toBe("/t/m2.jpg");
+  });
+
+  it("is chosen from the media library, as the Content tab's image is", () => {
+    // "Not editable here yet (image)" left a placement's picture fixed to
+    // the component's.
+    const editor = mountWithServices(instance(), { MediaPicker: OnePick });
+    expect(screen.queryByText(/Not editable here yet \(image\)/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Choose Picture" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pick new.png" }));
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { picture: "m2" },
+    });
+  });
+
+  it("removes the placement's image, leaving it cleared rather than inherited", () => {
+    const editor = mountWithServices(
+      instance({ overrides: { picture: "m2" } }),
+      { MediaPicker: OnePick }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove Picture" }));
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { picture: { $unset: true } },
+    });
+  });
+
+  it("names the picker by its row's label, which points at it", () => {
+    mountWithServices(instance(), { MediaPicker: OnePick });
+    // The label targets the Choose button, a labelable control, so pressing
+    // the label reaches the picker as it reaches every other row's control.
+    const label = screen.getByText("Picture", { selector: "label" });
+    const target = document.getElementById(label.getAttribute("for") ?? "");
+    expect(target?.tagName).toBe("BUTTON");
+    expect(target?.getAttribute("aria-label")).toBe("Choose Picture");
+  });
+
+  it("keeps a malformed image value visible and out of the picker's reach", () => {
+    // A number is not an image id; offered to the picker it read as "Nothing
+    // chosen" and could be replaced unseen.
+    mountWithServices(instance({ overrides: { picture: 42 } }), {
+      MediaPicker: OnePick,
+    });
+    expect(
+      screen.getByText(/Not editable here yet \(image\)/).textContent
+    ).toContain("42");
+    expect(screen.queryByRole("button", { name: "Choose Picture" })).toBeNull();
+  });
+
+  it("says the library is not available where the host offers none", () => {
+    mountWithServices(instance(), {});
+    expect(
+      screen.getByText("The media library is not available here.")
+    ).toBeDefined();
+  });
+});
+
+describe("rows with no control", () => {
+  it("lists a value its control cannot hold, with the value, rather than hiding it", () => {
+    // An image row chooses a file by id; a host block holding its image as
+    // an object is shown, not offered to a picker that would replace it.
+    mount(instance({ overrides: { picture: { src: "hero.png" } } }));
 
     const note = screen.getByText(/Not editable here yet \(image\)/);
     expect(note.textContent).toContain("hero.png");
-    expect(screen.queryByRole("textbox", { name: "Picture" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose Picture" })).toBeNull();
   });
 
   it("shows a structured value in words — rich text as its text, a list by its count, other data as data — rather than as nothing", () => {
@@ -782,12 +984,12 @@ describe("rows with no control", () => {
 
     expect(
       screen.queryByRole("button", {
-        name: "Reset Title to inherited value",
+        name: "Reset Title",
       })
     ).toBeNull();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Headline to inherited value",
+        name: "Reset Headline",
       })
     );
     expect(appliedProps(editor)).toStrictEqual({ componentId: "header" });
@@ -928,8 +1130,8 @@ describe("telling cleared from inherited, and the way back", () => {
     ];
     const cleared = badges.find(b => b.dataset.source === "cleared");
     const inherited = badges.find(b => b.dataset.source === "definition");
-    expect(cleared?.textContent).toBe("Cleared");
-    expect(inherited?.textContent).toBe("Inherited");
+    expect(cleared?.textContent).toBe("Cleared on this page");
+    expect(inherited?.textContent).toBe("From the component");
     // Shape as well as words: never colour alone.
     const iconOf = (badge: HTMLElement | undefined) =>
       badge?.querySelector("svg")?.getAttribute("class") ?? "";
@@ -940,9 +1142,7 @@ describe("telling cleared from inherited, and the way back", () => {
 
   it("names the reset for the inherited value, which under a variant is the variant's", () => {
     mount(instance({ overrides: { title: "Mine" } }));
-    expect(
-      screen.getByRole("button", { name: "Reset Title to inherited value" })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Reset Title" })).toBeDefined();
   });
 });
 
@@ -954,11 +1154,17 @@ describe("a placement locked in Layers", () => {
     };
     const editor = mount(locked);
 
-    expect(screen.getByText(/This component is locked/)).toBeDefined();
     const field = screen.getByRole("textbox", { name: "Title" });
     expect(field.closest("fieldset")?.disabled).toBe(true);
+    // Said once, by the card's lock line, which the held rows point at; the
+    // panel no longer repeats it in a sentence of its own.
+    const reason = document.getElementById(
+      field.closest("fieldset")?.getAttribute("aria-describedby") ?? ""
+    );
+    expect(reason?.textContent).toMatch(/^Locked: it can.t be moved/);
+    expect(screen.getAllByText(/locked/i)).toHaveLength(1);
     const reset = screen.getByRole("button", {
-      name: "Reset Title to inherited value",
+      name: "Reset Title",
     });
     expect(reset.closest("fieldset")?.disabled).toBe(true);
     // The card's menu, which holds Unlock, stays live.
@@ -1063,7 +1269,10 @@ describe("a row a lock the component sets holds", () => {
     const free = rowOf("Strap");
     const heldRow = rowOf("Title");
     expect(heldRow?.className).toBe(free?.className);
-    expect(heldRow?.firstElementChild?.tagName).toBe("LABEL");
+    // The label leads the row's name cell, which leads the row.
+    expect(heldRow?.firstElementChild?.firstElementChild?.tagName).toBe(
+      "LABEL"
+    );
     // The cell beside it starts with the field, held or free, so the field
     // stays level with its label and the reason follows it.
     const leads = (row: Element | null | undefined, name: string) =>
@@ -1099,7 +1308,7 @@ describe("a row a lock the component sets holds", () => {
         ?.disabled
     ).toBe(true);
     const reset = screen.getByRole("button", {
-      name: "Reset Title to inherited value",
+      name: "Reset Title",
     });
     expect(reset.closest("fieldset[disabled]")).toBeNull();
     expect((reset as HTMLButtonElement).disabled).toBe(false);
@@ -1183,6 +1392,20 @@ describe("a refused link once the value changes underneath it", () => {
 });
 
 describe("the variant a placement uses", () => {
+  it("says a field the variant clears is cleared by the variant, not on this page", () => {
+    // The page holds no value to reset; the variant removed it.
+    const definition = header({
+      variants: {
+        v1: { label: "Dark", overrides: { title: { $unset: true } } },
+      },
+    } as Partial<ComponentDocument>);
+    mount(instance({ variant: "v1" }), definition, [
+      { id: "header", title: "Header", document: definition },
+    ]);
+    expect(screen.getByText("Cleared by variant")).toBeDefined();
+    expect(screen.queryByText("Cleared on this page")).toBeNull();
+  });
+
   it("is named under the title", () => {
     const definition = header({
       variants: { v1: { label: "Dark", overrides: { tone: "dark" } } },

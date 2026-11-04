@@ -181,3 +181,49 @@ export function parseVariableVersion(raw: unknown): string | undefined {
   const parsed = Versions.safeParse(raw);
   return parsed.success ? parsed.data.latestVariable : undefined;
 }
+
+/** One family's figures in the stats answer: only the total month is read. */
+const StatsEntry = z.object({
+  total: z.object({ npmDownloadMonthly: z.number().int().nonnegative() }),
+});
+
+/**
+ * How popular each family is, from the catalogue's stats answer: its total
+ * monthly downloads, by catalogue id.
+ *
+ * An entry whose figure is missing or unreadable counts as 0 rather than
+ * failing the answer, so one odd family cannot cost the rest their order.
+ * Nothing when the answer is not an object of families at all, which the
+ * editor reads as "order by name".
+ */
+export function parseCatalogueStats(
+  raw: unknown
+): ReadonlyMap<string, number> | undefined {
+  const parsed = z.record(z.string(), z.unknown()).safeParse(raw);
+  if (!parsed.success) return undefined;
+  const popularity = new Map<string, number>();
+  for (const [id, entry] of Object.entries(parsed.data)) {
+    const figures = StatsEntry.safeParse(entry);
+    popularity.set(
+      id,
+      figures.success ? figures.data.total.npmDownloadMonthly : 0
+    );
+  }
+  return popularity;
+}
+
+/**
+ * The families with their popularity, 0 for one the stats do not name; the
+ * families as they are when there are no stats, so the field's absence says
+ * that nothing is known rather than that nobody uses them.
+ */
+export function withPopularity(
+  families: readonly CatalogueFamily[],
+  stats: ReadonlyMap<string, number> | undefined
+): CatalogueFamily[] {
+  if (stats === undefined) return [...families];
+  return families.map(family => ({
+    ...family,
+    popularity: stats.get(family.id) ?? 0,
+  }));
+}

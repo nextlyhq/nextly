@@ -51,14 +51,30 @@ test.describe("the editor's rail and Help", () => {
     );
   });
 
-  test("names every item in visible text, and offers nothing that does not work", async ({
+  test("names every item by its accessible name and tooltip, and offers nothing that does not work", async ({
     page,
   }) => {
     await openEditor(page);
     const rail = page.getByRole("navigation", { name: "Editor panels" });
 
-    for (const label of ["Add", "Layers", "Design", "Help"]) {
-      await expect(rail.getByText(label, { exact: true })).toBeVisible();
+    // Icons only: each item's name is its accessible name, and pointing at it
+    // shows the name in a tooltip, with its key where it has one.
+    for (const [label, key] of [
+      ["Add", "A"],
+      ["Layers", "L"],
+      ["Design", "D"],
+      ["Help", undefined],
+    ] as const) {
+      const item = rail.getByRole("button", { name: label, exact: true });
+      await expect(item).toBeVisible();
+      await item.hover();
+      const tip = page.getByRole("tooltip");
+      await expect(tip).toHaveText(
+        key === undefined ? label : `${label}${key}`
+      );
+      // Away across the canvas, as a pointer leaves an item.
+      await page.mouse.move(500, 300, { steps: 5 });
+      await expect(tip).toBeHidden();
     }
     await expect(rail).not.toContainText(/coming soon/i);
   });

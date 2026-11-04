@@ -873,6 +873,7 @@ export function PageRenderer({
     repairedDocument,
     {
       fetchPolicyId,
+      ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
       // The tree the stored artifact describes. This render prunes before it
       // resolves — a gated drop and a drawless drop are both covered by the
       // artifact and licensed to keep it — and both can remove the last node of

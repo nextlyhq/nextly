@@ -8,32 +8,46 @@ describe("validateDefaultValue", () => {
   it("accepts a valid string for text field", () => {
     const result = validateDefaultValue(
       { name: "email", type: "text" },
-      "guest@example.com"
+      "guest@example.com",
+      "postgresql"
     );
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
   });
 
   it("rejects non-string for text field", () => {
-    const result = validateDefaultValue({ name: "email", type: "text" }, 42);
+    const result = validateDefaultValue(
+      { name: "email", type: "text" },
+      42,
+      "postgresql"
+    );
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
   });
 
   it("accepts integer for number field", () => {
-    const result = validateDefaultValue({ name: "age", type: "number" }, 18);
+    const result = validateDefaultValue(
+      { name: "age", type: "number" },
+      18,
+      "postgresql"
+    );
     expect(result.success).toBe(true);
   });
 
   it("rejects non-number for number field", () => {
-    const result = validateDefaultValue({ name: "age", type: "number" }, "abc");
+    const result = validateDefaultValue(
+      { name: "age", type: "number" },
+      "abc",
+      "postgresql"
+    );
     expect(result.success).toBe(false);
   });
 
   it("accepts boolean for checkbox field", () => {
     const result = validateDefaultValue(
       { name: "active", type: "checkbox" },
-      true
+      true,
+      "postgresql"
     );
     expect(result.success).toBe(true);
   });
@@ -41,7 +55,8 @@ describe("validateDefaultValue", () => {
   it("rejects non-boolean for checkbox field", () => {
     const result = validateDefaultValue(
       { name: "active", type: "checkbox" },
-      "yes"
+      "yes",
+      "postgresql"
     );
     expect(result.success).toBe(false);
   });
@@ -49,7 +64,8 @@ describe("validateDefaultValue", () => {
   it("accepts ISO date string for date field", () => {
     const result = validateDefaultValue(
       { name: "published", type: "date" },
-      "2026-04-28T00:00:00Z"
+      "2026-04-28T00:00:00Z",
+      "postgresql"
     );
     expect(result.success).toBe(true);
   });
@@ -57,7 +73,8 @@ describe("validateDefaultValue", () => {
   it("accepts Date object for date field", () => {
     const result = validateDefaultValue(
       { name: "published", type: "date" },
-      new Date()
+      new Date(),
+      "postgresql"
     );
     expect(result.success).toBe(true);
   });
@@ -67,13 +84,18 @@ describe("validateDefaultValue", () => {
     // don't block the apply.
     const result = validateDefaultValue(
       { name: "custom", type: "myCustomType" },
-      { anything: "goes" }
+      { anything: "goes" },
+      "postgresql"
     );
     expect(result.success).toBe(true);
   });
 
   it("accepts empty string for text field (caller decides if that's meaningful)", () => {
-    const result = validateDefaultValue({ name: "email", type: "text" }, "");
+    const result = validateDefaultValue(
+      { name: "email", type: "text" },
+      "",
+      "postgresql"
+    );
     expect(result.success).toBe(true);
   });
 });

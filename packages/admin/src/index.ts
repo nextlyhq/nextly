@@ -105,6 +105,7 @@ export {
 export {
   useMedia,
   useMediaItem,
+  useMediaResolver,
   useUploadMedia,
   useUpdateMedia,
   useDeleteMedia,
@@ -245,6 +246,14 @@ export {
   DocumentSaveIndicator,
   DocumentPrimaryAction,
 } from "./components/features/entries/EntryForm/DocumentSurfaceControls";
+/**
+ * How a document view restores its own field from a recovery point, as an edit
+ * it can undo. Exported for the plugin surface.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
+} from "./components/features/entries/EntryForm/DocumentRestoreContext";
 export {
   pillStateFromForm,
   PILL_LABEL,

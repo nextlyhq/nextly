@@ -100,7 +100,7 @@ export function documentsToFree(source: string, file: string): string[] {
  * Each step is asserted, so a changed lock route fails here rather than
  * leaving the next test to open the document read-only.
  */
-async function freeDocument(api: APIRequestContext, lock: string) {
+export async function freeDocument(api: APIRequestContext, lock: string) {
   const ref = await CLAIMED_DOCUMENTS[lock](api);
   if (ref === null) return;
   const claimed = await api.post("/admin/api/document-lock", {

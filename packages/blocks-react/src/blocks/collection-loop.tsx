@@ -22,12 +22,18 @@
  *
  * @module blocks/library/collection-loop
  */
-import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
+import {
+  type BlockDefinition,
+  blockTypeClassName,
+  CHILD_GAP_CLASS,
+  defineBlock,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
+import { CONTAINER_CHILD_GAP } from "./container";
 
 export interface CollectionLoopProps {
   /** The collection queried. */
@@ -97,6 +103,26 @@ function sortWasRefused(error: unknown): boolean {
   );
 }
 
+/**
+ * This block's registered name, used for the definition and for the class each
+ * entry's wrapper wears.
+ */
+const COLLECTION_LOOP_BLOCK = "core/collection-loop";
+
+/**
+ * The classes an entry's wrapper wears: the block-type class and the gap
+ * marker, and only those.
+ *
+ * The loop spaces its children by its `childGap`, written as a rule on the
+ * block-type class and the gap marker together. On the loop itself that
+ * separates one entry from the next; worn by each entry's wrapper, the same
+ * rule spaces the blocks inside an entry exactly as it spaces the template
+ * when no collection is configured. The node class stays on the loop alone,
+ * so an author's styling of the loop (a flex row of entries, say) applies to
+ * the loop and not to every entry.
+ */
+const ENTRY_CLASS = `${blockTypeClassName(COLLECTION_LOOP_BLOCK)} ${CHILD_GAP_CLASS}`;
+
 export async function renderCollectionLoop({
   props,
   renderSlot,
@@ -164,7 +190,7 @@ export async function renderCollectionLoop({
   return (
     <div className={className}>
       {items.map((item, index) => (
-        <div key={keyFor(item, index)}>
+        <div key={keyFor(item, index)} className={ENTRY_CLASS}>
           {/* Drawn again per entry, with this entry on the context, so anything
               inside the template reads its own values rather than the first
               entry's. The collection goes with it, so an item binding is
@@ -182,7 +208,7 @@ export async function renderCollectionLoop({
 // published types is typed the same as one compiled here. See `./index.ts`.
 export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
   defineBlock({
-    name: "core/collection-loop",
+    name: COLLECTION_LOOP_BLOCK,
     version: 1,
     // What an author reads, in the Add panel and the block card: one plain
     // line. What the block does, for whoever maintains it: Repeats its children
@@ -220,6 +246,8 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       // from its own declaration.
       children: {},
     },
+    // Spaces one entry from the next, as any container spaces its blocks.
+    childGap: CONTAINER_CHILD_GAP,
     supports: {
       spacing: true,
       layout: true,

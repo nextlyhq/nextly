@@ -194,6 +194,30 @@ describe("readLayoutChoices", () => {
     }
   });
 
+  it("marks each Layout behind Remove Layout's fence, from one read of the fence", async () => {
+    const { nextly } = fake(store);
+    const asks: string[][] = [];
+    const { items } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        fence: {
+          removalStates: async ids => {
+            asks.push([...ids]);
+            return new Map([["draft", "unpublished" as const]]);
+          },
+        },
+      })
+    );
+    expect(asks).toHaveLength(1);
+    expect(items.find(item => item.id === "draft")?.removal).toBe(
+      "unpublished"
+    );
+    expect(items.find(item => item.id === "main")).not.toHaveProperty(
+      "removal"
+    );
+  });
+
   it("lists every Layout, with regions only for the published ones", async () => {
     const { nextly } = fake(store);
     const { items } = await readLayoutChoices(context(), nextly, asked());
@@ -658,16 +682,22 @@ describe("parseChoicesQuery", () => {
 });
 
 describe("readPageCollection", () => {
-  it("answers the pages collection's resolved slug, renamed or not", () => {
+  it("answers the pages and Layouts collections' resolved slugs, renamed or not", () => {
     expect(
       readPageCollection({
-        self: { collections: { pages: "site-pages" }, singles: {} },
+        self: {
+          collections: { pages: "site-pages", layouts: "site-layouts" },
+          singles: {},
+        },
       } as unknown as Parameters<typeof readPageCollection>[0])
-    ).toEqual({ pagesCollection: "site-pages" });
+    ).toEqual({
+      pagesCollection: "site-pages",
+      layoutsCollection: "site-layouts",
+    });
     expect(
       readPageCollection({
         self: { collections: {}, singles: {} },
       } as unknown as Parameters<typeof readPageCollection>[0])
-    ).toEqual({ pagesCollection: "pages" });
+    ).toEqual({ pagesCollection: "pages", layoutsCollection: "layouts" });
   });
 });
