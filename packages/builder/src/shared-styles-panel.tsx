@@ -31,6 +31,7 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
+  Button,
   Input,
   Popover,
   PopoverAnchor,
@@ -73,7 +74,6 @@ import {
   sharedStyleReachSentence,
   sharedStyleRows,
   sharedStyleSearchText,
-  SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   SHARED_STYLE_RENAME_PENDING,
   SHARED_STYLE_COUNTING_NOTE,
@@ -361,15 +361,19 @@ export function SharedStylesPanel({
             blocksOf={blocksOf}
             onRemoved={() => search.current?.focus()}
           />
+          <TopNote
+            note={notes.top}
+            says={notes.one}
+            jobs={notes.jobs}
+            counter={counter}
+          />
           <StyleList
             rows={rows}
             found={filtered}
             filter={filter}
             query={query.trim()}
             withheld={notes.withheld}
-            note={notes.note}
-            jobs={notes.jobs}
-            counter={counter}
+            covered={notes.top !== undefined}
           >
             {shown.map(row => (
               <StyleRow
@@ -407,8 +411,6 @@ export function SharedStylesPanel({
             onMore={() => setPages(count => count + 1)}
           />
         </section>
-        {/* Said by the one counting note when that is showing. */}
-        <FloorNote note={notes.floor} jobs={notes.jobs} counter={counter} />
       </div>
     </div>
   );
@@ -569,22 +571,34 @@ function issueBesideList(
   return issue === null || issue.id === openId ? null : issue.reason;
 }
 
-/** The note under the list while every count is a floor, in its reason's words. */
-function FloorNote({
+/**
+ * The one note while counts are floors, at the top of the list, and while
+ * pages are still being counted, what counts them, with Count now. Carries
+ * the id Remove unused points at when it says why that waits.
+ */
+function TopNote({
   note,
+  says,
   jobs,
   counter,
 }: {
   note: string | undefined;
+  /** Whether it says why Remove unused waits. */
+  says: boolean;
   jobs: boolean;
   counter: CountNow | undefined;
 }): React.JSX.Element | null {
   if (note === undefined) return null;
   return (
-    <>
-      <p className="nx-vars__note">{note}</p>
+    <div className="nx-shared-styles__counting">
+      <p
+        className="nx-vars__note"
+        id={says ? "nx-shared-styles-withheld" : undefined}
+      >
+        {note}
+      </p>
       {jobs ? <CountedBy counter={counter} /> : null}
-    </>
+    </div>
   );
 }
 
@@ -600,35 +614,45 @@ function CountedBy({
   /** Counting the pages now, when this author may and the host can. */
   counter: CountNow | undefined;
 }): React.JSX.Element {
+  const docs = (
+    <a
+      className="nx-vars__link"
+      href={BACKGROUND_JOBS_DOCS_HREF}
+      target="_blank"
+      rel="noreferrer"
+    >
+      How background jobs run
+    </a>
+  );
+  if (counter === undefined) {
+    return (
+      <p className="nx-vars__note">
+        {"Pages are counted by the site's background jobs. "}
+        {docs}
+      </p>
+    );
+  }
+  // One line under the note: the count, what it found, and how the jobs
+  // that would have counted run. A button, since it does work; the docs are
+  // a link, since they go somewhere.
   return (
-    <p className="nx-vars__note">
-      {"Pages are counted by the site's background jobs. "}
-      {counter === undefined ? null : (
-        <>
-          {/* What the last count found, said as it changes, in the line
-              its next count is offered in. */}
-          <span role="status">{counter.said ?? ""}</span>
-          {counter.said === undefined ? null : " "}
-          <button
-            type="button"
-            className="nx-vars__link"
-            disabled={counter.busy}
-            onClick={counter.run}
-          >
-            {countNowWords(counter)}
-          </button>
-          {" · "}
-        </>
-      )}
-      <a
-        className="nx-vars__link"
-        href={BACKGROUND_JOBS_DOCS_HREF}
-        target="_blank"
-        rel="noreferrer"
+    <div className="nx-shared-styles__count-row">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="nx-shared-styles__count-now"
+        disabled={counter.busy}
+        onClick={counter.run}
       >
-        How background jobs run
-      </a>
-    </p>
+        {countNowWords(counter)}
+      </Button>
+      {/* What the last count found, said as it changes. */}
+      <span className="nx-vars__note" role="status">
+        {counter.said ?? ""}
+      </span>
+      {docs}
+    </div>
   );
 }
 
@@ -685,10 +709,13 @@ function useCountNow(
           return;
         }
         recountNow();
+        // Another count is offered only when the answer says one would get
+        // further: pages left that cannot be counted are not "still to
+        // count", whatever the panel last read.
         setFound(
-          answer.whole
-            ? undefined
-            : { said: SHARED_STYLE_STILL_TO_COUNT, again: true }
+          answer.counting
+            ? { said: SHARED_STYLE_STILL_TO_COUNT, again: true }
+            : undefined
         );
       })
       // A host that throws rather than answering a refusal: said all the
@@ -754,38 +781,34 @@ function floorReason(
 }
 
 /**
- * Which notes the tab says about floors, in their reason's words. When Unused
- * holds rows back while every count is a floor, ONE note says it all rather
- * than three paragraphs that each begin the same way. Rows held back while
- * every page is counted (one style's count cut short) get no such note: the
- * proven rows are listed, and nothing is waiting.
+ * Which notes the tab says about floors. While counts are floors, ONE note
+ * says why, at the top of the list, where the counts first read as
+ * minimums. It covers the minimums, the rows Unused holds back and Remove
+ * unused waiting, so neither the head nor the list says it again. Rows held back while every page is counted (one
+ * style's count cut short) get their own line in the list: nothing is
+ * waiting, and the proven rows are listed.
  */
 function countingNotes(
   withheld: boolean,
   reason: FloorReason
 ): {
   withheld: boolean;
+  /** Whether the top note says why Remove unused waits. */
   one: boolean;
-  /** The one note's words, when it is showing. */
-  note: string | undefined;
-  /** The floor note's words: nothing while the one note says it. */
-  floor: string | undefined;
-  /** Whether a note says pages are not counted yet, so who counts them. */
+  /** The top note's words, while counts are floors. */
+  top: string | undefined;
+  /** Whether that note says pages are not counted yet, so who counts them. */
   jobs: boolean;
 } {
-  const one = withheld && reason !== undefined;
-  const words =
-    reason === "permanent"
-      ? {
-          one: SHARED_STYLE_UNCOUNTABLE_NOTE,
-          floor: SHARED_STYLE_UNCOUNTABLE_NOTE,
-        }
-      : { one: SHARED_STYLE_COUNTING_NOTE, floor: SHARED_STYLE_NOT_WHOLE_NOTE };
   return {
     withheld,
-    one,
-    note: one ? words.one : undefined,
-    floor: one || reason === undefined ? undefined : words.floor,
+    one: reason !== undefined,
+    top:
+      reason === "counting"
+        ? SHARED_STYLE_COUNTING_NOTE
+        : reason === "permanent"
+          ? SHARED_STYLE_UNCOUNTABLE_NOTE
+          : undefined,
     jobs: reason === "counting",
   };
 }
@@ -803,32 +826,24 @@ function unusedWithheld(
 }
 
 /**
- * Unused while it holds rows back: why, then the rows proven unused. The
- * counting note carries the id Remove unused points at; without one, the
- * words say a count was cut short.
+ * Unused while it holds rows back: the rows proven unused, and, when the top
+ * note does not already say why (every page counted, but one style's count
+ * cut short), a line that says so.
  */
 function WithheldList({
-  note,
-  jobs,
-  counter,
+  covered,
   listed,
   children,
 }: {
-  note: string | undefined;
-  jobs: boolean;
-  counter: CountNow | undefined;
+  covered: boolean;
   listed: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <>
-      <p
-        className="nx-vars__empty"
-        id={note === undefined ? undefined : "nx-shared-styles-withheld"}
-      >
-        {note ?? SHARED_STYLE_UNUSED_UNCERTAIN}
-      </p>
-      {jobs ? <CountedBy counter={counter} /> : null}
+      {covered ? null : (
+        <p className="nx-vars__empty">{SHARED_STYLE_UNUSED_UNCERTAIN}</p>
+      )}
       {listed ? <ul className="nx-vars__list">{children}</ul> : null}
     </>
   );
@@ -841,9 +856,7 @@ function StyleList({
   filter,
   query,
   withheld,
-  note,
-  jobs,
-  counter,
+  covered,
   children,
 }: {
   rows: readonly SharedStyleRow[];
@@ -856,26 +869,14 @@ function StyleList({
    * rows proven unused are still listed, each judged on its own.
    */
   withheld: boolean;
-  /**
-   * The tab's one counting note, said here in place of the withheld rows'
-   * own; Remove unused points at it for why it waits.
-   */
-  note: string | undefined;
-  /** Whether that note says pages are not counted yet, so who counts them. */
-  jobs: boolean;
-  /** Counting the pages now, beside who counts them. */
-  counter: CountNow | undefined;
+  /** Whether the top note already says why rows are held back. */
+  covered: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   // Whenever Unused holds a row back it says so, beside the rows it lists.
   if (withheld && rows.length > 0) {
     return (
-      <WithheldList
-        note={note}
-        jobs={jobs && note !== undefined}
-        counter={counter}
-        listed={found.length > 0}
-      >
+      <WithheldList covered={covered} listed={found.length > 0}>
         {children}
       </WithheldList>
     );

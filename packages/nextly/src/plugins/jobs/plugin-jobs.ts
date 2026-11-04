@@ -102,6 +102,25 @@ const BOOTED_RUNNER: PluginSweepRunner = {
   },
 };
 
+/**
+ * How long a sweep run now may spend starting work: the one asked for, held
+ * to {@link PLUGIN_SWEEP_NOW_MAX_MS}, or that when none is asked. A budget
+ * that is not a number of milliseconds is refused rather than clamped: a NaN
+ * passes through `Math.min`, and a runner told to stop at NaN never stops.
+ */
+function sweepBudget(asked: number | undefined): number {
+  if (asked === undefined) return PLUGIN_SWEEP_NOW_MAX_MS;
+  // `typeof` too: a JavaScript caller can hand anything to a public option.
+  if (typeof asked !== "number" || Number.isNaN(asked) || asked < 0) {
+    throw NextlyError.invalidInput({
+      message:
+        "runSweepNow's maxDurationMs must be a number of milliseconds, 0 or more.",
+      logContext: { maxDurationMs: String(asked) },
+    });
+  }
+  return Math.min(asked, PLUGIN_SWEEP_NOW_MAX_MS);
+}
+
 /** The sweeps a plugin declares, by the slug the registry keys them under. */
 function ownSweeps(plugin: PluginDefinition | undefined): ReadonlySet<string> {
   return new Set(
@@ -133,10 +152,7 @@ export function pluginJobsNamespace(
           },
         });
       }
-      const budget = Math.min(
-        options?.maxDurationMs ?? PLUGIN_SWEEP_NOW_MAX_MS,
-        PLUGIN_SWEEP_NOW_MAX_MS
-      );
+      const budget = sweepBudget(options?.maxDurationMs);
       const result = await runner.run(own, budget);
       return { ran: result.claimed > 0 };
     },

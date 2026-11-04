@@ -69,6 +69,32 @@ describe("running a plugin's own sweep now", () => {
   });
 
   it.each([
+    ["not a number", Number.NaN],
+    ["negative", -1],
+  ])("refuses a budget that is %s, running nothing", async (_name, budget) => {
+    // A NaN slips through a clamp (Math.min answers NaN), and a runner told
+    // to stop at NaN never stops: the ceiling must hold for every input.
+    const run = vi.fn(async () => ran);
+    const jobs = pluginJobsNamespace(acme, { run });
+
+    const refusal = await jobs
+      .runSweepNow("acme:reindex", { maxDurationMs: budget })
+      .catch((error: unknown) => error);
+    expect(NextlyError.is(refusal)).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("holds an endless budget to the most a request may spend", async () => {
+    const run = vi.fn(async () => ran);
+    const jobs = pluginJobsNamespace(acme, { run });
+
+    await jobs.runSweepNow("acme:reindex", {
+      maxDurationMs: Number.POSITIVE_INFINITY,
+    });
+    expect(run).toHaveBeenCalledWith("acme:reindex", PLUGIN_SWEEP_NOW_MAX_MS);
+  });
+
+  it.each([
     ["another plugin's sweep", "other:reindex"],
     ["core's release drain", "releases:drain"],
     ["its own job that is not a sweep", "acme:export"],

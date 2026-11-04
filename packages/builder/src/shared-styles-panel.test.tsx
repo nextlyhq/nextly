@@ -376,10 +376,13 @@ describe("counts", () => {
       "Card, .nx-c-card, On at least 4 pages"
     );
     expect(card.textContent).toContain("4+ pages");
+    const note = screen.getByText(
+      "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed."
+    );
+    // At the top of the list, where the counts first read as minimums, not
+    // after every row.
     expect(
-      screen.getByText(
-        "Some pages haven't been counted yet, so these numbers are minimums."
-      )
+      note.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     // Who counts them, so a site whose counts never finish knows why: the
     // site's background jobs, which nothing runs without a scheduler.
@@ -436,7 +439,7 @@ describe("counts", () => {
     expect(reads).toBe(2);
     expect(
       screen.getByText(
-        "Some pages haven't been counted yet, so these numbers are minimums."
+        "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed."
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Unused" })).toBeTruthy();
@@ -826,11 +829,13 @@ describe("counting the pages now", () => {
   it("offers Count now beside who counts the pages, and counts them", async () => {
     const { access, count } = countingSite();
     await panel({ access });
-    expect(
-      screen.getByText(/Pages are counted by the site's background jobs/)
-    ).toBeTruthy();
+    // A button, since it does work, beside the docs on how the jobs that
+    // would have counted run.
     const button = countNow();
     expect(button).not.toBeNull();
+    expect(
+      screen.getByRole("link", { name: "How background jobs run" })
+    ).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(button as HTMLElement);
@@ -857,6 +862,42 @@ describe("counting the pages now", () => {
     });
     expect(count).toHaveBeenCalledTimes(2);
     await screen.findByRole("button", { name: "Card, .nx-c-card, On 3 pages" });
+  });
+
+  it("offers no further count when the answer says counting cannot get further", async () => {
+    // Whole no, counting no: what is left cannot be counted, so another
+    // press would do nothing, and none is offered.
+    const base = accessOf().access;
+    const count = vi.fn(
+      async (): Promise<SharedStylesCount> => ({
+        kind: "counted",
+        whole: false,
+        counting: false,
+      })
+    );
+    const access: SharedStylesAccess = {
+      ...base,
+      count,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        // The read after the press fails, so the panel still holds the
+        // first read's "counting": only the count's own answer can say no
+        // further count will help.
+        if (count.mock.calls.length > 0) throw new Error("offline");
+        return {
+          whole: false,
+          counting: true,
+          mayLock: false,
+          mayCount: true,
+          styles: new Map(ids.map(id => [id, reach({ pages: 1 }, false)])),
+        };
+      }),
+    };
+    await panel({ access });
+    await act(async () => {
+      fireEvent.click(countNow() as HTMLElement);
+    });
+    expect(screen.queryByRole("button", { name: "Count again" })).toBeNull();
+    expect(screen.queryByText("Some pages are still to count.")).toBeNull();
   });
 
   it("says why a count was refused, in its own words", async () => {
@@ -1499,11 +1540,14 @@ describe("Remove unused…", () => {
     await panel({ access });
     const button = screen.getByRole("button", { name: "Remove unused…" });
     expect(button.hasAttribute("disabled")).toBe(true);
-    expect(
-      screen.getByText(
-        "Some pages haven't been counted yet, so no shared style can be removed."
-      )
-    ).toBeTruthy();
+    // Why, in the one note at the top of the list, which it points at
+    // rather than saying it twice.
+    const why = document.getElementById(
+      button.getAttribute("aria-describedby") ?? ""
+    );
+    expect(why?.textContent).toBe(
+      "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed."
+    );
   });
 
   it("is held while any rename is still being stored, and says why", async () => {
