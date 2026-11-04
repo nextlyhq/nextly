@@ -1500,6 +1500,13 @@
   outline-offset: 1px;
 }
 
+/* An option's value beside its words, muted: an HTML tag after its name. */
+.nx-inspector__option-value {
+  margin-inline-start: 0.5rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--nx-muted-foreground);
+}
+
 /* The control, and a held row's reason under it, in the row's second column. */
 .nx-inspector__exposed {
   display: flex;
@@ -2736,11 +2743,21 @@
  * not rest on the fill's colour alone; the sentence below says it in words.
  * The device being edited is underlined, as the device buttons mark it.
  */
+/*
+ * Separate toggles, a gap between them, each with its own edge and corners:
+ * a joined strip reads as "pick one", and this is "pick any".
+ */
+.nx-visible-on {
+  gap: 0.375rem;
+}
+
 .nx-visible-on > button {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-inline-start-width: 1px;
+  border-radius: var(--radius-md);
 }
 
 .nx-visible-on__icon {
@@ -2763,8 +2780,20 @@
   transform: translate(-50%, -50%) rotate(-45deg);
 }
 
+/* The device being edited, marked with a dot at its top corner. */
 .nx-visible-on > button[data-editing] {
-  box-shadow: inset 0 -2px 0 var(--nx-ring);
+  overflow: visible;
+}
+
+.nx-visible-on > button[data-editing]::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0.1875rem;
+  inset-inline-end: 0.1875rem;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: var(--nx-ring);
 }
 
 /*
