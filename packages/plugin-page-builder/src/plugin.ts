@@ -152,6 +152,8 @@ import {
   SITE_STYLE_SLUG,
   siteStyleSingle,
 } from "./site-style-storage";
+import { exportRoutes } from "./transfer/export-route";
+import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -1586,6 +1588,20 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // A pattern, a component or a Layout as one file, with the components,
+        // shared styles, variables, breakpoints and media it depends on,
+        // read as the caller.
+        ...exportRoutes({
+          store: componentStoreOf(opts),
+          defaults: configStyle,
+        }),
+        // Such a file read against this site: a preview of what it adds,
+        // reuses and clashes with, or the import itself, as the caller.
+        importRoute({
+          store: componentStoreOf(opts),
+          defaults: configStyle,
+          reconcile: () => usage.reconcile,
+        }),
         // The editor's read of the stored site style, for anyone who may
         // edit something the builder opens: the canvas cannot draw without it.
         siteStyleRoute(componentStoreOf(opts)),

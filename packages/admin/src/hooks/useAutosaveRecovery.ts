@@ -10,7 +10,7 @@
  * @module hooks/useAutosaveRecovery
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
@@ -231,6 +231,12 @@ export interface AutosaveRecoveryOffer {
   savedAt: Date;
   /** The values to write back into the form if the author accepts. */
   snapshot: unknown;
+  /**
+   * Whether the point is from an older version of the document, which someone
+   * else (or no one in particular) has written since: restoring it replaces
+   * those changes, and the offer says so.
+   */
+  olderVersion: boolean;
 }
 
 export interface UseAutosaveRecoveryResult {
@@ -263,8 +269,99 @@ export interface UseAutosaveRecoveryResult {
    * Accept the offer: write the recovered values into the form and stop
    * offering. A no-op when there is nothing on offer, so a caller may wire it
    * to a control it renders before the read has come back.
+   *
+   * An offer read as current is asked about again first, since the read is
+   * not repeated while the editor stays open: a write since then makes it an
+   * older version, and it is then shown as one rather than restored, so the
+   * author decides with the warning in front of them. So the restore happens
+   * later, when the answer is in: a caller with steps of its own around it
+   * passes them as `apply`, which runs in place of `take` once the offer is
+   * confirmed, and calls `take` itself.
    */
-  restore: () => void;
+  restore: (apply?: () => void) => void;
+  /** Write the offered values into the form now, unasked: see `restore`. */
+  take: () => void;
+}
+
+/**
+ * An offer, asked about again before it is restored: still as offered, or the
+ * answer the offer should now be drawn from (from an older version, or gone).
+ * One already shown as older is not asked again, since the author chose it
+ * with the warning in front of them. A read that fails restores nothing: the
+ * offer stays as it was, to be chosen again, since restoring an answer that
+ * could not be checked could put back an older version without its warning.
+ */
+async function askedAgain(
+  offer: AutosaveRecoveryOffer,
+  point: AutosaveDetail,
+  scope: VersionScope | null
+): Promise<
+  { stillCurrent: true } | { stillCurrent: false; fresh: AutosaveDetail | null }
+> {
+  if (offer.olderVersion || !scope) return { stillCurrent: true };
+  try {
+    const fresh = await versionApi.getAutosave(scope);
+    // The same point, still current: a rewrite since, from another tab, is
+    // newer work, and the offer is drawn again from it.
+    const same =
+      fresh !== null && pointIdentity(fresh) === pointIdentity(point);
+    return same && fresh.superseded === undefined
+      ? { stillCurrent: true }
+      : { stillCurrent: false, fresh };
+  } catch {
+    return { stillCurrent: false, fresh: point };
+  }
+}
+
+/**
+ * The restore half of an offer: ask about it again (see `askedAgain`), then
+ * write it into the form, or draw the offer again from the new answer.
+ */
+function useRestoreOffer({
+  offer,
+  point,
+  scope,
+  form,
+  queryKey,
+  setDismissed,
+}: {
+  offer: AutosaveRecoveryOffer | null;
+  /** The stored point the offer was drawn from. */
+  point: AutosaveDetail | null | undefined;
+  scope: VersionScope | null;
+  form: UseFormReturn<Record<string, unknown>>;
+  queryKey: readonly unknown[];
+  setDismissed: (dismissed: boolean) => void;
+}): Pick<UseAutosaveRecoveryResult, "restore" | "take"> {
+  const queryClient = useQueryClient();
+  const take = useCallback(() => {
+    if (!offer) return;
+    /*
+     * `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
+     * values are not what the server holds, and treating them as the new
+     * baseline would let the reader navigate away believing they were stored.
+     */
+    form.reset(offer.snapshot as Record<string, unknown>, {
+      keepDefaultValues: true,
+    });
+    setDismissed(true);
+  }, [offer, form, setDismissed]);
+
+  // Written since, or gone: the offer is drawn again from this answer.
+  const redraw = useCallback(
+    (fresh: AutosaveDetail | null) => queryClient.setQueryData(queryKey, fresh),
+    [queryClient, queryKey]
+  );
+  const restore = useCallback(
+    (apply?: () => void) => {
+      if (!offer || !point) return;
+      void askedAgain(offer, point, scope).then(answer =>
+        answer.stillCurrent ? (apply ?? take)() : redraw(answer.fresh)
+      );
+    },
+    [offer, point, scope, take, redraw]
+  );
+  return { restore, take };
 }
 
 /**
@@ -282,12 +379,13 @@ export function useAutosaveRecovery({
   const author = useCurrentUserId();
   // Keyed by the document, so switching entries asks again rather than
   // reusing the previous document's answer.
-  const queryKey = [
-    "autosave-recovery",
-    scope?.kind,
-    scope?.slug,
-    scope?.kind === "single" ? scope.documentId : scope?.entryId,
-  ];
+  // Memoised on those fields, so the restore below, which writes the answer
+  // back under it, is not rebuilt on every render.
+  const scopeId = scope?.kind === "single" ? scope.documentId : scope?.entryId;
+  const queryKey = useMemo(
+    () => ["autosave-recovery", scope?.kind, scope?.slug, scopeId],
+    [scope?.kind, scope?.slug, scopeId]
+  );
   const [dismissed, setDismissed] = useState(false);
   // Withdrawn once a save lands: see `savedCount`. Both answers belong to the
   // document they were given for: an editor that moves to another document
@@ -352,22 +450,28 @@ export function useAutosaveRecovery({
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
     if (holdsStored(data, stored, locale)) return null;
-    return { savedAt, snapshot: data.snapshot };
+    return {
+      savedAt,
+      snapshot: data.snapshot,
+      // Written since the point began, by anyone, the author included, or by
+      // a write the server cannot name: offered, and said to be from an older
+      // version. Not withheld when the later writes were all the author's
+      // own: a save of theirs deletes the point, so one still here outlived
+      // a write that did not store it, such as publishing every language,
+      // and it is the only copy of that work.
+      olderVersion: data.superseded !== undefined,
+    };
   }, [dismissed, data, stored, locale, isPutOff]);
 
-  const restore = useCallback(() => {
-    if (!offer) return;
-    /*
-     * `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
-     * values are not what the server holds, and treating them as the new
-     * baseline would let the reader navigate away believing they were stored.
-     */
-    form.reset(offer.snapshot as Record<string, unknown>, {
-      keepDefaultValues: true,
-    });
+  const { restore, take } = useRestoreOffer({
+    offer,
+    point: data,
+    scope,
+    form,
+    queryKey,
     // Taken, not put off: the form holds the work now, so nothing is offered.
-    setDismissed(true);
-  }, [offer, form]);
+    setDismissed,
+  });
 
-  return { offer, isResolved, dismiss, restore };
+  return { offer, isResolved, dismiss, restore, take };
 }

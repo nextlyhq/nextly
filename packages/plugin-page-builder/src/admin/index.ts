@@ -34,6 +34,7 @@ import {
   BUILDER_VIEW_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "../builder-view";
+import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 /*
  * The editor's stylesheet, loaded by whatever loads this entry.
  *
@@ -54,6 +55,8 @@ import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
 import { PageBuilderView } from "./editor/PageBuilderView";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
+import { registerExportActions } from "./transfer-export-action";
+import { TransferImport } from "./transfer-import";
 
 /**
  * The blocks field's editor-form control.
@@ -79,6 +82,7 @@ const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
 const COMPONENTS = {
   [BLOCKS_FIELD_PATH]: BlocksField,
   [BLOCKS_SUMMARY_PATH]: BlocksSummary,
+  [TRANSFER_IMPORT_COMPONENT]: TransferImport,
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
@@ -88,14 +92,23 @@ const COMPONENTS = {
 
 // Eager registration on module load.
 registerComponents(COMPONENTS);
+// "Export" on the Components, Patterns and Layouts lists.
+registerExportActions();
 
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   registerComponents(COMPONENTS);
+  registerExportActions();
   return Promise.resolve();
 });
 
-export { BlocksField, BlocksSummary, PageBuilderView, RemoveLayoutToolbarSlot };
+export {
+  BlocksField,
+  BlocksSummary,
+  PageBuilderView,
+  RemoveLayoutToolbarSlot,
+  TransferImport,
+};
 /**
  * Called by the app's generated component map to hand the editor the block
  * modules plugins declared (`editorEntry`, `editor.component`). Not for a

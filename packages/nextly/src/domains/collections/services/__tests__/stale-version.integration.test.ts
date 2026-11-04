@@ -32,10 +32,14 @@ afterEach(async () => {
 /** Translated, with a shared field, so an entry can exist with no translation row. */
 const DOCS = "docs";
 const LANGUAGES = `dc_${DOCS}_locales`;
+/** Runs of the translated collection's before-change hook. */
+let docsBeforeChangeCalls = 0;
 /** No languages: the plainest entry there is. */
 const NOTES = "notes";
 /** Draft and published, so a published entry holds an edit as a working draft. */
 const POSTS = "posts";
+/** Two languages, each with its own status, for a sweep of every language. */
+const LIVES = "lives";
 /** Keeps history and runs an after-change hook, to see a refusal reach neither. */
 const HOOKED = "hooked";
 let afterChangeCalls = 0;
@@ -62,6 +66,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: DOCS,
         localized: true,
         access: OPEN,
+        hooks: {
+          beforeChange: [
+            ({ data }: { data?: unknown }) => {
+              docsBeforeChangeCalls += 1;
+              return data;
+            },
+          ],
+        },
         fields: [
           text({ name: "title", localized: true }),
           text({ name: "note", localized: false }),
@@ -71,6 +83,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: NOTES,
         access: OPEN,
         fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: LIVES,
+        localized: true,
+        status: true,
+        access: { ...OPEN, publish: () => true, unpublish: () => true },
+        fields: [text({ name: "headline", localized: true })],
       }),
       defineCollection({
         slug: HOOKED,
@@ -985,5 +1004,167 @@ describe.each(getConfiguredTestDialects())(
         expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
       }
     );
+
+    it("answers a translated save refused over a shared change with a version that names its language, which that save may send", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      const es = await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      await update(t, DOCS, id, { note: "shared" }, { locale: "en" });
+      const refused = await update(
+        t,
+        DOCS,
+        id,
+        { title: "otra", _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      const current = String(refused.publicData?.currentVersion);
+      expect(current).toMatch(/\.es:\d+$/);
+      const again = await update(
+        t,
+        DOCS,
+        id,
+        { title: "otra", _rev: current },
+        { locale: "es" }
+      );
+      expect(again.success, JSON.stringify(again)).toBe(true);
+    });
+
+    it("refuses a status sweep of every language when any language moved since its version", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: LIVES, overrideAccess: true, locale: "en" },
+        { headline: "Hi", status: "published" }
+      );
+      const id = idOf(created);
+      await update(
+        t,
+        LIVES,
+        id,
+        { headline: "Hola", status: "published" },
+        { locale: "es" }
+      );
+      const everyLanguage = async () =>
+        String(
+          (
+            (await t.nextly.findByID({
+              collection: LIVES as never,
+              id,
+              locale: "*",
+              overrideAccess: true,
+              status: "all",
+            } as never)) as { _rev: string }
+          )._rev
+        );
+      const read = await everyLanguage();
+      // Spanish alone changes after the read.
+      await update(
+        t,
+        LIVES,
+        id,
+        { headline: "Hola de nuevo" },
+        { locale: "es" }
+      );
+      const swept = await update(
+        t,
+        LIVES,
+        id,
+        { status: "draft", _rev: read },
+        { locale: "*" }
+      );
+      expect(swept).toMatchObject({ success: false, code: "STALE_VERSION" });
+      expect(String(swept.publicData?.currentVersion)).toBe(
+        await everyLanguage()
+      );
+      const fresh = await update(
+        t,
+        LIVES,
+        id,
+        { status: "draft", _rev: await everyLanguage() },
+        { locale: "*" }
+      );
+      expect(fresh.success, JSON.stringify(fresh)).toBe(true);
+    });
+
+    it("refuses a save whose translation is already behind before any hook runs, alone and in a batch", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      const es = await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      // Spanish alone moves: the main counter stays where the version has it.
+      await update(t, DOCS, id, { title: "hola otra vez" }, { locale: "es" });
+      const before = docsBeforeChangeCalls;
+      const refused = await update(
+        t,
+        DOCS,
+        id,
+        { title: "mía", _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(docsBeforeChangeCalls).toBe(before);
+
+      // The same in a batch, which writes the default language.
+      const en = revOf(
+        await update(t, DOCS, id, { title: "hello" }, { locale: "en" })
+      );
+      await update(t, DOCS, id, { title: "hello again" }, { locale: "en" });
+      const beforeBatch = docsBeforeChangeCalls;
+      const batch = await serviceOf(t).updateMany(
+        DOCS,
+        [{ id, data: { title: "mine", _rev: en } }],
+        { overrideAccess: true } as never
+      );
+      expect(batch.errors.map(e => e.code)).toEqual(["STALE_VERSION"]);
+      expect(docsBeforeChangeCalls).toBe(beforeBatch);
+    });
+
+    it("accepts a version of every language on a save of one, judging that language and the shared fields alone", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      await update(t, DOCS, id, { title: "hola" }, { locale: "es" });
+      const everyLanguage = String(
+        (
+          (await t.nextly.findByID({
+            collection: DOCS as never,
+            id,
+            locale: "*",
+            overrideAccess: true,
+          } as never)) as { _rev: string }
+        )._rev
+      );
+      expect(everyLanguage).toMatch(/\.en:\d+,es:\d+$/);
+      // English moves after the read: a Spanish save from it is still current.
+      await update(t, DOCS, id, { title: "hello again" }, { locale: "en" });
+      const spanish = await update(
+        t,
+        DOCS,
+        id,
+        { title: "hola de nuevo", _rev: everyLanguage },
+        { locale: "es" }
+      );
+      expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+      // Spanish has now moved too: an English save from the same read is
+      // refused only because English moved, not because Spanish did.
+      const english = await update(
+        t,
+        DOCS,
+        id,
+        { title: "mine", _rev: everyLanguage },
+        { locale: "en" }
+      );
+      expect(english).toMatchObject({ code: "STALE_VERSION" });
+    });
   }
 );
