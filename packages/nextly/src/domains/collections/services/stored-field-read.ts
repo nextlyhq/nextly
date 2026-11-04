@@ -35,6 +35,8 @@
  *
  * @module domains/collections/services/stored-field-read
  */
+import { createHash } from "node:crypto";
+
 import { and, eq } from "drizzle-orm";
 
 import type {
@@ -282,46 +284,24 @@ export async function readStoredFieldsOn(
   const records = options.records ?? registryRecords(connection);
   const fields = [...new Set(target.fields)];
   const entity = await storedEntity(connection, records, target, scope);
-  const paths = fields.map(field => ({
-    field,
-    path: storedFieldPath(entity, { ...target, field }, scope),
-  }));
+  const placed = placedFields(entity, target, scope, fields);
   const locale = target.locale ?? connection.defaultLocale ?? null;
-  // Only a top-level field can be kept per language on its own: a field
-  // inside a group is stored in the group's value, and a group kept per
-  // language is refused by the path above.
-  const placed = paths.map(({ field, path }) => ({
-    field,
-    path,
-    perLanguage:
-      path.within.length === 0
-        ? companionFieldOf(entity, path.column)
-        : undefined,
-  }));
-
   const state =
     options.askState === true
       ? stateSource(entity, locale, connection.defaultLocale)
       : undefined;
-  const row = await storedRow(connection, entity, target, [
-    ...placed
-      .filter(({ perLanguage }) => perLanguage === undefined)
-      .map(({ path }) => path.column),
-    ...(state === "row" ? ["status"] : []),
-  ]);
-  if (row === undefined) {
-    return {
-      found: false,
-      values: new Map(fields.map(field => [field, { kind: "absent" }])),
-      workingDraft: false,
-    };
-  }
+  const row = await storedRow(
+    connection,
+    entity,
+    target,
+    rowColumns(placed, state)
+  );
+  if (row === undefined) return notStored(fields);
   const id = String(row.id);
   const draft =
     target.form === "draft" || options.askDraft === true
       ? await pendingWorkingDraft(connection, entity, id, locale)
       : undefined;
-
   // The working draft a `draft` read shows, and the one language row every
   // field kept per language that it does not carry is read from, in one query
   // however many such fields are asked for.
@@ -329,17 +309,92 @@ export async function readStoredFieldsOn(
   const language = await languageRow(
     connection,
     {
-      fields: placed.flatMap(({ field, path, perLanguage }) =>
-        perLanguage === undefined || draftCarries(shownDraft, path.column)
-          ? []
-          : [{ field, kept: perLanguage }]
-      ),
+      fields: fromLanguageRow(placed, shownDraft),
       state: state === "language" ? companionOf(entity) : null,
     },
     { id, locale, target }
   );
-  const translated = language.values;
+  return {
+    found: true,
+    values: shownValues(placed, row, language.values, shownDraft),
+    workingDraft: draft !== undefined,
+    ...liveStateOf(state, row, language),
+  };
+}
 
+/** One field a read is asked for, with where it is stored. */
+interface PlacedField {
+  readonly field: string;
+  readonly path: StoredFieldPath;
+  /** The field's language-row column, for a field kept per language. */
+  readonly perLanguage: CompanionField | undefined;
+}
+
+/**
+ * Each field with where it is stored. Only a top-level field can be kept per
+ * language on its own: a field inside a group is stored in the group's value,
+ * and a group kept per language is refused by the path rule.
+ */
+function placedFields(
+  entity: StoredEntity,
+  target: StoredFieldsTarget,
+  scope: FieldScope,
+  fields: readonly string[]
+): PlacedField[] {
+  return fields.map(field => {
+    const path = storedFieldPath(entity, { ...target, field }, scope);
+    return {
+      field,
+      path,
+      perLanguage:
+        path.within.length === 0
+          ? companionFieldOf(entity, path.column)
+          : undefined,
+    };
+  });
+}
+
+/** The main row's columns a read needs: its fields' own, and its state's. */
+function rowColumns(
+  placed: readonly PlacedField[],
+  state: "row" | "language" | undefined
+): string[] {
+  return [
+    ...placed
+      .filter(({ perLanguage }) => perLanguage === undefined)
+      .map(({ path }) => path.column),
+    ...(state === "row" ? ["status"] : []),
+  ];
+}
+
+/** A read of a document that is not stored: every field absent. */
+function notStored(fields: readonly string[]): StoredFieldsRead {
+  return {
+    found: false,
+    values: new Map(fields.map(field => [field, { kind: "absent" }])),
+    workingDraft: false,
+  };
+}
+
+/** The fields kept per language whose value the shown draft does not carry. */
+function fromLanguageRow(
+  placed: readonly PlacedField[],
+  draft: PendingDraft | undefined
+): LanguageRowAsk["fields"] {
+  return placed.flatMap(({ field, path, perLanguage }) =>
+    perLanguage === undefined || draftCarries(draft, path.column)
+      ? []
+      : [{ field, kept: perLanguage }]
+  );
+}
+
+/** Each field's value as the read shows it, by the name it was asked by. */
+function shownValues(
+  placed: readonly PlacedField[],
+  row: Record<string, unknown>,
+  translated: ReadonlyMap<string, unknown>,
+  draft: PendingDraft | undefined
+): Map<string, PluginStoredValue> {
   const values = new Map<string, PluginStoredValue>();
   for (const { field, path, perLanguage } of placed) {
     const shown = shownValue({
@@ -347,34 +402,43 @@ export async function readStoredFieldsOn(
       stored: row[path.column],
       perLanguage,
       translated,
-      draft: shownDraft,
+      draft,
     });
     const reached =
       shown === undefined ? undefined : valueWithin(shown.value, path.within);
-    // Only a column's own value is stored encoded. A value reached inside a
-    // group was decoded with the group, and decoding it again would turn a
-    // string holding JSON text ("123", "null") into what that text says.
-    values.set(
-      field,
-      reached === undefined
-        ? { kind: "absent" }
-        : {
-            kind: "value",
-            value:
-              path.within.length === 0
-                ? decoded(reached.value, path.type)
-                : reached.value,
-          }
-    );
+    values.set(field, storedValueOf(reached, path));
   }
+  return values;
+}
+
+/**
+ * A reached value as a stored value. Only a column's own value is stored
+ * encoded: a value reached inside a group was decoded with the group, and
+ * decoding it again would turn a string holding JSON text ("123", "null")
+ * into what that text says.
+ */
+function storedValueOf(
+  reached: { value: unknown } | undefined,
+  path: StoredFieldPath
+): PluginStoredValue {
+  if (reached === undefined) return { kind: "absent" };
   return {
-    found: true,
-    values,
-    workingDraft: draft !== undefined,
-    ...(state === undefined
-      ? {}
-      : { liveState: state === "row" ? stateOf(row.status) : language.state }),
+    kind: "value",
+    value:
+      path.within.length === 0
+        ? decoded(reached.value, path.type)
+        : reached.value,
   };
+}
+
+/** The live state a read reports, where it was asked for one. */
+function liveStateOf(
+  state: "row" | "language" | undefined,
+  row: Record<string, unknown>,
+  language: LanguageRow
+): { liveState?: string | null } {
+  if (state === undefined) return {};
+  return { liveState: state === "row" ? stateOf(row.status) : language.state };
 }
 
 /**
@@ -968,39 +1032,46 @@ const ABSENT_HASH_INPUT = "\u0000absent";
  * hashes what it read, and the write path hashes what it reads again under
  * the row lock ({@link storedExpectationRefusal}).
  */
-export async function storedValueHash(
-  stored: PluginStoredValue
-): Promise<string> {
+export function storedValueHash(stored: PluginStoredValue): Promise<string> {
   const text =
-    stored.kind === "absent" ||
-    stored.value === null ||
-    stored.value === undefined
-      ? ABSENT_HASH_INPUT
-      : canonicalJson(stored.value);
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text)
-  );
-  return Array.from(new Uint8Array(digest), byte =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
+    stored.kind === "value" &&
+    stored.value !== null &&
+    stored.value !== undefined
+      ? (canonicalJson(stored.value) ?? "null")
+      : ABSENT_HASH_INPUT;
+  return Promise.resolve(createHash("sha256").update(text).digest("hex"));
 }
 
-/** `value` as JSON with every object's keys sorted. */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, inner: unknown) => {
-    if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
-      return inner;
-    }
-    // A null prototype, so a key spelt `__proto__` is kept as the own key it
-    // is: on an ordinary object its assignment would set the prototype
-    // instead, and the key would vanish from the JSON.
-    const sorted = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(inner).sort()) {
-      sorted[key] = (inner as Record<string, unknown>)[key];
-    }
-    return sorted;
-  });
+/**
+ * `value` as JSON with every object's keys sorted, written from its entries
+ * rather than by assigning them to a new object: an own key spelt
+ * `__proto__` is then kept as the key it is, where assigning it to an
+ * ordinary object would set that object's prototype instead and drop it.
+ * Otherwise as `JSON.stringify` writes it: a value with `toJSON` as that
+ * answers, an `undefined` member left out and an `undefined` item as `null`.
+ */
+function canonicalJson(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  const own = jsonOf(value);
+  if (own !== value) return canonicalJson(own);
+  if (Array.isArray(value)) {
+    return `[${value.map(item => canonicalJson(item) ?? "null").join(",")}]`;
+  }
+  const members = Object.keys(value)
+    .sort()
+    .flatMap(key => {
+      const text = canonicalJson((value as Record<string, unknown>)[key]);
+      return text === undefined ? [] : [`${JSON.stringify(key)}:${text}`];
+    });
+  return `{${members.join(",")}}`;
+}
+
+/** What an object's own `toJSON` answers, or the object where it has none. */
+function jsonOf(value: object): unknown {
+  const toJson = (value as { toJSON?: unknown }).toJSON;
+  return typeof toJson === "function"
+    ? (toJson as () => unknown).call(value)
+    : value;
 }
 
 /** What a conditional write expects to find stored when it takes the row lock. */
