@@ -138,7 +138,7 @@ import {
 } from "./library-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
-import { pagesSearchRoute } from "./pages-search-route";
+import { pageAddressRoute, pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
@@ -1857,6 +1857,9 @@ export const pageBuilder = (
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
         pagesSearchRoute(componentStoreOf(opts), opts.pagePreviewPath),
+        // Where one page is served as it is saved, for Settings' address
+        // line, resolved as the search resolves each page's path.
+        pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.

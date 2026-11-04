@@ -47,6 +47,7 @@ import {
   DocumentSaveIndicator,
   loadInlineRichTextEditor,
   MediaPickerDialog,
+  useDocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { useEffect, useState, type ComponentProps, type JSX } from "react";
@@ -87,6 +88,7 @@ import {
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { useReveal, type Reveal } from "./reveal-hidden";
+import { settingsAddressOf, type SettingsAddress } from "./settings-address";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -784,18 +786,36 @@ interface PageFacts {
   title: string | undefined;
   /** The SEO plugin's fields, where the document has them. */
   seo: ShareSeoFields | undefined;
+  /**
+   * The page whose saved address Settings reads, and whether its slug has
+   * changed since the save, or null for a document never saved.
+   */
+  address: Omit<SettingsAddress, "locale"> | null;
 }
+
+/** The field a page's address is made from, where the collection has one. */
+const SLUG_FIELD = "slug";
 
 function usePageFacts<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
 ): PageFacts {
-  const [title, seo]: unknown[] = useWatch({
+  const [title, seo, slug]: unknown[] = useWatch({
     control,
-    name: ["title", "seo"] as Path<TFieldValues>[],
+    name: ["title", "seo", SLUG_FIELD] as Path<TFieldValues>[],
   });
+  // The form's defaults are what the last load or save stored, so the slug
+  // there is the saved one, the slug the server's address is read for.
+  const { defaultValues } = useFormState({
+    control,
+    name: SLUG_FIELD as Path<TFieldValues>,
+  });
+  const saved: unknown = (
+    defaultValues as Record<string, unknown> | undefined
+  )?.[SLUG_FIELD];
   return {
     title: typeof title === "string" ? title : undefined,
     seo: seo !== null && typeof seo === "object" ? seo : undefined,
+    address: settingsAddressOf(useDocumentIdentity(), slug, saved),
   };
 }
 
@@ -859,6 +879,15 @@ function editorSettings(
         // The SEO plugin's group, where the page has one: its fields are then
         // among the page's own, and the preview is not all there is.
         seoFields={page.seo !== undefined}
+        // Read in the language being edited, as a localized slug is.
+        address={
+          page.address === null
+            ? null
+            : {
+                ...page.address,
+                ...(view.locale === undefined ? {} : { locale: view.locale }),
+              }
+        }
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,

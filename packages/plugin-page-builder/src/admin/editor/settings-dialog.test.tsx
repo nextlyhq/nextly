@@ -17,8 +17,13 @@ import { cloneElement, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteSettingsRead } from "../../library-contract";
+import type { PageAddressResponse } from "../../pages-search-contract";
+import { settingsAddressOf, type SettingsAddress } from "./settings-address";
 
 let siteRead: SiteSettingsRead | undefined;
+// The page address read's answer, and the paths it was asked at.
+let addressRead: PageAddressResponse | undefined;
+const addressAsked: string[] = [];
 let siteError: Error | null = null;
 let siteFetching = false;
 const refetch = vi.fn();
@@ -26,13 +31,25 @@ const writes: Array<{ path: string }> = [];
 let writeAnswer: () => Promise<unknown> = async () => ({});
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  usePluginRoute: () => ({
-    data: siteRead,
-    pending: false,
-    error: siteError,
-    fetching: siteFetching,
-    refetch,
-  }),
+  usePluginRoute: ({ path }: { path: string }) => {
+    if (path.startsWith("/pages/address")) {
+      addressAsked.push(path);
+      return {
+        data: addressRead,
+        pending: false,
+        error: null,
+        fetching: false,
+        refetch,
+      };
+    }
+    return {
+      data: siteRead,
+      pending: false,
+      error: siteError,
+      fetching: siteFetching,
+      refetch,
+    };
+  },
   writePluginRoute: async (write: { path: string }) => {
     writes.push(write);
     return writeAnswer();
@@ -100,7 +117,8 @@ let reshow: () => void = () => {};
 function show(
   onOpenChange = vi.fn(),
   pageLayout?: ReactElement,
-  seoFields = true
+  seoFields = true,
+  address: SettingsAddress | null = null
 ) {
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
@@ -114,6 +132,7 @@ function show(
         {...(pageLayout === undefined ? {} : { pageLayout })}
         share={{ title: "Who we are", description: "We build tools." }}
         seoFields={seoFields}
+        address={address}
         breakpoints={{
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
@@ -128,6 +147,8 @@ function show(
 }
 
 beforeEach(() => {
+  addressRead = undefined;
+  addressAsked.length = 0;
   siteRead = MANAGER;
   siteError = null;
   siteFetching = false;
@@ -189,6 +210,83 @@ describe("the Settings dialog", () => {
       screen.queryByText("Saved with the page when you Save or Publish.")
     ).toBeNull();
     expect(screen.queryByText(/save as you change them/)).toBeNull();
+  });
+
+  it("shows the page's saved address as the server resolved it", () => {
+    addressRead = { path: "/company/about-us" };
+    show(vi.fn(), undefined, true, {
+      page: { collection: "pages", id: "p-1" },
+      locale: "fr",
+      savedSlug: "about-us",
+      slugChanged: false,
+    });
+    expect(
+      screen.getByRole("region", { name: "Address on your site" }).textContent
+    ).toContain("/company/about-us");
+    // Asked of the server for this page, in the language being edited: the
+    // address is never assembled here from the slug.
+    expect(addressAsked.at(-1)).toBe(
+      "/pages/address?collection=pages&id=p-1&locale=fr"
+    );
+    expect(screen.queryByText(/changes when you save/)).toBeNull();
+  });
+
+  it("says the saved address changes on save while the slug differs", () => {
+    addressRead = { path: "/about-us" };
+    show(vi.fn(), undefined, true, {
+      page: { collection: "pages", id: "p-1" },
+      savedSlug: "about-us",
+      slugChanged: true,
+    });
+    // Still the SAVED address: the server knows nothing of the typed slug.
+    expect(
+      screen.getByRole("region", { name: "Address on your site" }).textContent
+    ).toContain("/about-us");
+    const line = screen.getByText(
+      "This is the saved address. It changes when you save the page."
+    );
+    // Announced as it appears, as the admin's own address warning is.
+    expect(line.getAttribute("role")).toBe("status");
+  });
+
+  it("shows no address line where the page has none, or was never saved", () => {
+    addressRead = { path: null };
+    show(vi.fn(), undefined, true, {
+      page: { collection: "posts", id: "x" },
+      slugChanged: false,
+    });
+    expect(
+      screen.queryByRole("region", { name: "Address on your site" })
+    ).toBeNull();
+    cleanup();
+    show();
+    expect(addressAsked).toHaveLength(1);
+    expect(
+      screen.queryByRole("region", { name: "Address on your site" })
+    ).toBeNull();
+  });
+
+  it("reads the saved entry's address, and a slug typed since as a change", () => {
+    const saved = { kind: "collection", slug: "pages", documentId: "p-1" };
+    expect(settingsAddressOf(saved, "about-us", "about-us")).toEqual({
+      page: { collection: "pages", id: "p-1" },
+      savedSlug: "about-us",
+      slugChanged: false,
+    });
+    expect(settingsAddressOf(saved, "about", "about-us")?.slugChanged).toBe(
+      true
+    );
+    // Never saved, or a Single: no page address to read.
+    expect(
+      settingsAddressOf({ kind: "collection", slug: "pages" }, "a", undefined)
+    ).toBeNull();
+    expect(
+      settingsAddressOf(
+        { kind: "single", slug: "home", documentId: "1" },
+        "a",
+        "a"
+      )
+    ).toBeNull();
   });
 
   it("offers no Site tab to a role that may not manage the site", () => {
