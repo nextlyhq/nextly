@@ -105,6 +105,7 @@ export {
 export {
   useMedia,
   useMediaItem,
+  useMediaResolver,
   useUploadMedia,
   useUpdateMedia,
   useDeleteMedia,

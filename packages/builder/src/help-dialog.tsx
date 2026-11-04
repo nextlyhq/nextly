@@ -86,8 +86,13 @@ export interface PanelKeysSetting {
    * second editor's on the same page.
    */
   shortcuts: readonly ActiveShortcut[];
-  /** The layer they register in, whose bindings Help leaves to `shortcuts`. */
+  /** The layer they register in: this editor's own. */
   layer: string;
+  /**
+   * The name every editor's panel-key layer begins with. Help leaves all of
+   * them to `shortcuts`, a second editor's included.
+   */
+  family: string;
 }
 
 /**
@@ -100,14 +105,17 @@ function listedShortcuts(
   panelKeys: PanelKeysSetting | undefined
 ): readonly ActiveShortcut[] {
   if (panelKeys === undefined) return active;
-  const others = active.filter(shortcut => shortcut.layer !== panelKeys.layer);
+  const panelKeysOf = (shortcut: ActiveShortcut) =>
+    shortcut.layer.startsWith(panelKeys.family);
+  const others = active.filter(shortcut => !panelKeysOf(shortcut));
   const own = panelKeys.on ? panelKeys.shortcuts : [];
-  // In the panel keys' own place in the manager's order, so a binding below
-  // them never takes their row; last where none is registered.
+  // In this editor's own layer's place in the manager's order, so a binding
+  // below it never takes its rows and one above it still does; last where it
+  // registered none.
   const at = active.findIndex(shortcut => shortcut.layer === panelKeys.layer);
-  return at === -1
-    ? [...others, ...own]
-    : [...others.slice(0, at), ...own, ...others.slice(at)];
+  if (at === -1) return [...others, ...own];
+  const before = active.slice(0, at).filter(shortcut => !panelKeysOf(shortcut));
+  return [...before, ...own, ...others.slice(before.length)];
 }
 
 /** What the switch's hint says: the keys this editor offers, by name. */

@@ -134,7 +134,12 @@ async function englishBehindSpanish(t: TestNextly): Promise<string> {
   return id;
 }
 
-type Result = { success?: boolean; code?: string; statusCode?: number };
+type Result = {
+  success?: boolean;
+  code?: string;
+  statusCode?: number;
+  publicData?: Record<string, unknown>;
+};
 
 const takeLive = (t: TestNextly, id: string, version?: Doc) =>
   entriesOf(t).takeLiveSharedValues({

@@ -19,7 +19,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
@@ -31,6 +31,10 @@ import { contentEventActor } from "../content-events/actor";
 import type { SanitizedLocalizationConfig } from "../i18n/config/types";
 import { isLocaleSelector } from "../i18n/locale-selector";
 import { resolveRequestedLocale } from "../i18n/resolve-locale";
+import {
+  languageRevisionTable,
+  systemColumnDriverValue,
+} from "../schema/services/runtime-schema-generator";
 
 export { DOCUMENT_VERSION_KEY };
 
@@ -136,20 +140,63 @@ export function changerColumns(
   };
 }
 
+/** The column holding when a row's counter last moved. */
+export const CHANGED_AT_COLUMN = "_changed_at";
+
 /**
- * What one save adds to the UPDATE of a row it changes: the counter
- * incremented by the database, and the changer.
+ * What one save adds to the UPDATE of a document's own row: the counter
+ * incremented by the database, the changer, and when — `at`, the same moment
+ * the save writes to `updated_at` when it writes one, so the two compare
+ * equal. The row's runtime model declares the column, so it stores the value
+ * exactly as it stores `updated_at`.
  *
  * The increment is an expression, never a value computed from a read, so two
  * saves can never both write the same next version: the row lock the UPDATE
  * takes orders them, and each adds one to what the other committed.
  */
 export function revisionBumpColumns(
-  actor: RequestActor
+  actor: RequestActor,
+  at: Date = new Date()
 ): Record<string, unknown> {
   return {
     [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
     ...changerColumns(actor),
+    [CHANGED_AT_COLUMN]: at,
+  };
+}
+
+/**
+ * The changer and the time for a translation row a save writes, without the
+ * counter: for a row being inserted, which takes the counter's default.
+ *
+ * Encoded here because a translation table's runtime model does not declare
+ * the column: stored as the main table's `_changed_at` is, by the same column
+ * builder, never as a driver binds a bare `Date`.
+ */
+export function translationChangeColumns(
+  actor: RequestActor,
+  dialect: SupportedDialect,
+  at: Date = new Date()
+): Record<string, unknown> {
+  return {
+    ...changerColumns(actor),
+    [CHANGED_AT_COLUMN]: systemColumnDriverValue(
+      dialect,
+      CHANGED_AT_COLUMN,
+      at
+    ),
+  };
+}
+
+/** {@link revisionBumpColumns} for an UPDATE of translation rows. */
+export function translationRevisionBumpColumns(
+  actor: RequestActor,
+  dialect: SupportedDialect,
+  at: Date = new Date()
+): Record<string, unknown> {
+  return {
+    [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
+    ...translationChangeColumns(actor, dialect, at),
   };
 }
 
@@ -158,14 +205,18 @@ export function revisionBumpColumns(
  * to that row: a held working draft, a status moved only on translation rows,
  * a change to components or relations alone. `updated_at` is left as it is,
  * since the row's own content did not change.
+ *
+ * `at` is when it changed: the moment the same save wrote to `updated_at`,
+ * when it wrote one in another statement, so the two compare equal.
  */
 export async function bumpDocumentRevision(
   tx: Pick<TransactionContext, "update">,
   table: string,
   where: Record<string, string>,
-  actor: RequestActor
+  actor: RequestActor,
+  at: Date = new Date()
 ): Promise<void> {
-  await tx.update(table, revisionBumpColumns(actor), {
+  await tx.update(table, revisionBumpColumns(actor, at), {
     and: Object.entries(where).map(([column, value]) => ({
       column,
       op: "=" as const,
@@ -182,7 +233,7 @@ export async function bumpDocumentRevision(
  * version it produced. A read after the commit can see a later save's.
  */
 async function readDocumentRevisions(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: Pick<TransactionContext, "select" | "getDrizzle">,
   args: {
     dialect: SupportedDialect;
     table: string;
@@ -201,10 +252,11 @@ async function readDocumentRevisions(
   if (!row) return undefined;
   const main = revisionOf(row[DOCUMENT_REVISION_COLUMN]);
   if (!args.languages || args.languages.locales.length === 0) return { main };
-  const byDocument = await readLanguageRevisions(
-    (statement, params) => tx.execute(statement, params),
-    { dialect: args.dialect, table: args.languages.table, ids: [args.id] }
-  );
+  const byDocument = await readLanguageRevisions(tx.getDrizzle<SelectsRows>(), {
+    dialect: args.dialect,
+    table: args.languages.table,
+    ids: [args.id],
+  });
   return {
     main,
     languages: languageCounters(
@@ -214,35 +266,42 @@ async function readDocumentRevisions(
   };
 }
 
-/** Runs one statement with its parameters and answers its rows. */
-export type RunStatement = (
-  statement: string,
-  params: (string | number)[]
-) => Promise<Record<string, unknown>[]>;
+/**
+ * A Drizzle database or transaction handle, as `getDrizzle()` answers it:
+ * the part of its query builder a counter read uses, the same on every
+ * dialect.
+ */
+export interface SelectsRows {
+  select(fields: Record<string, unknown>): {
+    from(table: never): {
+      where(condition: unknown): PromiseLike<Record<string, unknown>[]>;
+    };
+  };
+}
 
 /**
  * Every translation row's counter for `ids`, in one statement: by document,
  * then by language.
  *
- * Named in the statement: a translation table's runtime model does not
- * declare the counter, since the same model serves field-group translation
- * tables, which are no documents and never carry it.
+ * Selected through `languageRevisionTable`: a translation table's runtime
+ * model does not declare the counter, since the same model serves
+ * field-group translation tables, which are no documents and never carry it.
  */
 async function readLanguageRevisions(
-  run: RunStatement,
+  db: SelectsRows,
   args: { dialect: SupportedDialect; table: string; ids: readonly string[] }
 ): Promise<Map<string, Map<string, number>>> {
   const out = new Map<string, Map<string, number>>();
   if (args.ids.length === 0) return out;
-  const q = (name: string) =>
-    args.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-  const placeholders = args.ids
-    .map((_, i) => (args.dialect === "postgresql" ? `$${i + 1}` : "?"))
-    .join(", ");
-  const rows = await run(
-    `SELECT ${q("_parent")}, ${q("_locale")}, ${q(DOCUMENT_REVISION_COLUMN)} FROM ${q(args.table)} WHERE ${q("_parent")} IN (${placeholders})`,
-    [...args.ids]
-  );
+  const table = languageRevisionTable(args.dialect, args.table);
+  const rows = await db
+    .select({
+      _parent: table._parent,
+      _locale: table._locale,
+      [DOCUMENT_REVISION_COLUMN]: table[DOCUMENT_REVISION_COLUMN],
+    })
+    .from(table as never)
+    .where(inArray(table._parent as never, [...args.ids]));
   for (const row of rows) {
     const parent = String(row._parent);
     const languages = out.get(parent) ?? new Map<string, number>();
@@ -293,7 +352,7 @@ export function versionLanguagesFor(args: {
  * same languages as a read's (`attachDocumentVersions`).
  */
 export async function documentVersionOn(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: Pick<TransactionContext, "select" | "getDrizzle">,
   args: {
     dialect: SupportedDialect;
     table: string;
@@ -428,7 +487,12 @@ export function attachDocumentVersions(
   }
   for (const row of rows) {
     const id = documentIdOf(row);
-    if (id === undefined || !args.stored.has(id)) continue;
+    if (id === undefined || !args.stored.has(id)) {
+      // No stored document to take a version from, such as a row whose id a
+      // hook rewrote: it carries none, rather than one the hook set.
+      delete row[DOCUMENT_VERSION_KEY];
+      continue;
+    }
     row[DOCUMENT_VERSION_KEY] = encodeDocumentVersion(
       revisionOf(args.stored.get(id)),
       locales
@@ -474,9 +538,11 @@ export function setDocumentVersion(
  */
 export function mainRowBump(
   write: Parameters<typeof savesMainRow>[0],
-  actor: RequestActor
+  actor: RequestActor,
+  /** The moment the save writes to `updated_at`. */
+  at: Date
 ): Record<string, unknown> {
-  return savesMainRow(write) ? revisionBumpColumns(actor) : {};
+  return savesMainRow(write) ? revisionBumpColumns(actor, at) : {};
 }
 
 /**
@@ -509,7 +575,7 @@ export function withDocumentVersion<T extends Record<string, unknown>>(
  * older content would let a client save over a translation it never saw.
  */
 export async function languageCountersBeforeContent(
-  run: RunStatement,
+  db: SelectsRows,
   args: {
     dialect: SupportedDialect;
     languagesTable: string | null;
@@ -526,7 +592,7 @@ export async function languageCountersBeforeContent(
   if (args.languagesTable === null || !args.localization) return undefined;
   if (args.ids.length === 0) return undefined;
   return {
-    revisions: await readLanguageRevisions(run, {
+    revisions: await readLanguageRevisions(db, {
       dialect: args.dialect,
       table: args.languagesTable,
       ids: args.ids,
@@ -550,4 +616,13 @@ export function chainCoversVersion(
 ): boolean {
   const locales = versionLanguagesFor({ localized: true, ...args });
   return locales === undefined || locales.every(code => chain.includes(code));
+}
+
+/**
+ * The moment an UPDATE writes to `updated_at`, for the `_changed_at` it sets
+ * beside it: the same value, so the two compare equal. Now, for a payload
+ * that names none.
+ */
+export function updateTimeOf(value: unknown): Date {
+  return value instanceof Date ? value : new Date();
 }

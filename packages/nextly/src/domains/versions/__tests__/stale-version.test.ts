@@ -42,6 +42,9 @@ describe("versionCheckFor", () => {
     ).toMatchObject({
       given: { languages: { "pt-BR": 1 } },
     });
+    expect(
+      versionCheckFor({ _rev: "3.zh_Hant:1" }, { exempt: false })
+    ).toMatchObject({ given: { languages: { zh_Hant: 1 } } });
   });
 
   it("leaves a write that gives no version unjudged", () => {

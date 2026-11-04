@@ -42,7 +42,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineCollection({
         slug: POSTS,
         localized: true,
-        versions: { drafts: true, autosave: true },
+        versions: { drafts: { autosave: true } },
         status: true,
         fields: [text({ name: "title" })],
       }),
@@ -50,7 +50,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     singles: [
       defineSingle({
         slug: BANNER,
-        versions: { drafts: true, autosave: true },
+        versions: { drafts: { autosave: true } },
         fields: [text({ name: "notice" })],
       }),
     ],

@@ -4,8 +4,12 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, renderHook } from "@admin/__tests__/utils";
 import type { useDocumentLock as lockHook } from "@admin/hooks/queries/useDocumentLock";
 
-const { useDocumentLock } = vi.hoisted(() => ({ useDocumentLock: vi.fn() }));
+const { useDocumentLock, useCurrentUserId } = vi.hoisted(() => ({
+  useDocumentLock: vi.fn(),
+  useCurrentUserId: vi.fn(),
+}));
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+vi.mock("@admin/hooks/useCurrentUserId", () => ({ useCurrentUserId }));
 
 import { useDocumentLockSurface } from "../useDocumentLockSurface";
 
@@ -24,6 +28,7 @@ const options = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useCurrentUserId.mockReturnValue("u1");
 });
 
 describe("remembering who held the document", () => {
@@ -124,6 +129,29 @@ describe("remembering who held the document", () => {
 
     expect(requestAccess).toHaveBeenCalledTimes(1);
     expect(takeOver).not.toHaveBeenCalled();
+  });
+});
+
+describe("telling this person's other tab from a colleague", () => {
+  it("says the document was opened in another tab when the holder is who is signed in", () => {
+    // The surface hands the signed-in user's id to the derivation; without it
+    // a person's own second tab reads as a colleague taking over.
+    useDocumentLock.mockReturnValue({
+      state: {
+        status: "taken-over",
+        holder: { ...bob, ownerId: "u1", ownerLabel: "Ada" },
+      },
+      gains: 0,
+      takeOver,
+      requestAccess,
+    });
+
+    const { result } = renderHook(() => useDocumentLockSurface(options));
+
+    expect(result.current.notice?.message).toMatch(
+      /^You opened this document in another tab\./
+    );
+    expect(result.current.notice?.takeOverLabel).toBe("Continue editing here");
   });
 });
 

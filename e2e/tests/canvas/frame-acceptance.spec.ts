@@ -23,6 +23,7 @@ import {
   canvasBlock,
   canvasFrame,
   canvasLayer,
+  frameAndRoom,
 } from "../support/canvas-frame";
 import { LOCK } from "../support/locks";
 import {
@@ -215,11 +216,15 @@ test.describe("the page on the canvas behaves as on a device of that size", () =
       await openEditorWith(page, FIDELITY, "sized");
       for (const device of DEVICES) {
         await chooseDevice(page, device.name);
+        // The device's width; the height is the canvas window's, which fills
+        // the room the editor gives it, so the published page is read in a
+        // window of that same size.
         await expect
-          .poll(() => frameSize(page))
-          .toEqual({ width: device.width, height: device.height });
+          .poll(async () => (await frameSize(page)).width)
+          .toBe(device.width);
+        const window = await frameSize(page);
         const canvas = await readFidelity(canvasFrame(page));
-        const site = await published(page, device);
+        const site = await published(page, window);
         expect(
           canvas,
           `${String(device.name)} matches the published page`
@@ -237,29 +242,51 @@ test.describe("the page on the canvas behaves as on a device of that size", () =
     }
   });
 
-  test("vh does not change with the panels or the zoom", async ({ page }) => {
+  test("vh is the canvas window's height, whatever the panels or the zoom", async ({
+    page,
+  }) => {
     await storeBreakpoints(page, BREAKPOINTS);
     try {
       await page.setViewportSize({ width: 1440, height: 900 });
       await openEditorWith(page, FIDELITY, "sized");
       const sized = canvasBlock(page, "sized");
-      const heightOf = () =>
-        sized.evaluate(element => (element as HTMLElement).offsetHeight);
-      // Half of Desktop's 800px preview height.
-      await expect.poll(heightOf).toBe(400);
+      // The block is 50vh: half of the window the page is laid out in,
+      // which is the canvas frame's own height, as it is a browser window's
+      // for a visitor.
+      // And the window is the room: painted, the frame is as tall as the
+      // region it is laid into, so the window changes with the room and the
+      // zoom rather than standing at one device height.
+      const halfTheWindow = async (): Promise<boolean> => {
+        const block = await sized.evaluate(
+          element => (element as HTMLElement).offsetHeight
+        );
+        const window = await frameSize(page);
+        const { painted, room } = await frameAndRoom(page);
+        return (
+          Math.abs(block - window.height / 2) <= 1 &&
+          Math.abs(painted - room) <= 1
+        );
+      };
+      await expect.poll(halfTheWindow).toBe(true);
 
-      // Both sides hidden, then shown again: the room changes, vh does not.
+      // Both sides hidden, then shown again, and at two zooms: the window
+      // changes with the room, and vh with it.
       await canvasBlock(page, "sized").click();
       await page.keyboard.press("Control+\\");
-      await expect.poll(heightOf).toBe(400);
+      await expect.poll(halfTheWindow).toBe(true);
       await page.keyboard.press("Control+\\");
-      await expect.poll(heightOf).toBe(400);
+      await expect.poll(halfTheWindow).toBe(true);
 
+      const windows: number[] = [];
       for (const zoom of ["50%", "200%"]) {
         await chooseZoom(page, zoom);
         await expect(zoomTrigger(page)).toHaveText(zoom);
-        await expect.poll(heightOf).toBe(400);
+        await expect.poll(halfTheWindow).toBe(true);
+        windows.push((await frameSize(page)).height);
       }
+      // Four times as tall at half the zoom as at twice it: the window really
+      // follows the zoom, which a fixed device height would not.
+      expect(Math.round((windows[0] ?? 0) / (windows[1] ?? 1))).toBe(4);
     } finally {
       await storeBreakpoints(page, null);
     }
@@ -589,18 +616,32 @@ async function box(locator: Locator): Promise<Box> {
   return found;
 }
 
-/** Within a page pixel on every edge. */
-function expectAligned(mark: Box, block: Box, what: string): void {
-  expect(Math.abs(mark.x - block.x), `${what}: left`).toBeLessThanOrEqual(1);
-  expect(Math.abs(mark.y - block.y), `${what}: top`).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs(mark.x + mark.width - (block.x + block.width)),
-    `${what}: right`
-  ).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs(mark.y + mark.height - (block.y + block.height)),
-    `${what}: bottom`
-  ).toBeLessThanOrEqual(1);
+/**
+ * How far outside a block its selection ring is drawn, in screen pixels at any
+ * zoom: the ring and its halo, at the page's edge too, where the canvas's
+ * chrome draws past the frame for it.
+ */
+const RING_OUTSIDE = 4;
+
+/** How far each edge of the ring sits outside the block's. */
+function ringGaps(mark: Box, block: Box): Record<string, number> {
+  return {
+    left: block.x - mark.x,
+    top: block.y - mark.y,
+    right: mark.x + mark.width - (block.x + block.width),
+    bottom: mark.y + mark.height - (block.y + block.height),
+  };
+}
+
+/**
+ * Around the block on every edge, by the ring's distance: a ring drawn on the
+ * block's own edge, or held back at the page's, would leave a gap of none.
+ */
+function expectRinged(mark: Box, block: Box, what: string): void {
+  for (const [edge, gap] of Object.entries(ringGaps(mark, block))) {
+    expect(gap, `${what}: ${edge}`).toBeGreaterThanOrEqual(RING_OUTSIDE - 1);
+    expect(gap, `${what}: ${edge}`).toBeLessThanOrEqual(RING_OUTSIDE + 1);
+  }
 }
 
 test.describe("the frame in the canvas region", () => {
@@ -724,11 +765,11 @@ test.describe("chrome drawn over the frame stays on the block", () => {
       await expect(ring).toHaveCount(1);
       await expect
         .poll(async () => {
-          const [mark, block] = [await box(ring), await box(target)];
-          return Math.abs(mark.y - block.y) + Math.abs(mark.x - block.x);
+          const gaps = ringGaps(await box(ring), await box(target));
+          return Math.max(...Object.values(gaps).map(gap => Math.abs(gap)));
         })
-        .toBeLessThanOrEqual(1);
-      expectAligned(await box(ring), await box(target), what);
+        .toBeLessThanOrEqual(RING_OUTSIDE + 1);
+      expectRinged(await box(ring), await box(target), what);
       // The bar keeps its own size at any zoom, and sits by the block.
       const bar = await box(toolbar);
       expect(bar.height, `${what}: toolbar height`).toBeGreaterThan(24);
@@ -783,8 +824,12 @@ test.describe("chrome drawn over the frame stays on the block", () => {
 test.describe("a drag from the Add panel into the frame", () => {
   test.describe.configure({ timeout: 240_000 });
 
+  // A gap of the first block's own, since blocks at the page's top level
+  // carry no margin and nothing between them spaces them apart.
   const NODES = [
-    text("one", "The first block"),
+    text("one", "The first block", {
+      base: { base: { margin: { blockEnd: "24px" } } },
+    }),
     text("two", "The second block"),
   ];
 

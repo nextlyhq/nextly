@@ -26,8 +26,12 @@ afterEach(async () => {
 
 /** Two languages, with a shared field. */
 const PREFS = "prefs";
-/** No languages. */
+let prefsBeforeChangeCalls = 0;
+/** No languages; counts its before-change hook's runs. */
 const PLAIN = "plain";
+let beforeChangeCalls = 0;
+/** Two languages, each with its own status. */
+const LIVE = "live";
 const ANA = {
   id: "user-ana",
   name: "Ana Ruiz",
@@ -45,6 +49,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: PREFS,
         localized: true,
         access: OPEN,
+        hooks: {
+          beforeChange: [
+            ({ data }: { data?: unknown }) => {
+              prefsBeforeChangeCalls += 1;
+              return data;
+            },
+          ],
+        },
         fields: [
           text({ name: "siteName", localized: true }),
           text({ name: "contact", localized: false }),
@@ -53,7 +65,22 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineSingle({
         slug: PLAIN,
         access: OPEN,
+        hooks: {
+          beforeChange: [
+            ({ data }: { data?: unknown }) => {
+              beforeChangeCalls += 1;
+              return data;
+            },
+          ],
+        },
         fields: [text({ name: "notice" })],
+      }),
+      defineSingle({
+        slug: LIVE,
+        localized: true,
+        status: true,
+        access: { ...OPEN, publish: () => true, unpublish: () => true },
+        fields: [text({ name: "headline", localized: true })],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -251,6 +278,105 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, PREFS, "es")).toBe(
         `${(await mainRow(t, PREFS))._revision}.es:2`
       );
+    });
+
+    it("refuses a version below the stored one before any hook runs", async () => {
+      const t = await boot(dialect);
+      const first = await save(t, PLAIN, { notice: "first" });
+      await save(t, PLAIN, { notice: "theirs" });
+      const before = beforeChangeCalls;
+      expect(before).toBeGreaterThan(0);
+      const refused = await save(t, PLAIN, {
+        notice: "mine",
+        _rev: revOf(first),
+      });
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(beforeChangeCalls).toBe(before);
+    });
+
+    it("answers a refused translated save with a version that names its language, which that save may then send", async () => {
+      const t = await boot(dialect);
+      await save(
+        t,
+        PREFS,
+        { siteName: "Hello", contact: "c" },
+        { locale: "en" }
+      );
+      const es = await save(t, PREFS, { siteName: "Hola" }, { locale: "es" });
+      await save(t, PREFS, { contact: "shared" }, { locale: "en" });
+      const refused = await save(
+        t,
+        PREFS,
+        { siteName: "Otra", _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      const current = String(refused.publicData?.currentVersion);
+      expect(current).toBe(await read(t, PREFS, "es"));
+      const again = await save(
+        t,
+        PREFS,
+        { siteName: "Otra", _rev: current },
+        { locale: "es" }
+      );
+      expect(again.success, JSON.stringify(again)).toBe(true);
+    });
+
+    it("refuses a status sweep of every language when any language moved since its version", async () => {
+      const t = await boot(dialect);
+      await save(
+        t,
+        LIVE,
+        { headline: "Hi", status: "published" },
+        { locale: "en" }
+      );
+      await save(
+        t,
+        LIVE,
+        { headline: "Hola", status: "published" },
+        { locale: "es" }
+      );
+      const everyLanguage = await read(t, LIVE, "*");
+      // Spanish alone changes after the read.
+      await save(t, LIVE, { headline: "Hola de nuevo" }, { locale: "es" });
+      const swept = await save(
+        t,
+        LIVE,
+        { status: "draft", _rev: everyLanguage },
+        { locale: "*" }
+      );
+      expect(swept).toMatchObject({ success: false, code: "STALE_VERSION" });
+      expect(String(swept.publicData?.currentVersion)).toBe(
+        await read(t, LIVE, "*")
+      );
+      const fresh = await save(
+        t,
+        LIVE,
+        { status: "draft", _rev: await read(t, LIVE, "*") },
+        { locale: "*" }
+      );
+      expect(fresh.success, JSON.stringify(fresh)).toBe(true);
+    });
+
+    it("refuses a save whose translation is already behind before any hook runs", async () => {
+      const t = await boot(dialect);
+      await save(
+        t,
+        PREFS,
+        { siteName: "Hello", contact: "c" },
+        { locale: "en" }
+      );
+      const es = await save(t, PREFS, { siteName: "Hola" }, { locale: "es" });
+      await save(t, PREFS, { siteName: "Hola otra vez" }, { locale: "es" });
+      const before = prefsBeforeChangeCalls;
+      const refused = await save(
+        t,
+        PREFS,
+        { siteName: "Mía", _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(refused).toMatchObject({ code: "STALE_VERSION" });
+      expect(prefsBeforeChangeCalls).toBe(before);
     });
   }
 );

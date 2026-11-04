@@ -168,14 +168,16 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   bumpDocumentRevision,
   documentVersionOn,
   mainRowBump,
-  revisionBumpColumns,
   setDocumentVersion,
+  translationRevisionBumpColumns,
   translationTableOf,
+  updateTimeOf,
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
 import {
@@ -204,12 +206,14 @@ import {
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
 import {
+  certainlyStale,
   type DocumentRevisionState,
   givenOf,
   judgedLanguage,
+  judgedLanguageStates,
+  languagesJudged,
   type PartState,
   poolRevisionReader,
-  refuseIfDocumentMoved,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
@@ -930,6 +934,15 @@ export class SingleMutationService extends BaseService {
      * old view would lose it, so a discard is judged as a save of it is.
      */
     version?: Readonly<Record<string, unknown>>;
+    /**
+     * Told the version the discard left the document at, read on its
+     * transaction and spelled for `locale`: for a caller that answers with
+     * the document, so the version it hands back is the one this discard
+     * produced. Used only once the discard has resolved, so a discard that
+     * rolls back hands out none. Not called when there was no draft to
+     * discard.
+     */
+    onVersion?: (version: string | undefined) => void;
   }): Promise<number> {
     // Refused first when the Single is removed from code, before any hook or
     // read of its document, so a refused write changes nothing.
@@ -1016,6 +1029,30 @@ export class SingleMutationService extends BaseService {
             },
             { ...before, locale: judging.locale }
           );
+          if (params.onVersion) {
+            // Asked of the catalog on this transaction, which a missing table
+            // cannot abort, rather than taken from the write, which wrote no
+            // translation row.
+            const languagesTable = `${singleMeta.tableName}_locales`;
+            const translated =
+              singleMeta.localized === true &&
+              this.localization !== undefined &&
+              (
+                await liveColumnNames(tx.getDrizzle(), this.adapter.dialect, [
+                  languagesTable,
+                ])
+              ).has(languagesTable.toLowerCase());
+            params.onVersion(
+              await documentVersionOn(tx, {
+                dialect: this.adapter.dialect,
+                table: singleMeta.tableName,
+                id: entryId,
+                languagesTable: translated ? languagesTable : null,
+                localization: this.localization,
+                locale: params.locale ?? undefined,
+              })
+            );
+          }
           await recordWriteEvent(
             tx,
             { adapter: this.adapter },
@@ -1403,19 +1440,19 @@ export class SingleMutationService extends BaseService {
     language: PartState | undefined;
   }> {
     stale.lockedId = id;
-    const { main, languages } = await refuseIfDocumentMoved(
+    const locales = judging.locale === undefined ? undefined : [judging.locale];
+    const main = await refuseIfMainMoved(
       tx,
       this.adapter.dialect,
       judging.check,
       {
         table: judging.table,
         id,
-        languagesTable: judging.languagesTable,
-        judged: judging.locale === undefined ? undefined : [judging.locale],
+        languages: languagesJudged(judging.languagesTable, locales),
       },
       stale.holder
     );
-    return { main, language: languages?.[0] };
+    return { main, language: judgedLanguageStates(main, locales)?.[0] };
   }
 
   /**
@@ -2198,6 +2235,74 @@ export class SingleMutationService extends BaseService {
         autoCreated = true;
       }
 
+      const companion =
+        this.localization && singleMeta.localized === true
+          ? buildCompanionSchema({
+              slug,
+              tableName: singleMeta.tableName,
+              fields: singleMeta.fields as { name: string; type: string }[],
+              dialect: this.adapter.dialect,
+              status: (singleMeta as { status?: boolean }).status === true,
+            })
+          : null;
+      const writeLocale =
+        companion && this.localization
+          ? resolveRequestedLocale(this.localization, options.locale)
+          : undefined;
+      // A translated save is judged on its own language too, so the version
+      // must name it; one from a read of another language is refused here,
+      // before anything is written.
+      const judgedLocale = judgedLanguage(givenOf(versionCheck), writeLocale);
+      // Every language a refusal's current version names: the one the save
+      // is judged on, or for a sweep of every language, each of them.
+      const judgedLanguages =
+        companion && (judgedLocale !== undefined || sweepAllLocales)
+          ? {
+              table: companion.companionTableName,
+              locales: sweepAllLocales
+                ? (this.localization?.locales.map(l => l.code) ?? [])
+                : [judgedLocale as string],
+            }
+          : undefined;
+      // A version below the one the Single already holds is certainly out of
+      // date, since a counter only goes up: refused here, before any hook
+      // runs. Any other is judged under the row lock.
+      if (
+        !autoCreated &&
+        versionCheck.kind === "judge" &&
+        (await certainlyStale(poolRevisionReader(this.adapter), {
+          dialect: this.adapter.dialect,
+          table: singleMeta.tableName,
+          id: existingDoc.id,
+          given: versionCheck.given,
+          languages: judgedLanguages,
+        }))
+      ) {
+        return buildSingleErrorResult(
+          await staleVersionErrorFor(poolRevisionReader(this.adapter), {
+            dialect: this.adapter.dialect,
+            scopeKind: "single",
+            slug,
+            id: existingDoc.id,
+            given: versionCheck.given,
+            at: {
+              table: singleMeta.tableName,
+              ...(judgedLanguages ? { languages: judgedLanguages } : {}),
+            },
+            reader: {
+              user: options.user,
+              trusted: fieldTrustOf(options),
+              authenticatedScope: options.authenticatedScope,
+              hookInputs: {
+                request: options.request,
+                context: options.context,
+              },
+            },
+          }),
+          "Failed to update Single document"
+        );
+      }
+
       // Deserialize for hook context
       const existingDeserialized = this.queryService.deserializeJsonFields(
         existingDoc,
@@ -2364,24 +2469,6 @@ export class SingleMutationService extends BaseService {
       // language-aware and the split/upsert below reuse it. `companion` is null when the single
       // isn't localized (unchanged path) — gate on THIS single's `localized` flag so a
       // non-localized single in a localized app doesn't route to a companion never created.
-      const companion =
-        this.localization && singleMeta.localized === true
-          ? buildCompanionSchema({
-              slug,
-              tableName: singleMeta.tableName,
-              fields: singleMeta.fields as { name: string; type: string }[],
-              dialect: this.adapter.dialect,
-              status: (singleMeta as { status?: boolean }).status === true,
-            })
-          : null;
-      const writeLocale =
-        companion && this.localization
-          ? resolveRequestedLocale(this.localization, options.locale)
-          : undefined;
-      // A translated save is judged on its own language too, so the version
-      // must name it; one from a read of another language is refused here,
-      // before anything is written.
-      const judgedLocale = judgedLanguage(givenOf(versionCheck), writeLocale);
       if (companion) {
         translations = {
           table: companion.companionTableName,
@@ -3057,7 +3144,11 @@ export class SingleMutationService extends BaseService {
               tx,
               this.adapter.dialect,
               versionCheck,
-              { table: singleMeta.tableName, id: existingDoc.id },
+              {
+                table: singleMeta.tableName,
+                id: existingDoc.id,
+                languages: judgedLanguages,
+              },
               staleWrite
             );
             // The save's language row as it stood before this save wrote it,
@@ -3564,7 +3655,10 @@ export class SingleMutationService extends BaseService {
                         componentFieldData: attemptComponentFields,
                         manyToManyData: {},
                       },
-                      savedBy
+                      savedBy,
+                      updateTimeOf(
+                        (mainPayload as { updated_at?: unknown }).updated_at
+                      )
                     ),
                   },
                   this.whereEq("id", existingDoc.id),
@@ -4161,7 +4255,10 @@ export class SingleMutationService extends BaseService {
                 {
                   [COMPANION_STATUS_COLUMN]: companionStatus,
                   // Each translation row moved is a save of that language.
-                  ...revisionBumpColumns(savedBy),
+                  ...translationRevisionBumpColumns(
+                    savedBy,
+                    this.adapter.dialect
+                  ),
                 },
                 {
                   and: [

@@ -134,10 +134,10 @@ export const BUTTON_BASE_STYLES = {
       // 200px. Stated once here, both are the same control.
       boxSizing: "border-box",
       padding: {
-        blockStart: "0.5rem",
-        blockEnd: "0.5rem",
-        inlineStart: "1rem",
-        inlineEnd: "1rem",
+        blockStart: { $token: "button.padding-y" },
+        blockEnd: { $token: "button.padding-y" },
+        inlineStart: { $token: "button.padding-x" },
+        inlineEnd: { $token: "button.padding-x" },
       },
       backgroundColor: { $token: "color.primary" },
       color: { $token: "color.background" },
@@ -204,16 +204,21 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     entryId: { label: "Linked entry", role: "content", type: "text" },
     target: {
       label: "Open link in",
-      optionLabels: { _self: "This tab", _blank: "A new tab" },
+      optionLabels: { _self: "This tab", _blank: "New tab" },
       type: "select",
       options: ["_self", "_blank"],
     },
     rel: { label: "Link relationship", type: "text" },
+    // What the button does when it is not a link: offered only without a
+    // link, to a URL or to an entry, since a link is what it then does. An
+    // entry link is the collection and the entry together, as the renderer
+    // resolves one.
     type: {
-      label: "Button type",
+      label: "Acts as",
       optionLabels: { button: "Button", submit: "Submit", reset: "Reset" },
       type: "select",
       options: [...BUTTON_TYPES],
+      onlyWithout: ["href", ["entryCollection", "entryId"]],
     },
     ariaLabel: { label: "Accessible label", role: "content", type: "text" },
   },

@@ -68,6 +68,8 @@ export interface CommandVerbs {
   readonly duplicateComponent?: () => void;
   /** Begin replacing a pattern's content with the selection. */
   readonly updatePattern?: () => void;
+  /** Begin saving the block's look as a shared style; the host owns the form. */
+  readonly saveAsSharedStyle?: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -127,6 +129,10 @@ const BLOCK_COMMAND_COPY: Record<
     // searches with; the taxonomy calls it a pattern and they need not know
     // that before they can find it.
     keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
+  },
+  "save-as-shared-style": {
+    label: "Save block as shared style",
+    keywords: ["save", "shared style", "class", "reuse", "style", "preset"],
   },
   "edit-component": {
     label: "Edit component",
@@ -194,6 +200,7 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
+    "save-as-shared-style": () => verbs.saveAsSharedStyle?.(),
     "edit-component": () => verbs.editComponent?.(),
     "turn-into-component": () => verbs.turnIntoComponent?.(),
     "detach-component": () => verbs.detachComponent?.(),

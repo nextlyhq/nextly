@@ -111,6 +111,19 @@ function written(editor: { apply: ReturnType<typeof vi.fn> }): unknown {
 }
 
 describe("a placement's variant picker", () => {
+  it("is a row like the fields below it, its label beside the menu", () => {
+    mount(placed());
+    const picker = screen.getByRole("combobox", { name: "Variant" });
+    const row = picker.parentElement;
+    expect(row?.className).toBe("nx-inspector__field");
+    // A field's label, not the capitalised heading above a group.
+    const label = row?.querySelector("label");
+    expect(label?.textContent).toBe("Variant");
+    expect(label?.className).not.toContain("nx-inspector__heading");
+    // Inside the fields' container, so it stacks with them in a narrow rail.
+    expect(row?.parentElement?.className).toContain("nx-inspector__fields");
+  });
+
   it("chooses a variant, keeping the placement's own values", () => {
     const editor = mount(placed());
     const picker = screen.getByRole("combobox", { name: "Variant" });

@@ -18,6 +18,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { discardWorkingDraft } from "../../versions/discard-working-draft";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 /** The statement that reads translation counters on their own. */
@@ -283,6 +284,35 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("answers a discard with the version it produced, the one a read then gives", async () => {
+      const t = await boot(dialect);
+      await singlesOf(t).update(
+        PREFS,
+        { siteName: "Live", contact: "c", status: "published" },
+        { locale: "en", overrideAccess: true }
+      );
+      const held = revOf(
+        await singlesOf(t).update(
+          PREFS,
+          { contact: "held edit" },
+          { locale: "en", overrideAccess: true }
+        )
+      );
+      // As the discard route makes it: the live document read first, then
+      // the draft removed under the Single's lock.
+      const { document, removed } = await discardWorkingDraft({
+        scopeKind: "single",
+        slug: PREFS,
+        entryId: String((await mainRow(t, PREFS)).id),
+        locale: "en",
+        user: { id: "system-check", roles: ["super-admin"] } as never,
+      });
+      expect(removed).toBe(1);
+      const answered = (document as Record<string, unknown>)._rev;
+      expect(answered).not.toBe(held);
+      expect(answered).toBe(await readRev(t, PREFS, "en"));
+    });
+
     it("gives a translated Single with no translation table a version that names no language", async () => {
       const t = await boot(dialect);
       expect(await readRev(t, UNTRANSLATED, "en")).toBe("1");
@@ -327,6 +357,7 @@ describe.each(getConfiguredTestDialects())(
             ? row.snapshot
             : JSON.stringify(row.snapshot);
         expect(snapshot).not.toContain("_changed_by");
+        expect(snapshot).not.toContain("_changed_at");
         expect(snapshot).not.toContain("_revision");
         expect(snapshot).not.toContain('"_rev"');
       }
@@ -433,7 +464,11 @@ describe.each(getConfiguredTestDialects())(
       } as never)) as Record<string, unknown>;
       expect(
         Object.keys(read).filter(
-          key => key.includes("changed_by") || key.includes("changedBy")
+          key =>
+            key.includes("changed_by") ||
+            key.includes("changedBy") ||
+            key.includes("changed_at") ||
+            key.includes("changedAt")
         )
       ).toEqual([]);
       expect(read._revision).toBeUndefined();

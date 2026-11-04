@@ -16,11 +16,16 @@ import type {
   SharedStylesUsage,
   SharedStyleUsesPage,
 } from "@nextlyhq/builder/shell";
-import { readPluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  readPluginRoute,
+  validationIssues,
+  writePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useMemo } from "react";
 
 import {
   PAGE_BUILDER_PLUGIN_NAME,
+  SHARED_STYLE_IN_USE_CODE,
   SHARED_STYLE_LOCK_ROUTE_PATH,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
   sharedStyleUsagePath,
@@ -42,7 +47,12 @@ function usageFromResponse(
   // Own entries only, into a Map, so an id such as `__proto__` is a style
   // like any other rather than a key of the object's prototype.
   const styles = new Map<string, SharedStyleReach>(Object.entries(body.styles));
-  return { whole: body.whole, mayLock: body.mayLock, styles };
+  return {
+    whole: body.whole,
+    counting: body.counting,
+    mayLock: body.mayLock,
+    styles,
+  };
 }
 
 /** The list envelope the where-used route answers with. */
@@ -111,21 +121,23 @@ export function useSharedStylesClient(): SharedStylesAccess {
     []
   );
 
-  /** Send one write; answer its refusal, or read the site style again. */
+  /**
+   * Send one write; answer what refused it, or read the site style again and
+   * answer nothing.
+   */
   const send = useCallback(
     async (
       path: string,
-      body: SharedStyleLockRequest | SharedStyleRemoveRequest,
-      fallback: string
-    ): Promise<string | undefined> => {
+      body: SharedStyleLockRequest | SharedStyleRemoveRequest
+    ): Promise<{ readonly refused: unknown } | undefined> => {
       try {
         await writePluginRoute({
           plugin: PAGE_BUILDER_PLUGIN_NAME,
           path,
           body,
         });
-      } catch (reason) {
-        return refusalWords(reason, fallback);
+      } catch (refused) {
+        return { refused };
       }
       await refetch();
       return undefined;
@@ -134,29 +146,51 @@ export function useSharedStylesClient(): SharedStylesAccess {
   );
 
   const lock = useCallback(
-    (id: string, locked: boolean) =>
-      send(
-        SHARED_STYLE_LOCK_ROUTE_PATH,
-        { classId: id, locked },
-        locked
-          ? "This shared style could not be locked."
-          : "This shared style could not be unlocked."
-      ),
+    async (id: string, locked: boolean) => {
+      const answer = await send(SHARED_STYLE_LOCK_ROUTE_PATH, {
+        classId: id,
+        locked,
+      });
+      return answer === undefined
+        ? undefined
+        : refusalWords(
+            answer.refused,
+            locked
+              ? "This shared style could not be locked."
+              : "This shared style could not be unlocked."
+          );
+    },
     [send]
   );
 
-  const remove = useCallback(
-    (ids: readonly string[]) =>
-      send(
-        SHARED_STYLE_REMOVE_ROUTE_PATH,
-        { ids },
-        "These shared styles could not be removed."
-      ),
+  const removeWithReason = useCallback(
+    async (ids: readonly string[]) => {
+      const answer = await send(SHARED_STYLE_REMOVE_ROUTE_PATH, { ids });
+      if (answer === undefined) return undefined;
+      return {
+        reason: refusalWords(
+          answer.refused,
+          "These shared styles could not be removed."
+        ),
+        // The route's in-use refusal names its code, whichever check found
+        // the use; a lock or a count no longer whole refuses with another,
+        // and says nothing of use.
+        inUse: validationIssues(answer.refused).some(
+          issue => issue.code === SHARED_STYLE_IN_USE_CODE
+        ),
+      };
+    },
     [send]
+  );
+
+  // The words alone, as `remove` has always answered.
+  const remove = useCallback(
+    async (ids: readonly string[]) => (await removeWithReason(ids))?.reason,
+    [removeWithReason]
   );
 
   return useMemo(
-    () => ({ usage, uses, lock, remove }),
-    [usage, uses, lock, remove]
+    () => ({ usage, uses, lock, remove, removeWithReason }),
+    [usage, uses, lock, remove, removeWithReason]
   );
 }

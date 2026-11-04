@@ -1056,6 +1056,21 @@ export class CollectionsHandler {
   }
 
   /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   */
+  // Reached through the dispatcher's method table, handed the handler the DI
+  // container resolves, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async previewPublishAllLocales(
+    params: Parameters<CollectionsHandler["publishAllLocales"]>[0]
+  ) {
+    return this.entryService.previewPublishAllLocales(
+      this.resolveUserParam(params)
+    );
+  }
+
+  /**
    * Delete an entry.
    * @param params - Collection name, entry ID, and optional user ID
    */

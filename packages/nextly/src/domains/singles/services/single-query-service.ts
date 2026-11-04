@@ -163,6 +163,7 @@ import {
   attachDocumentVersions,
   chainCoversVersion,
   languageCountersBeforeContent,
+  type SelectsRows,
   languageRevisionsOf,
   storedRevisionsOf,
 } from "../../versions/document-revision";
@@ -1432,8 +1433,7 @@ export class SingleQueryService extends BaseService {
     const translated =
       this.localization !== undefined && singleMeta.localized === true;
     return languageCountersBeforeContent(
-      (statement, values) =>
-        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
+      this.adapter.getDrizzle<SelectsRows>(),
       {
         dialect: this.adapter.dialect,
         languagesTable:

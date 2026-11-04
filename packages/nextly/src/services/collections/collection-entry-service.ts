@@ -880,6 +880,17 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it. Asked in every language, as the publish is,
+   * and writing nothing, so it owes none of a write's side effects.
+   */
+  previewPublishAllLocales(params: EveryLanguageLifecycleParams) {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.previewPublishAllLocales(params)
+    );
+  }
+
+  /**
    * Take every language of an entry down at once.
    *
    * The counterpart publishing has had since i18n M7 and withdrawing never did.
