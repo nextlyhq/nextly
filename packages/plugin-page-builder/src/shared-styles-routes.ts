@@ -459,7 +459,7 @@ async function usageRefusals(
   if (!indexIsWhole(health)) {
     return {
       reasons: [
-        "Some pages are still being counted, so no shared style can be removed yet.",
+        "Some pages haven't been counted yet, so no shared style can be removed.",
       ],
       used: false,
     };
