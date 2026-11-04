@@ -5467,10 +5467,12 @@ export class CollectionMutationService extends BaseService {
      */
     updateUnderLock?: { authenticatedScope?: AuthenticatedScope };
     /**
-     * Told, once the discard has committed, the version it left the document
-     * at, read on its transaction and spelled for `locale`: for a caller that
-     * answers with the document, so the version it hands back is the one
-     * this discard produced. Not called when there was no draft to discard.
+     * Told the version the discard left the document at, read on its
+     * transaction and spelled for `locale`: for a caller that answers with
+     * the document, so the version it hands back is the one this discard
+     * produced. Used only once the discard has resolved, so a discard that
+     * rolls back hands out none. Not called when there was no draft to
+     * discard.
      */
     onVersion?: (version: string | undefined) => void;
   }): Promise<number> {
@@ -5481,7 +5483,6 @@ export class CollectionMutationService extends BaseService {
       params.collectionName
     );
     const tableName = collectionTableName(collection, params.collectionName);
-    let discardedVersion: string | undefined;
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter
       .transaction(async tx => {
@@ -5535,18 +5536,20 @@ export class CollectionMutationService extends BaseService {
             actorForWrite(params.actor, params.user)
           );
           if (params.onVersion) {
-            discardedVersion = await documentVersionOn(tx, {
-              dialect: this.dialect,
-              table: tableName,
-              id: params.entryId,
-              languagesTable: await this.translationTableOnTx(
-                tx,
-                collection,
-                tableName
-              ),
-              localization: this.localization,
-              locale: params.locale ?? undefined,
-            });
+            params.onVersion(
+              await documentVersionOn(tx, {
+                dialect: this.dialect,
+                table: tableName,
+                id: params.entryId,
+                languagesTable: await this.translationTableOnTx(
+                  tx,
+                  collection,
+                  tableName
+                ),
+                localization: this.localization,
+                locale: params.locale ?? undefined,
+              })
+            );
           }
           await this.recordHistoryEvent(
             tx,
@@ -5560,10 +5563,6 @@ export class CollectionMutationService extends BaseService {
             }
           );
         }
-        return removed;
-      })
-      .then(removed => {
-        if (removed > 0) params.onVersion?.(discardedVersion);
         return removed;
       })
       .catch(async (error: unknown) => {
