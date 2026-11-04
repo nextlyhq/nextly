@@ -14,10 +14,17 @@
  * The context is handed to the plugin's code, and nothing else stands between
  * that code and this method. Without the ownership check any plugin could run
  * any sweep, another plugin's or core's, as often as its routes are called.
- * Ownership is read from the plugin's own `contributes.jobs`, the list the
- * registry was folded from, so it is the same answer the registry gives about
- * who declared a slug: slugs are unique across the app and every plugin, which
- * `collectJobs` enforces at boot.
+ * Ownership is the registry's answer: it records the plugin that declared
+ * each job as it registers it, from what `collectJobs` collected, and slugs
+ * are unique across the app and every plugin, which `collectJobs` enforces at
+ * boot. So what a plugin may run is what was actually registered as its own.
+ *
+ * ## Which installation
+ *
+ * The registry and the database come from the plugin context's own service
+ * resolver, as its other services do, so a context left from an earlier
+ * registration, or one of two instances in a process, runs the sweep on its
+ * own installation, never on whichever the process container holds.
  *
  * ## Why bounded here
  *
@@ -30,7 +37,6 @@
  * @module plugins/jobs/plugin-jobs
  */
 import { runDetachedFromRequest } from "../../auth/caller-scope";
-import { container } from "../../di/container";
 import {
   createJobsNamespace,
   type JobsNamespace,
@@ -42,7 +48,6 @@ import {
 import type { JobsPassDatabase } from "../../domains/jobs/jobs-runner";
 import type { RunJobsResult } from "../../domains/jobs/run-jobs";
 import { NextlyError } from "../../errors/nextly-error";
-import type { PluginDefinition } from "../plugin-context";
 
 /**
  * The most a sweep run from a request may spend starting work: the budget the
@@ -73,34 +78,42 @@ export interface PluginJobsNamespace extends JobsNamespace {
   ): Promise<{ ran: boolean }>;
 }
 
-/** How a sweep is run, injected so the ownership rule is testable alone. */
-export interface PluginSweepRunner {
+/**
+ * What running a sweep now needs from the installation: its job registry, to
+ * say which sweeps a plugin declared, and the run itself. Injected so the
+ * ownership rule is testable alone.
+ */
+export interface PluginSweepHost {
+  registry(): Pick<JobRegistry, "get" | "pluginOf">;
   run(slug: string, maxDurationMs: number): Promise<RunJobsResult>;
 }
 
 /**
- * The runner a booted installation has: its adapter and its one job
- * registry, run outside the request's caller scope exactly as Publish now's
- * drain is, so the sweep is judged as a scheduled pass would be.
+ * The host a plugin context offers: the registry and the database its own
+ * service resolver answers, never the process container, so a sweep run now
+ * runs on the instance that built the context, as every other context
+ * service does. Run outside the request's caller scope exactly as Publish
+ * now's drain is, so the sweep is judged as a scheduled pass would be.
  */
-const BOOTED_RUNNER: PluginSweepRunner = {
-  run: async (slug, maxDurationMs) => {
-    if (!container.has("jobRegistry")) {
-      throw NextlyError.internal({
-        logContext: { reason: "job-registry-unregistered", slug },
-      });
-    }
-    // Imported when a sweep runs, not with the context: the runner reaches
-    // the Direct API, and every module that builds a plugin context would
-    // otherwise load all of it to offer a method most never call.
-    const { runSweepNow } = await import("../../domains/jobs/jobs-runner");
-    const adapter = container.get<JobsPassDatabase>("adapter");
-    const registry = container.get<JobRegistry>("jobRegistry");
-    return runDetachedFromRequest(() =>
-      runSweepNow(adapter, registry, slug, { maxDurationMs })
-    );
-  },
-};
+export function contextSweepHost(services: {
+  registry: () => JobRegistry;
+  database: () => JobsPassDatabase;
+}): PluginSweepHost {
+  return {
+    registry: services.registry,
+    run: async (slug, maxDurationMs) => {
+      // Imported when a sweep runs, not with the context: the runner reaches
+      // the Direct API, and every module that builds a plugin context would
+      // otherwise load all of it to offer a method most never call.
+      const { runSweepNow } = await import("../../domains/jobs/jobs-runner");
+      const database = services.database();
+      const registry = services.registry();
+      return runDetachedFromRequest(() =>
+        runSweepNow(database, registry, slug, { maxDurationMs })
+      );
+    },
+  };
+}
 
 /**
  * How long a sweep run now may spend starting work: the one asked for, held
@@ -121,39 +134,34 @@ function sweepBudget(asked: number | undefined): number {
   return Math.min(asked, PLUGIN_SWEEP_NOW_MAX_MS);
 }
 
-/** The sweeps a plugin declares, by the slug the registry keys them under. */
-function ownSweeps(plugin: PluginDefinition | undefined): ReadonlySet<string> {
-  return new Set(
-    (plugin?.contributes?.jobs ?? [])
-      .filter(definition => definition.sweep === true)
-      .map(definition => normalizeJobSlug(definition.slug))
-  );
-}
-
-/** `ctx.services.jobs` for one plugin. */
 export function pluginJobsNamespace(
-  plugin: PluginDefinition | undefined,
-  runner: PluginSweepRunner = BOOTED_RUNNER
+  pluginName: string | undefined,
+  host: PluginSweepHost
 ): PluginJobsNamespace {
-  // Read once: the definitions a plugin contributes are fixed when it is
-  // registered, as the registry folded from them is.
-  const sweeps = ownSweeps(plugin);
   return {
     ...createJobsNamespace(),
     async runSweepNow(slug, options) {
       const own = normalizeJobSlug(slug);
-      // The precondition, before anything is queued or run.
-      if (!sweeps.has(own)) {
+      // The precondition, before anything is queued or run: a sweep the
+      // registry holds as this plugin's own declaration. Asked of the
+      // registry, the one record of who declared what, rather than of the
+      // plugin's manifest.
+      const registry = host.registry();
+      const declared =
+        pluginName !== undefined &&
+        registry.pluginOf(own) === pluginName &&
+        registry.get(own)?.sweep === true;
+      if (!declared) {
         throw NextlyError.forbidden({
           logContext: {
             reason: "not-the-plugin's-own-sweep",
-            plugin: plugin?.name,
+            plugin: pluginName,
             slug: own,
           },
         });
       }
       const budget = sweepBudget(options?.maxDurationMs);
-      const result = await runner.run(own, budget);
+      const result = await host.run(own, budget);
       return { ran: result.claimed > 0 };
     },
   };

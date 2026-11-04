@@ -27,6 +27,8 @@ import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
+import type { JobRegistry } from "../domains/jobs/job-registry";
+import type { JobsPassDatabase } from "../domains/jobs/jobs-runner";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
@@ -77,6 +79,7 @@ import type {
 } from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import {
+  contextSweepHost,
   pluginJobsNamespace,
   type PluginJobsNamespace,
 } from "./jobs/plugin-jobs";
@@ -1318,6 +1321,11 @@ export const PLUGIN_SERVICE_NAMES = [
   "logger",
   "config",
   "adapter",
+  // The registration's job registry and the database its runner uses, so a
+  // plugin's `runSweepNow` runs against the instance that built its context,
+  // never whichever one the process container holds at the time.
+  "jobRegistry",
+  "jobsDatabase",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1860,7 +1868,11 @@ export function createPluginContext(
                         ? NextlyServiceConfig
                         : T extends "adapter"
                           ? AdapterTransactions
-                          : never,
+                          : T extends "jobRegistry"
+                            ? JobRegistry
+                            : T extends "jobsDatabase"
+                              ? JobsPassDatabase
+                              : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2161,7 +2173,13 @@ export function createPluginContext(
       // Built for THIS plugin, so running a sweep now is limited to the sweeps
       // it contributes; see `plugin-jobs`.
       get jobs() {
-        return pluginJobsNamespace(plugin);
+        return pluginJobsNamespace(
+          plugin?.name,
+          contextSweepHost({
+            registry: () => getServiceFn("jobRegistry"),
+            database: () => getServiceFn("jobsDatabase"),
+          })
+        );
       },
       plugins: buildPluginServicesNamespace(),
     },

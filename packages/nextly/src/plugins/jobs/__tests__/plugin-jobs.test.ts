@@ -10,9 +10,9 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { defineJob } from "../../../domains/jobs/job-registry";
+import { JobRegistry, defineJob } from "../../../domains/jobs/job-registry";
+import type { RunJobsResult } from "../../../domains/jobs/run-jobs";
 import { NextlyError } from "../../../errors/nextly-error";
-import type { PluginDefinition } from "../../plugin-context";
 import { PLUGIN_SWEEP_NOW_MAX_MS, pluginJobsNamespace } from "../plugin-jobs";
 
 const SWEEP = defineJob({
@@ -25,17 +25,37 @@ const ONE_OFF = defineJob({
   handler: async () => undefined,
 });
 
-const acme = {
-  name: "acme",
-  contributes: { jobs: [SWEEP, ONE_OFF] },
-} as unknown as PluginDefinition;
+/**
+ * An installation's registry as the boot fills it: acme's own sweep and
+ * one-off job, another plugin's sweep, and core's release drain, which no
+ * plugin declared.
+ */
+function registry(): JobRegistry {
+  const jobs = new JobRegistry();
+  jobs.register(SWEEP, { plugin: "acme" });
+  jobs.register(ONE_OFF, { plugin: "acme" });
+  jobs.register(
+    defineJob({ slug: "other:reindex", sweep: true, handler: async () => {} }),
+    { plugin: "other" }
+  );
+  jobs.register(
+    defineJob({ slug: "releases:drain", sweep: true, handler: async () => {} })
+  );
+  return jobs;
+}
+
+/** The host a context offers, over that registry and a recording run. */
+const hostOf = (run: (slug: string, ms: number) => Promise<RunJobsResult>) => {
+  const jobs = registry();
+  return { registry: () => jobs, run };
+};
 
 const ran = { claimed: 1, done: 1, failed: 0, retried: 0, unrecorded: 0 };
 
 describe("running a plugin's own sweep now", () => {
   it("runs a sweep the plugin contributes, bounded, and says it ran", async () => {
     const run = vi.fn(async () => ran);
-    const jobs = pluginJobsNamespace(acme, { run });
+    const jobs = pluginJobsNamespace("acme", hostOf(run));
 
     await expect(
       jobs.runSweepNow("acme:reindex", { maxDurationMs: 5_000 })
@@ -45,7 +65,7 @@ describe("running a plugin's own sweep now", () => {
 
   it("says it did not run when another runner holds the sweep", async () => {
     const run = vi.fn(async () => ({ ...ran, claimed: 0, done: 0 }));
-    const jobs = pluginJobsNamespace(acme, { run });
+    const jobs = pluginJobsNamespace("acme", hostOf(run));
 
     await expect(jobs.runSweepNow("acme:reindex")).resolves.toEqual({
       ran: false,
@@ -54,7 +74,7 @@ describe("running a plugin's own sweep now", () => {
 
   it("matches the slug as the registry keys it, trimmed", async () => {
     const run = vi.fn(async () => ran);
-    const jobs = pluginJobsNamespace(acme, { run });
+    const jobs = pluginJobsNamespace("acme", hostOf(run));
 
     await jobs.runSweepNow("  acme:reindex ");
     expect(run).toHaveBeenCalledWith("acme:reindex", PLUGIN_SWEEP_NOW_MAX_MS);
@@ -62,7 +82,7 @@ describe("running a plugin's own sweep now", () => {
 
   it("holds a longer budget to the most a request may spend", async () => {
     const run = vi.fn(async () => ran);
-    const jobs = pluginJobsNamespace(acme, { run });
+    const jobs = pluginJobsNamespace("acme", hostOf(run));
 
     await jobs.runSweepNow("acme:reindex", { maxDurationMs: 600_000 });
     expect(run).toHaveBeenCalledWith("acme:reindex", PLUGIN_SWEEP_NOW_MAX_MS);
@@ -75,7 +95,7 @@ describe("running a plugin's own sweep now", () => {
     // A NaN slips through a clamp (Math.min answers NaN), and a runner told
     // to stop at NaN never stops: the ceiling must hold for every input.
     const run = vi.fn(async () => ran);
-    const jobs = pluginJobsNamespace(acme, { run });
+    const jobs = pluginJobsNamespace("acme", hostOf(run));
 
     const refusal = await jobs
       .runSweepNow("acme:reindex", { maxDurationMs: budget })
@@ -86,7 +106,7 @@ describe("running a plugin's own sweep now", () => {
 
   it("holds an endless budget to the most a request may spend", async () => {
     const run = vi.fn(async () => ran);
-    const jobs = pluginJobsNamespace(acme, { run });
+    const jobs = pluginJobsNamespace("acme", hostOf(run));
 
     await jobs.runSweepNow("acme:reindex", {
       maxDurationMs: Number.POSITIVE_INFINITY,
@@ -100,7 +120,7 @@ describe("running a plugin's own sweep now", () => {
     ["its own job that is not a sweep", "acme:export"],
   ])("refuses %s, running nothing", async (_name, slug) => {
     const run = vi.fn(async () => ran);
-    const jobs = pluginJobsNamespace(acme, { run });
+    const jobs = pluginJobsNamespace("acme", hostOf(run));
 
     const refusal = await jobs
       .runSweepNow(slug)
@@ -111,7 +131,7 @@ describe("running a plugin's own sweep now", () => {
 
   it("refuses everything for a context built for no plugin", async () => {
     const run = vi.fn(async () => ran);
-    const jobs = pluginJobsNamespace(undefined, { run });
+    const jobs = pluginJobsNamespace(undefined, hostOf(run));
 
     await expect(jobs.runSweepNow("acme:reindex")).rejects.toThrow();
     expect(run).not.toHaveBeenCalled();
