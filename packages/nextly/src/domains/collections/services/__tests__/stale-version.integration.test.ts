@@ -890,32 +890,51 @@ describe.each(getConfiguredTestDialects())(
         { title: "first" }
       );
       const id = idOf(created);
-      await update(t, HOOKED, id, { title: "theirs" });
       const count = async (table: string) =>
         (await t.adapter.select<Record<string, unknown>>(table, {})).length;
-      const before = {
+      const measure = async () => ({
         hooks: afterChangeCalls,
         events: await count("nextly_content_events"),
         versions: await count("nextly_versions"),
-        row: await stored(t, `dc_${HOOKED}`, id),
-      };
-      // The hook does run for an applied save, so its silence below means something.
-      expect(before.hooks).toBeGreaterThan(0);
-
-      const refused = await update(t, HOOKED, id, {
-        title: "mine",
-        _rev: revOf(created),
       });
-      expect(refused).toMatchObject({ code: "STALE_VERSION" });
-      const flags = refused as { eventRecorded?: boolean; committed?: boolean };
+      const delta = (
+        from: Awaited<ReturnType<typeof measure>>,
+        to: Awaited<ReturnType<typeof measure>>
+      ) => ({
+        hooks: to.hooks - from.hooks,
+        events: to.events - from.events,
+        versions: to.versions - from.versions,
+      });
+
+      // What one applied save leaves behind, so the refused one's share is known.
+      const start = await measure();
+      const applied = await update(t, HOOKED, id, { title: "second" });
+      const oneSave = delta(start, await measure());
+      expect(oneSave.hooks).toBeGreaterThan(0);
+      expect(oneSave.versions).toBeGreaterThan(0);
+
+      // Two saves from the same version at once: both pass the check before
+      // the hooks, so the refused one is refused under the row lock.
+      const before = await measure();
+      const results = await Promise.all(
+        ["one", "two"].map(title =>
+          update(t, HOOKED, id, { title, _rev: revOf(applied) })
+        )
+      );
+      const refused = results.filter(r => r.code === "STALE_VERSION");
+      expect(
+        results.filter(r => r.success).length,
+        JSON.stringify(results)
+      ).toBe(1);
+      expect(refused).toHaveLength(1);
+      const flags = refused[0] as {
+        eventRecorded?: boolean;
+        committed?: boolean;
+      };
       expect(flags.eventRecorded ?? false).toBe(false);
       expect(flags.committed ?? false).toBe(false);
-      expect({
-        hooks: afterChangeCalls,
-        events: await count("nextly_content_events"),
-        versions: await count("nextly_versions"),
-        row: await stored(t, `dc_${HOOKED}`, id),
-      }).toEqual(before);
+      // Exactly one save's worth of hooks, events and versions: the refused one left none.
+      expect(delta(before, await measure())).toEqual(oneSave);
     });
   }
 );
