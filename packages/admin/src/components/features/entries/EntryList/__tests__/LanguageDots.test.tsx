@@ -1,9 +1,9 @@
 // The list's per-row language marks.
 //
 // This replaced a bare "n/total" badge, so the tests worth having are about
-// what the dots add: WHICH languages are missing, that the default is not one
-// of them, and that a long language list degrades instead of setting the
-// table's width.
+// what the dots add: WHICH languages are missing, that the dots and the count
+// beside them cover the same languages, the default included, and that a long
+// language list degrades instead of setting the table's width.
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -74,14 +74,20 @@ describe("LanguageDots", () => {
     ).toBeInTheDocument();
   });
 
-  it("gives the default language no dot, because it is the source", () => {
-    // A permanently-filled mark in every row of the table is a column of noise,
-    // and it would also disagree with the count beside it.
+  it("gives every language a dot, the default included, as the count does", () => {
+    // The count beside the dots counts the default ("2/3"), so the dots count
+    // it too: two dots beside "2/3" would say the row has a language the marks
+    // do not show.
     useBranding.mockReturnValue({ locales: LOCALES });
     render(<LanguageDots translations={TRANSLATIONS} onOpenLocale={vi.fn()} />);
-    const group = screen.getByRole("group");
-    expect(within(group).queryByRole("button", { name: /English/ })).toBeNull();
-    expect(within(group).getAllByRole("button")).toHaveLength(2);
+    const group = screen.getByRole("group", {
+      name: "2 of 3 languages translated; missing Arabic",
+    });
+    expect(
+      within(group).getByRole("button", { name: "Open in English — published" })
+    ).toBeInTheDocument();
+    expect(within(group).getAllByRole("button")).toHaveLength(3);
+    expect(within(group).getByText("2/3")).toBeInTheDocument();
   });
 
   it("carries each language and its state in the dot's accessible name", () => {
