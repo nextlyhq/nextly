@@ -133,7 +133,8 @@ export interface ListUsersQueryOptions {
   unsearchedFields?: ReadonlySet<string>;
   emailVerified?: boolean;
   hasPassword?: boolean;
-  sortBy?: "createdAt" | "name" | "email";
+  /** A built-in column, or a custom user field by its name. */
+  sortBy?: "createdAt" | "name" | "email" | (string & {});
   sortOrder?: "asc" | "desc";
 }
 

@@ -107,6 +107,14 @@ const fieldCodes = (error: unknown): string[] =>
       | undefined
   )?.errors?.map(entry => String(entry.code)) ?? [];
 
+/** The argument paths a validation refusal names, as a client attaches them. */
+const fieldPaths = (error: unknown): string[] =>
+  (
+    (error as NextlyError | undefined)?.publicData as
+      | { errors?: { path?: string }[] }
+      | undefined
+  )?.errors?.map(entry => String(entry.path)) ?? [];
+
 /** The error a read meets, or undefined when it answers. */
 async function refusal(read: Promise<unknown>): Promise<unknown> {
   try {
@@ -444,8 +452,11 @@ describe.each(getConfiguredTestDialects())(
         expect(fieldCodes(counted)).toEqual(["FIELD_NOT_FILTERABLE"]);
         expect(NextlyError.isCode(grouped, "VALIDATION_ERROR")).toBe(true);
         expect(fieldCodes(grouped)).toEqual(["FIELD_NOT_GROUPABLE"]);
+        expect(fieldPaths(grouped)).toEqual(["groupBy.internalCode"]);
         expect(NextlyError.isCode(timeline, "VALIDATION_ERROR")).toBe(true);
         expect(fieldCodes(timeline)).toEqual(["FIELD_NOT_GROUPABLE"]);
+        // Under the argument the caller supplied: a timeline has no groupBy.
+        expect(fieldPaths(timeline)).toEqual(["dateField.reviewedAt"]);
       });
 
       it("answers the same aggregates when they do not pass false, and a visible field when they do", async () => {

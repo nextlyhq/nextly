@@ -1355,6 +1355,8 @@ export class CollectionQueryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
     /** Declared paths of the fields this read leaves out of its rows. */
     hiddenFields?: ReadonlySet<string>;
+    /** Set for a timeline, whose `groupBy` is the caller's `dateField`. */
+    requireTimestampGroupKey?: boolean;
   }): Promise<void> {
     // A caller's release condition is judged first, before any read hook
     // runs: a hook may write an audit entry or spend a rate-limit budget, and
@@ -1433,7 +1435,12 @@ export class CollectionQueryService extends BaseService {
     // refusal here is. Whatever the caller's trust: the read asked for them
     // to be left out.
     assertNoHiddenFieldQueried(
-      { where: params.where, sort: sortFields, groupBy: params.groupBy },
+      {
+        where: params.where,
+        sort: sortFields,
+        groupBy: params.groupBy,
+        groupByAt: params.requireTimestampGroupKey ? "dateField" : "groupBy",
+      },
       params.hiddenFields
     );
   }

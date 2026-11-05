@@ -595,7 +595,12 @@ export async function filterSearchableFields(
  * sort or a group key does not spell.
  */
 function queriedPath(path: string): string {
-  return path.replace(/#[^.]*/g, "");
+  // The whole segment goes, with its separator: `zone.#cta.secret` is
+  // queried as `zone.secret`, not `zone..secret`.
+  return path
+    .split(".")
+    .filter(segment => !segment.startsWith("#"))
+    .join(".");
 }
 
 /**
@@ -634,6 +639,11 @@ export function assertNoHiddenFieldQueried(
     /** The sort keys, as the read parses them. */
     readonly sort?: readonly string[];
     readonly groupBy?: unknown;
+    /**
+     * Where the caller named the group key: a timeline's `dateField` travels
+     * as `groupBy`, and is reported under the argument the caller supplied.
+     */
+    readonly groupByAt?: "groupBy" | "dateField";
   },
   hidden: ReadonlySet<string> | undefined
 ): void {
@@ -647,7 +657,7 @@ export function assertNoHiddenFieldQueried(
     keys
       .filter(key => key !== "" && namesHidden(key, hidden))
       .map(key => ({
-        path: `${at}.${key}`,
+        path: `${at === "groupBy" ? (query.groupByAt ?? at) : at}.${key}`,
         code: REFUSALS[at].code,
         message: `"${key}" is hidden from this read, so it cannot be used to ${REFUSALS[at].verb}.`,
       }))
