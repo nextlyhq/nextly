@@ -475,6 +475,8 @@ async function applyPendingMigrations(label: string): Promise<number> {
       // collection rather than the config, and reading the config alone would
       // make boot and CLI disagree about the same database.
       knownJunctions: resolvedSchema.knownJunctions,
+      declaredTables: resolvedSchema.declaredTables,
+      junctionsByEntity: resolvedSchema.junctionsByEntity,
       label,
     });
 
@@ -518,6 +520,11 @@ export interface DevBootMigrateDeps<TLogger> {
   lockMode: "fail-fast";
   ttlSeconds?: number;
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: {
+    junctions?: ReadonlyMap<string, ReadonlySet<string>>;
+    tables?: ReadonlySet<string>;
+  };
   allowDestructive: boolean;
   ensureLedger: () => Promise<void>;
 }
@@ -553,6 +560,10 @@ export async function migrateAtDevBoot<
   logger: TLogger;
   ttlSeconds?: number;
   knownJunctions?: ReadonlySet<string>;
+  /** The entity tables the declared schema names (`declared`). */
+  declaredTables?: ReadonlySet<string>;
+  /** Each collection's custom junction names, by its slug (`declared`). */
+  junctionsByEntity?: ReadonlyMap<string, ReadonlySet<string>>;
   label: string;
 }): Promise<TResult> {
   const { adapter, label } = args;
@@ -572,6 +583,10 @@ export async function migrateAtDevBoot<
     lockMode: "fail-fast",
     ttlSeconds: args.ttlSeconds,
     knownJunctions: args.knownJunctions,
+    declared: {
+      junctions: args.junctionsByEntity,
+      tables: args.declaredTables,
+    },
     // The development boot lets the core reconcile make destructive changes.
     allowDestructive: true,
     ensureLedger: async () => {

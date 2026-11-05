@@ -56,6 +56,13 @@ interface MigrateCoreLike {
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
+    /** See `MigrateCoreDeps.refuseUnrecognisedBuilderFiles`. */
+    refuseUnrecognisedBuilderFiles?: boolean;
+    /** See `MigrateCoreDeps.declared`. */
+    declared?: {
+      junctions?: ReadonlyMap<string, ReadonlySet<string>>;
+      tables?: ReadonlySet<string>;
+    };
     pluginMigrationSets?: readonly PluginMigrationSet[];
     /**
      * Declared here so the value `pluginMigrationArgs` spreads in is checked
@@ -66,8 +73,6 @@ interface MigrateCoreLike {
     pluginsWithMigrations?: ReadonlySet<string>;
     /** Spread in by `pluginMigrationArgs`, checked here for the same reason. */
     declaredPlugins?: ReadonlySet<string>;
-    /** See `MigrateCoreDeps.refuseBuilderFilesWithoutSnapshot`. */
-    refuseBuilderFilesWithoutSnapshot?: boolean;
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -248,14 +253,20 @@ async function applyBootMigrations(
     ...(args.lockWaitMs !== undefined ? { lockWaitMs: args.lockWaitMs } : {}),
     ttlSeconds: args.config.db.migrateLockTtlSeconds,
     knownJunctions: resolvedSchema.knownJunctions,
+    // A file with a Builder name the signature does not recognise is refused
+    // here as `nextly migrate` refuses it: this boot runs the same files.
+    refuseUnrecognisedBuilderFiles: true,
+    // What the declared schema names, which old Builder files are judged
+    // against as `nextly migrate` judges them.
+    declared: {
+      junctions: resolvedSchema.junctionsByEntity,
+      tables: resolvedSchema.declaredTables,
+    },
     // The same sets the CLI applies, from the same config: a boot that
     // skipped them would serve against a schema missing every plugin
     // table while reporting a clean migrate.
     ...(await pluginMigrationArgs(args.config.plugins ?? [])),
     ensureLedger: run.ensureLedger,
-    // A Schema Builder file with no snapshot is refused here as `nextly migrate`
-    // refuses it: this boot applies the same pending files, in production.
-    refuseBuilderFilesWithoutSnapshot: true,
   });
   // REFUSES rather than serving. A held lock no longer comes back as
   // `ran: false` (the lock throws `NEXTLY_MIGRATE_LOCK_BUSY`, which the

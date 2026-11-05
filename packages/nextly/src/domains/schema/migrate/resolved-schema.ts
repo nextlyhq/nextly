@@ -92,6 +92,11 @@ export interface ResolvedSchema {
   declaredTables: Set<string>;
   /** Junction tables named outright via `options.junctionTable`. */
   knownJunctions: Set<string>;
+  /**
+   * The same names by the collection whose own fields declare them, slug to
+   * names: what an old Builder file of that collection may touch as its own.
+   */
+  junctionsByEntity: Map<string, Set<string>>;
 }
 
 interface RawEntity {
@@ -199,6 +204,7 @@ export async function resolveDeclaredSchema(
 
   let builder: DeclaredEntity[] = [];
   let builderJunctions: string[] = [];
+  let builderJunctionsByEntity: Map<string, Set<string>> = new Map();
   if (manifest) {
     const merged = applyDeferredExtendsToManifest(
       manifest,
@@ -236,6 +242,7 @@ export async function resolveDeclaredSchema(
     // snapshot and preserve it forever instead of letting the first migration
     // after adoption drop it.
     builderJunctions = customJunctionNames(survivingCollections);
+    builderJunctionsByEntity = junctionsBySlug(survivingCollections);
   }
 
   const entities = [...codeFirst, ...builder];
@@ -247,5 +254,56 @@ export async function resolveDeclaredSchema(
       ...customJunctionNames(args.config.collections),
       ...builderJunctions,
     ]),
+    junctionsByEntity: new Map([
+      ...junctionsBySlug(args.config.collections),
+      ...builderJunctionsByEntity,
+    ]),
   };
+}
+
+/**
+ * The junction and entity tables the configuration and the Builder's manifest
+ * declare (`knownJunctions`, `declaredTables`), for a reader of the migrations
+ * folder: an old Builder file is judged against them as `nextly migrate`
+ * judges it. With `orNone`, a manifest that cannot be read declares none, so
+ * such a file is read as a migration, for a reader that only reports.
+ */
+export async function declaredNamesOf(
+  args: ResolveSchemaArgs,
+  options: { orNone?: boolean } = {}
+): Promise<
+  | {
+      junctions: ReadonlyMap<string, ReadonlySet<string>>;
+      tables: ReadonlySet<string>;
+    }
+  | undefined
+> {
+  try {
+    const resolved = await resolveDeclaredSchema(args);
+    return {
+      junctions: resolved.junctionsByEntity,
+      tables: resolved.declaredTables,
+    };
+  } catch (error) {
+    if (options.orNone === true) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Each collection's custom junction names (`customJunctionNames`), by its
+ * slug: the names its own fields declare.
+ */
+function junctionsBySlug(
+  collections: readonly unknown[]
+): Map<string, Set<string>> {
+  const bySlug = new Map<string, Set<string>>();
+  for (const collection of collections) {
+    const slug = (collection as { slug?: unknown }).slug;
+    const names = customJunctionNames([collection]);
+    if (typeof slug === "string" && names.length > 0) {
+      bySlug.set(slug, new Set(names));
+    }
+  }
+  return bySlug;
 }

@@ -45,6 +45,7 @@ import {
   EMPTY_SNAPSHOT,
   planBaseline,
 } from "../../domains/schema/migrate/baseline";
+import { readOldBuilderLedger } from "../../domains/schema/migrate/old-builder-ledger";
 import {
   resolveDeclaredSchema,
   type ResolvedEntity,
@@ -77,6 +78,10 @@ import { createContext, type CommandContext } from "../program";
 import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  readMigrationFolder,
+  type DeclaredNames,
+} from "../utils/migration-discovery";
 
 import { maybeForceUnlock } from "./migrate";
 import { DEFAULT_BASELINE_NAME } from "./migrate-baseline.command";
@@ -115,19 +120,31 @@ async function listManagedTables(
 }
 
 /**
- * The migration files already on disk, earliest first.
+ * The migration files already on disk, earliest first, old Schema Builder
+ * files left out as every reader leaves them out: one is no history.
  *
  * A missing directory is a project that has never generated one, which is the
  * normal state for everything this command exists to adopt.
  */
-async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
+async function listMigrationFiles(
+  migrationsDir: string,
+  dialect: SupportedDialect,
+  declared: DeclaredNames | undefined
+): Promise<string[]> {
+  let entries: string[];
   try {
-    const entries = await readdir(migrationsDir);
-    return entries.filter(f => f.endsWith(".sql")).sort();
+    entries = await readdir(migrationsDir);
   } catch (err) {
     if ((err as { code?: string }).code === "ENOENT") return [];
     throw err;
   }
+  const { oldBuilderFiles } = await readMigrationFolder(
+    migrationsDir,
+    dialect,
+    declared
+  );
+  const ignored = new Set(oldBuilderFiles.map(f => f.file));
+  return entries.filter(f => f.endsWith(".sql") && !ignored.has(f)).sort();
 }
 
 /**
@@ -141,13 +158,23 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
  */
 async function firstAppliedMigration(
   repo: SchemaEventsRepository,
-  adapter: CLIDatabaseAdapter
+  adapter: CLIDatabaseAdapter,
+  folder: {
+    migrationsDir: string;
+    dialect: SupportedDialect;
+    declared: DeclaredNames | undefined;
+  }
 ): Promise<string | undefined> {
   if (!(await ledgerExists(adapter))) return undefined;
   // Past the existence check, a failure is a real one — permissions, a wrong
   // schema, a broken table. Swallowing it would read as "never migrated" and
   // write a second origin beside whatever history the ledger already holds.
-  const rows = await repo.listFileApplies();
+  const all = await repo.listFileApplies();
+  // An old Schema Builder file's rows are no history (`readOldBuilderLedger`).
+  const { ignoredRows } = await readOldBuilderLedger(folder, repo, all);
+  const rows = all.filter(
+    r => r.filename === null || !ignoredRows.has(r.filename)
+  );
   const names = rows
     .map(r => (r as { filename?: string | null }).filename)
     .filter((n): n is string => typeof n === "string" && n.length > 0)
@@ -353,6 +380,8 @@ export interface BaselineCoreDeps {
    * undeclared table and emit `DROP TABLE`, taking the relationship rows.
    */
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   /**
    * From `config.db.migrateLockTtlSeconds`.
    *
@@ -416,7 +445,11 @@ export async function baselineCore(
     dialect,
     async () => {
       const latest = await loadLatestSnapshot(metaDir);
-      const existingMigrations = await listMigrationFiles(migrationsDir);
+      const existingMigrations = await listMigrationFiles(
+        migrationsDir,
+        dialect,
+        deps.declared
+      );
 
       const known = deps.knownJunctions ?? new Set<string>();
       const managed = await listManagedTables(adapter, known);
@@ -445,7 +478,11 @@ export async function baselineCore(
         live,
         latestSnapshotName: latest?.filename,
         existingMigrationFile: existingMigrations[0],
-        appliedMigration: await firstAppliedMigration(repo, adapter),
+        appliedMigration: await firstAppliedMigration(repo, adapter, {
+          migrationsDir,
+          dialect,
+          declared: deps.declared,
+        }),
       });
 
       if (plan.kind === "already-baselined") {
@@ -705,6 +742,10 @@ export async function runMigrateBaseline(
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
       knownJunctions: resolved.knownJunctions,
+      declared: {
+        junctions: resolved.junctionsByEntity,
+        tables: resolved.declaredTables,
+      },
       adoptUnknown: options.adoptUnknown,
     });
 

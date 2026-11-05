@@ -118,6 +118,7 @@ function resolving(
       insertEvent: () => Promise.resolve("evt_2"),
       supersede: () => Promise.resolve(),
       markRolledBack: () => Promise.resolve(),
+      currentOldBuilderMarks: () => Promise.resolve(new Map()),
     },
     fileExists: () => Promise.resolve(true),
     loadTargetSnapshot: () => Promise.resolve(null),
@@ -214,6 +215,13 @@ export const MIGRATION_CASES = {
       why: "It ran on this database and no removal of it is recorded, so the folder may be from an older build.",
       next: "Restore the file from version control, or deploy the build that has it, then run `nextly migrate` again.",
     }),
+  // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.
+  OLD_BUILDER_FILE_SNAPSHOT_ADDED: () =>
+    new CliError("OLD_BUILDER_FILE_SNAPSHOT_ADDED", {
+      what: "`1761732000000_create_posts.sql` has a snapshot beside it (`meta/1761732000000_create_posts.snapshot.json`) since it was recognised as a file an earlier Schema Builder wrote, so `nextly migrate` ran nothing.",
+      why: "A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.",
+      next: "Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with `nextly migrate:resolve --applied <file>`, after which it is checked as any migration.",
+    }),
   // As `baselineCore` in `cli/commands/migrate-baseline.ts` throws it.
   BASELINE_LOCK_RELEASED: () =>
     new NextlyError({
@@ -230,12 +238,13 @@ export const MIGRATION_CASES = {
         "The migrate lock was released without resolving the migration. " +
         "Nothing was written; retry once no other schema operation is running.",
     }),
-  // As `assertNoBuilderFilesWithoutSnapshot` in `cli/commands/migrate.ts` throws it.
+  // As `refuseUnrecognisedBuilderFiles` in `cli/commands/migrate.ts` throws it.
   BUILDER_MIGRATION_SNAPSHOT_MISSING: () =>
     new NextlyError({
       code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
       publicMessage:
-        `nextly migrate does not apply a Schema Builder migration file with no snapshot. ` +
+        `nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: ` +
+        `${BUILDER_FILE}, which has a statement on a table that is not its own entity's, or one that cannot be read. ` +
         builderMigrationRemedy(BUILDER_FILE),
       logContext: { files: [BUILDER_FILE] },
     }),

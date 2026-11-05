@@ -88,6 +88,11 @@ function pickMode(opts: ResolveCommandOptions): {
  * undefined where the folder has none. Every read here goes through it, so
  * the file recorded is the one the run compares: a project shipping `x.sql`
  * beside `x.postgresql.sql` is recorded from the variant on PostgreSQL.
+ *
+ * Read with no declared junction tables, which the declared schema gives and
+ * this command resolves only when it must (a malformed manifest would take the
+ * recovery modes down with it): a file another reader sets aside for touching
+ * one is found here, so it can still be recorded.
  */
 export async function migrationFileIn(
   dir: string,
@@ -95,7 +100,7 @@ export async function migrationFileIn(
   dialect: SupportedDialect
 ): Promise<string | undefined> {
   const base = filename.replace(/\.sql$/i, "");
-  const group = (await discoverMigrationGroups(dir)).get(base);
+  const group = (await discoverMigrationGroups(dir, dialect)).get(base);
   const file = group && selectVariant(group.variants, dialect);
   return file === undefined ? undefined : resolve(dir, file);
 }

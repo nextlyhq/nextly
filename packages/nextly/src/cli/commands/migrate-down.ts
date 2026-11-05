@@ -62,6 +62,7 @@ import {
   runMigrationStatements,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
+import { readOldBuilderLedger } from "../../domains/schema/migrate/old-builder-ledger";
 import {
   compareModuleNames,
   qualifiedFilename,
@@ -69,6 +70,7 @@ import {
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/required-column-guard";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
   marksNoTransaction,
@@ -110,10 +112,16 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
-import { compareMigrationBaseNames } from "../utils/migration-discovery";
+import {
+  compareMigrationBaseNames,
+  type DeclaredNames,
+} from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
-import { refuseUnresolvedAppAttempts } from "./migrate";
+import {
+  refuseChangedOldBuilderFiles,
+  refuseUnresolvedAppAttempts,
+} from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -1065,6 +1073,14 @@ export async function downDatabaseDeps(args: {
   };
   /** The command a failed DOWN's ledger note names; `migrate:down` if absent. */
   command?: string;
+  /**
+   * The app's migrations folder. Given, with no plugin, the rows of its old
+   * Schema Builder files are no migration to roll back, as every reader
+   * leaves them out (`readOldBuilderLedger`).
+   */
+  migrationsDir?: string;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1121,7 +1137,22 @@ export async function downDatabaseDeps(args: {
     readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
     readDeletionFacts: statements => readDeletionFacts(db, dialect, statements),
     readEventTriggers: () => readDdlEventTriggers(db, dialect),
-    listFileApplies: () => repo.listFileApplies(),
+    listFileApplies: async () => {
+      const rows = await repo.listFileApplies();
+      if (plugin !== undefined || args.migrationsDir === undefined) return rows;
+      const { ignoredRows } = await readOldBuilderLedger(
+        {
+          migrationsDir: args.migrationsDir,
+          dialect,
+          declared: args.declared,
+        },
+        repo,
+        rows
+      );
+      return rows.filter(
+        row => row.filename === null || !ignoredRows.has(row.filename)
+      );
+    },
     refuseRequiredColumns: (statements, source) =>
       refuseRequiredColumnsOverNulls(db, dialect, statements, source),
     execDown: (statements, unit, after) =>
@@ -1244,6 +1275,13 @@ export async function runMigrateDown(
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
+    // Read as `nextly migrate` reads the folder, for an app rollback only: a
+    // plugin's DOWNs come from its definition, never from the app's folder,
+    // so the app's manifest has nothing to say about them.
+    const declared =
+      options.plugin === undefined
+        ? await declaredNamesOf({ ...configResult, projectRoot: cwd })
+        : undefined;
 
     if (options.forceUnlock) {
       const { forceUnlock } = await import(
@@ -1307,6 +1345,8 @@ export async function runMigrateDown(
         adapter: adapter as unknown as DrizzleAdapter,
         dialect,
         plugin: pluginModules(configResult.config.plugins, plugin),
+        migrationsDir,
+        declared,
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,
@@ -1322,15 +1362,21 @@ export async function runMigrateDown(
       withLock: withMigrateLock,
       ...(plugin === undefined
         ? {
-            refuseUnresolvedAttempts: () =>
-              refuseUnresolvedAppAttempts({
+            // Under the lock, before the first write: an unresolved attempt,
+            // then a marked old Builder file that changed since it was marked.
+            refuseUnresolvedAttempts: async () => {
+              const history = {
                 adapter,
                 db,
                 dialect,
                 migrationsDir,
                 logger,
+                declared,
                 command: "nextly migrate:down",
-              }),
+              };
+              await refuseUnresolvedAppAttempts(history);
+              await refuseChangedOldBuilderFiles(history);
+            },
           }
         : {}),
       interactive: canPrompt(),

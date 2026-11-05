@@ -1,0 +1,27 @@
+---
+title: OLD_BUILDER_FILE_SNAPSHOT_ADDED
+description: "A migration file recognised as an old Schema Builder file now has a snapshot beside it, so it would be read as a migration."
+---
+
+## Cause
+
+A migration file recognised as an old Schema Builder file now has a snapshot beside it, so it would be read as a migration.
+
+A file an earlier version's Schema Builder wrote is recognised by its whole signature, one part of which is that no snapshot stands beside it. The first run of this release marks the ledger rows of such a file, and every command ignores it. A snapshot placed beside a marked file, with its content unchanged, means it would now be read as a migration, so the command stops before changing anything.
+
+## Fix
+
+- Remove the snapshot from `meta/`, and the file is ignored again.
+- Or delete the file: its ledger rows stay ignored.
+- Or accept the file as it now stands with `nextly migrate:resolve --applied <file>`, after which it is checked as any migration.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ `1761732000000_create_posts.sql` has a snapshot beside it (`meta/1761732000000_create_posts.snapshot.json`) since it was recognised as a file an earlier Schema Builder wrote, so `nextly migrate` ran nothing.
+  Why:  A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.
+  Next: Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with `nextly migrate:resolve --applied <file>`, after which it is checked as any migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-snapshot-added  (OLD_BUILDER_FILE_SNAPSHOT_ADDED)
+```

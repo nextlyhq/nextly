@@ -44,6 +44,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
   discoverMigrationGroups,
   selectVariant,
+  type DeclaredNames,
 } from "../../../cli/utils/migration-discovery";
 import {
   parseEntityHeaders,
@@ -63,7 +64,9 @@ export interface PendingEntitiesOptions {
    * reading the base there names no slug, so the row is promoted while the
    * file that will really run is still outstanding.
    */
-  dialect?: SupportedDialect;
+  dialect: SupportedDialect;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   isApplied: IsAppliedFn;
   logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void };
 }
@@ -170,7 +173,11 @@ export async function readPendingEntities(
   const { migrationsDir, dialect, isApplied, logger } = options;
   const pending = noPendingEntities();
 
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const groups = await discoverMigrationGroups(
+    migrationsDir,
+    dialect,
+    options.declared
+  );
 
   for (const [baseName, group] of groups) {
     if (await isApplied(`${baseName}.sql`)) continue;
