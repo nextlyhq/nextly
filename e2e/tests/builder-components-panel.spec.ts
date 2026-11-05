@@ -42,7 +42,7 @@ import { settleTransitions } from "./support/axe-scan.mjs";
 import { canvasBlock } from "./support/canvas-frame";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { storedPageNodes } from "./support/stored-page";
-import { fileAccount, test } from "./support/test";
+import { fileAccount, ownSeat, test } from "./support/test";
 
 const COMPONENTS = "/admin/api/collections/components/entries";
 const PAGES = "/admin/api/collections/pages/entries";
@@ -675,31 +675,42 @@ test.describe("the Components panel", () => {
     await expect(searchBox(page)).toBeVisible();
   });
 
-  for (const scheme of ["light", "dark"] as const) {
-    test(`meets WCAG 2.2 AA in ${scheme}`, async ({ page }) => {
-      const title = `Promo ${stamp()}`;
-      await createComponent(page.request, title);
-      const id = await createPage(page.request);
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      await gotoAdmin(
-        page,
-        `/collections/pages/${id}/builder?field=content`,
-        scheme
-      );
-      await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
-        timeout: 60_000,
-      });
-      await openComponents(page);
-      await expect(row(page, title)).toBeVisible({ timeout: 30_000 });
-      await row(page, title).hover();
-      await settleTransitions(page);
+  /*
+   * Each scheme reads through an account of its own. These run late in a file
+   * whose earlier tests seed components and open the editor again and again,
+   * and through the file's one account the dark scan's open met the REST
+   * limit's per-user budget: the builder route answered "Too many requests"
+   * and the canvas never came. A seat per scheme spends one open of a budget.
+   */
+  (["light", "dark"] as const).forEach((scheme, index) => {
+    test.describe(`in ${scheme}`, () => {
+      ownSeat(index + 1);
 
-      const results = await new AxeBuilder({ page })
-        .withTags(AA_TAGS)
-        .analyze();
-      expect(results.violations).toEqual([]);
+      test(`meets WCAG 2.2 AA in ${scheme}`, async ({ page }) => {
+        const title = `Promo ${stamp()}`;
+        await createComponent(page.request, title);
+        const id = await createPage(page.request);
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await gotoAdmin(
+          page,
+          `/collections/pages/${id}/builder?field=content`,
+          scheme
+        );
+        await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+          timeout: 60_000,
+        });
+        await openComponents(page);
+        await expect(row(page, title)).toBeVisible({ timeout: 30_000 });
+        await row(page, title).hover();
+        await settleTransitions(page);
+
+        const results = await new AxeBuilder({ page })
+          .withTags(AA_TAGS)
+          .analyze();
+        expect(results.violations).toEqual([]);
+      });
     });
-  }
+  });
 });
 
 test.describe("the Components panel, for an author who may not update components", () => {
