@@ -264,6 +264,59 @@ describe("a breakpoint removal counted across the site", () => {
     expect(deps.savedAsks).toEqual([firstTen]);
   });
 
+  it("reads at most twenty saved titles in one dry run, however many breakpoints go", async () => {
+    // Three breakpoints, each held by ten pages of its own: thirty documents
+    // would be named, and only the first twenty are read as saved.
+    const at = (breakpoint: string, id: string): Stored => ({
+      host: entry("pages", id),
+      published: page({
+        id: "a",
+        type: "core/text",
+        version: 1,
+        props: {},
+        styles: { base: { [breakpoint]: { color: "#111" } } },
+      }),
+    });
+    const stored = ["mobile", "watch", "tv"].flatMap(breakpoint =>
+      Array.from({ length: 10 }, (_, i) => at(breakpoint, `${breakpoint}-${i}`))
+    );
+    const deps = site(stored, { saved: host => `${host.id ?? ""} (draft)` });
+    const run = await countRemoval(
+      new Map([
+        ["mobile", "Mobile"],
+        ["watch", "Watch"],
+        ["tv", "TV"],
+      ]),
+      deps
+    );
+    expect(deps.savedAsks.flat()).toHaveLength(20);
+    // The third list keeps the titles the access read gave.
+    expect(run.removed[2]?.documents.named[0]).toBe("pages/tv-0");
+    expect(run.removed[0]?.documents.named[0]).toBe("mobile-0 (draft)");
+  });
+
+  it("asks once for saved titles that run out of time, and keeps the names it has", async () => {
+    const deps = site([
+      {
+        host: entry("pages", "p1"),
+        published: page(styled("a", { locked: true })),
+      },
+    ]);
+    const asks: number[] = [];
+    const run = await countRemoval(MOBILE, {
+      ...deps,
+      savedTitles: hosts => {
+        asks.push(hosts.length);
+        return new Promise(() => {});
+      },
+      deadline: new Date(Date.now() + 100),
+    });
+    // Named in both lists by the access read's title, and asked only once.
+    expect(run.removed[0]?.documents.named).toEqual(["pages/p1"]);
+    expect(run.removed[0]?.locked.named).toEqual(["pages/p1"]);
+    expect(asks).toEqual([1]);
+  });
+
   it("counts the whole site however slowly the caller's names come", async () => {
     // Naming waits for the walk, so it never takes time from counting: a
     // slow answer leaves documents unnamed, never uncounted.

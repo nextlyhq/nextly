@@ -105,6 +105,14 @@ export const NAMED_AT_MOST = 10;
 /** How many documents one ask of the caller names at once. */
 const NAMES_PER_ASK = 50;
 
+/**
+ * How many documents one dry run reads by their saved titles, however many
+ * breakpoints it removes. Each is a read by id, the only read that shows a
+ * pending working draft; past this, a document keeps the title the batched
+ * access read gave it.
+ */
+const SAVED_TITLES_AT_MOST = 20;
+
 /** What the dry run reads the site through. */
 export interface DryRunDeps {
   /** Every document holding blocks, as the shared walk yields them. */
@@ -394,11 +402,20 @@ async function savedNames(
   deps: DryRunDeps,
   saved: Map<string, string | null>
 ): Promise<string[]> {
+  // Within the dry run's own allowance of such reads, and never once the
+  // deadline has passed: a read started then could not be heard.
+  const room = SAVED_TITLES_AT_MOST - saved.size;
   const unasked = picked
     .map(entry => entry.host)
-    .filter(host => !saved.has(documentKeyOf(host)));
-  if (deps.savedTitles !== undefined && unasked.length > 0) {
+    .filter(host => !saved.has(documentKeyOf(host)))
+    .slice(0, Math.max(room, 0));
+  if (
+    deps.savedTitles !== undefined &&
+    unasked.length > 0 &&
+    !pastDeadline(deps)
+  ) {
     const answer = await beforeDeadline(deps.savedTitles(unasked), deps);
+    // Timed out means the deadline has passed, so no later list asks again.
     if (answer !== TIMED_OUT) {
       for (const host of unasked) {
         const key = documentKeyOf(host);
@@ -409,6 +426,11 @@ async function savedNames(
   return picked.map(
     entry => saved.get(documentKeyOf(entry.host)) ?? entry.name
   );
+}
+
+/** Whether the deadline has passed. */
+function pastDeadline(deps: DryRunDeps): boolean {
+  return deps.deadline !== undefined && Date.now() >= deps.deadline.getTime();
 }
 
 /**
