@@ -290,6 +290,27 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
     expect(siteDefinitions).toHaveBeenCalledTimes(1);
   });
 
+  it("judges both against one read of the page as stored", async () => {
+    /*
+     * A page bringing an undefined shared style reads the stored forms once
+     * for it; bringing a removed breakpoint as well reads them no more, so
+     * both are judged against the same snapshot of the page.
+     */
+    const classOnly = write({ published: page([text("a")]) });
+    await validate(page([{ ...text("a"), classes: ["c-gone"] }]), {
+      mode: "update",
+      write: classOnly.write,
+    });
+    const both = write({ published: page([text("a")]) });
+    await validate(
+      page([{ ...text("a", colourAt("mobile")), classes: ["c-gone"] }]),
+      { mode: "update", write: both.write }
+    );
+    expect(both.readStored.mock.calls.length).toBe(
+      classOnly.readStored.mock.calls.length
+    );
+  });
+
   it("takes an empty entry for no use of the breakpoint", async () => {
     // The compiler emits nothing for it, so nothing would be lost.
     const { write: stored } = write({ published: page([text("a")]) });

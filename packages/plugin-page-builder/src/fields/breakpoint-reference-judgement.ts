@@ -40,7 +40,7 @@ import { readStoredJson } from "../stored-json";
 
 // An update with a write behind it is exactly what the Layers lock is asked
 // about too: the one case with a stored document to compare with.
-import { addedUndefinedIds } from "./added-undefined-ids";
+import { addedUndefinedIds, type StoredForms } from "./added-undefined-ids";
 import { isTopLevel, judgesLayersLocks } from "./layers-lock-judgement";
 
 /** The code a write bringing an undefined breakpoint is refused with. */
@@ -163,6 +163,8 @@ export async function newBreakpointIssues(
     /** The ids the site's stylesheet is emitted under, the base included. */
     readonly breakpointIds: () => Promise<ReadonlySet<string>>;
     readonly limits?: DocumentLimits;
+    /** The page's stored forms, shared by every check of one write. */
+    readonly storedForms?: () => Promise<StoredForms>;
   }
 ): Promise<PluginFieldIssue[]> {
   if (!judgesLayersLocks(args) || !isTopLevel(args.path)) return [];
@@ -178,7 +180,8 @@ export async function newBreakpointIssues(
     args,
     [...breakpointIdsUsed(value, limits)],
     site.breakpointIds,
-    form => breakpointIdsUsed(form, limits)
+    form => breakpointIdsUsed(form, limits),
+    site.storedForms
   );
   if (added.length === 0) return [];
   return [

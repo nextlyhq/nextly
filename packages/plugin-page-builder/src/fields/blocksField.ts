@@ -32,6 +32,7 @@ import type {
 import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
+import { storedFormsFor } from "./added-undefined-ids";
 import {
   compositionIssues,
   documentOf,
@@ -245,6 +246,9 @@ export function blocksFieldType(
       // above answered, so one round fixes both. A value judged on its own,
       // or an emptied field, references none.
       const definitions = onceAsked(composition?.()?.siteDefinitions);
+      // And against one read of the page as stored, so no reference is let
+      // through by a snapshot the other checks did not see.
+      const storedForms = onceAsked(async () => storedFormsFor(args));
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {
         if (emptied || definitions === undefined) return [];
         const limits = composition?.()?.limits;
@@ -252,10 +256,12 @@ export function blocksFieldType(
           ...(await newClassReferenceIssues(value, args, label, {
             classIds: async () => (await definitions()).classIds,
             limits,
+            storedForms,
           })),
           ...(await newBreakpointIssues(value, args, label, {
             breakpointIds: async () => (await definitions()).breakpointIds,
             limits,
+            storedForms,
           })),
         ];
       };

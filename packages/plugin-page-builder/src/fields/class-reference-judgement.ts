@@ -23,7 +23,7 @@ import type {
 
 import { classUsageOf } from "../class-usage";
 
-import { addedUndefinedIds } from "./added-undefined-ids";
+import { addedUndefinedIds, type StoredForms } from "./added-undefined-ids";
 import { isTopLevel } from "./layers-lock-judgement";
 
 /** The engine's code for a reference to a class the site does not define. */
@@ -49,6 +49,8 @@ export async function newClassReferenceIssues(
   site: {
     readonly classIds: () => Promise<ReadonlySet<string>>;
     readonly limits?: DocumentLimits;
+    /** The page's stored forms, shared by every check of one write. */
+    readonly storedForms?: () => Promise<StoredForms>;
   }
 ): Promise<PluginFieldIssue[]> {
   if (args.write === undefined || !isTopLevel(args.path)) return [];
@@ -59,7 +61,8 @@ export async function newClassReferenceIssues(
     args,
     classUsageOf(value, limits).ids,
     site.classIds,
-    form => classUsageOf(form, limits).ids
+    form => classUsageOf(form, limits).ids,
+    site.storedForms
   );
   if (added.length === 0) return [];
   const named = added
