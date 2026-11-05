@@ -373,6 +373,40 @@ function reasonOf(error: NextlyError): string {
 }
 
 /**
+ * `task`, in the earlier shape, mapped and handed to `admit`, with a
+ * deprecation notice; or, when it cannot be, left unexecuted with a notice
+ * saying why. Never refused. The job that runs its handler, when mapped.
+ */
+function collectEarlier(
+  plugin: string,
+  task: ScheduledTask,
+  declaredJobs: ReadonlySet<string>,
+  earlier: EarlierScheduleOptions,
+  admit: (schedule: CollectedSchedule) => void
+): CollectedJob | undefined {
+  // Said once per schedule: each is its own surface.
+  const surface = `Plugin "${plugin}"'s schedule "${String(task.name)}" in the { name, schedule, handler } shape`;
+  const replacement = "{ slug, cron, job } with a job the plugin declares";
+  try {
+    const mapped = mapEarlier(plugin, task, declaredJobs, earlier.contextOf);
+    admit(mapped.schedule);
+    noticeDeprecation({ surface, replacement }, earlier.notice);
+    return mapped.job;
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    noticeDeprecation(
+      {
+        surface,
+        replacement,
+        message: `${surface} is not run: ${reasonOf(error)}. Declare it as ${replacement} instead.`,
+      },
+      earlier.notice
+    );
+    return undefined;
+  }
+}
+
+/**
  * Every enabled plugin's schedules, checked.
  *
  * @throws NextlyError.invalidInput naming the plugin, for a schedule that
@@ -408,7 +442,6 @@ export function collectSchedules(
           "another of the plugin's schedules has the same slug"
         );
       }
-      seen.add(schedule.slug);
       if (keys.has(schedule.key)) {
         throw refuse(
           plugin.name,
@@ -416,6 +449,7 @@ export function collectSchedules(
           `another plugin's schedule has the same key "${schedule.key}"`
         );
       }
+      seen.add(schedule.slug);
       keys.add(schedule.key);
       out.push(schedule);
     };
@@ -424,31 +458,14 @@ export function collectSchedules(
         admit(collectOne(plugin.name, entry, ownJobs));
         continue;
       }
-      const task = entry as ScheduledTask;
-      // Said once per schedule: each is its own surface.
-      const surface = `Plugin "${plugin.name}"'s schedule "${String(task.name)}" in the { name, schedule, handler } shape`;
-      const replacement = "{ slug, cron, job } with a job the plugin declares";
-      try {
-        const mapped = mapEarlier(
-          plugin.name,
-          task,
-          declaredJobs,
-          earlier.contextOf
-        );
-        admit(mapped.schedule);
-        earlierJobs.push(mapped.job);
-        noticeDeprecation({ surface, replacement }, earlier.notice);
-      } catch (error) {
-        if (!NextlyError.is(error)) throw error;
-        noticeDeprecation(
-          {
-            surface,
-            replacement,
-            message: `${surface} is not run: ${reasonOf(error)}. Declare it as ${replacement} instead.`,
-          },
-          earlier.notice
-        );
-      }
+      const job = collectEarlier(
+        plugin.name,
+        entry as ScheduledTask,
+        declaredJobs,
+        earlier,
+        admit
+      );
+      if (job !== undefined) earlierJobs.push(job);
     }
   }
   return { schedules: out, jobs: earlierJobs };
