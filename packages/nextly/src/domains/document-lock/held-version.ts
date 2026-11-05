@@ -15,8 +15,7 @@
 import { getService } from "../../di";
 import { changesSinceStartedFrom } from "../versions/recovery-point-changes";
 import {
-  givenOf,
-  versionCheckFor,
+  givenVersionOf,
   type ChangeSinceArgs,
   type DecodedVersion,
 } from "../versions/stale-version";
@@ -27,15 +26,17 @@ import type { DocumentLockChange, DocumentRef } from "./types";
  * The version a claim or renewal body names, decoded; undefined when it names
  * none.
  *
- * Decoded as a save's `_rev` is (`versionCheckFor`), so a malformed one is
- * refused with the same 400 rather than read as a change by someone else.
+ * Decoded as a save's `_rev` is, so a malformed one is refused with the same
+ * 400 rather than read as a change by someone else. Only decoded, never
+ * judged as a write: a claim or renewal naming no version is answered as
+ * before, whatever a write is required to name.
  *
  * @throws NextlyError.validation for a `_rev` that is not a version.
  */
 export function heldVersionOf(
   body: Readonly<Record<string, unknown>>
 ): DecodedVersion | undefined {
-  return givenOf(versionCheckFor(body, { exempt: false }));
+  return givenVersionOf(body);
 }
 
 /**

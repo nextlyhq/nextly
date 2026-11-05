@@ -251,6 +251,66 @@ describe("the version the editor's copy started from", () => {
     );
   });
 
+  it("keeps another entry's hold when an earlier save answers after the switch", async () => {
+    // 🔴 The first entry's save went through, but the copy it was made from is
+    // gone: releasing whatever is shown would let the colleague's newer read
+    // reset the second entry over the edits typed into it.
+    let answerFirst: (answer: unknown) => void = () => {};
+    update.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          answerFirst = resolve;
+        })
+    );
+    const rendered = render({ ...stored, _rev: "5" });
+    act(() => {
+      rendered.result.current.form.setValue("title", "First's edit", {
+        shouldDirty: true,
+      });
+    });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = rendered.result.current.handleSubmit();
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+
+    const second = {
+      id: "e2",
+      title: "Second",
+      summary: "theirs",
+      updatedAt: "2026-10-19T03:00:00.000Z",
+      _rev: "5",
+    };
+    act(() => rendered.rerender({ entry: second }));
+    act(() => {
+      rendered.result.current.form.setValue("title", "Second's edit", {
+        shouldDirty: true,
+      });
+      rendered.result.current.holdForVersionChange({
+        ...ANA_CHANGED,
+        currentVersion: "6",
+      } as never);
+    });
+    await act(async () => {
+      answerFirst(answered({ ...stored, _rev: "6" }));
+      await saving;
+    });
+
+    act(() =>
+      rendered.rerender({
+        entry: {
+          ...second,
+          title: "Ana's second",
+          updatedAt: "2026-10-19T03:05:00.000Z",
+          _rev: "6",
+        },
+      })
+    );
+    expect(rendered.result.current.form.getValues("title")).toBe(
+      "Second's edit"
+    );
+  });
+
   it("does not pin a refusal that arrives once the form shows another entry", async () => {
     // The refusal is about the first entry: pinned on the second, Save anyway
     // would write the first's values over the second.

@@ -760,7 +760,7 @@ function useConflictChoices(choices: {
       const result = await updateMutation.mutateAsync(payload as never);
       ownSave.current.storedVersion = storedVersionOf(result.item);
       write.answered(result.item);
-      version.release();
+      write.released();
       if (sent !== undefined) {
         form.reset(storedAfterSave(fields, sent, result.item));
       }

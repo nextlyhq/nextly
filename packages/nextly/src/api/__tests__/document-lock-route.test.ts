@@ -380,14 +380,36 @@ describe("document lock route", () => {
 
     expect(changeSinceHeldVersion).toHaveBeenCalledTimes(2);
     expect(claimed.status).toBe(200);
-    const claimItem = ((await claimed.json()) as { item: Record<string, unknown> })
-      .item;
+    const claimItem = (
+      (await claimed.json()) as { item: Record<string, unknown> }
+    ).item;
     expect(claimItem).toMatchObject({ status: "acquired", claimToken: "t" });
     expect(claimItem).not.toHaveProperty("changed");
     expect(renewed.status).toBe(200);
     expect(
       ((await renewed.json()) as { item: Record<string, unknown> }).item
     ).toMatchObject({ status: "renewed" });
+  });
+
+  it("claims and renews without a version, and refuses a malformed one first", async () => {
+    // 🔴 The version is only decoded here, never judged as a write is: an
+    // editor whose copy has none yet, a custom edit view and an older client
+    // all claim without one, whatever a write is required to name.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    service.renew.mockResolvedValue({ status: "renewed" });
+
+    const claimed = await acquireLock(post(ref));
+    const renewed = await renewLock(post({ ...ref, claimToken: "t" }, "PATCH"));
+
+    expect(claimed.status).toBe(200);
+    expect(renewed.status).toBe(200);
+    expect(changeSinceHeldVersion).not.toHaveBeenCalled();
+
+    // A typo is the client's mistake, told before anything is claimed.
+    service.acquire.mockClear();
+    const malformed = await acquireLock(post({ ...ref, _rev: "seven" }));
+    expect(malformed.status).toBe(400);
+    expect(service.acquire).not.toHaveBeenCalled();
   });
 
   it("requires a claim token to renew or release", async () => {
