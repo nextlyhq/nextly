@@ -25,10 +25,6 @@
 import {
   BASE_BREAKPOINT,
   DEFAULT_LIMITS,
-  isPlainRecord,
-  MAX_SCANNED_KEYS,
-  selectNodes,
-  STYLE_STATES,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -36,11 +32,11 @@ import type {
   PluginFieldValidateArgs,
 } from "@nextlyhq/plugin-sdk";
 
-import { readStoredJson } from "../stored-json";
+import { breakpointUsesIn } from "../breakpoint-removal/usage";
 
+import { addedUndefinedIds, type StoredForms } from "./added-undefined-ids";
 // An update with a write behind it is exactly what the Layers lock is asked
 // about too: the one case with a stored document to compare with.
-import { addedUndefinedIds, type StoredForms } from "./added-undefined-ids";
 import { isTopLevel, judgesLayersLocks } from "./layers-lock-judgement";
 
 /** The code a write bringing an undefined breakpoint is refused with. */
@@ -51,88 +47,16 @@ const REMOVED_BREAKPOINT_MESSAGE =
   "That breakpoint was removed from the site. Reload to keep editing.";
 
 /**
- * The keys of a stored record that `holds` says keep something, read no
- * further than `bound`: as far as the engine reads the same record, so this
- * check judges exactly the keys the engine acts on. Read with an early break
- * rather than `Object.keys`, which builds every key before anything can stop
- * it.
- */
-function* keysHolding(
-  record: Record<string, unknown>,
-  holds: (value: unknown) => boolean,
-  bound: number
-): Generator<string> {
-  let read = 0;
-  for (const key in record) {
-    if (!Object.hasOwn(record, key)) continue;
-    read += 1;
-    if (read > bound) return;
-    if (holds(record[key])) yield key;
-  }
-}
-
-/** Whether a stored per-device setting is one. */
-function isBoolean(value: unknown): boolean {
-  return typeof value === "boolean";
-}
-
-/** Whether a breakpoint's style values hold at least one value to emit. */
-function holdsValues(values: unknown): boolean {
-  if (!isPlainRecord(values)) return false;
-  for (const key in values) if (Object.hasOwn(values, key)) return true;
-  return false;
-}
-
-/**
- * The breakpoint ids a style envelope (states × breakpoints) stores a value
- * under, in the states the compiler writes: one it does not know is reported
- * as such and never written, whatever breakpoint it names. An empty entry is
- * no value: the compiler emits nothing for it.
- */
-function addEnvelopeIds(styles: unknown, into: Set<string>): void {
-  if (!isPlainRecord(styles)) return;
-  for (const state of STYLE_STATES) {
-    const byBreakpoint = styles[state];
-    if (!isPlainRecord(byBreakpoint)) continue;
-    // The compiler reads a style map's keys up to its bound and no further: a
-    // map wider than that is corrupt, and the keys past it are never read.
-    for (const id of keysHolding(byBreakpoint, holdsValues, MAX_SCANNED_KEYS)) {
-      into.add(id);
-    }
-  }
-}
-
-/**
  * Every breakpoint id a stored blocks value keeps a style or a per-device
- * hide under: each read node's styles and `visibility.devices`, and the
- * document's own page styles. The base is left out, being every site's.
- *
- * The nodes are the ones the compiler reads, selected by the engine's own
- * walk within `limits`, so a node past the bounds is one nothing renders
- * from either. An unreadable value uses none.
+ * hide under, read by the one reader every count of a site's breakpoints
+ * shares (`breakpoint-removal/usage`), so this check and a removal's count
+ * agree on what a page uses. The base is left out, being every site's.
  */
 function breakpointIdsUsed(
   stored: unknown,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): Set<string> {
-  const ids = new Set<string>();
-  const document = readStoredJson(stored);
-  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) return ids;
-  for (const { node } of selectNodes(document, limits).nodes) {
-    const read = node as { styles?: unknown; visibility?: unknown };
-    addEnvelopeIds(read.styles, ids);
-    const devices = isPlainRecord(read.visibility)
-      ? read.visibility.devices
-      : undefined;
-    if (isPlainRecord(devices)) {
-      // A stored setting is a boolean; anything else applies nothing. Every
-      // key, as the engine's validation and compiler both read this record
-      // whole: one past any bound is still judged and applied there.
-      for (const id of keysHolding(devices, isBoolean, Infinity)) ids.add(id);
-    }
-  }
-  const settings = document.settings;
-  if (isPlainRecord(settings)) addEnvelopeIds(settings.styles, ids);
+  const ids = new Set(breakpointUsesIn(stored, "every", limits).uses.keys());
   ids.delete(BASE_BREAKPOINT);
   return ids;
 }
