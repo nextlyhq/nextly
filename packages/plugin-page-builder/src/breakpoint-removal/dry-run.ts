@@ -25,6 +25,7 @@ import type {
   ReadValue,
 } from "../host-rewrite/rewrite";
 import { scannedOutcomes } from "../host-rewrite/scan";
+import { storedHash } from "../host-rewrite/stored-hash";
 
 import {
   breakpointUsesIn,
@@ -182,18 +183,21 @@ async function scannedIds(
   limits: DryRunDeps["limits"]
 ): Promise<Set<string> | null> {
   const found = new Set<string>();
+  // A value the engine's walk stopped inside holds blocks nothing counted, so
+  // the row is as unreadable as one the scan could not finish.
+  let cut = false;
   const outcome = await scannedOutcomes(
     value => {
-      for (const id of breakpointUsesIn(value, ids, limits).uses.keys()) {
-        found.add(id);
-      }
+      const { uses, complete } = breakpointUsesIn(value, ids, limits);
+      if (!complete) cut = true;
+      for (const id of uses.keys()) found.add(id);
       return { kind: "unchanged" };
     },
     form.value,
     { host: candidate.host, form: form.draft ? "draft" : "published" },
     candidate.excluded
   );
-  return outcome === "unreadable" ? null : found;
+  return outcome === "unreadable" || cut ? null : found;
 }
 
 /**
@@ -243,6 +247,7 @@ async function documentUses(
   deps: DryRunDeps
 ): Promise<Map<string, DocumentTally> | null> {
   const tallies = new Map<string, DocumentTally>();
+  const counted = new Set<string>();
   for (const candidate of document.hosts) {
     let read: HostRead;
     try {
@@ -250,18 +255,49 @@ async function documentUses(
     } catch {
       return null;
     }
-    const forms: ReadForm[] = [
-      { value: valueOf(read.published), draft: false },
-      { value: valueOf(read.draft), draft: true },
-    ];
-    for (const form of forms) {
-      if (form.value === undefined) continue;
-      if (!(await addForm(tallies, candidate, form, ids, deps.limits))) {
-        return null;
-      }
+    if (!(await addHost(tallies, counted, candidate, read, ids, deps))) {
+      return null;
     }
   }
   return tallies;
+}
+
+/**
+ * Add one host's stored forms to the document's tallies; false when one could
+ * not be read to the end.
+ *
+ * `counted` holds the values already counted, by field, form and content. A
+ * field whose languages are unknown is read once per language, and where it is
+ * stored once each read answers the same value: counted once, not once per
+ * language. The count is of distinct values, so a translated field holding the
+ * same value in two languages is counted once as well.
+ */
+async function addHost(
+  tallies: Map<string, DocumentTally>,
+  counted: Set<string>,
+  candidate: HostDocument["hosts"][number],
+  read: HostRead,
+  ids: ReadonlySet<string>,
+  deps: DryRunDeps
+): Promise<boolean> {
+  const forms: ReadForm[] = [
+    { value: valueOf(read.published), draft: false },
+    { value: valueOf(read.draft), draft: true },
+  ];
+  for (const form of forms) {
+    if (form.value === undefined) continue;
+    const key = [
+      candidate.host.path.join("."),
+      form.draft ? "draft" : "published",
+      await storedHash(form.value),
+    ].join("\u001F");
+    if (counted.has(key)) continue;
+    counted.add(key);
+    if (!(await addForm(tallies, candidate, form, ids, deps.limits))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** A list being named as it fills, past the cap only counted. */
@@ -284,8 +320,9 @@ async function named(
   const names: string[] = [];
   let unnamed = naming.unnamed;
   for (const host of naming.hosts) {
-    const name = await deps.nameFor(host);
-    if (name === null) unnamed += 1;
+    // Past the deadline a document is counted rather than named.
+    const name = await beforeDeadline(deps.nameFor(host), deps);
+    if (name === null || name === TIMED_OUT) unnamed += 1;
     else names.push(name);
   }
   return { named: names, unnamed };
@@ -321,9 +358,30 @@ function gather(
   }
 }
 
-/** Whether the walk's deadline has passed. */
-function pastDeadline(deps: DryRunDeps): boolean {
-  return deps.deadline !== undefined && Date.now() >= deps.deadline.getTime();
+/** What a piece of work came to when the deadline passed before it answered. */
+const TIMED_OUT: unique symbol = Symbol("timed out");
+
+/**
+ * `work`'s answer, or {@link TIMED_OUT} once the deadline passes first: a read
+ * that stalls cannot hold the request past its budget. The work itself is
+ * only a read, so leaving it to finish unheard changes nothing.
+ */
+async function beforeDeadline<T>(
+  work: Promise<T>,
+  deps: DryRunDeps
+): Promise<T | typeof TIMED_OUT> {
+  if (deps.deadline === undefined) return work;
+  const left = deps.deadline.getTime() - Date.now();
+  if (left <= 0) return TIMED_OUT;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof TIMED_OUT>(resolve => {
+    timer = setTimeout(() => resolve(TIMED_OUT), left);
+  });
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -336,15 +394,27 @@ async function walkSite(
   deps: DryRunDeps
 ): Promise<{ unreadable: number; complete: boolean }> {
   let unreadable = 0;
-  for await (const document of deps.documents()) {
-    if (pastDeadline(deps)) return { unreadable, complete: false };
+  const stopped = { unreadable: 0, complete: false };
+  // Stepped by hand so both the listing and each read answer to the deadline.
+  const documents = deps.documents()[Symbol.asyncIterator]();
+  for (;;) {
+    const next = await beforeDeadline(documents.next(), deps);
+    if (next === TIMED_OUT) {
+      void documents.return?.();
+      return { ...stopped, unreadable };
+    }
+    if (next.done === true) return { unreadable, complete: true };
+    const document = next.value;
     const first = document.hosts[0]?.host;
     if (first === undefined) continue;
-    const tallies = await documentUses(document, ids, deps);
+    const tallies = await beforeDeadline(
+      documentUses(document, ids, deps),
+      deps
+    );
+    if (tallies === TIMED_OUT) return { ...stopped, unreadable };
     if (tallies === null) unreadable += 1;
     else gather(per, tallies, deps.placeOf(first), first);
   }
-  return { unreadable, complete: true };
 }
 
 /**

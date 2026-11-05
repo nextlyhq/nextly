@@ -224,6 +224,94 @@ describe("a breakpoint removal counted across the site", () => {
     expect(stopped.complete).toBe(false);
   });
 
+  it("takes a nested value its bounds cut off for an unreadable document", async () => {
+    // Past the bounds a removed style could sit uncounted: no confident zero.
+    const deps = site([
+      {
+        host: { ...entry("entries", "rows"), path: [] },
+        access: "scan",
+        published: {
+          rows: [{ body: page(styled("a"), styled("b"), styled("c")) }],
+        },
+      },
+    ]);
+    const run = await countRemoval(MOBILE, {
+      ...deps,
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+    expect(run).toMatchObject({ unreadable: 1, complete: true });
+    expect(run.removed[0]?.unaddressable).toBe(0);
+  });
+
+  it("stops at the deadline while a read is still outstanding", async () => {
+    // A read that stalls must not hold the request past its budget.
+    const deps = site([
+      { host: entry("pages", "p1"), published: page(styled("a")) },
+    ]);
+    const started = Date.now();
+    const run = await countRemoval(MOBILE, {
+      ...deps,
+      read: () => new Promise(() => {}),
+      deadline: new Date(Date.now() + 50),
+    });
+    expect(run.complete).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("counts a value read the same in every language once", async () => {
+    // A field whose languages are unknown is read once per language; stored
+    // once, each read answers the same value.
+    const shared = page(styled("a"));
+    const hosts = ["en", "fr"].map(locale => ({
+      ...entry("pages", "p1"),
+      locale,
+    }));
+    const deps = site(hosts.map(host => ({ host, published: shared })));
+    const once = await countRemoval(MOBILE, {
+      ...deps,
+      documents: async function* () {
+        yield {
+          key: "p1",
+          hosts: hosts.map(host => ({ host, access: "write" as const })),
+        };
+      },
+    });
+    expect(once.removed[0]?.places.pages).toMatchObject({
+      documents: 1,
+      styles: 2,
+    });
+
+    // Two languages holding different values: each is dropped, each counted.
+    const apart = site([
+      { host: hosts[0]!, published: shared },
+      { host: hosts[1]!, published: page(styled("a"), styled("b")) },
+    ]);
+    const both = await countRemoval(MOBILE, {
+      ...apart,
+      documents: async function* () {
+        yield {
+          key: "p1",
+          hosts: hosts.map(host => ({ host, access: "write" as const })),
+        };
+      },
+    });
+    expect(both.removed[0]?.places.pages.styles).toBe(6);
+  });
+
+  it("takes a document this version cannot interpret for an unreadable one", async () => {
+    const run = await countRemoval(
+      MOBILE,
+      site([
+        {
+          host: entry("pages", "future"),
+          published: { ...page(styled("a")), formatVersion: 999 },
+        },
+      ])
+    );
+    expect(run.unreadable).toBe(1);
+    expect(run.removed[0]?.places.pages.documents).toBe(0);
+  });
+
   it("counts the shared styles, and walks nothing when nothing is removed", async () => {
     const classes: NamedClass[] = [
       {
