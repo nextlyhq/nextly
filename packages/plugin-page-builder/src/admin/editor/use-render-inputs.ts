@@ -390,8 +390,12 @@ type CanvasViewport = {
 function useCanvasViewport({
   canvasRender,
   siteStylePending,
+  siteStyleError,
 }: Pick<CanvasRender, "canvasRender"> &
-  Pick<SiteStyleInputs, "siteStylePending">): CanvasViewport {
+  Pick<
+    SiteStyleInputs,
+    "siteStylePending" | "siteStyleError"
+  >): CanvasViewport {
   const breakpoints = canvasRender.styleContext.breakpoints;
   /*
    * The device the SHELL holds, mirrored here to draw the canvas with it.
@@ -424,22 +428,29 @@ function useCanvasViewport({
    * choice, so it stores and shows that device as the author's own.
    *
    * Compared against the last set the stored style ANSWERED with. While the
-   * read is pending the set in hand is the host's config defaults, and a
-   * breakpoint missing from the stored set was never removed in this session:
-   * a device restored on load that the site no longer has goes to the base,
-   * through `editingBreakpointOf` below.
+   * read is pending, or after it failed, the set in hand is the host's config
+   * defaults, and a breakpoint missing from the stored set was never removed
+   * in this session: a device restored on load that the site no longer has
+   * goes to the base, through `editingBreakpointOf` below, even when a later
+   * retry is the read that answers.
    */
   const previousBreakpoints = useRef<BreakpointSet | undefined>(undefined);
   useEffect(() => {
+    const answered = !siteStylePending && siteStyleError === null;
     const before = previousBreakpoints.current;
-    previousBreakpoints.current = siteStylePending ? undefined : breakpoints;
-    if (siteStylePending || before === undefined || before === breakpoints)
-      return;
+    previousBreakpoints.current = answered ? breakpoints : undefined;
+    if (!answered || before === undefined || before === breakpoints) return;
     // Only a device that WAS being edited and is gone now moves.
     if (editingBreakpointOf(before, chosenDevice) !== chosenDevice) return;
     if (editingBreakpointOf(breakpoints, chosenDevice) === chosenDevice) return;
     chooseDevice(fallbackBreakpoint(before, breakpoints, chosenDevice));
-  }, [breakpoints, siteStylePending, chosenDevice, chooseDevice]);
+  }, [
+    breakpoints,
+    siteStylePending,
+    siteStyleError,
+    chosenDevice,
+    chooseDevice,
+  ]);
 
   /*
    * Which breakpoint an edit lands in: the device the author chose, and

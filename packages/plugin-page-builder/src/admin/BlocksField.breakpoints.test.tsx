@@ -61,7 +61,7 @@ let settingsOpen = false;
 /** What the Site tab's read answers with; nothing until a case sets it. */
 let siteSettingsRead: Record<string, unknown> | undefined;
 /** What the stored site style's read answers with for the test in hand. */
-let storedRead: { data: unknown; isPending: boolean } = {
+let storedRead: { data: unknown; isPending: boolean; error?: Error | null } = {
   data: undefined,
   isPending: false,
 };
@@ -228,8 +228,8 @@ const refetchStoredStyle = async () => ({ isError: false });
 // route; that read's request is asserted in `site-style-read.test`.
 vi.mock("./site-style-read", () => ({
   useStoredSiteStyle: () => ({
-    ...storedRead,
     error: null,
+    ...storedRead,
     refetch: refetchStoredStyle,
   }),
 }));
@@ -675,6 +675,37 @@ describe("a device the site stops offering", () => {
         },
       },
       isPending: false,
+    };
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("does not take a retried read's answer, after the first failed, for a removal", () => {
+    /*
+     * A failed first read leaves the host's config defaults in hand, as a
+     * pending one does. A device restored on load that the stored set does not
+     * have was removed before this session, so when a retry answers it goes to
+     * the base rather than to the next wider breakpoint.
+     */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("offline"),
+    };
+    const view = openEditor();
+
+    storedRead = {
+      data: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+      isPending: false,
+      error: null,
     };
     view.rerender();
 

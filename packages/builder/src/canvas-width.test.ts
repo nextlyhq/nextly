@@ -467,6 +467,30 @@ describe("the device edited once the chosen one is removed", () => {
     ).toBe("laptop");
   });
 
+  it("keeps the width when a breakpoint at the same bound remains", () => {
+    /*
+     * Two at one bound: only the later is offered, until it is removed and the
+     * earlier one is offered at that same width. Strictly wider would skip it
+     * for Laptop.
+     */
+    const doubled: BreakpointSet = {
+      viewport: [
+        { id: "laptop", label: "Laptop", maxWidth: 1199 },
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "tablet-wide", label: "Wide tablet", maxWidth: 991 },
+        { id: "mobile", label: "Mobile", maxWidth: 575 },
+      ],
+      container: [],
+    };
+    expect(
+      fallbackBreakpoint(
+        doubled,
+        without(doubled, "tablet-wide"),
+        "tablet-wide"
+      )
+    ).toBe("tablet");
+  });
+
   it("moves to the base when no wider breakpoint remains", () => {
     // Narrower ones remain, and none of them is chosen.
     expect(

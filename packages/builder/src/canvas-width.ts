@@ -357,10 +357,13 @@ export function editingBreakpointOf(
  * `after`, given the device the author had chosen.
  *
  * The chosen breakpoint while the site still offers it. Once it is removed,
- * the narrowest device that remains WIDER than it was, so the author stays as
- * close as the site allows to the layout they were styling, without moving to
- * a narrower one whose styles reach fewer widths. The base when nothing wider
- * remains, which covers every width above the remaining bounds.
+ * the narrowest device that remains at least as wide as it was, so the author
+ * stays as close as the site allows to the layout they were styling, without
+ * moving to a narrower one whose styles reach fewer widths. A breakpoint left
+ * at exactly the removed one's width is the same layout, and is kept: a set
+ * may define two at one bound, where only the later one is offered until the
+ * other is removed. The base when nothing as wide remains, which covers every
+ * width above the remaining bounds.
  *
  * The removed breakpoint's width is read from `before`, since `after` no
  * longer has it. A chosen id `before` never offered as a device has no width
@@ -377,9 +380,9 @@ export function fallbackBreakpoint(
   if (kept === chosen || chosen === null) return kept;
   const former = offeredTiers(before).find(tier => tier.id === chosen);
   if (former === undefined) return BASE_BREAKPOINT;
-  // Widest first, so the last one wider than the former bound is the narrowest.
+  // Widest first, so the last one at least as wide is the narrowest of them.
   const wider = offeredTiers(after).filter(
-    tier => tier.maxWidth > former.maxWidth
+    tier => tier.maxWidth >= former.maxWidth
   );
   return wider.at(-1)?.id ?? BASE_BREAKPOINT;
 }
