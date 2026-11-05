@@ -118,6 +118,40 @@ function readValue(token: string, rule: FieldRule, source: string): number {
   return named + (rule.firstNamed ?? 0);
 }
 
+/** A list item's step: 1 when it names none. */
+function readStep(step: string | undefined, source: string): number {
+  if (step === undefined) return 1;
+  if (!/^\d+$/.test(step) || Number(step) === 0) {
+    throw invalid(source, `the step "${step}" is not a positive whole number`);
+  }
+  return Number(step);
+}
+
+/** The values a list item's range spans, before its step. */
+function readSpan(
+  range: string,
+  stepped: boolean,
+  rule: FieldRule,
+  source: string
+): { low: number; high: number } {
+  if (range === "*") return { low: rule.min, high: rule.max };
+  if (!range.includes("-")) {
+    const low = readValue(range, rule, source);
+    // `5/15` runs from 5 to the field's end, as Vixie cron reads it.
+    return { low, high: stepped ? rule.max : low };
+  }
+  const [from, to, beyond] = range.split("-");
+  if (!from || !to || beyond !== undefined) {
+    throw invalid(source, `"${range}" is not a ${rule.label} range`);
+  }
+  const low = readValue(from, rule, source);
+  const high = readValue(to, rule, source);
+  if (low > high) {
+    throw invalid(source, `the range "${range}" runs backwards`);
+  }
+  return { low, high };
+}
+
 /** Every value one field allows. */
 function readField(text: string, rule: FieldRule, source: string): Set<number> {
   const values = new Set<number>();
@@ -126,36 +160,8 @@ function readField(text: string, rule: FieldRule, source: string): Set<number> {
     if (!range || extra !== undefined || step === "") {
       throw invalid(source, `"${part}" is not a ${rule.label} list item`);
     }
-    let every = 1;
-    if (step !== undefined) {
-      if (!/^\d+$/.test(step) || Number(step) === 0) {
-        throw invalid(
-          source,
-          `the step "${step}" is not a positive whole number`
-        );
-      }
-      every = Number(step);
-    }
-    let low: number;
-    let high: number;
-    if (range === "*") {
-      low = rule.min;
-      high = rule.max;
-    } else if (range.includes("-")) {
-      const [from, to, beyond] = range.split("-");
-      if (!from || !to || beyond !== undefined) {
-        throw invalid(source, `"${range}" is not a ${rule.label} range`);
-      }
-      low = readValue(from, rule, source);
-      high = readValue(to, rule, source);
-      if (low > high) {
-        throw invalid(source, `the range "${range}" runs backwards`);
-      }
-    } else {
-      low = readValue(range, rule, source);
-      // `5/15` runs from 5 to the field's end, as Vixie cron reads it.
-      high = step === undefined ? low : rule.max;
-    }
+    const every = readStep(step, source);
+    const { low, high } = readSpan(range, step !== undefined, rule, source);
     for (let value = low; value <= high; value += every) {
       values.add(rule.max === 7 && value === 7 ? 0 : value);
     }
@@ -212,6 +218,18 @@ const SEARCH_LIMIT = 8 * 366 * DAY;
  */
 type WallClock = number;
 
+/** A wall-clock minute as a date and the fields the searches step through. */
+function fieldsOf(at: WallClock) {
+  const d = new Date(at);
+  return {
+    d,
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth(),
+    day: d.getUTCDate(),
+    hour: d.getUTCHours(),
+  };
+}
+
 /** Whether `cron` fires on the day `at` falls on. */
 function firesOnDay(cron: CronExpression, at: Date): boolean {
   const byDate = cron.daysOfMonth.has(at.getUTCDate());
@@ -233,13 +251,7 @@ function nextWallClock(
   const limit = from + SEARCH_LIMIT;
   let at = from;
   while (at <= limit) {
-    const d = new Date(at);
-    const [year, month, day, hour] = [
-      d.getUTCFullYear(),
-      d.getUTCMonth(),
-      d.getUTCDate(),
-      d.getUTCHours(),
-    ];
+    const { d, year, month, day, hour } = fieldsOf(at);
     if (!cron.months.has(month + 1)) at = Date.UTC(year, month + 1, 1);
     else if (!firesOnDay(cron, d)) at = Date.UTC(year, month, day + 1);
     else if (!cron.hours.has(hour)) at = Date.UTC(year, month, day, hour + 1);
@@ -260,13 +272,7 @@ function previousWallClock(
   const limit = from - SEARCH_LIMIT;
   let at = from;
   while (at >= limit) {
-    const d = new Date(at);
-    const [year, month, day, hour] = [
-      d.getUTCFullYear(),
-      d.getUTCMonth(),
-      d.getUTCDate(),
-      d.getUTCHours(),
-    ];
+    const { d, year, month, day, hour } = fieldsOf(at);
     // Each step lands on the last minute of the unit before.
     if (!cron.months.has(month + 1)) at = Date.UTC(year, month, 1) - MINUTE;
     else if (!firesOnDay(cron, d)) at = Date.UTC(year, month, day) - MINUTE;
