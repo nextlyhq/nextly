@@ -28,6 +28,8 @@ import {
   scheduleAsItStands,
 } from "./helpers/release-writes";
 
+// The edits made between scheduling and the run are setup, not what is under
+// test, so they set their values whatever is stored.
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
@@ -150,7 +152,7 @@ describe.each(getConfiguredTestDialects())(
       // document was when it was scheduled would refuse it.
       await handlerOf(t).updateEntry(
         { collectionName: POSTS, entryId: id, overrideAccess: true },
-        { title: "saved since" }
+        { title: "saved since", _overwrite: true }
       );
       const before = Number((await stored(t, POSTS, id))._revision);
 
@@ -177,7 +179,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await handlerOf(t).updateEntry(
         { collectionName: POSTS, entryId: id, overrideAccess: true },
-        { title: "saved since" }
+        { title: "saved since", _overwrite: true }
       );
 
       const ran = await t.nextly.releases.publishNow({ id: release });
@@ -196,7 +198,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "es",
         },
-        { title: "hola" }
+        { title: "hola", _overwrite: true }
       );
       const release = await scheduled(t, {
         slug: PAGES,
@@ -212,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "es",
         },
-        { title: "hola otra vez" }
+        { title: "hola otra vez", _overwrite: true }
       );
 
       const ran = await t.nextly.releases.publishNow({ id: release });
