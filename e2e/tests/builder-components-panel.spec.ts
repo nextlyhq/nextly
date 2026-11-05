@@ -231,6 +231,9 @@ async function selectHeading(page: Page): Promise<void> {
  * path that crossed the end of the page on its way would keep that place.
  */
 async function dragAfterHeading(page: Page, from: ReturnType<typeof row>) {
+  // On screen before it is measured: a box read for a row scrolled out of the
+  // panel is a point the pointer cannot press.
+  await from.scrollIntoViewIfNeeded();
   const start = await from.boundingBox();
   if (start === null) throw new Error("[e2e] the row rendered no box");
   const x = start.x + start.width / 2;
@@ -612,7 +615,14 @@ test.describe("the Components panel", () => {
           .fill(title);
         await dragAfterHeading(page, tile(page, title));
       } else {
+        // Narrowed to this component first, as the Add pass is. The suite's
+        // database holds every component the specs before it made, so the
+        // full list can put this row below the panel's fold, or move it as
+        // the list finishes loading: a drag aimed at its box then starts off
+        // it, and nothing is placed.
         await openComponents(page);
+        await searchBox(page).fill(title);
+        await expect(row(page, title)).toBeVisible();
         await dragAfterHeading(page, row(page, title));
       }
       await saveDraft(page);

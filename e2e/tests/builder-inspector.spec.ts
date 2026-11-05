@@ -546,19 +546,30 @@ test.describe("the inspector", () => {
     // The header below the opening section, where it is drawn now. An
     // opening section's fields left unclipped while it grows are drawn over
     // it, and take the click.
-    const size = await sectionHeader(page, "size").boundingBox();
-    if (size === null) throw new Error("the Size header has no box");
-    const x = size.x + 20;
-    const y = size.y + size.height / 2;
-    const hit = await page.evaluate(
-      ([px, py]) =>
-        document
-          .elementFromPoint(px, py)
-          ?.closest(".nx-style-inspector__section-trigger")
-          ?.closest("[data-section]")
-          ?.getAttribute("data-section") ?? null,
-      [x, y] as const
-    );
+    //
+    // Measured and hit-tested in ONE evaluation, so in one frame: the header
+    // moves throughout the motion, and two round trips — its box, then the
+    // element at that point — let it move between them, which under a loaded
+    // machine sent the probe to where the header had been.
+    const { hit, x, y } = await page.evaluate(() => {
+      const header = document.querySelector(
+        '.nx-style-inspector [data-section="size"] .nx-style-inspector__section-trigger'
+      );
+      if (header === null) throw new Error("the Size header is not drawn");
+      const box = header.getBoundingClientRect();
+      const px = box.x + 20;
+      const py = box.y + box.height / 2;
+      return {
+        x: px,
+        y: py,
+        hit:
+          document
+            .elementFromPoint(px, py)
+            ?.closest(".nx-style-inspector__section-trigger")
+            ?.closest("[data-section]")
+            ?.getAttribute("data-section") ?? null,
+      };
+    });
     expect(hit).toBe("size");
     await page.mouse.click(x, y);
     await expect
