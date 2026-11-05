@@ -1339,14 +1339,25 @@ function unknownForm(form: never): never {
 }
 
 /**
- * A Single's first write's read of its row inside its transaction, for the
- * write called with `context`: `undefined` where it is not stored yet.
+ * Whether the write called with `context` carries a conditional write's
+ * expectation, so its first read inside its transaction must be
+ * {@link lockedFirstRead}.
+ */
+export function carriesExpectation(
+  context: Record<string, unknown> | undefined
+): boolean {
+  return context !== undefined && expectations.has(context);
+}
+
+/**
+ * A Single's first write's read of its row inside its transaction, for a
+ * write carrying a conditional write's expectation: `undefined` where it is
+ * not stored yet.
  *
- * A write carrying a conditional write's expectation reads under locks. On
- * MySQL a transaction's first plain read fixes the snapshot every later plain
- * read answers from, and the expectation is read plainly after the row lock;
- * read before that lock, the row could change under a snapshot the
- * expectation would then trust. A locking read takes its lock at once and
+ * The write reads under locks. On MySQL a transaction's first plain read
+ * fixes the snapshot every later plain read answers from, and the expectation
+ * is read plainly after the row lock; read before that lock, the row could
+ * change under a snapshot the expectation would then trust. A locking read takes its lock at once and
  * fixes no snapshot, so the expectation's snapshot is taken under the lock.
  *
  * The Single's registry row is locked first: it always exists, so the lock is
@@ -1359,18 +1370,14 @@ function unknownForm(form: never): never {
  * then the document's row, is the one every history write and deletion takes
  * (`history-locks`).
  *
- * A write without an expectation keeps its plain read. An entry's update
- * takes its row lock as its transaction's first statement, so it reads
- * nothing before the lock.
+ * A write without an expectation keeps its plain read, made by the write
+ * path itself. An entry's update takes its row lock as its transaction's
+ * first statement, so it reads nothing before the lock.
  */
-export async function firstWriteRead<T>(
+export async function lockedFirstRead<T>(
   tx: VersionsDbApi,
-  single: { readonly id: string; readonly tableName: string },
-  context: Record<string, unknown> | undefined
+  single: { readonly id: string; readonly tableName: string }
 ): Promise<T | undefined> {
-  if (context === undefined || !expectations.has(context)) {
-    return (await tx.select<T>(single.tableName, { limit: 1 }))[0];
-  }
   await tx.select("dynamic_singles", {
     columns: ["id"],
     where: { and: [{ column: "id", op: "=", value: single.id }] },

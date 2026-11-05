@@ -2736,14 +2736,16 @@ export class SingleMutationService extends BaseService {
             // rolls the insert back, with no compensating delete. Idempotent: a
             // hook's read (`get`) may have auto-created the row, and a retry
             // re-enters here; either way the existing row is reused. A
-            // conditional write reads it under locks (see `firstWriteRead`).
+            // conditional write reads it under locks (see `lockedFirstRead`).
             if (autoCreated && pendingAutoCreateValues) {
-              const committed =
-                await storedFieldRead.firstWriteRead<SingleDocument>(
-                  tx,
-                  singleMeta,
-                  options.context
-                );
+              const committed = storedFieldRead.carriesExpectation(
+                options.context
+              )
+                ? await storedFieldRead.lockedFirstRead<SingleDocument>(
+                    tx,
+                    singleMeta
+                  )
+                : await tx.selectOne<SingleDocument>(singleMeta.tableName, {});
               if (committed) {
                 existingDoc = committed;
               } else {
