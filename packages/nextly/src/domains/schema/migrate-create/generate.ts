@@ -67,6 +67,7 @@ import type {
   LocalizedColumnSpec,
 } from "../../i18n/migration/types";
 import {
+  companionMigrationPath,
   writeCompanionMigrationFile,
   type WriteCompanionMigrationOpts,
 } from "../../i18n/migration/write-migration-file";
@@ -273,6 +274,8 @@ export interface CompanionFileOf {
   entity: I18nTransitionKind;
   /** The slug of the entity the file is about. */
   slug: string;
+  /** Where the file is written; on a dry run, where it would be. */
+  path: string;
 }
 
 export interface GenerateResult {
@@ -758,6 +761,7 @@ export async function generateMigration(
       kind: opts.kind,
       entity: opts.entity,
       slug: spec.collection,
+      path: companionMigrationPath(args.migrationsDir, spec, opts),
     })),
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,

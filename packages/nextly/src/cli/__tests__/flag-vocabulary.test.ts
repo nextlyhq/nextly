@@ -222,6 +222,55 @@ describe("--dry-run and --apply by what a command does", () => {
     expect(worded).toEqual([]);
   });
 
+  it("refuses --dry-run together with --check wherever a command has both", () => {
+    // `--check` exits non-zero on drift and `--dry-run` exits 0 with the plan,
+    // so the two together would have one silently override the other.
+    const both = paths.filter(name => {
+      const flags = longs(name);
+      return flags.includes("--dry-run") && flags.includes("--check");
+    });
+    expect(both.length).toBeGreaterThan(0);
+    const unrefused = both.filter(
+      name =>
+        !(
+          named(name).options.find(option => option.long === "--dry-run")
+            ?.conflictsWith ?? []
+        ).includes("check")
+    );
+    expect(unrefused).toEqual([]);
+  });
+
+  it("ends a run given both flags before anything runs, naming the clash", async () => {
+    const run = createProgram();
+    const command = commandAt(run, ["generate:types"]);
+    let written = "";
+    command
+      .exitOverride()
+      .configureOutput({ writeErr: text => void (written += text) });
+    // The action is replaced, so reaching it would show the run went on.
+    let ran = false;
+    command.action(() => {
+      ran = true;
+    });
+
+    await expect(
+      run.parseAsync([
+        "node",
+        "nextly",
+        "generate:types",
+        "--check",
+        "--dry-run",
+      ])
+    ).rejects.toMatchObject({
+      code: "commander.conflictingOption",
+      exitCode: 1,
+    });
+    expect(written).toContain(
+      "option '--dry-run' cannot be used with option '--check'"
+    );
+    expect(ran).toBe(false);
+  });
+
   it("offers --apply on every command that previews by default", () => {
     expect(PREVIEWS.filter(name => !longs(name).includes("--apply"))).toEqual(
       []

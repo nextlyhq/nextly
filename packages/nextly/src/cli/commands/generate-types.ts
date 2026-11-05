@@ -39,7 +39,10 @@ import {
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
-import { writeComponentMapFiles } from "../../plugins/codegen/write-component-map";
+import {
+  planComponentMapFiles,
+  writeComponentMapFiles,
+} from "../../plugins/codegen/write-component-map";
 // The option names the field identity would overwrite, refused here because a
 // code-defined user field never passes through the manifest schema.
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
@@ -169,14 +172,6 @@ interface GenerationPlan {
   zodIndex?: GeneratedFile;
 }
 
-/**
- * What a dry run says of the component map and its path list. The writer
- * decides inside one call whether either file changes, so a dry run cannot
- * name them without writing; it says so rather than leaving them out silently.
- */
-export const COMPONENT_MAP_DRY_RUN_NOTE =
-  "Not shown: the plugin component map and its path list, which a real run rewrites beside the configured types file wherever they differ.";
-
 // ============================================================================
 // Generate Types Command Implementation
 // ============================================================================
@@ -195,20 +190,9 @@ export const COMPONENT_MAP_DRY_RUN_NOTE =
  * @returns the map's path
  */
 async function settleImportMap(
-  plugins: Parameters<typeof writeComponentMapFiles>[0],
-  typesOutputPath: string,
-  cwd: string,
-  configFile: string | undefined,
-  // The site config's `admin.dashboard`, whose own widgets the map lists too.
-  siteDashboard: unknown
+  ...args: Parameters<typeof writeComponentMapFiles>
 ): Promise<string | undefined> {
-  const written = await writeComponentMapFiles(
-    plugins,
-    typesOutputPath,
-    cwd,
-    configFile,
-    siteDashboard
-  );
+  const written = await writeComponentMapFiles(...args);
   return written.paths[0];
 }
 
@@ -308,20 +292,29 @@ export async function runGenerateTypes(
   // place, and the admin's check rewrites it in development and names it in
   // production from the config, so a map written elsewhere would be one nothing
   // reads.
+  const importMapArgs: Parameters<typeof planComponentMapFiles> = [
+    configResult.config.plugins ?? [],
+    generatedTypesFile(manifestCwd, configResult.config.typescript.outputFile),
+    manifestCwd,
+    // The config file it was loaded from, whose type the map imports to check each widget
+    // component against its widget. None for a site running on the default config.
+    configResult.configPath,
+    configResult.config.admin?.dashboard,
+  ];
+  // A dry run names each file of the pair the real run would rewrite, from the
+  // plan the writer writes from.
+  if (dryRun) {
+    for (const each of await planComponentMapFiles(...importMapArgs)) {
+      if (each.previous === each.code) continue;
+      dryRunChanges.push({
+        action: "write",
+        target: shownPath(manifestCwd, each.file),
+      });
+    }
+  }
   const writtenImportMapPath = dryRun
     ? undefined
-    : await settleImportMap(
-        configResult.config.plugins ?? [],
-        generatedTypesFile(
-          manifestCwd,
-          configResult.config.typescript.outputFile
-        ),
-        manifestCwd,
-        // The config file it was loaded from, whose type the map imports to check each widget
-        // component against its widget. None for a site running on the default config.
-        configResult.configPath,
-        configResult.config.admin?.dashboard
-      );
+    : await settleImportMap(...importMapArgs);
   if (writtenImportMapPath) {
     logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);
   }
@@ -336,12 +329,7 @@ export async function runGenerateTypes(
     logger.info(
       "Add collections, singles, or components to your nextly.config.ts to generate types."
     );
-    if (dryRun) {
-      reportDryRun(logger, {
-        changes: dryRunChanges,
-        notes: [COMPONENT_MAP_DRY_RUN_NOTE],
-      });
-    }
+    if (dryRun) reportDryRun(logger, { changes: dryRunChanges });
     return;
   }
 
@@ -361,7 +349,6 @@ export async function runGenerateTypes(
             target: shownPath(manifestCwd, file.path),
           })),
         ],
-        notes: [COMPONENT_MAP_DRY_RUN_NOTE],
       });
       return;
     }

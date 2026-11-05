@@ -8,16 +8,26 @@
  * nothing), and exits 0. Where the real run would refuse, it says so and
  * still exits 0: the refusal is part of what the real run would do.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 
 import type { Logger } from "./utils/logger";
 
 /** The help line `--dry-run` carries on every command. */
 export const DRY_RUN_HELP = "Show what would change; change nothing";
 
-/** Adds `--dry-run` to `command`, off unless given. */
-export function withDryRun(command: Command): Command {
-  return command.option("--dry-run", DRY_RUN_HELP);
+/**
+ * Adds `--dry-run` to `command`, off unless given. `conflicts` names the
+ * command's options a dry run cannot be combined with, such as a `--check`
+ * whose own exit code would override the dry run's: given together, the run
+ * is refused before anything is read or written.
+ */
+export function withDryRun(
+  command: Command,
+  { conflicts = [] }: { conflicts?: string[] } = {}
+): Command {
+  return command.addOption(
+    new Option("--dry-run", DRY_RUN_HELP).conflicts(conflicts)
+  );
 }
 
 /** One change the real run would make, by what it does to what. */

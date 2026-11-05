@@ -39,6 +39,8 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown,
   migrations: [] as unknown[],
   transactions: 0,
+  /** How many times a run cleared the migrate lock with `forceUnlock`. */
+  unlocks: 0,
   /** Whether another process holds the migrate lock for the whole wait. */
   lockHeld: false,
 }));
@@ -70,6 +72,10 @@ vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => {
     >();
   return {
     ...real,
+    forceUnlock: ((db, dialect) => {
+      state.unlocks += 1;
+      return real.forceUnlock(db, dialect);
+    }) as typeof real.forceUnlock,
     withMigrateLock: ((db, dialect, fn, opts) => {
       if (!state.lockHeld) return real.withMigrateLock(db, dialect, fn, opts);
       opts?.logger?.warn?.(
@@ -294,6 +300,7 @@ beforeEach(async () => {
   state.db = adapter.getDrizzle();
   state.sqlite = adapter.getDrizzle<{ $client: Database.Database }>().$client;
   state.transactions = 0;
+  state.unlocks = 0;
   state.lockHeld = false;
   await reconcileCore({
     db: state.db,
@@ -766,6 +773,33 @@ describe("plugins uninstall over a column it contributed that is already gone", 
 });
 
 describe("migrate:down --plugin against a real database", () => {
+  it("clears no lock under --dry-run --force-unlock, and changes nothing", async () => {
+    state.migrations = [init, more];
+    const before = await ledger();
+
+    await runMigrateDown(
+      {
+        plugin: PLUGIN,
+        step: 1,
+        allowDataLoss: true,
+        dryRun: true,
+        forceUnlock: true,
+      },
+      context
+    );
+
+    expect(state.unlocks).toBe(0);
+    expect(await ledger()).toEqual(before);
+    expect(tables()).toContain("fx__tags");
+
+    // The same run without --dry-run does clear it.
+    await runMigrateDown(
+      { plugin: PLUGIN, step: 1, allowDataLoss: true, forceUnlock: true },
+      context
+    );
+    expect(state.unlocks).toBe(1);
+  });
+
   it("rolls the newest module back under its own ledger key", async () => {
     state.migrations = [init, more];
 

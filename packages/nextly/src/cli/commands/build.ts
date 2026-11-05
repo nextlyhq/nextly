@@ -314,13 +314,20 @@ export async function runBuild(
     if (entityValidation.errors.length > 0) {
       result.success = false;
       result.durationMs = Date.now() - startTime;
-      exitWithError(
-        logger,
-        buildDeclarationsInvalid(declarationIssues(entityValidation.errors))
+      const invalid = buildDeclarationsInvalid(
+        declarationIssues(entityValidation.errors)
       );
+      // A dry run names the failure, as it does once the build has a schema.
+      if (options.dryRun === true) {
+        reportDryRun(logger, { changes: [], refusals: [invalid.what] });
+        return;
+      }
+      exitWithError(logger, invalid);
     }
     logger.warn("No schema defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
+    // Nothing to generate; a dry run still ends as every dry run ends.
+    if (options.dryRun === true) reportDryRun(logger, { changes: [] });
     return;
   }
 

@@ -21,7 +21,9 @@ export function registerGenerateTypesCommand(program: Command): void {
       .command("generate:types")
       .description(
         "Generate TypeScript type definitions and Zod schemas from collections and singles"
-      )
+      ),
+    // Each sets its own exit code, so the two together are refused.
+    { conflicts: ["check"] }
   )
     // The help names the default from the value the config falls back to, so
     // the two cannot disagree.

@@ -20,7 +20,9 @@ export function registerGenerateManifestCommand(program: Command): void {
       .command("generate:manifest")
       .description(
         "Generate the block manifest from plugin declarations, or check it is current"
-      )
+      ),
+    // Each sets its own exit code, so the two together are refused.
+    { conflicts: ["check"] }
   )
     .option(
       "-o, --output <path>",

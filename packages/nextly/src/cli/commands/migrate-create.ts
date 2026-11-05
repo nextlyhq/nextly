@@ -50,7 +50,6 @@ import { dirname, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
 
-import { KIND_NAMES } from "../../domains/i18n/migration/resolve-entity-table";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
@@ -308,11 +307,12 @@ function reportMigrationDryRun(
     changes: [
       { action: "write", target: sqlFile },
       { action: "write", target: relative(cwd, result.snapshotPath) },
+      // The translation-table migration files, written after the pair.
+      ...result.companionFiles.map(file => ({
+        action: "write" as const,
+        target: relative(cwd, file.path),
+      })),
     ],
-    notes: result.companionFiles.map(
-      file =>
-        `A real run also writes the ${file.kind} translation-table migration file for ${KIND_NAMES[file.entity]} "${file.slug}", which a dry run does not name.`
-    ),
   });
 }
 

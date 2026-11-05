@@ -25,9 +25,7 @@ import { dryRunLines } from "../../dry-run";
 const loadConfig = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/config-loader", () => ({ loadConfig }));
 
-const { runGenerateTypes, COMPONENT_MAP_DRY_RUN_NOTE } = await import(
-  "../generate-types"
-);
+const { runGenerateTypes } = await import("../generate-types");
 const { createContext } = await import("../../program");
 
 const dirs: string[] = [];
@@ -119,9 +117,14 @@ async function run(
 const report = (printed: string[]) =>
   printed.slice(printed.findIndex(line => line.startsWith("Would ")));
 
-/** In the order a real run writes them: the manifest, the Zod files, then the types. */
+/**
+ * In the order a real run writes them: the manifest, the component map and its
+ * path list, the Zod files, then the types.
+ */
 const WRITES = [
   "src/types/blocks.manifest.json",
+  `src/types/${COMPONENT_IMPORT_MAP_FILENAME}`,
+  `src/types/${COMPONENT_PATHS_FILENAME}`,
   "src/db/schemas/zod/posts.zod.ts",
   "src/db/schemas/zod/index.ts",
   "src/types/nextly-types.ts",
@@ -137,13 +140,12 @@ describe("generate:types --dry-run", () => {
     expect(report(printed)).toEqual(
       dryRunLines({
         changes: WRITES.map(target => ({ action: "write", target })),
-        notes: [COMPONENT_MAP_DRY_RUN_NOTE],
       })
     );
     expect(folderSnapshot(cwd)).toEqual(before);
   });
 
-  it("names the files the real run then writes, the component map aside", async () => {
+  it("names the files the real run then writes", async () => {
     const cwd = await project();
     const before = folderSnapshot(cwd);
 
@@ -154,13 +156,7 @@ describe("generate:types --dry-run", () => {
       .filter(([path, hash]) => hash !== "dir" && before[path] === undefined)
       .map(([path]) => path)
       .sort();
-    expect(added).toEqual(
-      [
-        ...WRITES,
-        `src/types/${COMPONENT_IMPORT_MAP_FILENAME}`,
-        `src/types/${COMPONENT_PATHS_FILENAME}`,
-      ].sort()
-    );
+    expect(added).toEqual([...WRITES].sort());
   });
 
   it("leaves the Zod files out under --no-zod", async () => {
@@ -174,7 +170,6 @@ describe("generate:types --dry-run", () => {
         changes: WRITES.filter(target => !target.includes("/zod/")).map(
           target => ({ action: "write", target })
         ),
-        notes: [COMPONENT_MAP_DRY_RUN_NOTE],
       })
     );
   });
@@ -187,18 +182,28 @@ describe("generate:types --dry-run", () => {
 
     const printed = await run(cwd, { dryRun: true });
 
-    expect(report(printed)).toEqual(
-      dryRunLines({
-        changes: [
-          { action: "remove", target: "src/types/blocks.manifest.json" },
-          ...WRITES.slice(1).map(target => ({
-            action: "write" as const,
-            target,
-          })),
-        ],
-        notes: [COMPONENT_MAP_DRY_RUN_NOTE],
-      })
+    expect(report(printed)[0]).toBe(
+      "Would remove src/types/blocks.manifest.json"
     );
     expect(folderSnapshot(cwd)).toEqual(before);
+
+    // No file the real run then changes goes unnamed. The types and Zod files
+    // are written on every run, so they are named even when their content is
+    // the same; the component map is written only where it differs, so its
+    // files are named exactly when the real run changes them.
+    const named = report(printed)
+      .filter(line => line.startsWith("Would write "))
+      .map(line => line.slice("Would write ".length))
+      .sort();
+    await run(cwd);
+    const after = folderSnapshot(cwd);
+    const changed = Object.keys(after)
+      .filter(path => after[path] !== "dir" && after[path] !== before[path])
+      .sort();
+    expect(changed.filter(path => !named.includes(path))).toEqual([]);
+    const isMap = (path: string) =>
+      path.endsWith(COMPONENT_IMPORT_MAP_FILENAME) ||
+      path.endsWith(COMPONENT_PATHS_FILENAME);
+    expect(named.filter(isMap)).toEqual(changed.filter(isMap));
   });
 });

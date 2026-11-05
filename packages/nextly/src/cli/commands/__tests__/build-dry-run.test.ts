@@ -137,6 +137,24 @@ describe("nextly build --dry-run", () => {
     expect(lines.some(line => /zod/.test(line))).toBe(false);
   });
 
+  it("ends a project with no schema as every dry run ends", async () => {
+    const dir = project([]);
+    const { logger, lines } = captureLogger();
+    const exit = stubExit();
+    const context: CommandContext = { logger, options: {}, cwd: dir };
+
+    await runBuild(
+      { cwd: dir, skipMigrationsCheck: true, dryRun: true },
+      context
+    );
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(lines.slice(-2)).toEqual([
+      "Nothing would change.",
+      "Dry run: nothing was changed.",
+    ]);
+  });
+
   it("names the failure a real build would end with, and exits 0", async () => {
     // Two collections with one slug: the build's own validation refuses it.
     const dir = project([posts, posts]);

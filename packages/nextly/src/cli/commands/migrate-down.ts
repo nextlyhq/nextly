@@ -1172,7 +1172,11 @@ export async function runMigrateDown(
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
 
-    if (options.forceUnlock) {
+    // A dry run clears no lock, which may be an active operation's; it says a
+    // real run would.
+    if (options.forceUnlock && options.dryRun) {
+      logger.info("Would remove any migrate lock held");
+    } else if (options.forceUnlock) {
       const { forceUnlock } = await import(
         "../../domains/schema/pipeline/locks"
       );
