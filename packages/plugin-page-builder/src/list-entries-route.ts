@@ -101,7 +101,31 @@ export async function readListEntries(
       },
     });
   }
-  return reads.publicFind(request.query);
+  try {
+    return await reads.publicFind(request.query);
+  } catch (error) {
+    throw visitorRefusal(error, request.query.collection);
+  }
+}
+
+/**
+ * A refusal of the visitor's read, as the editor is told it. The read is made
+ * as no one, so a collection visitors may not read answers "sign in" (401);
+ * handed back as that, the admin would take the AUTHOR's session for expired
+ * and send them to sign in. It is the page's visitors who are refused, so it
+ * travels as a refusal (403) saying so. Any other failure travels unchanged.
+ */
+function visitorRefusal(error: unknown, collection: string): unknown {
+  if (!NextlyError.isAuthRequired(error) && !NextlyError.isForbidden(error)) {
+    return error;
+  }
+  return new NextlyError({
+    code: "FORBIDDEN",
+    publicMessage: `Visitors can't read ${collection}, so a published list of it shows nothing.`,
+    logMessage: "A canvas list's visitor read was refused",
+    logContext: { reason: "list-entries-visitor-refused", collection },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
 }
 
 /** The reads the route binds: the caller's permission and the public reader. */

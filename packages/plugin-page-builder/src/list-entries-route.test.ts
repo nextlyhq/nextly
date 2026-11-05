@@ -51,6 +51,36 @@ describe("a canvas list's read", () => {
     expect(publicFind).not.toHaveBeenCalled();
   });
 
+  it("tells the editor visitors are refused, never that its author must sign in", async () => {
+    const refused = await readListEntries(
+      { query: { collection: "posts" } },
+      {
+        mayRead: async () => true,
+        publicFind: async () => {
+          throw NextlyError.authRequired();
+        },
+      }
+    ).catch((error: unknown) => error);
+    expect(NextlyError.isForbidden(refused)).toBe(true);
+    expect((refused as NextlyError).statusCode).toBe(403);
+    expect((refused as NextlyError).publicMessage).toBe(
+      "Visitors can't read posts, so a published list of it shows nothing."
+    );
+    // Any other failure travels as it was, so a refused sort still falls back.
+    const sort = NextlyError.validation({
+      errors: [{ path: "sort.x", code: "FIELD_NOT_SORTABLE", message: "No." }],
+    });
+    await expect(
+      readListEntries(
+        { query: { collection: "posts" } },
+        {
+          mayRead: async () => true,
+          publicFind: async () => Promise.reject(sort),
+        }
+      )
+    ).rejects.toBe(sort);
+  });
+
   it("refuses a body no list could build, before the caller is asked", async () => {
     const can = vi.fn(async () => true);
     const ctx = { caller: { can } } as unknown as PluginRouteContext;
