@@ -63,6 +63,9 @@ describe("the canonical address", () => {
     ["a current-directory segment", "/blog/./post"],
     ["an encoded slash", "/a%2Fb"],
     ["broken percent-encoding", "/%E0%A4%A"],
+    ["a backslash, which a browser reads as a slash", "/a\\b"],
+    ["a tab, which a browser drops", "/a\tb"],
+    ["a line break", "/a\nb"],
   ])("names no address for %s", (_why, path) => {
     expect(servedAddress("en", path)).toBeNull();
   });

@@ -11,17 +11,19 @@
  *
  * @module address-claims/waiting-report-route
  */
-import type {
-  PluginRouteContext,
-  PluginRoutePermissionScope,
+import {
+  getCachedNextly,
+  respondList,
+  type PaginationMeta,
+  type PluginRouteContext,
+  type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
-import { respondList, type PaginationMeta } from "nextly";
-import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
 import { ADDRESS_CLAIMS_SLUG } from "../collections/address-claims";
 import { PAGES_SLUG } from "../collections/pages";
 import { titlesAsCaller } from "../publish-readiness";
+import { parseRouteQuery } from "../route-query";
 
 import { pathOf } from "./claim-key";
 import { committedClaims, type Claims, type Holder } from "./claim-store";
@@ -151,8 +153,12 @@ export function addressWaitingRoute(): {
     // Computed, so a host that renamed the collection still reaches it.
     requiredPermission: ({ collection }) => collection(PAGES_SLUG, "update"),
     handler: async (req, ctx) => {
-      const { page } = reportQuery.parse(
-        Object.fromEntries(new URL(req.url).searchParams)
+      // A malformed page is the caller's mistake, refused as one.
+      const { page } = parseRouteQuery(
+        req.url,
+        ["page"],
+        reportQuery,
+        "address report"
       );
       const report = await readWaitingReport(
         ctx,
@@ -163,7 +169,7 @@ export function addressWaitingRoute(): {
               ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
           },
           // The Direct API, read through the one method the reads need.
-          nextly: requireNextly() as unknown as Parameters<
+          nextly: (await getCachedNextly()) as unknown as Parameters<
             typeof titlesAsCaller
           >[1],
         },

@@ -53,13 +53,28 @@ const PAGE_SEGMENT = "page";
 /** A page number as a list spells it: no sign, no leading zero. */
 const PAGE_NUMBER = /^[1-9]\d*$/;
 
+/**
+ * Whether `path` holds what a browser rewrites before it asks for a path: a
+ * backslash, read as a slash, or a tab, line break or other control
+ * character, dropped. A path holding one would be a second key for an
+ * address already keyed.
+ */
+function rewrittenByBrowsers(path: string): boolean {
+  for (const char of path) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\\" || code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
 /** A URL's scheme and host, which are not part of the address it serves. */
 const SCHEME_AND_HOST = /^[a-z][a-z\d+.-]*:\/\/[^/?#]*/i;
 
 /**
  * The canonical address `path` names in `locale`, or null when it names none
  * a document can be served at: a reserved path (`/admin`, `/api`, …), a `.`
- * or `..` segment, a `/` encoded inside a segment, or bad percent-encoding.
+ * or `..` segment, a `/` encoded inside a segment, bad percent-encoding, or a
+ * backslash or control character, which a browser would rewrite.
  * Those are refused rather than resolved, so a claim never holds an address
  * other than the one it was asked for.
  */
@@ -68,6 +83,7 @@ export function servedAddress(
   path: string
 ): ServedAddress | null {
   if (locale === "" || locale.includes("|")) return null;
+  if (rewrittenByBrowsers(path.trim())) return null;
   const local = path
     .trim()
     .replace(SCHEME_AND_HOST, "")

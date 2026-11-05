@@ -38,6 +38,7 @@ import {
   claimSpace,
   committedClaims,
   releaseClaims,
+  storedKey,
   type Claims,
   type Holder,
 } from "../address-claims/claim-store";
@@ -136,10 +137,13 @@ describe.each(getConfiguredTestDialects())(
         { kind: { equals: kind } },
         { limit: 100 }
       );
-      return rows.map(row => [
-        row.address === null ? null : `/${row.address.segments.join("/")}`,
-        row.holder?.id ?? null,
-      ]);
+      // Sorted: rows come back in stored-key order, which is a digest's.
+      return rows
+        .map(row => [
+          row.address === null ? null : `/${row.address.segments.join("/")}`,
+          row.holder?.id ?? null,
+        ])
+        .sort();
     }
 
     it("refuses a second document at an address, naming the first, in either order", async () => {
@@ -267,6 +271,90 @@ describe.each(getConfiguredTestDialects())(
       ]);
       expect(await stored(claims, "waiting")).toEqual([["/blog/hello", "e1"]]);
     });
+
+    it("holds addresses differing only in case apart, and one longer than a column", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/About", page("p1"));
+      await claim(claims, "/about", page("p2"));
+      const long = `/${"a".repeat(300)}`;
+      await claim(claims, long, page("p3"));
+      await expect(claim(claims, long, page("p4"))).rejects.toThrow("pages p3");
+    });
+
+    it("moves one language's address and keeps the others", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/about", page("p1"), "en");
+      await claim(claims, "/a-propos", page("p1"), "fr");
+      await saving(claims, async tx => {
+        await claimAddress(claims, tx, {
+          address: at("/qui-sommes-nous", "fr"),
+          holder: page("p1"),
+          describe: describeHolder,
+        });
+        await releaseClaims(claims, tx, page("p1"), {
+          address: at("/a-propos", "fr"),
+        });
+      });
+      expect(await stored(claims, "address")).toEqual([
+        ["/about", "p1"],
+        ["/qui-sommes-nous", "p1"],
+      ]);
+      await claim(claims, "/a-propos", page("p2"), "fr");
+      await expect(claim(claims, "/about", page("p2"), "en")).rejects.toThrow(
+        "pages p1"
+      );
+    });
+
+    it("serves one of two documents waiting on a released space, and keeps the other waiting", async () => {
+      const claims = claimsOf(await boot());
+      await paginate(claims, "/news", page("list"));
+      for (const id of ["e1", "e2"]) {
+        await saving(claims, tx =>
+          claimOrWait(claims, tx, {
+            address: at("/news/page/2"),
+            holder: post(id),
+          })
+        );
+      }
+      await release(claims, page("list"));
+      const [served] = await stored(claims, "address");
+      const [waiting] = await stored(claims, "waiting");
+      expect([served?.[1], waiting?.[1]].sort()).toEqual(["e1", "e2"]);
+      expect(waiting?.[0]).toBe("/news/page/2");
+
+      await release(claims, post(String(served?.[1])));
+      expect(await stored(claims, "address")).toEqual([
+        ["/news/page/2", waiting?.[1] ?? null],
+      ]);
+      expect(await stored(claims, "waiting")).toEqual([]);
+    });
+
+    it("releases every claim a holder has, however many reads that takes", async () => {
+      const claims = claimsOf(await boot());
+      await saving(claims, async tx => {
+        for (let i = 0; i < 501; i++) {
+          await claims.services.collections.createEntryInTransaction(
+            tx,
+            ADDRESS_CLAIMS_SLUG,
+            {
+              claimKey: storedKey(`addr:en|/bulk/${String(i)}`),
+              kind: "address",
+              locale: "en",
+              path: `/bulk/${String(i)}`,
+              holderCollection: "pages",
+              holderId: "many",
+            }
+          );
+        }
+      });
+      await release(claims, page("many"));
+      const { total } = await committedClaims(
+        claims,
+        { holderId: { equals: "many" } },
+        { limit: 1 }
+      );
+      expect(total).toBe(0);
+    }, 120_000);
 
     /*
      * Concurrent saves. SQLite runs one writer at a time, so the race below
@@ -458,7 +546,7 @@ describe.each(getConfiguredTestDialects())(
 
     /** A page `waiting` for `/hello`, held by `holder`. */
     async function seedWait(t: TestNextly, waiting: string, holder: Holder) {
-      const addressKey = "addr:en|/hello";
+      const addressKey = storedKey("addr:en|/hello");
       await create(t, ADDRESS_CLAIMS_SLUG, {
         claimKey: addressKey,
         kind: "address",
@@ -468,7 +556,7 @@ describe.each(getConfiguredTestDialects())(
         holderId: holder.id,
       });
       await create(t, ADDRESS_CLAIMS_SLUG, {
-        claimKey: `wait:pages:${waiting}|${addressKey}`,
+        claimKey: storedKey(`wait:pages:${waiting}|${addressKey}`),
         kind: "waiting",
         locale: "en",
         path: "/hello",
@@ -525,6 +613,16 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (answered.body.items as { blockedBy: unknown }[])[0]?.blockedBy
       ).toEqual({ collection: "components", id: hidden, title: null });
+    });
+
+    it("refuses a malformed page as the caller's mistake", async () => {
+      const t = await boot();
+      const author = await person(t, "author");
+      await grant(t, author, ["read-pages", "update-pages"]);
+      const cookie = await sessionOf(t, author);
+      for (const page of ["0", "two", "1.5"]) {
+        expect((await report(cookie, `?page=${page}`)).status).toBe(400);
+      }
     });
 
     it("is refused to someone who may not update pages", async () => {

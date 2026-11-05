@@ -7,11 +7,19 @@
  * waiting for an address another holds, or the lock row a space's claims are
  * serialised on. The key is the only unique column, and it is what refuses a
  * second holder: a collection's composite indexes never reach the schema
- * pipeline, so the namespaced key stands in for one.
+ * pipeline, so the namespaced key stands in for one. It is stored as the
+ * key's SHA-256 in hex (see `storedKey`), so two keys collide exactly when
+ * they are the same text on every dialect, whatever its collation, and a key
+ * of any length fits.
  *
  * @module collections/address-claims
  */
-import { defineCollection, text, type CollectionConfig } from "nextly/config";
+import {
+  defineCollection,
+  text,
+  textarea,
+  type CollectionConfig,
+} from "nextly/config";
 
 export const ADDRESS_CLAIMS_SLUG = "nx_pb_address_claims";
 
@@ -33,16 +41,16 @@ export function addressClaimsCollection(): CollectionConfig {
       text({ name: "kind", label: "Kind", required: true }),
       text({ name: "locale", label: "Locale" }),
       // The address as the key spells it, so a report reads it back without
-      // parsing keys.
-      text({ name: "path", label: "Path" }),
+      // parsing keys. Long text, so an address of any length fits.
+      textarea({ name: "path", label: "Path" }),
       // Indexed because releasing a document's claims finds them by holder.
       text({ name: "holderCollection", label: "Holder collection" }),
       text({ name: "holderId", label: "Holder id", index: true }),
-      // For an address claim, the key of the space that would hold it, so a
-      // list paginating there finds the addresses already inside it.
+      // For an address claim, the stored key of the space that would hold
+      // it, so a list paginating there finds the addresses already inside.
       text({ name: "space", label: "Space", index: true }),
-      // For a waiting row, the key of the claim it waits on, so releasing
-      // that claim finds who is waiting for it.
+      // For a waiting row, the stored key of the claim it waits on, so
+      // releasing that claim finds who is waiting for it.
       text({ name: "blockedBy", label: "Blocked by", index: true }),
     ],
     access: {
