@@ -230,8 +230,7 @@ async function attachAxeUndecided(page: Page, testInfo: TestInfo) {
  */
 async function groundBehind(
   page: Page,
-  part: Locator,
-  at: { inset?: number } = {}
+  part: Locator
 ): Promise<{ own: string | null; page: string }> {
   const own = await part.evaluate(element => {
     for (
@@ -254,11 +253,7 @@ async function groundBehind(
     element => (element as HTMLElement).offsetWidth
   );
   const zoom = frameBox.width / laidOutWidth;
-  // The part's centre, or a point just inside its left edge.
-  const x =
-    ((at.inset === undefined ? box.x + box.width / 2 : box.x + at.inset) -
-      frameBox.x) /
-    zoom;
+  const x = (box.x + box.width / 2 - frameBox.x) / zoom;
   const y = (box.y + box.height / 2 - frameBox.y) / zoom;
   // Every background from the element at that point out to the root, each
   // possibly translucent (an editor tint over the page's own), composited
@@ -301,13 +296,40 @@ async function groundBehind(
 }
 
 /**
- * The page's colour beneath a mark's ring: sampled just inside the block's
- * edge, where the ring is drawn, so a block painting a background of its own
- * is the ground its ring is judged against rather than the canvas's.
+ * The page's colour beneath a mark's ring, as rendered: one pixel just inside
+ * the block's edge, where the ring is drawn, captured with the editor's layer
+ * hidden so the pixel is the page's own. A colour, an image or a gradient the
+ * block paints is then the ground its ring is judged against.
  */
 async function groundUnder(page: Page, selector: string): Promise<string> {
   const mark = canvasLayer(page).locator(selector).first();
-  return (await groundBehind(page, mark, { inset: 3 })).page;
+  const box = await mark.boundingBox();
+  if (box === null) throw new Error("the mark is not laid out");
+  const layer = canvasLayer(page);
+  await layer.evaluate(element => {
+    (element as HTMLElement).style.visibility = "hidden";
+  });
+  const shot = await page.screenshot({
+    clip: { x: box.x + 3, y: box.y + box.height / 2, width: 1, height: 1 },
+  });
+  await layer.evaluate(element => {
+    (element as HTMLElement).style.visibility = "";
+  });
+  return page.evaluate(async png => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (context === null) throw new Error("no 2d context");
+    context.drawImage(image, 0, 0, 1, 1);
+    const [r = 0, g = 0, b = 0] = Array.from(
+      context.getImageData(0, 0, 1, 1).data
+    );
+    return `rgb(${r}, ${g}, ${b})`;
+  }, shot.toString("base64"));
 }
 
 /** A mark's outline colour, and a pseudo-element tag's colours if asked. */
@@ -502,6 +524,77 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+test.describe("the empty section's prompt in a narrow box", () => {
+  test.describe.configure({ timeout: 240_000 });
+
+  test("keeps its + on its plate, and the plate inside the box", async ({
+    page,
+  }) => {
+    const run = stamp();
+    const narrow = "00000000-0000-4000-8000-0000000c5a06";
+    const created = await page.request.post(PAGES, {
+      data: {
+        title: "Narrow empty box",
+        slug: `narrow-empty-${run}`,
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: HEADING,
+              type: "core/heading",
+              version: 1,
+              props: { text: "A narrow box", level: "h2" },
+            },
+            {
+              id: narrow,
+              type: "core/section",
+              version: 1,
+              props: { as: "section", contained: false },
+              slots: { children: [] },
+              styles: { base: { base: { width: "40px", height: "80px" } } },
+            },
+          ],
+        },
+      },
+    });
+    expect(created.ok(), `seeding the page: ${created.status()}`).toBe(true);
+    const id = ((await created.json()) as { item: { id: string } }).item.id;
+    await open(page, id, "light");
+    const prompt = page.getByRole("button", {
+      name: /Drop a block here, or click to add one, in /,
+    });
+    await expect(prompt).toBeVisible();
+    const boxes = await prompt.evaluate(button => {
+      const plate = button.querySelector(
+        ".nx-empty-container-appenders__plate"
+      );
+      const icon = plate?.querySelector("svg");
+      const rect = (element: Element | null | undefined) => {
+        const r = element?.getBoundingClientRect();
+        return r === undefined
+          ? null
+          : { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+      };
+      return { button: rect(button), plate: rect(plate), icon: rect(icon) };
+    });
+    const within = (
+      inner: typeof boxes.icon,
+      outer: typeof boxes.icon
+    ): boolean =>
+      inner !== null &&
+      outer !== null &&
+      inner.left >= outer.left - 0.5 &&
+      inner.right <= outer.right + 0.5 &&
+      inner.top >= outer.top - 0.5 &&
+      inner.bottom <= outer.bottom + 0.5;
+    expect(within(boxes.icon, boxes.plate), "the + on its plate").toBe(true);
+    expect(within(boxes.plate, boxes.button), "the plate inside the box").toBe(
+      true
+    );
+  });
+});
+
 test.describe("the canvas while an author works", () => {
   test.describe.configure({ timeout: 240_000 });
 
@@ -532,8 +625,10 @@ test.describe("the canvas while an author works", () => {
       )
       .toBe(true);
     const first = fetched.length;
-    // The control: the probe sees the image's own request at all.
-    expect(first, "the image's first request is counted").toBeGreaterThan(0);
+    // Fetched exactly once to draw it: more on the first render is the
+    // duplicate this test exists to catch, and none means the probe saw
+    // nothing at all.
+    expect(first, "the image is fetched once to draw it").toBe(1);
 
     // The recovery point the edits below schedule, written after its
     // debounce: the quiet is judged once that write and the renders after it

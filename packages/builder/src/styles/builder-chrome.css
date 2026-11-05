@@ -6033,6 +6033,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   align-items: center;
   gap: 0.375rem;
   min-width: 0;
+  max-width: 100%;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-sm);
@@ -6041,6 +6042,31 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 .nx-empty-container-appenders__plate > svg {
   flex: none;
+}
+/*
+ * A box too narrow for the plate's words and padding keeps the "+" on the
+ * plate rather than letting it spill onto the site's ground: the words go (the
+ * button's name still says them), the padding and border close up, and the
+ * icon shrinks to whatever width is left.
+ */
+.nx-empty-container-appenders__button {
+  container-type: inline-size;
+}
+@container (max-width: 64px) {
+  .nx-empty-container-appenders__plate {
+    max-width: 100%;
+    padding: 0.125rem;
+    border-width: 0;
+  }
+  .nx-empty-container-appenders__words {
+    display: none;
+  }
+  .nx-empty-container-appenders__plate > svg {
+    flex: 0 1 auto;
+    width: min(16px, 100%);
+    min-width: 0;
+    height: auto;
+  }
 }
 .nx-empty-container-appenders__button:hover
   .nx-empty-container-appenders__plate,
