@@ -6,7 +6,6 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import {
-  blocksWearing,
   lookLineWords,
   lookTiles,
   lookTileStyle,
@@ -48,6 +47,22 @@ describe("a block's look tiles", () => {
       [secondary.id, "Secondary"],
       [outline.id, "Outline"],
     ]);
+  });
+
+  it("leave out a look a site's own style holds the name of", () => {
+    // The compiler gives the name to the style, so the look never renders and
+    // a tile for it would apply nothing.
+    const mine = {
+      id: "c-mine",
+      slug: outline.slug,
+      orderIndex: 2,
+      styles: {},
+    };
+    expect(
+      lookTiles([...library, mine], "core/button", "Primary").map(
+        tile => tile.id
+      )
+    ).toEqual([null, secondary.id]);
   });
 
   it("are none for a type with no looks", () => {
@@ -136,44 +151,12 @@ describe("a token-built look's tile", () => {
 });
 
 describe("the bar's line about a worn look", () => {
-  it("says an edit here is this block's, and offers the look everywhere", () => {
-    expect(lookLineWords("Outline", "Button", 9)).toEqual({
+  it("says an edit here is this block's, and offers the look for every block", () => {
+    expect(lookLineWords("Outline", "Button")).toEqual({
       here: "Changes this button only",
-      everywhere: "Edit Outline everywhere · 9 buttons on this page",
+      everywhere: "Edit Outline for every button that uses it",
     });
-    expect(lookLineWords("Rounded", "Image", 1).everywhere).toBe(
-      "Edit Rounded everywhere · 1 image on this page"
-    );
-    expect(lookLineWords("Hero", "Box", 2).everywhere).toContain("2 boxes");
-  });
-
-  it("counts the blocks wearing a look, nested ones included", () => {
-    const nodes = [
-      {
-        id: "a",
-        type: "core/button",
-        version: 1,
-        props: {},
-        classes: [outline.id],
-      },
-      {
-        id: "b",
-        type: "core/box",
-        version: 1,
-        props: {},
-        slots: {
-          children: [
-            {
-              id: "c",
-              type: "core/button",
-              version: 1,
-              props: {},
-              classes: [outline.id],
-            },
-          ],
-        },
-      },
-    ] as never;
-    expect(blocksWearing(nodes, outline.id)).toBe(2);
+    // No count: what the site knows is an index of documents, not blocks.
+    expect(lookLineWords("Circle", "Image").everywhere).not.toMatch(/\d/);
   });
 });

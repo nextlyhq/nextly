@@ -15,8 +15,6 @@ import {
   isPlainRecord,
   isTokenRef,
   resolveSiteTokens,
-  walkNodes,
-  type BlockNode,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
@@ -24,7 +22,7 @@ import {
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
 
-import { classDeclarations } from "./class-library";
+import { classDeclarations, usableSiteClasses } from "./class-library";
 
 /** One tile: a look of the block's type, or the block's own (`id: null`). */
 export interface LookTile {
@@ -35,14 +33,18 @@ export interface LookTile {
   readonly styles: NodeStyles | undefined;
 }
 
-/** The looks a block of this type may wear, in library order. */
+/**
+ * The looks a block of this type may wear, in library order: those the
+ * compiler renders, read from the same view the class picker reads, so a
+ * look whose name a site's own style holds is not offered.
+ */
 export function looksOfType(
   library: readonly NamedClass[],
   blockType: string
 ): NamedClass[] {
-  return library
-    .filter(entry => isLook(entry) && entry.blockType === blockType)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+  return usableSiteClasses(library).filter(
+    entry => isLook(entry) && entry.blockType === blockType
+  );
 }
 
 /**
@@ -177,40 +179,20 @@ export function lookTileStyle(
   return style;
 }
 
-/** A block's name in a sentence, one or many: "button", "buttons". */
-function blockWord(label: string, count: number): string {
-  const one = label.toLowerCase();
-  if (count === 1) return one;
-  return /(?:s|x|z|ch|sh)$/.test(one) ? `${one}es` : `${one}s`;
-}
-
 /**
  * What the bar says about a look the block wears while the block is the
  * target: that an edit here changes this block only, and how to change the
- * look itself, everywhere, with how many blocks on this page wear it.
+ * look itself for every block wearing it. No count: what the site knows is
+ * which documents an index records, not how many blocks wear the look, and a
+ * count of this page's blocks beside "every" would read as the site's.
  */
 export function lookLineWords(
   lookName: string,
-  blockLabel: string,
-  onThisPage: number
+  blockLabel: string
 ): { here: string; everywhere: string } {
+  const block = blockLabel.toLowerCase();
   return {
-    here: `Changes this ${blockWord(blockLabel, 1)} only`,
-    everywhere: `Edit ${lookName} everywhere · ${onThisPage} ${blockWord(
-      blockLabel,
-      onThisPage
-    )} on this page`,
+    here: `Changes this ${block} only`,
+    everywhere: `Edit ${lookName} for every ${block} that uses it`,
   };
-}
-
-/** How many blocks in a document wear one class. */
-export function blocksWearing(
-  nodes: readonly BlockNode[],
-  classId: string
-): number {
-  let count = 0;
-  walkNodes(nodes as BlockNode[], node => {
-    if ((node.classes ?? []).includes(classId)) count += 1;
-  });
-  return count;
 }

@@ -790,7 +790,7 @@ describe("the shared style target", () => {
       expect(bar().textContent).toContain("Changes this box only");
       fireEvent.click(
         within(bar()).getByRole("button", {
-          name: "Edit Outline everywhere · 1 box on this page",
+          name: "Edit Outline for every box that uses it",
         })
       );
       expect(bar().textContent).toMatch(/Editing shared style Outline/);

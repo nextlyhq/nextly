@@ -35,7 +35,7 @@ import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
-import { blocksWearing, lookLineWords } from "./look-tiles";
+import { lookLineWords } from "./look-tiles";
 import { LookTiles } from "./look-tiles-view";
 import type { BuilderOp } from "./ops";
 import {
@@ -471,11 +471,7 @@ function wornLookLine(
   return {
     wornLook: {
       id: look.id,
-      ...lookLineWords(
-        look.name,
-        label,
-        blocksWearing(editor.document.nodes, look.id)
-      ),
+      ...lookLineWords(look.name, label),
     },
   };
 }
