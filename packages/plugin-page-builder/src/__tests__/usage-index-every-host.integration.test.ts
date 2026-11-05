@@ -431,6 +431,70 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a collection's scope that is gone", () => {
+      it("forgets its rows and progress, whichever pass finds them, and the count drops", async () => {
+        const { t, tick, count } = await boot();
+        const header = await component(t, "header", [text("h")]);
+        const home = await page(t, [placing("i1", header)]);
+        /** A row placing `header`, filed under a collection scope. */
+        const row = (entity: string, entityKey: string, locale: string) =>
+          t.adapter.insert(COMPONENT_ROWS, {
+            id: globalThis.crypto.randomUUID(),
+            scope: "collection",
+            entity,
+            entityKey,
+            field: "content",
+            locale,
+            variant: "published",
+            kind: "reference",
+            componentId: header,
+          });
+        // A collection removed from the site before the run walked it: no
+        // progress names its rows, so the pass that finishes the run reads
+        // the tables for them.
+        await row("retired-pages", "p9", "");
+        expect(await placers(t, header)).toEqual([
+          `collection:pages:${home}`,
+          "collection:retired-pages:p9",
+        ]);
+
+        await tick();
+
+        expect(await placers(t, header)).toEqual([`collection:pages:${home}`]);
+
+        // A language the field is no longer stored in, which the finished run
+        // recorded as walked: a later pass finds it from that progress.
+        await row("pages", "p8", "fr");
+        const french = backfillScopeKey({
+          scope: "collection",
+          entity: "pages",
+          field: "content",
+          locale: "fr",
+          variant: "published",
+        });
+        const [run] = await t.adapter.select<{ token: string }>(RUNS, {});
+        await t.adapter.insert(PROGRESS, {
+          id: globalThis.crypto.randomUUID(),
+          token: run!.token,
+          scopeKey: french,
+          cursor: null,
+          done: true,
+        });
+        const progressOfFrench = () =>
+          t.adapter.select(PROGRESS, {
+            where: { and: [{ column: "scopeKey", op: "=", value: french }] },
+          });
+        expect((await count(header)).documents).toBe(2);
+
+        await tick();
+
+        expect(await placers(t, header)).toEqual([`collection:pages:${home}`]);
+        expect(await progressOfFrench()).toHaveLength(0);
+        // CONTROL: the live page's row stays, and the count is exact.
+        expect(await count(header)).toEqual({ documents: 1, complete: true });
+      });
+    });
+
     describe("reading the index a page at a time", () => {
       it("skips no row when a row of a page already read is removed", async () => {
         const { t } = await boot();

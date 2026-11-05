@@ -79,15 +79,33 @@ export interface UsageBackfillDeps {
    */
   clock?: () => number;
   /**
-   * Remove the rows no scope that exists now can own, once every scope has
-   * been walked: those of a Single removed from the configuration, or of one
-   * that no longer stores blocks where it did. No walk visits them, so
-   * nothing else would. Its writes go through `fenced`, as a walk's do.
+   * Remove the rows and progress no scope that exists now can own, once every
+   * scope has been walked: those of a collection or Single removed from the
+   * site, or of one that no longer stores blocks where, in the language or in
+   * the form it did. No walk visits them, so nothing else would. Its writes go
+   * through `fenced`, as a walk's do. Told what the run has recorded and
+   * whether this pass walked a scope, so a finished run's later passes can
+   * skip reading the tables when nothing it recorded is gone.
    */
   forgetGone?: (
     scopes: readonly BackfillScope[],
-    fenced: BackfillStateStore["fenced"]
+    fenced: BackfillStateStore["fenced"],
+    run: GoneScopeRun
   ) => Promise<void>;
+}
+
+/** What the run that just walked every scope knows, as the cleanup reads it. */
+export interface GoneScopeRun {
+  /** The keys of the scopes this run has recorded as walked. */
+  completed: ReadonlySet<string>;
+  /**
+   * Whether this pass walked a scope, which makes it the pass that finished
+   * the run. Rows of content gone before or while the run walked, which the
+   * run never recorded, are found only by reading the tables, so that pass
+   * reads them; a later pass of a finished run reads them only when a scope
+   * it recorded is gone.
+   */
+  walked: boolean;
 }
 
 /**
@@ -120,6 +138,8 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
       // Read ONCE for the handler and threaded through every pass, so a pass
       // does not re-read progress this same invocation already holds.
       let completed: ReadonlySet<string> | undefined;
+      // Whether this handler walked a scope: the pass that finishes a run.
+      let walked = false;
 
       try {
         for (;;) {
@@ -135,13 +155,17 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
             ...(completed === undefined ? {} : { completed }),
           });
           completed = pass.completed;
+          if (pass.walked !== null) walked = true;
 
           // Every scope walked under this run: the dirty mark a failed
           // maintenance write left can go, since this run started after it.
           if (pass.complete) {
             // Before the dirty mark clears, so a run is finished only once
             // the rows of content that is gone are gone too.
-            await deps.forgetGone?.(scopes, write => state.fenced(write));
+            await deps.forgetGone?.(scopes, write => state.fenced(write), {
+              completed: pass.completed,
+              walked,
+            });
             await state.finish();
             return;
           }

@@ -15,7 +15,8 @@ import { backfillScopeKey } from "./usage-backfill-scope";
 import {
   backfillScopes,
   backfillSurvey,
-  goneSingleScopes,
+  forgetGoneScopes,
+  goneScopes,
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import type { UsageRowReader } from "./usage-count";
@@ -289,7 +290,7 @@ describe("reporting content no scope can cover", () => {
   });
 });
 
-describe("finding the rows of Singles that are gone", () => {
+describe("finding the rows of scopes that are gone", () => {
   /** A table of `pages` pages of `size` rows, read as the row reader reads it. */
   function rowsOf(pages: number, size: number, last: Record<string, unknown>) {
     const all: Record<string, unknown>[] = [];
@@ -307,12 +308,21 @@ describe("finding the rows of Singles that are gone", () => {
     const asked: (string | undefined)[] = [];
     const rows: UsageRowReader = async args => {
       asked.push(args.after);
+      // The predicate honoured as the table store honours it, so a sweep
+      // that asks a narrower question reads fewer rows here too.
+      const matching = all.filter(row =>
+        Object.entries(args.where).every(([column, predicate]) =>
+          "equals" in predicate
+            ? row[column] === predicate.equals
+            : predicate.in.includes(String(row[column]))
+        )
+      );
       const start =
         args.after === undefined
           ? 0
-          : all.findIndex(row => row.id === args.after) + 1;
-      const items = all.slice(start, start + size);
-      return { items, hasNext: start + size < all.length };
+          : matching.findIndex(row => row.id === args.after) + 1;
+      const items = matching.slice(start, start + size);
+      return { items, hasNext: start + size < matching.length };
     };
     return { rows, asked };
   }
@@ -336,7 +346,7 @@ describe("finding the rows of Singles that are gone", () => {
       variant: "published",
     });
 
-    const gone = await goneSingleScopes(rows, new Set([HOME]));
+    const gone = await goneScopes(rows, new Set([HOME]));
 
     expect(gone.map(scope => scope.entity)).toEqual(["retired"]);
     // Each page after the first starts after the last id the one before read.
@@ -352,6 +362,62 @@ describe("finding the rows of Singles that are gone", () => {
       variant: "published",
     });
 
-    expect(await goneSingleScopes(rows, new Set([HOME]))).toEqual([]);
+    expect(await goneScopes(rows, new Set([HOME]))).toEqual([]);
+  });
+
+  it("finds a collection's scope that is gone, as a Single's", async () => {
+    // A collection that lost its blocks field, or stopped storing it in a
+    // language, leaves rows no walk visits, as a removed Single does.
+    const { rows } = rowsOf(2, 2, {
+      scope: "collection",
+      entity: "pages",
+      field: "content",
+      locale: "fr",
+      variant: "published",
+    });
+
+    const gone = await goneScopes(rows, new Set([HOME]));
+
+    expect(gone).toEqual([
+      {
+        scope: "collection",
+        entity: "pages",
+        field: "content",
+        locale: "fr",
+        variant: "published",
+      },
+    ]);
+  });
+});
+
+describe("forgetting the scopes that are gone", () => {
+  it("reads nothing on a finished run's later pass when nothing it recorded is gone", async () => {
+    // The sweep runs on every jobs pass; reading every row of both tables
+    // each time would cost a site whose content stays put a table scan a pass.
+    const fenced: unknown[] = [];
+    const host = new Proxy({} as BackfillHost, {
+      get: (_target, name) => {
+        throw new Error(`the cleanup read the host's ${String(name)}`);
+      },
+    });
+    const home = {
+      scope: "single" as const,
+      entity: "home",
+      field: "content",
+      locale: "",
+      variant: "published" as const,
+    };
+
+    await forgetGoneScopes(
+      host,
+      [home],
+      async write => {
+        fenced.push(write);
+        return undefined as never;
+      },
+      { completed: new Set([backfillScopeKey(home)]), walked: false }
+    );
+
+    expect(fenced).toEqual([]);
   });
 });

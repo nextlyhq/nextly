@@ -296,6 +296,63 @@ describe("one pass of the backfill sweep", () => {
     ).rejects.toThrow("the database went away");
   });
 
+  it("tells the cleanup what the run recorded, and whether this pass walked a scope", async () => {
+    const s = store();
+    const told: { completed: string[]; walked: boolean }[] = [];
+    const job = usageBackfillJob({
+      scopes: async () => [scope("a")],
+      state: s.state,
+      rebuild: async () => WHOLE,
+      clock: () => PASS_START,
+      forgetGone: async (_scopes, _fenced, run) => {
+        told.push({ completed: [...run.completed], walked: run.walked });
+      },
+    });
+
+    await job.handler(null as never, context(10_000) as never);
+    await job.handler(null as never, context(10_000) as never);
+
+    const a = backfillScopeKey(scope("a"));
+    expect(told).toEqual([
+      { completed: [a], walked: true },
+      // A finished run's later pass walked nothing.
+      { completed: [a], walked: false },
+    ]);
+  });
+
+  it("walks a scope again once the cleanup has forgotten it, rather than reading it as walked", async () => {
+    // A scope recorded, then gone (its field removed), then back: the cleanup
+    // removed its progress, so it is outstanding again.
+    const b = backfillScopeKey(scope("b"));
+    const s = store([backfillScopeKey(scope("a")), b]);
+    let current = [scope("a")];
+    const walked: string[] = [];
+    const job = usageBackfillJob({
+      scopes: async () => current,
+      state: s.state,
+      rebuild: async sc => {
+        walked.push(sc.field);
+        return WHOLE;
+      },
+      clock: () => PASS_START,
+      // As the real cleanup does: the progress of a recorded scope no scope
+      // names is removed.
+      forgetGone: async (scopes, _fenced, run) => {
+        const named = new Set(scopes.map(backfillScopeKey));
+        for (const key of run.completed) {
+          if (!named.has(key)) s.done.delete(key);
+        }
+      },
+    });
+
+    await job.handler(null as never, context(10_000) as never);
+    expect(s.done.has(b)).toBe(false);
+    current = [scope("a"), scope("b")];
+    await job.handler(null as never, context(10_000) as never);
+
+    expect(walked).toEqual(["b"]);
+  });
+
   it("is declared a sweep, which is what keeps one queued", async () => {
     // Without this the handler is registered and nothing ever enqueues it - a
     // job that exists, is reachable, and never runs.

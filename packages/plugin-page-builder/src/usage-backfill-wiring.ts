@@ -29,7 +29,7 @@ import { componentUsageIndex } from "./component-usage";
 import type { SingleToWalk } from "./host-rewrite/site";
 import { lastIdOf } from "./paged-walk";
 import type { BackfillStateStore } from "./usage-backfill";
-import type { UsageBackfillDeps } from "./usage-backfill-job";
+import type { GoneScopeRun, UsageBackfillDeps } from "./usage-backfill-job";
 import {
   backfillGeneration,
   backfillScopeKey,
@@ -207,7 +207,8 @@ export async function backfillSurvey(
     const collection = await host.resolveCollection(slug);
     // A slug the registry no longer resolves contributes no scopes. Skipped
     // rather than refused: a collection removed while a backfill is in flight
-    // is an ordinary event, and its rows are the delete hook's to clear.
+    // is an ordinary event, and its rows are cleared once the run has walked
+    // every scope, as any gone scope's are (`forgetGoneScopes`).
     if (collection === null || collection === undefined) continue;
 
     const survey = blocksFieldSurvey(collection);
@@ -316,51 +317,70 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
 }
 
 /**
- * Remove the rows filed under a Single that no scope existing now names: a
- * Single removed from the configuration, one that no longer stores blocks
- * in that field, language or form. No walk visits those rows, so without
- * this they would keep counting towards their components and classes, and a
- * component a Single that is gone once placed could never be deleted.
+ * Remove the rows and progress of every scope that no scope existing now
+ * names: a collection or Single removed from the site, a blocks field it no
+ * longer has, drafts it no longer keeps, a language it no longer stores the
+ * field in. No walk visits those rows, so without this they would keep
+ * counting towards their components and classes for good, and a component
+ * they name could never be deleted; and the progress left behind would read
+ * a scope that comes back as already walked.
  *
  * Asked only once every scope has been walked, from the scopes that pass
- * read, so a Single the registry could not list is never taken for gone:
- * reading the registry failed the pass before this point. Every row is read,
- * to the end of each table. Each gone scope's rows in both indexes, and the
- * progress recorded for it, are removed in one transaction fenced by the run,
- * so a Single that comes back under the same scope is walked again rather
- * than read as walked.
+ * read, so content a registry could not list is never taken for gone:
+ * reading a registry failed the pass before this point. The registries are
+ * read again here and a scope either reading names is kept, so content made
+ * while the pass walked is not taken for gone either. Every row is read, to
+ * the end of each table. Each gone scope's rows in both indexes, and the
+ * progress recorded for it, are removed in one transaction fenced by the
+ * run, so a scope that comes back is walked again rather than read as
+ * walked.
+ *
+ * A finished run's later passes read nothing unless a scope it recorded is
+ * gone, so a site whose content stays put pays no table read per pass.
  */
-export async function forgetGoneSingles(
+export async function forgetGoneScopes(
   host: BackfillHost,
   scopes: readonly BackfillScope[],
   fenced: BackfillStateStore["fenced"],
+  run: GoneScopeRun,
   /** Rows per read of each table; smaller only in a test. */
   pageSize?: number
 ): Promise<void> {
-  const live = new Set(
-    scopes.filter(scope => scope.scope === "single").map(backfillScopeKey)
-  );
+  const named = new Set(scopes.map(backfillScopeKey));
+  const recordedGone = [...run.completed].filter(key => !named.has(key));
+  if (!run.walked && recordedGone.length === 0) return;
+  const live = new Set([
+    ...named,
+    ...(await backfillScopes(host)).map(backfillScopeKey),
+  ]);
   const tables = [
     usageTableOf(classUsageIndex),
     usageTableOf(componentUsageIndex),
   ];
-  const gone = new Map<string, BackfillScope>();
+  const gone = new Map<string, BackfillScope | null>();
+  for (const key of recordedGone) {
+    if (!live.has(key)) gone.set(key, null);
+  }
   for (const table of tables) {
     const rows = usageTableRows(host.db, table, pageSize);
-    for (const scope of await goneSingleScopes(rows, live)) {
+    for (const scope of await goneScopes(rows, live)) {
       gone.set(backfillScopeKey(scope), scope);
     }
   }
   for (const [key, scope] of gone) {
     await fenced(async tx => {
-      for (const table of tables) {
-        await forgetUsageRows(tx, table, {
-          scope: { equals: "single" },
-          entity: { equals: scope.entity },
-          field: { equals: scope.field },
-          locale: { equals: scope.locale },
-          variant: { equals: scope.variant },
-        });
+      // A scope known only from its progress has no rows: the tables were
+      // read to their end and named none.
+      if (scope !== null) {
+        for (const table of tables) {
+          await forgetUsageRows(tx, table, {
+            scope: { equals: scope.scope },
+            entity: { equals: scope.entity },
+            field: { equals: scope.field },
+            locale: { equals: scope.locale },
+            variant: { equals: scope.variant },
+          });
+        }
       }
       await forgetScopeProgress(tx, key);
     });
@@ -368,11 +388,11 @@ export async function forgetGoneSingles(
 }
 
 /**
- * The Single scopes a table holds rows for that are not among `live`, read
- * to the table's end a page at a time by id. Collected whole before any is
- * removed.
+ * The scopes a table holds rows for that are not among `live`, of either
+ * kind, read to the table's end a page at a time by id. Collected whole
+ * before any is removed.
  */
-export async function goneSingleScopes(
+export async function goneScopes(
   rows: UsageRowReader,
   live: ReadonlySet<string>
 ): Promise<BackfillScope[]> {
@@ -380,11 +400,11 @@ export async function goneSingleScopes(
   let after: string | undefined;
   for (let page = 1; ; page += 1) {
     const found = await rows({
-      where: { scope: { equals: "single" } },
+      where: {},
       page,
       ...(after === undefined ? {} : { after }),
     });
-    for (const scope of found.items.map(singleScopeOf)) {
+    for (const scope of found.items.map(scopeOfRow)) {
       if (scope !== null && !live.has(backfillScopeKey(scope))) {
         gone.set(backfillScopeKey(scope), scope);
       }
@@ -396,19 +416,20 @@ export async function goneSingleScopes(
     // and health stays not whole.
     if (next === undefined || next === after) {
       throw new Error(
-        "[page-builder] the usage index's Single rows could not be read to their end, so the rows of Singles that are gone were not all removed"
+        "[page-builder] the usage index's rows could not be read to their end, so the rows of scopes that are gone were not all removed"
       );
     }
     after = next;
   }
 }
 
-/** The Single scope a stored row is filed under, or `null` for one this cannot read. */
-function singleScopeOf(item: unknown): BackfillScope | null {
+/** The scope a stored row is filed under, or `null` for one this cannot read. */
+function scopeOfRow(item: unknown): BackfillScope | null {
   if (typeof item !== "object" || item === null) return null;
   const row = item as Record<string, unknown>;
-  const { entity, field, locale, variant } = row;
+  const { scope, entity, field, locale, variant } = row;
   if (
+    (scope !== "collection" && scope !== "single") ||
     typeof entity !== "string" ||
     typeof field !== "string" ||
     typeof locale !== "string" ||
@@ -416,7 +437,7 @@ function singleScopeOf(item: unknown): BackfillScope | null {
   ) {
     return null;
   }
-  return { scope: "single", entity, field, locale, variant };
+  return { scope, entity, field, locale, variant };
 }
 
 /**
