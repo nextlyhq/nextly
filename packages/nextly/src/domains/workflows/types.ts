@@ -48,10 +48,8 @@ export interface WorkflowStage<S extends string = string> {
 /**
  * A stage as the system reads it: whether it allows publishing decided, and
  * the name it was renamed from kept only where the definition gave one.
- *
- * @experimental
  */
-export interface ResolvedWorkflowStage<S extends string = string> {
+interface ResolvedWorkflowStage<S extends string = string> {
   name: S;
   label: string;
   allowsPublish: boolean;
