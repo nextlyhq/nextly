@@ -44,7 +44,10 @@ import {
   type CompositionService,
 } from "../composition-service";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
-import { writeLayoutSettings } from "../default-layout/store";
+import {
+  readLayoutSettings,
+  writeLayoutSettings,
+} from "../default-layout/store";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 
@@ -215,9 +218,15 @@ describe.each(getConfiguredTestDialects())(
         areas: [{ area: "header", component: header }],
         status: "published",
       });
+      const slugs = {
+        layouts: LAYOUTS_SLUG,
+        settings: PAGE_BUILDER_SETTINGS_SLUG,
+      };
+      // Written against the settings as read, as every settings writer is.
       await writeLayoutSettings(
         t.nextly,
-        { layouts: LAYOUTS_SLUG, settings: PAGE_BUILDER_SETTINGS_SLUG },
+        slugs,
+        await readLayoutSettings(t.nextly, slugs),
         { defaultLayout: main }
       );
       return { page, pattern, card, header, main };

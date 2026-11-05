@@ -30,6 +30,14 @@ import {
   trimCssWhitespace,
 } from "./css-value";
 import {
+  alignedWithOverlay,
+  OVERLAY_ALIGNED,
+  OVERLAY_COLOR,
+  OVERLAY_LAYER_PROPERTY,
+  OVERLAY_LAYER_VALUE,
+  overlaid,
+} from "./overlay";
+import {
   newStyleIssueBudget,
   normalizeStyleIssueBudget,
   structuralAllowanceSpent,
@@ -252,6 +260,19 @@ export function tokenCustomProperty(name: string, prefix: string): string {
   return prefix + name.replace(/\./g, "-");
 }
 
+/**
+ * A token's text at a reference's factor: `calc(<text> * <times>)`, or the
+ * text alone when the reference is not scaled. The one spelling of a scaled
+ * token, for the compiler's `var()` and for an editor preview that resolves
+ * the token to its value. A factor is validated before it reaches here, so it
+ * is a finite number in range, and `String` writes it without a locale.
+ *
+ * @experimental
+ */
+export function scaledTokenText(text: string, times: unknown): string {
+  return typeof times === "number" ? `calc(${text} * ${String(times)})` : text;
+}
+
 /** A declaration with the pointer it came from, so a verdict can be applied. */
 interface PlacedDeclaration extends Declaration {
   path: string;
@@ -305,14 +326,78 @@ function scalarText(
       );
       return undefined;
     }
-    return `var(${tokenCustomProperty(name, walk.prefix)})`;
+    const reference = scaledTokenText(
+      `var(${tokenCustomProperty(name, walk.prefix)})`,
+      value.times
+    );
+    // A token names an image, never a keyword, so an overlaid leaf's always
+    // carries the overlay's layer.
+    return paintsOverlaid(leaf) ? overlaid(reference) : reference;
   }
   // Written through `String`, which does not read a locale. A formatter that
   // did would emit "1,5" on half the machines in the world, breaking both the
   // CSS and the guarantee that the same document always produces the same bytes.
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value !== "string") return undefined;
-  return leaf.kind === "url" ? urlText(leaf, value) : value;
+  const text = leaf.kind === "url" ? urlText(leaf, value) : value;
+  return isOverlaid(leaf, value) ? overlaid(text) : text;
+}
+
+/**
+ * Whether a stored background image or gradient paints one, as the compiler
+ * judges it when it lays the overlay's layer in front: a value, or a token,
+ * rather than a keyword that clears or defers it (`none`, `inherit`). For an
+ * editor deciding whether an overlay has anything to cover.
+ *
+ * @experimental
+ */
+export function paintsBackgroundImage(
+  field: "url" | "gradient",
+  value: unknown
+): boolean {
+  const leaf = field === "url" ? BACKGROUND_URL_LEAF : BACKGROUND_GRADIENT_LEAF;
+  if (leaf === undefined) return false;
+  if (isTokenRef(value)) return true;
+  return typeof value === "string" && isOverlaid(leaf, value);
+}
+
+/** The catalog's background image and gradient leaves, which an overlay covers. */
+const BACKGROUND_URL_LEAF: StyleLeaf | undefined = (() => {
+  const shape = CATALOG_IN_EMISSION_ORDER.find(
+    entry => entry.property === "background"
+  )?.shape;
+  const url =
+    shape !== undefined && !isStyleLeaf(shape) && shape.kind === "object"
+      ? shape.fields.url
+      : undefined;
+  return url !== undefined && isStyleLeaf(url) ? url : undefined;
+})();
+const BACKGROUND_GRADIENT_LEAF: StyleLeaf | undefined = (() => {
+  const shape = CATALOG_IN_EMISSION_ORDER.find(
+    entry => entry.property === "backgroundGradient"
+  )?.shape;
+  return shape !== undefined && isStyleLeaf(shape) ? shape : undefined;
+})();
+
+/** Whether a leaf paints an image a background's overlay covers. */
+function paintsOverlaid(leaf: StyleLeaf): boolean {
+  return (
+    (leaf.kind === "url" || leaf.kind === "cssValue") && leaf.overlaid === true
+  );
+}
+
+/**
+ * Whether a value is an image a background's overlay is laid over: one its
+ * leaf paints, and not a keyword, which clears or defers the image (`none`,
+ * `inherit`) rather than naming one.
+ */
+function isOverlaid(leaf: StyleLeaf, value: string): boolean {
+  if (!paintsOverlaid(leaf)) return false;
+  const written = asciiLower(decodeIdentifier(trimCssWhitespace(value)));
+  if (isCssWideKeyword(written)) return false;
+  return !(leaf.kind === "url" ? (leaf.keywords ?? []) : ["none"]).some(
+    keyword => asciiLower(keyword) === written
+  );
 }
 
 /**
@@ -370,11 +455,35 @@ function shapeDeclarations(
     walk.placed.push({
       path,
       property: shape.cssProperty,
-      value: text,
+      // A longhand paired with the image's layers reads the overlay layer's
+      // entry in front of it, so its list stays lined up with the image.
+      value: alignedWithOverlay(
+        shape.cssProperty,
+        text,
+        isCssWideKeyword(asciiLower(decodeIdentifier(trimCssWhitespace(text))))
+      ),
       ...(shape.descendant === undefined
         ? {}
         : { descendant: shape.descendant }),
     });
+    // The overlay's colour also writes the layer an image reads in front of
+    // itself: present only where an overlay is, so no other background
+    // changes its layers.
+    if (shape.cssProperty === OVERLAY_COLOR) {
+      walk.placed.push({
+        path,
+        property: OVERLAY_LAYER_PROPERTY,
+        value: OVERLAY_LAYER_VALUE,
+      });
+      // And the layer's own entry in each longhand paired with it.
+      for (const aligned of OVERLAY_ALIGNED.values()) {
+        walk.placed.push({
+          path,
+          property: aligned.property,
+          value: aligned.value,
+        });
+      }
+    }
     return;
   }
   switch (shape.kind) {

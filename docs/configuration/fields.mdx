@@ -30,7 +30,7 @@ Seven categories partition the field inventory.
 
 | Category | Fields |
 |---|---|
-| [Basic](#basic) | `text`, `textarea`, `richText`, `email`, `password`, `code`, `number`, `checkbox`, `date` |
+| [Basic](#basic) | `text`, `textarea`, `richText`, `email`, `icon`, `password`, `code`, `number`, `checkbox`, `date` |
 | [Selection](#selection) | `select`, `radio`, `chips` |
 | [Media](#media) | `upload` |
 | [Relationship](#relationship) | `relationship` |
@@ -179,6 +179,22 @@ email({
       : "Must be a company email address",
 });
 ```
+
+---
+
+### icon
+
+One icon from the site's icon sets. The admin shows an icon picker, and the stored value is the icon's id, a plain string of the form `<set>:<name>`, for example `"lucide:star"`. It is stored in a text column, like an email address.
+
+```typescript
+icon({ name: "badge", defaultValue: "lucide:star" })
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `defaultValue` | `string` | — | An icon id such as `"lucide:star"`. Any other shape is refused when the config is defined. |
+
+A saved value must have the id's shape: a set and a name, each of lowercase letters, digits and hyphens, joined by one colon (`"lucide:arrow-up-right"`). Only the shape is checked. An id whose set or icon is not registered is still saved, because icon sets are registered when the site runs; such an id is reported as an issue rather than refused.
 
 ---
 

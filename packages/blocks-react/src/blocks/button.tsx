@@ -117,6 +117,10 @@ export const BUTTON_BASE_STYLES = {
   base: {
     base: {
       display: "inline-block",
+      // Centred, as a user agent centres a `<button>` and not an `<a>`: given
+      // any width beyond its label (full width, a set width), a link-button's
+      // label would otherwise sit at the start while a button's sat centred.
+      textAlign: "center",
       // A user agent gives `<button>` a border box and `<a>` a content box, so
       // an authored width means two different outer sizes depending only on
       // whether a destination is set. Measured with `width: 200px` and this
