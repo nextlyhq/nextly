@@ -1,17 +1,13 @@
 // @vitest-environment jsdom
 
 /**
- * `showEmptyElements` reaching the empty-container appender.
+ * The empty-container appender as this field mounts it.
  *
  * `empty-container-appender.test.tsx` (in the builder package) asserts the
  * component's own behaviour given `hidden`. What is only true HERE is the
- * WIRING: that this field folds the author's "Show empty containers"
- * preference into that prop at all. The component was mounted with no
- * awareness of the preference — it reads only `hidden` and the document — so
- * without this wiring the dashed placeholder box collapses to zero height
- * when the preference is off (that CSS rule already matches the preference)
- * while the appender's own "+" keeps floating over nothing, defeating the
- * preference's whole point: seeing the page as a visitor would.
+ * WIRING: which `hidden` this field passes, and what its "+" opens. Empty
+ * containers always show, so the appender is hidden only during a drag, and
+ * its "+" opens Add to fill the container it sits on.
  *
  * The builder shell is replaced with recorders rather than rendered, as
  * `BlocksField.breakpoints.test` does and for its reason: what is under test
@@ -43,7 +39,14 @@ const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 const seen: {
   builderShell: Record<string, unknown> | undefined;
   appender: Record<string, unknown> | undefined;
-} = { builderShell: undefined, appender: undefined };
+  insertPanel: Record<string, unknown> | undefined;
+} = { builderShell: undefined, appender: undefined, insertPanel: undefined };
+
+/**
+ * The editor's selection, which `select` writes and the next render reads, so
+ * selecting a container through its "+" is seen by the panel it opens.
+ */
+let selectedId: string | null = null;
 
 /**
  * What `useCanvasDrag` reports for `draggingId`, mutated per test.
@@ -53,6 +56,12 @@ const seen: {
  * a re-render is what stands in for a drag actually starting.
  */
 let draggingId: string | null = null;
+
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
@@ -71,8 +80,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   }): React.JSX.Element => <>{children}</>;
   return {
     ...real,
-    // Captures the WHOLE props object — `onShowEmptyElementsChange` and
-    // `openPanelRequest` are what this file drives, and a narrower
+    // Captures the WHOLE props object — `openPanelRequest` and
+    // `renderPanel` are what this file drives, and a narrower
     // destructure (as the sibling files use for a shell that ignores those)
     // would silently discard them.
     BuilderShell: (
@@ -108,7 +117,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BreakpointManager: nothing,
     BreakpointSwitcher: nothing,
     InspectorPanel: nothing,
-    InsertPanel: nothing,
+    InsertPanel: (props: Record<string, unknown>): null => {
+      seen.insertPanel = props;
+      return null;
+    },
+    RepairNotice: nothing,
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
@@ -130,11 +143,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     }),
     useEditorState: () => ({
       document: DOCUMENT,
-      selectedId: null,
-      selection: { ids: [], primary: null },
+      selectedId,
+      selection: {
+        ids: selectedId === null ? [] : [selectedId],
+        primary: selectedId,
+      },
       apply: () => null,
       applyAll: () => null,
-      select: () => {},
+      select: (id: string | null) => {
+        selectedId = id;
+      },
       undo: () => {},
       redo: () => {},
       canUndo: false,
@@ -158,13 +176,43 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
  * is where one exists — so until these suites have one, every export the
  * subject imports has to be named below.
  */
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   /*
    * Never awaited by these cases: the loader is reached only when an author
    * double-clicks a passage, and none of them do. Present because the mock
    * REPLACES the module wholesale, so an export the subject imports and this
    * omits is a missing-export error rather than an unused stub.
    */
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => ({ siteStyle: undefined }),
   // No document around the field: the state every case here was written
@@ -191,14 +239,24 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // Nothing stored, read successfully — so `siteStylePending` and
   // `siteStyleError` both resolve to their "ready" values on the first
   // render, and the editor renders `Canvas` rather than its loading
   // paragraph.
-  useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -243,6 +301,8 @@ function openEditor(): { rerender: () => void } {
 beforeEach(() => {
   seen.builderShell = undefined;
   seen.appender = undefined;
+  seen.insertPanel = undefined;
+  selectedId = null;
   draggingId = null;
 });
 
@@ -250,65 +310,81 @@ afterEach(() => {
   cleanup();
 });
 
-describe("the empty-container appender and the show-empty-elements preference", () => {
-  it("starts visible, matching the preference's own default of shown", () => {
+describe("the empty-container appender's visibility", () => {
+  it("is shown outside a drag, since empty containers always show", () => {
     openEditor();
 
     expect(seen.appender?.hidden).toBe(false);
   });
 
-  it("hides the appender once the shell reports the preference switched off", () => {
-    const { rerender } = openEditor();
-
-    const report = seen.builderShell?.onShowEmptyElementsChange as
-      | ((value: boolean) => void)
-      | undefined;
-    if (report === undefined) {
-      throw new Error("the shell was given no onShowEmptyElementsChange");
-    }
-    React.act(() => {
-      report(false);
-    });
-    rerender();
-
-    expect(seen.appender?.hidden).toBe(true);
-  });
-
-  it("shows the appender again once the shell reports the preference switched back on", () => {
-    // Asserted at EACH step rather than only at the end: a fold that ORs the
-    // wrong thing, or one that was never wired at all, can still leave the
-    // FINAL value `false` here purely because it never became `true` in
-    // between — which is exactly the shape of a test that would pass whether
-    // or not the fix under test exists. Requiring the intermediate `true` is
-    // what makes "back on" mean something distinct from "was never off".
-    const { rerender } = openEditor();
-
-    const report = seen.builderShell?.onShowEmptyElementsChange as (
-      value: boolean
-    ) => void;
-    React.act(() => {
-      report(false);
-    });
-    rerender();
-    expect(seen.appender?.hidden).toBe(true);
-
-    React.act(() => {
-      report(true);
-    });
-    rerender();
-
-    expect(seen.appender?.hidden).toBe(false);
-  });
-
-  it("stays hidden during a drag even while the preference is on", () => {
-    // The regression this guards: folding the preference into `hidden`
-    // must OR with the drag condition, not replace it — a control that
-    // reappeared mid-drag because the preference happened to be on would be
-    // exactly the failure `hidden` exists to prevent.
+  it("stays hidden during a drag", () => {
+    // A control left over the canvas mid-drag would sit on a layout that is
+    // about to change, which is the failure `hidden` exists to prevent.
     draggingId = "some-node";
 
     openEditor();
 
     expect(seen.appender?.hidden).toBe(true);
+  });
+});
+
+/** Draw the Add panel as the shell would, and answer what it was handed. */
+function drawAddPanel(): Record<string, unknown> | undefined {
+  const renderPanel = seen.builderShell?.renderPanel as
+    | ((panel: string, view?: string) => React.ReactNode)
+    | undefined;
+  if (renderPanel === undefined) {
+    throw new Error("the shell was given no renderPanel");
+  }
+  seen.insertPanel = undefined;
+  render(<>{renderPanel("add")}</>);
+  return seen.insertPanel;
+}
+
+/** Press the "+" of the empty container `id`. */
+function pressAppender(id: string): void {
+  const onAppend = seen.appender?.onAppend as
+    | ((nodeId: string) => void)
+    | undefined;
+  if (onAppend === undefined) {
+    throw new Error("the appender was given no onAppend");
+  }
+  React.act(() => {
+    onAppend(id);
+  });
+}
+
+describe('the empty-container appender\'s "+"', () => {
+  it("opens Add to add INSIDE its container", () => {
+    openEditor();
+
+    pressAppender("box");
+
+    expect(seen.builderShell?.openPanelRequest).toMatchObject({ panel: "add" });
+    expect(drawAddPanel()?.inside).toBe("box");
+  });
+
+  it("adds after the selection again once the selection moves, even back to the container", () => {
+    // Selecting the container is never "inside" by itself: only its "+"
+    // says so, and only until the author selects something else.
+    const { rerender } = openEditor();
+    pressAppender("box");
+
+    selectedId = "other";
+    rerender();
+    expect(drawAddPanel()).toBeDefined();
+    expect(drawAddPanel()).not.toHaveProperty("inside");
+
+    selectedId = "box";
+    rerender();
+    expect(drawAddPanel()).not.toHaveProperty("inside");
+  });
+
+  it("is not inside for an Add opened any other way", () => {
+    openEditor();
+    selectedId = "box";
+
+    expect(drawAddPanel()).toBeDefined();
+    expect(drawAddPanel()).not.toHaveProperty("inside");
   });
 });

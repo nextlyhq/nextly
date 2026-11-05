@@ -1,760 +1,589 @@
 /**
- * The tokens studio: the site's design tokens, and the edits an author makes.
+ * The Variables view of the Design panel: the site's named colours, type
+ * sizes, spacing and the rest, each with its light and dark value.
  *
- * A panel over {@link tokens-studio}, which holds every rule this draws. The
- * split is the same one the style inspector uses: the projection decides what a
- * token IS and what an edit produces, this decides what it looks like, and the
- * rules stay testable without a DOM.
+ * A panel over {@link tokens-studio}, which holds every rule this draws: what
+ * group a variable is in, what an edit produces and what the engine says
+ * about it. This decides only what it looks like.
  *
- * ## The table is the editor
+ * ## Compact rows, edited beside the panel
  *
- * Values are edited where they are read, rather than behind a detail form.
- * Figma's variables table and Tokens Studio both work this way, and the reason
- * is the shape of the work: the common edit is nudging one value, and a form
- * turns that into two clicks and a context switch. It also suits the rail,
- * which is narrow enough that a form would compete with the list it came from.
+ * Each variable is one row: a swatch or a specimen, its plain name, and its
+ * light and dark values. Choosing a row opens its editor in a popover beside
+ * the panel, so the list stays readable at a glance and the editing has room.
+ *
+ * ## The header is the Design panel's
+ *
+ * The preview switch and the import-and-export menu belong in the Design
+ * panel's own header, beside its title, and stay there whichever of its tabs
+ * is open. A host that draws that header holds them with
+ * {@link useVariablesHeader} and hands the result in as `header`; this view
+ * then takes its preview mode from it and draws no controls of its own.
+ * Without one, the view holds them itself: drawn into `headerActions` when
+ * the host gives that element, else at the top of this view.
  *
  * ## Edits are lifted, not saved here
  *
- * Every control reports a NEW token set to the host and stores nothing. Saving
- * belongs to whoever owns the document — in the page builder that is the
- * section-scoped site-style write, which this package cannot reach and should
- * not — so this stays a controlled surface with no opinion about persistence.
- *
- * ## A colour value is typed, not picked, in this release
- *
- * Deliberate, and it is not a gap in the design. `@nextlyhq/ui`'s ColorPicker
- * holds unparseable hex in a private draft that is reset by `onBlur`, and a
- * dismissal is not a blur — so leaving it mid-edit commits the last value it
- * published rather than the one on screen. On a block that costs one
- * declaration. On a TOKEN it would silently change a value the whole site
- * resolves. The swatch here therefore previews and does not open, until that
- * contract is fixed.
+ * Every control reports a NEW set to the host and stores nothing. Saving
+ * belongs to whoever owns the site style.
  *
  * @module tokens-panel
  */
 import {
-  TOKEN_KINDS,
-  referencesCustomProperty,
   tokenIdentity,
   type SiteToken,
   type SiteTokenSet,
+  type SpacingMode,
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import { Button, Input } from "@nextlyhq/ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Input,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@nextlyhq/ui";
+import {
+  Braces,
+  Bold,
+  Hash,
+  Plus,
+  Ruler,
+  Search,
+  SquareRoundCorner,
+  Timer,
+  Type,
+} from "lucide-react";
 import * as React from "react";
+import { createPortal } from "react-dom";
 
-import { colourHexOf } from "./style-colour";
+import { ShowMore } from "./panel-actions";
+import { usePrefersDark } from "./prefers-dark";
+import { SpacingModeChoice } from "./spacing-mode-choice";
+import { colourHexOf, colourPairOf } from "./style-colour";
+import { lengthInPx, variableValueText } from "./style-variables";
 import {
-  TOKEN_KIND_LABELS,
-  addToken,
-  clearDarkValue,
-  removeToken,
-  renameToken,
-  setTokenValue,
-  tokenNameIssue,
-  tokenRows,
-  type TokenRow,
+  addVariable,
+  labelNewVariable,
+  lengthFamilyOf,
+  variableGroups,
+  type NewVariable,
+  type VariableEntry,
+  type VariableGroup,
 } from "./tokens-studio";
-import {
-  exportCss,
-  exportDtcg,
-  importDtcg,
-  type ExportResult,
-} from "./tokens-transfer";
+import { VariableEditor } from "./variable-editor";
+import { ColourPair, swatchStyle } from "./variable-swatch";
+import { useVariablesTransfer } from "./variables-transfer";
 
 export interface TokensPanelProps {
   /**
-   * The site's tokens, or `undefined` while the host has not read them yet.
-   *
-   * A real third state rather than an empty table: a site that has stored
-   * nothing legitimately has no tokens, so a panel that drew the two the same
-   * way would invite an author to add a token into a set that is about to be
-   * replaced by the one still loading.
+   * The site's variables, or `undefined` while the host has not read them.
+   * A real third state: a site may legitimately have none of its own.
    */
   tokens: SiteTokenSet | undefined;
-  /** An edit. The host owns the document and decides when to persist. */
+  /** An edit. The host owns the site style and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
   /**
+   * The author is still at work here: typing in a field before it commits.
+   * For a host that waits for a pause before persisting, so a save is not
+   * made between one field's edit and the next.
+   */
+  onActivity?: () => void;
+  /**
+   * The author is done for now: a variable's editor closed, or this panel
+   * went away. A host waiting for a pause persists what it holds at once.
+   */
+  onSettle?: () => void;
+  /**
    * The set the host holds RIGHT NOW, asked at the moment it is needed.
-   *
-   * Reading a file is asynchronous, and an author can edit a token while it is
-   * in flight. Merging into anything this panel captured earlier would discard
-   * that edit and persist the result — an edit made, seen, and silently undone
-   * by an import that was already running.
-   *
-   * A function rather than a value because the panel CANNOT observe the newest
-   * set: a host that has dispatched a state update has not necessarily
-   * re-rendered, so every form of "the latest props this component saw" is one
-   * commit behind for as long as that takes. The host is the only place that
-   * knows, so it is the host that answers.
-   *
-   * Answer it from a REF the host writes as it dispatches, not from a value
-   * captured when the function was made. This panel may hold an accessor a
-   * commit older than the newest render, which is harmless when the accessor
-   * reads a ref and is the whole defect when it reads a captured value.
-   *
-   * Required rather than defaulted to the `tokens` prop. That default would be
-   * exactly the stale read this exists to prevent, and it would be silent.
+   * Answer it from a ref the host writes as it dispatches: an import reads
+   * files asynchronously and must merge into the newest set, not into one this
+   * panel rendered with.
    */
   currentTokens: () => SiteTokenSet | undefined;
   /**
-   * The tokens something ELSE supplies, which the stored ones layer over.
-   *
-   * Needed because these two are not equally editable. A supplied token can be
-   * overridden and reset, and cannot be removed: absence from the stored tier
-   * means "no override", so a removal would merge straight back on the next
-   * read. Offering a Remove that quietly undoes itself is worse than not
-   * offering one.
-   *
-   * Two sources arrive as one set — the site's own config, and the ENGINE's
-   * defaults that `resolveSiteTokens` layers under everything. They behave
-   * identically here, so the row says "Default" rather than naming a source
-   * this panel cannot tell apart.
+   * The variables something else supplies (the site's code and the engine's
+   * defaults), which the stored ones layer over. These can be reset and not
+   * removed: absence from the stored tier means "no override".
    */
   supplied?: SiteTokenSet;
-  /** What the last save said, when it failed. Nothing while it is succeeding. */
+  /** What the last save said, when it failed. */
   issue?: string;
-  /** Whether the canvas is currently showing dark values. */
-  prefersDark?: boolean;
   /**
-   * Why there are no tokens to show, when there are none.
+   * Which mode the preview opens on.
    *
-   * `undefined` tokens has two causes and they need different words: a read
-   * still in flight will finish, and a refused or failed one will not. Told
-   * apart because a panel that says "reading…" forever after a 403 describes a
-   * state the site is not in and gives the author nothing to do about it.
+   * - `true`: Dark, whatever the device prefers.
+   * - `false`: Light, whatever the device prefers.
+   * - omitted: the device's own scheme, followed live, as the canvas does.
+   *
+   * Either way the author can switch it afterwards.
    */
+  prefersDark?: boolean;
+  /** Why there are no variables to show: a read in flight, or one that failed. */
   absence?: "pending" | "failed";
+  /**
+   * Shown, never changed. Fields stay selectable (`readOnly`, not disabled)
+   * and every control that would change something is left out.
+   */
+  readOnly?: boolean;
+  /** The Design panel's header element, where the header controls are drawn. */
+  headerActions?: HTMLElement | null;
+  /**
+   * The header a host draws for the whole Design panel, from
+   * {@link useVariablesHeader}. Given, the view previews its mode and leaves
+   * the controls, and what an import or export reports, to the host.
+   */
+  header?: VariablesHeader;
+  /**
+   * The site's spacing model, shown as "Space between blocks" above the
+   * spacing variables. Absent, the choice is not drawn.
+   */
+  spacing?: SpacingModeControl;
+}
+
+/** The site's spacing model as the Variables view offers it. */
+export interface SpacingModeControl {
+  /** The model as it is now. */
+  readonly mode: SpacingMode;
+  /** A new model. The host saves it, as it saves an edit. */
+  readonly onChange: (mode: SpacingMode) => void;
+}
+
+/** The Design panel's header controls, and the preview mode they choose. */
+export interface VariablesHeader {
+  /** Which mode's values the swatches and specimens show. */
+  readonly mode: TokenMode;
+  /** The preview switch and the import-and-export menu. */
+  readonly controls: React.JSX.Element;
+  /** What an import or an export reports, and the import's preview. */
+  readonly overlays: React.JSX.Element;
 }
 
 /**
- * The studio.
+ * The header controls and their state, for a host that keeps them while the
+ * Design panel's tabs change under them: the preview mode, the switch that
+ * chooses it, and the import-and-export menu with what it reports.
  *
- * `tokens === undefined` draws a note rather than an empty table, and rather
- * than a spinner: the read is usually instant and a flash of one reads as a
- * fault. An author who arrives before it lands sees a sentence.
+ * `prefersDark` is as {@link TokensPanelProps.prefersDark} reads it.
  */
-export function TokensPanel({
+export function useVariablesHeader({
+  onChange,
+  currentTokens,
+  readOnly,
+  prefersDark,
+}: {
+  onChange: (tokens: SiteTokenSet) => void;
+  currentTokens: () => SiteTokenSet | undefined;
+  readOnly: boolean;
+  prefersDark?: boolean;
+}): VariablesHeader {
+  // The device's scheme until the author picks one, as the canvas shows it.
+  const device = usePrefersDark();
+  const [picked, setMode] = React.useState<TokenMode | null>(() =>
+    statedPreview(prefersDark)
+  );
+  const mode: TokenMode = picked ?? (device ? "dark" : "light");
+  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
+  return {
+    mode,
+    controls: (
+      <div className="nx-vars__controls">
+        <PreviewSwitch mode={mode} onMode={setMode} />
+        {transfer.menu}
+      </div>
+    ),
+    overlays: transfer.overlays,
+  };
+}
+
+/** How many rows of one group mount before the author asks for more. */
+const PAGE_SIZE = 50;
+
+export function TokensPanel(props: TokensPanelProps): React.JSX.Element {
+  const { header } = props;
+  if (header !== undefined) {
+    return <VariablesView {...props} header={header} placed={false} />;
+  }
+  return <OwnHeader {...props} />;
+}
+
+/** The view holding its header itself, where no host draws one. */
+function OwnHeader(props: TokensPanelProps): React.JSX.Element {
+  const header = useVariablesHeader({
+    onChange: props.onChange,
+    currentTokens: props.currentTokens,
+    readOnly: props.readOnly ?? false,
+    ...(props.prefersDark === undefined
+      ? {}
+      : { prefersDark: props.prefersDark }),
+  });
+  return <VariablesView {...props} header={header} placed />;
+}
+
+function VariablesView({
   tokens,
   onChange,
+  onActivity,
+  onSettle,
   currentTokens,
   supplied,
   issue,
   absence = "pending",
-  prefersDark = false,
-}: TokensPanelProps): React.JSX.Element {
-  const [mode, setMode] = React.useState<TokenMode>(
-    prefersDark ? "dark" : "light"
-  );
+  readOnly = false,
+  headerActions,
+  header,
+  placed,
+  spacing,
+}: TokensPanelProps & {
+  header: VariablesHeader;
+  /** Whether this view draws the header's controls and reports itself. */
+  placed: boolean;
+}): React.JSX.Element {
+  const { mode } = header;
   const [query, setQuery] = React.useState("");
+  const { root, openKey, toggle, add, forget } = useOpenVariable({
+    tokens,
+    onChange,
+    currentTokens,
+    onAdded: () => setQuery(""),
+    onSettle,
+  });
+  // Going away ends the author's work here as closing an editor does: a tab
+  // change or the panel closing. The latest callback, so the effect runs
+  // only on unmount rather than on every render that hands a new one.
+  const settle = React.useRef(onSettle);
+  settle.current = onSettle;
+  // Which editor is open as of the latest render, and whether the panel is
+  // still mounted: read when an editor commits, which it may do as it goes
+  // away, after the close or the unmount has already settled.
+  const openNow = React.useRef(openKey);
+  openNow.current = openKey;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      settle.current?.();
+    };
+  }, []);
+  /*
+   * An edit committed by an editor that is already closed, such as a colour
+   * picker writing what it held as it unmounts, comes after the settle its
+   * closing made, so it settles again rather than wait for a pause the
+   * author has already ended.
+   */
+  const commitFrom =
+    (key: string) =>
+    (next: SiteTokenSet): void => {
+      onChange(next);
+      if (!mounted.current || openNow.current !== key) settle.current?.();
+    };
+  const search = React.useRef<HTMLInputElement>(null);
 
-  /*
-   * The kinds that have something to show, in catalog order.
-   *
-   * A kind with no rows produces no group at all rather than an empty one. That
-   * is the whole of the shape change: eight tabs meant five clickable dead ends
-   * in a narrow rail, and a place you can go to find nothing is worse than no
-   * place at all.
-   */
+  const groups = React.useMemo(
+    () => (tokens === undefined ? [] : variableGroups(tokens, mode)),
+    [tokens, mode]
+  );
   const needle = query.trim().toLowerCase();
-  /*
-   * ONE projection of the set, held across keystrokes.
-   *
-   * The grouped shape reads every kind at once where the tabs read only the
-   * open one, so projecting per kind meant a pass over the whole set eight
-   * times, on every render — and a search re-ran all of it per character. A
-   * DTCG import is not bounded to a size where that stays invisible.
-   */
-  /*
-   * The stored position of the row that must be reachable after an add.
-   *
-   * Clearing the search is not enough on its own: a new token is appended, so
-   * in a kind that already fills its page it lands AFTER the mounted slice and
-   * is hidden by the cap instead of by the query — the same invisible-write
-   * failure, one control further on.
-   */
-  const [revealAt, setRevealAt] = React.useState<number | undefined>(undefined);
-  const rows = React.useMemo(() => tokenRows(tokens, mode), [tokens, mode]);
-  /*
-   * Grouped in one pass over that projection, in `TOKEN_KINDS` order so the
-   * sections keep the order the vocabulary declares rather than the order the
-   * site happens to store its tokens in.
-   */
-  const groups = React.useMemo(() => {
-    const byKind = new Map<TokenKind, TokenRow[]>();
-    for (const row of rows) {
-      if (needle !== "" && !row.name.toLowerCase().includes(needle)) continue;
-      const held = byKind.get(row.kind);
-      if (held === undefined) byKind.set(row.kind, [row]);
-      else held.push(row);
-    }
-    return TOKEN_KINDS.map(kind => ({
-      kind,
-      rows: byKind.get(kind) ?? [],
-    })).filter(group => group.rows.length > 0);
-  }, [rows, needle]);
+  const shown = searched(groups, needle);
 
   if (tokens === undefined) {
-    return (
-      <div
-        className="nx-tokens"
-        data-empty={absence === "failed" ? "failed" : "loading"}
-      >
-        <p
-          className="nx-inspector__note"
-          role={absence === "failed" ? "alert" : undefined}
-        >
-          {absence === "failed"
-            ? "This site\u2019s tokens could not be read, so none can be shown or changed. Reload to try again."
-            : "Reading this site\u2019s tokens\u2026"}
-        </p>
-      </div>
-    );
+    return <Unread absence={absence} />;
   }
 
   return (
-    <div className="nx-tokens">
-      <div className="nx-tokens__head">
-        <h2 className="nx-tokens__title">Tokens</h2>
-        <ModeSwitch
-          mode={mode}
-          onMode={next => {
-            setMode(next);
-            setRevealAt(undefined);
-          }}
+    // Typing anywhere in the panel, the editors beside the rows included
+    // (React carries their events here through the portal), is activity.
+    <div
+      className="nx-vars"
+      ref={root}
+      data-read-only={readOnly ? "" : undefined}
+      onInput={onActivity}
+    >
+      {placed ? (
+        <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
+      ) : null}
+      <div className="nx-vars__search">
+        <Search aria-hidden="true" size={16} />
+        <Input
+          ref={search}
+          type="search"
+          aria-label="Search variables"
+          placeholder="Search variables"
+          value={query}
+          onChange={event => setQuery(event.target.value)}
         />
       </div>
-      {/*
-       * What a token IS, before any of the machinery.
-       *
-       * The panel opened with a mode switch, a transfer control and eight tabs
-       * of vocabulary, and never said what any of it does to the site. An
-       * author who does not already know the word has nothing to go on, and
-       * this is the surface where they would have learned it.
-       *
-       * It names the ACTIVE MODE rather than promising the whole site changes.
-       * A token with distinct light and dark values is edited one mode at a
-       * time, so "every block changes" would describe renderings this edit
-       * deliberately leaves alone — and naming the mode is also the only thing
-       * on screen that explains what the switch above is for.
-       */}
-      <p className="nx-tokens__lede">
-        <b>Tokens are your site&rsquo;s named values.</b> Every block using one
-        follows it, on every page. You are editing the{" "}
-        {mode === "dark" ? "dark" : "light"} values; switch above for the other.
+      <div className="nx-vars__body">
+        <PanelNotes readOnly={readOnly} issue={issue} />
+        {placed ? header.overlays : null}
+        {shown.length === 0 ? (
+          <p className="nx-vars__note">No variables match this search.</p>
+        ) : (
+          shown.map(group => (
+            <React.Fragment key={group.group}>
+              <SpacingModeAbove
+                group={group.group}
+                spacing={spacing}
+                readOnly={readOnly}
+              />
+              <Group
+                group={group.group}
+                heading={group.heading}
+                entries={group.entries}
+                searching={needle !== ""}
+                readOnly={readOnly}
+                openKey={openKey}
+                onAdd={add}
+              >
+                {(entry: VariableEntry) => (
+                  <VariableRow
+                    key={entry.row.key}
+                    entry={entry}
+                    tokens={tokens}
+                    mode={mode}
+                    suppliedOf={identity => suppliedFor(supplied, identity)}
+                    readOnly={readOnly}
+                    open={openKey === entry.row.key}
+                    onOpenChange={open => toggle(entry.row.key, open)}
+                    onChange={commitFrom(entry.row.key)}
+                    onRemoved={() => {
+                      forget(entry.row.key);
+                      search.current?.focus();
+                    }}
+                  />
+                )}
+              </Group>
+            </React.Fragment>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Space between blocks", drawn above the spacing variables (the model they
+ * space by), and nothing above any other group or when the host offers no
+ * choice.
+ */
+function SpacingModeAbove({
+  group,
+  spacing,
+  readOnly,
+}: {
+  group: VariableGroup;
+  spacing: SpacingModeControl | undefined;
+  readOnly: boolean;
+}): React.JSX.Element | null {
+  if (group !== "spacing" || spacing === undefined) return null;
+  return (
+    <SpacingModeChoice
+      mode={spacing.mode}
+      onChange={spacing.onChange}
+      readOnly={readOnly}
+    />
+  );
+}
+
+/** What shows while the variables are being read, or after a read failed. */
+function Unread({
+  absence,
+}: {
+  absence: "pending" | "failed";
+}): React.JSX.Element {
+  const failed = absence === "failed";
+  return (
+    <div className="nx-vars">
+      <p
+        className={failed ? "nx-vars__alert" : "nx-vars__note"}
+        role={failed ? "alert" : "status"}
+      >
+        {failed
+          ? "This site\u2019s variables could not be read, so none can be shown or changed. Reload to try again."
+          : "Reading this site\u2019s variables\u2026"}
       </p>
+    </div>
+  );
+}
+
+/** The header controls, in the Design panel's header when it gives one. */
+function HeaderControls({
+  slot,
+  children,
+}: {
+  slot: HTMLElement | null | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (slot) return <>{createPortal(children, slot)}</>;
+  return <div className="nx-vars__head">{children}</div>;
+}
+
+/** The read-only line, and a save that failed. */
+function PanelNotes({
+  readOnly,
+  issue,
+}: {
+  readOnly: boolean;
+  issue: string | undefined;
+}): React.JSX.Element {
+  return (
+    <>
+      {readOnly ? (
+        <p className="nx-vars__note">
+          You can view the site&rsquo;s variables but not change them.
+        </p>
+      ) : null}
       {issue === undefined ? null : (
-        /*
-         * A save that did not happen. `role="alert"` because it reports on an
-         * action the author has already taken and believes is done — the table
-         * still shows what they typed, and without this the only signal that
-         * the site was never changed is the canvas failing to move.
-         */
-        <p className="nx-tokens__issue" role="alert">
+        <p className="nx-vars__alert" role="alert">
           {issue}
         </p>
       )}
-      <TokenSearch
-        value={query}
-        onValue={next => {
-          setQuery(next);
-          // A reveal answers ONE add. Left standing it pins a stored position
-          // that a later delete can hand to a different token, so any
-          // narrowing the author performs afterwards retires it.
-          setRevealAt(undefined);
-        }}
-      />
-      {groups.length === 0 ? (
-        <EmptyTokens searching={needle !== ""} />
-      ) : (
-        groups.map(group => (
-          <section key={group.kind} className="nx-tokens__group">
-            <div className="nx-tokens__grouphead">
-              {/*
-               * The count OUTSIDE the heading, so the heading's accessible name
-               * is the kind itself. Inside it, "Colour" becomes "Colour 3" and
-               * anything addressing the group by name — a test, a screen
-               * reader's heading list — has to know the number to find it.
-               */}
-              <h3 className="nx-tokens__groupname">
-                {TOKEN_KIND_LABELS[group.kind]}
-              </h3>
-              <span className="nx-tokens__count">{group.rows.length}</span>
-            </div>
-            <TokenList
-              rows={group.rows}
-              revealAt={revealAt}
-              tokens={tokens}
-              supplied={supplied}
-              mode={mode}
-              onChange={onChange}
-            />
-          </section>
-        ))
-      )}
-      <AddToken
-        tokens={tokens}
-        onChange={onChange}
-        onAdded={at => {
-          setQuery("");
-          setRevealAt(at);
-        }}
-      />
-      {/*
-       * The transfer control, BELOW the tokens rather than above them.
-       *
-       * Importing a token file is a thing an author does once and then rarely;
-       * reading and nudging values is what the panel is for. Putting the rare
-       * one first spends the top of a narrow rail on machinery and pushes the
-       * content it operates on out of view.
-       */}
-      <TokenTransfer onChange={onChange} currentTokens={currentTokens} />
-    </div>
+    </>
   );
 }
 
 /**
- * Search across the whole set, which the tabbed shape could not offer.
+ * Which variable's editor is open, and what opening and closing one does.
  *
- * A tabbed panel can only search within a tab, or it crosses a boundary the
- * tabs assert — so the question "where did I put that token" had no answer
- * short of clicking through eight of them. One list has no boundary to cross.
+ * A variable added from a "+" opens straight away, and is "fresh" until its
+ * editor closes: nothing can reference it yet, so its code name may still
+ * follow the name it was given, which happens on close. The row is keyed by
+ * that code name, so focus is put back on it once it has re-rendered.
  */
-function TokenSearch({
-  value,
-  onValue,
-}: {
-  value: string;
-  onValue: (value: string) => void;
-}): React.JSX.Element {
-  const id = React.useId();
-  return (
-    <div className="nx-tokens__search">
-      <label className="sr-only" htmlFor={id}>
-        Search tokens
-      </label>
-      <Input
-        id={id}
-        type="search"
-        placeholder="Search tokens"
-        value={value}
-        onChange={event => onValue(event.target.value)}
-      />
-    </div>
-  );
-}
-
-/**
- * The empty state, which is the first thing a new site shows.
- *
- * Three jobs rather than one: say what is absent, say what belongs here, and
- * offer the way in. "No colour tokens yet." did the first and stopped, which
- * leaves an author who does not already know what a token is with nowhere to
- * go — and this panel is where they would have found out.
- *
- * A search that matched nothing is a DIFFERENT state and must not be taught at:
- * the author already knows what a token is, they are looking for one.
- */
-function EmptyTokens({ searching }: { searching: boolean }): React.JSX.Element {
-  if (searching) {
-    return <p className="nx-inspector__note">No tokens match this search.</p>;
-  }
-  return (
-    <div className="nx-tokens__empty">
-      <p className="nx-tokens__empty-head">No tokens yet.</p>
-      <p className="nx-inspector__note">
-        A token names one value — a colour, a size, a shadow — so every block
-        can point at it instead of repeating it. This is where the tokens
-        themselves are edited.
-      </p>
-    </div>
-  );
-}
-
-/**
- * Why no file arrived, in the author's terms rather than the compiler's.
- *
- * Two different things produce an empty artefact and they need different words.
- * Something went WRONG — vendor data that cannot be written, a stylesheet the
- * compiler refused — and the reasons are listed beneath. Or there was simply
- * nothing to write, which is not a fault and must not be worded as one: a site
- * with no token values compiles to an empty sheet and warns about nothing, and
- * telling that author the file "could not be written" describes a failure that
- * did not happen.
- */
-function refusalFor(made: ExportResult): string {
-  return made.skipped.length > 0
-    ? `${made.filename} could not be written.`
-    : `${made.filename} was not created, because this site has no token values to write.`;
-}
-
-/**
- * Bringing a token file in, and taking one out.
- *
- * ## In: a file, not a paste
- *
- * A design-token document is something a TOOL produced — Figma, Style
- * Dictionary — and lives on disk as a file. Asking for a paste would make the
- * author open it, select it and copy it first, for no gain. The one other
- * import in this product takes a paste, and rightly: it imports a list of
- * options somebody may have in a spreadsheet or an email, which is a different
- * artefact.
- *
- * ## Out: two files, because two audiences read them
- *
- * The token document goes back to a design tool and round-trips exactly. The
- * CSS is what a visitor's stylesheet contains, for someone wiring these values
- * into something this system does not render — and it is compiled by the same
- * function the site sheet is, so it cannot describe a site that does not exist.
- *
- * ## The report is not chrome
- *
- * Both directions can carry less than they were given, and both say what they
- * left behind. That report IS the feature: a designer handed a file with three
- * tokens missing has no way to know otherwise, and the ones that go missing are
- * the interesting ones. So it is shown until dismissed rather than flashed.
- */
-function TokenTransfer({
+function useOpenVariable({
+  tokens,
   onChange,
   currentTokens,
+  onAdded,
+  onSettle,
 }: {
+  tokens: SiteTokenSet | undefined;
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
-}): React.JSX.Element {
-  const id = React.useId();
-  const [report, setReport] = React.useState<{
-    tone: "done" | "refused";
-    headline: string;
-    detail: readonly string[];
-  } | null>(null);
+  onAdded: () => void;
+  /** The author is done with a variable; see `TokensPanelProps.onSettle`. */
+  onSettle: (() => void) | undefined;
+}): {
+  /** The panel's element, which rows are found in to be focused. */
+  root: React.RefObject<HTMLDivElement | null>;
+  openKey: string | null;
+  toggle: (key: string, open: boolean) => void;
+  add: (what: NewVariable) => void;
+  forget: (key: string) => void;
+} {
+  const root = React.useRef<HTMLDivElement>(null);
+  const [openKey, setOpenKey] = React.useState<string | null>(null);
+  const [focusKey, setFocusKey] = React.useState<string | null>(null);
+  const fresh = React.useRef(new Set<string>());
+  // Focus a row after its key changed under it (a just-added variable named
+  // after its label) or after the editor closed onto a new row.
+  React.useEffect(() => {
+    if (focusKey === null) return;
+    const row = root.current?.querySelector<HTMLElement>(
+      `[data-variable-key="${CSS.escape(focusKey)}"]`
+    );
+    row?.focus();
+    setFocusKey(null);
+  }, [focusKey, tokens]);
 
-  /*
-   * The CALLBACK as it is now.
-   *
-   * A read in flight outlives the render that began it, and the host can
-   * re-render with a different `onChange` while it runs — in the page builder
-   * that closure captures the baseline an import is diffed against, so calling
-   * yesterday's callback diffs the new table against the old baseline and can
-   * persist code-supplied defaults as overrides.
-   *
-   * Published at COMMIT rather than during render. Both earlier forms were
-   * wrong in opposite directions: a passive effect runs AFTER the commit,
-   * leaving a window where a read resolves against the previous value, and
-   * assigning during render closes that one and opens another — a concurrent
-   * render later abandoned still ran the line, so a read resolving then calls a
-   * callback from a render that never happened. A layout effect runs when a
-   * render commits and only when it commits.
-   *
-   * That still leaves the gap between a host DISPATCHING an update and React
-   * committing it, which no ref written from this component can close. It is
-   * why the token set is asked for through `currentTokens` instead of kept
-   * here: the set is what an import would silently overwrite, and the callback
-   * is not — every value this one closes over comes from the site's own
-   * configuration rather than from anything an author edits mid-read.
-   */
-  const latestChange = React.useRef(onChange);
-  /*
-   * The ACCESSOR is kept the same way, and for a reason worth separating from
-   * the callback's: an `async` function closes over the props of the render
-   * that created it, so a read still in flight would go on asking the accessor
-   * it was born with. Held as a value that would be exactly the staleness this
-   * prop exists to remove, wearing a different shape.
-   *
-   * Being one commit behind is harmless HERE, which is what makes the ref
-   * enough. A stale closure over a value is stale; a stale closure over the
-   * host's own ref still reads whatever that ref holds now. That is the
-   * contract the prop asks for, and it is why the panel can stop trying to
-   * track the set itself.
-   */
-  const latestCurrent = React.useRef(currentTokens);
-  React.useLayoutEffect(() => {
-    latestChange.current = onChange;
-    latestCurrent.current = currentTokens;
-  });
-
-  /*
-   * Which read is the current one.
-   *
-   * Two files can be in flight at once — an author picks one, then picks
-   * another before the first answers — and their answers need not arrive in
-   * order. Without this, a slow rejection lands after a fast success and
-   * reports failure for an import that was applied and persisted. Same rule the
-   * save path follows: an answer for a superseded operation says nothing.
-   */
-  const reads = React.useRef(0);
-  /*
-   * A read in flight when the panel goes away must not land.
-   *
-   * The shell renders one left panel at a time and keys them, so switching to
-   * Layers while a large file is being read unmounts this — and the
-   * continuation would still call `onChange`, changing the site AFTER the
-   * author left the tool, with the report it produced discarded. The same
-   * invalidation also stops a read from a previous mount racing one started
-   * after the panel is reopened.
-   *
-   * Marked rather than cancelled: a `File` read cannot be aborted, so what is
-   * available is refusing to act on its answer.
-   *
-   * LAYOUT-timed, for the same reason the latest-set ref is assigned in render.
-   * A passive cleanup runs after the unmount commit, so a read settling in that
-   * gap passes the sequence guard and calls back into a panel that is already
-   * gone — the window this cleanup exists to close, left open by the mechanism
-   * meant to close it. A layout cleanup is synchronous with the unmount.
-   */
-  React.useLayoutEffect(
-    () => () => {
-      reads.current = -1;
-    },
-    []
-  );
-
-  /**
-   * The set to work from, or `undefined` having already said why there is none.
-   *
-   * Every path here asks the HOST rather than reading a snapshot, because the
-   * panel cannot see an edit the host has dispatched and not yet re-rendered
-   * with. That matters most for the import, which merges into this set after a
-   * wait, and it is no less true of an export clicked immediately after an
-   * edit: both would otherwise describe a table the author has already changed.
-   *
-   * A guard over a value already in hand. The panel draws a note instead of a
-   * table when the set is absent, so this is not reachable today — and a guess
-   * here is the loss the whole path exists to prevent.
-   */
-  const workingSet = (doing: string): SiteTokenSet | undefined => {
-    const set = latestCurrent.current();
-    if (set !== undefined) return set;
-    setReport({
-      tone: "refused",
-      headline: `This site\u2019s tokens are no longer loaded, so there is nothing to ${doing}.`,
-      detail: [],
-    });
-    return undefined;
+  const add = (what: NewVariable): void => {
+    const made = addVariable(currentTokens() ?? tokens, what);
+    const added = made.tokens.tokens[made.at];
+    if (added === undefined) return;
+    onChange(made.tokens);
+    onAdded();
+    const key = tokenIdentity(added);
+    fresh.current.add(key);
+    setOpenKey(key);
   };
 
-  const read = async (file: File): Promise<void> => {
-    const mine = reads.current + 1;
-    reads.current = mine;
-    let text: string;
-    try {
-      text = await file.text();
-    } catch {
-      if (mine !== reads.current) return;
-      /*
-       * The file could not be READ at all — removed between choosing and
-       * opening, a permission refusal, a failing disk. Distinct from a file
-       * that read fine and held nothing usable, and reported rather than
-       * swallowed: without this the promise rejects into the `void` at the
-       * call site and the import does nothing while saying nothing.
-       */
-      setReport({
-        tone: "refused",
-        headline:
-          "That file could not be read. It may have been moved or renamed since you chose it.",
-        detail: [],
-      });
-      return;
+  const close = (key: string): void => {
+    setOpenKey(null);
+    // Settled after the renaming below, so a just-added variable's code name
+    // is part of what is persisted with the rest of its edit.
+    if (fresh.current.delete(key)) {
+      const named = namedAfterLabel(currentTokens(), key);
+      if (named !== undefined) {
+        onChange(named.tokens);
+        setFocusKey(named.key);
+      }
     }
-    if (mine !== reads.current) return;
-    // Asked HERE, after the wait, and never before it.
-    const into = workingSet("merge into");
-    if (into === undefined) return;
-    const result = importDtcg(text, into);
-    if (!result.ok) {
-      setReport({
-        tone: "refused",
-        headline: result.error,
-        detail: result.skipped,
-      });
-      return;
-    }
-    /*
-     * NOTHING landed is a refusal, even though the file was readable. Every
-     * token in it can be refused after the fact — by a name the site already
-     * holds, by a path, by a custom property two tokens compose — and the
-     * import then reports "Imported 0 tokens." as a success while handing the
-     * host a table identical to the one it already had. That announces an
-     * arrival that did not happen AND spends a save on it.
-     */
-    if (result.imported === 0) {
-      setReport({
-        tone: "refused",
-        headline:
-          "No tokens from that file could be imported, so nothing was changed.",
-        detail: result.skipped,
-      });
-      return;
-    }
-    setReport({
-      tone: "done",
-      headline: `Imported ${String(result.imported)} ${
-        result.imported === 1 ? "token" : "tokens"
-      }.`,
-      detail: result.skipped,
-    });
-    latestChange.current(result.tokens);
+    onSettle?.();
   };
 
-  /** Build an artefact from the set as it is NOW, or say there is none. */
-  const sendCurrent = (make: (set: SiteTokenSet) => ExportResult): void => {
-    const set = workingSet("write out");
-    if (set !== undefined) send(make(set));
+  const forget = (key: string): void => {
+    fresh.current.delete(key);
+    setOpenKey(null);
+    onSettle?.();
   };
 
-  const send = (made: ExportResult): void => {
-    // Nothing to download is not a file worth handing over. An empty artefact
-    // means the export could not be written, and the reason is in its report.
-    const wrote = made.text !== "";
-    if (wrote) download(made);
-    /*
-     * A clean export says nothing and CLEARS nothing. Exporting is the common
-     * next step after an import, and the import's report is the only list
-     * naming what the source file could not carry — wiping it because a later
-     * action had no news of its own destroys the one thing the author still
-     * needed, and does it without them dismissing anything.
-     *
-     * The FILE ARRIVING is what makes that silence acceptable: it is the
-     * confirmation, and a report is for what the author could not otherwise
-     * see. So the silence is conditional on `wrote`. Without that it also
-     * covered the case with no file and nothing to say — an empty site, whose
-     * stylesheet compiles to nothing and warns about nothing — and the button
-     * did nothing at all, which is the one outcome an author cannot act on.
-     */
-    if (wrote && made.skipped.length === 0) return;
-    setReport({
-      // An export that WROTE nothing is a refusal, whatever it has to say. The
-      // tone also decides how the report is announced, so calling this "done"
-      // would headline "Saved …" directly above a line saying nothing was, and
-      // announce a failure as a passive status update.
-      tone: wrote ? "done" : "refused",
-      headline: wrote ? `Saved ${made.filename}.` : refusalFor(made),
-      detail: made.skipped,
-    });
+  const toggle = (key: string, open: boolean): void => {
+    if (open) setOpenKey(key);
+    else close(key);
   };
 
-  return (
-    <div className="nx-tokens__transfer">
-      <label className="nx-tokens__import" htmlFor={`${id}-file`}>
-        Import
-        {/*
-          The input is the control; the label is what is seen. A button that
-          forwards a click to a hidden input is a second mechanism for one
-          affordance, and the one that breaks first is the keyboard.
-        */}
-        <input
-          id={`${id}-file`}
-          type="file"
-          accept="application/json,.json,.tokens.json"
-          onChange={event => {
-            const file = event.target.files?.[0];
-            // Cleared so choosing the SAME file twice fires again — after a
-            // refusal an author edits the file and picks it back, and an input
-            // holding the old value reports nothing.
-            event.target.value = "";
-            if (file !== undefined) void read(file);
-          }}
-        />
-      </label>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() => sendCurrent(exportDtcg)}
-      >
-        Export JSON
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() => sendCurrent(exportCss)}
-      >
-        Export CSS
-      </Button>
-      {report === null ? null : (
-        <TransferReport report={report} onDismiss={() => setReport(null)} />
-      )}
-    </div>
-  );
-}
-
-/** What an import or an export carried, and what it did not. */
-function TransferReport({
-  report,
-  onDismiss,
-}: {
-  report: {
-    tone: "done" | "refused";
-    headline: string;
-    detail: readonly string[];
-  };
-  onDismiss: () => void;
-}): React.JSX.Element {
-  return (
-    <div
-      className="nx-tokens__report"
-      data-tone={report.tone}
-      role={report.tone === "refused" ? "alert" : "status"}
-    >
-      <p>{report.headline}</p>
-      {report.detail.length === 0 ? null : (
-        <ul>
-          {/*
-            Keyed by POSITION as well as text. The same message arrives twice
-            whenever a file holds two tokens of one unsupported type — the
-            engine names the type, not the token — and a list keyed on the text
-            alone then hands React two identical keys.
-          */}
-          {report.detail.map((line, at) => (
-            <li key={`${String(at)}-${line}`}>{line}</li>
-          ))}
-        </ul>
-      )}
-      <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
-        Dismiss
-      </Button>
-    </div>
-  );
+  return { root, openKey, toggle, add, forget };
 }
 
 /**
- * Hand a generated file to the browser.
- *
- * An object URL rather than a data URL: a token document can run to tens of
- * kilobytes, and a data URL of that size is refused outright by some browsers
- * and truncated by others. Revoked immediately — the click has already happened
- * by the time the handler returns, and leaving it alive holds the whole file in
- * memory until the tab closes.
+ * A just-added variable given a code name made from the name the author gave
+ * it, with the row key it now has; nothing when it has no name of its own or
+ * the code name would not change.
  */
-function download(made: ExportResult): void {
-  const url = URL.createObjectURL(new Blob([made.text], { type: made.mime }));
-  const link = window.document.createElement("a");
-  link.href = url;
-  link.download = made.filename;
-  link.click();
-  /*
-   * Revoked on a LATER task. The click is dispatched synchronously but the
-   * fetch it starts is not, so releasing the URL in this turn can cancel the
-   * download it was created for — the file silently never arrives. Deferred
-   * rather than left alive, because an object URL holds the whole artefact in
-   * memory until the document is discarded.
-   */
-  window.setTimeout(() => {
-    URL.revokeObjectURL(url);
-  }, 0);
+function namedAfterLabel(
+  set: SiteTokenSet | undefined,
+  key: string
+): { tokens: SiteTokenSet; key: string } | undefined {
+  if (set === undefined) return undefined;
+  const at = set.tokens.findIndex(token => tokenIdentity(token) === key);
+  const token = set.tokens[at];
+  if (token?.label === undefined) return undefined;
+  const named = labelNewVariable(set, at, token.label);
+  const renamed = named.tokens[at];
+  if (renamed === undefined || renamed.name === token.name) return undefined;
+  return { tokens: named, key: tokenIdentity(renamed) };
+}
+
+/** The groups narrowed to a search; Other only when it has rows. */
+function searched<
+  G extends { group: VariableGroup; entries: readonly VariableEntry[] },
+>(groups: readonly G[], needle: string): G[] {
+  if (needle === "") {
+    return groups.filter(
+      group => group.group !== "other" || group.entries.length > 0
+    );
+  }
+  return groups
+    .map(group => ({
+      ...group,
+      entries: group.entries.filter(
+        entry =>
+          entry.label.toLowerCase().includes(needle) ||
+          entry.row.name.toLowerCase().includes(needle)
+      ),
+    }))
+    .filter(group => group.entries.length > 0);
 }
 
 /**
- * Which mode's values the table is editing.
- *
- * Two states of one property, so a segmented pair rather than two buttons that
- * happen to be adjacent — the same shape the style inspector's toggles take.
- * It sets what an EDIT writes, not merely what is shown, which is why it sits
- * above the tabs where it governs all of them rather than inside one.
+ * The mode a host asked the preview to open on, or `null` to follow the
+ * device: `false` is an explicit choice of light, not an absence.
  */
-function ModeSwitch({
+function statedPreview(prefersDark: boolean | undefined): TokenMode | null {
+  if (prefersDark === undefined) return null;
+  return prefersDark ? "dark" : "light";
+}
+
+/**
+ * The preview switch: which mode's values the swatches and specimens show.
+ * It changes nothing that is stored; each variable's editor shows both.
+ */
+function PreviewSwitch({
   mode,
   onMode,
 }: {
@@ -762,626 +591,498 @@ function ModeSwitch({
   onMode: (mode: TokenMode) => void;
 }): React.JSX.Element {
   return (
-    <div className="nx-tokens__modes" role="group" aria-label="Token mode">
-      {(["light", "dark"] as const).map(candidate => (
-        <button
-          key={candidate}
-          type="button"
-          onClick={() => onMode(candidate)}
-          aria-pressed={mode === candidate}
-        >
-          {candidate === "light" ? "Light" : "Dark"}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Every token of one kind, with the way to add another. */
-/**
- * How many rows of one kind mount before the author asks for more.
- *
- * Matches `class-manager-panel`'s default. Large enough that an ordinary site
- * never sees the control, small enough that a thousand-token import draws a
- * panel rather than blocking the editor.
- */
-const TOKEN_PAGE_SIZE = 50;
-
-function TokenList({
-  rows,
-  revealAt,
-  tokens,
-  supplied,
-  mode,
-  onChange,
-}: {
-  /*
-   * The rows to draw, resolved by the caller rather than here.
-   *
-   * The panel has to know how many rows a kind has BEFORE it draws the group,
-   * because a kind with none does not get a heading at all — so computing them
-   * here as well would be the same question answered twice, and the two would
-   * disagree the moment a filter was added to one of them.
-   */
-  rows: readonly TokenRow[];
-  /**
-   * A stored position that must be on screen, whatever the page count says.
-   *
-   * Opens exactly far enough to include it rather than lifting the cap: the
-   * cap exists because every row mounts two inputs and a preview, and an add
-   * is no reason to mount a thousand of them.
-   */
-  revealAt: number | undefined;
-  tokens: SiteTokenSet;
-  supplied: SiteTokenSet | undefined;
-  mode: TokenMode;
-  onChange: (tokens: SiteTokenSet) => void;
-}): React.JSX.Element {
-  /*
-   * How many PAGES are open, not how many rows — the same shape
-   * `class-manager-panel` uses, and for the same reason: a token table has no
-   * upper bound an author controls, a DTCG file can carry thousands, and every
-   * row here mounts two inputs plus a preview. Rendering all of them is what
-   * makes a large import freeze the editor, and a search cannot be relied on
-   * to reach the tail because a query matching most names narrows nothing.
-   */
-  const [pagesOpen, setPagesOpen] = React.useState(1);
-  const limit = pagesOpen * TOKEN_PAGE_SIZE;
-  const shown = rows.slice(0, limit);
-  /*
-   * A revealed row is drawn ON ITS OWN when it sits past the mounted page,
-   * never by raising the limit to reach it. A token is appended, so in a set
-   * of five thousand that index IS five thousand — raising the limit mounts
-   * every row before it and recreates exactly the freeze this cap prevents.
-   */
-  const at =
-    revealAt === undefined ? -1 : rows.findIndex(row => row.at === revealAt);
-  const revealed = at >= limit ? rows[at] : undefined;
-  const hidden = rows.length - shown.length - (revealed === undefined ? 0 : 1);
-  return (
-    <div className="nx-tokens__list">
-      {rows.length === 0 ? null : (
-        <ul>
-          {shown.map(row => (
-            <li key={row.key}>
-              <TokenEntry
-                row={row}
-                tokens={tokens}
-                from={suppliedTokenFor(supplied, row.identity)}
-                mode={mode}
-                onChange={onChange}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-      {revealed === undefined ? null : (
-        <div className="nx-tokens__revealed">
-          <p className="nx-inspector__note">
-            Just added, further down the list:
-          </p>
-          <ul>
-            {/*
-             * KEYED, like every row in the list above. This element's position
-             * never changes, so without a key React reuses one `TokenEntry`
-             * across different tokens and carries its local state with it — a
-             * second add would drop the new token into the previous row's
-             * removal confirmation.
-             */}
-            <li key={revealed.key}>
-              <TokenEntry
-                row={revealed}
-                tokens={tokens}
-                from={suppliedTokenFor(supplied, revealed.identity)}
-                mode={mode}
-                onChange={onChange}
-              />
-            </li>
-          </ul>
-        </div>
-      )}
-      {hidden <= 0 ? null : (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="nx-tokens__more"
-          onClick={() => setPagesOpen(current => current + 1)}
-        >
-          {`Show ${Math.min(hidden, TOKEN_PAGE_SIZE)} more`}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-/**
- * The one way to create a token, and the price the grouped shape has to pay.
- *
- * Tabs offered creation for free: every kind had a tab, so an empty one was
- * still somewhere you could stand and press "add". A list that omits empty
- * kinds has nowhere to stand, so the kind has to be NAMED instead — which is
- * the same move Figma's variables panel makes.
- *
- * One control rather than one per group. Two ways to perform one action drift,
- * and the per-group button could not reach a kind that had no group anyway.
- */
-function AddToken({
-  tokens,
-  onChange,
-  onAdded,
-}: {
-  tokens: SiteTokenSet;
-  onChange: (tokens: SiteTokenSet) => void;
-  /**
-   * Clears whatever is narrowing the list, because the row just created has to
-   * be reachable. A new token is named after its kind (`shadow.1`), so any
-   * search that does not happen to match that name hides it the instant it is
-   * written — the control looks inert, and pressing it again writes
-   * `shadow.2`, `shadow.3`, each one also hidden. The tabs could not produce
-   * this: they had nothing to narrow with.
-   */
-  onAdded: (at: number) => void;
-}): React.JSX.Element {
-  const [kind, setKind] = React.useState<TokenKind>("color");
-  const id = React.useId();
-  return (
-    <div className="nx-tokens__add">
-      <label className="sr-only" htmlFor={id}>
-        Kind of token to add
-      </label>
-      <select
-        id={id}
-        className="nx-tokens__kind"
-        value={kind}
-        onChange={event => setKind(event.target.value as TokenKind)}
-      >
-        {TOKEN_KINDS.map(option => (
-          <option key={option} value={option}>
-            {TOKEN_KIND_LABELS[option]}
-          </option>
+    <div className="nx-vars__preview" role="group" aria-label="Preview">
+      <span className="nx-vars__preview-label" aria-hidden="true">
+        Preview
+      </span>
+      <div className="nx-vars__seg">
+        {(["light", "dark"] as const).map(candidate => (
+          <button
+            key={candidate}
+            type="button"
+            aria-pressed={mode === candidate}
+            onClick={() => onMode(candidate)}
+          >
+            {candidate === "light" ? "Light" : "Dark"}
+          </button>
         ))}
-      </select>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          const made = addToken(tokens, kind);
-          onChange(made.tokens);
-          onAdded(made.at);
-        }}
-      >
-        Add {TOKEN_KIND_LABELS[kind].toLowerCase()} token
-      </Button>
+      </div>
     </div>
   );
 }
 
-/**
- * One row: what it is called, what it holds, and how to remove it.
- *
- * Both fields commit on blur rather than on every keystroke. A token is read by
- * the whole site, so an edit per character would recompile the canvas for every
- * letter of a name — and it would put a half-typed name through the validator,
- * reporting a refusal about a value the author is still in the middle of.
- */
-function TokenEntry({
-  row,
-  tokens,
-  from,
-  mode,
-  onChange,
+/** What each group's "+" offers: one variable, or a short menu of kinds. */
+const ADDS: Readonly<
+  Record<
+    VariableGroup,
+    { label: string; empty: string; options: readonly [NewVariable, string][] }
+  >
+> = {
+  colours: {
+    label: "Add colour",
+    empty: "No colours yet.",
+    options: [["colour", "Colour"]],
+  },
+  type: {
+    label: "Add type size",
+    empty: "No type sizes yet.",
+    options: [["type size", "Type size"]],
+  },
+  spacing: {
+    label: "Add spacing, radius or shadow",
+    empty: "No spacing, radii or shadows yet.",
+    options: [
+      ["spacing", "Spacing"],
+      ["radius", "Radius"],
+      ["shadow", "Shadow"],
+    ],
+  },
+  other: {
+    label: "Add another variable",
+    empty: "",
+    options: [
+      ["dimension", "Size"],
+      ["fontFamily", "Font"],
+      ["fontWeight", "Font weight"],
+      ["number", "Number"],
+      ["duration", "Duration"],
+      ["custom", "Custom value"],
+    ],
+  },
+};
+
+/** One group: its heading, its "+", and its rows, a page at a time. */
+function Group({
+  group,
+  heading,
+  entries,
+  searching,
+  readOnly,
+  openKey,
+  onAdd,
+  children,
 }: {
-  row: TokenRow;
-  tokens: SiteTokenSet;
-  /** The site config's own version of this token, when it supplies one. */
-  from: SiteToken | undefined;
-  mode: TokenMode;
-  onChange: (tokens: SiteTokenSet) => void;
+  group: VariableGroup;
+  heading: string;
+  entries: readonly VariableEntry[];
+  searching: boolean;
+  readOnly: boolean;
+  /** The row whose editor is open, which is drawn even past the page. */
+  openKey: string | null;
+  onAdd: (what: NewVariable) => void;
+  children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const id = React.useId();
-  const [nameIssue, setNameIssue] = React.useState<string | null>(null);
-  const noteId = `${id}-note`;
-
-  const commitName = (next: string): void => {
-    if (next.trim() === row.name) {
-      setNameIssue(null);
-      return;
-    }
-    const refusal = tokenNameIssue(tokens, row.at, next);
-    setNameIssue(refusal ?? null);
-    if (refusal === undefined) onChange(renameToken(tokens, row.at, next));
-  };
-
-  const said = [...(nameIssue === null ? [] : [nameIssue]), ...row.issues];
-
+  const [pages, setPages] = React.useState(1);
+  const shown = withOpenRow(entries, pages * PAGE_SIZE, openKey);
+  const hidden = entries.length - shown.length;
+  const adds = ADDS[group];
   return (
-    <div className="nx-tokens__row">
-      <TokenPreview row={row} />
-      <div className="nx-tokens__fields">
-        <label className="sr-only" htmlFor={`${id}-name`}>
-          Name of {row.name}
-        </label>
-        <Input
-          id={`${id}-name`}
-          className="nx-tokens__name"
-          defaultValue={row.name}
-          // Keyed by identity so a rename does not remount the row, and a
-          // reorder does not carry one row's draft into another's field.
-          /*
-           * The NAME as well as the row, because a refused save and Reset both
-           * replace the token through props — and an uncontrolled input keeps
-           * whatever the author typed, so the panel would go on showing an
-           * override that storage and the canvas no longer hold. Typing does
-           * not change props, so this is stable while the author is editing
-           * and changes exactly when the value they are editing is replaced
-           * underneath them.
-           */
-          key={`${row.key}-name-${row.name}`}
-          aria-invalid={nameIssue === null ? undefined : true}
-          aria-describedby={said.length > 0 ? noteId : undefined}
-          onBlur={event => commitName(event.target.value)}
-        />
-        <label className="sr-only" htmlFor={`${id}-value`}>
-          {mode === "dark" ? "Dark value" : "Value"} of {row.name}
-        </label>
-        <Input
-          id={`${id}-value`}
-          className="nx-tokens__value"
-          defaultValue={row.value}
-          key={`${row.key}-value-${mode}-${row.value}`}
-          data-inherited={row.inherited ? "" : undefined}
-          aria-describedby={said.length > 0 ? noteId : undefined}
-          onBlur={event => {
-            const next = event.target.value;
-            /*
-             * Compared against what this MODE actually holds, not against what
-             * the row displays. In dark, a token with no dark value displays
-             * the light one — so typing that same value is a real edit, the one
-             * that PINS dark before light is changed later, and comparing
-             * against the display would discard exactly it.
-             */
-            if (next !== row.stored) {
-              onChange(setTokenValue(tokens, row.at, mode, next));
-            }
-          }}
-        />
+    <section className="nx-vars__group" aria-labelledby={id}>
+      <div className="nx-vars__group-head">
+        <h3 className="nx-vars__group-name" id={id}>
+          {heading}
+        </h3>
+        {/* The two small swatches on a colour row are its light and dark
+            values; this names those columns for sight. Each row's accessible
+            name already says which value is which, so it is not read. */}
+        {group === "colours" ? (
+          <span className="nx-vars__group-hint" aria-hidden="true">
+            Light / Dark
+          </span>
+        ) : null}
+        {/* An empty type scale offers its add in the line below instead. */}
+        {readOnly || (group === "type" && entries.length === 0) ? null : (
+          <AddButton adds={adds} onAdd={onAdd} />
+        )}
       </div>
-      <TokenActions
-        row={row}
-        tokens={tokens}
-        from={from}
-        mode={mode}
-        onChange={onChange}
+      {entries.length === 0 && !searching ? (
+        <EmptyGroup
+          group={group}
+          text={adds.empty}
+          readOnly={readOnly}
+          onAdd={onAdd}
+        />
+      ) : (
+        <ul className="nx-vars__list">{shown.map(children)}</ul>
+      )}
+      <ShowMore
+        hidden={hidden}
+        pageSize={PAGE_SIZE}
+        onMore={() => setPages(count => count + 1)}
       />
-      {said.length > 0 ? (
-        <p className="nx-tokens__issue" id={noteId} role="status">
-          {said.join(" ")}
-        </p>
+    </section>
+  );
+}
+
+/** An empty group's one line; an empty type scale offers its add here. */
+function EmptyGroup({
+  group,
+  text,
+  readOnly,
+  onAdd,
+}: {
+  group: VariableGroup;
+  text: string;
+  readOnly: boolean;
+  onAdd: (what: NewVariable) => void;
+}): React.JSX.Element {
+  return (
+    <p className="nx-vars__empty">
+      {text}
+      {group === "type" && !readOnly ? (
+        <button
+          type="button"
+          className="nx-vars__link"
+          onClick={() => onAdd("type size")}
+        >
+          Add type size
+        </button>
       ) : null}
-    </div>
+    </p>
   );
 }
 
 /**
- * Removing a token, and dropping a dark value back to following light.
+ * The rows a page shows, and the open row as well when it lies past them.
  *
- * Its own component because both are DESTRUCTIVE in a way the two fields above
- * are not — a field edit changes a value, and these two change what resolves
- * for pages nobody is looking at.
+ * A variable is added at the end of its group, so in a group longer than a
+ * page its row would not mount and the editor opened for it would have
+ * nothing to open beside. It is drawn on its own after the page rather than
+ * by raising the page, which would mount every row before it.
  */
-function TokenActions({
-  row,
-  tokens,
-  from,
-  mode,
-  onChange,
-}: {
-  row: TokenRow;
-  tokens: SiteTokenSet;
-  from: SiteToken | undefined;
-  mode: TokenMode;
-  onChange: (tokens: SiteTokenSet) => void;
-}): React.JSX.Element {
-  const [confirming, setConfirming] = React.useState(false);
+function withOpenRow(
+  entries: readonly VariableEntry[],
+  limit: number,
+  openKey: string | null
+): readonly VariableEntry[] {
+  const page = entries.slice(0, limit);
+  const at =
+    openKey === null
+      ? -1
+      : entries.findIndex(entry => entry.row.key === openKey);
+  const open = at >= limit ? entries[at] : undefined;
+  return open === undefined ? page : [...page, open];
+}
 
-  if (confirming) {
+/** A group's "+": a button for one kind, a menu for several. */
+function AddButton({
+  adds,
+  onAdd,
+}: {
+  adds: (typeof ADDS)[VariableGroup];
+  onAdd: (what: NewVariable) => void;
+}): React.JSX.Element {
+  const icon = <Plus aria-hidden="true" size={14} />;
+  const [only] = adds.options;
+  if (adds.options.length === 1 && only !== undefined) {
     return (
-      <div className="nx-tokens__confirm" role="group">
-        {/*
-          Named rather than counted. Answering "how many pages use this" needs a
-          search INSIDE a JSON column, which no dialect this ships on can do
-          portably — so the warning says what removal MEANS rather than
-          inventing a number it cannot stand behind.
-        */}
-        <p className="nx-tokens__issue">
-          Any block using <strong>{row.name}</strong> loses that style. The page
-          still renders.
-        </p>
-        <Button
-          type="button"
-          variant="destructive"
-          size="sm"
-          onClick={() => onChange(removeToken(tokens, row.at))}
-        >
-          Remove
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => setConfirming(false)}
-        >
-          Keep
-        </Button>
-      </div>
+      <button
+        type="button"
+        className="nx-vars__icon-button nx-vars__add"
+        aria-label={adds.label}
+        title={adds.label}
+        onClick={() => onAdd(only[0])}
+      >
+        {icon}
+      </button>
     );
   }
-
   return (
-    <div className="nx-tokens__actions">
-      {mode === "dark" && !row.inherited ? (
-        <Button
+    // Not modal: a modal menu marks the editor around it aria-hidden while
+    // its controls stay focusable (axe: aria-hidden-focus).
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => onChange(clearDarkValue(tokens, row.at))}
+          className="nx-vars__icon-button nx-vars__add"
+          aria-label={adds.label}
+          title={adds.label}
         >
-          Match light
-        </Button>
-      ) : null}
-      {from === undefined ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label={`Remove ${row.name}`}
-          onClick={() => setConfirming(true)}
+          {icon}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="nx-vars__menu">
+        {adds.options.map(([what, label]) => (
+          <DropdownMenuItem key={what} onSelect={() => onAdd(what)}>
+            {label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * One variable: a button that opens its editor beside the panel.
+ *
+ * The button's name is the plain name followed by the values in words, so a
+ * screen reader hears what the swatches show.
+ */
+function VariableRow({
+  entry,
+  tokens,
+  mode,
+  suppliedOf,
+  readOnly,
+  open,
+  onOpenChange,
+  onChange,
+  onRemoved,
+}: {
+  entry: VariableEntry;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  suppliedOf: (identity: string) => SiteToken | undefined;
+  readOnly: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChange: (tokens: SiteTokenSet) => void;
+  onRemoved: () => void;
+}): React.JSX.Element {
+  const token = tokens.tokens[entry.row.at];
+  return (
+    <li>
+      <Popover open={open} onOpenChange={onOpenChange} modal>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="nx-vars__row"
+            data-variable-key={entry.row.key}
+            // The visible name first, then the values the swatches show, so
+            // a screen reader hears both and speech input still matches.
+            aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}`}
+            data-kind={entry.row.kind}
+          >
+            <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
+            <span className="nx-vars__name">
+              {entry.label}
+              {entry.kindWord === undefined ? null : (
+                <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
+              )}
+            </span>
+            <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="right"
+          align="start"
+          sideOffset={12}
+          className="nx-vars-editor"
+          aria-label={`${readOnly ? "" : "Edit "}${entry.label}`}
         >
-          Remove
-        </Button>
+          <VariableEditor
+            entry={entry}
+            tokens={tokens}
+            suppliedOf={suppliedOf}
+            readOnly={readOnly}
+            onChange={onChange}
+            onRemoved={onRemoved}
+          />
+        </PopoverContent>
+      </Popover>
+    </li>
+  );
+}
+
+/**
+ * The row's name as it is read: its label, and its kind when another row is
+ * shown under the same name.
+ */
+function shownName(entry: VariableEntry): string {
+  return entry.kindWord === undefined
+    ? entry.label
+    : `${entry.label} · ${entry.kindWord}`;
+}
+
+/** The value a variable shows for the preview mode, falling back to light. */
+function valueFor(token: SiteToken | undefined, mode: TokenMode): string {
+  if (token === undefined) return "";
+  return mode === "dark"
+    ? (token.values.dark ?? token.values.light)
+    : token.values.light;
+}
+
+/** The row's leading preview: a swatch, a type specimen, or a kind icon. */
+function RowLead({
+  entry,
+  token,
+  tokens,
+  mode,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+}): React.JSX.Element {
+  const kind = entry.row.kind;
+  if (kind === "color") {
+    return (
+      <span
+        className="nx-vars__swatch nx-vars__swatch--main"
+        aria-hidden="true"
+        data-mode={mode}
+        style={swatchStyle(
+          entry.row.written
+            ? colourHexOf(valueFor(token, mode), undefined)
+            : undefined
+        )}
+      />
+    );
+  }
+  if (entry.row.name.startsWith("font-size.")) {
+    return (
+      <span
+        className="nx-vars__specimen"
+        aria-hidden="true"
+        style={{
+          fontSize: `${String(specimenSize(valueFor(token, mode)))}px`,
+          fontFamily: siteFamily(tokens, mode),
+        }}
+      >
+        Aa
+      </span>
+    );
+  }
+  // A radius draws a corner, so it is told from a spacing step at a glance.
+  const radius = lengthFamilyOf(entry.row) === "radius";
+  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
+  return (
+    <span
+      className="nx-vars__kind"
+      aria-hidden="true"
+      data-variable-icon={lengthFamilyOf(entry.row) ?? kind}
+    >
+      {kind === "shadow" ? (
+        <span
+          className="nx-vars__shadow"
+          style={{ boxShadow: valueFor(token, mode) }}
+        />
       ) : (
-        /*
-         * A token the site's code supplies. It cannot be REMOVED here: the
-         * stored tier expresses overrides, and absence from it means "no
-         * override", so a removal would merge straight back on the next read.
-         * Reset is the honest counterpart — it drops the override and lets the
-         * site's own value through again, which is what an author actually
-         * means by undoing their edit.
-         */
-        <>
-          <span className="nx-tokens__origin">Default</span>
-          {differs(row, from, mode) ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label={`Reset ${row.name}`}
-              onClick={() => onChange(resetToken(tokens, row.at, from))}
-            >
-              Reset
-            </Button>
-          ) : null}
-        </>
+        <Icon size={14} />
       )}
-    </div>
+    </span>
   );
 }
 
-/** Whether the author has changed this token away from the site's own value. */
-function differs(row: TokenRow, from: SiteToken, mode: TokenMode): boolean {
+const KIND_ICONS: Readonly<
+  Record<TokenKind, React.ComponentType<{ size?: number }>>
+> = {
+  color: Hash,
+  dimension: Ruler,
+  fontFamily: Type,
+  fontWeight: Bold,
+  number: Hash,
+  shadow: Hash,
+  duration: Timer,
+  custom: Braces,
+};
+
+/**
+ * The specimen's drawn size: the type size scaled into the row, so a heading
+ * still reads larger than body text without growing the row.
+ */
+function specimenSize(value: string): number {
+  // Read through the inspector's own reading of a length, so a type size is
+  // measured the same way in both places; a value it cannot measure is drawn
+  // at body size, as before.
+  const px = lengthInPx(value) ?? 16;
+  return Math.min(18, Math.max(11, Math.round(10 + px * 0.2)));
+}
+
+/** The site's body font, when it names a family this panel can draw. */
+function siteFamily(tokens: SiteTokenSet, mode: TokenMode): string | undefined {
+  // By identity, the one a rename leaves alone: the body font keeps drawing
+  // after an author renames it.
+  const body = tokens.tokens.find(
+    token => tokenIdentity(token) === "font.body"
+  );
+  const family = valueFor(body, mode);
+  return family === "" || /var\s*\(/i.test(family) ? undefined : family;
+}
+
+/** The row's trailing values: the light and dark swatches, or a value chip. */
+function RowTail({
+  entry,
+  token,
+  mode,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+}): React.JSX.Element | null {
+  if (token === undefined) return null;
+  if (entry.row.kind === "color") {
+    return <ColourPair {...colourPairOf(token)} />;
+  }
+  const own = valueFor(token, mode);
+  const words = chipText(entry, own);
   return (
-    row.name !== from.name ||
-    row.value !== (from.values[mode] ?? from.values.light)
+    <span
+      className="nx-vars__chip"
+      aria-hidden="true"
+      // The whole value on hover when the chip says it in fewer words, as
+      // "Fluid" does; the row's name says it to a screen reader already.
+      title={words === chipText(entry, own, "raw") ? undefined : own}
+    >
+      {words}
+    </span>
   );
 }
 
-/** The site's own token back in place of the author's override. */
-function resetToken(
-  tokens: SiteTokenSet,
-  at: number,
-  from: SiteToken
-): SiteTokenSet {
-  const next = [...tokens.tokens];
-  next[at] = from;
-  return { ...tokens, tokens: next };
+/**
+ * "16 / 26" for a type size with its line height, or the value itself, in
+ * the picker's words: "Fluid" for a length that changes with the page, whose
+ * whole `clamp()` crowded the name out of the row. `raw` keeps the value as
+ * written, to tell whether the words shortened it.
+ */
+function chipText(
+  entry: VariableEntry,
+  own: string,
+  form: "words" | "raw" = "words"
+): string {
+  const text =
+    form === "raw"
+      ? own
+      : variableValueText({ kind: entry.row.kind, value: own });
+  if (entry.lineHeight === undefined) return text;
+  return `${bare(text)} / ${bare(entry.lineHeight.value)}`;
 }
 
-/** The site config's own version of a token, matched the way the merge does. */
-function suppliedTokenFor(
+/** A px value without its unit, as designers write a type scale. */
+function bare(value: string): string {
+  return value.trim().replace(/^(-?\d*\.?\d+)px$/, "$1");
+}
+
+/** The row's values in words, for the button's accessible name. */
+function describe(
+  entry: VariableEntry,
+  token: SiteToken | undefined,
+  tokens: SiteTokenSet,
+  mode: TokenMode
+): string {
+  if (token === undefined) return "";
+  // A colour row shows both its swatches, so both values are said whatever
+  // the preview; every other row shows the preview mode's value, so that is
+  // the one said, read through the same projection the row draws with.
+  if (entry.row.kind === "color") {
+    const dark = token.values.dark;
+    return `, light ${token.values.light}, dark ${dark ?? "same as light"}`;
+  }
+  if (entry.lineHeight !== undefined) {
+    const line = valueFor(tokens.tokens[entry.lineHeight.at], mode);
+    return `, size ${valueFor(token, mode)}, line height ${line}`;
+  }
+  return `, ${valueFor(token, mode)}`;
+}
+
+/** The supplied version of a variable, matched the way the merge does. */
+function suppliedFor(
   supplied: SiteTokenSet | undefined,
   identity: string
 ): SiteToken | undefined {
   return (supplied?.tokens ?? []).find(
     token => tokenIdentity(token) === identity
-  );
-}
-
-/**
- * A preview of what the value is, where one can be drawn honestly.
- *
- * Only a colour gets painted, and only when this package can resolve it
- * WITHOUT the site's table — a token whose value is a `var()` would otherwise
- * resolve against the panel's own custom properties rather than the canvas's
- * and show a colour the page does not have. Every other kind gets nothing
- * rather than an approximation of itself.
- */
-/**
- * Whether a value can be drawn as itself, and the string to draw it with.
- *
- * The colour rule is unchanged and is the reason the others exist: a value is
- * previewed only where THIS package can resolve it without the site's token
- * table, because a `var()` resolves against the panel's own custom properties
- * rather than the canvas's and would show something the page does not have.
- * That applies to every kind, not only colour, so the same refusal covers all
- * of them.
- *
- * `number` and `custom` are absent deliberately. A number has no visual form,
- * and `custom` holds whatever a site put there; drawing either would be an
- * illustration rather than a preview.
- */
-function drawableValue(row: TokenRow): string | undefined {
-  /*
-   * The ENGINE decides whether a value is written at all. It refuses on five
-   * conditions this panel must not restate — a name that is not a token name,
-   * no light value, a value `checkCssValue` rejects, a value that would fetch,
-   * and a collision on one custom property — and a value the engine drops but
-   * the browser happens to accept inline would otherwise be previewed as a
-   * token the page does not carry.
-   */
-  if (!row.written) return undefined;
-  if (row.kind === "color") return colourHexOf(row.value, undefined);
-  if (!PREVIEWED_KINDS.has(row.kind)) return undefined;
-  /*
-   * A SECOND question, and the only one that is genuinely this panel's: the
-   * engine writes a `var()` happily, but it resolves against the canvas's
-   * custom properties and this panel has its own — so drawing it here would
-   * show a value the page does not have.
-   *
-   * ASKED OF THE ENGINE, not matched here. This read `/var\s*\(/i` against the
-   * raw text, and a CSS function token is an identifier followed by `(` with the
-   * identifier read DECODED — so `v\61 r(--nx-measure-wide)` is a `var()` to a
-   * browser and was not one to that regex. It was previewed, resolving against
-   * this panel's own `--nx-*` properties, which is the exact false preview the
-   * guard exists to prevent.
-   *
-   * `referencesCustomProperty` parses and compares decoded function names, so it
-   * also sees a reference nested in a `calc()` or inside a fallback. A fourth
-   * hand-written answer to "is this a var()" — after `contrast.ts`, `dtcg.ts` and
-   * `css-value.ts` — is the defect rather than the fix.
-   */
-  const own = row.value.trim();
-  if (own === "" || referencesCustomProperty(own)) return undefined;
-  return own;
-}
-
-/** The kinds that have a visual form this panel can draw from the value alone. */
-const PREVIEWED_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
-  "dimension",
-  "duration",
-  "fontFamily",
-  "fontWeight",
-  "shadow",
-]);
-
-/**
- * A length, drawn as a length.
- *
- * Its own component because the sign is a question of its own and answering it
- * inline put `TokenPreview` past the CRAP gate.
- */
-function DimensionPreview({ value }: { value: string }): React.JSX.Element {
-  /*
-   * A dimension may validly be NEGATIVE — a margin token pulling something
-   * back. CSS refuses a negative `width`, so the declaration was discarded
-   * and `min-width` left the same sliver a zero shows: a working token drawn
-   * as though it had neither size nor direction.
-   *
-   * The sign is taken off the front of the stored TEXT and reported as a
-   * direction, which is a string operation rather than a parse. A value whose
-   * sign is not visible that way — `calc()` among them — gets no bar at all,
-   * because a bar drawn on the wrong side of the line is worse than none.
-   */
-  const negative = value.startsWith("-");
-  const magnitude = negative ? value.slice(1).trim() : value;
-  if (magnitude === "" || /calc\s*\(/i.test(magnitude)) {
-    return <span className="nx-tokens__preview" aria-hidden="true" />;
-  }
-  return (
-    <span
-      className="nx-tokens__preview"
-      aria-hidden="true"
-      data-sign={negative ? "negative" : undefined}
-    >
-      {/*
-        Capped at the track rather than scaled to it. There is no maximum a
-        token is measured against, so any scale would be invented; a bar that
-        runs to the end says "at least this wide" and claims nothing more.
-
-        The cap is `max-width` in the stylesheet rather than `min()` here, so
-        the width reaching CSS is the stored value itself — a function around
-        it is one more thing that has to parse before anything is drawn.
-      */}
-      <span className="nx-tokens__bar" style={{ width: magnitude }} />
-    </span>
-  );
-}
-
-/**
- * A preview of what the value is, where one can be drawn honestly.
- *
- * Every kind that can be shown is shown in the SAME slot, so the column stays
- * a column: a ragged left edge would make the list harder to scan than the
- * previews make it easier.
- *
- * Values reach CSS as individual properties rather than as custom properties.
- * A custom property stores whatever string it is given and hands it to
- * `var()` substitution later, so a stored value carrying a semicolon could
- * open a declaration of its own; assigning `box-shadow` or `width` directly
- * makes the browser parse the value as that property and discard it if it is
- * not one. The panel shows unsaved and invalid values on purpose, so it cannot
- * assume the emitter's guards have already run.
- */
-function TokenPreview({ row }: { row: TokenRow }): React.JSX.Element {
-  const kind = row.kind;
-  const drawable = drawableValue(row);
-  if (drawable === undefined) {
-    return <span className="nx-tokens__preview" aria-hidden="true" />;
-  }
-  if (kind === "color") {
-    /*
-     * The swatch is now the slot's FILL rather than a box of its own. Each row
-     * owns an independent `auto` grid column, so a colour slot narrower than
-     * the others started its fields earlier and produced exactly the ragged
-     * edge one common slot exists to prevent.
-     */
-    return (
-      <span className="nx-tokens__preview" aria-hidden="true">
-        <span
-          className="nx-tokens__swatch"
-          style={{ "--nx-swatch": drawable } as React.CSSProperties}
-        />
-      </span>
-    );
-  }
-  if (kind === "shadow") {
-    return (
-      <span className="nx-tokens__preview" aria-hidden="true">
-        <span className="nx-tokens__shadow" style={{ boxShadow: drawable }} />
-      </span>
-    );
-  }
-  if (kind === "dimension") {
-    return <DimensionPreview value={drawable} />;
-  }
-  if (kind === "duration") {
-    return (
-      <span className="nx-tokens__preview" aria-hidden="true">
-        {/*
-          Shown by TAKING that long. A duration has no length to draw, and a bar
-          scaled to some assumed maximum would be a picture of an assumption.
-          Under `prefers-reduced-motion` the stylesheet stops the animation and
-          leaves the dot at rest.
-        */}
-        <span
-          className="nx-tokens__tick"
-          style={{ animationDuration: drawable }}
-        />
-      </span>
-    );
-  }
-  return (
-    <span
-      className="nx-tokens__preview"
-      aria-hidden="true"
-      style={
-        kind === "fontWeight"
-          ? { fontWeight: drawable }
-          : { fontFamily: drawable }
-      }
-    >
-      Aa
-    </span>
   );
 }

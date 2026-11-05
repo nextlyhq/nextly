@@ -14,6 +14,7 @@ import {
   assertNotPartiallyApplied,
   concurrentRunError,
 } from "../../../domains/schema/migrate/drift-reconcile";
+import { planChangedAfterConsent } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import {
   resolveMigration,
   type ResolveMigrationArgs,
@@ -25,6 +26,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { refusalOf } from "../../commands/migrate-down";
 import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
+  coreDestructiveNeedsTerminal,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
@@ -33,10 +35,16 @@ import {
   settingsChangeWithoutMigration,
   snapshotWithoutMigration,
 } from "../../errors/areas/migrations";
+import { requireConsented } from "../../utils/data-loss-consent";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 
 import { PROJECT, type ErrorCase, type ErrorCases } from "./types";
 import { assertRunnableStatements } from "../../../domains/schema/migrate/split-sql";
+import {
+  requiredColumnMigrationRefusal,
+  uncountedAtStatement,
+} from "../../../domains/schema/migrate/required-column-guard";
+import { requiredColumnUncountedError } from "../../../domains/schema/required-column-refusal";
 
 /** A fixed clock, so the holder's start and lapse times read the same in every run. */
 const NOW = Date.UTC(2026, 9, 29, 10, 2, 0);
@@ -105,6 +113,8 @@ function resolving(
     dialect: "postgresql",
     repo: {
       findFileApplies: () => Promise.resolve([]),
+      findFileRollbacks: () => Promise.resolve([]),
+      recordChecksum: () => Promise.resolve(),
       insertEvent: () => Promise.resolve("evt_2"),
       supersede: () => Promise.resolve(),
       markRolledBack: () => Promise.resolve(),
@@ -112,6 +122,7 @@ function resolving(
     fileExists: () => Promise.resolve(true),
     loadTargetSnapshot: () => Promise.resolve(null),
     marksNoTransaction: () => Promise.resolve(false),
+    fileChecksum: () => Promise.resolve("a".repeat(64)),
     introspectLive: () => Promise.resolve(POSTS),
     ...overrides,
   }).then(
@@ -161,6 +172,16 @@ export const MIGRATION_CASES = {
     dataLossRefusal(await refusedVerdict(undefined)),
   DATA_LOSS_CONSENT_NOT_COVERED: async () =>
     dataLossRefusal(await refusedVerdict("dc_authors")),
+  // As `runPrune` in `cli/commands/prune.ts` throws it, once a table appeared after the consent.
+  PLAN_CHANGED_AFTER_CONSENT: () =>
+    planChangedAfterConsent({
+      command: "nextly prune",
+      message:
+        "What `nextly prune` would drop changed after it was agreed to, so nothing was dropped. " +
+        "Run `nextly prune` again to see what it would drop now.",
+      agreed: ["dc_tags"],
+      current: ["dc_tags", "dc_tags_locales"],
+    }),
   // The consent's own parser, given a list it cannot read.
   DATA_LOSS_CONSENT_MALFORMED: () => {
     try {
@@ -169,6 +190,15 @@ export const MIGRATION_CASES = {
       return error;
     }
     throw new Error("expected the consent to be refused");
+  },
+  // As `requireConsented` ends a run whose deletion prompt was answered no.
+  DATA_LOSS_DECLINED: () => {
+    try {
+      requireConsented({ kind: "declined" });
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the declined deletion to end the run");
   },
   // Reserved for `nextly migrate`'s check of applied files, which the guides document; nothing
   // raises them yet, so each case is the error as that check is to raise it.
@@ -252,6 +282,9 @@ export const MIGRATION_CASES = {
         "drops column 'nextly_users.legacy_role'" +
         ".",
     }),
+  // As `upgradeAction` in `cli/commands/upgrade.ts` throws it with no terminal to confirm on.
+  CORE_DESTRUCTIVE_NEEDS_TERMINAL: () =>
+    coreDestructiveNeedsTerminal(["drops column 'nextly_users.legacy_role'"]),
   // As `reconcileCore` throws it when the core apply fails.
   CORE_SCHEMA_APPLY_FAILED: () =>
     new NextlyError({
@@ -374,6 +407,24 @@ export const MIGRATION_CASES = {
     }
     throw new Error("expected the statements to be refused");
   },
+  REQUIRED_COLUMN_HAS_NULLS: () =>
+    requiredColumnMigrationRefusal(
+      [
+        {
+          entity: { kind: "collection", slug: "posts" },
+          field: "subtitle",
+          count: 2,
+          added: false,
+        },
+      ],
+      { source: "20261103_101500_posts.sql", dialect: "postgresql" }
+    ),
+  REQUIRED_COLUMN_UNCOUNTED: () =>
+    requiredColumnUncountedError({
+      table: "dc_posts",
+      field: "subtitle",
+      cause: new Error("connection reset"),
+    }),
 } satisfies ErrorCases;
 
 /**
@@ -384,6 +435,41 @@ export const MIGRATION_MERGED_CASES: Record<
   string,
   { code: CliErrorCode; make: ErrorCase }
 > = {
+  // Not a former code: the reading the code has when the count fails part-way through a file,
+  // after statements before it ran.
+  REQUIRED_COLUMN_UNCOUNTED_AT_A_STATEMENT: {
+    code: "REQUIRED_COLUMN_UNCOUNTED",
+    make: () =>
+      uncountedAtStatement(
+        requiredColumnUncountedError({
+          table: "dc_posts",
+          field: "subtitle",
+          cause: new Error("connection reset"),
+        }),
+        "20261103_101500_posts.sql",
+        "mysql",
+        {
+          index: 1,
+          statements: [
+            "UPDATE `dc_posts` SET `subtitle` = '' WHERE `id` = 'p2'",
+            "ALTER TABLE `dc_posts` MODIFY COLUMN `subtitle` text NOT NULL",
+          ],
+          transaction: false,
+        }
+      ),
+  },
+  // Not a former code: the reading when the table is named through a qualifier that may reach
+  // another schema, which nothing counts.
+  REQUIRED_COLUMN_UNCOUNTED_THROUGH_A_QUALIFIER: {
+    code: "REQUIRED_COLUMN_UNCOUNTED",
+    make: () =>
+      requiredColumnUncountedError({
+        table: "archive.dc_posts",
+        field: "subtitle",
+        cause: undefined,
+        through: "archive",
+      }),
+  },
   MIGRATION_ATTEMPT_UNFINISHED: {
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
     make: () =>

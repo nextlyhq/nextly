@@ -34,6 +34,7 @@ import {
   type AuthContext,
 } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di/container";
 import {
   documentLockKey,
@@ -41,6 +42,7 @@ import {
   type DocumentRef,
   type DocumentScopeKind,
 } from "../domains/document-lock";
+import { peopleById } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 
@@ -51,6 +53,45 @@ import {
   assertVersionDocumentReadable,
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
+
+/**
+ * What the next editor is told holds the document: a person by their name,
+ * else their email; an API key as one, by its maker's name where they have
+ * one; and, when nothing names the caller, "Someone". Never empty, so no lock
+ * message can read "null is editing this document".
+ *
+ * A key is named as a key rather than as its maker, because a script holding
+ * a document is not its maker sitting at it, and the person asked to let go
+ * should know which of the two they are waiting on. The maker's name is read
+ * through `peopleById`, the one lookup that names a person, and only for a
+ * key: a session already carries it.
+ *
+ * 🔴 A key's label is cut to fit the lock row's label column. The column is as
+ * wide as the widest name, and the suffix makes a long name's label wider, so
+ * uncut it failed the claim on PostgreSQL and MySQL while SQLite stored it.
+ * Cut by code point, so no character is split in half.
+ *
+ * Names are trimmed first: a name of spaces is no name, and would otherwise
+ * read "'s API key" or a blank where the holder belongs.
+ */
+async function holderLabel(auth: AuthContext): Promise<string> {
+  if (auth.authMethod === "api-key") {
+    const maker = (await peopleById([auth.userId]))
+      .get(auth.userId)
+      ?.name?.trim();
+    if (!maker) return "An API key";
+    const suffix = "'s API key";
+    const room = OWNER_LABEL_LENGTH - suffix.length;
+    return `${Array.from(maker).slice(0, room).join("")}${suffix}`;
+  }
+  return auth.userName?.trim() || auth.userEmail?.trim() || "Someone";
+}
+
+/**
+ * The lock row's `owner_label` column width on PostgreSQL and MySQL
+ * (`schemas/document-lock`), which a stored label must fit.
+ */
+const OWNER_LABEL_LENGTH = 255;
 
 async function getDocumentLockService(): Promise<DocumentLockService> {
   await getCachedNextly();
@@ -289,7 +330,8 @@ export const readLock = withErrorHandler(async (req: Request) => {
  * `takeover` is the second editor deciding to edit anyway. It is accepted from
  * any authenticated caller because the lock is advisory: refusing the takeover
  * would not stop them editing, it would only stop them saying so, and the
- * displaced holder is told either way.
+ * displaced holder is told either way. A takeover that displaces somebody is
+ * recorded in the document's history, and refused if it cannot be.
  */
 export const acquireLock = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -305,7 +347,11 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
     ref,
     {
       ownerId: auth.userId,
-      ownerLabel: auth.userName ?? auth.userEmail ?? null,
+      ownerLabel: await holderLabel(auth),
+      // What a takeover's history event credits: the key itself for an API
+      // key, and the person by name only, never by the email above.
+      actor: actorFromAuthContext(auth),
+      personName: auth.userName ?? null,
     },
     {
       takeover: body.takeover === true,

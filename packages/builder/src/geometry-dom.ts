@@ -26,9 +26,21 @@ import {
   isSquare,
   roundedInsideRounded,
   scaleCornerRadii,
+  SQUARE_CORNERS,
   usedCornerRadii,
 } from "./border-radii";
-import type { FrameInset, Point, Rect, Scale } from "./geometry";
+import { isHTMLElement, isIFrame } from "./dom-kind";
+import {
+  frameContentOrigin,
+  pointToCanvas,
+  pointToHost,
+  rectToHost,
+  type FrameGeometry,
+  type FrameInset,
+  type Point,
+  type Rect,
+  type Scale,
+} from "./geometry";
 
 /**
  * How far a frame's content viewport sits inside its border box.
@@ -85,6 +97,223 @@ function paintedScale(root: HTMLElement, painted: DOMRect): Scale {
 }
 
 /**
+ * A point in the host page's client coordinates, in the frame's own.
+ *
+ * A pointer moving over the editor's panels is reported in the HOST's client
+ * coordinates, while every rectangle of the canvas is read inside the frame,
+ * relative to the frame's viewport. A drag begun on a palette row hears both,
+ * and the host's points have to be carried into the frame before they are
+ * compared with anything there.
+ *
+ * Composed from the one mapping rather than restated: the frame's border box
+ * and its painted scale are read here, where reads are allowed, and the
+ * arithmetic is {@link frameContentOrigin} and {@link pointToCanvas}. The scale
+ * is measured from the frame for the reason {@link paintedScale} gives — it may
+ * be applied by an ancestor no declaration on the frame records.
+ */
+export function hostPointInFrame(
+  frame: HTMLIFrameElement,
+  point: Point
+): Point {
+  return pointToCanvas(point, frameGeometryOf(frame));
+}
+
+/**
+ * Where a frame's content viewport sits in the host and how it is scaled, read
+ * once for the two directions of the mapping.
+ */
+function frameGeometryOf(frame: HTMLIFrameElement): FrameGeometry {
+  const box = frame.getBoundingClientRect();
+  const scale = framePaintedScale(frame);
+  const origin = frameContentOrigin(
+    { x: box.left, y: box.top },
+    frameInsetOf(frame),
+    scale
+  );
+  return { origin, scale };
+}
+
+/**
+ * A point in a frame's client coordinates, in the host page's.
+ *
+ * The inverse of {@link hostPointInFrame}, built from the same reads and the
+ * same mapping run forwards: a context menu opened by a press inside the frame
+ * is reported in the frame's coordinates and drawn by the host.
+ */
+export function framePointInHost(
+  frame: HTMLIFrameElement,
+  point: Point
+): Point {
+  return pointToHost(point, frameGeometryOf(frame));
+}
+
+/**
+ * The part of a frame's page on screen, in the frame's own CSS pixels.
+ *
+ * The root element's client box, which is the viewport WITHOUT its scrollbars:
+ * a frame whose page is taller than it shows a scrollbar inside, and chrome
+ * clipped to the frame's whole width would be drawn over that scrollbar.
+ * `null` while the frame holds no readable document.
+ */
+export function frameViewportOf(
+  frame: HTMLIFrameElement
+): { readonly width: number; readonly height: number } | null {
+  const element = frame.contentDocument?.documentElement;
+  if (element === undefined) return null;
+  return { width: element.clientWidth, height: element.clientHeight };
+}
+
+/**
+ * Where a canvas root's top-left corner is, in its frame's VIEWPORT.
+ *
+ * Read from the root's own client rectangle inside the frame, which already
+ * moves with the frame's scroll: a page scrolled 200px down puts its root at
+ * `y: -200`. Chrome drawn over the frame is offset by this, once, rather than
+ * adding the frame's scroll a second time.
+ */
+export function rootInFrameViewport(root: HTMLElement): Point {
+  const box = root.getBoundingClientRect();
+  return { x: box.left, y: box.top };
+}
+
+/**
+ * Where an element of a frame's page is, in that frame's VIEWPORT: its client
+ * rectangle inside the frame, which moves with the frame's scroll, as the
+ * canvas root's corner does above. Chrome drawn over the frame scales it by
+ * the frame's painted scale.
+ */
+export function boxInFrameViewport(element: Element): Rect {
+  const box = element.getBoundingClientRect();
+  return { x: box.left, y: box.top, width: box.width, height: box.height };
+}
+
+/**
+ * Where editor chrome is drawn, and how it maps the canvas's coordinates.
+ *
+ * Chrome is drawn in one of two places. Over a canvas sharing the editor's
+ * document it sits INSIDE the canvas root, and the root's own content
+ * coordinates are its coordinates. Over a canvas in a frame it sits in the
+ * editor's document, in the layer `CanvasFrame` draws over the frame, whose
+ * content box is laid over the root and moved with the frame's scroll — so a
+ * rectangle in the root's coordinates only has to be scaled by the frame's
+ * painted scale to land on what it describes, and the chrome itself is drawn
+ * at its own size rather than scaled with the page.
+ */
+export interface OverlaySpace {
+  /** The canvas root the chrome describes. */
+  readonly root: HTMLElement;
+  /** The frame the root is in, or `null` when it shares the chrome's document. */
+  readonly frame: HTMLIFrameElement | null;
+  /** How much larger the chrome's coordinates are than the root's. */
+  readonly scale: number;
+  /** A rectangle in the root's content coordinates, in the chrome's. */
+  readonly place: (rect: Rect) => Rect;
+  /** A chrome element's own size, in the chrome's coordinates. */
+  readonly sizeOf: (element: HTMLElement) => {
+    readonly width: number;
+    readonly height: number;
+  };
+  /**
+   * A client point of an event delivered to the CHROME's document, in the
+   * canvas document's client coordinates, where its rectangles are read.
+   */
+  readonly pointInCanvas: (point: Point) => Point;
+}
+
+/**
+ * The attribute marking the layer `CanvasFrame` draws chrome in.
+ *
+ * Here rather than beside the component because this module is what looks for
+ * it, and the component imports it from here.
+ */
+export const CANVAS_LAYER_ATTRIBUTE = "data-nx-canvas-layer";
+
+/**
+ * How far past the frame's viewport the layer draws, on every side, in the
+ * chrome's pixels: as far as a selection ring stands outside its block, so the
+ * ring of a block flush with the page's edge is drawn rather than cut off.
+ */
+export const CHROME_BLEED = 4;
+
+/** The attribute marking the box holding a canvas frame and its layer. */
+export const CANVAS_FRAME_BOX_ATTRIBUTE = "data-nx-canvas-frame-box";
+
+/**
+ * The coordinate space a piece of chrome is drawn in, found from the chrome's
+ * own element, or `null` when it is over no canvas.
+ *
+ * Found from the element rather than handed in, as the canvas root always was:
+ * the chrome does not exist until after its first render, and a space passed
+ * from elsewhere could describe a canvas the chrome is not drawn over.
+ */
+export function overlaySpaceOf(
+  element: Element,
+  rootClass: string
+): OverlaySpace | null {
+  const own = canvasRootFrom(element, rootClass);
+  if (own !== null) {
+    return {
+      root: own,
+      frame: null,
+      scale: 1,
+      place: rect => rect,
+      sizeOf: chrome => {
+        const box = canvasContentRect(chrome, own);
+        return { width: box.width, height: box.height };
+      },
+      pointInCanvas: point => point,
+    };
+  }
+  const frame = layerFrameOf(element);
+  const root = frame?.contentDocument?.querySelector(`.${rootClass}`);
+  if (frame === null || !isHTMLElement(root)) return null;
+  if (root.ownerDocument.defaultView === null) return null;
+  const scale = framePaintedScale(frame);
+  // The layer's content box is laid over the root, so the root's origin is
+  // the chrome's: only the scale is left to apply.
+  const mapping = { origin: { x: 0, y: 0 }, scale };
+  return {
+    root,
+    frame,
+    scale,
+    place: rect => rectToHost(rect, mapping),
+    // The chrome is not scaled, so its layout size is its size on screen.
+    sizeOf: chrome => ({
+      width: chrome.offsetWidth,
+      height: chrome.offsetHeight,
+    }),
+    pointInCanvas: point => hostPointInFrame(frame, point),
+  };
+}
+
+/**
+ * The frame whose layer an element is drawn in, or `null` when it is in none.
+ *
+ * The layer and the frame are children of one box, so the box names both and
+ * neither has to carry a reference to the other.
+ */
+function layerFrameOf(element: Element): HTMLIFrameElement | null {
+  const layer = element.closest(`[${CANVAS_LAYER_ATTRIBUTE}]`);
+  const box = layer?.closest(`[${CANVAS_FRAME_BOX_ATTRIBUTE}]`);
+  if (box === null || box === undefined) return null;
+  for (const child of Array.from(box.children)) {
+    if (isIFrame(child)) return child;
+  }
+  return null;
+}
+
+/**
+ * How many of the host's painted pixels one of a frame's pixels covers.
+ *
+ * `0.25` for a frame Fit has painted at a quarter of its layout size. A
+ * distance read inside the frame is multiplied by it to become a distance the
+ * author's hand moved, which is what every drag threshold is about.
+ */
+export function framePaintedScale(frame: HTMLIFrameElement): number {
+  return paintedScale(frame, frame.getBoundingClientRect()).x;
+}
+
+/**
  * A rectangle in the canvas's own CONTENT coordinates.
  *
  * The space the editor's chrome is drawn in: the origin is the canvas root's
@@ -101,7 +330,16 @@ function paintedScale(root: HTMLElement, painted: DOMRect): Scale {
  * and lands on what was measured.
  */
 export function canvasContentRect(element: Element, root: HTMLElement): Rect {
-  const box = element.getBoundingClientRect();
+  return clientRectInCanvas(element.getBoundingClientRect(), root);
+}
+
+/**
+ * A rectangle in CLIENT coordinates, in the canvas's content coordinates.
+ *
+ * The conversion {@link canvasContentRect} applies to an element's own box,
+ * for a rectangle that is not one element's: the visible part of a viewport.
+ */
+function clientRectInCanvas(box: Rect, root: HTMLElement): Rect {
   const rootBox = root.getBoundingClientRect();
   const scale = paintedScale(root, rootBox);
   return {
@@ -175,11 +413,16 @@ export interface CanvasPointerPoints {
 export function canvasPointerPoints(
   clientX: number,
   clientY: number,
-  root: HTMLElement
+  root: HTMLElement,
+  handScale = 1
 ): CanvasPointerPoints {
   const rootBox = root.getBoundingClientRect();
   const scale = paintedScale(root, rootBox);
-  const painted = { x: clientX - rootBox.x, y: clientY - rootBox.y };
+  const offset = { x: clientX - rootBox.x, y: clientY - rootBox.y };
+  // `handScale` carries the offset into the host's painted pixels when the
+  // canvas is in a frame the host paints scaled: the root's own rectangle is
+  // read inside the frame, where that scale does not show.
+  const painted = { x: offset.x * handScale, y: offset.y * handScale };
   return {
     painted,
     // DERIVED from the painted offset rather than subtracting the root a second
@@ -191,8 +434,8 @@ export function canvasPointerPoints(
     // laid-out content, which a transform never touches — so dividing it would
     // shrink a real offset by the zoom.
     content: {
-      x: painted.x / scale.x + root.scrollLeft,
-      y: painted.y / scale.y + root.scrollTop,
+      x: offset.x / scale.x + root.scrollLeft,
+      y: offset.y / scale.y + root.scrollTop,
     },
   };
 }
@@ -295,10 +538,10 @@ export function boxAcross(
  * through that transform already — so any comparison whose two readings sit on
  * opposite sides of it has to compose this back in.
  *
- * Asked against the root's OWN realm, as {@link canvasRootFrom} does. A canvas
- * portalled into a same-origin iframe has a root built by that document's
- * constructor, so the ambient `HTMLElement` is a different function object and
- * a plain `instanceof` is false for an ordinary div — which would substitute an
+ * Asked by node kind, as {@link canvasRootFrom} does. A canvas portalled into
+ * a same-origin iframe has a root built by that document's constructor, so the
+ * ambient `HTMLElement` is a different function object and a plain
+ * `instanceof` is false for an ordinary div — which would substitute an
  * identity scale on a canvas that really is scaled, the very case this exists
  * for.
  *
@@ -308,8 +551,8 @@ export function boxAcross(
  * arithmetic as it was before there was a canvas scale.
  */
 export function canvasPaintedScale(root: Element): Scale {
-  const realm = root.ownerDocument.defaultView;
-  return realm !== null && root instanceof realm.HTMLElement
+  // A root with no window has never been laid out, and has no scale to read.
+  return root.ownerDocument.defaultView !== null && isHTMLElement(root)
     ? paintedScale(root, root.getBoundingClientRect())
     : { x: 1, y: 1 };
 }
@@ -339,7 +582,7 @@ export function viewportPositioned(element: Element): boolean {
  * Starts at the root's parent: the root is excluded by definition, since it is
  * the thing being scrolled WITHIN.
  */
-export function scrollableAncestor(root: HTMLElement): HTMLElement | null {
+function scrollableAncestor(root: HTMLElement): HTMLElement | null {
   let element = root.parentElement;
   while (element !== null) {
     const overflowY = getComputedStyle(element).overflowY;
@@ -364,12 +607,199 @@ export function scrollableAncestor(root: HTMLElement): HTMLElement | null {
  * indirection: every reflow-forcing read being in one file is what makes the
  * cost of one findable.
  */
-export function containerEdges(root: HTMLElement): {
+export function containerEdges(root: Element): {
   top: number;
   bottom: number;
+  left: number;
+  right: number;
 } {
-  const box = root.getBoundingClientRect();
-  return { top: box.top, bottom: box.bottom };
+  const visible = visibleClientRect(root);
+  // The sides as well, for a caller placing something just outside the
+  // container on screen, such as a note drawn beside a panel rather than on it.
+  return {
+    top: visible.y,
+    bottom: visible.y + visible.height,
+    left: visible.x,
+    right: visible.x + visible.width,
+  };
+}
+
+/**
+ * The part of a scroller on screen, in CLIENT coordinates.
+ *
+ * A document's scrolling element is scrolled by the VIEWPORT, so what is on
+ * screen is the viewport: from `0` to the window's inner size. Its own
+ * rectangle is the whole document, which starts above the viewport once it
+ * has scrolled and ends far below it, so an edge band or a clamp measured
+ * against that never holds the pointer or the message at all.
+ */
+function visibleClientRect(scroller: Element): Rect {
+  /*
+   * The CLIENT box where the scroller has one: a classic scrollbar takes its
+   * width out of what the scroller shows, and chrome kept to the border box
+   * would sit under it. `clientWidth` is 0 for a scroller with no layout box,
+   * where there is no scrollbar to leave out either, so the outer size stands.
+   */
+  const inner = (outer: number, client: number): number =>
+    client > 0 ? Math.min(outer, client) : outer;
+  const view = scroller.ownerDocument.defaultView;
+  if (view !== null && scroller === scroller.ownerDocument.scrollingElement) {
+    return {
+      x: 0,
+      y: 0,
+      width: inner(view.innerWidth, scroller.clientWidth),
+      height: inner(view.innerHeight, scroller.clientHeight),
+    };
+  }
+  const box = scroller.getBoundingClientRect();
+  /*
+   * The client box is in layout pixels and the border box is painted, so a
+   * scroller drawn under a transform has the two in different units: the
+   * client box is scaled by the scroller's painted scale before the two are
+   * compared. `clientLeft` and `clientTop` are the border, and a scrollbar on
+   * the left in a right-to-left scroller.
+   */
+  const scaleX =
+    isHTMLElement(scroller) && scroller.offsetWidth > 0
+      ? box.width / scroller.offsetWidth
+      : 1;
+  const scaleY =
+    isHTMLElement(scroller) && scroller.offsetHeight > 0
+      ? (box.bottom - box.top) / scroller.offsetHeight
+      : 1;
+  const laidOut = scroller.clientWidth > 0;
+  return {
+    x: box.left + (laidOut ? scroller.clientLeft * scaleX : 0),
+    y: box.top + (scroller.clientHeight > 0 ? scroller.clientTop * scaleY : 0),
+    width: inner(box.width, scroller.clientWidth * scaleX),
+    height: inner(box.bottom - box.top, scroller.clientHeight * scaleY),
+  };
+}
+
+/**
+ * The part of a scroller on screen, in the canvas's content coordinates.
+ *
+ * What chrome drawn in the canvas has to stay inside to be seen. Read through
+ * the same {@link visibleClientRect} the drag's edges are, so a scroller that
+ * is a frame's viewport is clamped to the viewport here as well.
+ */
+export function visibleBandOf(scroller: Element, root: HTMLElement): Rect {
+  return clientRectInCanvas(visibleClientRect(scroller), root);
+}
+
+/**
+ * The element that scrolls the canvas, or `null` when nothing does.
+ *
+ * In the editor's own document that is an ancestor the shell styles to
+ * scroll, which {@link scrollableAncestor} finds. In a frame of its own the
+ * canvas is scrolled by the frame's viewport instead, whose element is the
+ * frame document's `scrollingElement`: nothing above the root inside the frame
+ * is styled to scroll, so the walk would find nothing and a drag held at the
+ * frame's edge would never scroll it.
+ *
+ * `framed` comes from whoever knows the canvas is in the editor's frame, rather
+ * than from asking whether the root's window is one: an editor that is itself
+ * embedded in another page's frame is in a frame too, and its canvas is still
+ * scrolled by the shell.
+ */
+export function canvasScroller(
+  root: HTMLElement,
+  framed: boolean
+): Element | null {
+  // `?? null` because a document with no scrolling element reports
+  // `undefined` in some runtimes, which is the same "nothing scrolls".
+  return framed
+    ? (root.ownerDocument.scrollingElement ?? null)
+    : scrollableAncestor(root);
+}
+
+/**
+ * What of a canvas is on screen, in the chrome's coordinates: the part of the
+ * page its scroller shows, where the canvas cuts off anything drawn past it;
+ * the whole page where nothing scrolls it. The marks and the block toolbar
+ * keep to it, so a tag or a bar is never drawn where the canvas cuts it off.
+ */
+export function onScreenOf(space: OverlaySpace): Rect {
+  const { root, frame } = space;
+  const scroller = canvasScroller(root, frame !== null);
+  const band =
+    scroller === null
+      ? canvasContentRect(root, root)
+      : visibleBandOf(scroller, root);
+  // A frame zoomed past the region around it is clipped and scrolled by the
+  // host's scroller as well, so what is on screen is the part both show.
+  const host = frame === null ? null : hostScrollerBandOf(frame, root);
+  return space.place(host === null ? band : intersectionOf(band, host));
+}
+
+/** The part two rectangles share; empty, at the first's corner, if none. */
+function intersectionOf(a: Rect, b: Rect): Rect {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  return right < x || bottom < y
+    ? { x: a.x, y: a.y, width: 0, height: 0 }
+    : { x, y, width: right - x, height: bottom - y };
+}
+
+/**
+ * The part of a frame the host's scroller shows, in the canvas's content
+ * coordinates, or `null` when no host scroller holds the frame.
+ *
+ * The shell scrolls a frame zoomed past the region it sits in, from the
+ * host's document, where nothing in the frame hears it: its visible box is
+ * read in the host, carried into the frame through the one mapping
+ * (`hostPointInFrame`), and into the canvas's coordinates from there.
+ */
+export function hostScrollerBandOf(
+  frame: HTMLIFrameElement,
+  root: HTMLElement
+): Rect | null {
+  const host = scrollableAncestor(frame);
+  if (host === null) return null;
+  const visible = visibleClientRect(host);
+  const start = hostPointInFrame(frame, { x: visible.x, y: visible.y });
+  const end = hostPointInFrame(frame, {
+    x: visible.x + visible.width,
+    y: visible.y + visible.height,
+  });
+  return clientRectInCanvas(
+    { x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y },
+    root
+  );
+}
+
+/**
+ * Every scroller whose scroll or size moves what of the canvas is on screen:
+ * the canvas's own, and the host's around a frame. The same two
+ * {@link onScreenOf} reads, so the band chrome keeps to and what it listens to
+ * are one set.
+ */
+export function screenScrollers(
+  root: HTMLElement,
+  frame: HTMLIFrameElement | null
+): Element[] {
+  const scrollers: Element[] = [];
+  const own = canvasScroller(root, frame !== null);
+  if (own !== null) scrollers.push(own);
+  const host = frame === null ? null : scrollableAncestor(frame);
+  if (host !== null) scrollers.push(host);
+  return scrollers;
+}
+
+/**
+ * Where a scroller's `scroll` events are dispatched.
+ *
+ * At the element for an ordinary scroller, and at its DOCUMENT for a
+ * document's scrolling element: a viewport's scroll is reported on the
+ * document, never on `<html>`, so a listener on the element would hear
+ * nothing however far the page scrolled.
+ */
+export function scrollEventTarget(scroller: Element): EventTarget {
+  return scroller === scroller.ownerDocument.scrollingElement
+    ? scroller.ownerDocument
+    : scroller;
 }
 
 /**
@@ -399,6 +829,26 @@ export function containerEdges(root: HTMLElement): {
  */
 export function layoutFragments(element: Element): number {
   return element.getClientRects().length;
+}
+
+/**
+ * The elements that draw an element's boxes: itself when it generates one, its
+ * children's drawing when it is `display: contents` (which generates no box of
+ * its own and leaves its children on the page), nothing when it is hidden or
+ * skipped. What a rectangle for the element is read from.
+ *
+ * `display: contents` is asked FIRST. A browser's `checkVisibility()` answers
+ * false for an element with no box, and `contents` generates none, so asking
+ * {@link renderSkips} first would drop a section whose children are all on the
+ * page. A child under a skipped ancestor still answers for itself.
+ */
+export function drawnBoxes(element: Element): Element[] {
+  const view = element.ownerDocument.defaultView;
+  if (view?.getComputedStyle(element).display === "contents") {
+    return Array.from(element.children).flatMap(drawnBoxes);
+  }
+  if (renderSkips(element)) return [];
+  return layoutFragments(element) > 0 ? [element] : [];
 }
 
 /**
@@ -928,15 +1378,15 @@ export function hasScrollbarGutter(
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
   /*
-   * The ELEMENT's realm, not the one asking — see `canvasRootFrom` for why the
-   * ambient `HTMLElement` is the wrong constructor to compare against.
+   * By node kind, not by any realm's constructor — see `canvasRootFrom` for
+   * why the ambient `HTMLElement` is the wrong one to compare against.
    *
    * Getting it wrong here fails SILENTLY and in the unsafe direction. A canvas
    * mounted into a same-origin iframe answers `false` before measuring
    * anything, so the refusal below never fires and every scrolling block in
    * that canvas draws its padding bands across the reserved scrollbar.
    */
-  if (!(element instanceof view.HTMLElement)) return false;
+  if (!isHTMLElement(element)) return false;
 
   /*
    * Only a scroll container can reserve one, and asking anything else is not
@@ -1035,6 +1485,66 @@ export function clippedByAncestor(
   return anyAncestorCuts(element, root, node =>
     cutByAncestor(node, box, radii, view, root)
   );
+}
+
+/**
+ * The part of `element`'s box its clipping ancestors leave visible, in the
+ * canvas's content coordinates: the box cut to every ancestor's clip, on each
+ * axis that ancestor clips. `"hidden"` when nothing of it is left, and
+ * `null` when a clip cannot be described (an ancestor not aligned with the
+ * axes), which leaves the caller its own fallback. Two answers, because "the
+ * page shows none of it" and "it cannot be said what the page shows" call for
+ * different marks.
+ *
+ * Read from the same per-ancestor answer {@link clippedByAncestor} reads, so
+ * the box that is said to be cut and the part said to be visible come from
+ * one reading of each ancestor.
+ */
+export function visiblePartOf(
+  element: Element,
+  root: HTMLElement
+): Rect | "hidden" | null {
+  const view = element.ownerDocument.defaultView;
+  if (view === null) return null;
+  const box = element.getBoundingClientRect();
+  const edges = {
+    left: box.left,
+    top: box.top,
+    right: box.right,
+    bottom: box.bottom,
+  };
+  const described = !anyAncestorCuts(element, root, node => {
+    const context = ancestorClipContext(node, view, root);
+    if (context.kind === "cut") return true;
+    if (context.kind === "clips") narrowTo(edges, context);
+    return false;
+  });
+  if (!described) return null;
+  if (edges.right <= edges.left || edges.bottom <= edges.top) return "hidden";
+  return clientRectInCanvas(
+    {
+      x: edges.left,
+      y: edges.top,
+      width: edges.right - edges.left,
+      height: edges.bottom - edges.top,
+    },
+    root
+  );
+}
+
+/** Cut `edges` to one ancestor's clip, on each axis the ancestor clips. */
+function narrowTo(
+  edges: { left: number; top: number; right: number; bottom: number },
+  context: { clipsX: boolean; clipsY: boolean; clip: EdgeBounds }
+): void {
+  if (context.clipsX) {
+    edges.left = Math.max(edges.left, context.clip.left);
+    edges.right = Math.min(edges.right, context.clip.right);
+  }
+  if (context.clipsY) {
+    edges.top = Math.max(edges.top, context.clip.top);
+    edges.bottom = Math.min(edges.bottom, context.clip.bottom);
+  }
 }
 
 /**
@@ -1444,13 +1954,14 @@ function borderSpan(style: CSSStyleDeclaration, axis: "x" | "y"): number {
 }
 
 /**
- * The canvas root an element sits inside, as an `HTMLElement` of its OWN realm.
+ * The canvas root an element sits inside, as an `HTMLElement` of any realm.
  *
  * `instanceof HTMLElement` compares against the constructor of the realm doing
  * the asking. A host that mounts the canvas into a same-origin iframe through a
  * portal gets a root built by that iframe's realm, and the check fails for a
  * perfectly good element — so chrome would return early and draw nothing,
- * silently, on exactly the iframe canvas `geometry.ts` documents.
+ * silently, on exactly the iframe canvas `geometry.ts` documents. The root is
+ * classified by node kind instead, through `dom-kind`.
  *
  * Here rather than at each caller because two of them ask the same question, and
  * the realm-safe spelling is the kind of detail that gets written correctly once
@@ -1462,7 +1973,50 @@ export function canvasRootFrom(
 ): HTMLElement | null {
   const root = element.closest(`.${rootClass}`);
   if (root === null) return null;
-  const realm = root.ownerDocument.defaultView;
-  if (realm === null) return null;
-  return root instanceof realm.HTMLElement ? root : null;
+  // A root with no window is not on screen, so there is nothing to draw over.
+  if (root.ownerDocument.defaultView === null) return null;
+  return isHTMLElement(root) ? root : null;
+}
+
+/**
+ * An element's USED border-box corner radii, in LAYOUT pixels, from its
+ * computed style and its rectangle as measured here.
+ *
+ * Here rather than in one overlay because every overlay drawn on a block's
+ * shape asks it, and a second reading of the radii would drift from the first.
+ *
+ * A percentage radius resolves against the border box's own size, and the size
+ * that governs is the one the element was LAID OUT at rather than the one it is
+ * drawn at — `border-radius: 50%` on a block under `scale(2)` is half its layout
+ * width, which then renders doubled like everything else inside the transform.
+ *
+ * That layout size is the measured rectangle divided back out by the scale it
+ * was measured at, rather than a second reading from the element. `offsetWidth`
+ * would answer the same question in whole pixels only, and `getComputedStyle`
+ * reports whichever box `box-sizing` selects — so both are a second answer to a
+ * question `renderedScale` has already answered exactly.
+ *
+ * A scale that is zero on either axis leaves nothing to resolve against and no
+ * band to draw; `describable` refuses that block anyway, and answering square
+ * here keeps this from dividing by it on the way to that refusal.
+ *
+ * UNDEFINED when a corner cannot be resolved at all — a percentage inside a
+ * `calc()` stays unresolved in the computed value — which the caller treats as a
+ * shape it cannot describe rather than as a square one.
+ */
+export function usedRadiiOf(
+  style: CSSStyleDeclaration,
+  border: Rect,
+  scale: Scale
+): CornerRadii | undefined {
+  if (!(scale.x > 0) || !(scale.y > 0)) return SQUARE_CORNERS;
+  return usedCornerRadii(
+    {
+      topLeft: style.borderTopLeftRadius,
+      topRight: style.borderTopRightRadius,
+      bottomRight: style.borderBottomRightRadius,
+      bottomLeft: style.borderBottomLeftRadius,
+    },
+    { width: border.width / scale.x, height: border.height / scale.y }
+  );
 }

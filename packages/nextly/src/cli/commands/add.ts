@@ -13,6 +13,7 @@
  * nextly add @nextlyhq/plugin-form-builder
  * nextly add @acme/nextly-plugin-forms --dev
  * nextly add @acme/plugin --skip-install   # just print the wiring snippet
+ * nextly add @acme/plugin --dry-run        # name the install; install nothing
  * ```
  */
 
@@ -23,7 +24,8 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 
-import { exitWithError, printCliError } from "../errors";
+import { reportDryRun } from "../dry-run";
+import { exitWithError } from "../errors";
 import { packageInstallFailed } from "../errors/areas/commands";
 import {
   createContext,
@@ -38,6 +40,8 @@ export interface AddCommandOptions {
   dev?: boolean;
   /** Skip the package-manager install; only print the wiring snippet. @default false */
   skipInstall?: boolean;
+  /** Name the install command it would run and print the wiring snippet; install nothing. @default false */
+  dryRun?: boolean;
 }
 
 interface ResolvedAddOptions extends AddCommandOptions {
@@ -68,6 +72,16 @@ export function buildInstallArgs(
     case "npm":
       return ["install", ...devFlag, pkg];
   }
+}
+
+/** The install `nextly add` makes in `cwd`: the package manager and its arguments. */
+function installFor(
+  cwd: string,
+  pkg: string,
+  dev: boolean
+): { pm: PackageManager; args: string[] } {
+  const pm = detectPackageManager(cwd);
+  return { pm, args: buildInstallArgs(pm, pkg, dev) };
 }
 
 /** Best-effort local-name guess for the wiring snippet (e.g. `@acme/plugin-forms` → `forms`). */
@@ -134,49 +148,52 @@ export async function runAdd(
 
   logger.header("Nextly Add");
 
-  if (!options.skipInstall) {
-    const pm = detectPackageManager(cwd);
-    const args = buildInstallArgs(pm, pkg, options.dev ?? false);
+  // The one install the run makes, if any: a dry run names this same
+  // command line, and the real run runs it.
+  const install = options.skipInstall
+    ? null
+    : installFor(cwd, pkg, options.dev ?? false);
+
+  if (install && !options.dryRun) {
+    const { pm, args } = install;
     logger.info(`Installing ${pc.cyan(pkg)} with ${pc.yellow(pm)}…`);
     const code = await runInstall(pm, args, cwd);
     if (code !== 0) {
-      // The package manager's own failing code is the command's, so the shape is printed here
-      // and the exit keeps that code rather than the 1 `exitWithError` ends with.
-      printCliError(logger, packageInstallFailed(pm, pkg, code));
-      process.exit(code || 1);
+      // A failed install is a failed run, so it ends with the shared 1; the
+      // package manager's own code is named in the message instead.
+      exitWithError(logger, packageInstallFailed(pm, pkg, code));
     }
     logger.success(`Installed ${pkg}`);
   }
 
   showWiring(pkg, context);
+
+  if (options.dryRun) {
+    reportDryRun(logger, {
+      changes: install
+        ? [{ action: "run", target: [install.pm, ...install.args].join(" ") }]
+        : [],
+    });
+  }
 }
 
-/** Register the `add` command with the program. */
-export function registerAddCommand(program: Command): void {
-  program
-    .command("add <package>")
-    .description("Install a Nextly plugin and show how to register it")
-    .option("-D, --dev", "Install as a dev dependency", false)
-    .option(
-      "--skip-install",
-      "Skip the package-manager install; just print the wiring snippet",
-      false
-    )
-    .action(
-      async (pkg: string, cmdOptions: AddCommandOptions, cmd: Command) => {
-        const globalOpts: GlobalOptions = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        const resolved: ResolvedAddOptions = {
-          ...cmdOptions,
-          cwd: globalOpts.cwd,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-        };
-        try {
-          await runAdd(pkg, resolved, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
-    );
+/** The action of `nextly add`, loaded when it runs. */
+export async function addAction(
+  pkg: string,
+  cmdOptions: AddCommandOptions,
+  cmd: Command
+) {
+  const globalOpts: GlobalOptions = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  const resolved: ResolvedAddOptions = {
+    ...cmdOptions,
+    cwd: globalOpts.cwd,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+  };
+  try {
+    await runAdd(pkg, resolved, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

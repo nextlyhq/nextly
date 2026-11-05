@@ -85,8 +85,9 @@ interface BuilderPath {
 const BUILDERS: BuilderPath[] = [
   { origin: "collection", path: "create", label: "collection" },
   { origin: "collection", path: "alter", label: "collection-alter" },
+  // A field group's columns are only ever created: its table gains columns through the pipeline's
+  // diff, not an ALTER generator of its own.
   { origin: "fieldGroup", path: "create", label: "fieldGroup" },
-  { origin: "fieldGroup", path: "alter", label: "fieldGroup-alter" },
 ];
 
 /**
@@ -492,11 +493,9 @@ function emittedColumns(
   const asConfigs = fields as unknown as Parameters<
     FieldGroupSchemaService["generateMigrationSQL"]
   >[1];
-  return builder.path === "create"
-    ? parseCreateTable(service.generateMigrationSQL(PROBE_TABLE, asConfigs, {}))
-    : parseAddColumns(
-        service.generateAlterTableMigration(PROBE_TABLE, [], asConfigs)
-      );
+  return parseCreateTable(
+    service.generateMigrationSQL(PROBE_TABLE, asConfigs, {})
+  );
 }
 
 /**

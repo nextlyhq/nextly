@@ -23,9 +23,16 @@
  * @module onboarding
  */
 
-import { walkNodes, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  getBlock,
+  walkNodes,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 import { inlineTargets } from "./inline-text";
+import { insertionPropSets } from "./inserter";
+import { startWords } from "./page-start-words";
 
 /** One thing to do, and whether the page shows it has been done. */
 export interface ChecklistStep {
@@ -37,7 +44,27 @@ export interface ChecklistStep {
   readonly done: boolean;
 }
 
-/** Whether any block on the page carries text an author typed. */
+/**
+ * The texts a block can start with when it is placed, for one of its values:
+ * what the inserter places it with, as itself or as any of its variations,
+ * none of which an author has written.
+ */
+function startingTexts(node: BlockNode, prop: string): ReadonlySet<string> {
+  const definition = getBlock(node.type);
+  if (definition === undefined) return new Set();
+  return new Set(
+    insertionPropSets(definition).flatMap(props => {
+      const value = props[prop];
+      return typeof value === "string" ? [value.trim()] : [];
+    })
+  );
+}
+
+/**
+ * Whether any block on the page carries text an author typed: text that is
+ * neither empty nor what the block started with, so placing a heading whose
+ * default reads "Heading" does not count as writing something.
+ */
 function hasAuthoredText(document: BlockDocument): boolean {
   let found = false;
   walkNodes(document.nodes, node => {
@@ -46,9 +73,10 @@ function hasAuthoredText(document: BlockDocument): boolean {
     // so "text an author could have written here" means one thing in both
     // places. A block with no inline values cannot satisfy this step, which is
     // correct: there was nothing to type.
-    found = inlineTargets(document, node.id).some(
-      target => target.value.trim() !== ""
-    );
+    found = inlineTargets(document, node.id).some(target => {
+      const text = target.value.trim();
+      return text !== "" && !startingTexts(node, target.prop).has(text);
+    });
   });
   return found;
 }
@@ -72,9 +100,9 @@ export function builderChecklist(
     {
       id: "add-block",
       label: "Add your first block",
-      // The one gesture nothing else on screen suggests: an empty canvas looks
-      // like a page with nothing wrong with it.
-      hint: "Open Insert in the left rail and choose one.",
+      // The empty page's own Add section button first, which is on the canvas
+      // beside this step, then the rail, which is there on every page.
+      hint: `Click ${startWords(document.kind).start}, or open Add in the left rail.`,
       done: blocks > 0,
     },
     {

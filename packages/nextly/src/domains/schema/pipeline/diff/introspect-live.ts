@@ -827,6 +827,28 @@ export async function introspectLiveColumns(
 }
 
 /**
+ * Each named table's live column names, lower-cased, keyed by its lower-cased
+ * name. A table that is not there has no entry.
+ *
+ * The question "which columns does this table have right now" in the form a
+ * check of presence wants, so callers asking it do not each fold the snapshot
+ * themselves.
+ */
+export async function liveColumnNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: string[]
+): Promise<Map<string, Set<string>>> {
+  const snapshot = await introspectLiveColumns(db, dialect, tableNames);
+  return new Map(
+    snapshot.tables.map(table => [
+      table.name.toLowerCase(),
+      new Set(table.columns.map(column => column.name.toLowerCase())),
+    ])
+  );
+}
+
+/**
  * The table each of the named indexes is on, by lower-cased index name, for
  * the drop guard: PostgreSQL's and SQLite's `DROP INDEX` names only the
  * index. Matched without regard to case, so a quoted mixed-case name is
@@ -875,6 +897,147 @@ export async function introspectIndexTables(
   }
   for (const row of rows) {
     found.set(row.index.toLowerCase(), row.table.toLowerCase());
+  }
+  return found;
+}
+
+/**
+ * The live spelling of each base table whose name matches one of
+ * `tableNames` without regard to case, for a reader that has names as a
+ * statement wrote them: a MySQL server with case-sensitive table names, or a
+ * quoted mixed-case PostgreSQL name, would otherwise read an existing table
+ * as absent. On PostgreSQL only the relation an unqualified name reaches
+ * counts, as every read here is scoped. A name with no table is left out.
+ */
+export async function introspectTableNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: readonly string[]
+): Promise<string[]> {
+  if (tableNames.length === 0) return [];
+  const namesIn = sql.join(
+    tableNames.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  let rows: unknown[];
+  if (dialect === "postgresql") {
+    // Ordinary and partitioned tables: the relations a CREATE TABLE makes.
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT t.relname AS name FROM pg_class t
+          WHERE t.relkind IN ('r', 'p')
+            AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND lower(t.relname) IN (${namesIn})`
+    )) as { rows: unknown[] };
+    rows = result.rows;
+  } else if (dialect === "mysql") {
+    rows = mysqlResultRows<unknown>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT TABLE_NAME AS name FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_TYPE = 'BASE TABLE'
+              AND lower(TABLE_NAME) IN (${namesIn})`
+      )
+    );
+  } else {
+    const sqliteRows: unknown = await Promise.resolve(
+      (db as { all(query: unknown): unknown }).all(
+        sql`SELECT name FROM sqlite_master
+            WHERE type = 'table' AND lower(name) IN (${namesIn})`
+      )
+    );
+    rows = Array.isArray(sqliteRows) ? sqliteRows : [];
+  }
+  return rows.flatMap(row => {
+    const { name } = (row ?? {}) as Record<string, unknown>;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
+/**
+ * The name of every constraint the catalog holds on each of `tableNames`
+ * (their live spellings, as `introspectTableNames` returns them), keyed by the
+ * lower-cased table name, each name lower-cased, with whether the database
+ * has validated it: false for a PostgreSQL constraint added `NOT VALID` and
+ * not validated since, true everywhere else. Read from the catalog's own
+ * constraint table rather than inferred from indexes, foreign keys and checks,
+ * which leave out a primary key and an exclusion constraint, and keep a MySQL
+ * foreign key's backing index after the key is dropped: PostgreSQL's
+ * `pg_constraint`, every kind, and MySQL's `TABLE_CONSTRAINTS` (a primary key
+ * is named `PRIMARY` there). SQLite names no constraint it can add or drop
+ * later, so nothing is read there.
+ */
+export async function introspectConstraintNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: readonly string[]
+): Promise<Map<string, Map<string, boolean>>> {
+  const found = new Map<string, Map<string, boolean>>();
+  if (tableNames.length === 0 || dialect === "sqlite") return found;
+  const namesIn = sql.join(
+    tableNames.map(name => sql`${name}`),
+    sql`, `
+  );
+  let rows: unknown[];
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT t.relname AS "table", c.conname AS name,
+                 c.convalidated AS validated
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND t.relname IN (${namesIn})`
+    )) as { rows: unknown[] };
+    rows = result.rows;
+  } else {
+    rows = mysqlResultRows<unknown>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT TABLE_NAME AS \`table\`, CONSTRAINT_NAME AS name
+            FROM information_schema.TABLE_CONSTRAINTS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME IN (${namesIn})`
+      )
+    );
+  }
+  for (const row of rows) {
+    const { table, name, validated } = (row ?? {}) as Record<string, unknown>;
+    if (typeof table !== "string" || typeof name !== "string") continue;
+    const key = table.toLowerCase();
+    const names = found.get(key) ?? new Map<string, boolean>();
+    names.set(name.toLowerCase(), validated !== false);
+    found.set(key, names);
+  }
+  return found;
+}
+
+/**
+ * The lower-cased names of the PostgreSQL indexes on `tableNames` (their live
+ * spellings) the database cannot use: not valid or not ready, which is what a
+ * `CREATE INDEX CONCURRENTLY` that failed or was interrupted leaves in the
+ * catalog. MySQL and SQLite have no such state, so nothing is read there.
+ */
+export async function introspectUnusableIndexes(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: readonly string[]
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  if (tableNames.length === 0 || dialect !== "postgresql") return found;
+  const namesIn = sql.join(
+    tableNames.map(name => sql`${name}`),
+    sql`, `
+  );
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT i.relname AS name
+        FROM pg_index ix
+        JOIN pg_class i ON i.oid = ix.indexrelid
+        JOIN pg_class t ON t.oid = ix.indrelid
+        WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+          AND t.relname IN (${namesIn})
+          AND NOT (ix.indisvalid AND ix.indisready)`
+  )) as { rows: unknown[] };
+  for (const row of result.rows) {
+    const { name } = (row ?? {}) as Record<string, unknown>;
+    if (typeof name === "string") found.add(name.toLowerCase());
   }
   return found;
 }

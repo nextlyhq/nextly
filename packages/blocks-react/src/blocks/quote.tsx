@@ -17,7 +17,8 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
-import { text, url } from "./props";
+import { libraryDefinition } from "./classic-spacing";
+import { boundText, text, url } from "./props";
 
 export interface QuoteProps {
   /** The quoted text. */
@@ -35,8 +36,11 @@ export function renderQuote({
   className,
   markProp,
   partClass,
+  bound,
 }: BlockRenderArgs<QuoteProps>): ReactElement {
-  const quoted = text(props.text);
+  const quoted = boundText(text(props.text), bound?.text);
+  // Kept as text for the emptiness tests below; the date markup, when there is
+  // one, is added where each is drawn.
   const attribution = text(props.attribution);
   const source = text(props.source);
   const citeUrl = url(props.citeUrl);
@@ -82,9 +86,11 @@ export function renderQuote({
     <figure className={className}>
       {blockquote}
       <figcaption className={partClass("attribution")}>
-        {attribution}
+        {boundText(attribution, bound?.attribution)}
         {attribution !== "" && source !== "" ? ", " : null}
-        {source === "" ? null : <cite {...markSource}>{source}</cite>}
+        {source === "" ? null : (
+          <cite {...markSource}>{boundText(source, bound?.source)}</cite>
+        )}
       </figcaption>
     </figure>
   );
@@ -134,9 +140,11 @@ const QUOTE_BASE_STYLES = {
       // `<blockquote>` and a `<figure>` by about 40px of its own, so in a host
       // with no reset that margin ADDS to the padding below and the indent is
       // whatever the browser happened to choose plus whatever this states.
+      // The block sides are zeroed too: the quote is spaced from its
+      // neighbours by the gap of whatever holds it, like every other block.
       margin: {
-        blockStart: "1.5em",
-        blockEnd: "1.5em",
+        blockStart: "0",
+        blockEnd: "0",
         inlineStart: "0",
         inlineEnd: "0",
       },
@@ -187,44 +195,60 @@ const QUOTE_PARTS = {
   },
 } as const;
 
-export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
-  name: QUOTE_BLOCK,
-  version: 1,
-  description:
-    "Quoted text with an optional attribution, kept outside the quotation so the speaker is not quoted saying their own name.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Quote",
-    icon: "quote",
-    category: CONTENT,
-    keywords: ["blockquote", "pull quote", "citation"],
-  },
-  baseStyles: QUOTE_BASE_STYLES,
-  parts: QUOTE_PARTS,
-  props: {
-    text: { role: "content", type: "textarea", inline: true },
-    attribution: { role: "content", type: "text" },
-    source: { role: "content", type: "text", inline: true },
-    citeUrl: { role: "content", type: "url" },
-  },
-  defaultProps: { text: "" },
-  example: {
-    props: {
-      text: "Simplicity is the soul of efficiency.",
-      attribution: "Austin Freeman",
-    },
-  },
-  supports: {
-    typography: true,
-    color: true,
-    background: true,
-    spacing: true,
-    dimensions: true,
-    border: true,
-    effects: true,
-    position: true,
-  },
-  render: renderQuote,
-});
+export const quote: BlockDefinition<QuoteProps, PageContext> =
+  libraryDefinition(
+    defineBlock({
+      name: QUOTE_BLOCK,
+      version: 1,
+      // What an author reads, in the Add panel and the block card: one plain line.
+      // What the block does, for whoever maintains it: Quoted text with an optional
+      // attribution, kept outside the quotation so the speaker is not quoted saying
+      // their own name.
+      description: "A quotation, with who said it.",
+      // Palette metadata. The category is imported rather than spelled here so
+      // nineteen blocks cannot drift into nineteen headings; keywords are what
+      // let a search for a word the description never uses still find this.
+      editor: {
+        label: "Quote",
+        icon: "quote",
+        category: CONTENT,
+        keywords: ["blockquote", "pull quote", "citation"],
+      },
+      baseStyles: QUOTE_BASE_STYLES,
+      parts: QUOTE_PARTS,
+      props: {
+        text: {
+          label: "Quote",
+          role: "content",
+          type: "textarea",
+          inline: true,
+        },
+        attribution: { label: "Attribution", role: "content", type: "text" },
+        source: {
+          label: "Source title",
+          role: "content",
+          type: "text",
+          inline: true,
+        },
+        citeUrl: { label: "Source URL", role: "content", type: "url" },
+      },
+      defaultProps: { text: "" },
+      example: {
+        props: {
+          text: "Simplicity is the soul of efficiency.",
+          attribution: "Austin Freeman",
+        },
+      },
+      supports: {
+        typography: true,
+        color: true,
+        background: true,
+        spacing: true,
+        dimensions: true,
+        border: true,
+        effects: true,
+        position: true,
+      },
+      render: renderQuote,
+    })
+  );

@@ -29,8 +29,13 @@ import {
   readAccessCaller,
   type ReadAccessCaller,
 } from "../auth/entity-read-access";
+import {
+  asNotMigrated,
+  collectionNotMigrated,
+} from "../database/with-db-errors";
 import { getService } from "../di";
 import { container } from "../di/container";
+import { fieldTrustOf } from "../domains/collections/services/collection-query-service";
 import { mayReadDeletedDocument } from "../domains/content-events/deleted-document-access";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import {
@@ -42,6 +47,7 @@ import {
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
+import { originalErrorOf } from "../errors/original-error";
 import { SHARED_PART } from "../schemas/content-events";
 
 import type { PaginationMeta } from "./response-shapes";
@@ -204,8 +210,17 @@ export async function readSubjectEvents(
           page
         )
       : { items: page.items, nextBefore: page.nextBefore };
+  // Loaded when history is read, not with this route module: boot loads the
+  // route, and naming a holder reads the users table through the version
+  // author reader, which nothing else at boot needs.
+  const { nameEventPeople } = await import(
+    "../domains/content-events/named-event-people"
+  );
   return {
-    items,
+    // A takeover and an overwrite keep the person they displaced or replaced
+    // by id; they are named here, as they are now, so a deleted account is
+    // never named from the record.
+    items: await nameEventPeople(items),
     // A cursor walk: page and total describe the window returned, and the
     // next page passes the last item's id as `before`.
     meta: {
@@ -331,7 +346,7 @@ async function authorizeSubject(
     return { life: undefined, ended: null };
   }
   const ended = await repository.latestEnd(subject);
-  if (ended !== null && !(await documentExists(subject))) {
+  if (ended !== null && !(await documentExists(subject, caller))) {
     const life = { endedBy: ended };
     if (caller.overrideAccess) return { life, ended };
     const visibleParts = await authorizeDeletedDocument(subject, query, caller);
@@ -444,9 +459,15 @@ function releaseActorOf(caller: SubjectEventsCaller) {
   };
 }
 
-/** Whether the document still exists, read without the caller's access. */
+/**
+ * Whether the document still exists, read without the caller's access.
+ *
+ * A database not migrated for the collection is answered ENTITY_NOT_MIGRATED
+ * to `caller` by its own trust, not the lookup's: see {@link notMigratedFor}.
+ */
 async function documentExists(
-  subject: Exclude<ContentEventSubject, { kind: "release" }>
+  subject: Exclude<ContentEventSubject, { kind: "release" }>,
+  caller: SubjectEventsCaller
 ): Promise<boolean> {
   if (subject.kind === "single") {
     return (await resolveSingleDocumentId(subject.slug)) === subject.id;
@@ -459,6 +480,8 @@ async function documentExists(
   });
   if (result.success) return true;
   if (result.statusCode === 404) return false;
+  const notMigrated = await notMigratedFor(subject.slug, result, caller);
+  if (notMigrated !== undefined) throw notMigrated;
   // Anything else is a fault, not an answer about the document.
   throw NextlyError.internal({
     logContext: {
@@ -468,6 +491,38 @@ async function documentExists(
       entryId: subject.id,
     },
   });
+}
+
+/**
+ * The ENTITY_NOT_MIGRATED answer `caller` is owed for a failed lookup of a
+ * document in `slug`, or undefined when the lookup failed for another reason.
+ *
+ * The lookup runs as trusted server code, so its own answer names the table
+ * and the field; forwarding it would tell them to a caller held to access
+ * rules. The driver error underneath is judged again by `asNotMigrated`, the
+ * one place that decides it, with the caller's own field trust, so the reason
+ * is the lookup's and the names are only what this caller may be told.
+ */
+async function notMigratedFor(
+  slug: string,
+  lookup: object,
+  caller: SubjectEventsCaller
+): Promise<NextlyError | undefined> {
+  const original = originalErrorOf(lookup);
+  // The lookup's answer chains the error it judged as its cause.
+  const failure =
+    NextlyError.is(original) && original.code === "ENTITY_NOT_MIGRATED"
+      ? original.cause
+      : original;
+  const answer = await asNotMigrated(
+    failure,
+    collectionNotMigrated(getService("collectionRegistryService"), slug, {
+      trusted: fieldTrustOf({ overrideAccess: caller.overrideAccess }),
+    })
+  );
+  return NextlyError.is(answer) && answer.code === "ENTITY_NOT_MIGRATED"
+    ? answer
+    : undefined;
 }
 
 /** The caller as an entity-level read decision reads it. */

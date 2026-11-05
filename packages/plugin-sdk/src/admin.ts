@@ -95,6 +95,33 @@ export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin";
 export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
 
 /**
+ * The surrounding document's full-page preview (@experimental).
+ *
+ * For a field that shows the page it holds — the page builder's entry view —
+ * and offers to open it whole. `open` is the editor's own Preview handler, so
+ * the field opens the page the header would, in the language being edited.
+ *
+ * `null` wherever the editor offers no Preview action: no preview configured,
+ * an entry never saved, a reader, and outside a form. A field shows no such
+ * control then, rather than one that opens nothing.
+ */
+export { useDocumentPreview, type DocumentPreview } from "@nextlyhq/admin";
+
+/**
+ * The signed-in user's id (@experimental).
+ *
+ * For a plugin that keeps something per user on a browser several people
+ * share, such as the page builder's own editor preferences. Read from the
+ * query the admin's chrome already holds, so it costs no request.
+ *
+ * `null` while the answer is not known yet, when no one is signed in, and when
+ * the read failed: keep nothing for nobody rather than for a guess. Experimental
+ * while its first consumer settles; the intent is to keep its name and its
+ * `string | null` answer stable.
+ */
+export { useCurrentUserId } from "@nextlyhq/admin";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the
@@ -147,7 +174,15 @@ export { useReportUnsavedWork } from "@nextlyhq/admin";
  * - `useBeforeDocumentAction(handler)` runs `handler` before every action that
  *   stores the editor's work, from any control, the shortcut or `run`, while
  *   the caller is mounted: commit work held outside the form there. Throwing
- *   refuses the action.
+ *   refuses the action; throwing an `AbortError` cancels it instead, for a
+ *   handler that asked the author and was told no. Its second argument,
+ *   `store.writesSettled()`, waits for the tracked writes below and answers
+ *   whether they all landed: a handler that acts on the server for the store
+ *   asks it first, since the store is refused when one failed. And
+ *   `store.checkBeforeWrite(check)` (@experimental) has the store make
+ *   `check` immediately before it writes, after every handler and tracked
+ *   write: a handler that judged the work checks there that it is unchanged,
+ *   and `false` runs every handler again.
  * - `useTrackedWrite()` counts a write the document depends on but does not
  *   contain. Storing actions wait for it and are refused, naming it, while its
  *   latest attempt has failed.
@@ -167,7 +202,50 @@ export {
   type DocumentActionOutcome,
   type DocumentSaveState,
   type BeforeDocumentAction,
+  type StoreReadiness,
   type SubmitRefusal,
+} from "@nextlyhq/admin";
+
+/**
+ * The editor header's own save state and leading action, for a document view
+ * that replaces the header (@experimental).
+ *
+ * - `<DocumentSaveIndicator />` is the header's save chip: Saving…, Unsaved
+ *   changes, Saved (when, in its tooltip) or Not saved with Retry, in a
+ *   reserved width so nothing beside it moves, and announced as the header
+ *   announces it. `className` places it; it does not restyle it.
+ * - `<DocumentPrimaryAction />` is the leading action (Publish, Publish
+ *   changes or Save, as the header's), with the other ways to publish and
+ *   Unpublish on its arrow, each row showing why it cannot run when it
+ *   cannot. Every control runs through the same runner as `run`.
+ *
+ * Drawn by the admin, so a view offers the header's controls rather than a
+ * copy that drifts from them. Both render nothing outside a document editor.
+ * Experimental while the first view that uses them settles; the intent is to
+ * keep both names and their props stable.
+ */
+export { DocumentSaveIndicator, DocumentPrimaryAction } from "@nextlyhq/admin";
+
+/**
+ * How a document view restores its own field from a recovery point
+ * (@experimental).
+ *
+ * Without it, the admin restores a recovery point by drawing the view afresh
+ * over the restored values, and the view's own history starts again, so the
+ * restore can't be undone. A view that registers `useDocumentRestore` is asked
+ * first: the admin resets every OTHER field to the recovery point and calls
+ * `restore` with this field's recovered value, unparsed, and the view applies
+ * it as one edit of its own, which the author can undo. Returning false
+ * declines (a value the view can't apply as an edit), and the admin restores
+ * the old way. One handler per view; it does nothing outside a document view.
+ *
+ * Experimental while the first view that uses it (the Page Builder) settles.
+ * Adding it changes no existing export; the intent is to keep the name and the
+ * handler's shape stable.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
 } from "@nextlyhq/admin";
 
 /**
@@ -583,6 +661,30 @@ export {
 } from "@nextlyhq/admin";
 
 /**
+ * The shared field picker (@experimental), beside the field-UI kit above and
+ * replacing its `FieldTypePicker` for adding a field. One picker serves every
+ * surface: search first (names, descriptions, categories and synonyms, older
+ * and developer names included), a most-used group then categories, keyboard
+ * alone, and a label-only add step with "Add and add another". Your surface
+ * configures it with `FieldPickerConfig` (its built-in `types`, the `surface`
+ * whose plugin types join them, `exclude`, `mostUsed`, `deriveName`, and
+ * optionally `fieldGroups`) and owns where the field goes: `onAdd` hands you
+ * the choice and the picker writes nothing.
+ * - `describeFieldTypes` turns catalog rows into the `FieldTypeDescription`s
+ *   the picker takes (each row plus its search words).
+ * Experimental until every built-in surface uses it; the kit above stays
+ * exported and working beside it.
+ */
+export { FieldPicker, describeFieldTypes } from "@nextlyhq/admin";
+export type {
+  FieldPickerProps,
+  FieldPickerConfig,
+  FieldPickerChoice,
+  FieldGroupOption,
+  FieldTypeDescription,
+} from "@nextlyhq/admin";
+
+/**
  * @experimental Upload a file into the media library, as the admin's own
  * dropzone does.
  *
@@ -598,6 +700,31 @@ export {
  * carry into anything that names a format.
  */
 export { useUploadMedia } from "@nextlyhq/admin";
+/**
+ * A media item by id, as a query a component renders from: a thumbnail, a
+ * preview. The admin's own read of one item, cached by id.
+ *
+ * @experimental
+ */
+export { useMediaItem } from "@nextlyhq/admin";
+/**
+ * Read a media item by id from code that draws a page, outside a component's
+ * render. The same query as `useMediaItem`, so the two share one cache and
+ * one read in flight.
+ *
+ * @experimental
+ */
+export { useMediaResolver } from "@nextlyhq/admin";
+
+/**
+ * @experimental The media library as a dialog a plugin can open: browse,
+ * search and upload, then hand back the chosen items. The page builder's
+ * inspector opens it to choose an image; a plugin's own inspector may do the
+ * same. Store the chosen item's `id`, which stays right when the file is moved
+ * or renamed, rather than its `url`, which does not.
+ */
+export { MediaPickerDialog } from "@nextlyhq/admin";
+export type { MediaPickerDialogProps } from "@nextlyhq/admin";
 
 /**
  * @experimental Reads the `clientConfig` this plugin declared in
@@ -635,6 +762,17 @@ export { usePluginClientConfig } from "@nextlyhq/admin";
 export { usePluginRoute } from "@nextlyhq/admin";
 
 /**
+ * @experimental Read a route this plugin contributed once, outside React.
+ *
+ * For a read a hook cannot express: a search an author is typing, each read
+ * cancelling the one it replaces through `signal`. It goes through the same
+ * session handling as `usePluginRoute`, so an expired session is renewed
+ * rather than surfacing as a failure, and a refusal rejects with the admin's
+ * parsed error. Not cached. Answers `undefined` for an empty answer.
+ */
+export { readPluginRoute } from "@nextlyhq/admin";
+
+/**
  * @experimental Write to a route this plugin contributed.
  *
  * The other half of `usePluginRoute`, and it was the missing half: a plugin
@@ -655,6 +793,22 @@ export { usePluginRoute } from "@nextlyhq/admin";
  * learn rather than two.
  */
 export { usePluginRouteMutation } from "@nextlyhq/admin";
+
+/**
+ * @experimental Write to a route this plugin contributed once, outside React.
+ *
+ * The write half of `readPluginRoute`. Where `usePluginRouteMutation` reports
+ * a failure on `error` at the next render, this REJECTS with the admin's
+ * parsed error, so a caller that must hand a refusal's reasons back at the
+ * moment it awaits can. Same session handling and CSRF token as the hook; not
+ * cached, and it invalidates nothing. Experimental while its first caller
+ * settles; the intent is to keep its name and options stable.
+ *
+ * `keepalive: true` (optional, additive) sends the write so the browser
+ * finishes it after the page is hidden or closed, while its body fits the
+ * 64 KB browsers allow; a larger one goes as an ordinary request.
+ */
+export { writePluginRoute } from "@nextlyhq/admin";
 /**
  * `PluginRouteInvalidation` is what a write names as gone stale. A plugin
  * serving both mounts has to say which one an entry belongs to, so the type has
@@ -758,3 +912,13 @@ export type {
   PluginFieldTypeDocumentView,
   PluginMenuItem,
 } from "nextly";
+
+/**
+ * `WEB_FONT_FORMATS` — the web font formats the host accepts, serves and
+ * advertises: each one's type, file suffix, `format()` keyword and the four
+ * bytes it begins with. Published so a plugin that takes a font file reads
+ * the table the upload gate checks rather than restating it. Intended to be
+ * stable: the host's own table, which changes only with a release that says
+ * so.
+ */
+export { WEB_FONT_FORMATS } from "nextly/config";

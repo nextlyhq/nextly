@@ -24,6 +24,7 @@ import {
   desc,
   gte,
   lt,
+  type Column,
   type SQL,
   type SQLWrapper,
 } from "drizzle-orm";
@@ -89,10 +90,12 @@ import {
   type ReadExpansionCaches,
   type RelatedRowReadContext,
 } from "../../../services/collections/related-row-read-context";
-import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
+  type TrustBound,
   assumedBound,
   narrows,
+  readHooksWaived,
+  type HookExemptRead,
 } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
@@ -115,15 +118,18 @@ import {
   assertFilterableFields,
   assertGroupableField,
   assertNoHiddenColumnFilter,
+  assertNoHiddenFieldQueried,
   assertSortableField,
   filterKeys,
   filterSearchableFields,
+  type HiddenFieldPaths,
   refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
 import {
   type FieldGroupReach,
   hiddenColumnMatcher,
   isPasswordFieldName,
+  queriesPassword,
   reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
@@ -166,6 +172,7 @@ import {
 } from "../../i18n/localization-source";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
+  isCompanionReady,
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
@@ -187,6 +194,15 @@ import {
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import {
+  attachDocumentVersions,
+  chainCoversVersion,
+  DOCUMENT_REVISION_COLUMN,
+  languageCountersBeforeContent,
+  type SelectsRows,
+  languageRevisionsOf,
+  storedRevisionsOf,
+} from "../../versions/document-revision";
 import {
   draftDocumentFacts,
   resolveDraftOverlay,
@@ -210,11 +226,14 @@ import {
   type FilterConditionSources,
 } from "../query/filter-condition";
 import {
+  assertReadOffset,
   isPlainObject,
+  parseSortKeys,
   refuseFilterProblems,
   unknownFieldProblem,
 } from "../query/filter-shape";
 import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
+import { orderBySortKeys } from "../query/sort-order";
 import {
   timeseriesBoundOperand,
   timeseriesBucketExpression,
@@ -726,13 +745,19 @@ interface FilteredReadParams {
    */
   status?: StatusOption;
   /**
-   * Requested content locale (i18n M4). Kept in parity with listEntries so a locale-scoped
+   * Requested content locale. Kept in parity with listEntries so a locale-scoped
    * filter (M4c EXISTS) counts the same rows the page returns. For plain reads it has no
    * effect on the count (localized display resolution is post-query).
    */
   locale?: string;
   /** Fallback control (`false`/`"none"` disables fallback). */
   fallbackLocale?: string | false;
+  /**
+   * A grant waiving this collection's read hooks, issued to the plugin that
+   * declared it. Effective only for a collection it covers; see
+   * {@link readHooksWaived}.
+   */
+  hookExemptRead?: HookExemptRead;
   /**
    * Set by `listEntries`, which has already run the read hooks for this
    * request and forwards the filter they settled on. A standalone count runs
@@ -777,6 +802,8 @@ interface FilteredReadParams {
    * `where` yields it one probe at a time.
    */
   groupBy?: string;
+  /** See `listEntries`' `hiddenFields`: the same refusal, for an aggregate. */
+  hiddenFields?: HiddenFieldPaths;
 }
 
 /**
@@ -1042,7 +1069,7 @@ export class CollectionQueryService extends BaseService {
     private readonly hookService: CollectionHookService,
     private readonly fieldGroupDataService?: FieldGroupDataService,
     /**
-     * Normalized localization config (i18n M4). When set and a collection is localized,
+     * Normalized localization config. When set and a collection is localized,
      * reads resolve translatable fields from the companion `_locales` table for the
      * requested locale with fallback. Absent → non-localized behavior (unchanged).
      */
@@ -1103,7 +1130,7 @@ export class CollectionQueryService extends BaseService {
   }
 
   // ============================================================
-  // i18n (M4) — companion-aware read helpers
+  // Companion-aware read helpers for localized collections
   // ============================================================
 
   /**
@@ -1170,7 +1197,7 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Translation-status overview populate (i18n M7): attach a per-locale `_translations` map
+   * Translation-status overview populate: attach a per-locale `_translations` map
    * (which languages are translated + each one's draft/published status) to each row, for the
    * admin's completeness badges / per-language pills / language filter. One batched query over
    * the page. No-op when localization is off or the collection isn't localized.
@@ -1257,10 +1284,55 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Pull the reserved `_translated` key (i18n M7 language filter) out of a where object, returning
+   * Pull the reserved `_translated` key (the language filter) out of a where object, returning
    * the validated filter and a cleaned where without it (so the generic where-builder never sees
    * it). Shape: `{ _translated: { locale, state } }`, state ∈ missing|translated|draft|published.
    */
+  /**
+   * Refuse an untrusted filter or sort that names a password field, or a
+   * container holding one.
+   *
+   * A password's guarantee comes from its type, not from an `access.read`
+   * rule, so the field-rule guards below never see it, and the strip that
+   * hides its value works on rows after they are selected. A filter or an
+   * ordering on it runs before that: which rows match, and in what order,
+   * would disclose the stored hash one probe at a time.
+   */
+  private async assertNoPasswordQueried(params: {
+    collectionName: string;
+    where?: WhereFilter;
+    sort?: string | readonly string[];
+    overrideAccess?: boolean;
+    enforceFieldAccess?: boolean;
+    frameworkFilter?: boolean;
+  }): Promise<void> {
+    if (fieldTrustOf(params)) return;
+    const filtered = params.frameworkFilter
+      ? []
+      : [...filterKeys(params.where)];
+    const sorted = parseSortKeys(params.sort).map(key => key.field);
+    if (filtered.length === 0 && sorted.length === 0) return;
+    const fields = collectionFieldsFor(
+      await this.collectionService.getCollection(params.collectionName)
+    );
+    const refused = [
+      ...filtered
+        .filter(key => queriesPassword(fields, key))
+        .map(key => ({ path: `where.${key}`, code: "FIELD_NOT_FILTERABLE" })),
+      ...sorted
+        .filter(key => queriesPassword(fields, key))
+        .map(key => ({ path: `sort.${key}`, code: "FIELD_NOT_SORTABLE" })),
+    ];
+    if (refused.length === 0) return;
+    throw NextlyError.validation({
+      errors: refused.map(error => ({
+        ...error,
+        message:
+          "A password field cannot be filtered or sorted on. Its stored value never leaves the server, and which rows match would disclose it.",
+      })),
+    });
+  }
+
   /**
    * What a caller may select and order by, asked once for both read verbs.
    *
@@ -1272,7 +1344,7 @@ export class CollectionQueryService extends BaseService {
   private async assertQueryReadable(params: {
     collectionName: string;
     where?: WhereFilter;
-    sort?: string;
+    sort?: string | readonly string[];
     groupBy?: string;
     overrideAccess?: boolean;
     frameworkFilter?: boolean;
@@ -1282,12 +1354,17 @@ export class CollectionQueryService extends BaseService {
     /** The redaction basis, when it is not `user`; it wins, as it does for rows. */
     fieldAccessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
+    /** Declared paths of the fields this read leaves out of its rows. */
+    hiddenFields?: HiddenFieldPaths;
+    /** Set for a timeline, whose `groupBy` is the caller's `dateField`. */
+    requireTimestampGroupKey?: boolean;
   }): Promise<void> {
     // A caller's release condition is judged first, before any read hook
     // runs: a hook may write an audit entry or spend a rate-limit budget, and
     // a refusal after it would come after those effects. The condition is
     // judged again where it is built, for one a trusted hook adds.
     await this.assertReleaseFilterReadable(params);
+    await this.assertNoPasswordQueried(params);
     // The settled filter a list forwards to its own count already passed this
     // check as the caller's, and what a read hook added to it is trusted
     // server code, which may scope by the column its own plugin contributed.
@@ -1326,10 +1403,13 @@ export class CollectionQueryService extends BaseService {
       params.where,
       opts
     );
+    // The keys the ORDER BY sorts by, from the parser it reads them with, so
+    // a refused field cannot ride in any position the guard did not judge.
+    const sortFields = parseSortKeys(params.sort).map(key => key.field);
     await assertSortableField(
       "collection",
       params.collectionName,
-      params.sort,
+      sortFields,
       opts
     );
     // A group key discloses by a third route: the buckets it returns ARE the
@@ -1348,6 +1428,25 @@ export class CollectionQueryService extends BaseService {
       params.collectionName,
       params.groupBy,
       { overrideAccess: opts.overrideAccess, caller: opts.caller }
+    );
+    // A field the read leaves out of its rows, named in any of the three
+    // positions. Here, past the collection read gate, so a caller who may not
+    // read the collection is refused for that alone and learns nothing of
+    // which of its fields are hidden; and before the read hooks, as every
+    // refusal here is. Whatever the caller's trust: the read asked for them
+    // to be left out. The paths are resolved here and not by the caller, so a
+    // read the gate refused never reads the declarations they come from.
+    assertNoHiddenFieldQueried(
+      {
+        where: params.where,
+        sort: sortFields,
+        groupBy: params.groupBy,
+        // A timeline's `dateField` travels as `groupBy`.
+        ...(params.requireTimestampGroupKey
+          ? { labels: { groupBy: "dateField" } }
+          : {}),
+      },
+      await params.hiddenFields?.()
     );
   }
 
@@ -1479,7 +1578,7 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Build the SQL condition for a `_translated` filter (i18n M7). Loads the companion (reusing a
+   * Build the SQL condition for a `_translated` filter. Loads the companion (reusing a
    * preloaded one) and delegates to {@link buildTranslationStatusCondition}. Returns `undefined`
    * for non-localized collections or no-op filters.
    */
@@ -1540,7 +1639,7 @@ export class CollectionQueryService extends BaseService {
     preloaded?: CompanionSchema | null,
     /**
      * Resolved status the read is scoped to (`"published"` / `"draft"`), or `null` for `all`.
-     * When the companion has per-locale status (i18n M6), a companion row whose `_status` differs
+     * When the companion has per-locale status, a companion row whose `_status` differs
      * is filtered out so a draft translation never leaks — the field falls back to the published
      * default.
      */
@@ -2520,6 +2619,32 @@ export class CollectionQueryService extends BaseService {
   // `listEntries` (cyclomatic 87) and `getEntry` (64), both critical — which
   // had already diverged on where the owner column is cleared.
   // fallow-ignore-next-line complexity
+
+  /**
+   * The translation counters of `rows`, read before their translated content
+   * (`languageCountersBeforeContent`); undefined for a collection that keeps
+   * no translations or whose table is not there yet.
+   */
+  private async languageCountersFirst(
+    rows: readonly Record<string, unknown>[],
+    /** The collection's translation schema; null for one that keeps none. */
+    companion: { companionTableName: string } | null | undefined
+  ) {
+    const table = companion?.companionTableName ?? null;
+    return languageCountersBeforeContent(
+      this.adapter.getDrizzle<SelectsRows>(),
+      {
+        dialect: this.dialect,
+        languagesTable:
+          table !== null && (await isCompanionReady(this.adapter, table))
+            ? table
+            : null,
+        localization: this.localization,
+        ids: rows.flatMap(row => (typeof row.id === "string" ? [row.id] : [])),
+      }
+    );
+  }
+
   private async finalizeReadRows(params: {
     rows: Record<string, unknown>[];
     /**
@@ -2557,8 +2682,26 @@ export class CollectionQueryService extends BaseService {
     select?: Record<string, boolean>;
     richTextFormat?: RichTextOutputFormat;
     locale?: string;
+    /**
+     * The read carries a grant for this collection, so none of its own
+     * afterRead phases runs: code (the `*` globals and every plugin's included),
+     * stored, or field-level. What a field's type does to make a value readable
+     * still runs, because none of it is a hook: JSON decoding, timestamp
+     * casing, server-only redaction, the rich-text format and `select`. A
+     * related row's own field hooks run in the relationship walk, which never
+     * sees the grant, so the waiver does not travel.
+     */
+    hooksWaived?: boolean;
+    /** Translation counters the read already took (`attachDocumentVersions`). */
+    knownLanguages?: {
+      revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
+      locales: readonly string[];
+    };
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, tableName, fields } = params;
+    // Taken before step (1), which removes the counter with every other
+    // server-only column.
+    const storedRevisions = storedRevisionsOf(rows);
     // The field groups held inline in this collection's containers, whose
     // passwords sit in those containers' values: resolved once for the read.
     // A read of every translation returns each translated field keyed by
@@ -2638,17 +2781,19 @@ export class CollectionQueryService extends BaseService {
     };
 
     // Code-registered afterRead hooks, which may transform the data wholesale.
-    const transformed = await this.hookService.hookRegistry.execute(
-      "afterRead",
-      this.hookService.buildHookContext({
-        collection: collectionName,
-        operation: "read" as const,
-        data: toPayload(rows),
-        user: params.user,
-        context: params.sharedContext,
-        req: params.requestFacts,
-      })
-    );
+    const transformed = params.hooksWaived
+      ? undefined
+      : await this.hookService.hookRegistry.execute(
+          "afterRead",
+          this.hookService.buildHookContext({
+            collection: collectionName,
+            operation: "read" as const,
+            data: toPayload(rows),
+            user: params.user,
+            context: params.sharedContext,
+            req: params.requestFacts,
+          })
+        );
     const afterCodeHooks = toRows(transformed, rows);
 
     // (4) A code hook may have RETURNED a reshaped related row carrying a denied
@@ -2664,21 +2809,23 @@ export class CollectionQueryService extends BaseService {
     );
 
     // Stored afterRead hooks (UI-configured).
-    const storedAfterResult = await this.hookService.storedHookExecutor.execute(
-      "afterRead",
-      params.storedHooks,
-      this.hookService.buildPrebuiltHookContext({
-        collection: collectionName,
-        operation: "read",
-        data: toPayload(afterCodeHooks),
-        // The signature wants a thenable; `async` on a body with nothing to
-        // await only asked for a suppression.
-        queryDatabase: () => Promise.resolve(false),
-        req: params.requestFacts,
-        user: params.user,
-        sharedContext: params.sharedContext,
-      })
-    );
+    const storedAfterResult = params.hooksWaived
+      ? { data: undefined }
+      : await this.hookService.storedHookExecutor.execute(
+          "afterRead",
+          params.storedHooks,
+          this.hookService.buildPrebuiltHookContext({
+            collection: collectionName,
+            operation: "read",
+            data: toPayload(afterCodeHooks),
+            // The signature wants a thenable; `async` on a body with nothing to
+            // await only asked for a suppression.
+            queryDatabase: () => Promise.resolve(false),
+            req: params.requestFacts,
+            user: params.user,
+            sharedContext: params.sharedContext,
+          })
+        );
     let finalData = toRows(storedAfterResult.data, afterCodeHooks);
 
     // Snake_case timestamp columns to their camelCase API form.
@@ -2750,14 +2897,16 @@ export class CollectionQueryService extends BaseService {
         redactions: fieldGroupRedactions,
       };
       await fieldGroupPass?.(row, rowFieldGroupCaller);
-      await runFieldHooks({
-        kind: "collection",
-        slug: collectionName,
-        phase: "afterRead",
-        data: row,
-        operation: "read",
-        user: params.user,
-      });
+      if (!params.hooksWaived) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: collectionName,
+          phase: "afterRead",
+          data: row,
+          operation: "read",
+          user: params.user,
+        });
+      }
       // Judged against the stored field groups, not the instances the first
       // field-group pass cut: a collection rule may read a value inside one.
       await withFieldGroupEvidence(row, fieldGroupRedactions, () =>
@@ -2796,6 +2945,15 @@ export class CollectionQueryService extends BaseService {
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
     for (const row of finalData) stripServerOnlyColumns(row, tableName);
+
+    // The version, after everything a hook or a selection can do to a row,
+    // so neither can drop or forge it.
+    attachDocumentVersions(finalData, {
+      stored: storedRevisions,
+      localization: this.localization,
+      locale: params.locale,
+      known: params.knownLanguages,
+    });
 
     return finalData;
   }
@@ -2955,6 +3113,31 @@ export class CollectionQueryService extends BaseService {
      */
     page?: number;
     /**
+     * Where the read starts, as a count of rows to skip, whether or not that
+     * falls on a page boundary. A whole number from 0, and never together
+     * with `page`. Ordered by the id when no sort is given, so a position
+     * means the same row on every read.
+     */
+    offset?: number;
+    /**
+     * What a sort key naming no sortable field does: `"drop"` (the default)
+     * warns and sorts by the other keys and the id; `"refuse"` refuses the
+     * read, naming every such key, before it runs. A reader serving the
+     * public refuses, so an author learns of the key rather than a list
+     * quietly changing order.
+     */
+    unknownSort?: "drop" | "refuse";
+    /**
+     * Declared paths of the fields this read leaves out of its rows (a Direct
+     * API read passing `showHiddenFields: false`). A `where`, `sort` or group
+     * key naming one is refused after the collection read gate and before any
+     * read hook, since which rows match, their order and the buckets would
+     * each reveal the value. Resolved only there, past the gate, so a read
+     * the gate refuses never reaches the declarations. Absent or resolving
+     * to an empty set, nothing is refused on this ground.
+     */
+    hiddenFields?: HiddenFieldPaths;
+    /**
      * Number of documents per page.
      * Maximum allowed is 500 to prevent abuse.
      * @default 10
@@ -3037,9 +3220,14 @@ export class CollectionQueryService extends BaseService {
      * ```typescript
      * sort: '-createdAt'  // Sort by createdAt descending
      * sort: 'title'       // Sort by title ascending
+     * sort: ['-featured', 'createdAt'] // featured first, then oldest
+     * sort: '-featured,createdAt'      // the same, as REST sends it
      * ```
+     *
+     * Several keys sort in turn, and any tie left is broken by the id,
+     * ascending unless a key names `id` itself.
      */
-    sort?: string;
+    sort?: string | readonly string[];
     /** When true, bypass all access control checks (collection-level, field permissions) */
     overrideAccess?: boolean;
     /**
@@ -3130,14 +3318,14 @@ export class CollectionQueryService extends BaseService {
      */
     status?: StatusOption;
     /**
-     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * Requested content locale. For a localized collection, translatable fields are
      * resolved to this language (with fallback) from the companion `_locales` table.
      */
     locale?: string;
     /** Fallback control. `false`/`"none"` disables fallback (raw requested language). */
     fallbackLocale?: string | false;
     /**
-     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to each
+     * When true, attach a per-locale `_translations` map (translated + status) to each
      * row for the admin translation-status overview. No-op for non-localized collections.
      */
     translationStatus?: boolean;
@@ -3145,8 +3333,28 @@ export class CollectionQueryService extends BaseService {
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
+    /**
+     * A grant waiving this collection's read hooks, issued to the plugin that
+     * declared it. Effective only for a collection it covers; see
+     * {@link readHooksWaived}.
+     */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     try {
+      // An offset that names no row, or one beside a page, is refused before
+      // anything is read or any hook runs.
+      assertReadOffset(params.offset, params.page);
+      // One reading of the sort for the whole read: the guard that judges
+      // which fields may be sorted on and the ORDER BY then see the same keys,
+      // whatever a caller's array answers if read again.
+      params = {
+        ...params,
+        sort:
+          params.sort === undefined || typeof params.sort === "string"
+            ? params.sort
+            : Object.freeze([...params.sort]),
+      };
+
       // Determine the effective user for access control
       // When overrideAccess is true, skip all access checks even if user is provided
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -3163,7 +3371,7 @@ export class CollectionQueryService extends BaseService {
         params.collectionName
       );
 
-      // i18n M4: resolve the locale chain + load the companion once, so both the sort
+      // Resolve the locale chain + load the companion once, so both the sort
       // block (in-query ORDER BY on a localized column) and the post-query populate reuse
       // it. `null` when localization is off or the collection isn't localized.
       const localeChain = resolveLocaleChain(
@@ -3193,36 +3401,133 @@ export class CollectionQueryService extends BaseService {
       // makes "what the caller sent" true rather than intended.
       await this.assertQueryReadable(params);
 
+      // Collection metadata: the sort needs its table, and the response
+      // pipeline its relation fields and hooks.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      // Convert camelCase field names to snake_case for database column lookup
+      // e.g., 'createdAt' → 'created_at', 'updatedAt' → 'updated_at'
+      const toSnakeCase = (str: string): string => {
+        return str.replace(/([A-Z])/g, "_$1").toLowerCase();
+      };
+      const isHiddenColumn = hiddenColumnMatcher(
+        collectionTableName(collection, params.collectionName)
+      );
+      const sortKeys = parseSortKeys(params.sort);
+      // An own property only: a key such as `constructor` must not resolve to
+      // a member every object inherits.
+      const ownColumn = (name: string) =>
+        Object.hasOwn(schema, name)
+          ? (schema as Record<string, unknown>)[name]
+          : undefined;
+      /**
+       * What one sort key names, decided once for both the refusal below and
+       * the ORDER BY: a localized field, a column, a column withheld from
+       * every row, or nothing.
+       */
+      const classifySortKey = (
+        sortField: string
+      ):
+        | { kind: "localized"; column: string }
+        | { kind: "column"; column: Column }
+        | { kind: "withheld" }
+        | { kind: "unknown" } => {
+        const sortFieldSnake = toSnakeCase(sortField);
+        // A localized sort field lives in the companion table (absent
+        // from the main schema), ordered by a correlated subquery below.
+        const localizedSortField =
+          companion && localeChain
+            ? companion.localizedFields.find(
+                f => f.name === sortField || f.column === sortFieldSnake
+              )
+            : undefined;
+        if (localizedSortField) {
+          return { kind: "localized", column: localizedSortField.column };
+        }
+        // The system owner column is stripped from responses, so it must not be
+        // sortable either — sorting by it would let a caller order/target rows
+        // by creator. A hidden contributed column is stripped from every row as
+        // the owner column is, so it is withheld for the same reason: the
+        // order of the page would be a comparison of values never returned.
+        if (
+          sortField === "created_by" ||
+          sortField === "createdBy" ||
+          sortFieldSnake === "created_by" ||
+          isHiddenColumn(sortField)
+        ) {
+          return { kind: "withheld" };
+        }
+        // Both camelCase and snake_case: user-defined fields are often
+        // camelCase, system fields snake_case in the database.
+        const column = ownColumn(sortField) ?? ownColumn(sortFieldSnake);
+        return column
+          ? { kind: "column", column: column as Column }
+          : { kind: "unknown" };
+      };
+      // Refused BEFORE the read hooks, as the other query checks are: a hook
+      // may write an audit entry or spend a rate-limit budget, and a refusal
+      // after it would come after those effects. A withheld key is named as
+      // unknown, so what the caller may not sort by is not told apart from
+      // what does not exist.
+      if (params.unknownSort === "refuse") {
+        const unknownSortKeys = sortKeys
+          .map(key => key.field)
+          .filter(field => {
+            const { kind } = classifySortKey(field);
+            return kind === "withheld" || kind === "unknown";
+          });
+        if (unknownSortKeys.length > 0) {
+          throw NextlyError.validation({
+            errors: unknownSortKeys.map(key => ({
+              path: `sort.${key}`,
+              code: "FIELD_NOT_SORTABLE",
+              message: `"${key}" is not a field this list can be sorted by.`,
+            })),
+          });
+        }
+      }
+
       // The read hooks settle the filter before any seam or constraint touches
       // it, so `beforeOperation` and `beforeRead` both narrow the rows actually
       // returned rather than being computed and dropped.
-      const hookedWhere = await this.resolveReadWhere({
-        collectionName: params.collectionName,
-        where: params.where,
-        user: params.user,
-        sharedContext,
-        requestFacts,
-      });
+      //
+      // A plugin reading a collection it declared carries a grant, and the
+      // grant waives everything here that could reshape the read: these hooks,
+      // the list-query filter below and every afterRead phase.
+      const hooksWaived = readHooksWaived(
+        params.hookExemptRead,
+        params.collectionName
+      );
+      const hookedWhere = hooksWaived
+        ? params.where
+        : await this.resolveReadWhere({
+            collectionName: params.collectionName,
+            where: params.where,
+            user: params.user,
+            sharedContext,
+            requestFacts,
+          });
 
       // D63 seam: let plugins transform the structured list-query `where`.
       // Guarded by hasFilters so default behavior (no plugins) is unchanged. It
       // runs last, on what the hooks settled, because it is the only one of the
       // three that was already live.
       const filterRegistry = getFilterRegistry();
-      const listQueryWhere = filterRegistry.hasFilters(
-        FilterSeams.CollectionsListQuery
-      )
-        ? await filterRegistry.applyFilters(
-            FilterSeams.CollectionsListQuery,
-            hookedWhere ?? {},
-            {
-              collection: params.collectionName,
-              userId: params.user?.id,
-              search: params.search,
-              limit: params.limit,
-            }
-          )
-        : hookedWhere;
+      const listQueryWhere =
+        !hooksWaived &&
+        filterRegistry.hasFilters(FilterSeams.CollectionsListQuery)
+          ? await filterRegistry.applyFilters(
+              FilterSeams.CollectionsListQuery,
+              hookedWhere ?? {},
+              {
+                collection: params.collectionName,
+                userId: params.user?.id,
+                search: params.search,
+                limit: params.limit,
+              }
+            )
+          : hookedWhere;
 
       // Build base query using Drizzle (via BaseService db compatibility layer)
       let query = this.db.select().from(schema);
@@ -3276,80 +3581,51 @@ export class CollectionQueryService extends BaseService {
         );
       }
 
-      // Collection metadata: the sort below needs its table, and the response
-      // pipeline its relation fields and hooks.
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
-
       // ============================================================
       // SORTING: Apply ORDER BY clause
       // ============================================================
 
-      // Parse sort format: '-createdAt' → DESC, 'title' → ASC
-      if (params.sort) {
-        const sortDesc = params.sort.startsWith("-");
-        const sortField = sortDesc ? params.sort.slice(1) : params.sort;
-
-        // Convert camelCase field names to snake_case for database column lookup
-        // e.g., 'createdAt' → 'created_at', 'updatedAt' → 'updated_at'
-        const toSnakeCase = (str: string): string => {
-          return str.replace(/([A-Z])/g, "_$1").toLowerCase();
-        };
-
-        const sortFieldSnake = toSnakeCase(sortField);
-
-        // i18n M4: a localized sort field lives in the companion table (absent from the main
-        // schema). Order by a correlated subquery pulling the companion value for the requested
-        // locale (with fallback) so pagination is correct. Applied only when the collection is
-        // localized and this field is one of its translatable fields.
-        const localizedSortField =
-          companion && localeChain
-            ? companion.localizedFields.find(
-                f => f.name === sortField || f.column === sortFieldSnake
-              )
-            : undefined;
-
-        // The system owner column is stripped from responses, so it must not be
-        // sortable either — sorting by it would let a caller order/target rows
-        // by creator. Ignore an owner-column sort instead of resolving it.
-        const ownerSort =
-          sortField === "created_by" ||
-          sortField === "createdBy" ||
-          sortFieldSnake === "created_by";
-        // A hidden contributed column is stripped from every row as the owner
-        // column is, so it is ignored as a sort for the same reason: the
-        // order of the page would be a comparison of values never returned.
-        const hiddenSort = hiddenColumnMatcher(
-          collectionTableName(collection, params.collectionName)
-        )(sortField);
-
-        // Try both camelCase and snake_case versions of the field name
-        // This handles both user-defined fields (often camelCase) and system fields (snake_case in DB)
-        const column =
-          ownerSort || hiddenSort
-            ? undefined
-            : schema[sortField] || schema[sortFieldSnake];
-
-        if (localizedSortField && companion && localeChain) {
-          const orderExpr = buildLocalizedOrderExpr({
-            companionTableName: companion.companionTableName,
-            mainIdColumn: schema.id,
-            column: localizedSortField.column,
-            localeChain,
-            statusValues: localizedCtx?.statusValues, // don't sort by draft translations
-          });
-          query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
-        } else if (column) {
-          query = query.orderBy(sortDesc ? desc(column) : asc(column));
-        } else if (sortField) {
-          // Log warning if sort field is not found in either format
+      // Each key sorts in turn: '-createdAt' descending, 'title' ascending;
+      // empty values last and the id as the last key (see orderBySortKeys).
+      const orderBy = orderBySortKeys({
+        keys: sortKeys,
+        // An empty array asks for id order; a string naming no key asks for
+        // nothing, as it always has.
+        ordered:
+          sortKeys.length > 0 ||
+          Array.isArray(params.sort) ||
+          params.offset !== undefined,
+        id: schema.id,
+        resolve: sortField => {
+          const named = classifySortKey(sortField);
+          if (named.kind === "localized" && companion && localeChain) {
+            return {
+              expr: buildLocalizedOrderExpr({
+                companionTableName: companion.companionTableName,
+                mainIdColumn: schema.id,
+                column: named.column,
+                localeChain,
+                statusValues: localizedCtx?.statusValues, // don't sort by draft translations
+              }),
+              // A missing translation reads as NULL.
+              nullable: true,
+            };
+          }
+          if (named.kind === "column") {
+            return { expr: named.column, nullable: !named.column.notNull };
+          }
+          // Withheld keys are ignored quietly. An unknown key is dropped with
+          // a warning, and the read carries on with the others and the id; a
+          // read that asked to refuse was refused before its hooks ran.
+          if (named.kind === "withheld") return undefined;
           this.logger?.warn(
-            `Sort field '${sortField}' (or '${sortFieldSnake}') not found in schema for collection '${params.collectionName}'. ` +
+            `Sort field '${sortField}' not found in schema for collection '${params.collectionName}'. ` +
               `Available fields: ${Object.keys(schema).join(", ")}`
           );
-        }
-      }
+          return undefined;
+        },
+      });
+      if (orderBy.length > 0) query = query.orderBy(...orderBy);
 
       // ============================================================
       // PAGINATION: Apply page/limit parameters
@@ -3358,7 +3634,8 @@ export class CollectionQueryService extends BaseService {
       // Extract pagination parameters with defaults
       const page = Math.max(1, params.page ?? PAGINATION_DEFAULTS.page);
       const limit = clampLimit(params.limit ?? PAGINATION_DEFAULTS.limit);
-      const offset = calculateOffset(page, limit);
+      // A named offset is where the read starts; otherwise the page's start.
+      const offset = params.offset ?? calculateOffset(page, limit);
 
       // For geo-filtered queries, we need to fetch all candidates first,
       // apply geo filtering in memory, then paginate the result.
@@ -3468,7 +3745,12 @@ export class CollectionQueryService extends BaseService {
             : 0;
       }
 
-      // i18n M4: resolve localized fields for the whole page from the companion table
+      // The page's translation counters, before its translated content.
+      const knownLanguages = await this.languageCountersFirst(
+        entries,
+        companion
+      );
+      // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
       await this.overlayLocalized(
@@ -3480,7 +3762,7 @@ export class CollectionQueryService extends BaseService {
             entries,
             localeChain,
             companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // the per-locale published filter
           )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
@@ -3493,10 +3775,10 @@ export class CollectionQueryService extends BaseService {
             entries,
             params.locale,
             companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // the per-locale published filter
           )
       );
-      // i18n M7: per-locale translation-status map for the admin overview (opt-in).
+      // A per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
           params.collectionName,
@@ -3506,7 +3788,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               entries,
               companion,
-              statusFilter?.values ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // the per-locale published filter
             )
         );
       }
@@ -3642,6 +3924,8 @@ export class CollectionQueryService extends BaseService {
       // single document.
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
+        hooksWaived,
+        knownLanguages,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.
@@ -3669,6 +3953,8 @@ export class CollectionQueryService extends BaseService {
         total: totalDocs,
         page,
         limit,
+        // An offset read reports its paging from where it started.
+        ...(params.offset === undefined ? {} : { offset: params.offset }),
       });
 
       return {
@@ -3747,7 +4033,14 @@ export class CollectionQueryService extends BaseService {
   private async hookSettledWhere(
     params: FilteredReadParams
   ): Promise<WhereFilter | undefined> {
-    if (params.readHooksAlreadyRan) return params.where;
+    // A count, group or timeline of a collection the read's grant covers runs
+    // no read hook, as the list it mirrors runs none.
+    if (
+      params.readHooksAlreadyRan ||
+      readHooksWaived(params.hookExemptRead, params.collectionName)
+    ) {
+      return params.where;
+    }
     return this.resolveReadWhere({
       collectionName: params.collectionName,
       where: params.where,
@@ -4572,7 +4865,7 @@ export class CollectionQueryService extends BaseService {
      */
     status?: StatusOption;
     /**
-     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * Requested content locale. For a localized collection, translatable fields are
      * resolved to this language (with fallback) from the companion `_locales` table. Ignored
      * for non-localized collections. Defaults to the configured default locale.
      */
@@ -4583,7 +4876,7 @@ export class CollectionQueryService extends BaseService {
      */
     fallbackLocale?: string | false;
     /**
-     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to the
+     * When true, attach a per-locale `_translations` map (translated + status) to the
      * entry for the admin translation-status pills. No-op for non-localized collections.
      */
     translationStatus?: boolean;
@@ -4617,6 +4910,12 @@ export class CollectionQueryService extends BaseService {
      * expose a draft to a caller who cannot edit the document.
      */
     includeWorkingDraft?: boolean;
+    /**
+     * A grant waiving this collection's read hooks, issued to the plugin that
+     * declared it. Effective only for a collection it covers; see
+     * {@link readHooksWaived}.
+     */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult> {
     try {
       // 1. Check collection-level access FIRST. A read rule that answered a
@@ -4646,14 +4945,22 @@ export class CollectionQueryService extends BaseService {
       const requestFacts = resolveRequestFacts(params.request);
 
       // `beforeOperation` runs first and may rewrite the id, then `beforeRead`
-      // sees the id it settled on.
-      const entryId = await this.resolveReadEntryId({
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        user: params.user,
-        sharedContext,
-        requestFacts,
-      });
+      // sees the id it settled on. A read whose grant covers this collection
+      // is not retargeted: the id asked for is the id read, and the afterRead
+      // phases below are waived with it.
+      const hooksWaived = readHooksWaived(
+        params.hookExemptRead,
+        params.collectionName
+      );
+      const entryId = hooksWaived
+        ? params.entryId
+        : await this.resolveReadEntryId({
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            user: params.user,
+            sharedContext,
+            requestFacts,
+          });
 
       // The Draft/Published filter, from the same resolver the listing uses.
       // A public caller asking for a draft entry by id gets a 404, never a hint
@@ -4768,14 +5075,28 @@ export class CollectionQueryService extends BaseService {
       // companion is there to join to: one round trip where reading them after it took two. They
       // are resolved onto it as the batched fill resolves them. Until the companion is there, the
       // entry is read alone and its main-table values stand.
+      // Joined only when the chain holds every language the version names:
+      // otherwise the counters are read before the content, apart from it.
       const joinedLocaleChain =
         localeChain &&
         companion &&
+        chainCoversVersion(localeChain, {
+          localization: this.localization,
+          locale: params.locale,
+        }) &&
         (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
           "ready"
           ? localeChain
           : null;
       let entry: Record<string, unknown> | undefined;
+      // The translation counters the joined read takes with the entry, so
+      // its version needs no statement of its own.
+      let knownLanguages:
+        | {
+            revisions: Map<string, Map<string, number>>;
+            locales: readonly string[];
+          }
+        | undefined;
       if (joinedLocaleChain && companion) {
         const table = companion.table;
         // As the translations read it stands for fails: the database's own message, which names
@@ -4793,6 +5114,11 @@ export class CollectionQueryService extends BaseService {
             })
         );
         entry = joined.entry;
+        const joinedRevisions = languageRevisionsOf(joined.companionRows);
+        knownLanguages = joinedRevisions && {
+          revisions: joinedRevisions,
+          locales: joinedLocaleChain,
+        };
         if (entry) {
           fillCompanionFields({
             rows: [entry],
@@ -4825,10 +5151,13 @@ export class CollectionQueryService extends BaseService {
       // The row's own id, as stored, before any overlay or hook can reshape
       // what this read returns.
       const resolvedEntryId = String((entry as { id: unknown }).id);
+      // Not joined with the entry: the translation counters now, before the
+      // translated content is read below.
+      knownLanguages ??= await this.languageCountersFirst([entry], companion);
 
       // `localeChain` and `companion` were resolved above the access predicate,
       // which needs the same pair to judge a rule naming a localized field.
-      // i18n M4: resolve localized fields from the companion `_locales` table for the
+      // Resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
       // Already done when the translations came with the entry.
@@ -4843,7 +5172,7 @@ export class CollectionQueryService extends BaseService {
               [read],
               localeChain,
               companion,
-              statusFilter?.values ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // the per-locale published filter
             )
         );
       }
@@ -4857,10 +5186,10 @@ export class CollectionQueryService extends BaseService {
             [entry],
             params.locale,
             companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // the per-locale published filter
           )
       );
-      // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
+      // A per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
           params.collectionName,
@@ -4870,7 +5199,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               [entry],
               companion,
-              statusFilter?.values ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // the per-locale published filter
             )
         );
       }
@@ -5194,6 +5523,12 @@ export class CollectionQueryService extends BaseService {
             declaredFields,
             draftComponentSchemas
           );
+          // The version is the live row's: a held draft moved the live row's
+          // counter when it was saved, and a snapshot never holds one.
+          if (DOCUMENT_REVISION_COLUMN in expandedEntry) {
+            draftEntry[DOCUMENT_REVISION_COLUMN] =
+              expandedEntry[DOCUMENT_REVISION_COLUMN];
+          }
           expandedEntry = draftEntry;
           draftOverlaid = true;
         }
@@ -5226,6 +5561,8 @@ export class CollectionQueryService extends BaseService {
       // passes, same shared walk state as the listing above.
       const [finalData] = await this.finalizeReadRows({
         rows: [expandedEntry],
+        hooksWaived,
+        knownLanguages,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,
@@ -5422,6 +5759,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: localizedCtx.mainIdColumn,
             locale: localizedCtx.locale,
             valueCondition: caseInsensitiveContains(
+              this.dialect,
               sql`${t}.${col}`,
               searchText
             ),
@@ -5430,7 +5768,7 @@ export class CollectionQueryService extends BaseService {
         }
         const column = schema[fieldName];
         if (!column) return undefined; // not on main table and not localized → skip
-        return caseInsensitiveContains(column, searchText);
+        return caseInsensitiveContains(this.dialect, column, searchText);
       })
       .filter((c): c is NonNullable<typeof c> => c !== undefined);
 
@@ -5469,6 +5807,7 @@ export class CollectionQueryService extends BaseService {
     return buildDrizzleCondition(
       whereClause,
       schema,
+      this.dialect,
       localizedCtx,
       buildLocalizedWhereExists
     );

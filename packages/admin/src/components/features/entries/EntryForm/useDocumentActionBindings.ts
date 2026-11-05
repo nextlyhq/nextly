@@ -248,6 +248,8 @@ export interface DocumentActionBindings {
    * has failed.
    */
   trackWrite: (label: string, write: Promise<unknown>) => void;
+  /** Whether a tracked write is still on its way. */
+  writesPending: boolean;
   /**
    * The Save the document's state calls for, run as its control runs it —
    * every open edit committed and tracked write settled first — wherever that
@@ -293,8 +295,38 @@ export type DocumentSaveState =
       retry?: () => Promise<DocumentActionOutcome>;
     };
 
-/** Run before an action that stores the editor's work; given its id. */
-export type BeforeDocumentAction = (action: string) => void | Promise<void>;
+/**
+ * Run before an action that stores the editor's work; given its id, and how
+ * to wait for the writes the store depends on.
+ */
+export type BeforeDocumentAction = (
+  action: string,
+  store: StoreReadiness
+) => void | Promise<void>;
+
+/** What a before-action handler may ask of the store it runs before. */
+export interface StoreReadiness {
+  /**
+   * Waits for every write the document depends on but does not contain (see
+   * `useTrackedWrite`), and answers whether they all landed. A handler that
+   * acts on the server for the store, beyond committing work to the form,
+   * asks this first and acts only on `true`: on `false` the store is refused,
+   * and anything the handler did would stand without it.
+   */
+  writesSettled(): Promise<boolean>;
+  /**
+   * Gives the store a check to make once every handler has run and every
+   * tracked write has settled, immediately before it writes, with nothing
+   * awaited in between. A handler that judged the work (asked a question
+   * about it, say) checks there that the work is still what it judged: the
+   * handlers after it, and the writes the store waits for, give the author
+   * time to change it. A check answering `false` runs every handler again;
+   * work still changing after a few rounds is refused.
+   *
+   * @experimental
+   */
+  checkBeforeWrite(check: () => boolean): void;
+}
 
 const CANCELLED: DocumentActionOutcome = {
   ok: false,
@@ -616,6 +648,7 @@ export function useDocumentActionBindings({
     },
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
+    writesPending: gate.writesPending,
     saveWithoutPublishing: storingWithoutPublishing(
       hasStatus,
       saveWithoutPublishing(runSave, onSaveChanges),
@@ -916,8 +949,13 @@ export function refusalReasons({
   };
 }
 
-/** Why a write is refused while a colleague holds the document. */
-const LOCKED_REASON = "Someone else is editing this document";
+/**
+ * Why a write is refused while the document is held elsewhere.
+ *
+ * Says where, not who: the holder may be a colleague, an API key, or this
+ * person in another tab, and the lock notice above the form names which.
+ */
+const LOCKED_REASON = "This document is being edited elsewhere";
 
 /**
  * The page's contributions, with each way to publish held while a colleague

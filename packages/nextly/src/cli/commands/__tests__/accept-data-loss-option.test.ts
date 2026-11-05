@@ -1,7 +1,8 @@
 /**
  * Every command that can delete data takes the one consent: the
  * `--accept-data-loss` option, given alone or with targets, and the
- * `NEXTLY_ACCEPT_DATA_LOSS` variable. `prune` and `migrate:fresh` are
+ * `NEXTLY_ACCEPT_DATA_LOSS` variable. `prune`, `migrate:fresh`,
+ * `webhooks:prune`, `permissions:cleanup` and `i18n:restore --purge` are
  * exercised further in their own files; this one holds each command to the
  * option, and checks how `plugins uninstall`, `db:sync` and `migrate:down`
  * read it.
@@ -10,12 +11,17 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { exportDataLossConsent, registerDbSyncCommand } from "../db-sync";
+import { registerI18nRestoreCommand } from "../i18n-restore.command";
+import { registerMigrateCommand } from "../migrate.command";
 import { downConsent, registerMigrateDownCommand } from "../migrate-down";
 import { registerMigrateFreshCommand } from "../migrate-fresh";
+import { createPermissionsCleanupCommand } from "../permissions-cleanup.command";
 import { registerPluginsCommand } from "../plugins";
 import { registerPruneCommand } from "../prune";
+import { registerWebhooksPruneCommand } from "../webhooks-prune.command";
 
 const uninstall = vi.hoisted(() => vi.fn(async () => {}));
+const install = vi.hoisted(() => vi.fn(async () => {}));
 
 // `../program` imports every command, `migrate` with its whole graph among
 // them; the commands under test need only its context factory.
@@ -38,16 +44,22 @@ vi.mock("../migrate", () => ({
 
 vi.mock("../plugin-lifecycle-runner", () => ({
   runPluginUninstall: uninstall,
+  runPluginInstall: install,
+  runPluginInstallAll: vi.fn(async () => {}),
 }));
 
 /** A program with every command that deletes data registered on it. */
 function program(): Command {
   const root = new Command().exitOverride();
   registerDbSyncCommand(root);
+  registerMigrateCommand(root);
   registerMigrateDownCommand(root);
   registerMigrateFreshCommand(root);
   registerPruneCommand(root);
   registerPluginsCommand(root);
+  registerWebhooksPruneCommand(root);
+  registerI18nRestoreCommand(root);
+  root.addCommand(createPermissionsCleanupCommand());
   return root;
 }
 
@@ -66,6 +78,7 @@ beforeEach(() => {
   savedEnv = process.env.NEXTLY_ACCEPT_DATA_LOSS;
   delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
   uninstall.mockClear();
+  install.mockClear();
 });
 afterEach(() => {
   if (savedEnv === undefined) delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
@@ -75,10 +88,15 @@ afterEach(() => {
 describe("--accept-data-loss on every command that deletes data", () => {
   it.each([
     [["db:sync"]],
+    [["migrate"]],
     [["migrate:down"]],
     [["migrate:fresh"]],
     [["prune"]],
+    [["plugins", "install"]],
     [["plugins", "uninstall"]],
+    [["webhooks:prune"]],
+    [["permissions:cleanup"]],
+    [["i18n:restore"]],
   ])("%j takes it, alone or with targets", path => {
     const option = command(program(), path).options.find(
       o => o.long === "--accept-data-loss"
@@ -88,6 +106,26 @@ describe("--accept-data-loss on every command that deletes data", () => {
     // every deletion and `=posts,pages.summary` names what it covers.
     expect(option?.optional).toBe(true);
     expect(option?.description).toContain("NEXTLY_ACCEPT_DATA_LOSS");
+  });
+});
+
+describe("plugins install", () => {
+  it("hands the install the flag's targets", async () => {
+    await program().parseAsync(
+      ["plugins", "install", "@acme/x", "--accept-data-loss=x__notes"],
+      { from: "user" }
+    );
+    const options = (
+      install.mock.calls[0] as unknown as [string, { consent: unknown }]
+    )[1];
+    expect(options.consent).toEqual({
+      given: {
+        from: "flag",
+        targets: { tables: new Set(["x__notes"]), columns: new Set() },
+      },
+      earlier: [],
+      ignored: [],
+    });
   });
 });
 

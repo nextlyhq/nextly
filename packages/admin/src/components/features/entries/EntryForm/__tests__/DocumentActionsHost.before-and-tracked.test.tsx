@@ -23,6 +23,7 @@ import {
   useTrackedWrite,
 } from "../useDocumentActionHooks";
 import type {
+  BeforeDocumentAction,
   DocumentActionBindings,
   DocumentActionBindingsInput,
 } from "../useDocumentActionBindings";
@@ -55,7 +56,7 @@ interface Probe {
  */
 function renderHost(
   input: Partial<DocumentActionBindingsInput>,
-  before?: (action: string) => void | Promise<void>
+  before?: BeforeDocumentAction
 ) {
   const probe: Probe = {
     run: () => Promise.reject(new Error("not rendered")),
@@ -63,7 +64,7 @@ function renderHost(
     track: () => {},
   };
   function Editor(): null {
-    useBeforeDocumentAction(action => before?.(action));
+    useBeforeDocumentAction((action, store) => before?.(action, store));
     return null;
   }
   function Surface(): ReactElement {
@@ -181,6 +182,22 @@ describe("before a storing action", () => {
       beforeWrite: true,
     });
     expect(onSaveDraft).not.toHaveBeenCalled();
+  });
+
+  it("cancels, storing nothing, when an editor's question is answered no", async () => {
+    // An AbortError is a "no" to a question the editor asked, not a failure,
+    // so the outcome is the one a dismissed confirmation has.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const probe = renderHost({ onPublish }, () => {
+      throw new DOMException("Publishing was cancelled.", "AbortError");
+    });
+
+    await expect(runAction(probe, "publish")).resolves.toEqual({
+      ok: false,
+      reason: "cancelled",
+      message: "Cancelled.",
+    });
+    expect(onPublish).not.toHaveBeenCalled();
   });
 
   it("no longer asks an editor that has closed", async () => {
@@ -306,6 +323,113 @@ describe("before a storing action", () => {
         "Site colours wasn't saved, so this page wasn't either: The server is unreachable.",
       beforeWrite: true,
     });
+  });
+
+  it("tells an editor's handler a tracked write failed, so it can hold off acting", async () => {
+    // A handler that acts on the server for the store, as publishing the
+    // parts a page needs does, asks first and must not act for a store that
+    // will be refused.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const answers: boolean[] = [];
+    const probe = renderHost({ onPublish }, async (_action, store) => {
+      answers.push(await store.writesSettled());
+    });
+    const write = deferred();
+    act(() => {
+      probe.track("Site colours", write.promise);
+    });
+    await act(async () => {
+      write.reject(new Error("The server is unreachable."));
+      await write.promise.catch(() => {});
+    });
+
+    const outcome = await runAction(probe, "publish");
+
+    expect(answers).toEqual([false]);
+    expect(onPublish).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, reason: "refused" });
+  });
+
+  it("tells it the writes landed once they have", async () => {
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const answers: boolean[] = [];
+    const probe = renderHost({ onPublish }, async (_action, store) => {
+      answers.push(await store.writesSettled());
+    });
+    const write = deferred();
+    act(() => {
+      probe.track("Site colours", write.promise);
+    });
+    let outcome: Promise<unknown> = Promise.resolve();
+    act(() => {
+      outcome = probe.run("publish");
+    });
+    await act(async () => {
+      write.resolve();
+      await outcome;
+    });
+    expect(answers).toEqual([true]);
+    expect(onPublish).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the refusal it gave a handler, though the write lands before the store", async () => {
+    // Told no, the handler did not act; the store must not go ahead because
+    // the write was retried, and landed, before the store asked again.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    // Called only once rendered, so the handler reads `probe` assigned.
+    const probe: Probe = renderHost({ onPublish }, async (_action, store) => {
+      if (await store.writesSettled()) return;
+      const retried = Promise.resolve();
+      probe.track("Site colours", retried);
+      await retried;
+    });
+    const write = deferred();
+    act(() => {
+      probe.track("Site colours", write.promise);
+    });
+    await act(async () => {
+      write.reject(new Error("The server is unreachable."));
+      await write.promise.catch(() => {});
+    });
+
+    const outcome = await runAction(probe, "publish");
+
+    expect(onPublish).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "refused",
+      message:
+        "Site colours wasn't saved, so this page wasn't either: The server is unreachable.",
+      beforeWrite: true,
+    });
+  });
+
+  it("refuses a second store started while the first readies, and stores once", async () => {
+    // Run twice before the first renders its control busy: the second would
+    // ask the handlers again over the first's question, and store twice.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const asked = deferred();
+    const before = vi.fn(() => asked.promise);
+    const probe = renderHost({ onPublish }, before);
+
+    let first: Promise<unknown> = Promise.resolve();
+    let second: Promise<unknown> = Promise.resolve();
+    act(() => {
+      first = probe.run("publish");
+      second = probe.run("publish");
+    });
+    await act(async () => {
+      asked.resolve();
+      await Promise.all([first, second]);
+    });
+
+    await expect(second).resolves.toMatchObject({
+      ok: false,
+      reason: "busy",
+    });
+    await expect(first).resolves.toEqual(saved);
+    expect(before).toHaveBeenCalledTimes(1);
+    expect(onPublish).toHaveBeenCalledTimes(1);
   });
 
   it("stores again once the same change is written successfully", async () => {

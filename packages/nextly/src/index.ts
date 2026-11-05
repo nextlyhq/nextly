@@ -219,6 +219,9 @@ export type {
   BulkDeleteArgs,
   DuplicateArgs,
   FindSingleArgs,
+  // What `findSingle` resolves to, `null` included only for a call that may
+  // pass `createIfMissing: false`.
+  FoundSingle,
   UpdateSingleArgs,
   CountResult,
   GroupResult,
@@ -581,6 +584,7 @@ export {
   type HookPointValue,
   type PluginRoute,
   type PluginRouteCaller,
+  type PluginRouteCanOptions,
   type PluginRouteIdentity,
   type PluginRouteContext,
   type PluginRouteHandler,
@@ -613,8 +617,13 @@ export {
   type PluginCollectionView,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginAdminPlaceDeclaration,
   type PluginMenuItem,
   type PluginNavSection,
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
 } from "./plugins";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
@@ -841,6 +850,20 @@ export type {
   ReadableContentCaller,
   ReadableContentEntity,
 } from "./auth/readable-content";
+// A plugin's read of a document's stored field values with no read hook, and
+// its write of a field only if the stored value is still the one it read,
+// judged under the write's own row lock. Here for `@nextlyhq/plugin-sdk` to
+// publish; it is the surface a plugin is promised. The hash is the one both
+// sides of the comparison use, so a plugin never computes its own.
+export { readStoredFields, updateIfUnchanged } from "./plugins/stored-fields";
+export type {
+  PluginConditionalUpdate,
+  PluginStoredDocument,
+  PluginStoredFields,
+  PluginStoredFieldsRequest,
+  PluginWriteExpectation,
+} from "./plugins/stored-fields";
+export { storedValueHash } from "./domains/collections/services/stored-field-read";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
@@ -1029,6 +1052,9 @@ export type {
   QueueJobArgs,
   QueueJobResult,
 } from "./direct-api/types/jobs";
+// A plugin's `ctx.services.jobs`: the queue, and running one of its own
+// sweeps now. Named so a plugin can annotate what it hands that service to.
+export type { PluginJobsNamespace } from "./plugins/jobs/plugin-jobs";
 
 // The release materialiser, as a job definition. Exported so an application can
 // register it with the runner today: the periodic trigger that would register it

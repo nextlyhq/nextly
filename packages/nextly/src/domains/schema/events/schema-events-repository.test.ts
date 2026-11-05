@@ -2,7 +2,7 @@
  * @module domains/schema/events/schema-events-repository.test
  * @since v0.0.3-alpha (Plan C3)
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 
@@ -116,5 +116,47 @@ describe("SchemaEventsRepository — C3 additions", () => {
     expect(rows.find(row => row.status === "failed")!.startedAt.getTime()).toBe(
       1_000
     );
+  });
+});
+
+describe("SchemaEventsRepository.deletePluginModuleRows", () => {
+  it("deletes more rows than one statement may bind, in statements SQLite's default limit accepts", async () => {
+    const testDb = await createTestDb();
+    const repo = new SchemaEventsRepository(testDb.db, "sqlite");
+    // More rows than SQLite's default 999 bound parameters.
+    for (let at = 0; at < 1_200; at += 1) {
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: at % 2 === 0 ? "applied" : "rolled_back",
+        source: "cli-migrate",
+        filename: "plugin:@acme/fx/0001_init",
+        startedAt: new Date(at),
+      });
+    }
+    // CONTROL: another plugin's row stays.
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename: "plugin:@acme/other/0001_init",
+      startedAt: new Date(1),
+    });
+    // The bundled SQLite accepts far more than its default, so what the
+    // statements bind is read where they are prepared.
+    const prepare = vi.spyOn(testDb.sqlite, "prepare");
+
+    await repo.deletePluginModuleRows("@acme/fx");
+
+    const deletes = prepare.mock.calls
+      .map(call => String(call[0]))
+      .filter(source => /^delete/i.test(source.trim()));
+    expect(deletes.length).toBeGreaterThan(1);
+    for (const source of deletes) {
+      expect((source.match(/\?/g) ?? []).length).toBeLessThanOrEqual(999);
+    }
+    const left = (await repo.listFileApplies()).map(row => row.filename);
+    expect(left).toEqual(["plugin:@acme/other/0001_init"]);
+    prepare.mockRestore();
+    await testDb.close();
   });
 });

@@ -130,7 +130,8 @@ describe("a bulk write by query", () => {
     const result = await entriesOf(t).bulkUpdateByQuery({
       collectionName: OPEN_POSTS,
       where: ALL,
-      data: { title: "renamed" },
+      // The write rule's filter is under test, not versions.
+      data: { title: "renamed", _overwrite: true },
       ...asAuthor,
     } as never);
 
@@ -168,7 +169,8 @@ describe("a bulk write by ids", () => {
       entriesOf(t).bulkUpdateEntries({
         collectionName: collection,
         ids,
-        data: { title: "renamed" },
+        // The write rule's filter is under test, not versions.
+        data: { title: "renamed", _overwrite: true },
         ...asAuthor,
       } as never);
 
@@ -192,7 +194,8 @@ describe("a bulk write by ids", () => {
     const result = await entriesOf(t).bulkUpdateEntries({
       collectionName: OPEN_POSTS,
       ids: [own],
-      data: { owner: OTHER },
+      // Refused for the filter, not for want of a version.
+      data: { owner: OTHER, _overwrite: true },
       ...asAuthor,
     } as never);
 
@@ -359,7 +362,8 @@ describe.each(dialects)("on a collection with languages (%s)", dialect => {
     const result = await entriesOf(t).bulkUpdateByQuery({
       collectionName: LOCALIZED,
       where: { note: { equals: "unchanged" } },
-      data: { note: "renamed" },
+      // The write rule's filter is under test, not versions.
+      data: { note: "renamed", _overwrite: true },
       ...asAuthor,
     } as never);
 
@@ -369,7 +373,7 @@ describe.each(dialects)("on a collection with languages (%s)", dialect => {
     expect(JSON.stringify(result)).not.toContain(german);
   });
 
-  it("deletes by query only the entries the filter matches in the default language", async () => {
+  it("deletes by query only the entries the filter matches in each language they hold", async () => {
     const { t, english, german } = await bootLocalized();
     const result = await entriesOf(t).bulkDeleteByQuery({
       collectionName: LOCALIZED,
@@ -377,8 +381,10 @@ describe.each(dialects)("on a collection with languages (%s)", dialect => {
       ...asAuthor,
     } as never);
 
-    expect(result).toMatchObject({ successCount: 1, failedCount: 0 });
-    expect(await stored(t, LOCALIZED, english)).toBeUndefined();
+    // Matched in the default language, picked, and refused: a delete removes
+    // its German content too, which the German filter does not match.
+    expect(result).toMatchObject({ successCount: 0, failedCount: 1 });
+    expect(await stored(t, LOCALIZED, english)).toBeDefined();
     expect(await stored(t, LOCALIZED, german)).toBeDefined();
     expect(JSON.stringify(result)).not.toContain(german);
   });

@@ -65,6 +65,7 @@ import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
@@ -88,8 +89,6 @@ import {
   contributedSqliteChecks,
   sqliteTimestampColumns,
 } from "../../schema/services/runtime-schema-generator";
-import { backfillDefaultForType } from "../../schema/utils/backfill-default";
-import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { componentFieldHasColumn } from "./field-group-utils";
 
@@ -335,7 +334,12 @@ export class FieldGroupSchemaService {
       const indexName = `idx_${tableName}_${columnName}`;
 
       indexStatements.push(
-        this.createIndexSql(indexName, tableName, columnName)
+        this.createIndexSql(
+          indexName,
+          tableName,
+          columnName,
+          this.columnTypeFor(field) ?? ""
+        )
       );
     }
 
@@ -370,132 +374,6 @@ export class FieldGroupSchemaService {
     }
 
     return sql;
-  }
-
-  /**
-   * Generate ALTER TABLE migration for updating a component data table.
-   */
-  generateAlterTableMigration(
-    tableName: string,
-    oldFields: FieldConfig[],
-    newFields: FieldConfig[]
-  ): string {
-    const statements: string[] = [
-      `-- Update component data table: ${tableName}`,
-    ];
-
-    const oldFieldMap = this.buildFieldMap(oldFields);
-    const newFieldMap = this.buildFieldMap(newFields);
-
-    for (const [name, field] of newFieldMap) {
-      if (oldFieldMap.has(name)) continue;
-
-      // Mapped once and reused: the default formatting and the type default
-      // both switch on `type`, so reading the raw plugin token there would
-      // produce a literal for a type the column does not have.
-      const mapped = this.asMappableField(field);
-      const columnType = this.getColumnType(mapped);
-      if (!columnType) continue;
-
-      const columnName = this.toSnakeCase(name);
-      const nullable = this.writesNotNull(field) ? "NOT NULL" : "";
-
-      // When adding NOT NULL columns to existing tables, provide a sensible default.
-      let defaultVal = "";
-      // A function default produces a different value per row, which a single
-      // DDL constant cannot express. Backfilling existing rows still needs
-      // something, so a required column falls back to its type default rather
-      // than trying to serialize the function itself.
-      const hasConstantDefault =
-        "defaultValue" in field &&
-        field.defaultValue !== undefined &&
-        typeof field.defaultValue !== "function";
-      if (hasConstantDefault) {
-        defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, mapped.type)}`;
-      } else if ("required" in field && field.required) {
-        // The MAPPED type drives the switch and the ORIGINAL field carries the
-        // declared token: a contributed type states its own empty value under
-        // its own name, and `mapped` has already replaced that with the storage
-        // primitive.
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, field)}`;
-      }
-
-      // Refused BEFORE the column statement, not after it. MySQL commits each DDL statement on
-      // its own, so adding the column and then failing on its constraint leaves the column in
-      // place without the guarantee — and a bare column is what the desired schema declares for
-      // an unkeyable type, so the next reconcile sees nothing to fix.
-      if ("unique" in field && field.unique) {
-        this.assertUniquenessEnforceable(field, tableName);
-      }
-
-      statements.push(
-        `ALTER TABLE ${this.q}${tableName}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType} ${nullable} ${defaultVal};`.trim()
-      );
-
-      if ("unique" in field && field.unique) {
-        if (this.dialect === "sqlite") {
-          statements.push(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${this.q}uq_${tableName}_${columnName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`
-          );
-        } else {
-          statements.push(
-            `ALTER TABLE ${this.q}${tableName}${this.q} ADD CONSTRAINT ${this.q}uq_${tableName}_${columnName}${this.q} UNIQUE (${this.q}${columnName}${this.q});`
-          );
-        }
-      }
-    }
-
-    for (const [name] of oldFieldMap) {
-      if (newFieldMap.has(name)) continue;
-
-      const columnName = this.toSnakeCase(name);
-      if (this.dialect === "sqlite") {
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} DROP COLUMN ${this.q}${columnName}${this.q};`
-        );
-      } else {
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} DROP COLUMN IF EXISTS ${this.q}${columnName}${this.q};`
-        );
-      }
-    }
-
-    // SQLite doesn't support ALTER COLUMN, so skip modification detection there.
-    if (this.dialect !== "sqlite") {
-      for (const [name, newField] of newFieldMap) {
-        const oldField = oldFieldMap.get(name);
-        if (!oldField) continue;
-        if (!this.isFieldModified(oldField, newField)) continue;
-
-        const columnName = this.toSnakeCase(name);
-        // Mapped like the added-column path: a field changed to a plugin type
-        // would otherwise resolve no type here and the ALTER would be skipped,
-        // leaving the column as whatever it was.
-        const newType = this.getColumnType(this.asMappableField(newField));
-        if (!newType) continue;
-
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} TYPE ${newType};`
-        );
-
-        const oldRequired = "required" in oldField && oldField.required;
-        const newRequired = "required" in newField && newField.required;
-
-        if (oldRequired !== newRequired) {
-          if (newRequired) {
-            statements.push(
-              `ALTER TABLE ${this.q}${tableName}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} SET NOT NULL;`
-            );
-          } else {
-            statements.push(
-              `ALTER TABLE ${this.q}${tableName}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} DROP NOT NULL;`
-            );
-          }
-        }
-      }
-    }
-
-    return statements.join("\n--> statement-breakpoint\n");
   }
 
   /**
@@ -1158,55 +1036,6 @@ export class FieldGroupSchemaService {
     return [...found];
   }
 
-  private isFieldModified(
-    oldField: DataFieldConfig,
-    newField: DataFieldConfig
-  ): boolean {
-    if (oldField.type !== newField.type) return true;
-
-    const oldRequired = "required" in oldField && oldField.required;
-    const newRequired = "required" in newField && newField.required;
-    if (oldRequired !== newRequired) return true;
-
-    const oldUnique = "unique" in oldField && oldField.unique;
-    const newUnique = "unique" in newField && newField.unique;
-    if (oldUnique !== newUnique) return true;
-
-    if (isTextField(oldField) && isTextField(newField)) {
-      if (oldField.maxLength !== newField.maxLength) return true;
-    }
-
-    if (
-      (isSelectField(oldField) && isSelectField(newField)) ||
-      (isRelationshipField(oldField) && isRelationshipField(newField)) ||
-      (isUploadField(oldField) && isUploadField(newField))
-    ) {
-      if (oldField.hasMany !== newField.hasMany) return true;
-    }
-
-    // A number field keeps `type: "number"` while `dbType`, `precision`,
-    // `scale` and `options.format` decide its physical column. Comparing only
-    // `type` would report "unmodified" for a switch from integer to decimal and
-    // leave the existing column at its old type forever.
-    if (isNumberField(oldField) && isNumberField(newField)) {
-      const oldKind = this.numberColumnKind(oldField);
-      const newKind = this.numberColumnKind(newField);
-      if (oldKind !== newKind) return true;
-      if (oldKind === "decimal") {
-        const oldDims = this.decimalDimensions(oldField);
-        const newDims = this.decimalDimensions(newField);
-        if (
-          oldDims.precision !== newDims.precision ||
-          oldDims.scale !== newDims.scale
-        ) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
   /**
    * The fields that own a column on the component's row: named data fields,
    * less those `componentFieldHasColumn` rules out. Every loop that builds the
@@ -1226,75 +1055,26 @@ export class FieldGroupSchemaService {
     );
   }
 
-  /** A plain index on one column, in this dialect's spelling. */
+  /**
+   * A plain index on one column, in this dialect's spelling. Rendered by the schema pipeline's own
+   * rule, so a MySQL TEXT/BLOB column, which MySQL refuses to index whole, is keyed by the same
+   * prefix a collection's column is.
+   */
   private createIndexSql(
     indexName: string,
     tableName: string,
-    columnName: string
+    columnName: string,
+    columnType: string
   ): string {
-    // MySQL has no IF NOT EXISTS for CREATE INDEX.
-    const ifNotExists = this.dialect === "mysql" ? "" : "IF NOT EXISTS ";
-    return `CREATE INDEX ${ifNotExists}${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`;
-  }
-
-  private buildFieldMap(fields: FieldConfig[]): Map<string, DataFieldConfig> {
-    const map = new Map<string, DataFieldConfig>();
-    for (const field of this.columnFields(fields)) {
-      map.set(field.name, field);
-    }
-    return map;
-  }
-
-  // Used when adding NOT NULL columns to existing tables: the shared backfill
-  // decision, with no JSON-array types because this path stores none.
-  private getDefaultValueForType(type: string, field?: FieldConfig): string {
-    return backfillDefaultForType({
-      type,
-      field,
-      dialect: this.dialect,
-      formatDefaultValue: (value, storageToken) =>
-        this.formatDefaultValue(value, storageToken),
-    });
-  }
-
-  private formatDefaultValue(value: unknown, type: string): string {
-    if (
-      type === "text" ||
-      type === "textarea" ||
-      type === "email" ||
-      type === "password" ||
-      type === "richText" ||
-      type === "code" ||
-      type === "select" ||
-      type === "radio"
-    ) {
-      return `'${String(value)}'`;
-    }
-    if (type === "checkbox") {
-      if (this.dialect === "sqlite") return value ? "1" : "0";
-      return value ? "TRUE" : "FALSE";
-    }
-    if (
-      type === "json" ||
-      type === "repeater" ||
-      type === "group" ||
-      type === "blocks"
-    ) {
-      return quoteExpressionSqlDefault(
-        typeof value === "string" ? value : JSON.stringify(value),
-        this.dialect
-      );
-    }
-    if (type === "date") {
-      if (this.dialect === "sqlite" && typeof value === "string") {
-        return String(Math.floor(new Date(value).getTime() / 1000));
-      }
-      return `'${String(value)}'`;
-    }
-    if (type === "number") {
-      return String(value);
-    }
-    return String(value);
+    const sql = columnIndexSql(
+      tableName,
+      indexName,
+      columnName,
+      columnType,
+      this.dialect,
+      name => `${this.q}${name}${this.q}`
+    );
+    return `${sql};`;
   }
 
   private toSnakeCase(name: string): string {

@@ -66,6 +66,15 @@ const nextConfig: NextConfig = {
   // Unset everywhere else, which leaves Next.js's own default.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
+  // The browser suite's own server turns Next.js's development indicator off.
+  // In development the indicator's button is injected into every document the
+  // app serves, the canvas's frame included, so a keyboard walk through the
+  // editor meets a tab stop inside the canvas that no deployed site has.
+  // Unset everywhere else, which keeps the indicator for a contributor.
+  ...(process.env.NEXTLY_E2E_DEV_INDICATORS === "0"
+    ? { devIndicators: false as const }
+    : {}),
+
   // Type-checking responsibility lives in each workspace package's own
   // `pnpm check-types` (run by CI and during dev). The playground's prod
   // build should only gate on actual bundling/compilation, not re-run
@@ -231,8 +240,14 @@ const nextConfig: NextConfig = {
       // and remain load-bearing for Turbopack's optional-peer-dep handling
       // inside nextly.
       pg: "pg",
-      "mysql2/promise": "./src/stubs/mysql2-stub.js",
-      mysql2: "./src/stubs/mysql2-stub.js",
+      // The mysql2 stub stands in only on SQLite and PostgreSQL: on MySQL the
+      // adapter needs the real driver, which stays external.
+      ...(process.env.DB_DIALECT === "mysql"
+        ? {}
+        : {
+            "mysql2/promise": "./src/stubs/mysql2-stub.js",
+            mysql2: "./src/stubs/mysql2-stub.js",
+          }),
       // CSS files come from dist (the build-css.mjs pipeline applies
       // the .nextly-admin scoping post-process and runs a watch loop so
       // the dist file stays fresh during dev). With @nextlyhq/admin

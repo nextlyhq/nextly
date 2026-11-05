@@ -17,8 +17,10 @@
  */
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   hasBlock,
   registerBlocks,
+  type ComponentLookup,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -37,7 +39,7 @@ import { BlockContextMenu } from "./block-context-menu";
 import { Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
-import { toolbarActions } from "./toolbar-actions";
+import { depthMoveActions, toolbarActions } from "./toolbar-actions";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 afterEach(() => {
@@ -56,6 +58,15 @@ function register() {
         example: { props: {} },
         editor: { label: "Leaf" },
         render: () => React.createElement("p", null, "leaf"),
+      },
+      {
+        name: "acme/box",
+        version: 1,
+        description: "A box.",
+        example: { props: {} },
+        editor: { label: "Box" },
+        slots: { children: {} },
+        render: () => React.createElement("div", null, "box"),
       },
     ] as never,
     { source: "block-context-menu-test" }
@@ -90,13 +101,18 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorState {
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
   } as unknown as EditorState;
 }
 
-function mount(editor: EditorState) {
+function mount(editor: EditorState, definitions?: ComponentLookup) {
   return render(
     <ShortcutProvider>
-      <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
+      <BlockKeyboardActions
+        onSaveAsPattern={() => undefined}
+        editor={editor}
+        {...(definitions === undefined ? {} : { definitions })}
+      >
         <BlockContextMenu editor={editor}>
           <Canvas
             document={editor.document}
@@ -128,6 +144,17 @@ describe("the canvas's right-click menu", () => {
     expect(screen.getByRole("menu")).toBeTruthy();
   });
 
+  it("leaves the editor around it in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register();
+    const { container } = mount(editorSpy(pair(), "a"));
+    fireEvent.contextMenu(blockElement(container));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("offers the verbs the toolbar offers, in the toolbar's words", () => {
     /*
      * The palette deliberately says "Duplicate block", because a palette row is
@@ -139,16 +166,23 @@ describe("the canvas's right-click menu", () => {
     const { container } = mount(editorSpy(pair(), "a"));
     fireEvent.contextMenu(blockElement(container));
 
-    // Taken from the same call the menu takes them from, rather than written
+    // Taken from the same calls the menu takes them from, rather than written
     // down here: a literal list keeps passing while a verb appears on the bar
     // and not in this menu, which is the exact divergence this test names.
-    const expected = toolbarActions(pair(), "a").map(action => action.label);
+    // The menu adds the two depth moves after Move down, which the bar leaves
+    // off.
+    const depth = depthMoveActions(pair(), "a").map(action => action.label);
+    const expected = toolbarActions(pair(), "a").flatMap(action =>
+      action.id === "move-down" ? [action.label, ...depth] : [action.label]
+    );
+    expect(depth).toEqual(["Move in", "Move out"]);
 
     // The control: an empty model would make the comparison vacuous.
     expect(expected.length).toBeGreaterThan(1);
+    // Each item's label, its first line: a dimmed item says why beneath it.
     const labels = screen
       .getAllByRole("menuitem")
-      .map(item => item.textContent);
+      .map(item => item.querySelector("span")?.textContent);
     expect(labels).toEqual(expected);
   });
 
@@ -372,7 +406,103 @@ describe("the canvas's right-click menu", () => {
     // VISIBLE, not a `title`. A disabled item has `pointer-events-none` and is
     // skipped by keyboard navigation, so a tooltip on it is unreachable by
     // either input — the reason has to be in the item's own content.
-    expect(remove.textContent).toContain("This block is locked.");
+    expect(remove.textContent).toContain("Leaf is locked.");
     expect(remove.getAttribute("title")).toBeNull();
+  });
+
+  it("moves a block into the one above with Move in, as Alt+ArrowRight does", () => {
+    register();
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "box", type: "acme/box", version: 1, props: {} },
+        { id: "a", type: "acme/leaf", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+    const editor = editorSpy(doc, "a");
+    const { container } = mount(editor);
+    fireEvent.contextMenu(blockElement(container));
+
+    const moveIn = screen.getByRole("menuitem", { name: "Move in" });
+    expect(moveIn.getAttribute("data-disabled")).toBeNull();
+    fireEvent.pointerUp(moveIn, { pointerType: "mouse", button: 0 });
+
+    // Through the editor's own `apply`, with the keyboard move's position.
+    expect(editor.apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "move",
+        id: "a",
+        to: { parentId: "box", slot: "children", index: 0 },
+      })
+    );
+  });
+
+  it("dims Move in and Move out where the block has nowhere to go", () => {
+    // The first block at the top level: nothing above to move into, and no
+    // container to move out of.
+    register();
+    const { container } = mount(editorSpy(pair(), "a"));
+    fireEvent.contextMenu(blockElement(container));
+    for (const name of ["Move in", "Move out"]) {
+      // By its start: a dimmed item's name goes on to say why.
+      expect(
+        screen
+          .getByRole("menuitem", { name: new RegExp(`^${name}`) })
+          .getAttribute("data-disabled")
+      ).not.toBeNull();
+    }
+  });
+
+  it("judges Move in by the component definitions the verb moves by", () => {
+    // An instance above whose component exposes two regions and neither the
+    // default: the keystroke, given the definitions, has no slot to name and
+    // does nothing — so the menu, asked with the same definitions, dims it.
+    register();
+    const definitions: ComponentLookup = new Map([
+      [
+        "comp",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [{ id: "inside", type: "acme/leaf", version: 1, props: {} }],
+          slots: { header: {}, footer: {} },
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "comp" },
+        },
+        { id: "a", type: "acme/leaf", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+    const { container } = mount(editorSpy(doc, "a"), definitions);
+    fireEvent.contextMenu(blockElement(container));
+    expect(
+      screen
+        .getByRole("menuitem", { name: /^Move in/ })
+        .getAttribute("data-disabled")
+    ).not.toBeNull();
+  });
+
+  it("dims Move in where the placement rule refuses it, and says why", () => {
+    // The block above holds no blocks, so the keystroke would be refused by
+    // the rule. The menu, asked with the same rule, says so before the press.
+    register();
+    const editor = editorSpy(pair(), "b");
+    const { container } = mount(editor);
+    const target = container.querySelector(`[${NODE_ID_ATTRIBUTE}="b"]`);
+    if (target === null) throw new Error("expected block b");
+    fireEvent.contextMenu(target);
+    const moveIn = screen.getByRole("menuitem", { name: /^Move in/ });
+    expect(moveIn.getAttribute("data-disabled")).not.toBeNull();
+    expect(moveIn.textContent).toContain("Leaf can't hold blocks.");
   });
 });

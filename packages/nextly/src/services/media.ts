@@ -54,6 +54,7 @@ import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  storageReadingOf,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
 import { storedSizesOf } from "../domains/media/retired-image-sizes-store";
@@ -358,12 +359,12 @@ export class MediaService extends BaseService {
         "../domains/media/media-library-query"
       );
       const unused = view === "unused" ? await this.unusedSources() : null;
-      const whereClause = mediaQueryCondition(media, unused, {
-        folderId,
-        search,
-        type,
-        view,
-      });
+      const whereClause = mediaQueryCondition(
+        media,
+        unused,
+        { folderId, search, type, view },
+        this.dialect
+      );
 
       const orderFn = sortOrder === "asc" ? asc : desc;
       const orderByClause = orderFn(media[sortBy]);
@@ -1025,10 +1026,15 @@ export class MediaService extends BaseService {
     mediaId: string,
     record: MediaFilesRecord
   ): Promise<boolean> {
+    // The files the removal below takes, a size recorded by URL alone among
+    // them where this storage serves it, so each is asked about first, with
+    // every other item's record read against the same storage.
+    const reading = storageReadingOf(this.storage);
     const kept = await filesKeptByOthers(
       this.storedFileSearch,
-      storedFilesOf(record).paths,
-      [mediaId]
+      storedFilesOf(record, reading.locator).paths,
+      [mediaId],
+      reading
     );
     const ownFilesGone = kept
       ? await removeStoredFiles(this.storage, record, mediaId, kept)

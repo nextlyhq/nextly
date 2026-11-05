@@ -257,43 +257,30 @@ describe("the classes on the selected node", () => {
   });
 });
 
+/** Every style, and the styles whose class name holds some text. */
+const ALL = (): boolean => true;
+const slugHas =
+  (text: string) =>
+  (choice: { slug: string }): boolean =>
+    choice.slug.includes(text);
+
 describe("what the selector offers next", () => {
   it("excludes what the node already carries", () => {
     expect(
-      applicableClasses(LIBRARY, ["id-hero"], "").map(r => r.slug)
+      applicableClasses(LIBRARY, ["id-hero"], ALL).map(r => r.slug)
     ).toEqual(["badge", "card"]);
   });
 
-  it("narrows on the SLUG rather than the emitted name", () => {
-    // Every emitted name starts with the same prefix, so matching against it
-    // would make an author's first keystrokes match everything.
-    expect(applicableClasses(LIBRARY, [], "car").map(r => r.slug)).toEqual([
-      "card",
-    ]);
-    expect(applicableClasses(LIBRARY, [], "nx-c-").map(r => r.slug)).toEqual(
-      []
-    );
-  });
-
   it("keeps library order among SEVERAL matches, not the order it filtered", () => {
-    // A query returning one row cannot see this: the ordering and the filtering
-    // are separate steps and a single result satisfies either. `a` matches two
-    // classes whose library order (badge, card) differs from both their storage
-    // order (card, badge) and any lexical tie they could be sorted by.
-    expect(applicableClasses(LIBRARY, [], "a").map(r => r.slug)).toEqual([
-      "badge",
-      "card",
-    ]);
-  });
-
-  it("ignores case and surrounding space, which a typed query carries", () => {
-    expect(applicableClasses(LIBRARY, [], "  HERO ").map(r => r.slug)).toEqual([
-      "hero",
-    ]);
+    // `a` matches two classes whose library order (badge, card) differs from
+    // both their storage order (card, badge) and any lexical tie.
+    expect(
+      applicableClasses(LIBRARY, [], slugHas("a")).map(r => r.slug)
+    ).toEqual(["badge", "card"]);
   });
 
   it("carries NO usage fields either", () => {
-    const [choice] = applicableClasses(LIBRARY, [], "");
+    const [choice] = applicableClasses(LIBRARY, [], ALL);
     expect(Object.keys(choice ?? {}).sort()).toEqual([
       "className",
       "id",
@@ -303,50 +290,28 @@ describe("what the selector offers next", () => {
 });
 
 describe("what one keystroke resolves to", () => {
-  it("offers the matches first and the new name last", () => {
-    // Enter has to resolve to exactly one action. Create sitting last is what
-    // makes a partially typed name apply the match rather than create a
-    // near-duplicate beside it.
-    const { options } = selectorOptions(LIBRARY, [], "ca");
-    expect(options.map(o => o.kind)).toEqual(["apply", "create"]);
-    expect(options[0]).toEqual({
-      kind: "apply",
-      choice: expect.objectContaining({ slug: "card" }),
-    });
-    expect(options[1]).toEqual({ kind: "create", slug: "ca" });
-  });
-
-  it("does not offer to create a name the library already holds", () => {
-    // A second class under one slug is dropped by the compiler, so offering it
-    // would be offering an entry that styles nothing.
-    const { options } = selectorOptions(LIBRARY, [], "hero");
-    expect(options.map(o => o.kind)).toEqual(["apply"]);
+  it("offers the matching shared styles and never a new, empty one", () => {
+    // Styles are made from a block, so a typed name that matches nothing
+    // offers nothing rather than an empty style.
+    const { options } = selectorOptions(LIBRARY, [], slugHas("ca"));
+    expect(options).toEqual([
+      { kind: "apply", choice: expect.objectContaining({ slug: "card" }) },
+    ]);
+    expect(selectorOptions(LIBRARY, [], slugHas("brand-new")).options).toEqual(
+      []
+    );
   });
 
   it("offers nothing for a class the node already carries", () => {
-    // Neither action is available: applying is a no-op and creating collides.
-    expect(selectorOptions(LIBRARY, ["id-hero"], "hero").options).toEqual([]);
+    expect(
+      selectorOptions(LIBRARY, ["id-hero"], slugHas("hero")).options
+    ).toEqual([]);
   });
 
-  it("offers no creation for a name the engine's grammar rejects", () => {
-    const { options } = selectorOptions(LIBRARY, [], "Not A Slug");
-    expect(options.every(o => o.kind === "apply")).toBe(true);
-  });
-
-  it("offers every applicable class and no creation for an empty query", () => {
-    // The opened-but-untyped state. An empty name cannot be created, so the
-    // list is exactly what the node could still be given.
-    const { options } = selectorOptions(LIBRARY, ["id-hero"], "");
+  it("offers every applicable class for an empty query", () => {
+    // The opened-but-untyped state: exactly what the node could still wear.
+    const { options } = selectorOptions(LIBRARY, ["id-hero"], ALL);
     expect(options.map(o => o.kind)).toEqual(["apply", "apply"]);
-  });
-
-  it("carries the CREATE slug normalized, not as typed", () => {
-    expect(selectorOptions(LIBRARY, [], "  new-thing ").options).toContainEqual(
-      {
-        kind: "create",
-        slug: "new-thing",
-      }
-    );
   });
 });
 
@@ -358,24 +323,15 @@ describe("a library too long to put in front of an author", () => {
   it("offers at most the cap, and REPORTS what it withheld", () => {
     // A truncated list that says nothing reads as "these are all of them",
     // which is the one thing it is not.
-    const { options, hidden } = selectorOptions(many, [], "many");
-    expect(options.filter(o => o.kind === "apply")).toHaveLength(
-      MAX_SELECTOR_OPTIONS
-    );
+    const { options, hidden } = selectorOptions(many, [], slugHas("many"));
+    expect(options).toHaveLength(MAX_SELECTOR_OPTIONS);
     expect(hidden).toBe(20);
   });
 
   it("reports nothing hidden when everything fits", () => {
     // The control: `hidden` must distinguish a capped list from a short one,
     // or the surface would warn about a list it showed in full.
-    expect(selectorOptions(LIBRARY, [], "").hidden).toBe(0);
-  });
-
-  it("keeps the CREATE row even when the matches are capped", () => {
-    // It is the one row the author's own typing produced; dropping it would
-    // make a full library unable to gain a class through this surface.
-    const { options } = selectorOptions(many, [], "brand-new");
-    expect(options.at(-1)).toEqual({ kind: "create", slug: "brand-new" });
+    expect(selectorOptions(LIBRARY, [], ALL).hidden).toBe(0);
   });
 });
 
@@ -452,6 +408,22 @@ describe("whether a name can become a class", () => {
     expect(newClassName("call-to-action", full)).toEqual({
       ok: false,
       refusal: "library-full",
+    });
+  });
+
+  it("leaves the looks out of the count: they have a cap of their own", () => {
+    // One short of full in shared styles, plus code's looks: still room, as
+    // the engine reads the two apart.
+    const nearly = Array.from({ length: MAX_NAMED_CLASSES - 1 }, (_, index) =>
+      cls(`id-fill-${index}`, `fill-${index}`, index)
+    );
+    const looks = Array.from({ length: 6 }, (_, index) => ({
+      ...cls(`look:core/button:l${index}`, `button-l${index}`, index),
+      blockType: "core/button",
+    }));
+    expect(newClassName("call-to-action", [...nearly, ...looks])).toEqual({
+      ok: true,
+      slug: "call-to-action",
     });
   });
 
@@ -587,7 +559,7 @@ describe("a node holding more classes than the page applies", () => {
      * offering it would append a second copy of an id already stored.
      */
     expect(
-      applicableClasses(LIBRARY, overFull, "").map(r => r.slug)
+      applicableClasses(LIBRARY, overFull, ALL).map(r => r.slug)
     ).not.toContain("hero");
   });
 });
@@ -889,5 +861,20 @@ describe("persisted class styles that are not the shape the type promises", () =
         { id: "c1", slug: "hero", styles: { base: { base: null } } },
       ] as never)
     ).toHaveLength(1);
+  });
+});
+
+describe("an applied look's class name", () => {
+  it("is the one the compiler writes, under the look prefix", () => {
+    const [choice] = siteClasses([
+      {
+        id: "look:core/button:outline",
+        slug: "button-outline",
+        orderIndex: 0,
+        blockType: "core/button",
+        styles: {},
+      },
+    ]);
+    expect(choice?.className).toBe("nx-l-button-outline");
   });
 });

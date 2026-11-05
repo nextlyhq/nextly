@@ -6,7 +6,9 @@
  * normally pruned opportunistically on content writes and by the drain, but a
  * self-hoster without a running drain (for example, a cron-driven deploy) needs
  * a manual trigger. `--dry-run` reports what a pass would remove without
- * deleting. The command name is `webhooks:prune` because `prune` already drops
+ * deleting. A pass that deletes takes the data-loss consent
+ * (`--accept-data-loss`, or `NEXTLY_ACCEPT_DATA_LOSS`), with this release's
+ * grace for a run nobody can be asked in. The command name is `webhooks:prune` because `prune` already drops
  * orphaned collection schema.
  *
  * **Runtime restriction:** CLI-only. Do NOT import from runtime code.
@@ -14,8 +16,9 @@
  * @module cli/commands/webhooks-prune
  * @example
  * ```bash
- * nextly webhooks:prune            # prune aged events + terminal deliveries
- * nextly webhooks:prune --dry-run  # report what would be removed
+ * nextly webhooks:prune                     # asks first at a terminal
+ * nextly webhooks:prune --accept-data-loss  # prune without asking
+ * nextly webhooks:prune --dry-run           # report what would be removed
  * ```
  */
 
@@ -33,9 +36,15 @@ import {
   requireDatabaseEnv,
 } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  judgeDataLossWithGrace,
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 
 interface WebhooksPruneCommandOptions {
   dryRun?: boolean;
+  acceptDataLoss?: AcceptDataLossOption;
   config?: string;
   cwd?: string;
 }
@@ -64,6 +73,25 @@ export async function runWebhooksPruneCommand(
     return;
   }
 
+  // A pass that deletes is consented to before the database is reached; a
+  // dry run deletes nothing and needs none.
+  const dryRun = options.dryRun ?? false;
+  if (!dryRun) {
+    await judgeDataLossWithGrace({
+      command: "webhooks:prune",
+      deletions: [
+        { kind: "rows", table: "nextly_events" },
+        { kind: "rows", table: "nextly_webhook_deliveries" },
+      ],
+      consent: readDataLossConsent({
+        flag: options.acceptDataLoss,
+        warn: message => logger.warn(message),
+      }),
+      print: line => logger.info(line),
+      warn: message => logger.warn(message),
+    });
+  }
+
   const dbValidation = requireDatabaseEnv(logger);
   const configuredDialect = dbValidation.dialect;
 
@@ -90,7 +118,6 @@ export async function runWebhooksPruneCommand(
     });
     drizzleAdapter.setTableResolver(schemaRegistry);
 
-    const dryRun = options.dryRun ?? false;
     const result = await pruneWebhookData(
       { adapter: drizzleAdapter, logger },
       policy,
@@ -114,28 +141,19 @@ export async function runWebhooksPruneCommand(
   }
 }
 
-/** Register the `nextly webhooks:prune` command. */
-export function registerWebhooksPruneCommand(program: Command): void {
-  program
-    .command("webhooks:prune")
-    .description(
-      "Run a webhook retention pass: prune aged events and terminal deliveries"
-    )
-    .option(
-      "--dry-run",
-      "Report what a pass would remove without deleting anything",
-      false
-    )
-    .action(async (cmdOptions: { dryRun?: boolean }, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runWebhooksPruneCommand(
-          { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/** The action of `nextly webhooks:prune`, loaded when it runs. */
+export async function webhooksPruneAction(
+  cmdOptions: { dryRun?: boolean; acceptDataLoss?: AcceptDataLossOption },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runWebhooksPruneCommand(
+      { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

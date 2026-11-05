@@ -214,13 +214,16 @@ export interface PluginDocumentView {
 
 /**
  * @experimental A document view offered on every collection and Single that
- * has a top-level field of one type, wherever that type is used — including
+ * has a field of one type, at the top level or inside named groups at any
+ * depth, wherever that type is used — including
  * collections created in the Schema Builder after boot, which no list of slugs
  * could name.
  *
  * A plugin may scope a view only to a field type it contributes itself (boot
  * refuses any other), so no plugin can add a screen to every document that has,
- * say, a text field. A field inside a group or a repeater does not count.
+ * say, a text field. A field inside a repeater does not count: a row is
+ * addressed by its position, which names another row once the rows are
+ * reordered.
  *
  * Which documents carry the field is not known at boot, so the path must be
  * unique among every document view any plugin declares.
@@ -228,6 +231,17 @@ export interface PluginDocumentView {
 export interface PluginFieldTypeDocumentView extends PluginDocumentView {
   /** The field type, one of this plugin's own `contributes.fieldTypes`. */
   fieldType: string;
+}
+
+/**
+ * @experimental One place a plugin declares on its own admin pages, under its
+ * namespace: see `PluginAdminContributions.places`.
+ */
+export interface PluginAdminPlaceDeclaration {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-billing.invoice"`. */
+  name: string;
+  /** What the place is for, for the authors of plugins that add to it. */
+  description?: string;
 }
 
 /**
@@ -243,6 +257,14 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
   menu?: PluginMenuItem[];
+  /**
+   * @experimental Places of this plugin's own, on its pages, that plugins may
+   * add to. Each name starts with this plugin's slug and a dot,
+   * `"acme-billing.invoice"` for `@acme/billing`; the app refuses to start on
+   * one outside it, under a segment core reserves, or declared by two
+   * plugins. Type each by augmenting `AdminPlaces`.
+   */
+  places?: PluginAdminPlaceDeclaration[];
   /** Custom admin pages, namespaced + RBAC-gated. */
   pages?: PluginAdminPage[];
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */

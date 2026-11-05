@@ -20,7 +20,7 @@ export const LOCALIZATION_INTENT_HEADER = "-- Localization:";
  * Absence of the field is different, and does mean verbatim — that is what every file written
  * before this existed looks like.
  */
-export const LOCALIZATION_INTENT_VERSION = 4;
+export const LOCALIZATION_INTENT_VERSION = 6;
 
 /**
  * Every payload version this build has a parser for.
@@ -30,7 +30,9 @@ export const LOCALIZATION_INTENT_VERSION = 4;
  * When version 2 arrives and 1 is still readable, both belong here; when 1 stops being readable, it
  * comes out and its files start refusing instead of being silently misread.
  */
-const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4]);
+const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([
+  1, 2, 3, 4, 5, 6,
+]);
 
 /**
  * What a companion migration file declares it is FOR, as opposed to the statements it happens to
@@ -61,6 +63,8 @@ const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4]);
  * - `unique` adds or drops the companion's per-language unique indexes, for translated fields that
  *   become or stop being unique (`plan-translated-unique-migration.ts`). Its drops run before the
  *   main migration, so no column they key on goes first, and its creates after every other file.
+ * - `adds` adds the companion columns of translated fields added to an entity that is already
+ *   translated (`field-added-to-translation.ts`), and its DOWN drops them.
  */
 export const LOCALIZATION_MIGRATION_KINDS = [
   "enable",
@@ -70,14 +74,16 @@ export const LOCALIZATION_MIGRATION_KINDS = [
   "shared",
   "joins",
   "unique",
+  "adds",
 ] as const;
 
 export type LocalizationMigrationKind =
   (typeof LOCALIZATION_MIGRATION_KINDS)[number];
 
 /**
- * The kinds each payload version can declare. Version 4 added `unique`, version 3 `joins`,
- * version 2 `archive` and `shared`; version 1 has only the whole-entity transitions.
+ * The kinds each payload version can declare. Version 6 added no kind but the spec's `settings`
+ * (`SETTINGS_INTENT_VERSION`), 5 `adds`, 4 `unique`, 3 `joins`, version 2 `archive` and `shared`;
+ * version 1 has only the whole-entity transitions.
  */
 const KINDS_BY_VERSION: ReadonlyMap<
   number,
@@ -86,16 +92,41 @@ const KINDS_BY_VERSION: ReadonlyMap<
   [1, ["enable", "create-only", "disable"]],
   [2, ["enable", "create-only", "disable", "archive", "shared"]],
   [3, ["enable", "create-only", "disable", "archive", "shared", "joins"]],
-  [4, LOCALIZATION_MIGRATION_KINDS],
+  [
+    4,
+    [
+      "enable",
+      "create-only",
+      "disable",
+      "archive",
+      "shared",
+      "joins",
+      "unique",
+    ],
+  ],
+  [5, LOCALIZATION_MIGRATION_KINDS],
+  [6, LOCALIZATION_MIGRATION_KINDS],
 ]);
+
+/**
+ * The first version whose spec may record `settings`. A build before it ignores keys it does not
+ * know, so it would run such a file without the check the settings are recorded for; at this
+ * version it refuses the file instead, as one it does not support.
+ */
+const SETTINGS_INTENT_VERSION = 6;
 
 /**
  * The version a file of this kind is written with: the lowest that can declare it. A file of a
  * version-1 kind stays readable by a build that knows only version 1, and a file of a newer kind
  * is refused by such a build as a version it does not support, which says to upgrade, rather
- * than as a corrupt version-1 file.
+ * than as a corrupt version-1 file. A spec recording `settings` needs `SETTINGS_INTENT_VERSION`,
+ * so only the files that carry them leave older builds behind.
  */
-export function intentVersionFor(kind: LocalizationMigrationKind): number {
+export function intentVersionFor(
+  kind: LocalizationMigrationKind,
+  spec?: Pick<CompanionMigrationSpec, "settings">
+): number {
+  if (spec?.settings !== undefined) return SETTINGS_INTENT_VERSION;
   for (const [version, kinds] of KINDS_BY_VERSION) {
     if (kinds.includes(kind)) return version;
   }
@@ -126,7 +157,7 @@ export function formatLocalizationIntent(
 ): string {
   const s = intent.spec;
   const ordered = {
-    version: intentVersionFor(intent.kind),
+    version: intentVersionFor(intent.kind, intent.spec),
     kind: intent.kind,
     entity: intent.entity,
     spec: {
@@ -151,6 +182,20 @@ export function formatLocalizationIntent(
         ? {}
         : {
             unique: s.unique.map(u => ({ field: u.field, column: u.column })),
+          }),
+      ...(s.settings === undefined
+        ? {}
+        : {
+            settings: {
+              required: s.settings.required.map(r => ({
+                field: r.field,
+                column: r.column,
+              })),
+              unique: s.settings.unique.map(u => ({
+                field: u.field,
+                column: u.column,
+              })),
+            },
           }),
     },
   };
@@ -302,17 +347,33 @@ function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
   )
     return false;
   if (s.status !== undefined && typeof s.status !== "boolean") return false;
+  if (s.unique !== undefined && !isFieldColumnList(s.unique)) return false;
+  // Settings arrived with their version: an older header carrying them was not written by a
+  // generator, and a hand-added key is not one to trust.
   return (
-    s.unique === undefined ||
-    (Array.isArray(s.unique) &&
-      s.unique.every(
-        u =>
-          typeof u === "object" &&
-          u !== null &&
-          typeof (u as Record<string, unknown>).field === "string" &&
-          typeof (u as Record<string, unknown>).column === "string"
-      ))
+    s.settings === undefined ||
+    (v.version >= SETTINGS_INTENT_VERSION && isSettingsShape(s.settings))
   );
+}
+
+/** A list of `{ field, column }` names, as `unique` and each `settings` list record them. */
+function isFieldColumnList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      u =>
+        typeof u === "object" &&
+        u !== null &&
+        typeof (u as Record<string, unknown>).field === "string" &&
+        typeof (u as Record<string, unknown>).column === "string"
+    )
+  );
+}
+
+function isSettingsShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return isFieldColumnList(v.required) && isFieldColumnList(v.unique);
 }
 
 /**

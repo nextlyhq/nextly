@@ -1,7 +1,8 @@
 // Find every column whose type or nullability differs from its field's descriptor.
 //
-// Read-only: it introspects the live tables once and changes nothing in the database. Each column
-// is judged against its field AS THE DATABASE LAST HAD IT APPLIED, never against a newer
+// Read-only: it introspects the live tables once, reads the rows of each differing column to class
+// it, and changes nothing in the database. Each column is judged against its field AS THE DATABASE
+// LAST HAD IT APPLIED, never against a newer
 // configuration, because a change the configuration holds and no migration has applied is that
 // migration's to make: converting the column towards it here would let a repair stand in for a
 // reviewed migration file. Such a change is reported on its own record, so the owner sees both what
@@ -9,6 +10,7 @@
 //
 // @module domains/schema/repair-columns/find-differences
 
+import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
@@ -18,7 +20,9 @@ import {
   getComponentRowColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
+import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
+import { classifyDifference, planDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
 import { differenceCause } from "./difference-cause";
 import type {
@@ -137,8 +141,14 @@ function columnsNamedBy(
   return columns;
 }
 
-/** The live columns of each live table, by lower-cased table and column name. */
-type LiveTables = ReadonlyMap<string, ReadonlyMap<string, ColumnSpec>>;
+/** One live table: its name as the database spells it, and its columns by lower-cased name. */
+interface LiveTable {
+  name: string;
+  columns: ReadonlyMap<string, ColumnSpec>;
+}
+
+/** The live tables, by lower-cased name. */
+type LiveTables = ReadonlyMap<string, LiveTable>;
 
 const key = (table: string, column: string) =>
   `${table.toLowerCase()}\u0000${column.toLowerCase()}`;
@@ -161,7 +171,25 @@ function liveColumnAt(
 ): ColumnSpec | undefined {
   return live
     .get(location.table.toLowerCase())
-    ?.get(location.column.toLowerCase());
+    ?.columns.get(location.column.toLowerCase());
+}
+
+/**
+ * The table and column at a location as the database spells them, for a query to name, and how the
+ * table's rows are keyed, from its primary key.
+ */
+function liveNamesOf(
+  live: LiveTables,
+  location: ColumnLocation
+): { liveTable: string; liveColumn: string; keyedBy: KeyedBy } {
+  const table = live.get(location.table.toLowerCase());
+  return {
+    keyedBy: keyedByOf([...(table?.columns.values() ?? [])]),
+    liveTable: table?.name ?? location.table,
+    liveColumn:
+      table?.columns.get(location.column.toLowerCase())?.name ??
+      location.column,
+  };
 }
 
 /** A live column's state, or null where the column does not exist, as a pending change holds it. */
@@ -198,7 +226,16 @@ async function readLiveTables(
   return new Map(
     snapshot.tables.map(table => [
       table.name.toLowerCase(),
-      new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
+      {
+        name: table.name,
+        // The per-document columns are Nextly's own, added by `nextly
+        // migrate` rather than by any field, so no comparison sees them.
+        columns: new Map(
+          table.columns
+            .filter(c => !isNextlyOwnedDocumentColumn(c.name))
+            .map(c => [c.name.toLowerCase(), c])
+        ),
+      },
     ])
   );
 }
@@ -237,13 +274,14 @@ export async function findColumnDifferences(args: {
       continue;
     }
     findings.push(
-      ...appliedColumnFindings(
+      ...(await appliedColumnFindings(
+        db,
         entity,
         entity.applied.origin,
         applied,
         live,
         dialect
-      )
+      ))
     );
     if (configured !== null) {
       findings.push(
@@ -291,18 +329,42 @@ function awaitingMigrationFindings(
 /**
  * Every applied column of one entity that the database lacks or holds differently. `origin` is the
  * applied definition's builder, the one that made the live table.
+ *
+ * Each differing column is classed from the rows it holds, except one a plugin owns: that column is
+ * reported and never changed, so nothing would act on its class.
  */
-function appliedColumnFindings(
+async function appliedColumnFindings(
+  db: unknown,
   entity: RepairEntity,
   origin: RepairColumnOrigin,
   applied: readonly NamedColumn[],
   live: LiveTables,
   dialect: SupportedDialect
-): ColumnFinding[] {
+): Promise<ColumnFinding[]> {
   const findings: ColumnFinding[] = [];
   for (const column of applied) {
     const finding = judgeAppliedColumn(entity, origin, column, live, dialect);
-    if (finding !== null) findings.push(finding);
+    if (finding === null) continue;
+    if (finding.kind !== "differs" || finding.plugin !== undefined) {
+      findings.push(finding);
+      continue;
+    }
+    const difference = {
+      kind: entity.kind,
+      field: column.field,
+      location: finding.location,
+      live: finding.live,
+      expected: finding.expected,
+      ...liveNamesOf(live, finding.location),
+    };
+    const judgement = await classifyDifference(db, dialect, difference);
+    findings.push({
+      ...finding,
+      judgement,
+      // What the conversion would run and what the new type cannot keep, read from the same live
+      // table, so the report can say both and block what cannot be carried.
+      conversion: await planDifference(db, dialect, difference, judgement),
+    });
   }
   return findings;
 }
@@ -342,6 +404,8 @@ function judgeAppliedColumn(
     expected: column.expected,
     live: state,
     aspects,
+    judgement: null,
+    conversion: null,
     cause: differenceCause({
       field: column.field,
       kind: entity.kind,

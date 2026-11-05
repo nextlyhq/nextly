@@ -10,8 +10,10 @@
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
+import type { ConversionJudgement } from "../value-conversion/types";
 
 import type { ColumnAspects } from "./column-comparison";
+import type { ColumnConversionPlan } from "./conversion/types";
 
 /** The kinds of entity whose fields Nextly builds a table from. */
 export type RepairEntityKind =
@@ -143,6 +145,17 @@ export interface DiffersFinding extends FindingBase {
   live: ColumnState;
   aspects: ColumnAspects;
   cause: DifferenceCause | null;
+  /**
+   * Whether the column can convert, from the rows it holds: its class, every reason and the rows
+   * that give it. Null for a column a plugin owns, which is reported and never changed.
+   */
+  judgement: ConversionJudgement | null;
+  /**
+   * How the column would convert, read from the live table: its statements, what they cost and
+   * what the new type cannot keep, which makes the difference blocked. Null where the judgement is
+   * null or found no conversion for the pair of types.
+   */
+  conversion: ColumnConversionPlan | null;
 }
 
 /**

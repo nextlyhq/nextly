@@ -38,6 +38,15 @@ vi.mock("../../init", () => ({
   getCachedNextly: vi.fn(async () => undefined),
 }));
 
+// The collection schema route runs its address check under the schema lock, which needs a real
+// database; the stub adapter above has none, and what is judged here is the check, not the lock
+// (`builder-saves-refused-while-locked.integration.test.ts` holds the lock against that route).
+vi.mock("../../domains/schema/services/schema-change-exclusion", () => ({
+  withSchemaChangeExcluded: vi.fn(
+    (_args: unknown, work: () => Promise<unknown>) => work()
+  ),
+}));
+
 vi.mock("../../api/route-auth", () => ({
   requireRouteAnyPermission: vi.fn(async () => undefined),
   requireRouteAllPermissions: vi.fn(async () => undefined),

@@ -132,7 +132,10 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
     // The inserter is a different tree from the canvas — a list of options with
     // its own roles — and a scan of the closed editor never reaches it.
     await openEditor(page);
-    await page.getByRole("button", { name: "Insert" }).click();
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Add", exact: true })
+      .click();
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
     });
@@ -142,6 +145,34 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
     expect(
       findings,
       `axe reported ${findings.length} violation(s) with the inserter open:\n${JSON.stringify(findings, null, 2)}`
+    ).toEqual([]);
+  });
+
+  test("has no violations with the Add panel open in DARK mode", async ({
+    page,
+  }) => {
+    // The panel's greyed tiles, its placement line and the popover each set
+    // a colour of their own, so each theme is scanned with them on screen.
+    await page.addInitScript(
+      ([key, value]) => window.localStorage.setItem(key, value),
+      ["nextly-theme", "dark"] as const
+    );
+    await openEditor(page);
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Add", exact: true })
+      .click();
+    await expect(page.getByRole("option").first()).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.getByRole("option").first().hover();
+    await expect(page.locator(".nx-insert-popover")).toBeVisible();
+
+    const findings = await scanEditor(page);
+
+    expect(
+      findings,
+      `axe reported ${findings.length} violation(s) with the inserter open in dark mode:\n${JSON.stringify(findings, null, 2)}`
     ).toEqual([]);
   });
 

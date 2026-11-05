@@ -50,12 +50,15 @@ they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, fo
 checkout or a test run, and the server log then names each missing component and the switch.
 
 Check the committed map in CI with `nextly generate:types --check`. It writes nothing, and
-exits 1 naming each missing component and each path no longer declared, or 2 when it cannot
+exits 2 naming each missing component and each path no longer declared, or 1 when it cannot
 load the config:
 
 ```bash
 npx nextly generate:types --check
 ```
+
+`--check` and `--dry-run` are refused together: `--check` exits non-zero when the map is out
+of date, while `--dry-run` lists the files a real run would write and exits 0.
 
 Production never reads, checks or writes the map. A dashboard widget whose component is missing
 from it draws its own card's error state, and every other card and page draws as usual. In
@@ -279,11 +282,14 @@ contributes: {
 },
 ```
 
-A view can be scoped only to a field type the same plugin contributes. Only a
-top-level field counts: a document whose field sits inside a named group or a
-repeater doesn't get the view. A field inside an unnamed group counts as top-level,
-because the group only arranges the form. A field-type view's `path` must be unique among
-every document view any plugin declares.
+A view can be scoped only to a field type the same plugin contributes. A field
+counts at the top level or inside named groups, at any depth. The address names
+it by its path from the document's root (`?field=hero.body`). A field inside an
+unnamed group is named as if it were at the top level, because the group only
+arranges the form. A field inside a repeater doesn't count: a row is addressed
+by its position, and the position names another row once the rows are
+reordered. A field-type view's `path` must be unique among every document view
+any plugin declares.
 
 The admin keeps the document's own behaviour around your view, so you don't
 build any of it yourself:
@@ -301,18 +307,19 @@ build any of it yourself:
 Your component replaces the form's body and receives `DocumentViewProps` from
 `@nextlyhq/plugin-sdk/admin`:
 
-| Prop                        | What it is                                                                                                                                                                                                                                                                                                             |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `collectionSlug`, `entryId` | The collection entry being shown.                                                                                                                                                                                                                                                                                      |
-| `singleSlug`                | The Single being shown, instead of the two above.                                                                                                                                                                                                                                                                      |
-| `control`                   | The document form's react-hook-form `control`. Write to the fields through it.                                                                                                                                                                                                                                         |
-| `readOnly`                  | `true` while someone else holds the document. Don't offer edits then.                                                                                                                                                                                                                                                  |
-| `exit`                      | Goes back to the document's edit form. Commit any state you hold into the form first.                                                                                                                                                                                                                                  |
-| `field`                     | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
+| Prop                        | What it is                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `collectionSlug`, `entryId` | The collection entry being shown.                                                                                                                                                                                                                                                                            |
+| `singleSlug`                | The Single being shown, instead of the two above.                                                                                                                                                                                                                                                            |
+| `control`                   | The document form's react-hook-form `control`. Write to the fields through it.                                                                                                                                                                                                                               |
+| `readOnly`                  | `true` while someone else holds the document. Don't offer edits then.                                                                                                                                                                                                                                        |
+| `exit`                      | Goes back to the document's edit form. Commit any state you hold into the form first.                                                                                                                                                                                                                        |
+| `field`                     | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the field it edits. When the document has several such fields, it is the one the address names (`?field=<path>`). If the address names none of them, the admin asks the author which one before it draws your view. |
+| `fieldPath`                 | For a field-type view, where that field sits in the form, from the document's root: `layout` at the top level, `hero.body` inside a named group. Bind to the field through this, not `field.name`, which names the field within its own group only. Experimental.                                            |
 
 Opening that address requires the same permission as editing the document.
 A field-type view also opens only for a field the edit form would let the
-author edit. If the field, or an unnamed group around it, is read-only,
+author edit. If the field, or any group around it, is read-only,
 disabled, hidden, or hidden by its condition, the admin says why and offers the
 way back instead of drawing your view.
 
@@ -330,6 +337,46 @@ Startup is refused, naming the plugins involved, when a view's `path`:
   field-type view and declared anywhere else;
 - belongs to a field-type view scoped to a field type the plugin does not
   contribute.
+
+#### The header's controls in your view
+
+> **Experimental.** These may change before they are marked stable.
+
+Your view replaces the header, and the header's save state and Publish with it.
+Place `<DocumentSaveIndicator />` and `<DocumentPrimaryAction />`, from
+`@nextlyhq/plugin-sdk/admin`, wherever your view draws its toolbar:
+
+- `DocumentSaveIndicator` says whether the work is stored: **Saving…**,
+  **Unsaved changes**, **Saved** (when, in its tooltip) or **Not saved** with
+  **Retry**. It keeps the width of its longest state, so nothing beside it
+  moves, and screen readers hear it as they hear the header's. `className`
+  places it.
+- `DocumentPrimaryAction` is the action that leads (**Publish**, **Publish
+  changes** or **Save**, as in the header). Its arrow holds **Save draft**, the
+  other ways to publish, such as **Schedule publish…**, and **Unpublish**. An
+  action that can't run right now is disabled, with the reason it is held.
+
+Both are the admin's own controls, run through the same actions as the
+header. Outside a document they render nothing.
+
+### Who is signed in
+
+`useCurrentUserId()` from `@nextlyhq/plugin-sdk/admin` answers the signed-in user's id, for a
+plugin that keeps something per user, such as its own preferences on a browser several
+people share. It reads what the admin already knows about the user, so it makes no request.
+
+It answers `null` while that isn't known yet, when no one is signed in, and when the read
+failed. Keep nothing then, rather than keeping it for a guess.
+
+```tsx
+import { useCurrentUserId } from "@nextlyhq/plugin-sdk/admin";
+
+const userId = useCurrentUserId();
+const key = userId === null ? null : `my-plugin.layout:${userId}`;
+```
+
+This hook is experimental while its first consumer settles. Its name and its
+`string | null` answer are meant to stay.
 
 ## Dashboard widgets
 

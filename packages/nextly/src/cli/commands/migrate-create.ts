@@ -52,6 +52,7 @@ import type { Command } from "commander";
 
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   orderedMigrations,
   type PluginMigration,
@@ -79,12 +80,15 @@ import {
 import {
   generateMigration,
   removedCollectionTables,
+  type GenerateResult,
 } from "../../domains/schema/migrate-create/generate";
 import {
   generateBlankPluginMigration,
   generatePluginMigration,
+  type GeneratePluginMigrationResult,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
+import { assertMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
@@ -117,17 +121,20 @@ import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
+import type { CommandContext } from "../context";
+import { reportDryRun } from "../dry-run";
 import {
   migrationCreateCancelled,
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
 import { exitWithError } from "../errors/index";
-import { createContext, type CommandContext } from "../context";
 import {
   type CLIDatabaseAdapter,
   createCliAdapter,
   getDialectDisplayName,
+  type MissingDatabase,
+  openDryRunAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
 import {
@@ -137,6 +144,8 @@ import {
 import { bundleAndRequire } from "../utils/config-bundler";
 import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
+
+import { commandRun } from "./command-run";
 
 // ============================================================================
 // Types
@@ -157,16 +166,10 @@ export interface MigrateCreateCommandOptions {
   blank?: boolean;
 
   /**
-   * Skip interactive prompts. Used in CI / non-TTY environments. With
-   * this flag set and `--accept-renames` not set, all rename candidates
-   * are declined (DROP + ADD with possible data loss).
-   * @default detected from process.stdout.isTTY
-   */
-  nonInteractive?: boolean;
-
-  /**
-   * Only meaningful with `--non-interactive`. Auto-accept all rename
-   * candidates. ADVANCED — verify the diff first via `migrate:create`
+   * Only meaningful when the run cannot prompt (`canPrompt`: no terminal,
+   * `CI` set, or the global `--non-interactive`), where rename candidates are
+   * otherwise declined (DROP + ADD with possible data loss). Auto-accept all
+   * rename candidates. ADVANCED — verify the diff first via `migrate:create`
    * in interactive mode before flipping this on for CI.
    * @default false
    */
@@ -197,6 +200,12 @@ export interface MigrateCreateCommandOptions {
    * @default false
    */
   recordSnapshot?: boolean;
+
+  /**
+   * `--dry-run`: plan the migration as a real run does, rename questions included, print it and
+   * the files it would write, and write nothing. A refusal of the plan is reported and exits 0.
+   */
+  dryRun?: boolean;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
@@ -211,45 +220,136 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
 // ============================================================================
 
 /**
- * `--record-snapshot` with nothing to record exits 2, as a plain run with
- * nothing to write does, so a script can tell it from a record to commit.
- */
-/**
  * What `--record-snapshot` reads the translations tables through (`liveCompanionColumns`): the
  * database `DATABASE_URL` names, opened on the first read and closed by `close`. Nothing for any
  * other run, which stays offline.
  */
-function recordModeReader(recording: boolean | undefined): {
+function recordModeReader(
+  recording: boolean | undefined,
+  dryRun: boolean | undefined
+): {
   read?: (tableName: string) => Promise<readonly string[]>;
   close: () => Promise<void>;
 } {
   if (recording !== true) return { close: () => Promise.resolve() };
-  let adapter: Promise<CLIDatabaseAdapter> | undefined;
+  // A dry run opens the database read-only; one that is not there has no
+  // translation tables, which is what a real run would find in the one it makes.
+  let adapter: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
   return {
     read: async tableName => {
-      adapter ??= createCliAdapter();
+      adapter ??= dryRun === true ? openDryRunAdapter() : createCliAdapter();
+      const opened = await adapter;
+      if ("missing" in opened) return [];
       const { companionColumnNames } = await import(
         "../../domains/i18n/runtime/companion-io"
       );
       return companionColumnNames(
-        (await adapter) as unknown as Parameters<
-          typeof companionColumnNames
-        >[0],
+        opened as unknown as Parameters<typeof companionColumnNames>[0],
         tableName
       );
     },
     close: async () => {
-      if (adapter) await (await adapter).disconnect();
+      const opened = adapter ? await adapter : undefined;
+      if (opened && !("missing" in opened)) await opened.disconnect();
     },
   };
 }
 
-function nothingToRecord(logger: CommandContext["logger"]): never {
+/**
+ * The errors a plan's own checks raise when the real run would refuse: a
+ * declaration or a change the checks reject, a plugin module that may not be
+ * written, and the bookkeeping `migrate:baseline` must not adopt over. A dry
+ * run reports these and exits 0. Anything else, such as a database that cannot
+ * be reached, means the plan could not be worked out, and the dry run fails on
+ * it as the real run does.
+ */
+const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "VALIDATION_ERROR",
+  "PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN",
+  "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
+  "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
+  "NEXTLY_LEGACY_BOOKKEEPING_DETECTED",
+]);
+
+/** The refusal a dry run reports for `error`, in the real run's own words. */
+export function dryRunRefusalOf(error: unknown): string | undefined {
+  if (!NextlyError.is(error) || !PLAN_REFUSAL_CODES.has(error.code)) {
+    return undefined;
+  }
+  return error.publicMessage;
+}
+
+/**
+ * Handles an error the plan's checks raised. A dry run reports it as the real run's refusal and
+ * exits 0. Any other run, or an error that is no refusal, goes on as it did before the dry run
+ * existed: `otherwise`, which rethrows unless the call site already ended the run itself.
+ */
+function stopOnPlanError(
+  error: unknown,
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined,
+  otherwise: () => never = () => {
+    throw error;
+  }
+): never {
+  const refusal = dryRun === true ? dryRunRefusalOf(error) : undefined;
+  if (refusal !== undefined) {
+    reportDryRun(logger, { changes: [], refusals: [refusal] });
+    process.exit(0);
+  }
+  otherwise();
+}
+
+/**
+ * What a dry run of a generated migration prints: the migration's text, then the migration and
+ * its snapshot as the real run would write them, and any translation-table file beside them.
+ */
+function reportMigrationDryRun(
+  result: GenerateResult,
+  cwd: string,
+  logger: CommandContext["logger"]
+): void {
+  const sqlFile = relative(cwd, result.sqlPath);
+  logger.info(`${sqlFile} would hold:\n${result.sqlContent.trimEnd()}`);
+  reportDryRun(logger, {
+    changes: [
+      { action: "write", target: sqlFile },
+      { action: "write", target: relative(cwd, result.snapshotPath) },
+      // The translation-table migration files, written after the pair.
+      ...result.companionFiles.map(file => ({
+        action: "write" as const,
+        target: relative(cwd, file.path),
+      })),
+    ],
+  });
+}
+
+/**
+ * `--record-snapshot` with nothing to record exits 0, as a plain run with
+ * nothing to write does: nothing to do is not a failure. The message, not the
+ * code, tells it from a record to commit.
+ */
+function nothingToRecord(
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined
+): never {
   logger.newline();
   logger.info(
     "Nothing to record: no snapshot here predates the record of which fields are translated."
   );
-  process.exit(2);
+  endNothingToDo(logger, dryRun);
+  process.exit(0);
+}
+
+/**
+ * Where the real run has nothing to do, a dry run says the same and then ends
+ * as every dry run ends, so a script can rely on its last lines.
+ */
+function endNothingToDo(
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined
+): void {
+  if (dryRun === true) reportDryRun(logger, { changes: [] });
 }
 
 /**
@@ -352,17 +452,17 @@ export async function runMigrateCreate(
       migrationsDir,
       context,
       startTime,
-      options.transaction !== false
+      options.transaction !== false,
+      options.dryRun === true
     );
     return;
   }
 
-  // F11 PR 3: detect non-interactive mode from the explicit flag OR from
-  // a non-TTY stdout. CI environments typically have isTTY=false; the
-  // safer default in that case is to decline renames (treat as DROP+ADD)
+  // Whether rename candidates may be asked about: the one answer every
+  // prompt takes (terminal on stdin and stdout, no `CI`, no global
+  // `--non-interactive`). Without one, renames are declined (DROP + ADD)
   // unless --accept-renames is explicit.
-  const nonInteractive =
-    options.nonInteractive === true || !process.stdout.isTTY;
+  const nonInteractive = !canPrompt();
 
   // F11 PR 3 review fix #8: surface a warning when --accept-renames was
   // passed but interactive mode is in effect. The flag is only consulted
@@ -453,22 +553,26 @@ export async function runMigrateCreate(
     return list.filter(e => !shadowed.has(e.slug));
   };
 
-  assertPluginFieldDeclarations({
-    collections: configResult.config.collections,
-    singles: configResult.config.singles,
-    fieldGroups: configResult.config.fieldGroups,
-  });
-  assertPluginFieldDeclarations({
-    collections: survivingOf(
-      manifest.collections,
-      configResult.config.collections
-    ),
-    singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
-    fieldGroups: survivingOf(
-      manifest.components,
-      configResult.config.fieldGroups ?? []
-    ),
-  });
+  try {
+    assertPluginFieldDeclarations({
+      collections: configResult.config.collections,
+      singles: configResult.config.singles,
+      fieldGroups: configResult.config.fieldGroups,
+    });
+    assertPluginFieldDeclarations({
+      collections: survivingOf(
+        manifest.collections,
+        configResult.config.collections
+      ),
+      singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
+      fieldGroups: survivingOf(
+        manifest.components,
+        configResult.config.fieldGroups ?? []
+      ),
+    });
+  } catch (error) {
+    stopOnPlanError(error, logger, options.dryRun);
+  }
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
   // survived the merge (code-first wins → shadowed UI slugs are skipped).
@@ -540,7 +644,9 @@ export async function runMigrateCreate(
           }),
       });
     } catch (error) {
-      exitWithError(logger, error);
+      stopOnPlanError(error, logger, options.dryRun, () =>
+        exitWithError(logger, error)
+      );
     }
   }
 
@@ -550,8 +656,14 @@ export async function runMigrateCreate(
     logger: { warn: m => logger.warn(m) },
   });
 
-  // A new address is judged by the one address rule before anything is written.
-  assertMigrationAddresses(merged, latest, logger);
+  try {
+    // A new address is judged by the one address rule before anything is written.
+    assertMigrationAddresses(merged, latest, logger);
+    // And each new pair of sibling fields, against the fields the latest snapshot records.
+    assertMigrationSiblingFields(merged, latest, logger);
+  } catch (error) {
+    stopOnPlanError(error, logger, options.dryRun);
+  }
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.
@@ -566,12 +678,14 @@ export async function runMigrateCreate(
   });
   // A project with no tables has no translated field to record, and says so as any recording run
   // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
-  if (nothing && options.recordSnapshot === true) nothingToRecord(logger);
+  if (nothing && options.recordSnapshot === true)
+    nothingToRecord(logger, options.dryRun);
   if (nothing) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
     logger.info("Use --blank to create an empty migration for custom SQL.");
+    endNothingToDo(logger, options.dryRun);
     return;
   }
 
@@ -580,7 +694,7 @@ export async function runMigrateCreate(
 
   // `--record-snapshot` records which fields are translated as the database holds them, so it reads
   // the translations tables, connecting only once it has one to check. Every other run stays offline.
-  const live = recordModeReader(options.recordSnapshot);
+  const live = recordModeReader(options.recordSnapshot, options.dryRun);
   let result;
   try {
     result = await generateMigration({
@@ -599,6 +713,7 @@ export async function runMigrateCreate(
       autoAcceptRenames: options.acceptRenames === true,
       recordSnapshot: options.recordSnapshot === true,
       liveCompanionColumns: live.read,
+      dryRun: options.dryRun === true,
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
@@ -609,13 +724,15 @@ export async function runMigrateCreate(
       // message before throwing; the error says what it left undone.
       exitWithError(logger, migrationCreateCancelled());
     }
-    exitWithError(logger, error);
+    stopOnPlanError(error, logger, options.dryRun, () =>
+      exitWithError(logger, error)
+    );
   } finally {
     await live.close();
   }
 
   if (result === null && options.recordSnapshot === true) {
-    nothingToRecord(logger);
+    nothingToRecord(logger, options.dryRun);
   }
 
   if (result === null) {
@@ -623,9 +740,15 @@ export async function runMigrateCreate(
     logger.info(
       "No changes detected. Your config matches the latest snapshot."
     );
-    // Per spec: exit code 2 distinguishes "happy no-op" from "actual
-    // error" so CI scripts can react differently.
-    process.exit(2);
+    // Nothing to do is not a failure: 0, as every command ends a run with
+    // nothing to do.
+    endNothingToDo(logger, options.dryRun);
+    process.exit(0);
+  }
+
+  if (options.dryRun === true) {
+    reportMigrationDryRun(result, cwd, logger);
+    return;
   }
 
   const duration = Date.now() - startTime;
@@ -739,7 +862,8 @@ async function runBlankPath(
   migrationsDir: string,
   context: CommandContext,
   startTime: number,
-  transaction: boolean
+  transaction: boolean,
+  dryRun: boolean
 ): Promise<void> {
   const { logger } = context;
 
@@ -747,7 +871,6 @@ async function runBlankPath(
   const baseName = `${formatTimestamp(now)}_${slugify(name)}`;
   const sqlPath = resolve(migrationsDir, `${baseName}.sql`);
 
-  await mkdir(migrationsDir, { recursive: true });
   // F11 PR 3 review fix #7: pass the slug-only name (not the timestamp-
   // prefixed baseName) so the file's `-- Migration:` header matches the
   // non-blank path's convention (e.g. "-- Migration: custom_seed", not
@@ -755,6 +878,14 @@ async function runBlankPath(
   const content = formatBlankFile(slugify(name), dialect, now, {
     transaction,
   });
+  // A dry run prints the file and its path, and writes neither the file nor its folder.
+  if (dryRun) {
+    const sqlFile = relative(context.cwd, sqlPath);
+    logger.info(`${sqlFile} would hold:\n${content.trimEnd()}`);
+    reportDryRun(logger, { changes: [{ action: "write", target: sqlFile }] });
+    return;
+  }
+  await mkdir(migrationsDir, { recursive: true });
   await writeFile(sqlPath, content, "utf-8");
 
   // F11 PR 3: blank migrations don't get a paired snapshot file. The
@@ -1161,7 +1292,12 @@ async function writeBlankPluginMigration(
     migrationsDir: generation.migrationsDir,
     existing: generation.existing,
     transaction: generation.options.transaction,
+    dryRun: generation.options.dryRun === true,
   });
+  if (generation.options.dryRun === true) {
+    reportPluginDryRun(blank, cwd, logger);
+    return;
+  }
   logger.success(`Created ${relative(cwd, blank.modulePath)}`);
   logger.info(`Rewrote ${relative(cwd, blank.indexPath)}`);
   logger.info(
@@ -1337,6 +1473,32 @@ async function compilePluginDialects(draft: PluginDraftInput): Promise<{
   };
 }
 
+/**
+ * What a dry run of a plugin module prints: the module's text, then the module and the barrel as
+ * the real run would write them. The barrel is rewritten whole, so it is an edit where one is
+ * already there.
+ */
+function reportPluginDryRun(
+  planned: Pick<
+    GeneratePluginMigrationResult,
+    "modulePath" | "moduleContent" | "indexPath"
+  >,
+  cwd: string,
+  logger: CommandContext["logger"]
+): void {
+  const moduleFile = relative(cwd, planned.modulePath);
+  logger.info(`${moduleFile} would hold:\n${planned.moduleContent.trimEnd()}`);
+  reportDryRun(logger, {
+    changes: [
+      { action: "write", target: moduleFile },
+      {
+        action: existsSync(planned.indexPath) ? "edit" : "write",
+        target: relative(cwd, planned.indexPath),
+      },
+    ],
+  });
+}
+
 /** Report a generated module: its path, each dialect's count, the barrel. */
 function reportPluginMigration(
   result: NonNullable<Awaited<ReturnType<typeof generatePluginMigration>>>,
@@ -1405,125 +1567,104 @@ async function runMigrateCreatePlugin(
   const { dependencyPlugins, dependencies, pluginPrefixes } =
     pluginDependencyClosure(target, configured);
 
+  // What the compile and the module's checks refuse ends the run, and a dry run reports it.
+  const planned = <T>(work: () => Promise<T>): Promise<T> =>
+    work().catch(error => stopOnPlanError(error, logger, options.dryRun));
+
   const {
     tablesByDialect,
     contributedByDialect,
     contributedBaselineByDialect,
     contributions,
-  } = await compilePluginDialects({
-    pluginName: definition.name,
-    pluginPrefixes,
-    tables,
-    extend,
-    dependencies,
-    // Dependencies FIRST, and among them each before its dependents:
-    // `runExtensionHooks` takes the list already topologically sorted, and a
-    // hook cannot extend a table the draft has not been told about yet.
-    dependencyPlugins,
-  });
+  } = await planned(() =>
+    compilePluginDialects({
+      pluginName: definition.name,
+      pluginPrefixes,
+      tables,
+      extend,
+      dependencies,
+      // Dependencies FIRST, and among them each before its dependents:
+      // `runExtensionHooks` takes the list already topologically sorted, and a
+      // hook cannot extend a table the draft has not been told about yet.
+      dependencyPlugins,
+    })
+  );
 
   if (options.blank) {
-    await writeBlankPluginMigration(
-      {
-        definition,
-        name,
-        cwd,
-        migrationsDir,
-        existing,
-        options,
-        logger,
-      },
-      {
-        tablesByDialect,
-        contributedByDialect,
-        contributedBaselineByDialect,
-        contributions,
-      }
+    await planned(() =>
+      writeBlankPluginMigration(
+        {
+          definition,
+          name,
+          cwd,
+          migrationsDir,
+          existing,
+          options,
+          logger,
+        },
+        {
+          tablesByDialect,
+          contributedByDialect,
+          contributedBaselineByDialect,
+          contributions,
+        }
+      )
     );
     return;
   }
 
-  const result = await generatePluginMigration({
-    contributedByDialect,
-    contributedBaselineByDialect,
-    contributions,
-    pluginName: definition.name,
-    schemaVersion: definition.schemaVersion,
-    name: name ?? "migration",
-    migrationsDir,
-    tablesByDialect,
-    existing,
-    transaction: options.transaction,
-    // A module that runs outside a transaction is written to be edited:
-    // its generated `CREATE INDEX` is what becomes `CREATE INDEX
-    // CONCURRENTLY`.
-    handSealed: options.transaction === false,
-  });
+  const result = await planned(() =>
+    generatePluginMigration({
+      contributedByDialect,
+      contributedBaselineByDialect,
+      contributions,
+      pluginName: definition.name,
+      schemaVersion: definition.schemaVersion,
+      name: name ?? "migration",
+      migrationsDir,
+      tablesByDialect,
+      existing,
+      transaction: options.transaction,
+      // A module that runs outside a transaction is written to be edited:
+      // its generated `CREATE INDEX` is what becomes `CREATE INDEX
+      // CONCURRENTLY`.
+      handSealed: options.transaction === false,
+      dryRun: options.dryRun === true,
+    })
+  );
 
   if (!result) {
     logger.info(
       `No schema changes detected for plugin "${definition.name}" — nothing to generate.`
     );
-    process.exit(2);
+    // Nothing to do, which is not a failure.
+    endNothingToDo(logger, options.dryRun);
+    process.exit(0);
   }
 
+  if (options.dryRun === true) {
+    reportPluginDryRun(result, cwd, logger);
+    return;
+  }
   reportPluginMigration(result, cwd, logger);
 }
 
-export function registerMigrateCreateCommand(program: Command): void {
-  program
-    .command("migrate:create")
-    .description(
-      "Create a new migration file from schema changes or for custom SQL"
-    )
-    .argument("[name]", "Migration name (slug-cased, e.g., add_excerpt)")
-    .option("--name <name>", "Migration name (alternate to positional arg)")
-    .option("--blank", "Create an empty migration file for custom SQL", false)
-    .option(
-      "--non-interactive",
-      "Skip interactive prompts (auto-detected from non-TTY)",
-      false
-    )
-    .option(
-      "--accept-renames",
-      "ADVANCED: auto-accept all rename candidates in non-interactive mode",
-      false
-    )
-    .option(
-      "--plugin <entry>",
-      "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
-    )
-    .option(
-      "--record-snapshot",
-      "Write a migration that changes nothing, whose snapshot records which fields are translated, for a project whose latest snapshot predates that record. Run it with the config as last migrated",
-      false
-    )
-    .option(
-      "--no-transaction",
-      "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
-    )
-    .action(
-      async (
-        positionalName: string | undefined,
-        cmdOptions: MigrateCreateCommandOptions,
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
+/**
+ * The action of `nextly migrate:create`, loaded when it runs.
+ */
+export async function migrateCreateAction(
+  positionalName: string | undefined,
+  cmdOptions: MigrateCreateCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateCreateOptions = options;
 
-        const resolvedOptions: ResolvedMigrateCreateOptions = {
-          ...cmdOptions,
-          config: globalOpts.config,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-          cwd: globalOpts.cwd,
-        };
-
-        try {
-          await runMigrateCreate(positionalName, resolvedOptions, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
-    );
+  try {
+    await runMigrateCreate(positionalName, resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateCreateCommand } from "./migrate-create.command";

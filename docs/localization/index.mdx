@@ -102,7 +102,7 @@ In code, set `localized: false` on the field and run `nextly migrate:create`. It
 
 If the archive cannot be written, the change is refused and nothing is changed.
 
-A field marked Required or Unique can stop being translated in the same change, as long as the default language's values can take the setting. The shared column is created without the setting, filled with the default language's values, and only then made required or unique. In the Schema Builder, the change is refused before anything runs when they can't, and the dialog says so before Apply: Required needs every entry to have a default-language value, and Unique needs no two entries to end up with the same value (an entry with no default-language value takes another language's, which counts). The refusal names the field and how many entries are in the way, never a value. In code, `migrate:create` writes the setting into the third file, after the copy and before the translated column is removed. If the values can't take it, `nextly migrate` stops at that file with every value still in place.
+A field marked Required or Unique can stop being translated in the same change, as long as the default language's values can take the setting. The shared column is created without the setting, filled with the default language's values, and only then made required or unique. In the Schema Builder, the change is refused before anything runs when they can't, and the dialog says so before Apply: Required needs every entry to have a default-language value, and Unique needs no two entries to end up with the same value (an entry with no default-language value takes another language's, which counts). The refusal names the field and how many entries are in the way, never a value. In code, `migrate:create` writes the setting into the third file, after the copy and before the translated column is removed. `nextly migrate` checks the values before the first of the three files runs, and again before the third: when they can't take the setting, it refuses with the field and how many entries are in the way, and changes nothing. Give those entries their values, then run `nextly migrate` again. The values are checked once, before the move starts, so stop the app's writes while `nextly migrate` runs. Files that record the setting need this version of Nextly or a newer one to run.
 
 To bring those values back, make the field translated again, then restore that field:
 
@@ -110,7 +110,7 @@ To bring those values back, make the field translated again, then restore that f
 npx nextly i18n:restore --collection posts --field title
 ```
 
-`--collection` takes the slug of a collection, Single or field group, and `--field` takes the field's name or its column name. `--locale es` restores one language only. A field group can share its slug with a collection or a Single, and each one's archived values stay its own: when the slug names more than one, say which with `--kind collection`, `--kind single` or `--kind field-group`. The archive keeps the values until you remove them: add `--purge` to a restore to delete the rows it replayed. Deleting the collection, Single or field group also removes its archived values.
+`--collection` takes the slug of a collection, Single or field group, and `--field` takes the field's name or its column name. `--locale es` restores one language only. A field group can share its slug with a collection or a Single, and each one's archived values stay its own: when the slug names more than one, say which with `--kind collection`, `--kind single` or `--kind field-group`. The archive keeps the values until you remove them: add `--purge` to a restore to delete the rows it replayed. Deleting them takes the data-loss consent: `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS=1`). At a terminal it asks; with nobody to ask and no consent, it changes nothing. Deleting the collection, Single or field group also removes its archived values.
 
 Values archived by a version of Nextly from before the archive recorded which kind of entity they belong to are matched to their entity when the slug names only one, and only from the time that entity was created. Any the archive can't match are kept, never deleted, and a restore of that slug says how many there are. Restoring with `--kind` also brings those values back as that entity's.
 
@@ -121,6 +121,10 @@ Changing a shared field to translated keeps its value too, for a collection, a S
 In code, set `localized: true` on the field (or remove `localized: false` from a text field) and run `nextly migrate:create`. It writes one file, which adds the translated column, copies each entry's value into the default language, and removes the shared column. Rolling it back with `nextly migrate:down` makes the field shared again with the default language's value, and writes the other languages to the archive, as when a field stops being translated.
 
 A field whose type, length or precision changes in the same change is refused, because its value would be copied into a column of the new shape: save the new type with the field still shared, then make it translated.
+
+### When a translated field is added
+
+Adding a translated field to a collection, Single or field group that is already translated is recorded in its migration. `nextly migrate:create` writes a file that adds the field's column to the translations table, and `nextly migrate:down` removes it again. The file needs this version of Nextly or a newer one to run.
 
 ### When your migrations predate the record of translated fields
 

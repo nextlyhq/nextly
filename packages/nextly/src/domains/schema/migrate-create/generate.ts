@@ -19,8 +19,8 @@
 // Returns null when no operations remain (after rename collapsing) and no
 // entity's settings changed: a settings change alone is written as a
 // migration with no table statements, beside its snapshot.
-// CLI exits with code 2 in that case ("no changes detected" — distinct
-// from exit 1 for actual errors so CI scripts can tell apart).
+// The CLI then says "No schema changes detected" and exits 0, since nothing
+// to do is a finished run; a failure exits 1.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -39,6 +39,7 @@ import {
   companionSpecShell,
   deriveCompanionSpec,
 } from "../../i18n/migration/derive-companion-spec";
+import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
@@ -63,9 +64,14 @@ import { KIND_NAMES } from "../../i18n/migration/resolve-entity-table";
 import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
 import type {
   CompanionMigrationSpec,
+  LeavingSettingsSpec,
   LocalizedColumnSpec,
 } from "../../i18n/migration/types";
-import { writeCompanionMigrationFile } from "../../i18n/migration/write-migration-file";
+import {
+  companionMigrationPath,
+  writeCompanionMigrationFile,
+  type WriteCompanionMigrationOpts,
+} from "../../i18n/migration/write-migration-file";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -112,6 +118,7 @@ import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  snapshotPathOf,
   writeSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
@@ -256,11 +263,35 @@ export interface GenerateArgs {
    * `new Date()`.
    */
   now?: Date;
+  /**
+   * `--dry-run`: plan the migration exactly as a real run does, prompts included, and write
+   * nothing. The result names the files the real run would write.
+   */
+  dryRun?: boolean;
+}
+
+/** A translation-table migration file a run writes beside the main one, by what it is for. */
+export interface CompanionFileOf {
+  kind: WriteCompanionMigrationOpts["kind"];
+  entity: I18nTransitionKind;
+  /** The slug of the entity the file is about. */
+  slug: string;
+  /** Where the file is written; on a dry run, where it would be. */
+  path: string;
 }
 
 export interface GenerateResult {
+  /** Where the migration is written; on a dry run, where it would be. */
   sqlPath: string;
+  /** Where its snapshot is written; on a dry run, where it would be. */
   snapshotPath: string;
+  /** The migration's text, as it is written to `sqlPath`. */
+  sqlContent: string;
+  /**
+   * The translation-table migration files written beside the migration, in the order they are
+   * written; on a dry run, the ones that would be.
+   */
+  companionFiles: CompanionFileOf[];
   /** Operation count AFTER rename collapsing. */
   operationCount: number;
   /** Number of rename candidates the operator confirmed. */
@@ -286,7 +317,7 @@ function operationTableName(op: Operation): string {
 
 /**
  * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot — exit code 2 in the CLI).
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
 export async function generateMigration(
   args: GenerateArgs
@@ -621,11 +652,30 @@ export async function generateMigration(
   //      it, once the main table has the column to copy into.
   //    - A translated field's per-language unique index that goes: first of all, before any
   //      file drops or renames a column it keys on.
+  // A field unique before and after leaving translation has its per-language index dropped by a
+  // file that runs before the move's archive file, so that file carries the move's settings too and
+  // is checked before its drop.
+  const leavingSettingsByTable = new Map(
+    fieldLeavesPlans.map(({ plan, entity, settings }) => [
+      `${entity}|${plan.archive.spec.mainTable}`,
+      settings,
+    ])
+  );
   const beforeMain = [
     ...uniquePlans.flatMap(({ spec, plan, entity }) =>
       plan.drops === null
         ? []
-        : [{ spec, kind: "unique" as const, entity, ...plan.drops }]
+        : [
+            {
+              spec: withLeavingSettings(
+                spec,
+                leavingSettingsByTable.get(`${entity}|${spec.mainTable}`)
+              ),
+              kind: "unique" as const,
+              entity,
+              ...plan.drops,
+            },
+          ]
     ),
     ...disablePlans.map(({ plan, entity }) => ({
       spec: plan.spec,
@@ -634,8 +684,9 @@ export async function generateMigration(
       upSql: plan.upSql,
       downSql: plan.downSql,
     })),
-    ...fieldLeavesPlans.map(({ plan, entity }) => ({
-      spec: plan.archive.spec,
+    ...fieldLeavesPlans.map(({ plan, entity, settings }) => ({
+      // Its header names the settings the move applies, for `nextly migrate`'s pre-check.
+      spec: withLeavingSettings(plan.archive.spec, settings),
       kind: "archive" as const,
       entity,
       upSql: plan.archive.upSql,
@@ -651,29 +702,45 @@ export async function generateMigration(
       downSql: plan.downSql,
     })),
   ];
+  // Every companion file in the order it is written, so a dry run reports the files a real run
+  // writes from the same list.
+  const companionFiles: Array<{
+    spec: CompanionMigrationSpec;
+    opts: WriteCompanionMigrationOpts;
+  }> = [];
   beforeMain.forEach(({ spec, ...file }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, spec, {
-      ...file,
-      now: new Date(now.getTime() - (beforeMain.length - i)),
+    companionFiles.push({
+      spec,
+      opts: {
+        ...file,
+        now: new Date(now.getTime() - (beforeMain.length - i)),
+      },
     });
   });
   forwardPlans.forEach(({ plan, entity }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, plan.spec, {
-      // `none` plans are filtered out by the planner, so the kind is always writable here.
-      kind: plan.kind === "none" ? "create-only" : plan.kind,
-      entity,
-      upSql: plan.upSql,
-      downSql: plan.downSql,
-      now: new Date(now.getTime() + i + 1),
+    companionFiles.push({
+      spec: plan.spec,
+      opts: {
+        // `none` plans are filtered out by the planner, so the kind is always writable here.
+        kind: plan.kind === "none" ? "create-only" : plan.kind,
+        entity,
+        upSql: plan.upSql,
+        downSql: plan.downSql,
+        now: new Date(now.getTime() + i + 1),
+      },
     });
   });
-  fieldLeavesPlans.forEach(({ plan, entity }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, plan.shared.spec, {
-      kind: "shared",
-      entity,
-      upSql: plan.shared.upSql,
-      downSql: plan.shared.downSql,
-      now: new Date(now.getTime() + forwardPlans.length + i + 1),
+  fieldLeavesPlans.forEach(({ plan, entity, settings }, i) => {
+    // Recorded again here, so a run that stopped between the two files is checked before this one.
+    companionFiles.push({
+      spec: withLeavingSettings(plan.shared.spec, settings),
+      opts: {
+        kind: "shared",
+        entity,
+        upSql: plan.shared.upSql,
+        downSql: plan.shared.downSql,
+        now: new Date(now.getTime() + forwardPlans.length + i + 1),
+      },
     });
   });
   //    - A translated field's per-language unique index that is new: last, once every column it
@@ -694,16 +761,31 @@ export async function generateMigration(
           ]
     )
     .forEach(({ spec, ...file }, i) => {
-      writeCompanionMigrationFile(args.migrationsDir, spec, {
-        ...file,
-        kind: "unique",
-        now: new Date(now.getTime() + createsAfter + i + 1),
+      companionFiles.push({
+        spec,
+        opts: {
+          ...file,
+          kind: "unique",
+          now: new Date(now.getTime() + createsAfter + i + 1),
+        },
       });
     });
+  if (args.dryRun !== true) {
+    for (const { spec, opts } of companionFiles) {
+      writeCompanionMigrationFile(args.migrationsDir, spec, opts);
+    }
+  }
 
   return {
     sqlPath,
     snapshotPath,
+    sqlContent,
+    companionFiles: companionFiles.map(({ spec, opts }) => ({
+      kind: opts.kind,
+      entity: opts.entity,
+      slug: spec.collection,
+      path: companionMigrationPath(args.migrationsDir, spec, opts),
+    })),
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
@@ -947,15 +1029,18 @@ function refuseChangesToRecord(tables: readonly string[]): void {
  */
 async function recordSnapshot(
   args: GenerateArgs,
-  run: Omit<MigrationPair, "sqlContent">
+  record: Omit<MigrationPair, "sqlContent">
 ): Promise<GenerateResult> {
-  const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
-    ...run,
-    sqlContent: formatSnapshotRecordFile(args.name, args.dialect, run.now),
-  });
+  const run: MigrationPair = {
+    ...record,
+    sqlContent: formatSnapshotRecordFile(args.name, args.dialect, record.now),
+  };
+  const { sqlPath, snapshotPath } = await writeMigrationPair(args, run);
   return {
     sqlPath,
     snapshotPath,
+    sqlContent: run.sqlContent,
+    companionFiles: [],
     operationCount: 0,
     renamesAccepted: 0,
     settingsChanges: [],
@@ -974,15 +1059,20 @@ interface MigrationPair {
 
 /**
  * Writes a migration's `.sql` file, named for the run's name and time, then its paired snapshot:
- * the order every `migrate:create` writes them in.
+ * the order every `migrate:create` writes them in. A dry run writes neither and returns the paths
+ * they would be written at.
  */
 async function writeMigrationPair(
-  args: Pick<GenerateArgs, "migrationsDir" | "name">,
+  args: Pick<GenerateArgs, "migrationsDir" | "name" | "dryRun">,
   pair: MigrationPair
 ): Promise<{ sqlPath: string; snapshotPath: string }> {
   const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
-  await mkdir(args.migrationsDir, { recursive: true });
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
+  if (args.dryRun === true) {
+    // Where `writeSnapshot` would put it, by the writer's own rule.
+    return { sqlPath, snapshotPath: snapshotPathOf(pair.metaDir, baseName) };
+  }
+  await mkdir(args.migrationsDir, { recursive: true });
   await writeFile(sqlPath, pair.sqlContent, "utf-8");
   const snapshotPath = await writeSnapshot(
     pair.metaDir,
@@ -1190,45 +1280,17 @@ function planCompanionMigrations(
       status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
     });
 
-    // the DISABLE transition (localized `true → false`).
-    // Detection is gated on the previous snapshot's explicit `localized: true` marker rather
-    // than inferred from column shape: a shape-only heuristic cannot tell "this collection
-    // was localized" apart from "someone added fields to a non-localized collection", and
-    // false-positively archiving + dropping a table is far worse than not automating a rare
-    // disable. A pre-marker snapshot records no marker, so it reads as unknown and no
-    // transition is emitted — that self-heals as soon as one migrate:create runs while the
-    // entity is still localized.
+    // the DISABLE transition (localized `true → false`), planned by `disableEntryFor`.
     if (c.localized !== true) {
-      const prevMain = previousSnapshot.tables.find(
-        t => t.name === (spec?.mainTable ?? c.tableName)
-      );
-      if (prevMain?.localized !== true) continue;
-      // The snapshot's recorded column list is the AUTHORITATIVE description of what the
-      // companion actually holds; the current config is not, because the same edit that
-      // flipped the switch may also have added or unflagged fields. Restoring exactly the
-      // recorded columns keeps the transition correct in both directions:
-      //   - a field whose `localized: true` was removed alongside the switch is still brought
-      //     home (it is in the recorded list even though it no longer classifies);
-      //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
-      //     being restored from a companion that never had that column (which emitted SQL that
-      //     failed on apply).
-      const disableSpec = buildDisableSpec(
+      const disable = disableEntryFor(
         c,
         entityKind,
-        prevMain,
+        spec?.mainTable ?? c.tableName,
+        previousSnapshot,
         dialect,
         defaultLocale
       );
-      if (!disableSpec) continue;
-      const plan = planCompanionMigration({
-        spec: disableSpec,
-        prevMainColumnNames: [],
-        companionExisted: false,
-        localized: false,
-        previouslyLocalized: true,
-      });
-      if (plan.kind !== "none")
-        entries.push({ spec: disableSpec, plan, entity: entityKind });
+      if (disable) entries.push(disable);
       continue;
     }
 
@@ -1276,8 +1338,104 @@ function planCompanionMigrations(
       companionExisted,
     });
     if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
+    // A companion that was there and stays: the translated fields it gains.
+    const adds = companionExisted
+      ? addsEntryFor(c, entityKind, prevTable, joining, dialect, defaultLocale)
+      : undefined;
+    if (adds) entries.push(adds);
   }
   return entries;
+}
+
+/**
+ * The `disable` file of an entity whose translation is turned off (localized `true → false`).
+ *
+ * Detection is gated on the previous snapshot's explicit `localized: true` marker rather
+ * than inferred from column shape: a shape-only heuristic cannot tell "this collection
+ * was localized" apart from "someone added fields to a non-localized collection", and
+ * false-positively archiving + dropping a table is far worse than not automating a rare
+ * disable. A pre-marker snapshot records no marker, so it reads as unknown and no
+ * transition is emitted — that self-heals as soon as one migrate:create runs while the
+ * entity is still localized.
+ */
+function disableEntryFor(
+  c: MinimalConfigEntity,
+  entityKind: I18nTransitionKind,
+  mainTable: string,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry | undefined {
+  const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
+  if (prevMain?.localized !== true) return undefined;
+  // The snapshot's recorded column list is the AUTHORITATIVE description of what the
+  // companion actually holds; the current config is not, because the same edit that
+  // flipped the switch may also have added or unflagged fields. Restoring exactly the
+  // recorded columns keeps the transition correct in both directions:
+  //   - a field whose `localized: true` was removed alongside the switch is still brought
+  //     home (it is in the recorded list even though it no longer classifies);
+  //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
+  //     being restored from a companion that never had that column (which emitted SQL that
+  //     failed on apply).
+  const disableSpec = buildDisableSpec(
+    c,
+    entityKind,
+    prevMain,
+    dialect,
+    defaultLocale
+  );
+  if (!disableSpec) return undefined;
+  const plan = planCompanionMigration({
+    spec: disableSpec,
+    prevMainColumnNames: [],
+    companionExisted: false,
+    localized: false,
+    previouslyLocalized: true,
+  });
+  return plan.kind === "none"
+    ? undefined
+    : { spec: disableSpec, plan, entity: entityKind };
+}
+
+/**
+ * The `adds` file of a translated entity whose companion is there before this run: its translated
+ * fields with no column there yet, which the previous snapshot doesn't record in the companion
+ * (`localizedColumns`) and which don't join translation (`joining`, whose column is the `joins`
+ * file's). Undefined when there is none, or when the snapshot records no companion columns to
+ * compare with, as one from before the record doesn't.
+ */
+function addsEntryFor(
+  c: MinimalConfigEntity,
+  entityKind: I18nTransitionKind,
+  prevTable: TableSpec | undefined,
+  joining: ReadonlySet<string>,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry | undefined {
+  if (prevTable?.localizedColumns === undefined) return undefined;
+  const there = new Set([...prevTable.localizedColumns, ...joining]);
+  const translated = c.fields.filter(f => isFieldLocalized(f, true));
+  const isAdded = (f: (typeof translated)[number]) => {
+    const column = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
+    return column != null && !there.has(column.name);
+  };
+  const added = translated.filter(isAdded);
+  if (added.length === 0) return undefined;
+  const { spec, upSql, downSql } = planFieldAddedToTranslationMigration({
+    slug: c.slug,
+    kind: entityKind,
+    tableName: c.tableName,
+    dialect,
+    defaultLocale,
+    status: c.status === true,
+    recorded: translated.filter(f => !isAdded(f)),
+    added,
+  });
+  return {
+    spec,
+    plan: { kind: "adds", spec, upSql, downSql },
+    entity: entityKind,
+  };
 }
 
 /** One entity's fields that stop being translated, and the two files that move their values. */
@@ -1286,6 +1444,8 @@ interface FieldLeavesEntry {
   entity: I18nTransitionKind;
   /** The settings the main migration leaves off, which the `shared` file applies. */
   held: HeldSettings;
+  /** The same settings by field, for the files' headers; undefined when the fields carry none. */
+  settings: LeavingSettingsSpec | undefined;
 }
 
 /**
@@ -1335,6 +1495,7 @@ function planFieldsLeavingTranslation(
     entries.push({
       entity: kind,
       held,
+      settings: leavingSettingsOf(leaving, held),
       plan: planFieldLeavesTranslationMigration(
         {
           dialect,
@@ -1396,6 +1557,37 @@ function heldSettingsOf(
       index => index.unique && index.columns.some(name => leaving.has(name))
     ),
   };
+}
+
+/**
+ * The held settings by field and column, as the archive and shared files' headers record them:
+ * each Required leaving field, and each one a one-column unique index covers. An index over
+ * several columns is created by the shared file as before, and judged by the database there.
+ */
+function leavingSettingsOf(
+  leaving: readonly LeavingField[],
+  held: HeldSettings
+): LeavingSettingsSpec | undefined {
+  const named = (l: LeavingField) => ({
+    field: l.field.name,
+    column: l.column.name,
+  });
+  const required = leaving.filter(l => held.required.has(l.column.name));
+  const unique = leaving.filter(l =>
+    held.uniqueIndexes.some(
+      index => index.columns.length === 1 && index.columns[0] === l.column.name
+    )
+  );
+  if (required.length === 0 && unique.length === 0) return undefined;
+  return { required: required.map(named), unique: unique.map(named) };
+}
+
+/** A leaving file's spec with the settings its move applies, when there are any. */
+function withLeavingSettings(
+  spec: CompanionMigrationSpec,
+  settings: LeavingSettingsSpec | undefined
+): CompanionMigrationSpec {
+  return settings === undefined ? spec : { ...spec, settings };
 }
 
 /** The main migration's operations with each held setting left off. */

@@ -22,12 +22,17 @@
 import type { JSX, ReactNode } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
+import {
+  autosaveEnabledFor,
+  autosaveIntervalFrom,
+} from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
+import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -38,20 +43,25 @@ import {
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useCan } from "@admin/hooks/useCan";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
 import {
   autosaveScopeFor,
+  documentRecordingKey,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
+import { versionForLanguage } from "@admin/lib/document-version";
 import { cn } from "@admin/lib/utils";
+import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
@@ -90,7 +100,10 @@ import {
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
-import { fieldsBesidePanel } from "./EntryFieldsPanel";
+import {
+  fieldsBesidePanel,
+  type EntryFieldsPresentation,
+} from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -103,6 +116,7 @@ import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
+import type { RecoveryPointState } from "./SaveStateIndicator";
 import { deleteHeld, submitHeld } from "./submit-outcome";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
@@ -126,6 +140,8 @@ import {
   offerHeldWhileRecovering,
   quickEditSave,
 } from "./useRefusedForm";
+import { useResetOnReload } from "./useResetOnReload";
+import { VersionConflictDialog } from "./VersionConflictDialog";
 
 // ============================================================================
 // Types
@@ -155,6 +171,13 @@ export interface EntryFormProps {
    * collection); an embedded editor reading the live row passes `false`.
    */
   readDraft?: boolean;
+  /**
+   * When the entry on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, an entry this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Called when the user switches the active content language. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
@@ -320,6 +343,7 @@ export function EntryForm({
   onCancel,
   locale,
   readDraft,
+  latest,
   onLocaleChange,
   seedFromLocale,
   onSeedHandled,
@@ -376,6 +400,7 @@ export function EntryForm({
 
   const {
     form,
+    defaultValues,
     handleSubmit: submitEntry,
     writeStatus,
     handleDelete: deleteEntry,
@@ -384,6 +409,11 @@ export function EntryForm({
     isSubmitting: savePending,
     recovering,
     isDirty,
+    versionConflict,
+    saveAnyway,
+    loadCurrentVersion,
+    versionStartedFrom,
+    adoptRecoveredVersion,
   } = useEntryForm({
     collection,
     entry,
@@ -435,7 +465,22 @@ export function EntryForm({
   // offered, so a create form supplies none and nothing renders.
   const publishAllEntryLocales = usePublishAllLocales({
     collectionSlug: collection.slug ?? collection.name,
+    // The copy on screen, read as the editor reads it, so a publish of every
+    // language is refused when that language changed since it opened.
+    shown: () => ({
+      version: versionStartedFrom(),
+      locale,
+      draft: readDraft ?? collection.draftsEnabled === true,
+    }),
   });
+  // Publishing every language waits for the entry's recordings in flight.
+  const { run: runAfterRecordings, pending: publishAllPending } =
+    useAfterRecordings(
+      documentRecordingKey(
+        autosaveScopeFor("collection", collection.name, entry?.id)
+      ),
+      publishAllEntryLocales.isPending
+    );
 
   // Publish-every-language rides the same kind of seam `fetchSourceValues`
   // does, and its ABSENCE is what keeps the action off a create form: there is
@@ -445,10 +490,30 @@ export function EntryForm({
     if (!entryId) return undefined;
     return {
       slug: collection.slug ?? collection.name,
-      publish: () => publishAllEntryLocales.mutate(entryId),
-      pending: publishAllEntryLocales.isPending,
+      // After this entry's recordings in flight land, as a save waits.
+      publish: () =>
+        runAfterRecordings(() => publishAllEntryLocales.mutate(entryId)),
+      pending: publishAllPending,
+      preview: () =>
+        entryApi.previewPublishAllLocales(
+          collection.slug ?? collection.name,
+          entryId
+        ),
+      previewKey: [
+        "publish-all-preview",
+        "collection",
+        collection.slug ?? collection.name,
+        entryId,
+      ],
     };
-  }, [entry?.id, collection.slug, collection.name, publishAllEntryLocales]);
+  }, [
+    entry?.id,
+    collection.slug,
+    collection.name,
+    publishAllEntryLocales,
+    runAfterRecordings,
+    publishAllPending,
+  ]);
 
   const translationMode = useTranslationSource({
     fields: getCollectionFields(collection),
@@ -535,7 +600,39 @@ export function EntryForm({
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
-  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  // The entry's version in a language, for a restore from its history: the
+  // version this copy started from in its own language, else read.
+  const versionFor = useCallback(
+    (wanted: string | null) =>
+      versionForLanguage({
+        wanted,
+        shown: locale ?? defaultLocale ?? null,
+        startedFrom: versionStartedFrom(),
+        readIn: inLocale =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale: inLocale,
+          }),
+        readShown: () =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale,
+            draft: readDraft ?? collection.draftsEnabled === true,
+          }),
+      }),
+    [
+      locale,
+      defaultLocale,
+      versionStartedFrom,
+      collection.name,
+      collection.draftsEnabled,
+      entry?.id,
+      readDraft,
+    ]
+  );
+  const viewedVersionHost = useViewedVersion(
+    allFields,
+    takeoverTypes,
+    versionFor
+  );
   const {
     viewingVersion,
     documentHistory,
@@ -659,8 +756,15 @@ export function EntryForm({
     enabled: mode === "edit",
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
   });
-  const lock = heldWhileRecovering(lockSurface, recovering);
+  // A gained entry's latest version starts the whole form again, whatever its
+  // `updatedAt` says, and the lock holds until it has; the document views key
+  // on the count it carries.
+  const lock = heldWhileRecovering(
+    useResetOnReload(form, lockSurface, defaultValues),
+    recovering
+  );
 
   /*
    * Delegated whole, including the decision to answer NULL when there is
@@ -674,13 +778,14 @@ export function EntryForm({
    * whose read-only answer it shares with every other field.
    */
   const renderEntryFields = useCallback(
-    (excludePath: string) =>
+    (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(allFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
         values: conditionValues,
         hasPublicAddress,
+        ...(presentation === undefined ? {} : { presentation }),
       }),
     [
       allFields,
@@ -785,7 +890,12 @@ export function EntryForm({
       // read-only form dirty with work it cannot save.
       scope: readOnlyForReader ? null : autosaveScope,
       form,
+      // The language the form shows: a point recorded in another is never
+      // taken for the document.
+      locale: locale ?? null,
       savedCount,
+      // A save of restored edits is judged by the version they began from.
+      onRestored: adoptRecoveredVersion,
     }),
     recovering
   );
@@ -816,6 +926,8 @@ export function EntryForm({
     enabled: !updatesHeld && mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
+    // Each point records the version its edits began from.
+    version: versionStartedFrom,
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
@@ -941,6 +1053,18 @@ export function EntryForm({
    * through the gate above, and the storing ones hand back their outcome so an
    * action run from outside the header can say what it came to.
    */
+  /*
+   * The recovery point, once, for every place the save state is drawn: the
+   * header's chip, and a document view's own through the host.
+   */
+  const recoveryPoint: RecoveryPointState = {
+    enabled: autosaveScope !== null,
+    storedAt: autosave.lastSavedAt,
+    // A recovery point newer than the stored document, still on offer: its
+    // edits are not stored, whatever the form says.
+    pendingOfferAt: recovery.offer?.savedAt ?? null,
+  };
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -969,6 +1093,34 @@ export function EntryForm({
     ...(canDelete ? { onDelete: handleDelete } : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
+
+  // A save refused because the entry changed since: who changed it and when,
+  // and the author's choices, over the edits it keeps. The comparison is of
+  // the change that made the save stale, where the entry keeps history.
+  const staleHistory = versionConflict?.stale.historyVersion;
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(collection);
+  const conflictDialog = (
+    <VersionConflictDialog
+      conflict={versionConflict}
+      keepsRecoveryPoints={keepsRecoveryPoints}
+      compareHref={
+        staleHistory && autosaveScope
+          ? versionsHref(
+              autosaveScope,
+              { from: PREVIOUS_VERSION, to: staleHistory.version },
+              staleHistory.locale
+            )
+          : null
+      }
+      onLoadCurrent={async () => {
+        await loadCurrentVersion(keepsRecoveryPoints);
+        // The edits were just kept as a recovery point: offer it now.
+        if (keepsRecoveryPoints) recovery.recheck();
+      }}
+      onSaveAnyway={saveAnyway}
+    />
+  );
 
   // Embedded mode: simplified single-column layout for modals
   // Note: Preview is typically not shown in embedded mode (modals)
@@ -1007,6 +1159,7 @@ export function EntryForm({
               notice={lock.notice}
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
+              onRetry={lock.retryLoad}
             />
             {/* No page around a modal to carry the removed-from-code notice in
                 a document banner, so the modal says it itself. */}
@@ -1055,6 +1208,7 @@ export function EntryForm({
               canSave={canSave}
             />
           </div>
+          {conflictDialog}
         </EntryFormProvider>
       </EntryFormContextProvider>
     );
@@ -1119,6 +1273,9 @@ export function EntryForm({
               // Nor for a reader, who is offered no preview: an open pane
               // closes once the user may no longer change the entry.
               open={previewOnScreen}
+              // A document view is a full-height screen: the closed split
+              // hands it the content area's height to fill.
+              fill={documentView !== undefined}
               onClose={() => setPreviewOpen(false)}
               scope={{
                 collection: collection.name,
@@ -1144,12 +1301,21 @@ export function EntryForm({
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
                   renderEntryFields={renderEntryFields}
+                  // The header's own Preview handler, on the header's own
+                  // terms, so a field offering the preview opens the same page
+                  // and only where the header would.
+                  {...(canPreview
+                    ? { openPreview: entryPreview.openPreview }
+                    : {})}
                 >
                   {/* A document view replaces the form body and nothing around
                       it: every provider above, the guard, the claim, the
                       recovery, the shortcut and the document's actions are
                       this editor's own either way. */}
-                  <DocumentActionsHost input={documentActionsInput}>
+                  <DocumentActionsHost
+                    input={documentActionsInput}
+                    recovery={recoveryPoint}
+                  >
                     <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Standalone only: an embedded editor in a modal takes no
                       shortcuts. Mod+S runs the Save action, so the shortcut
@@ -1206,13 +1372,11 @@ export function EntryForm({
                                   // The whole unsaved-work state, so the restore
                                   // confirmation covers builder-held work too.
                                   hasUnsavedWork={hasUnsavedWork}
-                                  autosaveEnabled={autosaveScope !== null}
-                                  // A recovery point newer than the stored document, still on offer:
-                                  // its edits are not stored, whatever the form says.
+                                  autosaveEnabled={recoveryPoint.enabled}
                                   pendingRecoveryAt={
-                                    recovery.offer?.savedAt ?? null
+                                    recoveryPoint.pendingOfferAt
                                   }
-                                  autosaveLastSavedAt={autosave.lastSavedAt}
+                                  autosaveLastSavedAt={recoveryPoint.storedAt}
                                   entry={entry}
                                   collectionSlug={collection.name}
                                   hasStatus={hasStatus}
@@ -1466,6 +1630,7 @@ export function EntryForm({
             </PreviewPanes>
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
+        {conflictDialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

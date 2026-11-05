@@ -58,8 +58,6 @@
  * ```
  */
 
-import { basename } from "node:path";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
@@ -73,14 +71,14 @@ import { readRecordedEntities } from "../../domains/i18n/migration/recorded-befo
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import {
   ACCEPT_DATA_LOSS_ENV,
-  ACCEPT_DATA_LOSS_HELP,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import { exitWithError } from "../errors";
+import { CliError } from "../errors/cli-error";
 import {
   createContext,
   type CommandContext,
@@ -101,6 +99,7 @@ import { formatDuration } from "../utils/logger";
 
 import {
   ensureLocalizedCompanions,
+  judgeOrphanRemoval,
   performPermissionSeeding,
   publishExtensionSchema,
   syncCollections,
@@ -148,7 +147,8 @@ export interface DbSyncCommandOptions {
   autoSync?: boolean;
 
   /**
-   * Force auto-sync without data loss warnings
+   * The retired `-f/--force`, which had no effect: given, the run is refused
+   * before it starts.
    * @default false
    */
   force?: boolean;
@@ -167,6 +167,13 @@ export interface DbSyncCommandOptions {
    * @default false
    */
   removeOrphaned?: boolean;
+
+  /**
+   * `--accept-data-loss [targets]`: the data-loss consent, for the push's
+   * column drops (handed on as NEXTLY_ACCEPT_DATA_LOSS) and for what
+   * `--remove-orphaned` deletes. `true` alone, the list when one is given.
+   */
+  acceptDataLoss?: string | boolean;
 }
 
 /**
@@ -330,10 +337,17 @@ export async function runDbSync(
         await runWithFieldTypes(configResult.fieldTypes, async () => {
           // The configuration's new addresses, judged by the one address rule as a start judges
           // them, before this sync reads or writes any schema.
+          // Its sibling fields too: a pair the registry row does not hold is new and refused.
           const liveAdapter = adapter as unknown as DrizzleAdapter;
+          const registered = await loadBuilderEntities(liveAdapter);
           await assertConfiguredAddresses(
             configResult.config,
-            await loadBuilderEntities(liveAdapter),
+            registered,
+            table => liveAdapter.tableExists(table)
+          );
+          await assertConfiguredSiblingFields(
+            configResult.config,
+            registered,
             table => liveAdapter.tableExists(table)
           );
 
@@ -351,6 +365,11 @@ export async function runDbSync(
           });
 
           assertPluginFieldDeclarations(configResult.config);
+
+          // Every orphan `--remove-orphaned` would delete, judged with the
+          // data-loss consent before anything below changes the database: a
+          // no, or a consent leaving one out, ends the run with none deleted.
+          await judgeOrphanRemoval(configResult, adapter, options, context);
 
           // Every entity as the registry records it before the syncs below rewrite it, so the
           // companion pass after them can tell a field this run newly translates from one
@@ -474,17 +493,9 @@ export async function runDbSync(
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-/**
- * Register the dev command with the program
- *
- * @param program - Commander program instance
- */
-// What: registers `nextly db:sync` (with `nextly sync` as a shorter alias).
-// also dropped the `--seed` flag — demo seeding is now Payload-style and
-// runs from the project's auth-gated POST route.
 /**
  * Hands `--accept-data-loss` to the push as `NEXTLY_ACCEPT_DATA_LOSS`, the
  * spelling the schema prompt reads, for the rest of the run: `true` as the
@@ -502,113 +513,79 @@ export function exportDataLossConsent(
   env[ACCEPT_DATA_LOSS_ENV] = flag === true ? "1" : flag;
 }
 
-export function registerDbSyncCommand(program: Command): void {
-  program
-    .command("db:sync")
-    .alias("sync")
-    .description("Sync database schema with nextly.config.ts.")
-    .option("-w, --watch", "Watch for config file changes", false)
-    .option(
-      "--types",
-      `Generate TypeScript types (to typescript.outputFile, ${basename(DEFAULT_TYPESCRIPT_CONFIG.outputFile)} by default)`,
-      false
-    )
-    .option(
-      "--schemas",
-      "Generate Zod validation schema files to src/db/schemas/zod/",
-      false
-    )
-    .option(
-      "--no-auto-sync",
-      "Disable auto-sync of schema changes (use migrations instead)"
-    )
-    // Deprecated no-op: the schema pipeline handles destructive ops via
-    // interactive prompts (or the data-loss consent, --accept-data-loss or
-    // NEXTLY_ACCEPT_DATA_LOSS, in non-interactive runs). Kept registered so
-    // existing scripts passing it keep working; the runtime emits a
-    // deprecation warning instead.
-    .option(
-      "-f, --force",
-      "(deprecated, no effect) Destructive ops are prompted; use --accept-data-loss for non-interactive runs",
-      false
-    )
-    .option(
-      "--remove-orphaned",
-      "Remove code-first collections/singles/components that no longer exist in config",
-      false
-    )
-    // --promote moves a UI-owned collection to code; --demote does the
-    // reverse. Either flag bypasses the normal sync flow and runs the
-    // dedicated handler. See conflict-detector for the reason these exist.
-    .option(
-      "--promote <slug>",
-      "Move a UI-owned collection to code (prints TS snippet, removes UI record)"
-    )
-    .option(
-      "--demote <slug>",
-      "Move a code-owned collection to UI (writes to dynamic_collections)"
-    )
-    // The data-loss consent for the push's column drops, handed on as
-    // NEXTLY_ACCEPT_DATA_LOSS (`exportDataLossConsent`). Only drops: renames
-    // and type changes still need a terminal to answer their prompts.
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .action(
-      async (
-        cmdOptions: DbSyncCommandOptions & {
-          promote?: string;
-          demote?: string;
-          acceptDataLoss?: string | boolean;
-        },
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
-        const context = createContext(globalOpts);
-
-        // Surface the flag as an env var so downstream modules (the
-        // schema-change prompt, the auto-sync path) pick it up without
-        // needing to thread the option through every function call.
-        try {
-          exportDataLossConsent(cmdOptions.acceptDataLoss);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-
-        // Promote / demote short-circuit the full db:sync flow because
-        // they operate on a single slug and do not need the normal
-        // multi-collection sync pipeline.
-        if (cmdOptions.promote) {
-          try {
-            const { runPromote } = await import("./db-sync-promote");
-            await runPromote(cmdOptions.promote, context);
-            return;
-          } catch (error) {
-            exitWithError(context.logger, error);
-          }
-        }
-
-        if (cmdOptions.demote) {
-          try {
-            const { runDemote } = await import("./db-sync-demote");
-            await runDemote(cmdOptions.demote, context);
-            return;
-          } catch (error) {
-            exitWithError(context.logger, error);
-          }
-        }
-
-        const resolvedOptions: ResolvedDevOptions = {
-          ...cmdOptions,
-          config: globalOpts.config,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-          cwd: globalOpts.cwd,
-        };
-
-        try {
-          await runDbSync(resolvedOptions, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
-    );
+/** The refusal of `db:sync -f/--force`, which had no effect and is retired. */
+function retiredForce(): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: "db:sync's --force is retired: it had no effect, and is no longer accepted.",
+    why: "Nothing was changed. A sync asks at a terminal before a destructive change; --force never skipped that.",
+    next: "Run it again without -f/--force. Where nobody can be asked, consent to the drops with --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS).",
+    context: { reason: "retired-flag" },
+  });
 }
+
+/** The action of `nextly db:sync`, loaded when it runs. */
+export async function dbSyncAction(
+  cmdOptions: DbSyncCommandOptions & {
+    promote?: string;
+    demote?: string;
+  },
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
+  const context = createContext(globalOpts);
+
+  // `-f/--force` never changed what a sync does, so it is refused rather than
+  // honoured, before anything is read or changed, naming the consent a run
+  // that cannot be asked gives instead.
+  if (cmdOptions.force) {
+    exitWithError(context.logger, retiredForce());
+  }
+
+  // Surface the flag as an env var so downstream modules (the
+  // schema-change prompt, the auto-sync path) pick it up without
+  // needing to thread the option through every function call.
+  try {
+    exportDataLossConsent(cmdOptions.acceptDataLoss);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+
+  // Promote / demote short-circuit the full db:sync flow because
+  // they operate on a single slug and do not need the normal
+  // multi-collection sync pipeline.
+  if (cmdOptions.promote) {
+    try {
+      const { runPromote } = await import("./db-sync-promote");
+      await runPromote(cmdOptions.promote, context);
+      return;
+    } catch (error) {
+      exitWithError(context.logger, error);
+    }
+  }
+
+  if (cmdOptions.demote) {
+    try {
+      const { runDemote } = await import("./db-sync-demote");
+      await runDemote(cmdOptions.demote, context);
+      return;
+    } catch (error) {
+      exitWithError(context.logger, error);
+    }
+  }
+
+  const resolvedOptions: ResolvedDevOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
+
+  try {
+    await runDbSync(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+}
+
+export { registerDbSyncCommand } from "./db-sync.command";

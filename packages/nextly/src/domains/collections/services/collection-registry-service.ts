@@ -44,6 +44,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import {
   deleteEntityRegistryRow,
   mediaUsageTablePresent,
@@ -397,6 +398,19 @@ export class CollectionRegistryService extends BaseRegistryService<
     this.logger.debug("Updating collection", { slug });
 
     const existing = await this.getCollection(slug);
+    // Every road that rewrites a collection's registry row reaches this write, the schema
+    // endpoint's among them, so the sibling rule is asked here too, before the row changes: only a
+    // pair of sibling fields this update creates is refused, and one already held keeps working.
+    if (data.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug },
+        data.fields,
+        existing.fields ?? [],
+        // The configuration's and plugins' sync writes `define*` output, with its added
+        // system fields; every other caller writes fields as it was sent.
+        isPipelineSource(options?.source) ? { definedInCode: "collection" } : {}
+      );
+    }
 
     const targetSlug = data.slug ?? slug;
     await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {

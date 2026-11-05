@@ -15,6 +15,8 @@ import type {
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
   SharedFieldsConflictPublicData,
+  StaleVersionPublicData,
+  VersionRequiredPublicData,
   ValidationPublicData,
 } from "./public-data";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
@@ -604,6 +606,58 @@ export class NextlyError extends Error {
       publicData: opts?.data,
       cause: opts?.cause,
       logContext: { reason: opts?.reason, ...opts?.logContext },
+    });
+  }
+
+  /**
+   * An update made from a version of the document that is no longer its
+   * current one. Never retried: the same version stays out of date, so the
+   * caller must read the document again and decide.
+   *
+   * @experimental
+   */
+  /**
+   * An update that said neither which version of a document it was made from
+   * nor that it overwrites whatever is stored. `bulk` names an update that
+   * writes the same values to many documents, which can carry no one
+   * document's version: by its ids, which can be given a version each
+   * (`keys.revs`), or by a query, which cannot. The keys are the write path's
+   * to name, so the message spells them as the request does.
+   *
+   * @experimental
+   */
+  static versionRequired(opts: {
+    bulk: "ids" | "query";
+    keys: { version: string; overwrite: string; revs: string };
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    const { version, overwrite, revs } = opts.keys;
+    const byIds = opts.bulk === "ids";
+    const data: VersionRequiredPublicData = {
+      versionKey: version,
+      overwriteKey: overwrite,
+      ...(byIds ? { revsKey: revs } : {}),
+    };
+    const message = `An update that writes the same values to many documents must set \`${overwrite}: true\`: it can't carry each document's version. Or update each document with its own \`${version}\`.`;
+    return new NextlyError({
+      code: "VERSION_REQUIRED",
+      publicMessage: byIds
+        ? `${message} Or give each document's \`${version}\` in \`${revs}\`.`
+        : message,
+      publicData: data,
+      logContext: opts.logContext,
+    });
+  }
+
+  static staleVersion(opts: {
+    data: StaleVersionPublicData;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "STALE_VERSION",
+      publicMessage: `This document changed since the version you gave. Its current version is ${opts.data.currentVersion}.`,
+      publicData: opts.data,
+      logContext: opts.logContext,
     });
   }
 

@@ -150,6 +150,14 @@ export interface CollectionEntry {
   [key: string]: unknown;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * The entry's version: changed by every save and by no read, and naming each
+   * language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
+   */
+  _rev?: string;
 }
 
 /**
@@ -869,6 +877,53 @@ export class CollectionService extends BaseService {
     }
 
     return result.data.totalDocs;
+  }
+
+  /**
+   * How many entries carry each distinct value of one field, over the rows a
+   * `count` with the same filter would count.
+   *
+   * Not on `ctx.services.collections`: a plugin reaches it only through
+   * `ctx.services.ownCollections`, whose safe-delete bookkeeping needs it.
+   *
+   * @param collectionName - Name of the collection
+   * @param options - The field to group by, an optional `where`, and a bucket cap
+   * @param context - Request context
+   * @returns The buckets, largest first, and whether the cap left any out
+   * @throws NextlyError if grouping fails
+   */
+  async group(
+    collectionName: string,
+    options: {
+      groupBy: string;
+      where?: Record<string, unknown>;
+      bucketLimit?: number;
+    },
+    context: RequestContext
+  ): Promise<{
+    buckets: { value: string | null; count: number }[];
+    truncated: boolean;
+  }> {
+    this.logger.debug("Grouping entries", { collectionName });
+
+    const result = await this.entryService.groupEntries({
+      collectionName,
+      ...forwardedFromContext(context),
+      groupBy: options.groupBy,
+      where: options.where as WhereFilter | undefined,
+      ...(options.bucketLimit === undefined
+        ? {}
+        : { bucketLimit: options.bucketLimit }),
+    });
+
+    if (!result.success || !result.data) {
+      throw this.mapLegacyErrorToNextlyError(result);
+    }
+
+    return {
+      buckets: result.data.buckets,
+      truncated: result.data.truncated,
+    };
   }
 
   /**

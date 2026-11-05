@@ -267,6 +267,21 @@ function bound(
   return out;
 }
 
+/**
+ * The actions a host wired, and the one among them that leads: what every
+ * drawing of the bar starts from, so two drawings cannot disagree about it.
+ */
+function wiredActions(
+  actions: readonly EditorDocumentAction[],
+  bindings: DocumentActionBarProps["bindings"]
+): { available: EditorDocumentAction[]; primary: Bound | undefined } {
+  const available = bound(actions, bindings).map(entry => entry.action);
+  return {
+    available,
+    primary: bound(actionsAt(available, "primary"), bindings)[0],
+  };
+}
+
 export function DocumentActionBar({
   actions,
   bindings,
@@ -274,9 +289,7 @@ export function DocumentActionBar({
   className,
   narrowItems = [],
 }: DocumentActionBarProps): JSX.Element {
-  const wired = bound(actions, bindings);
-  const available = wired.map(entry => entry.action);
-  const primary = bound(actionsAt(available, "primary"), bindings)[0];
+  const { available, primary } = wiredActions(actions, bindings);
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
   const publishItems = bound(actionsAt(available, "publish-menu"), bindings);
@@ -384,11 +397,20 @@ const PUBLISH_OPTIONS_LABEL = "More ways to publish";
 function PrimaryAction({
   primary,
   options,
+  dangerOptions = [],
+  optionsLabel = PUBLISH_OPTIONS_LABEL,
   pending,
+  menuClassName,
 }: {
   primary: Bound;
   options: Bound[];
+  /** Destructive rows, below a rule, for a surface with no menu of its own. */
+  dangerOptions?: Bound[];
+  /** What the arrow is called, for what it holds. */
+  optionsLabel?: string;
   pending: boolean;
+  /** Extra classes for the arrow's menu, for a surface with its own density. */
+  menuClassName?: string;
 }) {
   const reason = reasonFor(primary.action, primary.binding);
   const press = (
@@ -407,13 +429,15 @@ function PrimaryAction({
       title={reason ?? primary.action.label}
       data-action={primary.action.id}
       data-primary="true"
-      className={cn(options.length > 0 && "rounded-r-none")}
+      className={cn(
+        options.length + dangerOptions.length > 0 && "rounded-r-none"
+      )}
     >
       {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
       {primary.action.label}
     </Button>
   );
-  if (options.length === 0) return press;
+  if (options.length + dangerOptions.length === 0) return press;
   return (
     <div className="flex items-center" data-publish-split="">
       {press}
@@ -425,33 +449,133 @@ function PrimaryAction({
             type="button"
             size="sm"
             className="rounded-l-none border-l-primary-foreground/25 px-1.5"
-            aria-label={PUBLISH_OPTIONS_LABEL}
-            title={PUBLISH_OPTIONS_LABEL}
+            aria-label={optionsLabel}
+            title={optionsLabel}
           >
             <ChevronDown className="h-4 w-4" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-56">
-          {options.map(({ action, binding }) => (
-            <DropdownMenuItem
-              key={action.id}
-              disabled={reasonFor(action, binding) !== undefined}
-              // `onSelect`, which Radix withholds from a disabled item.
-              onSelect={binding.onSelect}
-              data-action={action.id}
-              {...reasonAttributes(reasonFor(action, binding))}
-            >
-              <ActionRow
-                label={action.label}
-                reason={reasonFor(action, binding)}
-              />
-            </DropdownMenuItem>
+        <DropdownMenuContent
+          align="end"
+          className={cn("min-w-56", menuClassName)}
+        >
+          {options.map(entry => (
+            <OptionRow key={entry.action.id} entry={entry} />
+          ))}
+          {/* A rule only between two populated groups, as in More. */}
+          {options.length > 0 && dangerOptions.length > 0 ? (
+            <DropdownMenuSeparator />
+          ) : null}
+          {dangerOptions.map(entry => (
+            <OptionRow key={entry.action.id} entry={entry} danger />
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
   );
 }
+
+/** One row on the primary action's arrow, with its reason when it is held. */
+function OptionRow({
+  entry: { action, binding },
+  danger = false,
+}: {
+  entry: Bound;
+  danger?: boolean;
+}) {
+  const reason = reasonFor(action, binding);
+  return (
+    <DropdownMenuItem
+      disabled={reason !== undefined}
+      // `onSelect`, which Radix withholds from a disabled item.
+      onSelect={binding.onSelect}
+      data-action={action.id}
+      className={cn(danger && "text-destructive focus:text-destructive")}
+      {...reasonAttributes(reason)}
+    >
+      <ActionRow label={action.label} reason={reason} />
+    </DropdownMenuItem>
+  );
+}
+
+/** What the arrow is called where something other than Publish leads. */
+const DOCUMENT_OPTIONS_LABEL = "More document actions";
+
+/**
+ * The destructive verbs a compact bar keeps on its arrow. Only the one about
+ * readers: Unpublish changes what is live, which belongs beside publishing.
+ * Discarding and deleting stay on the entry's own page, where the document
+ * they act on is the one on screen; a surface holding its own copy of the
+ * work would be left showing what was just thrown away.
+ */
+const COMPACT_DANGER_IDS: ReadonlySet<string> = new Set(["unpublish"]);
+
+/**
+ * The document's actions as ONE control, for a surface whose bar has room
+ * for one, such as a full-window editor that replaces the header.
+ *
+ * The leading action, and on its arrow: the toolbar's (Save draft), the
+ * other ways to publish (Schedule, Add to release), then Unpublish below a
+ * rule. Every row is the model's, with the model's reason; this decides only
+ * where each is drawn. With nothing leading, the same rows sit in a menu of
+ * their own, so a person who may not publish still finds them and reads why.
+ */
+export function CompactDocumentActionBar({
+  actions,
+  bindings,
+  pending = false,
+}: Omit<
+  DocumentActionBarProps,
+  "className" | "narrowItems"
+>): JSX.Element | null {
+  const { available, primary } = wiredActions(actions, bindings);
+  const options = [
+    ...bound(actionsAt(available, "toolbar"), bindings),
+    ...bound(actionsAt(available, "publish-menu"), bindings),
+  ];
+  const danger = bound(
+    menuGroups(available).danger.filter(action =>
+      COMPACT_DANGER_IDS.has(action.id)
+    ),
+    bindings
+  );
+  if (primary === undefined) {
+    // Nothing to lead and nothing this bar keeps: no control at all, rather
+    // than a menu that opens empty. The entry's page still has its own.
+    if (options.length + danger.length === 0) return null;
+    return (
+      <DocumentMenu
+        narrowItems={[]}
+        documentItems={options}
+        dangerItems={danger}
+        wideMenu
+        menuClassName={COMPACT_MENU_CLASS}
+      />
+    );
+  }
+  return (
+    <PrimaryAction
+      primary={primary}
+      options={options}
+      dangerOptions={danger}
+      optionsLabel={
+        primary.action.id === PUBLISH_ACTION_ID
+          ? PUBLISH_OPTIONS_LABEL
+          : DOCUMENT_OPTIONS_LABEL
+      }
+      pending={pending}
+      menuClassName={COMPACT_MENU_CLASS}
+    />
+  );
+}
+
+/**
+ * The compact bar's menu at the page builder's density: 12px rows 28px high,
+ * as the bar it opens from. Spelled here rather than read from the builder's
+ * tokens, which a menu drawn outside the editor's element can't inherit.
+ */
+const COMPACT_MENU_CLASS =
+  "[&_[role=menuitem]]:py-1.5 [&_[role=menuitem]]:text-xs [&_[role=menuitem]]:leading-4";
 
 /**
  * The document's menu: its other verbs, its destructive ones apart, and on a
@@ -462,11 +586,14 @@ function DocumentMenu({
   documentItems,
   dangerItems,
   wideMenu,
+  menuClassName,
 }: {
   narrowItems: readonly NarrowMenuItem[];
   documentItems: Bound[];
   dangerItems: Bound[];
   wideMenu: boolean;
+  /** Extra classes for the menu, for a surface with its own density. */
+  menuClassName?: string;
 }) {
   return (
     <DropdownMenu>
@@ -482,7 +609,7 @@ function DocumentMenu({
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className={menuClassName}>
         {narrowItems.map(item => (
           <DropdownMenuItem
             key={item.id}

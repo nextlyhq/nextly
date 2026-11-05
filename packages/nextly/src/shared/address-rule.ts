@@ -424,7 +424,7 @@ type Slugged = ReadonlyArray<{ slug: string; dbName?: string }>;
 type Registered = ReadonlyArray<{ slug: string; tableName?: string }>;
 
 /** The table a configured entity is stored in, as each kind's resolver names it. */
-function configuredTable(
+export function configuredTable(
   kind: AddressKind,
   entity: { slug: string; dbName?: string }
 ): string {

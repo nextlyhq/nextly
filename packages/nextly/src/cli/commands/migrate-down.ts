@@ -13,7 +13,6 @@
  *
  * @module cli/commands/migrate-down
  */
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -39,10 +38,10 @@ import {
   type SchemaEventRow,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
-  ACCEPT_DATA_LOSS_HELP,
-  isInteractiveTerminal,
-  judgeDataLoss,
+  consentToCover,
+  describeDeletion,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
@@ -53,6 +52,12 @@ import {
   isConcurrentRun,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
+  readDeletionFacts,
+  runDeletions,
+  runStatements,
+  type DeletionFacts,
+} from "../../domains/schema/migrate/file-deletions";
+import {
   outsideTransactionNotice,
   runMigrationStatements,
   type MigrationUnit,
@@ -62,6 +67,7 @@ import {
   qualifiedFilename,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
+import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/required-column-guard";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import {
   assertRunnableStatements,
@@ -77,63 +83,75 @@ import {
   readLiveElements,
   readLiveIndexTables,
   readLiveTables,
-  rebuildBlockStatements,
   type LiveColumns,
   type LiveElements,
 } from "../../domains/schema/ownership/drop-guard";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
-import { findUnexpectedDestructiveStatements } from "../../domains/schema/pipeline/filter-unsafe-statements";
+import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
-import {
-  createCliAdapter,
-  type CLIDatabaseAdapter,
-  type SupportedDialect,
-} from "../utils/adapter";
+import type { CommandContext } from "../program";
+import { openCommandAdapter, type SupportedDialect } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
+  deletionSource,
+  eventTriggerNotice,
+  judgeRunDeletions,
+  type Agreement,
+  type DeletionSource,
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
+import { commandRun } from "./command-run";
+import { refuseUnresolvedAppAttempts } from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
 } from "./plugin-module-rollback";
 
 /**
- * Whether a DOWN loses data: it drops a table, a schema or a column, or
- * truncates a table.
+ * What each target of a rollback deletes, named, for the consent to cover:
+ * the DOWNs read as one run, in the order they run (`runDeletions`), so a
+ * target is judged against the schema the targets before it leave, and a
+ * foreign key an earlier DOWN restores is followed from a later one's
+ * removal of rows. App migrations and plugin modules are read alike.
  *
- * Judged per statement by the classifier the schema pipeline refuses
- * unexpected destructive DDL with, so "destructive" has one reading — it
- * covers the forms a text match on `DROP COLUMN` misses, such as PostgreSQL's
- * and MySQL's `ALTER TABLE t DROP c`. A complete table rebuild keeps the
- * table and its rows, so its `DROP TABLE` is not counted: the statements
- * `rebuildBlockStatements` names — judged against the table's live columns,
- * as the drop guard judges them — which is how a constraint-only SQLite DOWN
- * needs no data-loss consent. Everything else is handed to the classifier
- * with an empty approved-rebuild set, so a DROP TABLE outside a complete
- * block, or of a twin missing a live column, still counts.
+ * The live facts are read once, for every target's statements. Without a
+ * reader none is known: every removal's reach, trigger and inheritance tree
+ * stands for a deletion only the consent without targets covers, and the
+ * live columns are the ones the plan read (`readLiveState`).
  */
-export function isDestructiveDown(
-  statements: readonly string[],
+export async function rollbackDeletions(
+  planned: readonly Pick<PlannedDown, "statements" | "liveColumns">[],
   dialect: SupportedDialect,
-  liveColumns: LiveColumns | undefined
-): boolean {
-  const rebuilding = rebuildBlockStatements(statements, dialect, liveColumns);
-  return (
-    findUnexpectedDestructiveStatements(
-      statements.filter((_, index) => !rebuilding.has(index)),
-      new Set()
-    ).length > 0
-  );
+  readFacts:
+    | ((statements: readonly string[]) => Promise<DeletionFacts>)
+    | undefined
+): Promise<Deletion[][]> {
+  const lists = planned.map(p => p.statements);
+  const facts =
+    (await readFacts?.(runStatements(lists))) ??
+    unreadFacts(planned[0]?.liveColumns);
+  return runDeletions(lists, dialect, facts);
+}
+
+/** The facts of a rollback with no reader: nothing live answered, so each question fails closed. */
+function unreadFacts(liveColumns: LiveColumns | undefined): DeletionFacts {
+  return {
+    cascadeFrom: () => undefined,
+    truncateCascadeFrom: () => undefined,
+    nulledBy: () => undefined,
+    hiddenCode: () => undefined,
+    descendantsOf: () => undefined,
+    liveTable: () => undefined,
+    liveColumns: liveColumns ?? new Map(),
+  };
 }
 
 /**
@@ -331,6 +349,17 @@ export interface MigrateDownCoreDeps {
    */
   recordDownStarted?: (filename: string) => Promise<string>;
   /**
+   * Refuses a DOWN whose statements make a column required over rows that would break it,
+   * counted before its first statement and before the ledger records an attempt
+   * (`refuseRequiredColumnsOverNulls`, as `nextly migrate` judges an UP). A DOWN can make a column
+   * required again over rows saved since its UP ran. `source` is the file's name. Optional so a
+   * caller with no database of its own supplies nothing.
+   */
+  refuseRequiredColumns?: (
+    statements: readonly string[],
+    source: string
+  ) => Promise<void>;
+  /**
    * Removes a DOWN's started attempt once its ending is recorded, through
    * `db`: the handle the rolled-back row was written on when it ended in a
    * rollback, so the two commit together. The ending's own record then says
@@ -377,6 +406,26 @@ export interface MigrateDownCoreDeps {
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<ReadonlyMap<string, string>>;
   withLock: typeof withMigrateLock;
+  /**
+   * The live facts a target's DOWN deletions are judged against: the foreign
+   * keys a row removal cascades through (`readDeletionFacts`). Absent, no
+   * foreign key is known, and a cascading removal needs the consent without
+   * targets.
+   */
+  readDeletionFacts?: (statements: readonly string[]) => Promise<DeletionFacts>;
+  /**
+   * The database's enabled DDL event triggers, named beside a rollback's
+   * deletions (`eventTriggerNotice`). Absent, none is named.
+   */
+  readEventTriggers?: () => Promise<readonly string[]>;
+  /**
+   * Refuses while an app migration has an unresolved attempt that may have
+   * stopped part-way (`refuseUnresolvedAppAttempts`), its own down section's
+   * included. Asked under the lock before the plan, for the app's stream
+   * only: a plugin's history keeps its own rules. The command supplies it;
+   * absent, a caller with no migrations folder of the app's, nothing is read.
+   */
+  refuseUnresolvedAttempts?: () => Promise<void>;
   /**
    * Whether a person is at a terminal to be asked before a DOWN loses data.
    * Absent reads as no, so a rollback without consent is refused rather than
@@ -574,8 +623,12 @@ export async function rollBackOne(
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "refuseRequiredColumns"
   >
 ): Promise<void> {
+  // A column made required over rows that would break it: refused here, before the DOWN's first
+  // statement and before the ledger records an attempt, so the migration stays applied.
+  await deps.refuseRequiredColumns?.(p.statements, p.filename);
   if (!p.transaction) {
     deps.logger.warn(outsideTransactionNotice(p.filename));
   }
@@ -730,7 +783,7 @@ function plannedFrom(
  */
 async function planAndGuard(
   deps: MigrateDownCoreDeps,
-  agreed?: readonly Deletion[]
+  agreed?: Agreement
 ): Promise<GuardedPlan> {
   const step = deps.options.step ?? 1;
   // Plugin rows belong to their own migration stream, so they are excluded
@@ -746,10 +799,9 @@ async function planAndGuard(
     deps,
     agreed === undefined
   );
-  if (targets.length === 0)
-    return { planned: [], deletions: [], declined: false };
+  if (targets.length === 0) return { planned: [], agreement: new Set() };
   const planned = await planRollback(targets, deps, reads);
-  if (deps.options.dryRun) return { planned, deletions: [], declined: false };
+  if (deps.options.dryRun) return { planned, agreement: new Set() };
 
   // Guards — evaluated up front for every target, before executing anything.
   for (const p of planned) {
@@ -757,51 +809,92 @@ async function planAndGuard(
     if (refusal !== undefined) throw refusal;
   }
 
-  // A DOWN that loses data takes the data-loss consent, judged for every
-  // target before the first runs. Each is judged by its statements as a
-  // whole, so it is named by its file: only the consent without targets
-  // covers it, and a list naming tables is refused rather than read as
-  // covering a DOWN it cannot be matched against.
-  const deletions: Deletion[] = planned
-    .filter(p => isDestructiveDown(p.statements, deps.dialect, p.liveColumns))
-    .map(p => ({
-      kind: "unnamed" as const,
-      description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
-      // The statements as judged: under the lock the DOWN is read again, and
-      // one that changed since it was agreed to is a different deletion.
-      fingerprint: createHash("sha256")
-        .update(p.statements.join("\n;\n"))
-        .digest("hex"),
-    }));
-  const first = agreed === undefined;
-  const verdict = await judgeDataLoss({
-    deletions,
-    consent:
-      deps.options.consent ??
-      resolveDataLossConsent({
-        honours: ["--allow-data-loss"],
-        earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
-      }),
-    interactive: first && deps.interactive === true,
-    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
-    print: first ? line => deps.logger.warn(line) : () => {},
-    approved: agreed,
-  });
-  if (verdict.kind === "refused") {
-    throw NextlyError.invalidInput({
-      message: verdict.message,
-      logContext: { reason: `data-loss-${verdict.reason}` },
+  // A DOWN that loses data takes the data-loss consent, judged once for
+  // every target before the first runs, by the deletions their statements
+  // make (`downDeletions`), each file named above its own.
+  const consent =
+    deps.options.consent ??
+    resolveDataLossConsent({
+      honours: ["--allow-data-loss"],
+      earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
     });
+  // Each deletion keeps the file it comes from, by identity, for the listing
+  // and for binding an agreement to the file as it stands.
+  const sources = new Map<Deletion, DeletionSource>();
+  const perTarget = await rollbackDeletions(
+    planned,
+    deps.dialect,
+    deps.readDeletionFacts
+  );
+  planned.forEach((p, at) => {
+    const source = deletionSource(p.filename, p.statements.join("\n;\n"));
+    for (const deletion of perTarget[at] ?? []) sources.set(deletion, source);
+  });
+  const agreement = await judgeRunDeletions({
+    sources,
+    consent,
+    agreed,
+    interactive: deps.interactive,
+    askToDelete: deps.askToDelete,
+    warn: line => deps.logger.warn(line),
+    notice:
+      sources.size === 0 || deps.readEventTriggers === undefined
+        ? undefined
+        : await eventTriggerNotice(deps.readEventTriggers),
+  });
+  return { planned, agreement };
+}
+
+/**
+ * What `migrate:down --dry-run` reports of a plan: the refusal a real run
+ * makes under the lock, each target with its refusal or what its DOWN deletes
+ * and the SQL it runs, and the database's DDL event triggers.
+ */
+async function previewRollback(
+  planned: readonly PlannedDown[],
+  deps: MigrateDownCoreDeps
+): Promise<void> {
+  // The refusal a real run makes under the lock, reported as the others are.
+  await reportUnresolvedRefusal(deps);
+  deps.logger.info(`Would roll back ${planned.length} migration(s):`);
+  const notice =
+    deps.readEventTriggers === undefined
+      ? undefined
+      : await eventTriggerNotice(deps.readEventTriggers);
+  if (notice !== undefined) deps.logger.info(`  ⚠ ${notice}`);
+  // Judged as the real run judges them: every target's DOWN as one run.
+  const perTarget = await rollbackDeletions(
+    planned,
+    deps.dialect,
+    deps.readDeletionFacts
+  );
+  for (const [at, p] of planned.entries()) {
+    deps.logger.info(`  • ${p.filename}`);
+    const refusal = refusalOf(p, deps);
+    if (refusal !== undefined) {
+      deps.logger.info(
+        `    ✖ a real run would be refused: ${describeError(refusal, { context: false })}`
+      );
+      continue;
+    }
+    const deletes = perTarget[at] ?? [];
+    if (deletes.length > 0) {
+      deps.logger.info(
+        `    ⚠ deletes data: ${deletes.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletes)}.`
+      );
+    }
+    if (!p.transaction) {
+      deps.logger.info(`    ⚠ ${outsideTransactionNotice(p.filename)}`);
+    }
+    deps.logger.info(p.downSql);
   }
-  return { planned, deletions, declined: verdict.kind === "declined" };
 }
 
 /** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
 interface GuardedPlan {
   planned: PlannedDown[];
-  deletions: Deletion[];
-  /** The terminal was asked and said no: nothing is rolled back. */
-  declined: boolean;
+  /** What the operator agreed the targets delete, bound to each file as it stood. */
+  agreement: Agreement;
 }
 
 export async function migrateDownCore(
@@ -809,8 +902,37 @@ export async function migrateDownCore(
 ): Promise<MigrateDownResult> {
   const guarded = await planAndGuard(deps);
   const planned = guarded.planned;
+  const lockOptions = {
+    command: deps.lockCommand ?? "nextly migrate:down",
+    // A held lock is waited for, about a minute, and then the run stops naming its holder.
+    mode: "wait" as const,
+    logger: {
+      warn: (m: string) => deps.logger.warn(m),
+      info: (m: string) => deps.logger.info(m),
+    },
+  };
 
   if (planned.length === 0) {
+    // Nothing to roll back still refuses on an unresolved attempt, judged under
+    // the lock as a run with targets is: the command must not read as having
+    // found the history sound while an attempt stands unresolved.
+    if (
+      !deps.options.dryRun &&
+      deps.options.plugin === undefined &&
+      deps.refuseUnresolvedAttempts !== undefined
+    ) {
+      await deps.withLock(
+        lockAdapter(deps),
+        deps.dialect,
+        async () => {
+          const unresolved = await refusalOfUnresolvedAttempts(deps);
+          if (unresolved !== undefined) throw unresolved;
+        },
+        lockOptions
+      );
+    }
+    // A dry run reports the same refusal, as it does with targets.
+    if (deps.options.dryRun) await reportUnresolvedRefusal(deps);
     deps.logger.info("Nothing to roll back.");
     return { rolledBack: [] };
   }
@@ -821,31 +943,7 @@ export async function migrateDownCore(
   // disagree; so is what a real run would need the data-loss consent for, so
   // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
-    deps.logger.info(`Would roll back ${planned.length} migration(s):`);
-    for (const p of planned) {
-      deps.logger.info(`  • ${p.filename}`);
-      const refusal = refusalOf(p, deps);
-      if (refusal !== undefined) {
-        deps.logger.info(
-          `    ✖ a real run would be refused: ${describeError(refusal, { context: false })}`
-        );
-        continue;
-      }
-      if (isDestructiveDown(p.statements, deps.dialect, p.liveColumns)) {
-        deps.logger.info(
-          "    ⚠ drops a table or column — a real run needs --accept-data-loss"
-        );
-      }
-      if (!p.transaction) {
-        deps.logger.info(`    ⚠ ${outsideTransactionNotice(p.filename)}`);
-      }
-      deps.logger.info(p.downSql);
-    }
-    return { rolledBack: [] };
-  }
-
-  if (guarded.declined) {
-    deps.logger.info("Nothing was rolled back.");
+    await previewRollback(planned, deps);
     return { rolledBack: [] };
   }
 
@@ -862,9 +960,14 @@ export async function migrateDownCore(
     lockAdapter(deps),
     deps.dialect,
     async () => {
+      // Before the plan and the first write, from the ledger as it stands
+      // once the lock is held: a DOWN retried over its own stopped attempt
+      // would run statements that already ran.
+      const unresolved = await refusalOfUnresolvedAttempts(deps);
+      if (unresolved !== undefined) throw unresolved;
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
-      const { planned: current } = await planAndGuard(held, guarded.deletions);
+      const { planned: current } = await planAndGuard(held, guarded.agreement);
       if (current.length === 0) {
         deps.logger.info("Nothing to roll back.");
         return;
@@ -875,18 +978,40 @@ export async function migrateDownCore(
         deps.logger.success(`Rolled back ${p.filename}`);
       }
     },
-    {
-      command: deps.lockCommand ?? "nextly migrate:down",
-      // A held lock is waited for, about a minute, and then the run stops naming its holder.
-      mode: "wait",
-      logger: {
-        warn: m => deps.logger.warn(m),
-        info: m => deps.logger.info(m),
-      },
-    }
+    lockOptions
   );
 
   return { rolledBack };
+}
+
+/** A dry run's line for the unresolved-attempt refusal a real run would make. */
+async function reportUnresolvedRefusal(
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "options" | "refuseUnresolvedAttempts" | "logger"
+  >
+): Promise<void> {
+  const unresolved = await refusalOfUnresolvedAttempts(deps);
+  if (unresolved === undefined) return;
+  deps.logger.info(
+    `✖ a real run would be refused: ${describeError(unresolved, { context: false })}`
+  );
+}
+
+/**
+ * The unresolved-attempt refusal, or undefined: a real run throws it under the
+ * lock, a dry run reports it. Never for a plugin's stream (`--plugin`).
+ */
+async function refusalOfUnresolvedAttempts(
+  deps: Pick<MigrateDownCoreDeps, "options" | "refuseUnresolvedAttempts">
+): Promise<Error | undefined> {
+  if (deps.options.plugin !== undefined) return undefined;
+  try {
+    await deps.refuseUnresolvedAttempts?.();
+    return undefined;
+  } catch (refusal) {
+    return asError(refusal);
+  }
 }
 
 // ============================================================================
@@ -949,6 +1074,8 @@ export async function downDatabaseDeps(args: {
     | "readLiveElements"
     | "readLiveTables"
     | "readLiveIndexTables"
+    | "readDeletionFacts"
+    | "readEventTriggers"
     | "listFileApplies"
     | "execDown"
     | "recordRolledBack"
@@ -956,6 +1083,7 @@ export async function downDatabaseDeps(args: {
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "refuseRequiredColumns"
   >
 > {
   const { adapter, dialect, plugin } = args;
@@ -987,7 +1115,11 @@ export async function downDatabaseDeps(args: {
     readLiveElements: lists => readLiveElements(db, dialect, lists),
     readLiveTables: lists => readLiveTables(db, dialect, lists),
     readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
+    readDeletionFacts: statements => readDeletionFacts(db, dialect, statements),
+    readEventTriggers: () => readDdlEventTriggers(db, dialect),
     listFileApplies: () => repo.listFileApplies(),
+    refuseRequiredColumns: (statements, source) =>
+      refuseRequiredColumnsOverNulls(db, dialect, statements, source),
     execDown: (statements, unit, after) =>
       runMigrationStatements(adapter, statements, unit, handle =>
         after(handle)
@@ -1004,6 +1136,7 @@ export async function downDatabaseDeps(args: {
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
         marksNoTransaction: () => Promise.resolve(false),
+        fileChecksum: () => Promise.resolve(""),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       return true;
@@ -1098,17 +1231,27 @@ export async function runMigrateDown(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  const adapter: CLIDatabaseAdapter = await createCliAdapter({
-    dialect: dbValidation.dialect,
-    databaseUrl: dbValidation.databaseUrl,
-    logger: options.verbose ? logger : undefined,
-  });
+  const adapter = await openCommandAdapter(
+    {
+      dialect: dbValidation.dialect,
+      databaseUrl: dbValidation.databaseUrl,
+      logger: options.verbose ? logger : undefined,
+      dryRun: options.dryRun,
+    },
+    logger
+  );
+  // A dry run whose database is not there has said so, and ends here.
+  if (adapter === undefined) return;
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
 
-    if (options.forceUnlock) {
+    // A dry run clears no lock, which may be an active operation's; it says a
+    // real run would.
+    if (options.forceUnlock && options.dryRun) {
+      logger.info("Would remove any migrate lock held");
+    } else if (options.forceUnlock) {
       const { forceUnlock } = await import(
         "../../domains/schema/pipeline/locks"
       );
@@ -1183,7 +1326,20 @@ export async function runMigrateDown(
       fileExists: () => Promise.resolve(true),
       readDownSql,
       withLock: withMigrateLock,
-      interactive: isInteractiveTerminal(),
+      ...(plugin === undefined
+        ? {
+            refuseUnresolvedAttempts: () =>
+              refuseUnresolvedAppAttempts({
+                adapter,
+                db,
+                dialect,
+                migrationsDir,
+                logger,
+                command: "nextly migrate:down",
+              }),
+          }
+        : {}),
+      interactive: canPrompt(),
       askToDelete: askToDeleteInTerminal,
     });
 
@@ -1199,48 +1355,20 @@ export async function runMigrateDown(
   }
 }
 
-export function registerMigrateDownCommand(program: Command): void {
-  program
-    .command("migrate:down")
-    .description(
-      "Roll back the most-recently-applied migration(s) using their -- DOWN section"
-    )
-    .option("--step <n>", "Roll back the last N migrations", parseInt)
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .option("--allow-data-loss", "Deprecated: use --accept-data-loss", false)
-    .option(
-      "--yes",
-      "Confirm rollback in production (NODE_ENV=production)",
-      false
-    )
-    .option(
-      "--dry-run",
-      "Show what would be rolled back (and the DOWN SQL) without executing",
-      false
-    )
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .option(
-      "--plugin <name>",
-      "Roll back <name>'s migrations instead of the app's"
-    )
-    .action(async (cmdOptions: MigrateDownCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      const resolvedOptions: ResolvedDownOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-      try {
-        await runMigrateDown(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/**
+ * The action of `nextly migrate:down`, loaded when it runs.
+ */
+export async function migrateDownAction(
+  cmdOptions: MigrateDownCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedDownOptions = options;
+  try {
+    await runMigrateDown(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateDownCommand } from "./migrate-down.command";
