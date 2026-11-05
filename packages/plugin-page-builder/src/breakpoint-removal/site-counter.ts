@@ -12,6 +12,8 @@ import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { PAGES_SLUG } from "../collections/pages";
 import { PATTERNS_SLUG } from "../collections/patterns";
+import { titleFieldIn } from "../entries-route";
+import { entryOf, readSavedAsCaller } from "../entry-reads";
 import type { HostAddress } from "../host-rewrite/contract";
 import {
   siteDocuments,
@@ -25,14 +27,8 @@ import { countRemoval, type RemovalDryRun, type RemovalPlace } from "./dry-run";
 /** How long one dry run may walk before it answers with what it has. */
 const WALK_MS = 20_000;
 
-/** The reads naming a document make, as the person asking. */
+/** The read naming a Single makes, as the person asking. */
 export interface NamingDirectApi {
-  findByID(args: {
-    collection: string;
-    id: string;
-    depth: number;
-    overrideAccess: false;
-  }): Promise<unknown>;
   findSingle(args: {
     slug: string;
     createIfMissing: false;
@@ -70,40 +66,50 @@ function placeOf(slugs: PlaceSlugs, host: HostAddress): RemovalPlace {
   return "entries";
 }
 
-/** What an author knows an entry by: its title, its name, else its id. */
-function titleOf(row: unknown, fallback: string): string {
-  if (typeof row !== "object" || row === null) return fallback;
-  const { title, name } = row as { title?: unknown; name?: unknown };
-  if (typeof title === "string" && title !== "") return title;
-  if (typeof name === "string" && name !== "") return name;
-  return fallback;
+/**
+ * What the caller knows an entry by, or `null` when they may not read it: its
+ * saved row read as them, drafts included, titled by the rule every entries
+ * list names a row by.
+ */
+async function entryNameAsCaller(
+  site: Pick<DocumentSite, "resolveCollection">,
+  ctx: Pick<PluginRouteContext, "caller">,
+  host: HostAddress
+): Promise<string | null> {
+  const record = await site.resolveCollection(host.slug);
+  const titleField =
+    typeof record === "object" && record !== null
+      ? titleFieldIn(record)?.name
+      : undefined;
+  const row = await readSavedAsCaller(ctx, {
+    collection: host.slug,
+    id: host.id ?? "",
+    select: {
+      id: true,
+      ...(titleField === undefined ? {} : { [titleField]: true }),
+    },
+  });
+  return row === null ? null : (entryOf(row, titleField)?.title ?? null);
 }
 
 /**
- * The name for a document the caller may read, or `null` for one they may
- * not: read with the caller's own identity, so the access gate that answers
- * their every read answers this one.
+ * Whether the caller may read a Single, named by its slug when they may: read
+ * with their own identity, so the access gate that answers their every read
+ * answers this one.
  */
-async function nameAsCaller(
+async function singleNameAsCaller(
   nextly: NamingDirectApi,
-  asUser: Awaited<ReturnType<typeof readingAsUser>>,
+  ctx: Pick<PluginRouteContext, "caller">,
   host: HostAddress
 ): Promise<string | null> {
   try {
-    if (host.kind === "single") {
-      await nextly.findSingle({
-        slug: host.slug,
-        createIfMissing: false,
-        depth: 0,
-        ...asUser,
-      });
-      return host.slug;
-    }
-    const id = host.id ?? "";
-    return titleOf(
-      await nextly.findByID({ collection: host.slug, id, depth: 0, ...asUser }),
-      id
-    );
+    await nextly.findSingle({
+      slug: host.slug,
+      createIfMissing: false,
+      depth: 0,
+      ...(await readingAsUser(ctx)),
+    });
+    return host.slug;
   } catch (error) {
     if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
       return null;
@@ -140,15 +146,14 @@ export async function countRemovalOnSite(
     layouts: site.layouts,
   };
   const documents = siteDocuments(site);
-  let asUser: Awaited<ReturnType<typeof readingAsUser>> | undefined;
   return countRemoval(removed, {
     documents: () => documents(null),
     read: siteHostReader(site),
     placeOf: host => placeOf(slugs, host),
-    nameFor: async host => {
-      asUser ??= await readingAsUser(ctx);
-      return nameAsCaller(await install.naming(), asUser, host);
-    },
+    nameFor: async host =>
+      host.kind === "single"
+        ? singleNameAsCaller(await install.naming(), ctx, host)
+        : entryNameAsCaller(site, ctx, host),
     limits: install.limits(),
     classes,
     deadline: new Date(Date.now() + WALK_MS),
