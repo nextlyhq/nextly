@@ -147,6 +147,7 @@ const WRITES = [
   "migrate:resolve",
   "permissions:cleanup",
   "prune",
+  "setup-token",
   "telemetry disable",
   "telemetry enable",
   "telemetry reset",
@@ -162,7 +163,6 @@ const WRITES_WITHOUT_DRY_RUN_YET = [
   "media reindex-usage",
   "plugins install",
   "plugins uninstall",
-  "setup-token",
   "upgrade",
 ];
 const PREVIEWS = [
