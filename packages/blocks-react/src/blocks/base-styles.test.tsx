@@ -363,6 +363,7 @@ describe("every default the core library declares", () => {
       "core/image#link",
       "core/image#linked",
       "core/image#picture",
+      "core/image#relay",
       "core/quote#attribution",
       "core/quote#quotation",
     ]);

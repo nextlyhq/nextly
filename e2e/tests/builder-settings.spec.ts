@@ -378,6 +378,11 @@ test.describe("Settings", () => {
       await openEditor(page, id);
       // The site's own three: Desktop, Tablet and Mobile, and no menu.
       await expect(devices(page).getByRole("radio")).toHaveCount(3);
+      // The chosen device shows its label and width once the canvas has
+      // measured it; read the buttons after that, not while it is drawing.
+      await expect(
+        devices(page).getByRole("radio", { checked: true })
+      ).toHaveText(/^Desktop · \d+px$/);
       const labels = await devices(page).getByRole("radio").allTextContents();
 
       const dialog = await editBreakpoints(page);
@@ -395,9 +400,7 @@ test.describe("Settings", () => {
 
       // The narrowest goes in the menu; the three buttons are unchanged.
       await expect(devices(page).getByRole("radio")).toHaveCount(3);
-      expect(await devices(page).getByRole("radio").allTextContents()).toEqual(
-        labels
-      );
+      await expect(devices(page).getByRole("radio")).toHaveText(labels);
       const more = page.getByRole("button", { name: /^More devices/ });
       await more.click();
       await page.getByRole("menuitemradio", { name: /^Small phone/ }).click();
