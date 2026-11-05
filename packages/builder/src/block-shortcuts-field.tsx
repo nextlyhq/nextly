@@ -61,7 +61,8 @@ function ChoiceRow<T extends string>({
   options: readonly T[];
   on: T | undefined;
   labels: Readonly<Record<T, string>>;
-  hint: string;
+  /** What the choices do, or none where the field beneath already says. */
+  hint?: string | undefined;
   onChoose: (choice: T) => void;
 }): React.JSX.Element {
   const labelId = React.useId();
@@ -79,7 +80,7 @@ function ChoiceRow<T extends string>({
           onChoose={onChoose}
         />
       </div>
-      <p className="nx-inspector__note">{hint}</p>
+      {hint === undefined ? null : <p className="nx-inspector__note">{hint}</p>}
     </>
   );
 }
@@ -115,7 +116,13 @@ export function MinHeightPresets({
         options={["auto", "screen"] as const}
         on={heightOf(node, at)}
         labels={HEIGHT_LABELS}
-        hint="Full screen: at least the screen's height, growing with its content."
+        // Over the field, the value beneath says what Full screen wrote, and a
+        // line between them would part the presets from the field they set.
+        hint={
+          over
+            ? undefined
+            : "Full screen: at least the screen's height, growing with its content."
+        }
         onChoose={choice => {
           const op = planHeight(node, choice, at);
           if (op !== null) editor.apply(op);
