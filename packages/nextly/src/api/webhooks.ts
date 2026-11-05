@@ -43,15 +43,17 @@ import {
 } from "../domains/webhooks/drain-runner";
 import type { WebhookEndpointRegistry } from "../domains/webhooks/endpoint-registry";
 import { webhookEventTypes } from "../domains/webhooks/event-type-registry";
+import {
+  CreateWebhookRequestSchema,
+  UpdateWebhookRequestSchema,
+  type CreateWebhookRequest,
+  type UpdateWebhookRequest,
+} from "../domains/webhooks/request-schemas";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import {
-  CreateWebhookSchema,
-  RotateWebhookSchema,
-  UpdateWebhookSchema,
-} from "../schemas/_zod/webhooks";
+import { RotateWebhookSchema } from "../schemas/_zod/webhooks";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
 
 import { readJsonBody } from "./read-json-body";
@@ -521,9 +523,11 @@ export const createWebhook = withErrorHandler(
     await getCachedNextly();
     const body = await readJsonBody(req);
 
-    let validated: z.infer<typeof CreateWebhookSchema>;
+    // The route's own schema: the published one, with a subscription list
+    // that also takes the types plugins declare.
+    let validated: CreateWebhookRequest;
     try {
-      validated = CreateWebhookSchema.parse(body);
+      validated = CreateWebhookRequestSchema.parse(body);
     } catch (err) {
       if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
       throw err;
@@ -568,9 +572,9 @@ export function updateWebhook(req: Request, id: string): Promise<Response> {
     await getCachedNextly();
     const body = await readJsonBody(request);
 
-    let validated: z.infer<typeof UpdateWebhookSchema>;
+    let validated: UpdateWebhookRequest;
     try {
-      validated = UpdateWebhookSchema.parse(body);
+      validated = UpdateWebhookRequestSchema.parse(body);
     } catch (err) {
       if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
       throw err;
