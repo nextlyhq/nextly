@@ -66,6 +66,16 @@ describe("listLoopCollections", () => {
             { field: "nowhere", label: "Nowhere" },
           ],
           declared: ["id", "title", 4],
+          readable: [
+            { name: "title", type: "text" },
+            {
+              name: "tags",
+              type: "relationship",
+              hasMany: true,
+              relationTo: ["a", "b"],
+            },
+            { name: "broken" },
+          ],
         },
         { slug: "events", label: "Events" },
         { slug: 3, label: "Not a collection" },
@@ -101,6 +111,15 @@ describe("listLoopCollections", () => {
           },
         ],
         declared: ["id", "title"],
+        readable: [
+          { name: "title", type: "text" },
+          {
+            name: "tags",
+            type: "relationship",
+            hasMany: true,
+            relationTo: ["a", "b"],
+          },
+        ],
       },
       // An answer from before singular names reads as its label, with nothing to name.
       {
@@ -110,6 +129,7 @@ describe("listLoopCollections", () => {
         fields: [],
         relations: [],
         declared: [],
+        readable: [],
       },
     ]);
   });

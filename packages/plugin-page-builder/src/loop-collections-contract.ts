@@ -77,6 +77,19 @@ export interface LoopCollectionItem {
    * collection no longer has.
    */
   readonly declared: readonly string[];
+  /**
+   * Every field the public may read, as a save judges a list against them:
+   * the offered fields are a narrower view of these.
+   */
+  readonly readable: readonly LoopReadableField[];
+}
+
+/** One field the public may read, as far as a list's judgement needs it. */
+export interface LoopReadableField {
+  readonly name: string;
+  readonly type: string;
+  readonly hasMany?: true;
+  readonly relationTo?: string | readonly string[];
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   type LoopCollectionsResponse,
   type LoopFieldOption,
   type LoopListFieldItem,
+  type LoopReadableField,
   type LoopRelationItem,
 } from "../loop-collections-contract";
 
@@ -90,6 +91,7 @@ function collectionOf(item: unknown): LoopCollectionItem | undefined {
     declared: eachOf(record.declared, name =>
       typeof name === "string" ? name : undefined
     ),
+    readable: eachOf(record.readable, readableOf),
   };
 }
 
@@ -122,6 +124,25 @@ function fieldOf(value: unknown): LoopListFieldItem | undefined {
       : {}),
     ...(typeof relationTo === "string" ? { relationTo } : {}),
     ...(dateOnly === true ? { dateOnly: true } : {}),
+  };
+}
+
+/** One field the public may read, or `undefined` for an entry of another shape. */
+function readableOf(value: unknown): LoopReadableField | undefined {
+  const record = recordOf(value);
+  if (typeof record?.name !== "string" || typeof record.type !== "string") {
+    return undefined;
+  }
+  const { relationTo } = record;
+  return {
+    name: record.name,
+    type: record.type,
+    ...(record.hasMany === true ? { hasMany: true as const } : {}),
+    ...(typeof relationTo === "string" ||
+    (Array.isArray(relationTo) &&
+      relationTo.every(each => typeof each === "string"))
+      ? { relationTo: relationTo as string | readonly string[] }
+      : {}),
   };
 }
 

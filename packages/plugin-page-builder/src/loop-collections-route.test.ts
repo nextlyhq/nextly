@@ -279,6 +279,23 @@ describe("the fields a list may name", () => {
     });
   });
 
+  it("sends every field the public may read, as the save judges a list against them", async () => {
+    const answer = await readLoopCollections(
+      readsOf([POSTS], { protectedFields: ["internalScore"] })
+    );
+    const readable = answer.items[0]?.readable ?? [];
+    const names = readable.map(field => field.name);
+    // Rich text and a has-many relation are not offered, and are readable.
+    expect(names).toEqual(expect.arrayContaining(["id", "body", "categories"]));
+    expect(names).not.toContain("internalScore");
+    expect(readable.find(field => field.name === "categories")).toEqual({
+      name: "categories",
+      type: "relationship",
+      hasMany: true,
+      relationTo: "categories",
+    });
+  });
+
   it("offers no field of a collection the public may read none of", async () => {
     const answer = await readLoopCollections(
       readsOf([POSTS], { unreadable: ["posts"] })

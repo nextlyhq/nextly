@@ -278,6 +278,14 @@ async function collectionItem(
         : [];
     }),
     declared: [...(fields?.declared ?? [])],
+    readable: (fields?.readable ?? []).map(shape => ({
+      name: shape.name,
+      type: shape.type,
+      ...(shape.hasMany === true ? { hasMany: true as const } : {}),
+      ...(shape.relationTo === undefined
+        ? {}
+        : { relationTo: shape.relationTo }),
+    })),
   };
 }
 
