@@ -320,3 +320,80 @@ function updatedRow(cursor: StatementCursor): RegistryRowWrite | undefined {
   if (slug === undefined || !setsPlainValues(assignments)) return undefined;
   return { table, slug };
 }
+
+/** The shared table an earlier Builder kept a translation's values in. */
+const ARCHIVE_TABLE = "nextly_i18n_archive";
+
+/**
+ * A statement an earlier Builder wrote into an `_i18n_` file to keep a
+ * translation's values: the archive created if absent, or the values copied
+ * into it, with the slug the rows are kept under and every table read.
+ */
+export type ArchiveWrite =
+  | { kind: "create" }
+  | { kind: "insert"; slug: string; reads: string[] };
+
+/**
+ * The archive write `statement` is, or `undefined` for any other statement:
+ * `CREATE TABLE IF NOT EXISTS nextly_i18n_archive`, `CREATE INDEX IF NOT
+ * EXISTS … ON nextly_i18n_archive`, or `INSERT INTO nextly_i18n_archive
+ * (columns) SELECT …` whose `collection` value is a string read exactly. A
+ * creation without IF NOT EXISTS, or any other write, reads nothing.
+ */
+export function archiveWriteOf(
+  statement: string,
+  dialect: SupportedDialect
+): ArchiveWrite | undefined {
+  const cursor = cursorOf(statement, dialect);
+  if (cursor.accept("CREATE")) {
+    return createsArchive(cursor) ? { kind: "create" } : undefined;
+  }
+  if (cursor.accept("INSERT", "INTO")) return archiveInsert(cursor);
+  return undefined;
+}
+
+/** Whether a CREATE, read after CREATE, makes the archive or its index if absent. */
+function createsArchive(cursor: StatementCursor): boolean {
+  if (cursor.accept("TABLE")) {
+    return (
+      cursor.accept("IF", "NOT", "EXISTS") && cursor.name() === ARCHIVE_TABLE
+    );
+  }
+  if (!cursor.accept("INDEX", "IF", "NOT", "EXISTS")) return false;
+  if (cursor.name() === undefined || !cursor.accept("ON")) return false;
+  return cursor.name() === ARCHIVE_TABLE;
+}
+
+/** An INSERT … SELECT into the archive, read after INSERT INTO. */
+function archiveInsert(cursor: StatementCursor): ArchiveWrite | undefined {
+  if (cursor.name() !== ARCHIVE_TABLE || !cursor.accept("(")) return undefined;
+  const columns = nameList(cursor);
+  if (columns === undefined || !cursor.accept(")")) return undefined;
+  if (!cursor.accept("SELECT")) return undefined;
+  const rest = cursor.rest();
+  const from = rest.indexOf("FROM");
+  if (from === -1) return undefined;
+  const items = new StatementCursor(rest.slice(0, from)).clauses();
+  const slug = stringText(items[columns.indexOf("collection")] ?? []);
+  const reads = tablesReadIn(rest);
+  if (slug === undefined || reads === undefined) return undefined;
+  return { kind: "insert", slug, reads };
+}
+
+/**
+ * Every table a query's FROM and JOIN clauses name, in order, once each, or
+ * undefined when one names something else (a subquery, a qualified name).
+ * `IS [NOT] DISTINCT FROM` compares values and names no table.
+ */
+function tablesReadIn(tokens: readonly StatementToken[]): string[] | undefined {
+  const tables: string[] = [];
+  for (let at = 0; at < tokens.length; at += 1) {
+    const token = tokens[at];
+    if (token !== "FROM" && token !== "JOIN") continue;
+    if (token === "FROM" && tokens[at - 1] === "DISTINCT") continue;
+    const table = new StatementCursor(tokens.slice(at + 1)).name();
+    if (table === undefined) return undefined;
+    if (!tables.includes(table)) tables.push(table);
+  }
+  return tables;
+}

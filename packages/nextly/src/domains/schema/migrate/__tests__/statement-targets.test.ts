@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
 import {
+  archiveWriteOf,
   indexesDroppedBy,
   indexesRenamedBy,
   registryRowWrittenBy,
@@ -320,5 +321,42 @@ describe("indexesDroppedBy", () => {
     `DROP TABLE "idx_a"`,
   ])("reads nothing from %s", sql => {
     expect(indexesDroppedBy(sql, "postgresql")).toBeUndefined();
+  });
+});
+
+// The statements an earlier Builder wrote into an `_i18n_` file to keep a
+// translation's values: the shared archive created if absent, and the
+// entity's values copied into it. Anything else on the archive reads nothing.
+describe("archiveWriteOf", () => {
+  const insert = (slug: string, from: string) =>
+    `INSERT INTO "nextly_i18n_archive" ("collection", "entity_kind", "entry_id", "locale", "field", "value") ` +
+    `SELECT '${slug}', 'collection', src."_parent", src."_locale", 'title', src."title" ` +
+    `FROM "${from}" src WHERE src."_locale" <> 'en' AND ` +
+    `(SELECT a."value" FROM "nextly_i18n_archive" a WHERE a."collection" = '${slug}' ORDER BY a."id" DESC LIMIT 1) IS DISTINCT FROM src."title"`;
+
+  it.each([
+    `CREATE TABLE IF NOT EXISTS "nextly_i18n_archive" ("id" serial PRIMARY KEY)`,
+    `CREATE INDEX IF NOT EXISTS "nextly_i18n_archive_lookup_idx" ON "nextly_i18n_archive" ("collection")`,
+  ])("reads the archive's creation if absent: %s", sql => {
+    expect(archiveWriteOf(sql, "postgresql")).toEqual({ kind: "create" });
+  });
+
+  it("reads an archive copy's slug and the tables it reads", () => {
+    expect(
+      archiveWriteOf(insert("posts", "dc_posts_locales"), "postgresql")
+    ).toEqual({
+      kind: "insert",
+      slug: "posts",
+      reads: ["dc_posts_locales", "nextly_i18n_archive"],
+    });
+  });
+
+  it.each([
+    `CREATE TABLE "nextly_i18n_archive" ("id" serial PRIMARY KEY)`,
+    `DELETE FROM "nextly_i18n_archive" WHERE "collection" = 'posts'`,
+    `INSERT INTO "nextly_i18n_archive" ("collection") VALUES ('posts')`,
+    `INSERT INTO "dc_posts" ("id") SELECT 'x' FROM "dc_posts_locales"`,
+  ])("reads nothing from %s", sql => {
+    expect(archiveWriteOf(sql, "postgresql")).toBeUndefined();
   });
 });

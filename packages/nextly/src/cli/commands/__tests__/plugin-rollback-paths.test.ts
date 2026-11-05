@@ -93,10 +93,10 @@ vi.mock(
       >();
     return {
       ...real,
-      knownJunctionsOf: ((...args) =>
+      declaredNamesOf: ((...args: Parameters<typeof real.declaredNamesOf>) =>
         state.manifestBroken
           ? Promise.reject(new Error("ui-schema.json is malformed"))
-          : real.knownJunctionsOf(...args)) as typeof real.knownJunctionsOf,
+          : real.declaredNamesOf(...args)) as typeof real.declaredNamesOf,
     };
   }
 );

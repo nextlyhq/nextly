@@ -36,6 +36,7 @@ import {
 import { hasExecutableText, splitSqlStatements } from "./split-sql";
 import { isDownMarker, isUpMarker } from "./sql-sections";
 import {
+  archiveWriteOf,
   indexesDroppedBy,
   indexesRenamedBy,
   registryRowWrittenBy,
@@ -66,6 +67,13 @@ export interface MigrationFileFacts {
    * declared, and a file touching such a table is partial.
    */
   declaredJunctions?: ReadonlySet<string>;
+  /**
+   * The entity tables the configuration and the Builder's manifest declare.
+   * An index named alone is traced to the entity's own table unless a longer
+   * reading of its name is a declared table. Omitted, any longer reading named
+   * like an entity's table defeats it, which fails closed.
+   */
+  declaredTables?: ReadonlySet<string>;
 }
 
 /** (a): the timestamp, the verb and the rest of the name the Builder gave it. */
@@ -73,6 +81,9 @@ const BUILDER_FILE_NAME = /^\d{13}_(create|update|i18n|status|drop)_(.+)\.sql$/;
 
 /** A bulk delete's name: how many collections, then a hash of their names. */
 const BULK_DROP_NAME = /^\d+_collections_[0-9a-f]{12}$/;
+
+/** The shared table an earlier Builder kept a translation's values in. */
+const ARCHIVE_TABLE = "nextly_i18n_archive";
 
 /** The user-field table, dropped by name, not by any collection's slug. */
 const USER_EXT_TABLE = "user_ext";
@@ -88,8 +99,13 @@ interface NamedEntity {
   slug: string;
   owns: (table: string) => boolean;
   registry?: string;
-  /** Its own main table, for a reading that names one (not a bulk delete). */
-  main?: string;
+  /**
+   * The tables whose drop marks a drop file as this entity's delete: its own
+   * main table, or for a bulk delete any collection's. A table dropped with
+   * one of them is the entity's when it can be no one else's
+   * (`dropsKeepToEntity`).
+   */
+  anchors?: (table: string) => boolean;
 }
 
 /**
@@ -105,14 +121,15 @@ function entitiesOf(verb: string, rest: string): NamedEntity[] {
   // A bulk delete names no one collection: every table it drops must be
   // some Builder collection's, and only collections' tables carry `dc_`.
   if (BULK_DROP_NAME.test(rest)) {
-    return [{ slug: rest, owns: table => table.startsWith("dc_") }];
+    const collection = (table: string) => table.startsWith("dc_");
+    return [{ slug: rest, owns: collection, anchors: collection }];
   }
   if (rest === USER_EXT_TABLE) {
     return [
       {
         slug: rest,
         owns: table => table === USER_EXT_TABLE,
-        main: USER_EXT_TABLE,
+        anchors: table => table === USER_EXT_TABLE,
       },
       collection,
     ];
@@ -123,7 +140,7 @@ function entitiesOf(verb: string, rest: string): NamedEntity[] {
       {
         slug: rest.slice(STORAGE_FORMAT.tablePrefix.length),
         owns: table => isOwnTable(own, table),
-        main: own,
+        anchors: table => table === own,
       },
       collection,
     ];
@@ -141,7 +158,7 @@ function collectionEntity(slug: string): NamedEntity {
     slug,
     owns: table => isOwnTable(own, table),
     registry: COLLECTION_REGISTRY,
-    main: own,
+    anchors: table => table === own,
   };
 }
 
@@ -176,24 +193,40 @@ const COLUMN_INDEX_NAMES = [
 /**
  * Whether an index named alone (dropped, or renamed on PostgreSQL) is on one
  * of the entity's tables: its name is exactly the one-column index name,
- * plain or unique, of a table and some column, and the longest such table is
- * the entity's own. The longest decides because a junction's index names the
+ * plain or unique, of a table and some column, and the longest such table
+ * the entity owns is not defeated by a longer reading.
+ *
+ * A name reads several ways when a column holds an underscore:
+ * `idx_dc_posts_publish_date` is `dc_posts`' `publish_date` or a table
+ * `dc_posts_publish`'s `date`. A longer reading defeats the entity's own only
+ * when its table is declared (`declaredTables`), so `idx_dc_posts_archive_title`
+ * is not `posts`' while a `posts-archive` collection exists. With nothing
+ * declared, any longer reading named like an entity's table defeats it, which
+ * fails closed. Shorter readings never do: a junction's index names the
  * junction, which can start with the other side's table
- * (`idx_dc_authors_dc_posts_writers_posts`), while a name another entity's
- * table explains as well traces to that longer table
- * (`idx_dc_posts_archive_title` is `dc_posts_archive`'s `title`). A name at
- * the length bound, or holding a character outside ASCII, is not traced: it
- * may be a bounded one, its readable part cut short and a hash appended.
+ * (`idx_dc_authors_dc_posts_writers_posts`).
+ *
+ * A name at the length bound, or holding a character outside ASCII, is not
+ * traced: it may be a bounded one, its readable part cut short and a hash
+ * appended.
  */
-function isOwnIndex(entity: NamedEntity, index: string): boolean {
+function isOwnIndex(
+  owns: (table: string) => boolean,
+  index: string,
+  declaredTables: ReadonlySet<string> | undefined
+): boolean {
   if (index.length >= MAX_INDEX_NAME_LENGTH || !/^[\x20-\x7e]*$/.test(index)) {
     return false;
   }
-  // The longest table the name traces to decides: a junction's index names
-  // the junction, which can start with the other side's table, while a name
-  // another entity's table explains as well traces to that longer table.
-  const [longest] = tablesNamedBy(index).sort((a, b) => b.length - a.length);
-  return longest !== undefined && entity.owns(longest);
+  const tables = tablesNamedBy(index);
+  const [own] = tables.filter(owns).sort((a, b) => b.length - a.length);
+  if (own === undefined) return false;
+  const defeats = (table: string) =>
+    !owns(table) &&
+    (declaredTables === undefined
+      ? isEntityTableName(table)
+      : declaredTables.has(table));
+  return !tables.some(table => table.length > own.length && defeats(table));
 }
 
 /**
@@ -249,12 +282,15 @@ function writesOwnRegistryRow(
 
 /**
  * (d): whether every statement changes only the entity's own tables, drops
- * an index traced to one of them by name, or writes its own registry row. A drop file is held to more: every statement
- * must be a DROP TABLE, since that is all the Builder ever wrote into one.
+ * an index traced to one of them by name, or writes its own registry row; an
+ * `_i18n_` file may also keep the entity's own translated values in the
+ * shared archive (`keepsOwnValues`). A drop file is held to more: every
+ * statement must be a DROP TABLE, since that is all the Builder ever wrote
+ * into one.
  */
 function staysInEntity(
   entity: NamedEntity,
-  dropOnly: boolean,
+  verb: string,
   file: MigrationFileFacts
 ): boolean {
   const statements = splitSqlStatements(file.content, file.dialect).filter(
@@ -263,19 +299,47 @@ function staysInEntity(
   if (statements.length === 0) return false;
   const owns = (table: string) =>
     entity.owns(table) || file.declaredJunctions?.has(table) === true;
-  if (dropOnly)
+  if (verb === "drop") {
     return dropsKeepToEntity(entity, statements, file.dialect, owns);
+  }
   return statements.every(statement => {
     if (writesOwnRegistryRow(entity, statement, file.dialect)) return true;
+    if (verb === "i18n" && keepsOwnValues(entity, statement, file, owns)) {
+      return true;
+    }
     const indexes =
       indexesDroppedBy(statement, file.dialect) ??
       indexesRenamedBy(statement, file.dialect);
     if (indexes !== undefined) {
-      return indexes.every(index => isOwnIndex(entity, index));
+      return indexes.every(index =>
+        isOwnIndex(owns, index, file.declaredTables)
+      );
     }
     const tables = tablesChangedIn(statement, file.dialect);
     return tables !== undefined && tables.length > 0 && tables.every(owns);
   });
+}
+
+/**
+ * Whether `statement` keeps the entity's own translated values in the shared
+ * archive, as an earlier Builder's `_i18n_` file did before dropping a
+ * translation: the archive created if absent, or the values copied into it
+ * under the entity's own slug from its own tables (and the archive itself,
+ * which the copy reads to skip a value already kept).
+ */
+function keepsOwnValues(
+  entity: NamedEntity,
+  statement: string,
+  file: MigrationFileFacts,
+  owns: (table: string) => boolean
+): boolean {
+  const write = archiveWriteOf(statement, file.dialect);
+  if (write === undefined) return false;
+  if (write.kind === "create") return true;
+  return (
+    write.slug === entity.slug &&
+    write.reads.every(table => owns(table) || table === ARCHIVE_TABLE)
+  );
 }
 
 /**
@@ -298,7 +362,7 @@ function dropsKeepToEntity(
     return false;
   }
   const tables = dropped.flatMap(list => list ?? []);
-  const dropsMain = entity.main !== undefined && tables.includes(entity.main);
+  const dropsMain = entity.anchors !== undefined && tables.some(entity.anchors);
   return tables.every(
     table => owns(table) || (dropsMain && mayBeEntityCompanion(table))
   );
@@ -307,12 +371,13 @@ function dropsKeepToEntity(
 /**
  * Whether a table's name can belong to no entity but the one a drop file
  * deletes: no prefix only entities' tables carry, not the user-field table,
- * and not one of Nextly's core tables.
+ * and not Nextly's own: a core table, or any name in its `nextly_` namespace.
  */
 function mayBeEntityCompanion(table: string): boolean {
   return (
     !isEntityTableName(table) &&
     table !== USER_EXT_TABLE &&
+    !table.startsWith("nextly_") &&
     !CORE_TABLE_NAMES.includes(table)
   );
 }
@@ -334,7 +399,7 @@ export function classifyMigrationFile(
   const [, verb, rest] = named;
   // The one reading of the name whose tables every statement keeps to.
   const entity = entitiesOf(verb, rest).find(candidate =>
-    staysInEntity(candidate, verb === "drop", file)
+    staysInEntity(candidate, verb, file)
   );
 
   const lacks: OldBuilderSignaturePart[] = [];

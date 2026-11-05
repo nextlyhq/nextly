@@ -78,7 +78,10 @@ import { createContext, type CommandContext } from "../program";
 import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
-import { readMigrationFolder } from "../utils/migration-discovery";
+import {
+  readMigrationFolder,
+  type DeclaredNames,
+} from "../utils/migration-discovery";
 
 import { maybeForceUnlock } from "./migrate";
 import { DEFAULT_BASELINE_NAME } from "./migrate-baseline.command";
@@ -126,7 +129,7 @@ async function listManagedTables(
 async function listMigrationFiles(
   migrationsDir: string,
   dialect: SupportedDialect,
-  knownJunctions: ReadonlySet<string> | undefined
+  declared: DeclaredNames | undefined
 ): Promise<string[]> {
   let entries: string[];
   try {
@@ -138,7 +141,7 @@ async function listMigrationFiles(
   const { oldBuilderFiles } = await readMigrationFolder(
     migrationsDir,
     dialect,
-    knownJunctions
+    declared
   );
   const ignored = new Set(oldBuilderFiles.map(f => f.file));
   return entries.filter(f => f.endsWith(".sql") && !ignored.has(f)).sort();
@@ -159,7 +162,7 @@ async function firstAppliedMigration(
   folder: {
     migrationsDir: string;
     dialect: SupportedDialect;
-    knownJunctions: ReadonlySet<string> | undefined;
+    declared: DeclaredNames | undefined;
   }
 ): Promise<string | undefined> {
   if (!(await ledgerExists(adapter))) return undefined;
@@ -377,6 +380,8 @@ export interface BaselineCoreDeps {
    * undeclared table and emit `DROP TABLE`, taking the relationship rows.
    */
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   /**
    * From `config.db.migrateLockTtlSeconds`.
    *
@@ -443,7 +448,7 @@ export async function baselineCore(
       const existingMigrations = await listMigrationFiles(
         migrationsDir,
         dialect,
-        deps.knownJunctions
+        deps.declared
       );
 
       const known = deps.knownJunctions ?? new Set<string>();
@@ -476,7 +481,7 @@ export async function baselineCore(
         appliedMigration: await firstAppliedMigration(repo, adapter, {
           migrationsDir,
           dialect,
-          knownJunctions: deps.knownJunctions,
+          declared: deps.declared,
         }),
       });
 
@@ -737,6 +742,10 @@ export async function runMigrateBaseline(
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
       knownJunctions: resolved.knownJunctions,
+      declared: {
+        junctions: resolved.knownJunctions,
+        tables: resolved.declaredTables,
+      },
       adoptUnknown: options.adoptUnknown,
     });
 

@@ -277,16 +277,16 @@ describe("migration-discovery", () => {
     });
 
     it("sets aside a file on a declared junction table only when the set is handed in", async () => {
-      const file = "1730000000002_drop_tags.sql";
+      // An update, where nothing but a declaration ties a custom junction to
+      // the collection.
+      const file = "1730000000002_update_tags.sql";
       await createMigrationFile(
         file,
-        'DROP TABLE IF EXISTS "dc_tags";\nDROP TABLE IF EXISTS "tag_links";'
+        'ALTER TABLE "dc_tags" ADD COLUMN "x" text;\nALTER TABLE "tag_links" ADD COLUMN "y" text;'
       );
-      const declared = await readMigrationFolder(
-        testDir,
-        "postgresql",
-        new Set(["tag_links"])
-      );
+      const declared = await readMigrationFolder(testDir, "postgresql", {
+        junctions: new Set(["tag_links"]),
+      });
       expect(declared.oldBuilderFiles.map(f => f.file)).toContain(file);
       const none = await readMigrationFolder(testDir, "postgresql");
       expect(none.partialBuilderFiles.map(f => f.file)).toContain(file);

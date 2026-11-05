@@ -36,7 +36,7 @@ import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
-import { knownJunctionsOf } from "../../domains/schema/migrate/resolved-schema";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
@@ -72,7 +72,10 @@ import { loadConfigOrExit } from "../utils/command-prerequisites";
 import type { LoadConfigResult } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
-import { readableMigrationFiles } from "../utils/migration-discovery";
+import {
+  readableMigrationFiles,
+  type DeclaredNames,
+} from "../utils/migration-discovery";
 import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
 import {
@@ -886,7 +889,7 @@ async function checkMigrationStatus(
     const migrationFiles = await discoverMigrations(
       migrationsDir,
       dialect,
-      await knownJunctionsOf(
+      await declaredNamesOf(
         { ...configResult, projectRoot: cwd },
         { orNone: true }
       )
@@ -929,15 +932,15 @@ async function checkMigrationStatus(
 async function discoverMigrations(
   migrationsDir: string,
   dialect: SupportedDialect,
-  knownJunctions: ReadonlySet<string> | undefined
+  declared: DeclaredNames | undefined
 ): Promise<ParsedMigration[]> {
-  return (
-    await readableMigrationFiles(migrationsDir, dialect, knownJunctions)
-  ).map(({ baseName, filePath, content }) => ({
-    name: baseName,
-    filePath,
-    checksum: createHash("sha256").update(content).digest("hex"),
-  }));
+  return (await readableMigrationFiles(migrationsDir, dialect, declared)).map(
+    ({ baseName, filePath, content }) => ({
+      name: baseName,
+      filePath,
+      checksum: createHash("sha256").update(content).digest("hex"),
+    })
+  );
 }
 
 /**

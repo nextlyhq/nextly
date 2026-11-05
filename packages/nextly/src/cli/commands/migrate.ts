@@ -163,6 +163,7 @@ import {
   migrationFilesInRunOrder,
   oldBuilderFileLine,
   readMigrationFolder,
+  type DeclaredNames,
 } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
@@ -365,7 +366,10 @@ export async function runMigrate(
         db,
         dialect,
         migrationsDir: appMigrationsDir,
-        knownJunctions: resolvedSchema.knownJunctions,
+        declared: {
+          junctions: resolvedSchema.knownJunctions,
+          tables: resolvedSchema.declaredTables,
+        },
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
@@ -433,6 +437,10 @@ export async function runMigrate(
         // has to be told about it or it reports a difference no migration can
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
+        declared: {
+          junctions: resolvedSchema.knownJunctions,
+          tables: resolvedSchema.declaredTables,
+        },
         allowDestructive: allowCoreDestructive,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
@@ -449,7 +457,10 @@ export async function runMigrate(
             dialect,
             appMigrationsDir,
             logger,
-            resolvedSchema.knownJunctions
+            {
+              junctions: resolvedSchema.knownJunctions,
+              tables: resolvedSchema.declaredTables,
+            }
           );
           if (pending.length > 0) return;
           const { refuseCompanionColumnsThatCannotHold } = await import(
@@ -512,7 +523,10 @@ export async function runMigrate(
         dialect,
         appMigrationsDir,
         logger,
-        resolvedSchema.knownJunctions
+        {
+          junctions: resolvedSchema.knownJunctions,
+          tables: resolvedSchema.declaredTables,
+        }
       );
       if (stillPending.length > 0) {
         logger.info(
@@ -738,6 +752,8 @@ export interface MigrateCoreDeps {
   markOldBuilderFilesFn?: typeof markOldBuilderFiles;
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
@@ -812,8 +828,8 @@ export async function previewMigrate(args: {
   db: unknown;
   dialect: SupportedDialect;
   migrationsDir: string;
-  /** The run's declared junction tables, read as a real run reads them. */
-  knownJunctions?: ReadonlySet<string>;
+  /** What the run's declared schema names, read as a real run reads them. */
+  declared?: DeclaredNames;
   plugins: Parameters<typeof pluginMigrationArgs>[0];
   step?: number;
   logger: CommandContext["logger"];
@@ -849,7 +865,7 @@ export async function previewMigrate(args: {
               dialect,
               args.migrationsDir,
               logger,
-              args.knownJunctions
+              args.declared
             )
           ).map(({ file, applied }) => ({ file, done: applied })),
           appStep,
@@ -881,7 +897,7 @@ export async function previewMigrate(args: {
       logger,
       dialect,
       "app",
-      args.knownJunctions
+      args.declared
     );
     const { changed } = appliedChecksums(
       files.map(m => ({ filename: `${m.name}.sql`, checksum: m.checksum })),
@@ -1599,6 +1615,7 @@ async function runMigrationStreams(
     step: appStep,
     logger: deps.logger,
     knownJunctions: deps.knownJunctions,
+    declared: deps.declared,
   });
   return { pluginModulesApplied, applied };
 }
@@ -1778,9 +1795,7 @@ export async function migrateCore(
           adapter: deps.adapter as unknown as DrizzleAdapter,
           dialect: deps.dialect,
           migrationsDir: deps.migrationsDir,
-          ...(deps.knownJunctions === undefined
-            ? {}
-            : { knownJunctions: deps.knownJunctions }),
+          ...(deps.declared === undefined ? {} : { declared: deps.declared }),
           logger: {
             info: (m: string) => deps.logger.debug(m),
             warn: (m: string) => deps.logger.warn(m),
@@ -1842,8 +1857,8 @@ export async function refuseUnresolvedAppAttempts(args: {
   dialect: SupportedDialect;
   migrationsDir: string;
   logger: CommandContext["logger"];
-  /** The run's declared junction tables, which old Builder files may touch. */
-  knownJunctions?: ReadonlySet<string>;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   /** The command refusing, as the operator typed it. */
   command: string;
 }): Promise<void> {
@@ -1882,8 +1897,8 @@ interface AppHistoryArgs {
   dialect: SupportedDialect;
   migrationsDir: string;
   logger: CommandContext["logger"];
-  /** The run's declared junction tables, which old Builder files may touch. */
-  knownJunctions?: ReadonlySet<string>;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
 }
 
 /**
@@ -1920,7 +1935,7 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
     args.logger,
     args.dialect,
     "app",
-    args.knownJunctions
+    args.declared
   );
   return { files, rows, repo, oldBuilder };
 }
@@ -1947,13 +1962,13 @@ export async function refuseChangedOldBuilderFiles(
 async function nameOldBuilderFiles(
   args: Pick<
     AppHistoryArgs,
-    "migrationsDir" | "dialect" | "logger" | "knownJunctions"
+    "migrationsDir" | "dialect" | "logger" | "declared"
   >
 ): Promise<void> {
   const folder = await readMigrationFolder(
     args.migrationsDir,
     args.dialect,
-    args.knownJunctions
+    args.declared
   );
   for (const file of folder.oldBuilderFiles) {
     args.logger.info(oldBuilderFileLine(file));
@@ -2150,7 +2165,7 @@ export async function findPendingFiles(
   dialect: SupportedDialect,
   migrationsDir: string,
   logger: CommandContext["logger"],
-  knownJunctions?: ReadonlySet<string>
+  declared?: DeclaredNames
 ): Promise<ParsedMigration[]> {
   return (
     await listMigrationFiles(
@@ -2159,7 +2174,7 @@ export async function findPendingFiles(
       dialect,
       migrationsDir,
       logger,
-      knownJunctions
+      declared
     )
   ).flatMap(({ file, applied }) => (applied ? [] : [file]));
 }
@@ -2171,7 +2186,7 @@ async function listMigrationFiles(
   dialect: SupportedDialect,
   migrationsDir: string,
   logger: CommandContext["logger"],
-  knownJunctions?: ReadonlySet<string>
+  declared?: DeclaredNames
 ): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
   const all = await discoverMigrations(
@@ -2179,7 +2194,7 @@ async function listMigrationFiles(
     logger,
     dialect,
     "app",
-    knownJunctions
+    declared
   );
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
@@ -2355,6 +2370,8 @@ export async function runFileMigrations(args: {
    * migration after adoption stops with drift no migration could resolve.
    */
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
@@ -2363,7 +2380,7 @@ export async function runFileMigrations(args: {
     logger,
     dialect,
     "app",
-    args.knownJunctions
+    args.declared
   );
   if (all.length === 0) {
     logger.debug("No user migration files found.");
@@ -2559,13 +2576,13 @@ async function discoverMigrations(
   logger: CommandContext["logger"],
   dialect: SupportedDialect,
   source: MigrationSource = "app",
-  knownJunctions?: ReadonlySet<string>
+  declared?: DeclaredNames
 ): Promise<ParsedMigration[]> {
   const migrations: ParsedMigration[] = [];
   for (const { baseName, filePath } of await migrationFilesInRunOrder(
     migrationsDir,
     dialect,
-    knownJunctions
+    declared
   )) {
     if (filePath === undefined) {
       logger.warn(`No suitable migration file found for ${baseName}`);

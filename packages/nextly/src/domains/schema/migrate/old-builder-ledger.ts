@@ -25,7 +25,10 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { readMigrationFolder } from "../../../cli/utils/migration-discovery";
+import {
+  readMigrationFolder,
+  type DeclaredNames,
+} from "../../../cli/utils/migration-discovery";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import type {
   SchemaEventRow,
@@ -145,8 +148,8 @@ export async function readOldBuilderLedger(
   args: {
     migrationsDir: string;
     dialect: SupportedDialect;
-    /** The run's declared junction tables (`readMigrationFolder`). */
-    knownJunctions?: ReadonlySet<string>;
+    /** What the run's declared schema names (`readMigrationFolder`). */
+    declared?: DeclaredNames;
   },
   repo: Pick<SchemaEventsRepository, "currentOldBuilderMarks">,
   rows: readonly Pick<SchemaEventRow, "filename">[]
@@ -154,7 +157,7 @@ export async function readOldBuilderLedger(
   const folder = await readMigrationFolder(
     args.migrationsDir,
     args.dialect,
-    args.knownJunctions
+    args.declared
   );
   return judgeOldBuilderLedger({
     oldBuilderFiles: folder.oldBuilderFiles,

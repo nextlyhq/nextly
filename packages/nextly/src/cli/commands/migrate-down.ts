@@ -63,7 +63,7 @@ import {
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
-import { knownJunctionsOf } from "../../domains/schema/migrate/resolved-schema";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
   marksNoTransaction,
@@ -101,7 +101,10 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
-import { compareMigrationBaseNames } from "../utils/migration-discovery";
+import {
+  compareMigrationBaseNames,
+  type DeclaredNames,
+} from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
 import {
@@ -1014,8 +1017,8 @@ export async function downDatabaseDeps(args: {
    * leaves them out (`readOldBuilderLedger`).
    */
   migrationsDir?: string;
-  /** The run's declared junction tables, which old Builder files may touch. */
-  knownJunctions?: ReadonlySet<string>;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1074,7 +1077,7 @@ export async function downDatabaseDeps(args: {
         {
           migrationsDir: args.migrationsDir,
           dialect,
-          knownJunctions: args.knownJunctions,
+          declared: args.declared,
         },
         repo,
         rows
@@ -1206,9 +1209,9 @@ export async function runMigrateDown(
     // Read as `nextly migrate` reads the folder, for an app rollback only: a
     // plugin's DOWNs come from its definition, never from the app's folder,
     // so the app's manifest has nothing to say about them.
-    const knownJunctions =
+    const declared =
       options.plugin === undefined
-        ? await knownJunctionsOf({ ...configResult, projectRoot: cwd })
+        ? await declaredNamesOf({ ...configResult, projectRoot: cwd })
         : undefined;
 
     if (options.forceUnlock) {
@@ -1274,7 +1277,7 @@ export async function runMigrateDown(
         dialect,
         plugin: pluginModules(configResult.config.plugins, plugin),
         migrationsDir,
-        knownJunctions,
+        declared,
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,
@@ -1299,7 +1302,7 @@ export async function runMigrateDown(
                 dialect,
                 migrationsDir,
                 logger,
-                knownJunctions,
+                declared,
                 command: "nextly migrate:down",
               };
               await refuseUnresolvedAppAttempts(history);

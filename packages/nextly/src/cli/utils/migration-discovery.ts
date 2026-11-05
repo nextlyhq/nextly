@@ -41,6 +41,18 @@ export interface MigrationGroup {
   variants: MigrationVariant[];
 }
 
+/**
+ * The names the configuration and the Builder's manifest declare, which an
+ * old Builder file's statements are judged against: its custom junction
+ * tables, and the entity tables an index name may be read as
+ * (`MigrationFileFacts`). A run resolves them from the declared schema
+ * (`declaredNamesOf`).
+ */
+export interface DeclaredNames {
+  junctions?: ReadonlySet<string>;
+  tables?: ReadonlySet<string>;
+}
+
 /** A file an earlier Schema Builder wrote, which every reader treats as absent. */
 export interface OldBuilderFile {
   /** The file name, `.sql` included, as a ledger row names it. */
@@ -81,12 +93,13 @@ export async function readMigrationFolder(
   migrationsDir: string,
   dialect: SupportedDialect,
   /**
-   * The junction tables the configuration and the Builder's manifest declare
-   * by name (`MigrationFileFacts.declaredJunctions`). Omitted, none is, and a
-   * file touching such a table is partial: a reader that runs or rolls back
-   * files passes the set its run resolves.
+   * The junction and entity tables the configuration and the Builder's
+   * manifest declare (`DeclaredNames`). Omitted, none is: a file touching a
+   * custom junction is partial, and an index name another table could explain
+   * is not traced. A reader that runs or rolls back files passes what its run
+   * resolves.
    */
-  declaredJunctions?: ReadonlySet<string>
+  declared?: DeclaredNames
 ): Promise<MigrationFolder> {
   const folder: MigrationFolder = {
     groups: new Map(),
@@ -120,7 +133,12 @@ export async function readMigrationFolder(
       content,
       hasSnapshot: await exists(snapshot),
       dialect,
-      ...(declaredJunctions === undefined ? {} : { declaredJunctions }),
+      ...(declared?.junctions === undefined
+        ? {}
+        : { declaredJunctions: declared.junctions }),
+      ...(declared?.tables === undefined
+        ? {}
+        : { declaredTables: declared.tables }),
     });
     const checksum = checksumOf(content);
     if (kind.kind === "old-builder") {
@@ -196,10 +214,9 @@ async function exists(path: string): Promise<boolean> {
 export async function discoverMigrationGroups(
   migrationsDir: string,
   dialect: SupportedDialect,
-  declaredJunctions?: ReadonlySet<string>
+  declared?: DeclaredNames
 ): Promise<Map<string, MigrationGroup>> {
-  return (await readMigrationFolder(migrationsDir, dialect, declaredJunctions))
-    .groups;
+  return (await readMigrationFolder(migrationsDir, dialect, declared)).groups;
 }
 
 /**
@@ -210,12 +227,12 @@ export async function discoverMigrationGroups(
 export async function migrationFilesInRunOrder(
   migrationsDir: string,
   dialect: SupportedDialect,
-  declaredJunctions?: ReadonlySet<string>
+  declared?: DeclaredNames
 ): Promise<{ baseName: string; filePath: string | undefined }[]> {
   const groups = await discoverMigrationGroups(
     migrationsDir,
     dialect,
-    declaredJunctions
+    declared
   );
   return getSortedBaseNames(groups).map(baseName => {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
@@ -235,13 +252,13 @@ export async function migrationFilesInRunOrder(
 export async function readableMigrationFiles(
   migrationsDir: string,
   dialect: SupportedDialect,
-  declaredJunctions?: ReadonlySet<string>
+  declared?: DeclaredNames
 ): Promise<{ baseName: string; filePath: string; content: string }[]> {
   const files: { baseName: string; filePath: string; content: string }[] = [];
   for (const { baseName, filePath } of await migrationFilesInRunOrder(
     migrationsDir,
     dialect,
-    declaredJunctions
+    declared
   )) {
     if (filePath === undefined) continue;
     try {

@@ -56,6 +56,11 @@ interface MigrateCoreLike {
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
+    /** See `MigrateCoreDeps.declared`. */
+    declared?: {
+      junctions?: ReadonlySet<string>;
+      tables?: ReadonlySet<string>;
+    };
     pluginMigrationSets?: readonly PluginMigrationSet[];
     /**
      * Declared here so the value `pluginMigrationArgs` spreads in is checked
@@ -246,6 +251,12 @@ async function applyBootMigrations(
     ...(args.lockWaitMs !== undefined ? { lockWaitMs: args.lockWaitMs } : {}),
     ttlSeconds: args.config.db.migrateLockTtlSeconds,
     knownJunctions: resolvedSchema.knownJunctions,
+    // What the declared schema names, which old Builder files are judged
+    // against as `nextly migrate` judges them.
+    declared: {
+      junctions: resolvedSchema.knownJunctions,
+      tables: resolvedSchema.declaredTables,
+    },
     // The same sets the CLI applies, from the same config: a boot that
     // skipped them would serve against a schema missing every plugin
     // table while reporting a clean migrate.

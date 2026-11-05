@@ -44,6 +44,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
   discoverMigrationGroups,
   selectVariant,
+  type DeclaredNames,
 } from "../../../cli/utils/migration-discovery";
 import {
   parseEntityHeaders,
@@ -64,8 +65,8 @@ export interface PendingEntitiesOptions {
    * file that will really run is still outstanding.
    */
   dialect: SupportedDialect;
-  /** The run's declared junction tables, which old Builder files may touch. */
-  knownJunctions?: ReadonlySet<string>;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   isApplied: IsAppliedFn;
   logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void };
 }
@@ -175,7 +176,7 @@ export async function readPendingEntities(
   const groups = await discoverMigrationGroups(
     migrationsDir,
     dialect,
-    options.knownJunctions
+    options.declared
   );
 
   for (const [baseName, group] of groups) {

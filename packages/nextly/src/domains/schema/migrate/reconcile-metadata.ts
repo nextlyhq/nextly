@@ -41,6 +41,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
 import type { Logger } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
@@ -93,8 +94,8 @@ export interface ReconcileMetadataDeps {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
   migrationsDir: string;
-  /** The run's declared junction tables, which old Builder files may touch. */
-  knownJunctions?: ReadonlySet<string>;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   logger: ReconcileLogger;
   /** Seam for tests; defaults to the real snapshot reader. */
   registerFn?: typeof registerFromMigrations;
@@ -348,9 +349,7 @@ export async function reconcileMigrationMetadata(
       dialect,
       isApplied,
       logger,
-      ...(deps.knownJunctions === undefined
-        ? {}
-        : { knownJunctions: deps.knownJunctions }),
+      ...(deps.declared === undefined ? {} : { declared: deps.declared }),
     });
   } catch (error) {
     awaiting = noPendingEntities();

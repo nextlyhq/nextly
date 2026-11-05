@@ -523,3 +523,117 @@ describe("renames in an update file", () => {
     expect(update(sql)).toEqual({ kind: "partial", lacks: ["scope"] });
   });
 });
+
+// An `_i18n_` file that turned translation off kept the values first: the
+// shared archive, created if absent, and the entity's own values copied into
+// it under its own slug. Only in an `_i18n_` file, and only for its entity.
+describe("an old _i18n_ file that archives translations", () => {
+  const archive = (slug: string, from: string) =>
+    [
+      `CREATE TABLE IF NOT EXISTS "nextly_i18n_archive" ("id" serial PRIMARY KEY, "collection" text)`,
+      `CREATE INDEX IF NOT EXISTS "nextly_i18n_archive_lookup_idx" ON "nextly_i18n_archive" ("collection")`,
+      `INSERT INTO "nextly_i18n_archive" ("collection", "entity_kind", "entry_id", "locale", "field", "value") ` +
+        `SELECT '${slug}', 'collection', src."_parent", src."_locale", 'title', src."title" ` +
+        `FROM "${from}" src WHERE src."_locale" <> 'en'`,
+      `DROP TABLE IF EXISTS "dc_posts_locales"`,
+    ].join(`;${BREAK}`) + ";";
+  const classify = (name: string, content: string) =>
+    classifyMigrationFile(facts({ name, content, dialect: "postgresql" }));
+
+  it("ignores the archive of the entity's own values", () => {
+    expect(
+      classify(
+        "1730000000015_i18n_posts.sql",
+        archive("posts", "dc_posts_locales")
+      )
+    ).toEqual({ kind: "old-builder", entity: "posts" });
+  });
+
+  it.each([
+    [
+      "under another entity's slug",
+      "1730000000015_i18n_posts.sql",
+      archive("comments", "dc_posts_locales"),
+    ],
+    [
+      "from another entity's table",
+      "1730000000015_i18n_posts.sql",
+      archive("posts", "dc_comments_locales"),
+    ],
+    [
+      "in a file that is not an _i18n_ one",
+      "1730000000015_update_posts.sql",
+      archive("posts", "dc_posts_locales"),
+    ],
+  ])("is partial for an archive %s", (_n, name, content) => {
+    expect(classify(name, content)).toEqual({
+      kind: "partial",
+      lacks: ["scope"],
+    });
+  });
+});
+
+// A delete of several collections drops their custom junctions in the same
+// bulk file: a table dropped alongside the `dc_` tables is one of theirs when
+// its name can be no other entity's and no core table's.
+describe("a bulk delete with a custom junction", () => {
+  const bulk = (...tables: string[]) =>
+    classifyMigrationFile(
+      facts({
+        name: "1730000000016_drop_2_collections_0123456789ab.sql",
+        content: tables.map(t => `DROP TABLE IF EXISTS "${t}";`).join("\n"),
+      })
+    );
+
+  it("ignores the drop of the collections and their junction", () => {
+    expect(bulk("dc_posts", "dc_tags", "post_tag_links").kind).toBe(
+      "old-builder"
+    );
+  });
+
+  it.each([
+    ["the junction without any collection", ["post_tag_links"]],
+    ["a core table", ["dc_posts", "users"]],
+    ["a field group's table", ["dc_posts", "comp_hero"]],
+  ])("is partial for %s", (_n, tables) => {
+    expect(bulk(...tables)).toEqual({ kind: "partial", lacks: ["scope"] });
+  });
+});
+
+// An index on a column whose name holds an underscore reads two ways:
+// `idx_dc_posts_publish_date` is dc_posts' `publish_date` or a table
+// `dc_posts_publish`'s `date`. A longer reading defeats the entity's own
+// only when that table is declared; with nothing declared, any table named
+// like an entity's defeats it, which fails closed.
+describe("an index whose column holds an underscore", () => {
+  const drop = (index: string, declaredTables?: Set<string>) =>
+    classifyMigrationFile(
+      facts({
+        name: "1730000000017_update_posts.sql",
+        content: `ALTER TABLE "dc_posts" DROP COLUMN "publish_date";${BREAK}DROP INDEX IF EXISTS "${index}";`,
+        ...(declaredTables ? { declaredTables } : {}),
+      })
+    );
+  const declared = new Set(["dc_posts", "dc_posts_archive"]);
+
+  it("is the entity's when the longer table is not declared", () => {
+    expect(drop("idx_dc_posts_publish_date", declared)).toEqual({
+      kind: "old-builder",
+      entity: "posts",
+    });
+  });
+
+  it("is not the entity's while the longer table is declared", () => {
+    expect(drop("idx_dc_posts_archive_title", declared)).toEqual({
+      kind: "partial",
+      lacks: ["scope"],
+    });
+  });
+
+  it("is not the entity's when nothing is declared", () => {
+    expect(drop("idx_dc_posts_publish_date")).toEqual({
+      kind: "partial",
+      lacks: ["scope"],
+    });
+  });
+});
