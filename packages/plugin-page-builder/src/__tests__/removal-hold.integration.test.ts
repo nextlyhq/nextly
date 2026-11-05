@@ -165,6 +165,7 @@ describe.each(getConfiguredTestDialects())(
             // whole: the count's completeness then plays no part here.
             confirmedComplete: false,
             until,
+            token: "integration",
           }),
         },
         overrideAccess: true,
