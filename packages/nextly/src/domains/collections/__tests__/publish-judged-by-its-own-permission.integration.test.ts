@@ -1261,6 +1261,9 @@ describe.each(getConfiguredTestDialects())(
         asPlugin(PUBLISHER)
       );
       expect(published).toMatchObject({ successful: 2, failed: 0 });
+      // Each row took its publish, not only the count of them.
+      expect((await stored(POSTS, a)).status).toBe("published");
+      expect((await stored(POSTS, b)).status).toBe("published");
 
       const unpublished = await collections.updateMany(
         POSTS,
@@ -1331,11 +1334,10 @@ describe.each(getConfiguredTestDialects())(
           })
         )
         .toEqual({ status: 403, message: "You can't publish posts." });
+      const byKey = await restWithKey(key, "PATCH", entry, publish);
       expect
-        .soft(
-          refusalMessage((await restWithKey(key, "PATCH", entry, publish)).json)
-        )
-        .toBe("You can't publish this posts.");
+        .soft({ status: byKey.status, message: refusalMessage(byKey.json) })
+        .toEqual({ status: 403, message: "You can't publish this posts." });
       expect
         .soft(
           refusalMessage(
