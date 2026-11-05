@@ -437,6 +437,39 @@ describe("collecting plugin schedules", () => {
     expect(notices[1]).toContain("is not run");
   });
 
+  it("maps an earlier-shape name with spaces around it as the name without them", () => {
+    const p = plugin([
+      { name: " acme.spaced ", schedule: "@daily", handler: () => {} },
+    ]);
+    const { schedules, jobs } = earlier(p);
+    expect(schedules.map(schedule => [schedule.slug, schedule.job])).toEqual([
+      ["acme.spaced", "@acme/plugin:schedule:acme.spaced"],
+    ]);
+    expect(jobs.map(job => job.definition.slug)).toEqual([
+      "@acme/plugin:schedule:acme.spaced",
+    ]);
+  });
+
+  it("an earlier-shape name with spaces around it whose job the plugin already declares is not run, and the start goes on", () => {
+    const taken = defineJob({
+      slug: "@acme/plugin:schedule:acme.taken-spaced",
+      handler: async () => {},
+    });
+    const earlierTask = {
+      name: "acme.taken-spaced ",
+      schedule: "@daily",
+      handler: () => {},
+    };
+    const p = plugin([earlierTask], {
+      contributes: { jobs: [tick, taken], schedules: [earlierTask] },
+    });
+    const { schedules, jobs, notices } = earlier(p);
+    expect(schedules).toEqual([]);
+    expect(jobs).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("declared already");
+  });
+
   it("an earlier-shape schedule whose job the plugin already declares is not run, and the start goes on", () => {
     const taken = defineJob({
       slug: "@acme/plugin:schedule:acme.taken",

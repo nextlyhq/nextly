@@ -313,7 +313,9 @@ function mapEarlier(
   if (typeof task.name !== "string") {
     throw refuse(plugin, "", "its name is not a string");
   }
-  const slug = task.name;
+  // Trimmed as the current shape's slug is, so the job built from it is the
+  // one the registry will hold, and a collision is seen here.
+  const slug = task.name.trim();
   const source =
     typeof task.schedule === "number"
       ? intervalCron(task.schedule)
