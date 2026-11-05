@@ -145,6 +145,31 @@ describe("planImport", () => {
     expect(existing.componentOrder).toEqual([]);
   });
 
+  it("does not reuse a look for a shared style of one name and one look", () => {
+    // The file's box style and the site's button look: same slug, same
+    // styles, different binding. Reused, a box would wear a button's look.
+    const styles = { base: { base: { color: "red" } } };
+    const plan = planImport(
+      file({
+        classes: [{ id: "c1", slug: "button-outline", orderIndex: 0, styles }],
+      }),
+      site({
+        classes: [
+          {
+            id: "look:core/button:outline",
+            slug: "button-outline",
+            orderIndex: 0,
+            blockType: "core/button",
+            styles,
+          },
+        ],
+      })
+    );
+    expect(plan.preview.reused.filter(entry => entry.kind === "class")).toEqual(
+      []
+    );
+  });
+
   it("reuses an identical shared style and variable, and settles a different one", () => {
     const plan = planImport(
       file({

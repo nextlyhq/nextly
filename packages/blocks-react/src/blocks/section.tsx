@@ -11,6 +11,7 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
+import { sectionLooks } from "./looks";
 import { libraryDefinition } from "./classic-spacing";
 import {
   CONTAINER_CHILD_GAP,
@@ -43,6 +44,8 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
         icon: "section",
         category: LAYOUT,
         keywords: ["container", "wrapper", "band", "region"],
+        // Its looks, offered as tiles on a block already on the page.
+        variations: sectionLooks(),
       },
       props: {
         as: htmlTagProp(["section", "header", "footer", "main"]),
