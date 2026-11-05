@@ -309,6 +309,26 @@ export interface BlockHostPolicy {
 }
 
 /**
+ * An icon a host resolved: what it is now and the SVG it draws.
+ *
+ * @experimental
+ */
+export interface ResolvedIcon {
+  /** The id it resolved as, which names the current icon after a rename. */
+  readonly id: string;
+  /** Its name within the set (`star`), for an accessible name when none is given. */
+  readonly name: string;
+  /** The SVG's inner markup, trusted: it comes from the host's own set. */
+  readonly body: string;
+  readonly viewBox: string;
+  /**
+   * Drawn by its stroke in the text colour (`stroke="currentColor"`), as
+   * Lucide's are, rather than by its fill.
+   */
+  readonly stroked: boolean;
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -349,6 +369,19 @@ export interface PageContext {
    * media id on every render, or to lie.
    */
   resolveMedia(id: string): Promise<ResolvedMedia | null>;
+  /**
+   * Resolve an icon id (`lucide:star`) to the SVG it draws, or `null` when
+   * this host does not draw that icon.
+   *
+   * Synchronous, because an icon set is data the host holds rather than a
+   * record it reads. Optional, so a host that draws no icons is not made to
+   * answer: a block asking an absent resolver draws nothing. A published page
+   * is given the Lucide set by its route; a standalone render passes
+   * `resolveLucideIcon` from `@nextlyhq/blocks-react/icons/lucide`.
+   *
+   * @experimental
+   */
+  resolveIcon?: (id: string) => ResolvedIcon | null;
   /**
    * Resolve an entry reference to a path, or `null` when it has none.
    *
