@@ -73,7 +73,7 @@ A collection's `read` rule may also answer with a filter, which limits a list an
 
 `admin.hidden: true` is a UI flag: it keeps a field out of the admin's forms, and the value is often public data your site renders. Every read returns such a field, trusted or not, unless it passes `showHiddenFields: false`. To keep a value from the people who read it, give the field a read rule (`access.read`); see [Field-level access](/docs/permissions#field-level-access).
 
-Pass `showHiddenFields: false` before you hand a trusted read to a client component, so values your server code maintains don't reach the browser. For example, in a Server Component: `const { items } = await nextly.find({ collection: "products", showHiddenFields: false })`, then pass `items` to the client component. It covers the fields of the collection or Single you read. A related document populated with `depth` above `0` keeps its own hidden fields, so read with `depth: 0`, or give those fields a read rule, when the result goes to a client.
+Pass `showHiddenFields: false` before you hand a trusted read to a client component, so values your server code maintains don't reach the browser. For example, in a Server Component: `const { items } = await nextly.find({ collection: "products", showHiddenFields: false })`, then pass `items` to the client component. It also covers related documents populated with `depth`: each loses its own collection's hidden fields.
 
 With `showHiddenFields: false`, filtering or sorting on a hidden field is refused with a validation error, because which rows match, and in what order, would reveal it.
 

@@ -116,16 +116,139 @@ export function refuseHiddenQuery(
   });
 }
 
-/** The document without its hidden fields; the same object when none are left out. */
-export async function withoutHiddenFields<T>(
-  document: T,
-  hidden: ReadonlySet<string>
-): Promise<T> {
-  if (hidden.size === 0 || typeof document !== "object" || document === null) {
-    return document;
+/** The deepest related document the strip follows: past population's own depths. */
+const MAX_RELATED_DEPTH = 10;
+
+/** The field shape the walk to related documents reads. */
+interface WalkedField {
+  readonly name?: string;
+  readonly type?: string;
+  readonly relationTo?: unknown;
+  readonly fields?: readonly WalkedField[];
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * A related value with its document's hidden fields left out, by that
+ * document's own collection. An id that was not populated is returned as it
+ * is; a polymorphic value (`{ relationTo, value }`) names its collection.
+ */
+async function withoutHiddenRelated(
+  value: unknown,
+  relationTo: unknown,
+  level: number
+): Promise<unknown> {
+  if (!isRecord(value)) return value;
+  if (Array.isArray(relationTo)) {
+    const slug = value.relationTo;
+    if (typeof slug !== "string" || !isRecord(value.value)) return value;
+    return {
+      ...value,
+      value: await withoutHiddenAt(
+        value.value,
+        { kind: "collection", slug },
+        level + 1
+      ),
+    };
   }
-  const { withoutHidden } = await import(
+  if (typeof relationTo !== "string") return value;
+  return withoutHiddenAt(
+    value,
+    { kind: "collection", slug: relationTo },
+    level + 1
+  );
+}
+
+/** A relationship or upload value, one or many, with each document stripped. */
+async function strippedRelation(
+  value: unknown,
+  field: WalkedField,
+  level: number
+): Promise<unknown> {
+  if (!Array.isArray(value)) {
+    return withoutHiddenRelated(value, field.relationTo, level);
+  }
+  return Promise.all(
+    value.map(item => withoutHiddenRelated(item, field.relationTo, level))
+  );
+}
+
+/** A container's value as rows: a group's one object, a repeater's array. */
+function rowsOf(value: unknown): Record<string, unknown>[] {
+  return (Array.isArray(value) ? value : [value]).filter(isRecord);
+}
+
+/** One named field of `holder`, with any related document it carries stripped. */
+async function stripRelatedField(
+  holder: Record<string, unknown>,
+  field: WalkedField & { readonly name: string },
+  level: number
+): Promise<void> {
+  const value = holder[field.name];
+  if (value === undefined || value === null) return;
+  if (field.type === "relationship" || field.type === "upload") {
+    holder[field.name] = await strippedRelation(value, field, level);
+    return;
+  }
+  if (field.fields === undefined) return;
+  for (const row of rowsOf(value)) await stripRelated(row, field.fields, level);
+}
+
+/**
+ * Follow `fields` through `holder`, replacing each populated relationship or
+ * upload value with its own document stripped. Containers (a group, a
+ * repeater's rows, a component's instance) are walked by their sub-fields; a
+ * nameless container holds its children inline, at the holder's level.
+ */
+async function stripRelated(
+  holder: Record<string, unknown>,
+  fields: readonly WalkedField[],
+  level: number
+): Promise<void> {
+  for (const field of fields) {
+    const { name } = field;
+    if (name !== undefined && name !== "") {
+      await stripRelatedField(holder, { ...field, name }, level);
+    } else if (field.fields !== undefined) {
+      await stripRelated(holder, field.fields, level);
+    }
+  }
+}
+
+/** The document at `level` without its source's hidden fields, nor its related documents'. */
+async function withoutHiddenAt(
+  document: Record<string, unknown>,
+  source: SourceEntity,
+  level: number
+): Promise<Record<string, unknown>> {
+  const { expandedFields, hiddenFieldPaths, withoutHidden } = await import(
     "../../runtime/routing/declared-fields"
   );
-  return withoutHidden(document as Record<string, unknown>, hidden) as T;
+  const hidden = await hiddenFieldPaths(source);
+  const stripped =
+    hidden.size === 0 ? { ...document } : withoutHidden(document, hidden);
+  if (level >= MAX_RELATED_DEPTH) return stripped;
+  const fields = await expandedFields(source);
+  if (fields !== undefined) {
+    await stripRelated(stripped, fields as readonly WalkedField[], level);
+  }
+  return stripped;
+}
+
+/**
+ * The document without its hidden fields, and every related document it
+ * carries (a populated relationship or upload, at any depth population
+ * reached) without its own, each by its own collection's declarations; the
+ * same object when this read keeps hidden fields. A client handed the result
+ * gets none of them, whichever document they sat on.
+ */
+export async function withoutHiddenFields<T>(
+  document: T,
+  config: HiddenFieldOptions,
+  source: SourceEntity
+): Promise<T> {
+  if (!stripsHiddenFields(config) || !isRecord(document)) return document;
+  return (await withoutHiddenAt(document, source, 0)) as T;
 }

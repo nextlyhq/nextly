@@ -20,7 +20,13 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, password, text } from "../../config";
+import {
+  defineCollection,
+  defineSingle,
+  password,
+  relationship,
+  text,
+} from "../../config";
 import { NextlyError } from "../../errors/nextly-error";
 import { seedPermissionsAndRolePresets } from "../../init/seed-permissions";
 import {
@@ -33,6 +39,15 @@ import { Nextly } from "../nextly";
 
 type Doc = Record<string, unknown>;
 
+const authors = defineCollection({
+  slug: "hauthors",
+  access: { read: () => true },
+  fields: [
+    text({ name: "name" }),
+    text({ name: "staffNote", admin: { hidden: true } }),
+  ],
+});
+
 const notes = defineCollection({
   slug: "hnotes",
   access: { read: () => true },
@@ -42,6 +57,8 @@ const notes = defineCollection({
     text({ name: "internalCode", admin: { hidden: true } }),
     // A secret by its type: stored hashed, and never read back.
     password({ name: "pin" }),
+    // A related document, whose own hidden field must not ride along.
+    relationship({ name: "author", relationTo: "hauthors" }),
   ],
 });
 
@@ -78,7 +95,7 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
-        collections: [notes],
+        collections: [authors, notes],
         singles: [settings],
       });
       // The boot's seeding: the Public role reads `hnotes` and `hsettings`,
@@ -87,9 +104,18 @@ describe.each(getConfiguredTestDialects())(
       trusted = new Nextly();
       visitor = new Nextly({ overrideAccess: false });
 
+      const author = await trusted.create({
+        collection: "hauthors",
+        data: { name: "Ada", staffNote: "on leave" },
+      } as never);
       const created = await trusted.create({
         collection: "hnotes",
-        data: { title: "Hello", internalCode: "code-42", pin: "Pin-12345!" },
+        data: {
+          title: "Hello",
+          internalCode: "code-42",
+          pin: "Pin-12345!",
+          author: (author.item as { id: string | number }).id,
+        },
       } as never);
       id = String((created.item as { id: string | number }).id);
       await trusted.users.create({
@@ -241,6 +267,42 @@ describe.each(getConfiguredTestDialects())(
 
         expect(settingsRow?.data.siteName).toBe("Site");
         expect(settingsRow?.data).not.toHaveProperty("seedMarker");
+      });
+    });
+
+    describe("a related document", () => {
+      it("loses its own hidden fields too when a populated read passes false", async () => {
+        const [row] = itemsOf(
+          await trusted.find({
+            collection: "hnotes",
+            depth: 1,
+            showHiddenFields: false,
+          } as never)
+        );
+        const byId = (await trusted.findByID({
+          collection: "hnotes",
+          id,
+          depth: 1,
+          showHiddenFields: false,
+        } as never)) as Doc;
+
+        // The controls: the author was populated, so an absence below is the
+        // strip and not an id left unexpanded.
+        expect(row?.author).toMatchObject({ name: "Ada" });
+        expect(byId.author).toMatchObject({ name: "Ada" });
+        expect(row?.author).not.toHaveProperty("staffNote");
+        expect(byId.author).not.toHaveProperty("staffNote");
+      });
+
+      it("keeps them on a populated read that does not pass false", async () => {
+        const [row] = itemsOf(
+          await trusted.find({ collection: "hnotes", depth: 1 } as never)
+        );
+
+        expect(row?.author).toMatchObject({
+          name: "Ada",
+          staffNote: "on leave",
+        });
       });
     });
 

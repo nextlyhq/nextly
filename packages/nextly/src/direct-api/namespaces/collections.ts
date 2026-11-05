@@ -113,7 +113,12 @@ export async function find<TSlug extends CollectionSlug>(
 
   return {
     items: await Promise.all(
-      legacy.docs.map(doc => withoutHiddenFields(doc, hidden))
+      legacy.docs.map(doc =>
+        withoutHiddenFields(doc, config, {
+          kind: "collection",
+          slug: args.collection,
+        })
+      )
     ),
     meta: {
       total,
@@ -134,11 +139,6 @@ export async function findByID<TSlug extends CollectionSlug>(
   args: FindByIDArgs<TSlug>
 ): Promise<RowFromCollectionSlug<TSlug> | null> {
   const config = mergeConfig(ctx.defaultConfig, args);
-  const hidden = await hiddenPathsFor(config, {
-    kind: "collection",
-    slug: args.collection,
-  });
-
   try {
     const result = await ctx.collectionsHandler.getEntry({
       collectionName: args.collection,
@@ -169,7 +169,8 @@ export async function findByID<TSlug extends CollectionSlug>(
 
     return await withoutHiddenFields(
       result.data as RowFromCollectionSlug<TSlug>,
-      hidden
+      config,
+      { kind: "collection", slug: args.collection }
     );
   } catch (error) {
     if (config.disableErrors && isNotFoundError(error)) {
