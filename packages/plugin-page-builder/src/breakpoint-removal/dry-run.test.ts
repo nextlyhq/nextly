@@ -6,7 +6,7 @@
 import { DEFAULT_LIMITS, type NamedClass } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import type { HostAddress } from "../host-rewrite/contract";
+import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
 import type { HostDocument, HostRead } from "../host-rewrite/rewrite";
 import { removedBreakpoints } from "../site-settings";
 
@@ -54,14 +54,18 @@ function site(
   stored: Stored[],
   options: {
     readable?: (host: HostAddress) => boolean;
+    /** Milliseconds every naming answer takes. */
+    slowNames?: number;
     classes?: NamedClass[];
     deadline?: Date;
   } = {}
-): DryRunDeps & { named: HostAddress[] } {
+): DryRunDeps & { named: HostAddress[]; batches: number[] } {
   const named: HostAddress[] = [];
+  const batches: number[] = [];
   const byKey = new Map(stored.map(s => [JSON.stringify(s.host), s]));
   return {
     named,
+    batches,
     documents: async function* () {
       for (const s of stored) {
         const document: HostDocument = {
@@ -90,11 +94,20 @@ function site(
           : host.slug === "components"
             ? "components"
             : "entries",
-    nameFor: async host => {
-      named.push(host);
-      return (options.readable?.(host) ?? true)
-        ? `${host.slug}/${host.id ?? ""}`
-        : null;
+    namesFor: async hosts => {
+      named.push(...hosts);
+      batches.push(hosts.length);
+      const names = new Map<string, string>();
+      for (const host of hosts) {
+        if (options.readable?.(host) ?? true) {
+          names.set(documentKeyOf(host), `${host.slug}/${host.id ?? ""}`);
+        }
+      }
+      return options.slowNames === undefined
+        ? names
+        : new Promise(resolve =>
+            setTimeout(() => resolve(names), options.slowNames)
+          );
     },
     limits: DEFAULT_LIMITS,
     classes: options.classes ?? [],
@@ -204,19 +217,35 @@ describe("a breakpoint removal counted across the site", () => {
   });
 
   it("names at most a handful, and counts the rest", async () => {
-    const many: Stored[] = Array.from(
-      { length: NAMED_AT_MOST + 3 },
-      (_, i) => ({
-        host: entry("pages", `p${i}`),
-        published: page(styled("a")),
-      })
-    );
+    const many: Stored[] = Array.from({ length: 120 }, (_, i) => ({
+      host: entry("pages", `p${i}`),
+      published: page(styled("a")),
+    }));
     const deps = site(many);
     const [mobile] = (await countRemoval(MOBILE, deps)).removed;
     expect(mobile?.documents.named).toHaveLength(NAMED_AT_MOST);
-    expect(mobile?.documents.unnamed).toBe(3);
-    // The ones past the cap are never asked about.
-    expect(deps.named).toHaveLength(NAMED_AT_MOST);
+    expect(mobile?.documents.unnamed).toBe(110);
+    // Asked in one batch; once a list holds its names, nothing more is asked.
+    expect(deps.batches).toEqual([50]);
+  });
+
+  it("counts the whole site however slowly the caller's names come", async () => {
+    // Naming waits for the walk, so it never takes time from counting: a
+    // slow answer leaves documents unnamed, never uncounted.
+    const deps = site(
+      [
+        { host: entry("pages", "p1"), published: page(styled("a")) },
+        { host: entry("pages", "p2"), published: page(styled("a")) },
+      ],
+      { slowNames: 400 }
+    );
+    const run = await countRemoval(MOBILE, {
+      ...deps,
+      deadline: new Date(Date.now() + 150),
+    });
+    expect(run.complete).toBe(true);
+    expect(run.removed[0]?.places.pages.documents).toBe(2);
+    expect(run.removed[0]?.documents).toEqual({ named: [], unnamed: 2 });
   });
 
   it("counts what no write can reach as unaddressable, not in a place", async () => {

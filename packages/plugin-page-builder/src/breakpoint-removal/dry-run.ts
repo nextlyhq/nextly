@@ -102,6 +102,15 @@ export interface RemovalDryRun {
 /** How many documents one list names; the rest are counted. */
 export const NAMED_AT_MOST = 10;
 
+/**
+ * How many documents one list keeps to name from. Kept as the walk finds
+ * them, named once it is done; past this a document is only counted.
+ */
+const KEPT_AT_MOST = 5_000;
+
+/** How many documents one ask of the caller names at once. */
+const NAMES_PER_ASK = 50;
+
 /** What the dry run reads the site through. */
 export interface DryRunDeps {
   /** Every document holding blocks, as the shared walk yields them. */
@@ -111,10 +120,13 @@ export interface DryRunDeps {
   /** Which place a document is in, by its first host. */
   readonly placeOf: (host: HostAddress) => RemovalPlace;
   /**
-   * What the caller knows a document by, or `null` when the caller may not
-   * read it. Asked only for documents that would be named.
+   * What the caller knows each of `hosts` by, by document key, for the ones
+   * the caller may read; one they may not is absent. Asked in batches, after
+   * the walk, only for documents that would be named.
    */
-  readonly nameFor: (host: HostAddress) => Promise<string | null>;
+  readonly namesFor: (
+    hosts: readonly HostAddress[]
+  ) => Promise<ReadonlyMap<string, string>>;
   /** The bounds the compiler reads a document within. */
   readonly limits: DocumentLimits;
   /** The site's shared styles, as stored and defaulted. */
@@ -303,41 +315,87 @@ async function addHost(
   return true;
 }
 
-/** A list being named as it fills: its names, and the documents only counted. */
+/** A list as the walk fills it: the documents to name from, and the ones only counted. */
 interface Naming {
-  readonly named: string[];
+  readonly hosts: HostAddress[];
   unnamed: number;
 }
 
-/** What the caller knows each document by, asked once however many lists hold it. */
-type NameCache = Map<string, Promise<string | null | typeof TIMED_OUT>>;
+/** Add a document to a list, kept to name from while there is room. */
+function addTo(naming: Naming, host: HostAddress): void {
+  if (naming.hosts.length < KEPT_AT_MOST) naming.hosts.push(host);
+  else naming.unnamed += 1;
+}
 
 /**
- * Add a document to a list, named while the list has fewer than
- * {@link NAMED_AT_MOST} names, and counted otherwise. Asked as the walk finds
- * it, so a document the caller may not read uses up no place, and a readable
- * one however late in the walk is still named. Each document is asked about
- * once, whichever lists hold it; past the deadline it is counted unasked.
+ * What the caller knows each document by, `null` for one they may not read,
+ * asked once however many lists hold it.
  */
-async function addTo(
+type NameCache = Map<string, string | null>;
+
+/**
+ * A list's names: its documents asked of the caller in batches, in the order
+ * the walk found them, until {@link NAMED_AT_MOST} are named. One the caller
+ * may not read uses up no place, so a readable one however late is named;
+ * the rest are counted. Asked after the walk, so naming never takes time from
+ * counting; past the deadline the rest are counted unasked.
+ */
+async function named(
   naming: Naming,
-  host: HostAddress,
   deps: DryRunDeps,
   cache: NameCache
-): Promise<void> {
-  if (naming.named.length >= NAMED_AT_MOST) {
-    naming.unnamed += 1;
-    return;
+): Promise<NamedDocuments> {
+  const names: string[] = [];
+  let unnamed = naming.unnamed;
+  for (let at = 0; at < naming.hosts.length; at += NAMES_PER_ASK) {
+    const left = naming.hosts.length - at;
+    if (names.length >= NAMED_AT_MOST)
+      return { named: names, unnamed: unnamed + left };
+    const batch = naming.hosts.slice(at, at + NAMES_PER_ASK);
+    if (!(await askBatch(batch, deps, cache))) {
+      return { named: names, unnamed: unnamed + left };
+    }
+    unnamed += takeNames(batch, cache, names);
   }
-  const key = documentKeyOf(host);
-  let asked = cache.get(key);
-  if (asked === undefined) {
-    asked = beforeDeadline(deps.nameFor(host), deps);
-    cache.set(key, asked);
+  return { named: names, unnamed };
+}
+
+/**
+ * Ask the caller for the names of a batch's documents not asked about yet,
+ * caching each answer; false when the deadline passed first.
+ */
+async function askBatch(
+  batch: readonly HostAddress[],
+  deps: DryRunDeps,
+  cache: NameCache
+): Promise<boolean> {
+  const unasked = batch.filter(host => !cache.has(documentKeyOf(host)));
+  if (unasked.length === 0) return true;
+  const answer = await beforeDeadline(deps.namesFor(unasked), deps);
+  if (answer === TIMED_OUT) return false;
+  for (const host of unasked) {
+    const key = documentKeyOf(host);
+    cache.set(key, answer.get(key) ?? null);
   }
-  const name = await asked;
-  if (name === null || name === TIMED_OUT) naming.unnamed += 1;
-  else naming.named.push(name);
+  return true;
+}
+
+/**
+ * Name a batch's documents from the cache while the list has room; answers
+ * how many were only counted.
+ */
+function takeNames(
+  batch: readonly HostAddress[],
+  cache: NameCache,
+  names: string[]
+): number {
+  let unnamed = 0;
+  for (const host of batch) {
+    const name = cache.get(documentKeyOf(host)) ?? null;
+    if (name !== null && names.length < NAMED_AT_MOST) names.push(name);
+    else unnamed += 1;
+  }
+  return unnamed;
 }
 
 /** What one removed breakpoint has gathered while the site is walked. */
@@ -349,14 +407,12 @@ interface Gathered {
 }
 
 /** Add one document's tallies to what each breakpoint has gathered. */
-async function gather(
+function gather(
   per: ReadonlyMap<string, Gathered>,
   tallies: ReadonlyMap<string, DocumentTally>,
   place: RemovalPlace,
-  host: HostAddress,
-  deps: DryRunDeps,
-  cache: NameCache
-): Promise<void> {
+  host: HostAddress
+): void {
   for (const [id, tally] of tallies) {
     const entry = per.get(id);
     if (entry === undefined) continue;
@@ -367,8 +423,8 @@ async function gather(
     if (tally.draft) count.drafts += 1;
     count.styles += tally.styles;
     count.hides += tally.hides;
-    await addTo(entry.documents, host, deps, cache);
-    if (tally.locked) await addTo(entry.locked, host, deps, cache);
+    addTo(entry.documents, host);
+    if (tally.locked) addTo(entry.locked, host);
   }
 }
 
@@ -408,7 +464,6 @@ async function walkSite(
   deps: DryRunDeps
 ): Promise<{ unreadable: number; complete: boolean }> {
   let unreadable = 0;
-  const names: NameCache = new Map();
   const stopped = { unreadable: 0, complete: false };
   // Stepped by hand so both the listing and each read answer to the deadline.
   const documents = deps.documents()[Symbol.asyncIterator]();
@@ -428,7 +483,7 @@ async function walkSite(
     );
     if (tallies === TIMED_OUT) return { ...stopped, unreadable };
     if (tallies === null) unreadable += 1;
-    else await gather(per, tallies, deps.placeOf(first), first, deps, names);
+    else gather(per, tallies, deps.placeOf(first), first);
   }
 }
 
@@ -447,8 +502,8 @@ export async function countRemoval(
       id,
       {
         places: emptyPlaces(),
-        documents: { named: [], unnamed: 0 },
-        locked: { named: [], unnamed: 0 },
+        documents: { hosts: [], unnamed: 0 },
+        locked: { hosts: [], unnamed: 0 },
         unaddressable: 0,
       },
     ])
@@ -458,17 +513,15 @@ export async function countRemoval(
       ? { unreadable: 0, complete: true }
       : await walkSite(ids, per, deps);
   const out: RemovedBreakpoint[] = [];
+  const names: NameCache = new Map();
   for (const [id, entry] of per) {
     out.push({
       id,
       label: removed.get(id) ?? id,
       places: entry.places,
       sharedStyles: shared.get(id) ?? { classes: 0, styles: 0, locked: [] },
-      documents: {
-        named: entry.documents.named,
-        unnamed: entry.documents.unnamed,
-      },
-      locked: { named: entry.locked.named, unnamed: entry.locked.unnamed },
+      documents: await named(entry.documents, deps, names),
+      locked: await named(entry.locked, deps, names),
       unaddressable: entry.unaddressable,
     });
   }
