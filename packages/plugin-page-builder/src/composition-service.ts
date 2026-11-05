@@ -28,7 +28,11 @@
  * @module composition-service
  */
 import type { DocumentLimits, RetiredExposures } from "@nextlyhq/blocks-engine";
-import type { PluginContext, PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginContext,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 
 import type {
   DefinitionActionRequest,
@@ -110,10 +114,13 @@ export function compositionService(
   plugin: PluginContext,
   setup: CompositionServiceSetup
 ): CompositionService {
+  // Signed in first, before a request is read or anything is asked of the
+  // site, as a route's authentication comes before its handler: a call made
+  // for nobody (from a public route, say) learns nothing about the request
+  // or the collections it names.
   const asRoute = (caller: CompositionCaller): PluginRouteContext => ({
     ...plugin,
-    user: caller.user,
-    caller: caller.caller,
+    ...signedIn(caller),
     ...(caller.authenticatedScope === undefined
       ? {}
       : { authenticatedScope: caller.authenticatedScope }),
@@ -138,4 +145,16 @@ export function compositionService(
         "ask-update"
       ),
   };
+}
+
+/** The caller's identity, or the refusal for a call with no signed-in caller. */
+function signedIn(
+  caller: CompositionCaller
+): Pick<PluginRouteContext, "user" | "caller"> {
+  if (caller.user === null || caller.caller === null) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "composition-service-no-caller" },
+    });
+  }
+  return { user: caller.user, caller: caller.caller };
 }
