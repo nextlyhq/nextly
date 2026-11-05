@@ -550,7 +550,15 @@ function SortField({
         />
         <DirectionToggle
           descending={first?.descending === true}
-          disabled={disabled || waiting || first === undefined}
+          // A key the collection cannot sort by is refused at render, so
+          // flipping it would change nothing on the page: it waits for a
+          // field of this collection to be picked.
+          disabled={
+            disabled ||
+            waiting ||
+            first === undefined ||
+            !fields.some(field => field.name === first.field)
+          }
           onFlip={() => {
             if (first !== undefined) {
               commit({ field: first.field, descending: !first.descending });

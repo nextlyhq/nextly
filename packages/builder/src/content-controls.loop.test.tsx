@@ -388,12 +388,13 @@ describe("the order a loop's entries come in", () => {
       name: "Sort by rating · not in this collection",
     });
     expect(button.closest("[data-unknown]")).not.toBeNull();
-    // Still a direction to read and flip: the key is kept, not replaced.
-    expect(
-      screen
-        .getByRole("button", { name: "Descending" })
-        .getAttribute("aria-pressed")
-    ).toBe("true");
+    // The stored direction still reads, but flipping a key the collection
+    // cannot sort by would change nothing on the page, so it waits for a
+    // field of this collection to be picked.
+    const toggle = screen.getByRole("button", { name: "Descending" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(toggle);
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
