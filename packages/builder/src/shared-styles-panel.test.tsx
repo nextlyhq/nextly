@@ -172,6 +172,20 @@ describe("the list", () => {
     expect(row(/^hero, \.nx-c-hero/)).toBeTruthy();
   });
 
+  it("lists no look among the shared styles", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    await panel({ library: [CARD, outline] });
+    expect(row(/^Card, \.nx-c-card/)).toBeTruthy();
+    expect(screen.queryByText("Outline")).toBeNull();
+  });
+
   it("says how to make one when there are none, with no + to create an empty one", async () => {
     await panel({ library: [] });
     expect(screen.getByText(/^No shared styles yet\./).textContent).toBe(

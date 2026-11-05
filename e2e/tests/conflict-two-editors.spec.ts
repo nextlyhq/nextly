@@ -20,6 +20,7 @@ import {
   request,
   type APIRequestContext,
   type Page,
+  type Request,
 } from "@playwright/test";
 
 import {
@@ -397,8 +398,18 @@ test.describe(
             p.getByRole("button", { name: "Save", exact: true }).click();
         }
 
+        // The reads a form makes as it opens, counted on the first editor's:
+        // the second's form makes the same ones.
+        const opening = new Set<string>();
+        const countRead = (request: Request) => {
+          if (request.method() === "GET" && readPath.test(request.url())) {
+            opening.add(request.url());
+          }
+        };
+        page.on("request", countRead);
         await gotoAdmin(page, address);
         await expect(field(page)).toBeEditable({ timeout: 30_000 });
+        page.off("request", countRead);
 
         const other = await secondEditor(browser, page, baseURL);
         try {
@@ -434,6 +445,11 @@ test.describe(
             }
           );
           await gotoAdmin(other.page, address);
+          // Every read B's form opens with has reached the server before A
+          // saves, so each holds the version before A's save.
+          await expect
+            .poll(() => before.size, { timeout: 30_000 })
+            .toBeGreaterThanOrEqual(opening.size);
 
           // A saves and leaves.
           await field(page).fill(`Saved by the first ${uniqueTag()}`);

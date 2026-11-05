@@ -587,6 +587,13 @@ export const SITE_BREAKPOINTS_ROUTE_PATH = "/site/breakpoints";
  */
 export interface SiteBreakpointsRequest {
   readonly breakpoints: BreakpointSet | null;
+  /**
+   * Save nothing, and answer with what saving this set would drop: every
+   * style and hide stored under each breakpoint it removes.
+   *
+   * @experimental
+   */
+  readonly dryRun?: boolean;
 }
 
 /**

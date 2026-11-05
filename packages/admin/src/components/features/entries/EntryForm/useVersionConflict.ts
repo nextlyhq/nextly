@@ -91,6 +91,16 @@ export interface VersionConflictState {
   release: () => void;
 }
 
+/** `payload` naming `version` as the one it began from, when there is one. */
+function withStartingVersion<T extends Record<string, unknown>>(
+  payload: T,
+  version: string | undefined
+): T {
+  return version === undefined
+    ? payload
+    : { ...payload, [DOCUMENT_VERSION_KEY]: version };
+}
+
 export function useVersionConflict(): VersionConflictState {
   const startedFrom = useRef<string | undefined>(undefined);
   const pin = useRef<Pinned | null>(null);
@@ -101,9 +111,7 @@ export function useVersionConflict(): VersionConflictState {
 
   const withVersion = useCallback(
     <T extends Record<string, unknown>>(payload: T): T =>
-      startedFrom.current === undefined
-        ? payload
-        : { ...payload, [DOCUMENT_VERSION_KEY]: startedFrom.current },
+      withStartingVersion(payload, startedFrom.current),
     []
   );
 
@@ -142,15 +150,12 @@ export function useVersionConflict(): VersionConflictState {
   const overwrite = useCallback(() => {
     const held = pin.current;
     if (!held) return null;
-    return {
-      ...held.payload,
-      [DOCUMENT_OVERWRITE_KEY]: true,
-      // The version the edits began from, so history names whose changes
-      // the overwrite replaced.
-      ...(held.startedFrom === undefined
-        ? {}
-        : { [DOCUMENT_VERSION_KEY]: held.startedFrom }),
-    };
+    // The version the edits began from, so history names whose changes the
+    // overwrite replaced.
+    return withStartingVersion(
+      { ...held.payload, [DOCUMENT_OVERWRITE_KEY]: true },
+      held.startedFrom
+    );
   }, []);
 
   const failed = useCallback((message: string) => {
@@ -164,7 +169,6 @@ export function useVersionConflict(): VersionConflictState {
       values: Record<string, unknown>,
       locale: string | null | undefined
     ) => {
-      const held = pin.current;
       if (!scope) {
         throw new Error(
           "This document has no recovery points to keep edits in."
@@ -172,12 +176,7 @@ export function useVersionConflict(): VersionConflictState {
       }
       await versionApi.saveAutosave(
         scope,
-        {
-          ...values,
-          ...(held?.startedFrom === undefined
-            ? {}
-            : { [DOCUMENT_VERSION_KEY]: held.startedFrom }),
-        },
+        withStartingVersion(values, pin.current?.startedFrom),
         locale
       );
     },

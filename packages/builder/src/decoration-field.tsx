@@ -20,7 +20,6 @@ import {
   checkDimensionValue,
   cssColor,
   isCssWideKeyword,
-  trimCssWhitespace,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -41,6 +40,7 @@ import * as React from "react";
 import { commitOnEnter } from "./commit-on-enter";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue } from "./inherited-value";
+import { commitRawCss } from "./raw-css";
 import { SectionHeld } from "./section-held";
 import type { AlignmentGroup } from "./style-alignment-icons";
 import { keywordLabel } from "./style-keyword-labels";
@@ -468,17 +468,8 @@ function DecorationCss({
   onCommit: (value: string | null) => CommitOutcome;
 }): React.JSX.Element {
   const [text, setText] = useDraft(stored);
-  // Written as typed: CSS's own whitespace decides only whether the field is
-  // empty. Trimmed, a stored value with whitespace around it read as changed
-  // when nothing was, and a no-break space, which is no CSS whitespace,
-  // cleared the decoration rather than being judged as the value it is.
   const commit = () => {
-    if (text === (stored ?? "")) return;
-    if (trimCssWhitespace(text) === "") {
-      if (stored !== undefined) onCommit(null);
-      return;
-    }
-    onCommit(text);
+    commitRawCss(text, stored, onCommit);
   };
   return (
     <label className="nx-style-inspector__decoration-part">

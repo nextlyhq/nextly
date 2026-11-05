@@ -20,6 +20,7 @@ import {
 } from "./container";
 import type { ContainerProps } from "./container";
 import { htmlTagProp } from "./html-tags";
+import { sectionLooks } from "./looks";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -43,6 +44,8 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
         icon: "section",
         category: LAYOUT,
         keywords: ["container", "wrapper", "band", "region"],
+        // Its looks, offered as tiles on a block already on the page.
+        variations: sectionLooks(),
       },
       props: {
         as: htmlTagProp(["section", "header", "footer", "main"]),

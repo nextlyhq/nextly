@@ -36,6 +36,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
 import { NoticeSinkProvider } from "./builder-notices";
+import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
@@ -263,6 +264,8 @@ describe("the shared style target", () => {
       supports?: Record<string, boolean>;
       /** Where a refusal that outlives its field is raised. */
       raise?: (message: string) => void;
+      /** The site's breakpoints, which Detach weighs. */
+      breakpoints?: BreakpointSet;
     } = {}
   ) {
     register(options.supports ?? { effects: true });
@@ -290,6 +293,9 @@ describe("the shared style target", () => {
     const panelFor = (current: EditorState) => (
       <InspectorPanel
         editor={current}
+        {...(options.breakpoints === undefined
+          ? {}
+          : { breakpoints: options.breakpoints })}
         classLibrary={options.library ?? [hero, card, promo]}
         sharedStyles={{
           mayChange: options.mayChange ?? true,
@@ -680,6 +686,47 @@ describe("the shared style target", () => {
     expect(raise).toHaveBeenCalledWith(
       "Card could not be detached from this block: the page could not take the change."
     );
+  });
+
+  it("holds Detach, saying why, when the look can't be kept on the block exactly", () => {
+    // Card's small-container value shows only where Promo's tablet value
+    // does not: a combined query the block's own rules can't say.
+    const early = {
+      ...card,
+      orderIndex: 0,
+      styles: { base: { "cq-sm": { color: "#aaaa00" } } } as NodeStyles,
+    };
+    const late = {
+      ...promo,
+      label: "Promo",
+      styles: { base: { md: { color: "#0000aa" } } } as NodeStyles,
+    };
+    const { editor } = mountTarget({
+      classes: ["c-card", "c-promo"],
+      library: [early, late],
+      breakpoints: {
+        viewport: [
+          { id: BASE_BREAKPOINT, label: "Desktop" },
+          { id: "md", label: "Tablet", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      } as BreakpointSet,
+    });
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    const item = screen.getByRole("menuitem", {
+      name: /^Detach: keep the look/,
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain(
+      "This look depends on screen and container width together, so it can't be detached yet."
+    );
+    fireEvent.click(item);
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
   it("raises a refusal through the shell once the author has switched target", async () => {
@@ -3157,6 +3204,72 @@ describe("where a control's value came from", () => {
     ).toContain("overrides\u00a0Card");
   });
 
+  it("keeps the canvas's viewport tier when weighing Reset at a container tier", () => {
+    // Editing the small-container tier while the canvas is at tablet width:
+    // Reset there shows the block's own tablet value, not Card's, so the
+    // line names no style.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: { tablet: { opacity: 0.3 }, "cq-sm": { opacity: 0.2 } },
+          },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+          } as never
+        }
+        breakpoint={"cq-sm" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.3",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.2", breakpoint: "cq-sm" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
+
   it("names no style when the block's own wider value is what Reset would show", () => {
     register({ effects: true });
     const editor = editorFor({
@@ -5281,6 +5394,65 @@ describe("an aspect ratio", () => {
     );
     expect(fieldsOf("aspectRatio").queryByRole("combobox")).toBeNull();
     expect(fieldsOf("aspectRatio").getByRole("textbox")).toBeDefined();
+  });
+});
+
+describe("an image's focal point", () => {
+  /** An image with the given fit, drawn on the canvas as `img`. */
+  function mountImage(fit: string | undefined, picture?: string) {
+    register({ dimensions: true });
+    const styles =
+      fit === undefined
+        ? undefined
+        : ({ base: { [BASE_BREAKPOINT]: { objectFit: fit } } } as NodeStyles);
+    const editor = editorFor(documentOf(styles));
+    render(
+      <FocalFrame.Provider value={{ picture }}>
+        <StyleInspectorPanel editor={editor} renderedTag="img" />
+      </FocalFrame.Provider>
+    );
+    return editor;
+  }
+
+  it("shows beside a fit that leaves a choice of where the picture sits", () => {
+    // Scale down is None or Contain, whichever is smaller: it sits too.
+    for (const fit of ["cover", "contain", "none", "scale-down"]) {
+      mountImage(fit);
+      expect(
+        screen.getByRole("radiogroup", { name: "Focal point" })
+      ).toBeDefined();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("waits behind More where the fit stretches the picture, or none is set", () => {
+    for (const fit of ["fill", undefined]) {
+      mountImage(fit);
+      expect(
+        screen.queryByRole("radiogroup", { name: "Focal point" })
+      ).toBeNull();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("is drawn over the block's own picture, and writes object-position", () => {
+    const editor = mountImage("cover", "/team.png");
+    expect(
+      document.querySelector(".nx-focal__picture")?.getAttribute("src")
+    ).toBe("/team.png");
+    expect(screen.getByText("Kept in view")).toBeDefined();
+    fireEvent.click(screen.getByRole("radio", { name: "Top" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"objectPosition":"center top"'
+    );
+  });
+
+  it("does not choose a point when its label is clicked", () => {
+    const editor = mountImage("cover");
+    fireEvent.click(screen.getByText("Focal point"));
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 });
 

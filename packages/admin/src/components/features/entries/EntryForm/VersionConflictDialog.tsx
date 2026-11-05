@@ -57,6 +57,176 @@ function changedSentence(conflict: VersionConflict): string {
     : `${who} changed it.`;
 }
 
+/** Whose changes saving anyway replaces, and when, as a sentence. */
+function replacesSentence(
+  conflict: VersionConflict,
+  who: string | null
+): string {
+  if (!who) {
+    return "Saving anyway replaces the changes made since you started editing with yours.";
+  }
+  const { changedAt } = conflict.stale;
+  const when = changedAt ? ` at ${formatDateTime(changedAt)}` : "";
+  return `Saving anyway replaces the changes ${who} made${when} with yours.`;
+}
+
+/** A choice's label, or a spinner saying it is under way. */
+function BusyLabel({
+  busy,
+  doing,
+  label,
+}: {
+  busy: boolean;
+  doing: string;
+  label: string;
+}): JSX.Element {
+  return busy ? (
+    <>
+      <Loader2 className="h-4 w-4 animate-spin" />
+      {doing}
+    </>
+  ) : (
+    <>{label}</>
+  );
+}
+
+type Busy = "load" | "overwrite" | null;
+
+interface StepProps {
+  conflict: VersionConflict;
+  who: string | null;
+  busy: Busy;
+  run: (choice: "load" | "overwrite") => void;
+  setStep: (step: "choose" | "confirm") => void;
+}
+
+/** The first step: what happened, and the author's choices. */
+function ChooseStep({
+  conflict,
+  who,
+  busy,
+  run,
+  setStep,
+  keepsRecoveryPoints,
+  compareHref,
+}: StepProps &
+  Pick<
+    VersionConflictDialogProps,
+    "keepsRecoveryPoints" | "compareHref"
+  >): JSX.Element {
+  return (
+    <>
+      <AlertDialogHeader>
+        <AlertDialogTitle>
+          This document changed since you started editing
+        </AlertDialogTitle>
+        <AlertDialogDescription>
+          {changedSentence(conflict)} Your edits are still here, not saved.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <p className="text-sm text-muted-foreground">
+        {keepsRecoveryPoints
+          ? "Load the current version and your edits are kept as a recovery point you can restore."
+          : "Load the current version and your edits are discarded: this document keeps no recovery points."}
+      </p>
+      {compareHref ? (
+        <p className="text-sm">
+          {/* In a tab of its own: the edits on screen are not saved, and
+              leaving the editor for the comparison would ask to discard
+              them. */}
+          <Link
+            href={compareHref}
+            target="_blank"
+            rel="noreferrer"
+            className="underline"
+          >
+            {who ? `See what ${who} changed` : "See what changed"}
+          </Link>
+        </p>
+      ) : null}
+      {conflict.failure ? (
+        <p role="alert" className="text-sm text-destructive">
+          {conflict.failure}
+        </p>
+      ) : null}
+      <AlertDialogFooter>
+        <AlertDialogCancel disabled={busy !== null}>
+          Keep editing
+        </AlertDialogCancel>
+        {/* A step within the dialog, not a choice that closes it. */}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy !== null}
+          onClick={() => setStep("confirm")}
+        >
+          Save anyway
+        </Button>
+        <AlertDialogAction
+          disabled={busy !== null}
+          onClick={event => {
+            event.preventDefault();
+            run("load");
+          }}
+        >
+          <BusyLabel
+            busy={busy === "load"}
+            doing="Loading..."
+            label="Load current version"
+          />
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </>
+  );
+}
+
+/** The second step of Save anyway: whose changes it replaces. */
+function ConfirmStep({
+  conflict,
+  who,
+  busy,
+  run,
+  setStep,
+}: StepProps): JSX.Element {
+  return (
+    <>
+      <AlertDialogHeader>
+        <AlertDialogTitle>
+          {who ? `Replace ${who}'s changes?` : "Replace the newer changes?"}
+        </AlertDialogTitle>
+        <AlertDialogDescription>
+          {replacesSentence(conflict, who)} History records that you replaced
+          them.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy !== null}
+          onClick={() => setStep("choose")}
+        >
+          Back
+        </Button>
+        <AlertDialogAction
+          variant="destructive"
+          disabled={busy !== null}
+          onClick={event => {
+            event.preventDefault();
+            run("overwrite");
+          }}
+        >
+          <BusyLabel
+            busy={busy === "overwrite"}
+            doing="Saving..."
+            label="Replace their changes"
+          />
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </>
+  );
+}
+
 export function VersionConflictDialog({
   conflict,
   keepsRecoveryPoints,
@@ -65,7 +235,7 @@ export function VersionConflictDialog({
   onSaveAnyway,
 }: VersionConflictDialogProps): JSX.Element {
   const [step, setStep] = useState<"choose" | "confirm">("choose");
-  const [busy, setBusy] = useState<"load" | "overwrite" | null>(null);
+  const [busy, setBusy] = useState<Busy>(null);
   // Closed by Keep editing; a later refusal is a new conflict, and opens it.
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
@@ -74,9 +244,8 @@ export function VersionConflictDialog({
   }, [conflict?.stale]);
 
   const open = conflict !== null && !dismissed;
-  const who = conflict?.stale.changedBy
-    ? changerName(conflict.stale.changedBy)
-    : null;
+  const changedBy = conflict?.stale.changedBy;
+  const who = changedBy ? changerName(changedBy) : null;
 
   // The choice runs to its end with the dialog open, so its busy state is
   // seen; a failure stays in the dialog, said by `conflict.failure`.
@@ -90,6 +259,7 @@ export function VersionConflictDialog({
       });
   };
 
+  const steps = { who, busy, run, setStep };
   return (
     <AlertDialog
       open={open}
@@ -99,120 +269,15 @@ export function VersionConflictDialog({
     >
       <AlertDialogContent>
         {conflict && step === "choose" ? (
-          <>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                This document changed since you started editing
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {changedSentence(conflict)} Your edits are still here, not
-                saved.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <p className="text-sm text-muted-foreground">
-              {keepsRecoveryPoints
-                ? "Load the current version and your edits are kept as a recovery point you can restore."
-                : "Load the current version and your edits are discarded: this document keeps no recovery points."}
-            </p>
-            {compareHref ? (
-              <p className="text-sm">
-                {/* In a tab of its own: the edits on screen are not saved,
-                    and leaving the editor for the comparison would ask to
-                    discard them. */}
-                <Link
-                  href={compareHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline"
-                >
-                  {who ? `See what ${who} changed` : "See what changed"}
-                </Link>
-              </p>
-            ) : null}
-            {conflict.failure ? (
-              <p role="alert" className="text-sm text-destructive">
-                {conflict.failure}
-              </p>
-            ) : null}
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={busy !== null}>
-                Keep editing
-              </AlertDialogCancel>
-              {/* A step within the dialog, not a choice that closes it. */}
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy !== null}
-                onClick={() => setStep("confirm")}
-              >
-                Save anyway
-              </Button>
-              <AlertDialogAction
-                disabled={busy !== null}
-                onClick={event => {
-                  event.preventDefault();
-                  run("load");
-                }}
-              >
-                {busy === "load" ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  "Load current version"
-                )}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </>
+          <ChooseStep
+            conflict={conflict}
+            {...steps}
+            keepsRecoveryPoints={keepsRecoveryPoints}
+            compareHref={compareHref}
+          />
         ) : null}
         {conflict && step === "confirm" ? (
-          <>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {who
-                  ? `Replace ${who}'s changes?`
-                  : "Replace the newer changes?"}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {who
-                  ? `Saving anyway replaces the changes ${who} made${
-                      conflict.stale.changedAt
-                        ? ` at ${formatDateTime(conflict.stale.changedAt)}`
-                        : ""
-                    } with yours.`
-                  : "Saving anyway replaces the changes made since you started editing with yours."}{" "}
-                History records that you replaced them.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy !== null}
-                onClick={() => setStep("choose")}
-              >
-                Back
-              </Button>
-              <AlertDialogAction
-                variant="destructive"
-                disabled={busy !== null}
-                onClick={event => {
-                  event.preventDefault();
-                  run("overwrite");
-                }}
-              >
-                {busy === "overwrite" ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Replace their changes"
-                )}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </>
+          <ConfirmStep conflict={conflict} {...steps} />
         ) : null}
       </AlertDialogContent>
     </AlertDialog>

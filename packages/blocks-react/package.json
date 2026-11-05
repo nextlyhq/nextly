@@ -36,10 +36,16 @@
       "types": "./dist/environment.d.ts",
       "import": "./dist/environment.mjs",
       "default": "./dist/environment.mjs"
+    },
+    "./icons/lucide": {
+      "types": "./dist/icons/lucide.d.ts",
+      "import": "./dist/icons/lucide.mjs",
+      "default": "./dist/icons/lucide.mjs"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "third-party"
   ],
   "scripts": {
     "build": "tsdown",
@@ -47,7 +53,8 @@
     "check-types": "node ../../scripts/tsc.mjs --noEmit && node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "icons:update-lucide": "node scripts/update-lucide.mjs"
   },
   "engines": {
     "node": "^22.12.0 || >=24.0.0"

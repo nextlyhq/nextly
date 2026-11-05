@@ -32,6 +32,7 @@ import type {
 import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
+import { storedFormsFor } from "./added-undefined-ids";
 import {
   compositionIssues,
   documentOf,
@@ -41,6 +42,7 @@ import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
+import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
 import {
   judgesLayersLocks,
@@ -89,6 +91,19 @@ export const BLOCKS_FIELD_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#BlocksField";
 
 /** The policy a field declares, in the loosest shape worth reading. */
+/**
+ * `read`, asked at most once: every caller shares the first call's answer,
+ * so the checks judging one write see one read. Nothing when there is no
+ * `read`.
+ */
+function onceAsked<T>(
+  read: (() => Promise<T>) | undefined
+): (() => Promise<T>) | undefined {
+  if (read === undefined) return undefined;
+  let answer: Promise<T> | undefined;
+  return () => (answer ??= read());
+}
+
 function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
   // Delegated rather than repeated. The admin editor asks the same question of
   // the same declaration, and a field validated under one reading and edited
@@ -226,22 +241,35 @@ export function blocksFieldType(
         : judgedByRules(value, args, breakpoints, composition);
       const label =
         typeof args.field.label === "string" ? args.field.label : args.path;
-      // The classes a write adds must be ones the site defines, judged
-      // whatever the rules above answered, so one round fixes both. A value
-      // judged on its own, or an emptied field, references none.
-      const classIds = composition?.()?.siteClassIds;
-      const classes = (): Promise<readonly PluginFieldIssue[]> =>
-        emptied || classIds === undefined
-          ? Promise.resolve([])
-          : newClassReferenceIssues(value, args, label, {
-              classIds,
-              limits: composition?.()?.limits,
-            });
+      // The classes a write adds, and the breakpoints it brings styles or
+      // hides under, must be ones the site defines, judged whatever the rules
+      // above answered, so one round fixes both. A value judged on its own,
+      // or an emptied field, references none.
+      const definitions = onceAsked(composition?.()?.siteDefinitions);
+      // And against one read of the page as stored, so no reference is let
+      // through by a snapshot the other checks did not see.
+      const storedForms = onceAsked(async () => storedFormsFor(args));
+      const classes = async (): Promise<readonly PluginFieldIssue[]> => {
+        if (emptied || definitions === undefined) return [];
+        const limits = composition?.()?.limits;
+        return [
+          ...(await newClassReferenceIssues(value, args, label, {
+            classIds: async () => (await definitions()).classIds,
+            limits,
+            storedForms,
+          })),
+          ...(await newBreakpointIssues(value, args, label, {
+            breakpointIds: async () => (await definitions()).breakpointIds,
+            limits,
+            storedForms,
+          })),
+        ];
+      };
       // A value judged on its own, or a create, has no stored document to
       // hold a lock, and keeps the answer it always got, synchronously where
       // the rules gave one and nothing else is asked.
       if (!judgesLayersLocks(args)) {
-        if (args.write === undefined || emptied || classIds === undefined) {
+        if (args.write === undefined || emptied || definitions === undefined) {
           return verdict;
         }
         return Promise.resolve(verdict).then(answered =>
