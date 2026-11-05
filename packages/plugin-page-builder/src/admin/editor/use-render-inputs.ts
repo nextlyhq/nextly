@@ -144,6 +144,7 @@ export function useSiteStyleInputs(
     unreadableFonts: unreadableStoredFonts,
     pending: siteStylePending,
     error: siteStyleError,
+    current: siteStyleCurrent,
   } = useSiteStyle(configSiteStyle);
 
   // The site-style half of the class surface. The node half stays with the
@@ -216,6 +217,7 @@ export function useSiteStyleInputs(
     unreadableStoredFonts,
     siteStylePending,
     siteStyleError,
+    siteStyleCurrent,
     classes,
     remotePatterns,
     stylePolicy,
@@ -231,6 +233,8 @@ export type SiteStyleInputs = {
   unreadableStoredFonts: readonly string[];
   siteStylePending: boolean;
   siteStyleError: Error | null;
+  /** Whether the stored style in hand is the site as it is now. */
+  siteStyleCurrent: boolean;
   classes: ClassSurface;
   remotePatterns: readonly RemotePattern[] | undefined;
   stylePolicy: HostFetchPolicy;
@@ -389,13 +393,9 @@ type CanvasViewport = {
 /** The device being edited, the width it is shown at, and the zoom. */
 function useCanvasViewport({
   canvasRender,
-  siteStylePending,
-  siteStyleError,
+  siteStyleCurrent,
 }: Pick<CanvasRender, "canvasRender"> &
-  Pick<
-    SiteStyleInputs,
-    "siteStylePending" | "siteStyleError"
-  >): CanvasViewport {
+  Pick<SiteStyleInputs, "siteStyleCurrent">): CanvasViewport {
   const breakpoints = canvasRender.styleContext.breakpoints;
   /*
    * The device the SHELL holds, mirrored here to draw the canvas with it.
@@ -427,30 +427,26 @@ function useCanvasViewport({
    * next wider breakpoint that remains, else the base. Sent to the shell as a
    * choice, so it stores and shows that device as the author's own.
    *
-   * Compared against the last set the stored style ANSWERED with. While the
-   * read is pending, or after it failed, the set in hand is the host's config
-   * defaults, and a breakpoint missing from the stored set was never removed
-   * in this session: a device restored on load that the site no longer has
-   * goes to the base, through `editingBreakpointOf` below, even when a later
-   * retry is the read that answers.
+   * Compared against the last set a CURRENT stored answer gave: one read
+   * since the editor opened, or still fresh in the shared cache. Before the
+   * first, the set in hand is the host's config defaults, or a cached answer
+   * older than a removal made while the author was away, so a device restored
+   * on load that the site no longer has goes to the base, through
+   * `editingBreakpointOf` below, whichever read is the one that answers. A
+   * later read that fails keeps the last current set, so a removal a retry
+   * then confirms still moves to the next wider breakpoint.
    */
   const previousBreakpoints = useRef<BreakpointSet | undefined>(undefined);
   useEffect(() => {
-    const answered = !siteStylePending && siteStyleError === null;
+    if (!siteStyleCurrent) return;
     const before = previousBreakpoints.current;
-    previousBreakpoints.current = answered ? breakpoints : undefined;
-    if (!answered || before === undefined || before === breakpoints) return;
+    previousBreakpoints.current = breakpoints;
+    if (before === undefined || before === breakpoints) return;
     // Only a device that WAS being edited and is gone now moves.
     if (editingBreakpointOf(before, chosenDevice) !== chosenDevice) return;
     if (editingBreakpointOf(breakpoints, chosenDevice) === chosenDevice) return;
     chooseDevice(fallbackBreakpoint(before, breakpoints, chosenDevice));
-  }, [
-    breakpoints,
-    siteStylePending,
-    siteStyleError,
-    chosenDevice,
-    chooseDevice,
-  ]);
+  }, [breakpoints, siteStyleCurrent, chosenDevice, chooseDevice]);
 
   /*
    * Which breakpoint an edit lands in: the device the author chose, and

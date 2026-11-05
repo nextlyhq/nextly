@@ -61,9 +61,26 @@ let settingsOpen = false;
 /** What the Site tab's read answers with; nothing until a case sets it. */
 let siteSettingsRead: Record<string, unknown> | undefined;
 /** What the stored site style's read answers with for the test in hand. */
-let storedRead: { data: unknown; isPending: boolean; error?: Error | null } = {
-  data: undefined,
+let storedRead: {
+  data: unknown;
+  isPending: boolean;
+  error: Error | null;
+  /** Whether the answer is the site as it is now, as the real read reports. */
+  current: boolean;
+} = { data: undefined, isPending: false, error: null, current: true };
+/** A current answer from the route, holding `data`. */
+const answered = (data: unknown): typeof storedRead => ({
+  data,
   isPending: false,
+  error: null,
+  current: true,
+});
+/** The stored set without Mobile, as a removal elsewhere leaves it. */
+const TABLET_ONLY = {
+  breakpoints: {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  },
 };
 
 // The editor asks the session's grants for shared styles; this file is not
@@ -385,7 +402,7 @@ beforeEach(() => {
   clientConfig = { siteStyle: SITE };
   storedDevice = null;
   deviceRequests.length = 0;
-  storedRead = { data: undefined, isPending: false };
+  storedRead = answered(undefined);
   settingsOpen = false;
   siteSettingsRead = undefined;
 });
@@ -664,18 +681,15 @@ describe("a device the site stops offering", () => {
      * arrival of the read is not a removal to fall back from.
      */
     storedDevice = "mobile";
-    storedRead = { data: undefined, isPending: true };
+    storedRead = {
+      data: undefined,
+      isPending: true,
+      error: null,
+      current: false,
+    };
     const view = openEditor();
 
-    storedRead = {
-      data: {
-        breakpoints: {
-          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-          container: [],
-        },
-      },
-      isPending: false,
-    };
+    storedRead = answered(TABLET_ONLY);
     view.rerender();
 
     expect(seen.inspector?.breakpoint).toBe("base");
@@ -694,23 +708,66 @@ describe("a device the site stops offering", () => {
       data: undefined,
       isPending: false,
       error: new Error("offline"),
+      current: false,
     };
     const view = openEditor();
 
-    storedRead = {
-      data: {
-        breakpoints: {
-          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-          container: [],
-        },
-      },
-      isPending: false,
-      error: null,
-    };
+    storedRead = answered(TABLET_ONLY);
     view.rerender();
 
     expect(seen.inspector?.breakpoint).toBe("base");
     expect(deviceRequests).toEqual([]);
+  });
+
+  it("does not take a stale cached answer, shown while a new read runs, for the set before", () => {
+    /*
+     * Reopened after the cache went stale: the cached answer still has Mobile,
+     * which another author removed meanwhile. It is shown while the editor
+     * reads again, and is not current, so the read's answer is a removal made
+     * while this author was away: the base, not the next wider breakpoint.
+     */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: null,
+      current: false,
+    };
+    const view = openEditor();
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("keeps the last current set across a read that fails, for the removal a retry confirms", () => {
+    /*
+     * Mobile chosen against a current answer; a later read fails, keeping that
+     * answer beside the failure; a retry then answers without Mobile. The
+     * removal is compared with the set before the failure, so it moves to
+     * Tablet rather than to the base.
+     */
+    const view = openEditor();
+    choose("mobile");
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("offline"),
+      current: false,
+    };
+    view.rerender();
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("tablet");
+    expect(deviceRequests.at(-1)).toBe("tablet");
   });
 
   it("shows Desktop when the site removes its last breakpoint", () => {
