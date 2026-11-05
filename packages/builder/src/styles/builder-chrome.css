@@ -3653,6 +3653,24 @@
   box-shadow: none;
 }
 
+/* As specific as a secondary selection's own halo rule, which it overrides. */
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-clipped] {
+  box-shadow: none;
+}
+
+/*
+ * A mark around a block its own clip-path shapes: the halo band would hug the
+ * box's corners, which the shape leaves showing the page behind, so only the
+ * ring is drawn, still outside the box.
+ */
+.nx-canvas-mark[data-shaped] {
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-shaped] {
+  box-shadow: none;
+}
+
 /*
  * The parts of a selected component placement an author can edit: its exposed
  * values, dashed in the component colour, so they stand apart from the
@@ -3688,6 +3706,19 @@
 
 .nx-canvas-mark[data-mark="hovered"][data-component] {
   outline-color: var(--nx-builder-component);
+}
+
+/*
+ * A hovered block an ancestor clips, or its own clip-path shapes, draws no
+ * halo band either: the hover rule above is as specific as the plain no-halo
+ * rules and comes later, so it would put the band back.
+ */
+.nx-canvas-mark[data-mark="hovered"][data-clipped] {
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-shaped] {
+  box-shadow: none;
 }
 
 /*
