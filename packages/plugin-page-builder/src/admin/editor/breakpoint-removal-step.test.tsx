@@ -221,6 +221,8 @@ describe("removing a breakpoint in Settings", () => {
       })
     ).toBeTruthy();
     expect(screen.getByText("This can't be undone.")).toBeTruthy();
+    // Focus followed the step, rather than falling back to the page.
+    expect(stepOf("confirm").parentElement).toBe(document.activeElement);
     // The step has the tab to itself.
     expect(screen.queryByText("Default Layout")).toBeNull();
 

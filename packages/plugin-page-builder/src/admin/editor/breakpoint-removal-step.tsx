@@ -14,7 +14,7 @@
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { Button } from "@nextlyhq/ui";
 import { Check, Loader2, TriangleAlert } from "lucide-react";
-import type { JSX } from "react";
+import { useEffect, useRef, type JSX } from "react";
 
 import {
   checkingWords,
@@ -112,19 +112,39 @@ function CheckedRows({
  * The step that takes the breakpoint list's place: checking, confirm,
  * removing or refused. Nothing for any other.
  */
-export function RemovalStepPanel({
-  removal,
-  current,
-  baseLabel,
-  onClose,
-}: {
+export function RemovalStepPanel(props: StepProps): JSX.Element {
+  // Focus moves to each step as it takes the editor's place: the button that
+  // led to it is hidden with the editor, and focus would otherwise fall back
+  // to the page, losing a keyboard author's place.
+  const holder = useRef<HTMLDivElement>(null);
+  const kind = props.removal.step.kind;
+  useEffect(() => {
+    holder.current?.focus();
+  }, [kind]);
+  return (
+    <div ref={holder} tabIndex={-1} className="outline-none">
+      <StepBody {...props} />
+    </div>
+  );
+}
+
+/** What a step is drawn from. */
+interface StepProps {
   removal: BreakpointRemoval;
   current: BreakpointSet;
   /** What the base breakpoint is called on the device buttons. */
   baseLabel: string;
   /** Close Settings: the removal carries on without it. */
   onClose: () => void;
-}): JSX.Element | null {
+}
+
+/** The step itself, by its kind. */
+function StepBody({
+  removal,
+  current,
+  baseLabel,
+  onClose,
+}: StepProps): JSX.Element | null {
   const { step } = removal;
   if (step.kind === "checking") {
     return (
