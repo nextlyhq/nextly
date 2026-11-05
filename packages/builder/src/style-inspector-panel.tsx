@@ -84,7 +84,7 @@ import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import {
   breakpointQueries,
-  liveBreakpointsFor,
+  editedTierLive,
   matchedBreakpoints,
 } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
@@ -123,6 +123,7 @@ import {
 } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
+import { SectionHeld } from "./section-held";
 import type { SharedStyleRow } from "./shared-style-library";
 import {
   moveToSharedStyleClear,
@@ -2116,7 +2117,7 @@ function provenanceReader({
      */
     const beneath = provenanceBeneath({
       ...query,
-      liveBreakpoints: liveBreakpointsFor(breakpoints, breakpoint),
+      liveBreakpoints: editedTierLive(breakpoints, breakpoint, live),
     });
     return {
       provenance,
@@ -5237,10 +5238,24 @@ function textNumber(text: string): number | undefined {
 }
 
 /**
- * Whether the section a field sits in is held read-only. Its fieldset holds
- * the form controls; a control that is not one (a slider's thumb) reads this.
+ * What describes a number field: its own description, and the words for its
+ * unit while what it shows is a number, or nothing at all. What it shows is
+ * the draft, or, while that is empty, the inherited value it hints. A keyword
+ * such as `inherit` has no unit to be said in.
  */
-const SectionHeld = React.createContext(false);
+export function describedWithUnit(
+  describedBy: string | undefined,
+  unitWords: string | undefined,
+  draft: string,
+  inherited: string | undefined
+): string | undefined {
+  const shown = trimCssWhitespace(draft) === "" ? (inherited ?? "") : draft;
+  const keyword =
+    trimCssWhitespace(shown) !== "" && textNumber(shown) === undefined;
+  return unitWords === undefined || keyword
+    ? describedBy
+    : [describedBy, unitWords].filter(Boolean).join(" ");
+}
 
 /**
  * The id of words naming a field's unit for a screen reader, where the unit
@@ -5528,6 +5543,8 @@ function NumericField({
 }): React.JSX.Element {
   // Words for a unit shown only as a sign beside the field, for its description.
   const unitWords = React.useContext(UnitWords);
+  // The value reaching the field from another tier, which it shows as a hint.
+  const inheritedHint = React.useContext(InheritedValue);
   const units = unitChoicesFor(control.leaf);
   // The draft lives HERE rather than inside the text field, because two
   // controls edit one value and the unit menu was reading the other copy. An
@@ -5589,11 +5606,12 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         tokens={tokens}
-        describedBy={
-          unitWords === undefined
-            ? describedBy
-            : [describedBy, unitWords].filter(Boolean).join(" ")
-        }
+        describedBy={describedWithUnit(
+          describedBy,
+          unitWords,
+          draft,
+          inheritedHint
+        )}
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}

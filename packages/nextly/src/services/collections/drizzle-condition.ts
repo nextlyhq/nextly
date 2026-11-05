@@ -18,6 +18,7 @@ import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import type { SQL } from "drizzle-orm";
 import {
   and,
+  bindIfParam,
   Column,
   eq,
   is,
@@ -53,6 +54,16 @@ export interface LocalizedQueryContext {
   companionTableName: string;
   /** Localized fields with both the camelCase name (matching) and snake_case column (SQL). */
   localizedFields: LocalizedFieldRef[];
+  /**
+   * The companion table's Drizzle columns, so a localized comparison's
+   * operand is read as its column compares it, as a main-table column's is.
+   */
+  companionTable?: unknown;
+  /**
+   * The companion's runtime Drizzle table, when the caller has it loaded.
+   * Alias for {@link companionTable}.
+   */
+  table?: unknown;
   /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
   mainIdColumn: unknown;
   /** The locale to filter on (the requested locale — chain head). */
@@ -71,11 +82,6 @@ export interface LocalizedQueryContext {
    * refuses. A caller's own filter keeps its meaning, the requested language.
    */
   inEveryFallbackLanguage?: boolean;
-  /**
-   * The companion table's Drizzle columns, so a localized comparison's
-   * operand is read as its column compares it, as a main-table column's is.
-   */
-  companionTable?: unknown;
   /**
    * Per-locale status filter (i18n M6). Set (e.g. `"published"`) when the read resolves to a
    * single status and the collection has per-locale status, so localized where/search EXISTS
@@ -112,6 +118,40 @@ export function buildLocalizedWhereExists(
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
+  // The companion column, resolved on its own table: a date value is read as
+  // the instant it names and bound as this column compares — the same reading
+  // the main where builder applies. Bound raw, an ISO string beside an epoch
+  // column compares by type ordering on SQLite (numbers order before text, so
+  // nothing matches) and by each server's coercion on the others: one filter,
+  // three answers.
+  const table = ctx.companionTable ?? ctx.table;
+  const companionColumn =
+    table !== undefined && table !== null && typeof table === "object"
+      ? findColumn(table, column)
+      : undefined;
+  if (companionColumn && COMPARISONS.has(op)) {
+    // The refusal names the field as the caller wrote it, not the
+    // companion's physical column spelling.
+    const apiName =
+      ctx.localizedFields.find(f => f.column === column)?.name ?? column;
+    if (
+      typeof value === "string" ||
+      (Array.isArray(value) && typeof value[0] === "string")
+    ) {
+      value = comparisonOperand(companionColumn, apiName, value);
+    }
+    // Bind through the column, as the main builder's eq() does: a Date
+    // bound raw reaches the driver as the driver zone's wall clock, while
+    // the companion column stores the UTC wall clock its encoder writes.
+    // Lists bind element-wise, each element through the column.
+    if (Array.isArray(value)) {
+      value = value.map(v =>
+        v instanceof Date ? sql`${bindIfParam(v, companionColumn)}` : v
+      );
+    } else if (value instanceof Date) {
+      value = bindIfParam(value, companionColumn);
+    }
+  }
   let valueCondition: SQL | undefined;
   switch (op) {
     case "=":
@@ -364,11 +404,13 @@ export function buildDrizzleCondition(
       // names, spelled as that column's dialect stores one, as on the main
       // table. Bound as written, an ISO string beside SQLite's integer
       // timestamp compares as text, which every number sorts below.
+      const companionTable = localizedCtx.companionTable ?? localizedCtx.table;
       const companionColumn =
-        localizedCtx.companionTable === undefined ||
-        localizedCtx.companionTable === null
+        companionTable === undefined ||
+        companionTable === null ||
+        typeof companionTable !== "object"
           ? undefined
-          : findColumn(localizedCtx.companionTable, localizedWhereField.name);
+          : findColumn(companionTable, localizedWhereField.name);
       const operand =
         companionColumn && COMPARISONS.has(op)
           ? comparisonOperand(companionColumn, column, value)

@@ -47,6 +47,83 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+describe("a block that moves without resizing", () => {
+  it("re-measures when a block's keyframe animation ends or is cancelled", () => {
+    // An entrance animation or a site's @keyframes moves a block by
+    // transform: nothing resizes, mutates or finishes a transition, so the
+    // marks stay at the starting geometry unless the animation's own end is
+    // heard. The events bubble, so a block's reaches the root.
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    block.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(1);
+    block.dispatchEvent(new Event("animationcancel", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(2);
+    stop?.();
+    // Released with the rest: nothing is heard after the watch stops.
+    block.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a block an authored state rule moves", () => {
+  it("re-measures when the input modality changes, which can turn :focus-visible on alone", () => {
+    // A block a pointer focused starts matching :focus-visible once the
+    // keyboard is used, with no focus event: the key press is the signal, as
+    // a pointer press is for the change back.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    block.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(1);
+    block.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(2);
+    // And when a press ends, which ends an authored :active state with no
+    // pointer leaving and no focus changing.
+    // Space releases a keyboard-activated :active state on keyup.
+    for (const type of ["pointerup", "pointercancel", "keyup"]) {
+      block.dispatchEvent(new Event(type, { bubbles: true }));
+      for (const run of frames.splice(0)) run(0);
+    }
+    expect(moved).toHaveBeenCalledTimes(5);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("re-measures on the frame after the pointer or focus enters or leaves a block", () => {
+    // An authored :hover or :focus-visible rule can move a block (a
+    // transform, a margin) with no transition: nothing resizes or mutates,
+    // so the change of state itself is the only signal. Measured on the next
+    // frame, once the browser has applied the state's styles.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    for (const type of ["pointerover", "pointerout", "focusin", "focusout"]) {
+      block.dispatchEvent(new Event(type, { bubbles: true }));
+    }
+    // Nothing yet: the state's styles apply before the next frame.
+    expect(moved).not.toHaveBeenCalled();
+    // One measurement for the frame, however many changes arrived in it.
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(1);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("a batch that changed nothing", () => {
   it("does not re-measure for a probe that put the attribute back", async () => {
     const { layer, block } = canvas();

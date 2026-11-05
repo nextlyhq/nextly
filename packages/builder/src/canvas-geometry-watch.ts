@@ -180,10 +180,61 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    * geometry rather than following the animation: tracking the frames between
    * would mean measuring on every one, which costs more than an overlay being
    * briefly behind a transition the author is watching.
+   *
+   * `animation` likewise: an entrance motion or a site's `@keyframes` moves a
+   * block by transform, and its end and cancel bubble the same way. A block
+   * animating FOREVER never ends; its marks follow the geometry of the last
+   * measurement, re-taken whenever anything else re-measures, rather than
+   * chasing every frame — `animationiteration` would re-measure at whatever
+   * point of the motion each loop boundary falls, which moves the ring without
+   * making it right.
    */
   const settled = (): void => moved();
   root.addEventListener("transitionend", settled);
   root.addEventListener("transitioncancel", settled);
+  root.addEventListener("animationend", settled);
+  root.addEventListener("animationcancel", settled);
+  /*
+   * An authored `:hover` or `:focus-visible` rule can move a block — a
+   * transform, a margin — with no transition, so the change of state is the
+   * only signal there is. Pointer and focus entering or leaving a block
+   * bubble, so the root hears every block's. Measured on the next frame,
+   * once the state's styles apply, and once per frame however many changes
+   * arrive in it: a pointer crossing the page enters and leaves many blocks.
+   */
+  let frame: number | undefined;
+  const restated = (): void => {
+    if (frame !== undefined) return;
+    if (view === null || typeof view.requestAnimationFrame !== "function") {
+      moved();
+      return;
+    }
+    frame = view.requestAnimationFrame(() => {
+      frame = undefined;
+      moved();
+    });
+  };
+  /*
+   * The input modality too: `:focus-visible` can start or stop matching with
+   * no focus event at all, when a block a pointer focused is then reached by
+   * the keyboard, or the other way about, so a key or a pointer press is a
+   * change of state as well.
+   */
+  const STATE_EVENTS = [
+    "pointerover",
+    "pointerout",
+    "focusin",
+    "focusout",
+    "keydown",
+    "pointerdown",
+    // A press ending ends an authored `:active` state, with no pointer
+    // leaving and no focus changing.
+    "pointerup",
+    "pointercancel",
+    // A key release ends a keyboard-activated `:active` state (Space).
+    "keyup",
+  ];
+  for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   root.addEventListener("scroll", settled, true);
   /*
    * And the root's DOCUMENT, in the bubble phase, for the viewport itself
@@ -201,6 +252,10 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     arrivals?.disconnect();
     root.removeEventListener("transitionend", settled);
     root.removeEventListener("transitioncancel", settled);
+    root.removeEventListener("animationend", settled);
+    root.removeEventListener("animationcancel", settled);
+    for (const type of STATE_EVENTS) root.removeEventListener(type, restated);
+    if (frame !== undefined) view?.cancelAnimationFrame(frame);
     root.removeEventListener("scroll", settled, true);
     doc.removeEventListener("scroll", settled);
   };
