@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { BlockResolver } from "../resolver";
+import { sharedStyleInputs } from "../page-renderer";
 import { sharedStyleInputsId } from "../shared-style-inputs";
 import { resolvePageStylesWithTrace } from "../styles";
 
@@ -159,5 +160,49 @@ describe("the site's edit of a block's own look, in Classic spacing", () => {
     // The same entry without the mark is a look a block wears instead.
     const { isDefault: _mark, ...worn } = primary;
     expect(id([primary])).not.toBe(id([worn]));
+  });
+});
+
+describe("the site's own looks, when the route states classes of its own", () => {
+  const route = { breakpoints: BREAKPOINTS, namedClasses: [outline, cta] };
+  const site = { breakpoints: BREAKPOINTS, classes: [primary, outline, cta] };
+
+  it("keeps the route's classes and carries the site's own look over", () => {
+    const reconciled = sharedStyleInputs(route, site).namedClasses ?? [];
+    expect(reconciled.map(each => each.id)).toEqual([
+      outline.id,
+      cta.id,
+      primary.id,
+    ]);
+    // So the page's base is the site's edit, and the stamp follows the edit.
+    expect(from("color", reconciled, [])).toEqual({
+      tier: "blockType",
+      value: "#aa00aa",
+    });
+    const id = (classes: NamedClass[]) =>
+      sharedStyleInputsId({
+        breakpoints: BREAKPOINTS,
+        namedClasses:
+          sharedStyleInputs(route, { ...site, classes }).namedClasses ??
+          undefined,
+      });
+    expect(id([primary, outline, cta])).not.toBe(
+      id([{ ...primary, styles: colour("#00aaaa") }, outline, cta])
+    );
+  });
+
+  it("puts the site's own look in place of one the route states", () => {
+    const stale = { ...primary, styles: colour("#000000") };
+    const reconciled =
+      sharedStyleInputs({ ...route, namedClasses: [stale, outline] }, site)
+        .namedClasses ?? [];
+    expect(reconciled).toEqual([outline, primary]);
+  });
+
+  it("leaves the route's classes as they are where neither holds an own look", () => {
+    const plain = { breakpoints: BREAKPOINTS, classes: [outline, cta] };
+    expect(sharedStyleInputs(route, plain).namedClasses).toBe(
+      route.namedClasses
+    );
   });
 });

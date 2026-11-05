@@ -48,17 +48,34 @@ function lookSlug(blockType: string, name: string): string {
 }
 
 /**
- * Every look the given block definitions declare, as classes bound to their
- * block types, in declaration order. The block's own look (`isDefault`) comes
- * with no styles of its own and the `isDefault` mark, so a site's edits to the
- * block's base have a class to be stored as. Any other variation without
- * styles is an insert preset, not a look; a look whose name can't be written
- * as a class name is left out.
+ * Every look the given block definitions declare that a block may wear, as
+ * classes bound to their block types, in declaration order. A variation
+ * without styles is an insert preset or the block's own look, not one of
+ * these; a look whose name can't be written as a class name is left out.
  */
 export function blockLooks(definitions: Iterable<LookSource>): NamedClass[] {
+  return looksOf(definitions, false);
+}
+
+/**
+ * Each block's own look (the variation marked `isDefault`, a button's
+ * Primary), as a class bound to its block type with no styles and the
+ * `isDefault` mark: where a site's edits to the block's base are stored. Kept
+ * apart from {@link blockLooks}, because no block wears one.
+ */
+export function blockOwnLooks(definitions: Iterable<LookSource>): NamedClass[] {
+  return looksOf(definitions, true);
+}
+
+/** The worn looks or the own looks the definitions declare, in declaration order. */
+function looksOf(
+  definitions: Iterable<LookSource>,
+  own: boolean
+): NamedClass[] {
   const looks: NamedClass[] = [];
   for (const definition of definitions) {
     for (const variation of definition.editor?.variations ?? []) {
+      if ((variation.isDefault === true) !== own) continue;
       const look = lookOf(definition.name, variation, looks.length);
       if (look !== undefined) looks.push(look);
     }

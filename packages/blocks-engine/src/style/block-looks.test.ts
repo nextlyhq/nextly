@@ -5,7 +5,7 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { MAX_NAMED_CLASSES } from "../document";
 
-import { blockLooks, lookClassId } from "./block-looks";
+import { blockLooks, blockOwnLooks, lookClassId } from "./block-looks";
 import { compilePageCss } from "./compile-page";
 import { styleOrigin } from "./style-origin";
 import {
@@ -31,8 +31,21 @@ const button = {
 };
 
 describe("a block type's looks, as the site receives them", () => {
-  it("is one class per look, bound to its block type, the block's own look first with no edits", () => {
+  it("is one class per look that carries styles, bound to its block type", () => {
     expect(blockLooks([button])).toEqual([
+      {
+        id: lookClassId("core/button", "outline"),
+        slug: "button-outline",
+        label: "Outline",
+        orderIndex: 0,
+        blockType: "core/button",
+        styles: colour("red"),
+      },
+    ]);
+  });
+
+  it("gives each block's own look apart, with no edits and the own-look mark", () => {
+    expect(blockOwnLooks([button])).toEqual([
       {
         id: lookClassId("core/button", "primary"),
         slug: "button-primary",
@@ -41,14 +54,6 @@ describe("a block type's looks, as the site receives them", () => {
         blockType: "core/button",
         styles: {},
         isDefault: true,
-      },
-      {
-        id: lookClassId("core/button", "outline"),
-        slug: "button-outline",
-        label: "Outline",
-        orderIndex: 1,
-        blockType: "core/button",
-        styles: colour("red"),
       },
     ]);
   });
@@ -62,6 +67,7 @@ describe("a block type's looks, as the site receives them", () => {
         ],
       },
     };
+    expect(blockOwnLooks([both])).toEqual([]);
     expect(blockLooks([both])).toEqual([]);
   });
 
@@ -82,7 +88,7 @@ describe("a block type's looks, as the site receives them", () => {
   });
 
   it("applies only to its own block type", () => {
-    const [, outline] = blockLooks([button]);
+    const [outline] = blockLooks([button]);
     if (outline === undefined) throw new Error("no look");
     const on = (type: string) =>
       compilePageCss(
@@ -113,7 +119,7 @@ describe("a block type's looks, as the site receives them", () => {
   });
 
   it("styles a block that wears it, and a shared style still wins over it", () => {
-    const [, outline] = blockLooks([button]);
+    const [outline] = blockLooks([button]);
     if (outline === undefined) throw new Error("no look");
     const card = {
       id: "c-card",
@@ -211,7 +217,7 @@ describe("a look the engine could not use", () => {
 
 describe("a look in the cascade's own reading", () => {
   it("reaches only a node of its own block type", () => {
-    const [, outline] = blockLooks([button]);
+    const [outline] = blockLooks([button]);
     if (outline === undefined) throw new Error("no look");
     const traced = (type: string) => {
       const { trace } = compilePageCss(

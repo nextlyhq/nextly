@@ -1,11 +1,10 @@
 import {
   blockDefaultsOf,
+  overlaidStyles,
   compilePageCss,
   declaresNoMarkup,
   hasItemBindings,
   isFetchableUrl,
-  isPlainRecord,
-  isTokenRef,
   nodeAtPointer,
   nodeClassNames,
   walkNodes,
@@ -232,70 +231,9 @@ export function blockBasesFor(
   if (siteDefaults === undefined) return bases;
   const edited = perUsedType(document, blocks, () => undefined, siteDefaults);
   for (const [type, edit] of Object.entries(edited)) {
-    bases[type] = overlaidBase(bases[type], edit);
+    bases[type] = overlaidStyles(bases[type], edit);
   }
   return bases;
-}
-
-/** A plain record that isn't a token reference: a composite value's sides. */
-function isCompositeValue(value: unknown): value is Record<string, unknown> {
-  return isPlainRecord(value) && !isTokenRef(value);
-}
-
-/** One value over another, a composite side by side. */
-function overlaidValue(under: unknown, over: unknown): unknown {
-  if (!isCompositeValue(under) || !isCompositeValue(over)) return over;
-  const out: Record<string, unknown> = { ...under };
-  for (const [key, value] of Object.entries(over)) {
-    out[key] = overlaidValue(under[key], value);
-  }
-  return out;
-}
-
-/** One breakpoint's values with another's laid over, property by property. */
-function overlaidValues(
-  under: Record<string, unknown> | undefined,
-  over: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...under };
-  for (const [property, value] of Object.entries(over)) {
-    out[property] = overlaidValue(out[property], value);
-  }
-  return out;
-}
-
-/** One state's breakpoints with another's laid over. */
-function overlaidBreakpoints(
-  under: Record<string, Record<string, unknown>> | undefined,
-  over: Record<string, unknown>
-): Record<string, Record<string, unknown>> {
-  const out: Record<string, Record<string, unknown>> = { ...under };
-  for (const [breakpoint, values] of Object.entries(over)) {
-    if (isPlainRecord(values)) {
-      out[breakpoint] = overlaidValues(out[breakpoint], values);
-    }
-  }
-  return out;
-}
-
-/**
- * A block type's base with the site's edit of it laid over, state by state,
- * breakpoint by breakpoint and property by property: the site keeps every
- * default value it did not change.
- */
-function overlaidBase(
-  base: NodeStyles | undefined,
-  edit: NodeStyles
-): NodeStyles {
-  const out: Record<string, Record<string, Record<string, unknown>>> = {};
-  for (const source of [base, edit]) {
-    for (const [state, byBreakpoint] of Object.entries(source ?? {})) {
-      if (isPlainRecord(byBreakpoint)) {
-        out[state] = overlaidBreakpoints(out[state], byBreakpoint);
-      }
-    }
-  }
-  return out;
 }
 
 /**

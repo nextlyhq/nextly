@@ -29,18 +29,24 @@
 "nextly": patch
 ---
 
-A site can now edit a block type's own look, such as a button's Primary, and
-the edit reaches every block of that type. The edit is stored as a look in the
-site's class library, marked `isDefault`, and laid over the block's base
-styles property by property, so every default value the site didn't change is
-kept. A look, a shared style and the block's own values still win over it, and
-under the Classic spacing model it sits over the frozen base.
+A site's edit of a block type's own look, such as a button's Primary, now
+reaches every block of that type. The edit is stored as a look in the site's
+class library, marked `isDefault`, and laid over the block's base styles
+property by property, so every default value the site didn't change is kept. A
+look, a shared style and the block's own values still win over it, and under
+the Classic spacing model it sits over the frozen base. The page builder does
+not offer a control that edits it yet.
 
-Each core block with looks now has its own look in the code tier with no edits,
-so a site stores it only once it changes it. An own look is never written as a
-class, so no block can wear it or refer to it. A block variation that is its
-block's own look and also states styles is no longer read as a look.
+`blockOwnLooks()` gives each block's own look with no edits, and the plugin
+seeds them in the code tier, so a site stores one only once it changes it.
+`blockLooks()` still gives only the looks a block can wear. An own look is
+never written as a class, so no block can wear it or refer to it. A variation
+that is its block's own look and also states styles is no longer read as a
+look.
 
-Published pages and the canvas read the same edits, because the renderer reads
-them from the class library it already receives. Nothing to migrate: stored
-libraries without own looks compile byte for byte as before.
+Published pages and the canvas read the same edits, from the class library they
+already receive. A route that states classes of its own keeps them, with the
+site's own looks carried in. `overlaidStyles()`, the layering the editor uses
+for Detach, now lives in the engine and also lays an own look over its base.
+Nothing to migrate: stored libraries without own looks compile byte for byte as
+before.
