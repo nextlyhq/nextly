@@ -22,6 +22,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { MEDIA } from "./categories";
+import { imageLooks } from "./looks";
 import { fetchableUrl, flag, isAuthoredText, oneOf, text, url } from "./props";
 
 /** How the browser should schedule the image. */
@@ -217,6 +218,8 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     icon: "image",
     category: MEDIA,
     keywords: ["picture", "photo", "img", "media"],
+    // Its looks, offered as tiles on a block already on the page.
+    variations: imageLooks(),
   },
   baseStyles: IMAGE_BASE_STYLES,
   parts: IMAGE_PARTS,

@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { INTERACTIVE } from "./categories";
+import { buttonLooks } from "./looks";
 import { libraryDefinition } from "./classic-spacing";
 import { boundText, oneOf, relFor, text, url } from "./props";
 
@@ -196,6 +197,8 @@ export const button: BlockDefinition<ButtonProps, PageContext> =
         icon: "button",
         category: INTERACTIVE,
         keywords: ["link", "cta", "call to action"],
+        // Its looks, offered as tiles on a block already on the page.
+        variations: buttonLooks(),
       },
       baseStyles: BUTTON_BASE_STYLES,
       props: {

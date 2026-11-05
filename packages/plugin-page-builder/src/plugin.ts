@@ -21,6 +21,7 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 // isomorphic and reachable from a browser bundle.
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import { withCoreLooks } from "./core-looks";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -1208,7 +1209,9 @@ export const pageBuilder = (
   // read, so what the factory can wire into the validator and the canvas is
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
-  const configStyle = resolveSiteStyle(opts.siteStyle);
+  // The core blocks' looks join the code tier, so the site receives them as
+  // shared styles its code supplies.
+  const configStyle = resolveSiteStyle(withCoreLooks(opts.siteStyle));
   // The font catalogue's hosts and caps, refused at boot when unusable, and
   // what it adds to the plugin.
   const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
