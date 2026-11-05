@@ -100,6 +100,9 @@ class ChangedSinceOpened extends Error {
   }
 }
 
+/** The statuses of a read refused to its caller, rather than failed. */
+const READ_REFUSED = new Set([403, 404]);
+
 /**
  * The version a publish of every language sends: a read of every language's.
  * From an editor, the language on screen is read too, the way the editor read
@@ -114,7 +117,13 @@ export async function versionToPublishEveryLanguage(
   shown: ShownCopy | undefined,
   readShown: (copy: ShownCopy) => Promise<unknown>
 ): Promise<string | undefined> {
-  const every = await readEvery();
+  const every = await readEvery().catch((reason: unknown) => {
+    // A caller who may publish every language may still be refused a read of
+    // one of them: the publish then goes unjudged, as before versions were
+    // sent, and the server decides what it may publish.
+    if (isApiError(reason) && READ_REFUSED.has(reason.status)) return undefined;
+    throw reason;
+  });
   if (shown?.version !== undefined) {
     if (versionOf(await readShown(shown)) !== shown.version) {
       throw new ChangedSinceOpened();

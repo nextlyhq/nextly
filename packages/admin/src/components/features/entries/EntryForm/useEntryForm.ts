@@ -706,6 +706,8 @@ function useConflictChoices(choices: {
   resetKey: RefObject<EntryIdentity | undefined>;
   ownSave: RefObject<{ inFlight: boolean; storedVersion?: string }>;
   submissionLatch: RefObject<boolean>;
+  /** Whether writes are held, as the form's own saves ask before writing. */
+  writesHeld: () => boolean;
   /** The entry's update, which the form's own saves go through as well. */
   update: UseUpdateEntryOptions<Entry, Record<string, unknown>>;
   onSuccess: UseEntryFormOptions["onSuccess"];
@@ -727,6 +729,7 @@ function useConflictChoices(choices: {
     resetKey,
     ownSave,
     submissionLatch,
+    writesHeld,
     update,
     onSuccess,
   } = choices;
@@ -739,6 +742,17 @@ function useConflictChoices(choices: {
   const saveAnyway = useCallback(async (): Promise<void> => {
     const payload = version.overwrite();
     if (!payload || !entry?.id || submissionLatch.current) return;
+    // Through the same gate as a save: someone else holding the document
+    // now stores nothing over their work.
+    if (writesHeld()) {
+      version.failed(HELD_NOTHING_SAVED);
+      return;
+    }
+    // The values the refused edits were typed as: a link the editor cannot
+    // see is a placeholder there, which the stored row leaves out. A refused
+    // status write carried none, so the form keeps what it holds, as after
+    // a status write that went through.
+    const sent = version.refusedValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
     const adopt = version.answerFor();
@@ -747,7 +761,9 @@ function useConflictChoices(choices: {
       ownSave.current.storedVersion = storedVersionOf(result.item);
       adopt(result.item);
       version.release();
-      form.reset(storedAfterSave(fields, payload, result.item));
+      if (sent !== undefined) {
+        form.reset(storedAfterSave(fields, sent, result.item));
+      }
       onSuccess?.(result.item);
     } catch (error) {
       version.failed(saveFailure(error));
@@ -760,6 +776,7 @@ function useConflictChoices(choices: {
     version,
     entry?.id,
     submissionLatch,
+    writesHeld,
     ownSave,
     updateMutation,
     form,
@@ -817,6 +834,10 @@ async function keepRefusedEdits(
     throw error;
   }
 }
+
+/** What Save anyway says when someone else holds the document. */
+const HELD_NOTHING_SAVED =
+  "Someone else is editing this document now, so nothing was saved.";
 
 /** The version a stored row's `updatedAt` names, for recognising its echo. */
 function storedVersionOf(row: EntryData): string | undefined {
@@ -968,6 +989,7 @@ export function useEntryForm({
       resetKey,
       ownSave,
       submissionLatch,
+      writesHeld,
       onSuccess,
       update: {
         collectionSlug: collection.name,
@@ -1091,7 +1113,7 @@ export function useEntryForm({
               .mutateAsync(version.withVersion(payload))
               // A save made from an older version holds the edits on
               // screen and opens the conflict; the failure is still told.
-              .catch(version.refusedThen(payload))
+              .catch(version.refusedThen(payload, data))
               .finally(() => {
                 ownSave.current.inFlight = false;
               });

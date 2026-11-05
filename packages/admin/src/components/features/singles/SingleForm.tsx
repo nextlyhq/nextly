@@ -1151,7 +1151,7 @@ export function SingleForm({
               .catch((error: unknown) => {
                 // A save made from an older version holds the edits on
                 // screen and opens the conflict; the failure is still told.
-                version.refused(error, payload);
+                version.refused(error, payload, data);
                 throw error;
               })
               .finally(() => {
@@ -1216,15 +1216,32 @@ export function SingleForm({
   const saveAnyway = useCallback(async (): Promise<void> => {
     const payload = version.overwrite();
     if (!payload || submissionLatch.current) return;
+    // Through the same gate as a save: someone else holding the Single now
+    // stores nothing over their work.
+    if (writesHeldNow.current) {
+      version.failed(
+        "Someone else is editing this document now, so nothing was saved."
+      );
+      return;
+    }
+    // The values the refused edits were typed as: a link the editor cannot
+    // see is a placeholder there, which the stored document leaves out. A
+    // refused status write carried none, so the form keeps what it holds, as
+    // after a status write that went through.
+    const sent = version.refusedValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
     const adopt = version.answerFor();
     try {
       const stored = await onSubmit(payload, refusedForm);
       adoptSaved(stored, adopt);
-      form.reset(
-        stored ? singleFormDefaults(schema, stored) : form.getValues()
-      );
+      if (sent !== undefined) {
+        form.reset(
+          stored && !holdsPlaceholders(schema.fields, sent)
+            ? singleFormDefaults(schema, stored)
+            : sent
+        );
+      }
     } catch (error) {
       version.failed(
         error instanceof Error ? error.message : "The save did not go through."
@@ -1237,6 +1254,7 @@ export function SingleForm({
   }, [
     version,
     submissionLatch,
+    writesHeldNow,
     onSubmit,
     refusedForm,
     form,

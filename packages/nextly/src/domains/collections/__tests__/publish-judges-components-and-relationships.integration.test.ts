@@ -1155,7 +1155,8 @@ describe.each(getConfiguredTestDialects())(
       const bulk = await entriesOf(t).bulkUpdateEntries({
         collectionName: "pages",
         ids: [ids.bulkA, ids.bulkB],
-        data: { status: "published" },
+        // Refused for what each lacks, not for want of a version.
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       expect(bulk.successes).toHaveLength(0);
@@ -1268,7 +1269,8 @@ describe.each(getConfiguredTestDialects())(
           await entriesOf(t).bulkUpdateEntries({
             collectionName: collection,
             ids: names.map(name => ids[name]),
-            data: { status: "published" },
+            // The reads a publish makes are under test, not versions.
+            data: { status: "published", _overwrite: true },
             overrideAccess: true,
           });
           return reads.count();

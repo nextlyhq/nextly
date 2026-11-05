@@ -169,6 +169,40 @@ describe("publishing every language", () => {
     expect(api.publishAllSingleLocales).not.toHaveBeenCalled();
   });
 
+  it("goes unjudged, as before versions, for a caller refused the read of every language", async () => {
+    // A role may publish every language yet read only some of them: the read
+    // is refused, and the publish is still sent, with no version.
+    api.findByID.mockImplementation(
+      async (_slug: string, _id: string, options: { locale?: string }) => {
+        if (options.locale === "all") {
+          throw Object.assign(new Error("You may not read this document."), {
+            status: 403,
+            code: "FORBIDDEN",
+          });
+        }
+        return { id: "e1", _rev: "7.en:3" };
+      }
+    );
+    api.publishAllEntryLocales.mockResolvedValue({ id: "e1" });
+    const { result } = renderHook(
+      () =>
+        usePublishAllLocales({
+          collectionSlug: "posts",
+          silent: true,
+          shown: () => ({ version: "7.en:3", locale: "en", draft: true }),
+        }),
+      { wrapper }
+    );
+
+    await result.current.mutateAsync("e1");
+
+    expect(api.publishAllEntryLocales).toHaveBeenCalledWith(
+      "posts",
+      "e1",
+      undefined
+    );
+  });
+
   it("of a Single sends the version a read of every language gives", async () => {
     api.getDocument.mockResolvedValue({ id: "s1", _rev: "4.en:1,es:1" });
     api.publishAllSingleLocales.mockResolvedValue({ id: "s1" });
