@@ -1139,6 +1139,7 @@ export class PushSchemaPipeline {
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
             fields: aggregatedFields,
+            desiredSnapshot,
             dialect,
           });
         } catch (err) {

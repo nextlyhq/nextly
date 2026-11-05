@@ -23,6 +23,7 @@ import { sql } from "drizzle-orm";
 import { NextlyError } from "../../../../errors";
 import { toSnakeCase } from "../../services/field-column-descriptor";
 import { runStatement } from "../_internal/run-statement";
+import { countRowsBreakingNotNull } from "../classifier/count-helpers";
 import type {
   AddColumnOp,
   NextlySchemaSnapshot,
@@ -73,6 +74,8 @@ export function assertPreCleanupAccepted(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
   fields: PreCleanupField[];
+  /** The schema being applied: a fill's column, its type and its unique indexes. */
+  desiredSnapshot: NextlySchemaSnapshot;
   /** Which encodings a value may arrive in: SQLite's columns store booleans and dates as numbers. */
   dialect: SupportedDialect;
 }): void {
@@ -99,34 +102,119 @@ export function assertPreCleanupAccepted(args: {
 
   assertResolutionsOffered(args);
 
-  const threshold = readDeleteThreshold();
   for (const { resolution, event } of sideEffectResolutions(args)) {
     if (resolution.kind === "provide_default") {
-      const field = fieldOf(args.fields, event.tableName, event.columnName);
-      // Text when the event names no declared field.
-      const fieldType = field?.type ?? "text";
+      const target = fillTargetOf(args, event);
       const validation = validateDefaultValue(
-        { name: event.columnName, type: fieldType },
+        { name: event.columnName, type: target.type },
         resolution.value,
         args.dialect
       );
       if (!validation.success) {
         throw new Error(
-          `INVALID_DEFAULT_FOR_TYPE: ${event.columnName} (${fieldType}) - ${validation.error}`
+          `INVALID_DEFAULT_FOR_TYPE: ${event.columnName} (${target.type}) - ${validation.error}`
         );
       }
-      assertFillCanBeUnique(event, field);
-    } else if (
-      event.kind === "add_not_null_with_nulls" &&
-      event.nullCount >= threshold
-    ) {
-      throw new Error(
-        `DELETE_THRESHOLD_EXCEEDED: ${event.nullCount} rows >= ${threshold}; explicit confirmation required`
+      // The classifier's counts, from before the prompt: judged again on the rows as they stand
+      // when pre-cleanup runs (`assertLiveCounts`).
+      assertFillCanBeUnique(
+        event,
+        target.unique,
+        event.kind === "add_required_field_no_default"
+          ? event.tableRowCount
+          : event.nullCount
       );
+    } else if (event.kind === "add_not_null_with_nulls") {
+      assertDeleteWithinThreshold(event.nullCount);
     }
     assertSafeIdent(event.tableName);
     assertSafeIdent(event.columnName);
   }
+}
+
+/**
+ * The fill and delete judgements again, on the rows as they stand when pre-cleanup runs, counted
+ * through its own handle before its first statement: rows can change while the prompt is open, so
+ * the classifier's counts can be stale. Counted with the shared counter
+ * (`countRowsBreakingNotNull`): a column added over the table counts every row, an existing one
+ * its null rows. Only the answers these judge are counted.
+ */
+async function assertLiveCounts(args: {
+  tx: unknown;
+  resolutions: Resolution[];
+  events: ClassifierEvent[];
+  fields: PreCleanupField[];
+  desiredSnapshot: NextlySchemaSnapshot;
+  dialect: SupportedDialect;
+}): Promise<void> {
+  for (const { resolution, event } of sideEffectResolutions(args)) {
+    const added = event.kind === "add_required_field_no_default";
+    const judgesFill =
+      resolution.kind === "provide_default" && fillTargetOf(args, event).unique;
+    const judgesDelete = resolution.kind === "delete_nonconforming" && !added;
+    if (!judgesFill && !judgesDelete) continue;
+    const rows = (
+      await countRowsBreakingNotNull(args.tx, args.dialect, {
+        table: event.tableName,
+        column: added ? null : event.columnName,
+      })
+    ).total;
+    if (judgesFill) assertFillCanBeUnique(event, true, rows);
+    else assertDeleteWithinThreshold(rows);
+  }
+}
+
+/** Refuses deleting `rows` rows past the threshold that needs explicit confirmation. */
+function assertDeleteWithinThreshold(rows: number): void {
+  const threshold = readDeleteThreshold();
+  if (rows < threshold) return;
+  throw new Error(
+    `DELETE_THRESHOLD_EXCEEDED: ${rows} rows >= ${threshold}; explicit confirmation required`
+  );
+}
+
+/**
+ * What a fill's column is, as the schema being applied declares it: the declared field's type, or,
+ * for a column no field declares (an extension's), the type family of the column itself; and
+ * unique when the field says so or the table has a single-column unique index on it (a unique
+ * index declared on the collection, not the field, is as unique).
+ */
+function fillTargetOf(
+  args: { fields: PreCleanupField[]; desiredSnapshot: NextlySchemaSnapshot },
+  event: { tableName: string; columnName: string }
+): { type: string; unique: boolean } {
+  const field = fieldOf(args.fields, event.tableName, event.columnName);
+  const table = args.desiredSnapshot.tables.find(t =>
+    sameName(t.name, event.tableName)
+  );
+  const column = table?.columns.find(c => sameName(c.name, event.columnName));
+  const indexed = (table?.indexes ?? []).some(
+    index =>
+      index.unique &&
+      index.columns.length === 1 &&
+      sameName(index.columns[0], event.columnName)
+  );
+  return {
+    type: field?.type ?? (column ? typeFamilyOf(column.type) : "text"),
+    unique: field?.unique === true || indexed,
+  };
+}
+
+/** The value family a column's SQL type takes, as `validateDefaultValue` names it. */
+function typeFamilyOf(sqlType: string): string {
+  const type = sqlType.toLowerCase();
+  if (type === "boolean" || type === "bool" || type.startsWith("tinyint(1)")) {
+    return "checkbox";
+  }
+  if (
+    /^(tiny|small|medium|big)?int|^integer|^serial|^bigserial|^numeric|^decimal|^real|^double|^float/.test(
+      type
+    )
+  ) {
+    return "number";
+  }
+  if (/^(timestamp|datetime|date)/.test(type)) return "date";
+  return "text";
 }
 
 /**
@@ -136,18 +224,11 @@ export function assertPreCleanupAccepted(args: {
  * statements committed. Refused before any statement.
  */
 function assertFillCanBeUnique(
-  event: Extract<
-    ClassifierEvent,
-    { kind: "add_not_null_with_nulls" | "add_required_field_no_default" }
-  >,
-  field: PreCleanupField | undefined
+  event: { id: string; tableName: string; columnName: string },
+  unique: boolean,
+  rows: number
 ): void {
-  if (field?.unique !== true) return;
-  const rows =
-    event.kind === "add_required_field_no_default"
-      ? event.tableRowCount
-      : event.nullCount;
-  if (rows < 2) return;
+  if (!unique || rows < 2) return;
   throw NextlyError.validation({
     errors: [
       {
@@ -433,6 +514,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
     dialect: SupportedDialect;
   }): Promise<NextlySchemaSnapshot> {
     assertPreCleanupAccepted(args);
+    await assertLiveCounts(args);
     // Rendered up front so a column the desired schema lacks is refused
     // before the first statement below, not after some have run.
     const addStatements = addStatementsFor(args);

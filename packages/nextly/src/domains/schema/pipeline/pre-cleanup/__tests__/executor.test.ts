@@ -1,6 +1,6 @@
 // Unit tests for RealPreCleanupExecutor.
 
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 
 import type { NextlySchemaSnapshot, Operation } from "../../diff/types";
 import { PromptCancelledError } from "../../prompt-dispatcher/errors";
@@ -10,6 +10,27 @@ import {
   RealPreCleanupExecutor,
   withAddedColumnsLeftToTighten,
 } from "../executor";
+
+// The rows a change would break as the database holds them now, keyed `table.column` (`table.null`
+// for every row): 0 for anything a case does not set, so only the cases about a changed count see
+// one.
+const liveCounts = vi.hoisted(() => new Map<string, number>());
+vi.mock("../../classifier/count-helpers", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  countRowsBreakingNotNull: (
+    _db: unknown,
+    _dialect: unknown,
+    target: { table: string; column: string | null }
+  ) =>
+    Promise.resolve({
+      total: liveCounts.get(`${target.table}.${String(target.column)}`) ?? 0,
+      byParentTable: new Map(),
+    }),
+}));
+afterEach(() => {
+  liveCounts.clear();
+  vi.unstubAllEnvs();
+});
 
 const baseSnapshot: NextlySchemaSnapshot = {
   tables: [
@@ -252,6 +273,144 @@ describe("RealPreCleanupExecutor", () => {
         dialect: "postgresql",
       })
     ).resolves.toBeDefined();
+  });
+
+  // Rows can change while the prompt is open: the classifier's counts are from before it, so the
+  // threshold and the unique fill are judged again on the rows as they stand, before any statement.
+  it("delete_nonconforming: refuses past the threshold on the rows as they stand now", async () => {
+    vi.stubEnv("NEXTLY_DELETE_THRESHOLD", "5");
+    liveCounts.set("dc_users.email", 7);
+    const execute = vi.fn();
+    await expect(
+      new RealPreCleanupExecutor().execute({
+        tx: { execute },
+        desiredSnapshot: baseSnapshot,
+        resolutions: [
+          { kind: "delete_nonconforming", eventId: notNullEvent.id },
+        ],
+        events: [notNullEvent],
+        operations: [],
+        fields: [{ tableName: "dc_users", name: "email", type: "text" }],
+        dialect: "postgresql",
+      })
+    ).rejects.toThrow(/DELETE_THRESHOLD_EXCEEDED: 7 rows >= 5/);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("provide_default: refuses a unique fill on the rows as they stand now", async () => {
+    liveCounts.set("dc_users.handle", 2);
+    const execute = vi.fn();
+    await expect(
+      new RealPreCleanupExecutor().execute({
+        tx: { execute },
+        desiredSnapshot: baseSnapshot,
+        resolutions: [
+          {
+            kind: "provide_default",
+            eventId: addedOver("handle").id,
+            value: "same",
+          },
+        ],
+        // One null row when the change was classified.
+        events: [{ ...addedOver("handle"), nullCount: 1 }],
+        operations: [],
+        fields: [
+          { tableName: "dc_users", name: "handle", type: "text", unique: true },
+        ],
+        dialect: "postgresql",
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            code: "UNIQUE_FILL_WOULD_REPEAT",
+            message: expect.stringContaining("one value for its 2 rows"),
+          }),
+        ],
+      },
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  // What a fill must be, read from the desired schema: a table with no declared field (an
+  // extension's) has its column's type, and a unique index declared on the collection rather than
+  // the field is as unique as the field's own flag.
+  describe("a fill's column, as the desired schema declares it", () => {
+    const withExtension: NextlySchemaSnapshot = {
+      tables: [
+        ...baseSnapshot.tables,
+        {
+          name: "ext_items",
+          columns: [
+            { name: "id", type: "text", nullable: false },
+            { name: "qty", type: "integer", nullable: false },
+          ],
+        },
+      ],
+    };
+    const qtyEvent: ClassifierEvent = {
+      ...notNullEvent,
+      id: "add_not_null_with_nulls:ext_items.qty",
+      tableName: "ext_items",
+      columnName: "qty",
+    };
+
+    it("judges an extension column's fill by the column's type", () => {
+      expect(() =>
+        assertPreCleanupAccepted({
+          resolutions: [
+            { kind: "provide_default", eventId: qtyEvent.id, value: "many" },
+          ],
+          events: [qtyEvent],
+          fields: [],
+          desiredSnapshot: withExtension,
+          dialect: "postgresql",
+        })
+      ).toThrow(/INVALID_DEFAULT_FOR_TYPE: qty \(number\)/);
+    });
+
+    it("counts a unique index declared on the collection as the column's uniqueness", () => {
+      const indexed: NextlySchemaSnapshot = {
+        tables: [
+          {
+            ...baseSnapshot.tables[0],
+            columns: [
+              ...baseSnapshot.tables[0].columns,
+              { name: "handle", type: "text", nullable: false },
+            ],
+            indexes: [
+              {
+                name: "dc_users_handle_unique",
+                columns: ["handle"],
+                unique: true,
+              },
+            ],
+          },
+        ],
+      };
+      let refusal: unknown;
+      try {
+        assertPreCleanupAccepted({
+          resolutions: [
+            {
+              kind: "provide_default",
+              eventId: addedOver("handle").id,
+              value: "same",
+            },
+          ],
+          events: [addedOver("handle")],
+          fields: [{ tableName: "dc_users", name: "handle", type: "text" }],
+          desiredSnapshot: indexed,
+          dialect: "postgresql",
+        });
+      } catch (thrown) {
+        refusal = thrown;
+      }
+      expect(
+        (refusal as { publicData?: { errors: { message: string }[] } })
+          ?.publicData?.errors[0]?.message
+      ).toContain("is unique, so one value for its 3 rows would repeat");
+    });
   });
 
   it("delete_nonconforming: runs DELETE", async () => {
@@ -590,6 +749,7 @@ describe("RealPreCleanupExecutor", () => {
           resolutions,
           events: [addedEvent],
           fields: [{ tableName: "dc_users", name: "nickname", type: "text" }],
+          desiredSnapshot: addedSnapshot,
           dialect: "postgresql",
         })
       ).toThrow();
