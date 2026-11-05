@@ -40,13 +40,56 @@ const EVENT_TYPE_MAX_LENGTH = 100;
 const CORE_TYPES: ReadonlySet<string> = new Set(WEBHOOK_EVENT_TYPES);
 
 /**
- * Every enabled plugin's declared webhook event types, checked.
- *
- * Refuses, naming the plugin and the type: a type outside the plugin's own
- * namespace (`<admin slug>.`), one of core's, one the plugin declares twice,
- * and one that is malformed. A disabled plugin is skipped, as the other
- * declarations are: it runs nothing, so it has nothing to deliver and nothing
- * to refuse.
+ * Refuse one declared type, naming the plugin and the type: malformed, one of
+ * core's, outside the plugin's own namespace (`<admin slug>.`), or one the
+ * plugin already declared (`seen`).
+ */
+function assertDeclarableEventType(
+  pluginName: string,
+  type: unknown,
+  seen: ReadonlySet<string>
+): asserts type is string {
+  const context = { plugin: pluginName, type };
+  if (
+    typeof type !== "string" ||
+    type.length > EVENT_TYPE_MAX_LENGTH ||
+    !EVENT_TYPE_SHAPE.test(type)
+  ) {
+    throw resolutionError(
+      "plugin-webhook-event-malformed",
+      `Plugin "${pluginName}" declares the webhook event type "${String(type)}", which must be lower-case segments separated by dots, at most ${EVENT_TYPE_MAX_LENGTH} characters.`,
+      context
+    );
+  }
+  if (CORE_TYPES.has(type)) {
+    throw resolutionError(
+      "plugin-webhook-event-core",
+      `Plugin "${pluginName}" declares the webhook event type "${type}", which is one of core's.`,
+      context
+    );
+  }
+  if (!isInPluginNamespace(pluginName, type)) {
+    const prefix = `${pluginAdminSlug(pluginName)}.`;
+    throw resolutionError(
+      "plugin-webhook-event-outside-namespace",
+      `Plugin "${pluginName}" declares the webhook event type "${type}", which must start with "${prefix}".`,
+      { ...context, expectedPrefix: prefix }
+    );
+  }
+  if (seen.has(type)) {
+    throw resolutionError(
+      "plugin-webhook-event-duplicate",
+      `Plugin "${pluginName}" declares the webhook event type "${type}" more than once.`,
+      context
+    );
+  }
+}
+
+/**
+ * Every enabled plugin's declared webhook event types, each checked by
+ * {@link assertDeclarableEventType}. A disabled plugin is skipped, as the
+ * other declarations are: it runs nothing, so it has nothing to deliver and
+ * nothing to refuse.
  */
 export function collectPluginWebhookEventTypes(
   plugins: readonly PluginDefinition[]
@@ -56,44 +99,10 @@ export function collectPluginWebhookEventTypes(
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
     for (const declared of plugin.contributes?.webhookEvents ?? []) {
-      const type = declared.type;
-      const context = { plugin: plugin.name, type };
-      if (
-        typeof type !== "string" ||
-        type.length > EVENT_TYPE_MAX_LENGTH ||
-        !EVENT_TYPE_SHAPE.test(type)
-      ) {
-        throw resolutionError(
-          "plugin-webhook-event-malformed",
-          `Plugin "${plugin.name}" declares the webhook event type "${String(type)}", which must be lower-case segments separated by dots, at most ${EVENT_TYPE_MAX_LENGTH} characters.`,
-          context
-        );
-      }
-      if (CORE_TYPES.has(type)) {
-        throw resolutionError(
-          "plugin-webhook-event-core",
-          `Plugin "${plugin.name}" declares the webhook event type "${type}", which is one of core's.`,
-          context
-        );
-      }
-      if (!isInPluginNamespace(plugin.name, type)) {
-        const prefix = `${pluginAdminSlug(plugin.name)}.`;
-        throw resolutionError(
-          "plugin-webhook-event-outside-namespace",
-          `Plugin "${plugin.name}" declares the webhook event type "${type}", which must start with "${prefix}".`,
-          { ...context, expectedPrefix: prefix }
-        );
-      }
-      if (seen.has(type)) {
-        throw resolutionError(
-          "plugin-webhook-event-duplicate",
-          `Plugin "${plugin.name}" declares the webhook event type "${type}" more than once.`,
-          context
-        );
-      }
-      seen.add(type);
+      assertDeclarableEventType(plugin.name, declared.type, seen);
+      seen.add(declared.type);
       collected.push({
-        type,
+        type: declared.type,
         owner: plugin.name,
         ...(declared.label === undefined ? {} : { label: declared.label }),
         ...(declared.description === undefined
