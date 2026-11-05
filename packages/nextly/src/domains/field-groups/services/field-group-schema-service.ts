@@ -73,7 +73,9 @@ import {
   componentRelationIsSingleReference,
   componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
+  getComponentRowColumnDescriptor,
   usesJunctionTable,
+  type ColumnDescriptor,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
@@ -86,6 +88,7 @@ import {
 } from "../../schema/services/plugin-codegen";
 import {
   addContributedDrizzleColumns,
+  buildUserDrizzleColumn,
   contributedColumnsFor,
   contributedSqliteChecks,
   sqliteTimestampColumns,
@@ -493,13 +496,7 @@ export class FieldGroupSchemaService {
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "postgresql");
+    this.addFieldColumns(columns, fields, contributed);
 
     // Required by Drizzle: pgTable() is generic over the column shape, and
     // our columns map is dynamic (Record<string, unknown>). The index
@@ -542,13 +539,7 @@ export class FieldGroupSchemaService {
       updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToMySQLColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "mysql");
+    this.addFieldColumns(columns, fields, contributed);
 
     return mysqlTable(
       tableName,
@@ -578,13 +569,7 @@ export class FieldGroupSchemaService {
       ...sqliteTimestampColumns(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToSQLiteColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "sqlite");
+    this.addFieldColumns(columns, fields, contributed);
 
     return sqliteTable(
       tableName,
@@ -805,9 +790,60 @@ export class FieldGroupSchemaService {
     };
   }
 
+  /**
+   * The canonical descriptor's column for a field type this service does not map itself, or null
+   * for a type it still maps below.
+   *
+   * An icon's column is read from the descriptor for the SQL and the Drizzle table alike, so a
+   * field group's icon column is the column the desired schema and the diff compare against on
+   * every dialect: `text` on PostgreSQL and SQLite, `varchar(255)` on MySQL.
+   */
+  private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
+    if (!isIconField(field) || !field.name) return null;
+    return getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup");
+  }
+
+  /**
+   * Adds each field's runtime column to a table's columns, keyed by the field's name, and then the
+   * columns a schema hook contributed, the same way for every dialect.
+   */
+  private addFieldColumns(
+    columns: Record<string, unknown>,
+    fields: FieldConfig[],
+    contributed: readonly ExtensionColumn[]
+  ): void {
+    for (const field of this.columnFields(fields)) {
+      const column = this.drizzleColumnFor(field);
+      if (column) {
+        columns[field.name] = column;
+      }
+    }
+    addContributedDrizzleColumns(columns, contributed, this.dialect);
+  }
+
+  /**
+   * A field's runtime Drizzle column: built from the descriptor where it names the column, and by
+   * this dialect's own mapper otherwise, so the runtime table and the CREATE read one answer.
+   */
+  private drizzleColumnFor(field: DataFieldConfig): unknown {
+    const mappable = this.asMappableField(field);
+    const canonical = this.canonicalColumn(mappable);
+    if (canonical) return buildUserDrizzleColumn(canonical, this.dialect);
+    switch (this.dialect) {
+      case "postgresql":
+        return this.mapFieldToPostgresColumn(mappable);
+      case "mysql":
+        return this.mapFieldToMySQLColumn(mappable);
+      case "sqlite":
+        return this.mapFieldToSQLiteColumn(mappable);
+    }
+  }
+
   private getColumnType(field: DataFieldConfig): string | null {
     const types = SQL_COLUMN_TYPES[this.dialect];
 
+    const canonical = this.canonicalColumn(field);
+    if (canonical) return canonical.dialectType;
     if (isTextField(field)) {
       return field.maxLength ? types.varchar(field.maxLength) : types.text;
     }
@@ -818,8 +854,7 @@ export class FieldGroupSchemaService {
     ) {
       return types.text;
     }
-    // An icon id ("lucide:star") is a short string, sized like an email.
-    if (isEmailField(field) || isIconField(field)) {
+    if (isEmailField(field)) {
       return types.varchar(255);
     }
     if (isPasswordField(field)) {
@@ -869,12 +904,7 @@ export class FieldGroupSchemaService {
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
-    if (
-      isTextField(field) ||
-      isEmailField(field) ||
-      isIconField(field) ||
-      isPasswordField(field)
-    ) {
+    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
     if (
@@ -921,12 +951,7 @@ export class FieldGroupSchemaService {
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
-    if (
-      isTextField(field) ||
-      isEmailField(field) ||
-      isIconField(field) ||
-      isPasswordField(field)
-    ) {
+    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
       return isRequired
         ? mysqlVarchar(colName, { length: 255 }).notNull()
         : mysqlVarchar(colName, { length: 255 });
@@ -984,7 +1009,6 @@ export class FieldGroupSchemaService {
     if (
       isTextField(field) ||
       isEmailField(field) ||
-      isIconField(field) ||
       isPasswordField(field) ||
       isTextareaField(field) ||
       isRichTextField(field) ||

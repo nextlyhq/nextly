@@ -137,7 +137,10 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
   email: [{ label: "plain", field: { type: "email" } }],
   password: [{ label: "plain", field: { type: "password" } }],
   code: [{ label: "plain", field: { type: "code" } }],
-  icon: [{ label: "plain", field: { type: "icon" } }],
+  icon: [
+    { label: "plain", field: { type: "icon" } },
+    { label: "required", field: { type: "icon", required: true } },
+  ],
   number: [
     { label: "integer", field: { type: "number" } },
     // `dbType` is how a number states it wants exact fixed-point storage, which is what a money
@@ -449,7 +452,7 @@ const ACCEPTED = byAspect([
     { origins: ["fieldGroup"], dialects: ["postgresql"] }
   ),
   ...everywhere(
-    ["email", "icon", "password"],
+    ["email", "password"],
     ["plain"],
     "type",
     "field-group generator bounds the column at varchar(255); descriptor leaves it unbounded text",
