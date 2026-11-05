@@ -179,9 +179,10 @@ describe("the canvas's right-click menu", () => {
 
     // The control: an empty model would make the comparison vacuous.
     expect(expected.length).toBeGreaterThan(1);
+    // Each item's label, its first line: a dimmed item says why beneath it.
     const labels = screen
       .getAllByRole("menuitem")
-      .map(item => item.textContent);
+      .map(item => item.querySelector("span")?.textContent);
     expect(labels).toEqual(expected);
   });
 
@@ -444,8 +445,11 @@ describe("the canvas's right-click menu", () => {
     const { container } = mount(editorSpy(pair(), "a"));
     fireEvent.contextMenu(blockElement(container));
     for (const name of ["Move in", "Move out"]) {
+      // By its start: a dimmed item's name goes on to say why.
       expect(
-        screen.getByRole("menuitem", { name }).getAttribute("data-disabled")
+        screen
+          .getByRole("menuitem", { name: new RegExp(`^${name}`) })
+          .getAttribute("data-disabled")
       ).not.toBeNull();
     }
   });
@@ -483,7 +487,7 @@ describe("the canvas's right-click menu", () => {
     fireEvent.contextMenu(blockElement(container));
     expect(
       screen
-        .getByRole("menuitem", { name: "Move in" })
+        .getByRole("menuitem", { name: /^Move in/ })
         .getAttribute("data-disabled")
     ).not.toBeNull();
   });

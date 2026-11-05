@@ -40,6 +40,8 @@ import * as React from "react";
 import { commitOnEnter } from "./commit-on-enter";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue } from "./inherited-value";
+import { commitRawCss } from "./raw-css";
+import { SectionHeld } from "./section-held";
 import type { AlignmentGroup } from "./style-alignment-icons";
 import { keywordLabel } from "./style-keyword-labels";
 
@@ -189,10 +191,14 @@ export function DecorationField({
   // so a line changed here keeps the style, thickness and colour it showed.
   const parts = useQueuedParts(
     typeof stored === "string" ? stored : undefined,
-    own ?? inheritedParts
+    own ?? inheritedParts,
+    describedBy !== undefined
   );
   // A part changed keeps the others: a line changed keeps its style.
   const write = (next: Partial<DecorationParts>) => parts.write(next, onCommit);
+  // The popover is mounted outside the section's fieldset, so a section held
+  // while it is open reaches its controls through this instead.
+  const held = React.useContext(SectionHeld);
   return (
     <div className="nx-style-inspector__decoration">
       {/* The icons mark the inherited line, not the whole shorthand. */}
@@ -201,7 +207,9 @@ export function DecorationField({
           id={id}
           labelledBy={labelledBy}
           group={LINE_GROUP}
-          stored={own?.line}
+          // The line just chosen while its write is on its way, so pressing
+          // it again clears it; otherwise the line set here.
+          stored={parts.pending ? parts.current?.line : own?.line}
           actionName={actionName}
           describedBy={describedBy}
           onCommit={line =>
@@ -232,11 +240,13 @@ export function DecorationField({
             parts={parts.current}
             write={write}
             describedBy={describedBy}
+            held={held}
           >
             <DecorationCss
               stored={typeof stored === "string" ? stored : undefined}
               actionName={actionName}
               describedBy={describedBy}
+              held={held}
               onCommit={value => parts.writeCss(value, onCommit)}
             />
           </DecorationStyle>
@@ -252,13 +262,16 @@ export function DecorationField({
  * that sent it, so a second part changed meanwhile would otherwise start from
  * the old value and undo the first. The queue follows the stored value: each
  * written value arriving is dropped from it, and any other change (an undo,
- * another author) or a refused write empties it.
+ * another author) or a refused write, at once or later, empties it.
  */
 function useQueuedParts(
   stored: string | undefined,
-  base: DecorationParts | undefined
+  base: DecorationParts | undefined,
+  refused: boolean
 ): {
   current: DecorationParts | undefined;
+  /** Whether a written value has yet to come back as the stored one. */
+  pending: boolean;
   write: (
     next: Partial<DecorationParts>,
     onCommit: (value: StyleValue | null) => CommitOutcome
@@ -276,6 +289,10 @@ function useQueuedParts(
     const arrived = queue.current.findIndex(entry => entry.value === stored);
     queue.current = arrived === -1 ? [] : queue.current.slice(arrived + 1);
   }
+  // A refusal that arrives after the write (a shared style's) leaves the
+  // stored value as it was: what was queued will not arrive, so the queue
+  // empties and the controls show what the document holds.
+  if (refused) queue.current = [];
   const current = queue.current.at(-1)?.parts ?? base;
   /** Sends a value, queued as its parts when they can be read from it. */
   const send = (
@@ -307,7 +324,7 @@ function useQueuedParts(
     onCommit: (value: StyleValue | null) => CommitOutcome
   ): CommitOutcome =>
     send(value, value === null ? undefined : parseDecoration(value), onCommit);
-  return { current, write, writeCss };
+  return { current, pending: queue.current.length > 0, write, writeCss };
 }
 
 /**
@@ -349,16 +366,19 @@ function DecorationStyle({
   parts,
   write,
   describedBy,
+  held,
   children,
 }: {
   parts: DecorationParts | undefined;
   write: (next: Partial<DecorationParts>) => CommitOutcome;
   describedBy: string | undefined;
+  /** Whether the section is held read-only. */
+  held: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   const [thickness, setThickness] = useDraft(parts?.thickness);
   const [color, setColor] = useDraft(parts?.color);
-  const disabled = parts === undefined || parts.line === "none";
+  const disabled = held || parts === undefined || parts.line === "none";
   const refusal = {
     "aria-describedby": describedBy,
     "aria-invalid": describedBy === undefined ? undefined : true,
@@ -438,18 +458,18 @@ function DecorationCss({
   stored,
   actionName,
   describedBy,
+  held,
   onCommit,
 }: {
   stored: string | undefined;
   actionName: string;
   describedBy: string | undefined;
+  held: boolean;
   onCommit: (value: string | null) => CommitOutcome;
 }): React.JSX.Element {
   const [text, setText] = useDraft(stored);
   const commit = () => {
-    const written = text.trim();
-    if (written === (stored ?? "")) return;
-    onCommit(written === "" ? null : written);
+    commitRawCss(text, stored, onCommit);
   };
   return (
     <label className="nx-style-inspector__decoration-part">
@@ -458,6 +478,7 @@ function DecorationCss({
         aria-label={`${actionName} as CSS`}
         aria-describedby={describedBy}
         aria-invalid={describedBy === undefined ? undefined : true}
+        disabled={held}
         placeholder="underline overline"
         value={text}
         onChange={event => setText(event.target.value)}

@@ -72,6 +72,8 @@ export interface PublishOfferInput {
   readonly documents: () => readonly unknown[];
   /** The Layout the page names, or null. */
   readonly layout: string | null;
+  /** Whether the page is drawn inside the site's default Layout instead. */
+  readonly siteDefault?: boolean;
   readonly subject: PublishSubject;
   /**
    * Whether this surface asks. False for every blocks field of a form but
@@ -101,9 +103,14 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
 
   useBeforeDocumentAction(async (action, store) => {
     if (!PUBLISHING_ACTIONS.has(action)) return;
-    const { documents, layout, subject, enabled } = latest.current;
+    const { documents, layout, siteDefault, subject, enabled } = latest.current;
     if (enabled === false) return;
-    const readiness = await askReadiness({ documents: documents(), layout });
+    const readiness = await askReadiness({
+      documents: documents(),
+      layout,
+      // Sent only when it applies, so a request names what it asks about.
+      ...(siteDefault === true ? { siteDefault } : {}),
+    });
     if (
       readiness === null ||
       (readiness.dependencies.length === 0 && readiness.missing === 0)
@@ -230,6 +237,7 @@ export function useFormPublishOffer(input: {
   readonly name: string;
   readonly value: () => unknown;
   readonly layout: string | null;
+  readonly siteDefault?: boolean;
   readonly subject: PublishSubject;
 }): JSX.Element {
   const fields = fieldsOf(input.form);
@@ -258,6 +266,9 @@ export function useFormPublishOffer(input: {
   return usePublishOffer({
     documents: () => [...fields.values.values()].map(read => read()),
     layout: input.layout,
+    ...(input.siteDefault === undefined
+      ? {}
+      : { siteDefault: input.siteDefault }),
     subject: input.subject,
     enabled: asking,
   });

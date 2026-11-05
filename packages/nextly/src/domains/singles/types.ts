@@ -288,6 +288,15 @@ export interface PublishAllSingleLocalesOptions {
    * by callers that own their cache strategy — a CLI, seed, or bulk import.
    */
   disableRevalidate?: boolean;
+
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   *
+   * @experimental
+   */
+  data?: Readonly<Record<string, unknown>>;
 }
 
 /**

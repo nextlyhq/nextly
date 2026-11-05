@@ -198,7 +198,8 @@ const CASES: readonly Case[] = [
     props: { src: "/example.jpg", alt: "An example image" },
     edit: {
       kind: "type",
-      label: "Alt text",
+      // The image stores its own alt text, so the field is the Custom one.
+      label: "Custom alt text",
       prop: "alt",
       value: "An edited description",
       stored: "An edited description",

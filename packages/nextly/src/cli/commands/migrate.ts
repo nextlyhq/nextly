@@ -60,7 +60,15 @@ import {
   appliedChecksums,
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
+import {
+  consentToCover,
+  describeDeletion,
+  resolveDataLossConsent,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
 import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
   assertNotPartiallyApplied,
@@ -68,6 +76,11 @@ import {
   reconcileFile,
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
+import {
+  readDeletionFacts,
+  runDeletions,
+  runStatements,
+} from "../../domains/schema/migrate/file-deletions";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -77,20 +90,27 @@ import {
   assertPluginHistories,
   assertPluginListsSound,
 } from "../../domains/schema/migrate/plugin/plugin-history";
+import { pluginModuleStatements } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   appliedPluginShas,
+  pendingPluginModules,
   pluginMigrationArgs,
   previewPluginMigrations,
   runPluginMigrations,
   type PluginMigrationRunResult,
   type PluginMigrationSet,
+  type PluginModulePreview,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import {
   findRegistryDisagreements,
   registryDisagreementLines,
 } from "../../domains/schema/migrate/registry-consistency";
+import {
+  previewRequiredColumns,
+  refuseRequiredColumnsOverNulls,
+} from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
@@ -130,6 +150,7 @@ import type {
   ContributedElements,
   NextlySchemaSnapshot,
 } from "../../domains/schema/pipeline/diff/types";
+import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import {
   forceUnlock,
   withMigrateLock,
@@ -148,10 +169,19 @@ import {
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
+import { loadConfig } from "../utils/config-loader";
 import {
-  requireDatabaseEnv,
-  loadConfigOrExit,
-} from "../utils/command-prerequisites";
+  askToDeleteInTerminal,
+  deletionSource,
+  eventTriggerNotice,
+  judgeRunDeletions,
+  textDigest,
+  type Agreement,
+  type DeletionSource,
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   builderMigrationRemedy,
@@ -217,6 +247,14 @@ export interface MigrateCommandOptions {
    * @default false
    */
   repairLocalization?: boolean;
+
+  /**
+   * Consent to the data a migration file deletes: alone, every deletion of
+   * the run; with tables and `table.column` pairs, only those
+   * (`--accept-data-loss=posts,pages.summary`). Same as
+   * `NEXTLY_ACCEPT_DATA_LOSS`.
+   */
+  acceptDataLoss?: AcceptDataLossOption;
 }
 
 /**
@@ -227,6 +265,13 @@ interface ResolvedMigrateOptions extends MigrateCommandOptions {
   verbose?: boolean;
   quiet?: boolean;
   cwd?: string;
+  /**
+   * Throw a failure instead of ending the process with it, for a command that
+   * runs `nextly migrate` inside work of its own: `migrate:fresh` holds the
+   * schema lock around it and must release the lock before it exits. The
+   * caller ends the command with the error, through `exitWithError`.
+   */
+  throwOnFailure?: boolean;
 }
 
 /**
@@ -289,22 +334,40 @@ export async function runMigrate(
 
   logger.header("Migrate");
 
+  // Every failure below ends here: the command's exit, or with
+  // `throwOnFailure` a throw its caller ends the command with.
+  // Annotated so the checker reads a call to it as ending the path.
+  const fail: (error: unknown, status?: 1 | 2) => never = (
+    error,
+    status = 1
+  ) => {
+    if (options.throwOnFailure === true) throw error;
+    return exitWithError(logger, error, status);
+  };
+
   logger.debug("Validating database environment...");
-  const dbValidation = requireDatabaseEnv(logger);
+  let dbValidation: ReturnType<typeof databaseEnvOrThrow>;
+  try {
+    dbValidation = databaseEnvOrThrow();
+  } catch (error) {
+    fail(error);
+  }
 
   const dialect = dbValidation.dialect;
   logger.debug(`Database dialect: ${dialect}`);
 
   logger.info("Loading configuration...");
 
-  const configResult = await loadConfigOrExit(
-    {
+  let configResult: Awaited<ReturnType<typeof loadConfig>>;
+  try {
+    configResult = await loadConfig({
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    },
-    logger
-  );
+    });
+  } catch (error) {
+    fail(error);
+  }
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -330,7 +393,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    exitWithError(logger, error);
+    fail(error);
   }
 
   installRegistryResolver(adapter as unknown as DrizzleAdapter);
@@ -429,6 +492,7 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
+        ...commandLineConsent(options, logger),
         // A file the Builder wrote with no snapshot is replaced by the one
         // `migrate:create` writes, never applied as written here.
         refuseBuilderFilesWithoutSnapshot: true,
@@ -482,7 +546,7 @@ export async function runMigrate(
           : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
-      exitWithError(logger, err, migrateExitCode(err));
+      fail(err, migrateExitCode(err));
     }
 
     // Localization companions, once the schema is in step.
@@ -544,7 +608,7 @@ export async function runMigrate(
         }
       }
     } catch (err) {
-      exitWithError(logger, err);
+      fail(err);
     }
 
     // Read-only, once the run has done its own work: name every registry row
@@ -685,6 +749,12 @@ export interface MigrateCoreDeps {
    * for tests; the default reads the ledger (`appliedPluginModules`).
    */
   appliedPluginModulesFn?: () => Promise<ReadonlyMap<string, string | null>>;
+  /**
+   * The database's enabled DDL event triggers, named beside the deletions a
+   * run asks consent for (`eventTriggerNotice`). Injected for tests; the
+   * default reads the catalog (`readDdlEventTriggers`).
+   */
+  readEventTriggersFn?: () => Promise<readonly string[]>;
   dialect: SupportedDialect;
   db: unknown;
   adapter: CLIDatabaseAdapter;
@@ -726,6 +796,15 @@ export interface MigrateCoreDeps {
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
   runFileMigrationsFn?: typeof runFileMigrations;
+  /**
+   * The consent to the data the run's files delete (`judgeFileDeletions`).
+   * Absent, it is read from the environment alone, as a boot reads it.
+   */
+  consent?: DataLossConsent;
+  /** Whether a person is at a terminal to be asked; absent reads as no. */
+  interactive?: boolean;
+  /** Asks that person a yes-or-no question; only called when `interactive`. */
+  askToDelete?: (question: string) => Promise<boolean>;
   /** The unresolved-attempt refusal; injected for tests (`refuseUnresolvedAppAttempts`). */
   refuseUnresolvedAttemptsFn?: typeof refuseUnresolvedAppAttempts;
   /** The applied-file checksum check; injected for tests (`assertAppliedFilesUnchanged`). */
@@ -826,6 +905,8 @@ export async function previewMigrate(args: {
   plugins: Parameters<typeof pluginMigrationArgs>[0];
   step?: number;
   logger: CommandContext["logger"];
+  /** As `MigrateCoreDeps.readEventTriggersFn`. */
+  readEventTriggers?: () => Promise<readonly string[]>;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
   const hasLedger = await (
@@ -878,6 +959,51 @@ export async function previewMigrate(args: {
     "Pending",
     formatCount(pendingModules.length + pendingFiles.length, "migration")
   );
+  // The modules a real run applies, then its files, judged as that run's
+  // consent judges them: one run, modules first (`judgeFileDeletions`).
+  const moduleRuns = pluginModuleUnits(
+    pluginMigrationSets,
+    appliedPluginShas(rows),
+    args.step,
+    dialect
+  );
+  const judged = await pendingRunDeletions(
+    [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
+    db,
+    dialect
+  );
+  const moduleDeletions = new Map(
+    judged
+      .slice(0, moduleRuns.length)
+      .map(({ unit, deletions }) => [unit.label, deletions])
+  );
+  previewModules(modules, moduleDeletions, logger);
+  await previewFiles(
+    judged.slice(moduleRuns.length).map(({ deletions }) => deletions),
+    pendingFiles,
+    args,
+    logger,
+    pendingModules.length > 0
+  );
+  await previewBeyondStep(
+    allPendingFiles,
+    pendingFiles,
+    args.migrationsDir,
+    logger
+  );
+  if (hasLedger) await previewChangedFiles(rows, args, logger);
+  if (pendingModules.length + pendingFiles.length > 0) {
+    await previewEventTriggers(args, logger);
+  }
+  await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/** Each plugin module a real run reaches, with what it would refuse and what it deletes. */
+function previewModules(
+  modules: readonly PluginModulePreview[],
+  deletions: ReadonlyMap<string, readonly Deletion[]>,
+  logger: CommandContext["logger"]
+): void {
   for (const module of modules) {
     logger.info(
       `  • ${module.filename}${module.recorded ? " (applied)" : ""}${module.transaction ? "" : " (runs outside a transaction)"}`
@@ -885,47 +1011,107 @@ export async function previewMigrate(args: {
     for (const refusal of module.refusals) {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
+    previewDeletions(deletions.get(module.filename) ?? [], logger);
   }
-  for (const m of pendingFiles) {
-    previewPendingFile(m, dialect, logger);
+}
+
+/**
+ * Each pending app file within the step, with what it deletes (`deletions`,
+ * in the same order), the required columns a real run would refuse it over,
+ * and a Builder file's refusal. `modulesFirst`: plugin modules run before
+ * the files, so even the first file is not the first migration applied.
+ */
+async function previewFiles(
+  deletions: readonly (readonly Deletion[])[],
+  pendingFiles: readonly ParsedMigration[],
+  args: { db: unknown; dialect: SupportedDialect; migrationsDir: string },
+  logger: CommandContext["logger"],
+  modulesFirst: boolean
+): Promise<void> {
+  for (const [at, m] of pendingFiles.entries()) {
+    previewPendingFile(m, deletions[at] ?? [], args.dialect, logger);
+    // The required columns a real run would refuse it over, from the same count: only for the
+    // first migration the run applies, since nothing before a later one is run here.
+    await previewRequiredColumns(
+      args.db,
+      args.dialect,
+      m,
+      logger,
+      at > 0 || modulesFirst
+    );
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
   }
-  // A real run refuses a snapshotless Builder file among ALL its pending files
-  // before it applies any, whatever `--step` allows, so one the step leaves
-  // out of the preview is named too.
+}
+
+/**
+ * A real run refuses a snapshotless Builder file among ALL its pending files
+ * before it applies any, whatever `--step` allows, so one the step leaves
+ * out of the preview is named too.
+ */
+async function previewBeyondStep(
+  allPendingFiles: readonly ParsedMigration[],
+  pendingFiles: readonly ParsedMigration[],
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): Promise<void> {
   const previewed = new Set(pendingFiles.map(m => m.name));
   for (const m of allPendingFiles) {
     if (previewed.has(m.name)) continue;
-    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
+    if (await isRefusedWithoutSnapshot(m, migrationsDir)) {
       logger.info(
         `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
   }
-  // An applied file edited since it ran stops a real run before it applies
-  // anything (`assertAppliedFilesUnchanged`), so the preview names it.
-  if (hasLedger) {
-    const files = await discoverMigrations(
-      args.migrationsDir,
-      logger,
-      dialect,
-      "app"
+}
+
+/**
+ * An applied file edited since it ran stops a real run before it applies
+ * anything (`assertAppliedFilesUnchanged`), so the preview names it.
+ */
+async function previewChangedFiles(
+  rows: Parameters<typeof appliedChecksums>[1],
+  args: { dialect: SupportedDialect; migrationsDir: string },
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const files = await discoverMigrations(
+    args.migrationsDir,
+    logger,
+    args.dialect,
+    "app"
+  );
+  const { changed } = appliedChecksums(
+    files.map(m => ({ filename: `${m.name}.sql`, checksum: m.checksum })),
+    rows
+  );
+  for (const filename of changed) {
+    logger.info(
+      `  ✖ a real run would refuse before applying anything: \`${filename}\` has changed since it was applied (exit code 2). Restore it, or accept the edit with \`nextly migrate:resolve --applied ${filename}\`.`
     );
-    const { changed } = appliedChecksums(
-      files.map(m => ({ filename: `${m.name}.sql`, checksum: m.checksum })),
-      rows
-    );
-    for (const filename of changed) {
-      logger.info(
-        `  ✖ a real run would refuse before applying anything: \`${filename}\` has changed since it was applied (exit code 2). Restore it, or accept the edit with \`nextly migrate:resolve --applied ${filename}\`.`
-      );
-    }
   }
-  await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/** The database's DDL event triggers, named as a real run names them beside its deletions (`eventTriggerNotice`). */
+async function previewEventTriggers(
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    readEventTriggers?: () => Promise<readonly string[]>;
+  },
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const notice = await eventTriggerNotice(
+    eventTriggersOf({
+      readEventTriggersFn: args.readEventTriggers,
+      db: args.db,
+      dialect: args.dialect,
+    })
+  );
+  if (notice !== undefined) logger.info(`  ⚠ ${notice}`);
 }
 
 /**
@@ -970,26 +1156,41 @@ export async function previewRetiredImageSizes(
  * One pending file as `migrate --dry-run` lists it: its name, whether it runs
  * outside a transaction, each refusal a real run would make, from the same
  * check, so the preview and the run cannot disagree, and the SQL it would run,
- * as `migrate:down --dry-run` prints the SQL a rollback would run.
+ * as `migrate:down --dry-run` prints the SQL a rollback would run. A file
+ * that deletes data is listed with each deletion, read as a real run reads
+ * it (`pendingRunDeletions`), and the consent that run needs.
  */
 function previewPendingFile(
   m: ParsedMigration,
+  deletions: readonly Deletion[],
   dialect: SupportedDialect,
   logger: CommandContext["logger"]
 ): void {
   logger.info(
     `  • ${m.name}.sql${m.transaction ? "" : " (runs outside a transaction)"}`
   );
-  for (const refusal of statementRefusals(
-    splitSqlStatements(m.upSql, dialect, m),
-    dialect,
-    { transaction: m.transaction, unit: "file" }
-  )) {
+  const statements = splitSqlStatements(m.upSql, dialect, m);
+  for (const refusal of statementRefusals(statements, dialect, {
+    transaction: m.transaction,
+    unit: "file",
+  })) {
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
+  previewDeletions(deletions, logger);
   // The file's own UP section. A run that finds the schema already at the file's target adopts it
   // without running these, and one that finds it at neither end refuses it for drift.
   logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
+}
+
+/** A unit's deletions as the dry run lists them, with the consent a real run needs; nothing when none. */
+function previewDeletions(
+  deletions: readonly Deletion[],
+  logger: Pick<CommandContext["logger"], "info">
+): void {
+  if (deletions.length === 0) return;
+  logger.info(
+    `    ⚠ deletes data: ${deletions.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletions)}.`
+  );
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
@@ -1326,6 +1527,10 @@ export async function runPluginPhase(
       readLiveTables(deps.db, deps.dialect, [statements]),
     liveIndexTables: statements =>
       readLiveIndexTables(deps.db, deps.dialect, [statements]),
+    // The same before-run count an app file gets: a plugin's module reaches the shared runner
+    // through this phase, not through `runFileMigrations`.
+    refuseRequiredColumns: (statements, source) =>
+      refuseRequiredColumnsOverNulls(deps.db, deps.dialect, statements, source),
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single
@@ -1601,7 +1806,8 @@ function appStepAfter(
  */
 async function runMigrationStreams(
   deps: MigrateCoreDeps,
-  runFiles: typeof runFileMigrations
+  runFiles: typeof runFileMigrations,
+  judged: ReadonlyMap<string, string>
 ): Promise<{ pluginModulesApplied: number; applied: number }> {
   const pluginOutcome = await runPluginPhase(deps);
   const pluginModulesApplied = pluginOutcome.applied + pluginOutcome.adopted;
@@ -1621,6 +1827,7 @@ async function runMigrationStreams(
     step: appStep,
     logger: deps.logger,
     knownJunctions: deps.knownJunctions,
+    judged,
   });
   return { pluginModulesApplied, applied };
 }
@@ -1655,6 +1862,10 @@ export async function migrateCore(
   if (deps.refuseBuilderFilesWithoutSnapshot === true) {
     await assertNoBuilderFilesWithoutSnapshot(deps);
   }
+  // Before the lock as well, so a person is asked without other runs waiting
+  // on them; judged again under the lock, below, against the database as it
+  // stands then, accepting only what was agreed here.
+  const { agreement: agreedDeletions } = await judgeFileDeletions(deps);
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1688,6 +1899,13 @@ export async function migrateCore(
         ...deps,
         command: deps.lockCommand ?? "nextly migrate",
       });
+      // A file that deletes data runs only with consent covering each
+      // deletion, judged from the database this run holds the lock on. The
+      // files run only as they were judged here (`assertRunsAsJudged`).
+      const { files: judgedFiles } = await judgeFileDeletions(
+        deps,
+        agreedDeletions
+      );
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -1777,7 +1995,8 @@ export async function migrateCore(
       await recordAppTableOwners(deps);
       ({ pluginModulesApplied, applied } = await runMigrationStreams(
         deps,
-        runFiles
+        runFiles,
+        judgedFiles
       ));
 
       // Element rows for contributed elements: written AFTER every stream has
@@ -1906,6 +2125,206 @@ export async function refuseUnresolvedAppAttempts(args: {
     dialect: args.dialect,
     readLive: statements => readLiveSchema(args.db, args.dialect, statements),
     command: args.command,
+  });
+}
+
+/**
+ * Refuses, before the run changes anything, an app migration file it would
+ * apply that deletes data (`pendingRunDeletions`, read from the files'
+ * statements for this dialect, never from a header, each file against the
+ * schema as the files before it leave it) unless the consent covers every
+ * deletion in it, naming the file and each deletion (`judgeRunDeletions`).
+ *
+ * Asked twice. Before the lock (`agreed` absent), a person at a terminal is
+ * shown every file's deletions, each file named above its own, and asked once
+ * for the whole run; a decline stops the run with nothing changed. Under the
+ * lock (`agreed` given), the files are judged again against
+ * the database as it stands then, and only what was agreed is accepted without
+ * asking: anything new is refused rather than asked about while other runs
+ * wait. Returns the deletions agreed to.
+ *
+ * Every pending file within `--step` is judged; the plugin modules a run
+ * applies first may leave the step fewer app files than that, so this can ask
+ * about a file the run then leaves for the next one, never miss one it runs.
+ */
+async function judgeFileDeletions(
+  deps: MigrateCoreDeps,
+  agreed?: Agreement
+): Promise<{ agreement: Agreement; files: ReadonlyMap<string, string> }> {
+  const consent =
+    deps.consent ??
+    resolveDataLossConsent({
+      env: process.env,
+      honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE"],
+    });
+  const listed = await listMigrationFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger
+  );
+  const plan = fileRunPlan(listed, deps.step);
+  // Each deletion keeps the file it comes from, by identity, for the listing
+  // and for binding an agreement to the file as it stands.
+  const sources = new Map<Deletion, DeletionSource>();
+  // The plugin modules a run applies first, then the app files within the
+  // step, read as one run in that order.
+  const fileUnits = listed.flatMap(({ file }) =>
+    plan.runs.has(file) ? [fileUnit(file, deps.dialect)] : []
+  );
+  const units = [...(await moduleUnits(deps)), ...fileUnits];
+  for (const { unit, deletions } of await pendingRunDeletions(
+    units,
+    deps.db,
+    deps.dialect
+  )) {
+    const source = deletionSource(unit.label, unit.text);
+    for (const deletion of deletions) sources.set(deletion, source);
+  }
+  // A refusal, or a no at the terminal (`DATA_LOSS_DECLINED`, exit 1),
+  // throws before anything changes.
+  const agreement = await judgeRunDeletions({
+    sources,
+    consent,
+    agreed,
+    interactive: deps.interactive,
+    askToDelete: deps.askToDelete,
+    warn: line => deps.logger.warn(line),
+    notice:
+      sources.size === 0
+        ? undefined
+        : await eventTriggerNotice(eventTriggersOf(deps)),
+  });
+  // Each app file judged, by filename, with the digest of the UP judged.
+  const files = new Map(
+    fileUnits.map(unit => [unit.label, textDigest(unit.text)])
+  );
+  return { agreement, files };
+}
+
+/** How a run reads the database's DDL event triggers: injected, or from the catalog. */
+function eventTriggersOf(
+  deps: Pick<MigrateCoreDeps, "readEventTriggersFn" | "db" | "dialect">
+): () => Promise<readonly string[]> {
+  return (
+    deps.readEventTriggersFn ??
+    (() => readDdlEventTriggers(deps.db, deps.dialect))
+  );
+}
+
+/** One unit of a run as its consent judges it: its name in the listing, its text (for binding an agreement) and its statements. */
+interface RunUnit {
+  label: string;
+  text: string;
+  statements: string[];
+}
+
+/** An app migration file as a unit of the run: its UP section. */
+function fileUnit(file: ParsedMigration, dialect: SupportedDialect): RunUnit {
+  return {
+    label: `${file.name}.sql`,
+    text: file.upSql,
+    statements: splitSqlStatements(file.upSql, dialect, file),
+  };
+}
+
+/**
+ * The plugin modules a run applies before the app files, in that order, as
+ * units of the run (`pendingPluginModules`), read against the applied
+ * checksums the history checks read.
+ */
+async function moduleUnits(deps: MigrateCoreDeps): Promise<RunUnit[]> {
+  const lists = deps.pluginMigrationSets ?? [];
+  if (lists.length === 0) return [];
+  const applied = await (
+    deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
+  )();
+  return pluginModuleUnits(lists, applied, deps.step, deps.dialect);
+}
+
+/**
+ * What the pending modules of `sets` delete, judged as one run in the order a
+ * run applies them (`pluginModuleUnits`, over the ledger's applied
+ * checksums): what `plugins install` asks consent for before it applies
+ * them, as `nextly migrate` does for the same modules.
+ */
+export async function pendingPluginDeletions(
+  sets: readonly PluginMigrationSet[],
+  deps: Pick<MigrateCoreDeps, "adapter" | "db" | "dialect">
+): Promise<{ label: string; text: string; deletions: Deletion[] }[]> {
+  const applied = await appliedPluginModules(deps);
+  const units = pluginModuleUnits(sets, applied, undefined, deps.dialect);
+  return (await pendingRunDeletions(units, deps.db, deps.dialect)).map(
+    ({ unit, deletions }) => ({ label: unit.label, text: unit.text, deletions })
+  );
+}
+
+/**
+ * The pending plugin modules over `applied`, within `step`, as units of the
+ * run (`pendingPluginModules`): what the consent gate and `migrate --dry-run`
+ * both judge, so the two cannot read different modules.
+ */
+function pluginModuleUnits(
+  lists: readonly PluginMigrationSet[],
+  applied: ReadonlyMap<string, string | null>,
+  step: number | undefined,
+  dialect: SupportedDialect
+): RunUnit[] {
+  return pendingPluginModules(lists, applied, step).map(
+    ({ filename, migration }) => {
+      const statements = pluginModuleStatements(migration, dialect, "up");
+      return { label: filename, text: statements.join("\n;\n"), statements };
+    }
+  );
+}
+
+/**
+ * What each unit of a run deletes, the run read as one list
+ * (`runDeletions`): a unit is judged against the schema as the units before
+ * it leave it, so a table an earlier one creates holds only what the run
+ * put there. The live facts are read once, for every unit's statements.
+ */
+async function pendingRunDeletions(
+  units: readonly RunUnit[],
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<{ unit: RunUnit; deletions: Deletion[] }[]> {
+  const lists = units.map(unit => unit.statements);
+  const facts = await readDeletionFacts(db, dialect, runStatements(lists));
+  const perUnit = runDeletions(lists, dialect, facts);
+  return units.map((unit, at) => ({ unit, deletions: perUnit[at] ?? [] }));
+}
+
+/**
+ * The consent a file that deletes data needs, at the command line: from the
+ * flag or the environment, with a person at a terminal asked instead.
+ */
+function commandLineConsent(
+  options: Pick<MigrateCommandOptions, "acceptDataLoss">,
+  logger: CommandContext["logger"]
+): Pick<MigrateCoreDeps, "consent" | "interactive" | "askToDelete"> {
+  return {
+    consent: migrateConsent(options, m => logger.warn(m)),
+    interactive: canPrompt(),
+    askToDelete: askToDeleteInTerminal,
+  };
+}
+
+/**
+ * `nextly migrate`'s consent: `--accept-data-loss` or
+ * `NEXTLY_ACCEPT_DATA_LOSS`. `NEXTLY_ALLOW_CORE_DESTRUCTIVE` is honoured for
+ * what it always covered, Nextly's own tables, and so never covers an app
+ * migration's deletion.
+ */
+function migrateConsent(
+  options: Pick<MigrateCommandOptions, "acceptDataLoss">,
+  warn: (message: string) => void
+): DataLossConsent {
+  return readDataLossConsent({
+    flag: options.acceptDataLoss,
+    honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE"],
+    warn,
   });
 }
 
@@ -2049,6 +2468,8 @@ async function listMigrationFiles(
 ): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
   const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
+  // No files, nothing to look up: the ledger is not read at all.
+  if (all.length === 0) return [];
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
@@ -2297,6 +2718,28 @@ async function refuseLeavingFileThatCannotTakeItsSettings(
  * Walks files in lex order, carrying each file's target snapshot forward as the
  * next file's baseline. Returns the count actually applied.
  */
+/**
+ * Refuses, before any app file runs, a file to run whose UP is not the one its
+ * deletions were judged from under the lock (`judgeFileDeletions`): the files
+ * are read again to run, and one edited, or added, in between would otherwise
+ * run without its deletions ever judged.
+ */
+function assertRunsAsJudged(
+  files: readonly ParsedMigration[],
+  judged: ReadonlyMap<string, string> | undefined
+): void {
+  // A caller that judged nothing (a boot's own run) has nothing to hold the files to.
+  if (judged === undefined) return;
+  for (const m of files) {
+    const filename = `${m.name}.sql`;
+    if (judged.get(filename) === textDigest(m.upSql)) continue;
+    throw NextlyError.invalidInput({
+      message: `\`${filename}\` changed after this run judged what it deletes, so none of the app's migration files ran. Run \`nextly migrate\` again to judge it as it stands.`,
+      logContext: { reason: "file-changed-after-judgement", file: filename },
+    });
+  }
+}
+
 export async function runFileMigrations(args: {
   adapter: CLIDatabaseAdapter;
   db: unknown;
@@ -2313,6 +2756,13 @@ export async function runFileMigrations(args: {
    * migration after adoption stops with drift no migration could resolve.
    */
   knownJunctions?: ReadonlySet<string>;
+  /**
+   * The app files the run judged under its lock for what they delete, by
+   * filename, with the digest of the UP judged (`judgeFileDeletions`). Given,
+   * a file to run that differs, or was not judged, is refused before any file
+   * runs (`assertRunsAsJudged`).
+   */
+  judged?: ReadonlyMap<string, string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
@@ -2352,6 +2802,10 @@ export async function runFileMigrations(args: {
   let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
   const plan = fileRunPlan(await withApplied(all, repo), args.step);
+  assertRunsAsJudged(
+    all.filter(m => plan.runs.has(m)),
+    args.judged
+  );
 
   for (const m of all) {
     const filename = `${m.name}.sql`;
@@ -2394,6 +2848,8 @@ export async function runFileMigrations(args: {
       transaction: m.transaction,
       unit: "file",
     });
+    // A column made required over rows that would break it: refused here, before any statement.
+    await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
     // A file adding per-language unique indexes is refused here, before the ledger records an
     // attempt and before any statement, where one cannot hold. It also answers with the UP to
     // run on THIS database, which leaves out an index already installed here.

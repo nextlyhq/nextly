@@ -95,6 +95,8 @@ export interface ContributedBinding extends Omit<ActionBinding, "onSelect"> {
 /** The document as the editor holds it, unsaved edits included. */
 export interface DocumentAsEdited {
   values: Record<string, unknown>;
+  /** Whether those values hold edits not saved yet; absent where unknown. */
+  dirty?: boolean;
 }
 
 /** What a host with no form to read hands a contribution. */
@@ -124,7 +126,9 @@ export function acceptContributions(
    * The form's values, read at the moment a contribution is chosen rather
    * than when the editor drew, so an edit made since the last render counts.
    */
-  currentValues: () => Record<string, unknown> = NO_VALUES
+  currentValues: () => Record<string, unknown> = NO_VALUES,
+  /** Whether the form holds unsaved edits, read at the same moment. */
+  currentDirty?: () => boolean
 ): {
   actions: EditorDocumentAction[];
   bindings: Record<string, ActionBinding | undefined>;
@@ -140,7 +144,11 @@ export function acceptContributions(
     if (actions.includes(entry.action))
       bindings[entry.action.id] = {
         ...entry.binding,
-        onSelect: () => entry.binding.onSelect({ values: currentValues() }),
+        onSelect: () =>
+          entry.binding.onSelect({
+            values: currentValues(),
+            ...(currentDirty === undefined ? {} : { dirty: currentDirty() }),
+          }),
       };
   }
   return { actions, bindings };
@@ -285,14 +293,20 @@ export function DocumentActionBar({
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
   const publishItems = bound(actionsAt(available, "publish-menu"), bindings);
-  // The other ways to publish hang off the primary action only when it is
-  // Publish. Where saving leads (a clean published document) or nothing
-  // does, they lead More's document rows instead: an arrow on Save would
-  // offer scheduling as a kind of saving.
+  // The other ways to publish hang off whatever action leads, so a clean
+  // published document, where Save leads, can still be scheduled to come
+  // down. "Publish now" heads them where Publish leads: the press itself,
+  // named in the menu beside the ways to do it later. With nothing leading,
+  // they lead More's document rows instead.
   const publishLeads = primary?.action.id === PUBLISH_ACTION_ID;
-  const documentItems = publishLeads
-    ? bound(groups.document, bindings)
-    : [...publishItems, ...bound(groups.document, bindings)];
+  const arrowItems =
+    primary === undefined || publishItems.length === 0
+      ? []
+      : [...(publishLeads ? [publishNow(primary)] : []), ...publishItems];
+  const documentItems =
+    primary === undefined
+      ? [...publishItems, ...bound(groups.document, bindings)]
+      : bound(groups.document, bindings);
   const dangerItems = bound(groups.danger, bindings);
   const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
   // A menu is drawn when it has a row to hold, folded controls included.
@@ -334,7 +348,7 @@ export function DocumentActionBar({
       {primary === undefined ? null : (
         <PrimaryAction
           primary={primary}
-          options={publishLeads ? publishItems : []}
+          options={arrowItems}
           pending={pending}
         />
       )}
@@ -353,6 +367,25 @@ export function DocumentActionBar({
 
 /** The built-in Publish's id, under both "Publish" and "Publish changes". */
 const PUBLISH_ACTION_ID = "publish";
+
+/**
+ * Publish, as the arrow's first row: the same binding as the press, and so the
+ * same reason when it is held.
+ */
+function publishNow(primary: Bound): Bound {
+  return {
+    action: {
+      ...primary.action,
+      id: PUBLISH_NOW_ACTION_ID,
+      label: "Publish now",
+      placement: "publish-menu",
+    },
+    binding: primary.binding,
+  };
+}
+
+/** The arrow's row for publishing at once. */
+const PUBLISH_NOW_ACTION_ID = "publish-now";
 
 /** What the arrow beside the primary action is called, and opens. */
 const PUBLISH_OPTIONS_LABEL = "More ways to publish";

@@ -66,6 +66,7 @@ import {
   isOutermostForAddress,
   nodeElement,
   nodeIdFromEvent,
+  outermostElementsOf,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
 
@@ -1329,6 +1330,24 @@ describe("the drag in flight is drawn on the canvas", () => {
           render: ({ className }: { className: string }) =>
             createElement("div", { className }),
         },
+        {
+          // Draws a part the way a component placement's definition does: a
+          // re-minted node id the page does not hold, carrying the
+          // placement's address as its instance.
+          name: "acme/placement",
+          version: 1,
+          description: "A block drawn from a definition.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                [NODE_ID_ATTRIBUTE]: "minted-part",
+                [INSTANCE_ATTRIBUTE]: "card",
+              })
+            ),
+        },
       ] as never,
       { source: "canvas-drag-marks-test" }
     );
@@ -1567,6 +1586,41 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
   });
 
+  it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {
+    /*
+     * A placement's parts carry a re-minted node id plus the placement's
+     * address. Read by the raw id, the lock finds nothing for them and the
+     * selection ring the marks draw from a part is solid, as for an unlocked
+     * block; read by the address, as the selection is, they are locked.
+     */
+    const { container } = draw(undefined, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "card",
+          type: "acme/placement",
+          version: 1,
+          props: {},
+          locked: true,
+        },
+        { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+      ],
+    });
+    await act(async () => undefined);
+
+    const part = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="minted-part"]`
+    );
+    expect(part?.getAttribute(LOCKED_ATTRIBUTE)).toBe("own");
+    // The control: an unlocked block beside it is not marked.
+    expect(
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="leaf"]`)
+        ?.hasAttribute(LOCKED_ATTRIBUTE)
+    ).toBe(false);
+  });
+
   it("marks a block's own lock and a lock it is held by from around it apart", async () => {
     // A block inside a locked one is locked too: it is marked `inherited`,
     // so the canvas can say so without claiming a lock of its own. The marks
@@ -1766,6 +1820,30 @@ describe("the site's dark-mode strategy on the canvas root", () => {
 
   it("states nothing when the host serves no site sheet", () => {
     expect(strategyOf(false)).toBeNull();
+  });
+});
+
+describe("the elements standing for an address", () => {
+  it("leaves out a nested canvas's elements, whose ids are its own document's", () => {
+    // Component edit mode draws a canvas inside a block. Ids are scoped per
+    // document, so the inner one may hold the same address as a block out
+    // here; it is not this canvas's to measure.
+    const root = document.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    root.innerHTML = `
+      <div data-nx-node="a" id="outer"></div>
+      <div data-nx-node="host">
+        <div class="${CANVAS_ROOT_CLASS}">
+          <div data-nx-node="a" id="inner"></div>
+        </div>
+      </div>`;
+    document.body.append(root);
+    try {
+      const found = outermostElementsOf(root, new Set(["a"])).get("a") ?? [];
+      expect(found.map(element => element.id)).toEqual(["outer"]);
+    } finally {
+      root.remove();
+    }
   });
 });
 
@@ -2122,6 +2200,144 @@ describe("the site's ground and text on the canvas root", () => {
     expect(opaque("transparent")).toBe(false);
     // A value this cannot read is not called opaque.
     expect(opaque("var(--elsewhere)")).toBe(false);
+  });
+
+  it("judges the ground by the colour it resolves to, which host CSS can change", () => {
+    /*
+     * The tokens say opaque, but the host's own CSS sets the token's
+     * property to a half-transparent colour. What the canvas paints is the
+     * resolved value, so that is what decides whether the page repeats it.
+     */
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") return "rgba(0, 0, 0, 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reads the alpha of a wide-gamut colour the ground resolves to", () => {
+    // A browser can keep `color(display-p3 …)` in the computed value; a
+    // half-transparent one must not be taken for the opaque token.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor")
+              return "color(display-p3 0 0 0 / 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("judges the ground again when the canvas frame resizes", () => {
+    // A site can override the background token under a width or height
+    // query, which a frame resized past it crosses with no render.
+    let narrow = false;
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return narrow ? "rgba(255, 255, 255, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      narrow = true;
+      window.dispatchEvent(new Event("resize"));
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("judges the ground again when the site's theme changes, with no render", async () => {
+    // The theme marker writes the root's theme without a render; a light
+    // ground that is opaque and a dark one that is not must each be judged.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        const dark = element.getAttribute("data-nx-site-theme") === "dark";
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return dark ? "rgba(11, 15, 25, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      root?.setAttribute("data-nx-site-theme", "dark");
+      await act(async () => undefined);
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("names nothing when the host serves no site sheet", () => {
