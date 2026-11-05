@@ -20,8 +20,8 @@
 
 import { z } from "zod";
 
-import { isSubscribableEventType } from "../../domains/webhooks/event-type-registry";
 import { WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS } from "../../domains/webhooks/secret-entries";
+import { subscriptionList } from "../../domains/webhooks/subscription-list";
 import {
   REDACTED_HEADER_VALUE,
   WEBHOOK_EVENT_TYPES,
@@ -29,17 +29,22 @@ import {
 } from "../../domains/webhooks/types";
 
 /**
- * Core's event types, as their literals. Published from `nextly/schemas` and
- * kept as it was: core's list alone, which is what it has always named. An
- * endpoint's subscriptions are judged by {@link SubscribableEventSchema}, which
- * also accepts the types plugins declare.
+ * The event types an endpoint may subscribe to.
+ *
+ * Bound to the same constant the fan-out matches against, so a type that
+ * cannot be delivered cannot be subscribed to either — a silently-never-firing
+ * subscription is worse than a rejected one.
+ *
+ * Passed directly rather than widened to `[string, ...string[]]`: the literal
+ * members survive inference, so a parsed request body carries
+ * `WebhookEventType[]` and reaches the service without a cast at the boundary.
  */
 export const WebhookEventTypeSchema = z.enum(WEBHOOK_EVENT_TYPES);
 
 /**
- * One of core's event types or the wildcard. Published from `nextly/schemas`
- * and kept as it was; an endpoint's subscriptions are judged by
- * {@link SubscribableEventSchema} instead, which also accepts plugins' types.
+ * One subscription entry: a concrete event type or the wildcard for
+ * all-and-future. The wildcard is accepted only in the subscription list, never
+ * in the finer `FilterSpec`.
  */
 export const WebhookEventSubscriptionSchema = z.union([
   z.literal(WEBHOOK_EVENT_WILDCARD),
@@ -47,48 +52,12 @@ export const WebhookEventSubscriptionSchema = z.union([
 ]);
 
 /**
- * One subscription entry: an event type an endpoint may subscribe to now, or
- * the wildcard for all-and-future. The wildcard is accepted only in the
- * subscription list, never in the finer `FilterSpec`.
- *
- * Judged against the one list of event types, core's and every enabled
- * plugin's, read when the request is checked rather than fixed when this
- * module loads: plugins declare theirs at startup, after it. A type nobody
- * declares, or whose plugin is disabled, is refused and named, rather than
- * stored as a subscription nothing may ever send.
+ * The subscription list an endpoint create/update accepts: core's types or the
+ * wildcard, under the rules every subscription list is held to.
  */
-const SubscribableEventSchema = z.union([
-  z.literal(WEBHOOK_EVENT_WILDCARD),
-  z.string().superRefine((type, ctx) => {
-    if (!isSubscribableEventType(type)) {
-      ctx.addIssue({
-        code: "custom",
-        message: `"${type}" is not an event type an endpoint can subscribe to.`,
-      });
-    }
-  }),
-]);
-
-/**
- * The subscription list an endpoint create/update accepts: at least one entry,
- * no duplicates, and the wildcard cannot be combined with specific types (it
- * already covers them, so a mix is contradictory rather than additive).
- */
-const EventSubscriptionsSchema = z
-  .array(SubscribableEventSchema)
-  .min(1, "Subscribe to at least one event type.")
-  // A duplicate would not change delivery, but it would make the stored
-  // subscription disagree with what the user typed.
-  .refine(types => new Set(types).size === types.length, {
-    message: "Event types must be unique.",
-  })
-  .refine(
-    types => !types.includes(WEBHOOK_EVENT_WILDCARD) || types.length === 1,
-    {
-      message:
-        'Use "*" on its own to subscribe to all events; do not combine it with specific types.',
-    }
-  );
+const EventSubscriptionsSchema = subscriptionList(
+  WebhookEventSubscriptionSchema
+);
 
 /** Header names a caller may not set, because delivery owns them. */
 const RESERVED_HEADER_PREFIXES = ["webhook-", "content-type", "user-agent"];

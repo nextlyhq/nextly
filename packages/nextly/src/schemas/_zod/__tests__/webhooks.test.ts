@@ -7,8 +7,9 @@
  * and an unknown event type would be accepted into a subscription the fan-out
  * never matches — a subscription that silently never fires.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 
+import { publishWebhookEventTypes } from "../../../domains/webhooks/event-type-registry";
 import {
   REDACTED_HEADER_VALUE,
   WEBHOOK_EVENT_TYPES,
@@ -171,6 +172,31 @@ describe("the webhook schemas nextly/schemas publishes", () => {
     ).toBe(true);
     expect(
       published.WebhookEventSubscriptionSchema.safeParse("acme-shop.order.paid")
+        .success
+    ).toBe(false);
+  });
+});
+
+describe("the published request schemas, with a plugin's type declared", () => {
+  afterEach(() => {
+    publishWebhookEventTypes([]);
+  });
+
+  it("still refuse it: they name core's types alone, as they always have", () => {
+    // Declared and subscribable through the route; the published schemas are
+    // an export of `nextly/schemas` and keep their meaning.
+    publishWebhookEventTypes([
+      { type: "acme-shop.order.paid", owner: "@acme/shop" },
+    ]);
+
+    expect(
+      CreateWebhookSchema.safeParse({
+        ...valid,
+        eventTypes: ["acme-shop.order.paid"],
+      }).success
+    ).toBe(false);
+    expect(
+      UpdateWebhookSchema.safeParse({ eventTypes: ["acme-shop.order.paid"] })
         .success
     ).toBe(false);
   });

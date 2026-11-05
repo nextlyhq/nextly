@@ -1,28 +1,45 @@
 /**
- * The webhook request schemas hand the endpoint service a subscription list
- * it accepts without a cast.
+ * The published webhook request schemas keep their event-type literals, and
+ * the route's own request schemas hand the endpoint service what it takes.
  *
- * An entry is the wildcard, one of core's types or a type a plugin declares,
- * so the parsed list is strings. Which strings are accepted is decided when
- * the request is judged, against the event-type registry, not by the type: a
- * cast at the request-to-service boundary is what this guards against.
+ * Runtime validation cannot catch a widened type: a schema whose `eventTypes`
+ * became `string[]` validates the same bodies. It shows only to code that reads
+ * the inferred type, which is why the published schemas are pinned here: they
+ * are an export of `nextly/schemas`, and a consumer narrowing on their literals
+ * would break if they widened.
  */
 import { expectTypeOf } from "vitest";
 
-import type { WebhookEventSubscription } from "../../domains/webhooks/types";
+import type {
+  CreateWebhookRequest,
+  UpdateWebhookRequest,
+} from "../../domains/webhooks/request-schemas";
+import type {
+  WebhookEventSubscription,
+  WebhookEventType,
+} from "../../domains/webhooks/types";
 
 import type { CreateWebhookInput, UpdateWebhookInput } from "./webhooks";
 
-// The parsed subscription list is what the service takes, with no cast.
-expectTypeOf<CreateWebhookInput["eventTypes"]>().toMatchTypeOf<
+/** What the published schemas have always parsed an entry as. */
+type CoreSubscription = WebhookEventType | "*";
+
+// The published schemas: core's types and the wildcard, as literals.
+expectTypeOf<CreateWebhookInput["eventTypes"]>().toEqualTypeOf<
+  CoreSubscription[]
+>();
+expectTypeOf<UpdateWebhookInput["eventTypes"]>().toEqualTypeOf<
+  CoreSubscription[] | undefined
+>();
+// Stated explicitly, so equality cannot pass for the wrong reason if the
+// literals ever collapsed to `string`.
+expectTypeOf<CreateWebhookInput["eventTypes"]>().not.toEqualTypeOf<string[]>();
+
+// The route's own schemas take plugins' types too, and what they parse is
+// what the endpoint service takes, with no cast at the boundary.
+expectTypeOf<CreateWebhookRequest["eventTypes"]>().toMatchTypeOf<
   WebhookEventSubscription[]
 >();
-
-expectTypeOf<UpdateWebhookInput["eventTypes"]>().toMatchTypeOf<
+expectTypeOf<UpdateWebhookRequest["eventTypes"]>().toMatchTypeOf<
   WebhookEventSubscription[] | undefined
 >();
-
-// And the service's own subscription type still names core's types and the
-// wildcard, so code that builds one by hand is checked against them.
-expectTypeOf<"entry.created">().toMatchTypeOf<WebhookEventSubscription>();
-expectTypeOf<"*">().toMatchTypeOf<WebhookEventSubscription>();
