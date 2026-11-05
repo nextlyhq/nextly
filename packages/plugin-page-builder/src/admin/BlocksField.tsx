@@ -45,7 +45,7 @@ import { acceptedKinds } from "../fields/blocks-options";
 
 import { builderAddress } from "./editor/builder-address";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
-import { PageLayoutPicker, usePageLayoutId } from "./page-layout";
+import { PageLayoutPicker, usePageLayoutAsk } from "./page-layout";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { useFormPublishOffer } from "./publish-offer";
 import { useRestingPageRender } from "./use-resting-page-render";
@@ -188,7 +188,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     form: control,
     name,
     value: () => field.value,
-    layout: usePageLayoutId(control),
+    ...usePageLayoutAsk(control),
     subject: restingDocument.kind === "component" ? "component" : "page",
   });
 

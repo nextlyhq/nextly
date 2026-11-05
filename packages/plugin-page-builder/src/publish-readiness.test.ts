@@ -14,6 +14,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  documentsWithin,
   planPublishReadiness,
   systemReads,
   titlesAsCaller,
@@ -313,5 +314,49 @@ describe("the reads behind the answer", () => {
     for (const read of store.asked) {
       expect(read).toMatchObject({ overrideAccess: false, user });
     }
+  });
+});
+
+describe("a page drawn inside the site's default Layout", () => {
+  it("names the components a live default's areas place, and not the default", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page([])], layout: "site", siteDefault: true },
+      reads({
+        components: { crest: { live: false } },
+        layouts: { site: { live: true, areas: ["crest"] } },
+      })
+    );
+    expect(plan).toEqual({ components: ["crest"], layout: null, missing: 0 });
+  });
+
+  it("names nothing for an unpublished default, which draws no regions", async () => {
+    const plan = await planPublishReadiness(
+      { documents: [page([])], layout: "site", siteDefault: true },
+      reads({
+        components: { crest: { live: false } },
+        layouts: { site: { live: false, areas: ["crest"] } },
+      })
+    );
+    expect(plan).toEqual({ components: [], layout: null, missing: 0 });
+  });
+});
+
+describe("the work one request may ask for", () => {
+  const limits = { maxDepth: 12, maxNodes: 10, maxBytes: 1000 };
+  const props = (text: string) => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [{ id: "t", type: "core/text", version: 1, props: { text } }],
+  });
+
+  it("takes documents within eight times the largest size allowed", () => {
+    expect(documentsWithin([props("x".repeat(900))], limits)).toHaveLength(1);
+  });
+
+  it("refuses a document of few nodes past the bytes allowed", () => {
+    // One node, so within the node budget: only its bytes are too many.
+    expect(() =>
+      documentsWithin([props("x".repeat(8 * 1000))], limits)
+    ).toThrow();
   });
 });
