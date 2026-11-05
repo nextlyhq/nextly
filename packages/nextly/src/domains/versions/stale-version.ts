@@ -44,7 +44,6 @@ import {
   revisionOf,
   type SelectsRows,
 } from "./document-revision";
-import type { VersionRef, VersionsRepository } from "./versions-repository";
 
 /** A language's counter in a version: 0 where it names none. */
 function languageCounterOf(version: DecodedVersion, code: string): number {
@@ -1122,31 +1121,4 @@ async function newestHistoryVersion(args: {
   return newest === undefined
     ? undefined
     : { version: newest, locale: args.locale };
-}
-
-/**
- * A discard's judgement, made under the row lock and before anything is
- * removed, so out of date `judge` throws with nothing deleted. Made only when
- * there is a pending change to lose: a discard with nothing to discard
- * answers as before, whatever version it names, and is given `unjudged`.
- *
- * @experimental
- */
-export async function judgedBeforeDiscard<T>(
-  draft: {
-    versions: Pick<VersionsRepository, "hasWorkingDraft">;
-    ref: VersionRef;
-    locale: string | null;
-  },
-  check: VersionCheck,
-  judge: () => Promise<T>,
-  unjudged: T
-): Promise<T> {
-  if (
-    check.kind === "unjudged" ||
-    !(await draft.versions.hasWorkingDraft(draft.ref, draft.locale))
-  ) {
-    return unjudged;
-  }
-  return judge();
 }

@@ -192,6 +192,7 @@ import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import { hasLifecycle } from "../../versions/recorded-status";
+import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   outOfDateSharedFields,
@@ -209,7 +210,6 @@ import {
   certainlyStale,
   type DocumentRevisionState,
   givenOf,
-  judgedBeforeDiscard,
   judgedLanguage,
   judgedLanguageStates,
   languagesJudged,
@@ -993,18 +993,13 @@ export class SingleMutationService extends BaseService {
           scopeSlug: params.slug,
           entryId,
         };
-        const versions = new VersionsRepository(tx);
-        const before = await judgedBeforeDiscard(
-          { versions, ref: discardedRef, locale: draftLocale },
+        const { removed, judged: before } = await removePendingChangeJudged(
+          tx,
+          { ref: discardedRef, locale: draftLocale },
           judging.check,
           () => this.refuseIfPendingChangeMoved(tx, judging, entryId, stale),
           { main: undefined, language: undefined }
         );
-        const removed = await versions.deleteWorkingDraft(
-          discardedRef,
-          draftLocale
-        );
-        await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the Single's history only when there was a draft to discard.
         if (removed > 0) {
           // A reader of the pending change now sees the live document, so the
