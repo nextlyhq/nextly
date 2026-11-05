@@ -101,11 +101,22 @@ export async function hiddenFrom(
     grants,
     overrideAccess: false,
   });
-  return fields.filter(
-    name =>
-      !(name in readable) ||
-      canonicalJson(readable[name]) !== canonicalJson(whole[name])
-  );
+  return fields.filter(name => withheld(name, whole, readable));
+}
+
+/**
+ * Whether the access pass withheld `name`: it removed a value the version holds, or something
+ * inside one. A field the version does not hold at all, such as one the collection no longer has,
+ * is a change anyone may approve: nothing of it is there to hide.
+ */
+function withheld(
+  name: string,
+  whole: Record<string, unknown>,
+  readable: Record<string, unknown>
+): boolean {
+  if (!(name in whole)) return false;
+  if (!(name in readable)) return true;
+  return canonicalJson(readable[name]) !== canonicalJson(whole[name]);
 }
 
 /** What the people who could approve instead are judged on. */

@@ -584,6 +584,68 @@ describe.each(getConfiguredTestDialects())(
           (await stateOf(app(), partOf("briefs", brief, null)))?.approval
         ).toMatchObject({ by: "bob" });
       });
+
+      it("lets anyone approve a field the collection no longer has, while a field a read rule hides still refuses", async () => {
+        await boot(dialect);
+        const bob = await person(app(), "bob", [["sign-off", "briefs"]]);
+        const carol = await person(app(), "carol", [["sign-off", "briefs"]]);
+        const erin = await person(app(), "erin", [["sign-off", "briefs"]]);
+        await person(app(), "dave", [["update", "briefs"]]);
+        const brief = await entry(app(), "briefs");
+        await seedState(app(), partOf("briefs", brief, null), "review", {
+          enteredBy: "alice",
+          definitionHash: workflowDefinitionHash(checked),
+        });
+        await take("briefs", brief, null, "approve", carol);
+        const approvedNo =
+          (await stateOf(app(), partOf("briefs", brief, null)))?.approval
+            ?.versionNo ?? 0;
+        // The approved version holds a field the collection has since dropped: a removed field
+        // is in the version approved and in no version saved after it.
+        const approvedSnapshot = (await snapshotOf(
+          app(),
+          "briefs",
+          brief,
+          approvedNo
+        )) as Record<string, unknown> | string;
+        const withRetired = {
+          ...(typeof approvedSnapshot === "string"
+            ? (JSON.parse(approvedSnapshot) as Record<string, unknown>)
+            : approvedSnapshot),
+          retired: "an old value",
+        };
+        await app().adapter.update(
+          "nextly_versions",
+          { snapshot: JSON.stringify(withRetired) },
+          {
+            and: [
+              { column: "scopeKind", op: "=", value: "collection" },
+              { column: "scopeSlug", op: "=", value: "briefs" },
+              { column: "entryId", op: "=", value: brief },
+              { column: "versionNo", op: "=", value: approvedNo },
+            ],
+          }
+        );
+        await save(
+          "briefs",
+          brief,
+          { title: "Retitled", secret: "s2" },
+          { userId: "dave" }
+        );
+
+        // The secret changed and bob cannot read it; the retired field is no one's to hide.
+        await expect(
+          take("briefs", brief, null, "approve", bob)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "field-hidden", fields: ["secret"] },
+        });
+        // A reviewer who reads every field the collection has may approve the removal too.
+        await take("briefs", brief, null, "approve", erin);
+        expect(
+          (await stateOf(app(), partOf("briefs", brief, null)))?.approval
+        ).toMatchObject({ by: "erin" });
+      });
     });
 
     describe("pins", () => {
