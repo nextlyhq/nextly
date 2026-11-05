@@ -66,6 +66,7 @@ import {
   isOutermostForAddress,
   nodeElement,
   nodeIdFromEvent,
+  outermostElementsOf,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
 
@@ -1819,6 +1820,30 @@ describe("the site's dark-mode strategy on the canvas root", () => {
 
   it("states nothing when the host serves no site sheet", () => {
     expect(strategyOf(false)).toBeNull();
+  });
+});
+
+describe("the elements standing for an address", () => {
+  it("leaves out a nested canvas's elements, whose ids are its own document's", () => {
+    // Component edit mode draws a canvas inside a block. Ids are scoped per
+    // document, so the inner one may hold the same address as a block out
+    // here; it is not this canvas's to measure.
+    const root = document.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    root.innerHTML = `
+      <div data-nx-node="a" id="outer"></div>
+      <div data-nx-node="host">
+        <div class="${CANVAS_ROOT_CLASS}">
+          <div data-nx-node="a" id="inner"></div>
+        </div>
+      </div>`;
+    document.body.append(root);
+    try {
+      const found = outermostElementsOf(root, new Set(["a"])).get("a") ?? [];
+      expect(found.map(element => element.id)).toEqual(["outer"]);
+    } finally {
+      root.remove();
+    }
   });
 });
 

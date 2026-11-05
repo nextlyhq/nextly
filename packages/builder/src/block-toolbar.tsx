@@ -83,6 +83,7 @@ import type { Rect } from "./geometry";
 import {
   canvasContentRect,
   canvasScroller,
+  drawnBoxes,
   onScreenOf,
   overlaySpaceOf,
 } from "./geometry-dom";
@@ -335,14 +336,18 @@ export function BlockToolbar({
      */
     // Every element each selected block draws, not its first: a placement
     // whose definition draws a headline and an intro is both, and a bar
-    // placed under the headline alone would sit over the intro's line.
+    // placed under the headline alone would sit over the intro's line. Only
+    // the ones that draw a box (`drawnBoxes`), so a part hidden on this
+    // device adds no zero rectangle at the canvas origin; a block none of
+    // whose elements draws one keeps its elements, as it had before.
     const rects: Rect[] = [];
     for (const elements of outermostElementsOf(
       root,
       new Set(selectedIds)
     ).values()) {
-      for (const drawn of elements) {
-        rects.push(space.place(canvasContentRect(drawn, root)));
+      const drawn = elements.flatMap(drawnBoxes);
+      for (const part of drawn.length > 0 ? drawn : elements) {
+        rects.push(space.place(canvasContentRect(part, root)));
       }
     }
     const block = unionRect(rects);

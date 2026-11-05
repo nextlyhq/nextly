@@ -631,6 +631,9 @@ export function isOutermostForAddress(
  * outermost per address, in document order. What a toolbar or a gap measures a
  * block by, so that a component placement whose definition draws several
  * top-level elements is measured as all of them rather than as its first.
+ * Only this canvas's own: a canvas nested inside a block (component edit
+ * mode) scopes ids to its own document, which may reuse an address from out
+ * here.
  */
 export function outermostElementsOf(
   root: HTMLElement,
@@ -638,6 +641,7 @@ export function outermostElementsOf(
 ): Map<string, Element[]> {
   const drawn = new Map<string, Element[]>();
   for (const element of nodeElements(root)) {
+    if (!ownedByCanvas(element, root)) continue;
     const address = nodeAddressOf(element);
     if (address === null || !addresses.has(address)) continue;
     if (!isOutermostForAddress(element, address, root)) continue;

@@ -198,6 +198,134 @@ describe("Enter on a selected block, on a canvas in a frame", () => {
     expect(attach.mock.calls[1]?.[1]).toEqual(typed);
   });
 
+  it("keeps carried typing through a second page replacement before the editor loads again", async () => {
+    // Two reloads in quick succession: the second arrives while the editor
+    // for the first is still loading. The words must reach the third page.
+    registerArticle();
+    const first = framedPage();
+    let frame = first.frame;
+    function Wrapper({ children }: { children?: React.ReactNode }) {
+      return (
+        <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>
+      );
+    }
+    const stored = { root: { type: "root", children: [] } };
+    const typed = {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [{ type: "text", text: "Typed" }] },
+        ],
+      },
+    };
+    let reads = 0;
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      status: "attached",
+      session: {
+        focus: () => {},
+        read: () => (reads++ === 0 ? stored : typed),
+        detach: () => {},
+        hold: () => {},
+      },
+    }));
+    let arrive: (() => void) | undefined;
+    const load = vi
+      .fn()
+      .mockImplementationOnce(async () => ({ attach }))
+      .mockImplementation(
+        () =>
+          new Promise(resolve => {
+            arrive = () => resolve({ attach });
+          })
+      );
+    const editor = editorState();
+    const { result, rerender } = renderHook(
+      () => useInlineRichText(editor, load as never),
+      { wrapper: Wrapper }
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    // The first reload, and the second before the editor has loaded for it.
+    frame = framedPage().frame;
+    await act(async () => {
+      rerender();
+    });
+    const third = framedPage();
+    frame = third.frame;
+    await act(async () => {
+      rerender();
+    });
+    await act(async () => {
+      arrive?.();
+    });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    const last = attach.mock.calls.at(-1);
+    expect(last?.[0]).toBe(
+      third.inside.querySelector('[data-nx-prop="content"]')
+    );
+    expect(last?.[1]).toEqual(typed);
+  });
+
+  it("writes carried typing when the new page no longer draws the passage", async () => {
+    // Nowhere to carry the words: they are written, as finishing the edit
+    // would write them, rather than lost with the old page.
+    registerArticle();
+    const first = framedPage();
+    let frame = first.frame;
+    function Wrapper({ children }: { children?: React.ReactNode }) {
+      return (
+        <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>
+      );
+    }
+    const stored = { root: { type: "root", children: [] } };
+    const typed = {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [{ type: "text", text: "Typed" }] },
+        ],
+      },
+    };
+    let reads = 0;
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      status: "attached",
+      session: {
+        focus: () => {},
+        read: () => (reads++ === 0 ? stored : typed),
+        detach: () => {},
+        hold: () => {},
+      },
+    }));
+    const load = vi.fn(async () => ({ attach }));
+    const editor = editorState();
+    editor.apply = vi.fn(() => editor.document);
+    const finished = vi.fn();
+    const { result, rerender } = renderHook(
+      () => useInlineRichText(editor, load as never, finished),
+      { wrapper: Wrapper }
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    const second = framedPage();
+    second.inside.querySelector('[data-nx-prop="content"]')?.remove();
+    frame = second.frame;
+    await act(async () => {
+      rerender();
+    });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.stringify(vi.mocked(editor.apply).mock.calls[0]?.[0])
+    ).toContain("Typed");
+    expect(finished).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "written" })
+    );
+    expect(result.current.editing).toBeNull();
+  });
+
   it("takes the caret into the frame's new page when the frame replaces its document mid-edit", () => {
     registerArticle();
     const first = framedPage();
