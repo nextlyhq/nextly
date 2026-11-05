@@ -981,7 +981,10 @@ export type {
 // Named classes: reusable style presets a node applies by id.
 export type { NamedClass } from "./style/named-class";
 export {
+  classNameOf,
+  isLook,
   isUsableNamedClass,
+  LOOK_CLASS_PREFIX,
   namedClassName,
   orderedNamedClasses,
   // How long a class id or slug may be before the compiler discards the class.
@@ -1002,6 +1005,11 @@ export {
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";
+/**
+ * @experimental A block type's looks (its named variants: a button's Outline), as the shared
+ * styles a site receives, bound to the block type and written before every other shared style.
+ */
+export { blockLooks, lookClassId } from "./style/block-looks";
 export type { BreakpointAxis } from "./style/breakpoint-axes";
 
 // Where each emitted declaration came from, for an editor that has to tell an author which of

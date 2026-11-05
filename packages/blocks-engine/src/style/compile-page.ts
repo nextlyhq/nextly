@@ -54,12 +54,13 @@ import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
   isUsableNamedClass,
-  namedClassName,
   namedClassesRead,
   orderedNamedClasses,
   orderedNamedClassPositions,
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  classNameOf,
+  isLook,
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
@@ -416,7 +417,7 @@ export interface CompiledPageCss {
  * specificity are separated by source order, so the order they are emitted in
  * is part of the contract rather than an artifact of iteration.
  */
-export const TYPOGRAPHIC_ELEMENTS = [
+const TYPOGRAPHIC_ELEMENTS = [
   "h1",
   "h2",
   "h3",
@@ -2337,7 +2338,7 @@ export function compilePageCss(
     rules.push(
       ...envelopeRules(
         cls.styles,
-        `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
+        `${pageRoot} .${escapeIdentifier(classNameOf(cls))}`,
         // The envelope is stored under `styles`, so the pointer names it. Without that a warning
         // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
         pointer(pointer("/classes", String(position)), "styles"),
@@ -2352,7 +2353,14 @@ export function compilePageCss(
         newStyleIssueBudget(),
         warningAllowance,
         {
-          origin: { kind: "class", id: cls.id, slug: cls.slug },
+          origin: {
+            kind: "class",
+            id: cls.id,
+            slug: cls.slug,
+            // A look reaches only its own block type, so a reader of the
+            // trace can refuse it on any other, as the compiler does.
+            ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+          },
           previewStates,
           trace,
           mayFetchUrl,
@@ -2362,7 +2370,7 @@ export function compilePageCss(
     // A class that makes a container flex or grid swaps the flow margin for
     // `gap` on each container type that wears it here, exactly as a node's
     // own display does below.
-    const classSelector = `.${escapeIdentifier(namedClassName(cls.slug))}`;
+    const classSelector = `.${escapeIdentifier(classNameOf(cls))}`;
     for (const type of [...(classWearers.get(cls.id) ?? [])].sort()) {
       const flow = flowGaps.get(type);
       if (flow === undefined) continue;
@@ -2600,7 +2608,19 @@ export function compilePageCss(
           )
           .filter((cls): cls is NamedClass => cls !== undefined)
       )) {
-        names.push(namedClassName(cls.slug));
+        // A look is bound to one block type: on any other block it is not applied, and said
+        // so, as a class the library does not define is.
+        if (isLook(cls) && cls.blockType !== node.type) {
+          pushBoundedWarning(warningAllowance, warnings, {
+            path: pointer(path, "classes"),
+            code: "look-for-another-block",
+            severity: "warning",
+            message: `This node lists the look ${describeValue(cls.id)}, which belongs to ${describeValue(cls.blockType)} blocks, so it was not applied.`,
+            suggestion: "Pick one of this block's own looks instead.",
+          });
+          continue;
+        }
+        names.push(classNameOf(cls));
       }
     }
     attributeClasses.set(node.id, names.join(" "));

@@ -847,3 +847,18 @@ describe("persisted class styles that are not the shape the type promises", () =
     ).toHaveLength(1);
   });
 });
+
+describe("an applied look's class name", () => {
+  it("is the one the compiler writes, under the look prefix", () => {
+    const [choice] = siteClasses([
+      {
+        id: "look:core/button:outline",
+        slug: "button-outline",
+        orderIndex: 0,
+        blockType: "core/button",
+        styles: {},
+      },
+    ]);
+    expect(choice?.className).toBe("nx-l-button-outline");
+  });
+});
