@@ -5,7 +5,9 @@
  * What only a server shows: that each part of a query is set, removed and
  * kept as asked; that the field validation behind every save refuses the
  * same bounds, fields and nesting the editor's save is refused for, naming
- * the field; and that a dry run answers those refusals without writing.
+ * the field; that a dry run answers those refusals without writing; and that
+ * the write carries the version the page was read at, so a save landing in
+ * between refuses it rather than being overwritten.
  *
  * @module __tests__/list-query-actions-api.integration.test
  */
@@ -16,6 +18,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { getCachedNextly } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -23,12 +26,13 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, relationship, text } from "nextly/config";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ListQueryChange,
   PageActionResult,
 } from "../composition-actions-contract";
+import { asOverwrite } from "../document-version";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
 
@@ -298,6 +302,54 @@ describe.each(getConfiguredTestDialects())(
       );
       const applied = await change(cookie, at, query);
       expect(applied.status).toBe(422);
+    });
+
+    it("refuses a write when the page is saved between its read and its write, and writes once read again", async () => {
+      const t = await boot();
+      const id = await homePage(t);
+      const { cookie } = await holding(t, AUTHOR);
+      const at = { collection: "pages", id };
+      // Someone else's save lands just after the action reads the page, so
+      // the action plans from the older page.
+      const direct = await getCachedNextly();
+      const read = direct.findByID.bind(direct);
+      let saved = false;
+      const spy = vi
+        .spyOn(direct, "findByID")
+        .mockImplementation(async (args: Parameters<typeof read>[0]) => {
+          const row = await read(args);
+          if (args.collection === "pages" && !saved) {
+            saved = true;
+            // The other editor's save, made whatever the row holds.
+            await t.nextly.update({
+              collection: "pages",
+              id,
+              data: asOverwrite({
+                content: page(list("list", { collection: CATS, limit: 7 })),
+              }),
+              overrideAccess: true,
+            });
+          }
+          return row;
+        });
+      try {
+        const refused = await change(cookie, at, { limit: 5 });
+        expect(refused.status).toBe(409);
+      } finally {
+        spy.mockRestore();
+      }
+      expect((await storedList(t, "pages", id))?.props).toEqual({
+        collection: CATS,
+        limit: 7,
+      });
+
+      // Made again, the action reads the page as it now is and writes it.
+      const applied = await change(cookie, at, { limit: 5 });
+      expect(applied.status).toBe(200);
+      expect((await storedList(t, "pages", id))?.props).toEqual({
+        collection: CATS,
+        limit: 5,
+      });
     });
 
     it("refuses a list id the page does not hold", async () => {

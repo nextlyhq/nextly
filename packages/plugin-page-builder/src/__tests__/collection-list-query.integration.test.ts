@@ -40,6 +40,8 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { asOverwrite } from "../document-version";
+
 const POSTS = "lqi_posts";
 const CATS = "lqi_cats";
 const WORDS = "lqi_words";
@@ -209,7 +211,9 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: POSTS,
           id: ids[title] ?? "",
-          data: { publishedAt: at, eventDay: "2026-09-01" },
+          // A fixture setting the seeded times whatever the row holds, so
+          // it says it overwrites rather than sending a version it never read.
+          data: asOverwrite({ publishedAt: at, eventDay: "2026-09-01" }),
           overrideAccess: true,
         });
       }
