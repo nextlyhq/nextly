@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ICON_ID_MAX_LENGTH } from "../../../../collections/fields/types/icon";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import type { PluginFieldType } from "../../../../plugins/contributions";
 import {
@@ -567,5 +568,15 @@ describe("getColumnDescriptor — icon", () => {
     );
     expect(unknown?.dialectType).toBe("varchar(120)");
     expect(icon?.dialectType).toBe("text");
+  });
+
+  it("is as wide on MySQL as the longest id the validators accept", () => {
+    const icon = getColumnDescriptor(
+      field({ type: "icon" }),
+      "mysql",
+      "collection"
+    );
+    expect(icon?.length).toBe(ICON_ID_MAX_LENGTH);
+    expect(icon?.dialectType).toBe(`varchar(${String(ICON_ID_MAX_LENGTH)})`);
   });
 });

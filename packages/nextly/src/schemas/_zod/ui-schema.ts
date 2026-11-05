@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 
+import { isIconIdShape } from "../../collections/fields/types/icon";
 import { isFieldGroupFieldType } from "../../domains/field-groups/storage/field-group-field-type";
 import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
@@ -435,7 +436,19 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       const shapeToken = BUILT_IN_UI_FIELD_TYPES.has(f.type)
         ? f.type
         : pluginStorageFieldType({ type: f.type });
-      if (f.defaultValue !== undefined && shapeToken !== undefined) {
+      if (shapeToken === "icon" && f.defaultValue !== undefined) {
+        // An icon default must be an id the write path accepts. A string of
+        // any other shape would be stored as the default and then refused
+        // on every new entry that inherits it.
+        if (!isIconIdShape(f.defaultValue)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              'defaultValue of an icon field must be an icon id such as "lucide:star"',
+            path: ["defaultValue"],
+          });
+        }
+      } else if (f.defaultValue !== undefined && shapeToken !== undefined) {
         const dv = f.defaultValue;
         const okType =
           // Anything a manifest can carry is already JSON, so json storage
@@ -450,7 +463,6 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             "email",
             "password",
             "code",
-            "icon",
             "date",
             "select",
             "radio",

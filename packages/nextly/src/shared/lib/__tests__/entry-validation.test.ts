@@ -551,6 +551,18 @@ describe("validateEntryData: icon fields", () => {
     }
   });
 
+  it("accepts a 255-character id and refuses a 256-character one, which its column cannot hold", async () => {
+    const longest = `lucide:${"a".repeat(255 - "lucide:".length)}`;
+    expect(await iconIssues(longest)).toEqual([]);
+    expect(await iconIssues(`${longest}a`)).toEqual([
+      {
+        path: "badge",
+        code: "INVALID_FORMAT",
+        message: 'badge must be an icon id such as "lucide:star".',
+      },
+    ]);
+  });
+
   it("refuses a value that is not a string", async () => {
     expect(await iconIssues(42)).toEqual([
       {

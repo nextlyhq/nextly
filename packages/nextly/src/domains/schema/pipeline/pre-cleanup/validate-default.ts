@@ -13,7 +13,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
-import { ICON_ID_PATTERN } from "../../../../collections/fields/types/icon";
+import {
+  ICON_ID_MAX_LENGTH,
+  ICON_ID_PATTERN,
+} from "../../../../collections/fields/types/icon";
 
 interface MinimalFieldDef {
   name: string;
@@ -40,8 +43,11 @@ function schemaForType(type: string, dialect: SupportedDialect): z.ZodTypeAny {
   const sqlite = dialect === "sqlite";
   if (TEXT_TYPES.has(type)) return z.string();
   // A backfilled icon id lands in every existing row, so it must have the
-  // shape the write path accepts ("lucide:star"); the set is not checked.
-  if (type === "icon") return z.string().regex(ICON_ID_PATTERN);
+  // shape and length the write path accepts ("lucide:star"); the set is not
+  // checked.
+  if (type === "icon") {
+    return z.string().max(ICON_ID_MAX_LENGTH).regex(ICON_ID_PATTERN);
+  }
   if (NUMBER_TYPES.has(type)) return z.number();
   if (BOOL_TYPES.has(type)) {
     return sqlite

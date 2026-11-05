@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 import { email, icon } from "../helpers";
 import { isDataField, isEmailField, isIconField } from "../guards";
 import { ALL_FIELD_TYPES, DATA_FIELD_TYPES } from "../types";
-import { ICON_ID_PATTERN, isIconIdShape } from "../types/icon";
+import {
+  ICON_ID_MAX_LENGTH,
+  ICON_ID_PATTERN,
+  isIconIdShape,
+} from "../types/icon";
 
 describe("icon()", () => {
   it("returns the config it was given, typed as an icon field", () => {
@@ -62,6 +66,13 @@ describe("icon id shape", () => {
     ]) {
       expect(isIconIdShape(bad), String(bad)).toBe(false);
     }
+  });
+
+  it("accepts an id as long as its column and refuses one character more", () => {
+    const longest = `lucide:${"a".repeat(ICON_ID_MAX_LENGTH - "lucide:".length)}`;
+    expect(longest).toHaveLength(255);
+    expect(isIconIdShape(longest)).toBe(true);
+    expect(isIconIdShape(`${longest}a`)).toBe(false);
   });
 
   it("is anchored, so an id cannot carry trailing text into SQL or markup", () => {

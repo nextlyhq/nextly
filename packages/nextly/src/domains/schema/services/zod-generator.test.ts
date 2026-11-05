@@ -451,6 +451,10 @@ describe("ZodGenerator — Individual Field Generation", () => {
     expect(schema.safeParse("Star").success).toBe(false);
     expect(schema.safeParse("lucide:").success).toBe(false);
     expect(schema.safeParse("lucide:Star").success).toBe(false);
+    // No longer than the varchar(255) column the id is stored in.
+    const longest = `lucide:${"a".repeat(255 - "lucide:".length)}`;
+    expect(schema.safeParse(longest).success).toBe(true);
+    expect(schema.safeParse(`${longest}a`).success).toBe(false);
   });
 
   it("generates polymorphic schema for upload fields with array relationTo", () => {

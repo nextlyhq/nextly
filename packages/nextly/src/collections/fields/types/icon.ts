@@ -38,16 +38,30 @@ export type IconFieldValue = string | null | undefined;
  * The shape every stored icon id has: a set prefix and an icon name, each
  * of lowercase letters, digits and hyphens, joined by one colon
  * (`"lucide:star"`, `"lucide:arrow-up-right"`). The config validator, the
- * zod schema and the write-path validator all read this one pattern.
+ * zod schema and the write-path validator all read this one pattern, and
+ * bound it by {@link ICON_ID_MAX_LENGTH}.
  */
 export const ICON_ID_PATTERN: RegExp = /^[a-z0-9-]+:[a-z0-9-]+$/;
 
 /**
- * Whether a value has the icon id shape. Checks the shape only: whether
- * the set and the icon exist is a runtime question this does not answer.
+ * The longest icon id that can be stored. An icon column is `varchar(255)` on
+ * MySQL and in a field group's table, so a longer id would pass the shape
+ * check and then fail in the database. The column descriptor's test pins
+ * this to the width it renders for an icon field.
+ */
+export const ICON_ID_MAX_LENGTH = 255;
+
+/**
+ * Whether a value has the icon id shape and fits its column. Checks the
+ * shape only: whether the set and the icon exist is a runtime question this
+ * does not answer.
  */
 export function isIconIdShape(value: unknown): value is string {
-  return typeof value === "string" && ICON_ID_PATTERN.test(value);
+  return (
+    typeof value === "string" &&
+    value.length <= ICON_ID_MAX_LENGTH &&
+    ICON_ID_PATTERN.test(value)
+  );
 }
 
 // ============================================================

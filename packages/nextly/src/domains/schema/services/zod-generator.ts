@@ -36,7 +36,10 @@ import {
   isChipsField,
   isDataField,
 } from "../../../collections/fields/guards";
-import { ICON_ID_PATTERN } from "../../../collections/fields/types/icon";
+import {
+  ICON_ID_MAX_LENGTH,
+  ICON_ID_PATTERN,
+} from "../../../collections/fields/types/icon";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 
 import { fieldAdmitsNull } from "./field-nullability";
@@ -470,10 +473,11 @@ export class ZodGenerator {
     else if (isCodeField(field)) {
       zodSchema = "z.string()";
     }
-    // Icon fields: the id's shape only ("lucide:star"). Whether the set and
-    // the icon exist is a runtime question, so an unknown id still parses.
+    // Icon fields: the id's shape only ("lucide:star"), no longer than its
+    // column. Whether the set and the icon exist is a runtime question, so an
+    // unknown id still parses.
     else if (isIconField(field)) {
-      zodSchema = `z.string().regex(${String(ICON_ID_PATTERN)})`;
+      zodSchema = `z.string().max(${String(ICON_ID_MAX_LENGTH)}).regex(${String(ICON_ID_PATTERN)})`;
     }
     // Number fields
     else if (isNumberField(field)) {
