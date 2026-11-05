@@ -1,0 +1,278 @@
+/**
+ * The dry run of a breakpoint removal over an in-memory site: what each place
+ * would lose, counted by document and by value, named only where the caller
+ * may read, and never reported as nothing where something could not be read.
+ */
+import { DEFAULT_LIMITS, type NamedClass } from "@nextlyhq/blocks-engine";
+import { describe, expect, it } from "vitest";
+
+import type { HostAddress } from "../host-rewrite/contract";
+import type { HostDocument, HostRead } from "../host-rewrite/rewrite";
+import { removedBreakpoints } from "../site-settings";
+
+import {
+  countRemoval,
+  NAMED_AT_MOST,
+  REMOVAL_PLACES,
+  type DryRunDeps,
+} from "./dry-run";
+
+type Node = Record<string, unknown>;
+
+const styled = (id: string, extra: Node = {}): Node => ({
+  id,
+  type: "core/text",
+  version: 1,
+  props: {},
+  styles: { base: { mobile: { color: "#111", padding: "4px" } } },
+  ...extra,
+});
+
+const page = (...nodes: Node[]) => ({ formatVersion: 1, kind: "page", nodes });
+
+const value = (v: unknown) => ({ kind: "value" as const, value: v });
+
+/** One stored document: where it is, how its host is reached, what it holds. */
+interface Stored {
+  host: HostAddress;
+  access?: "write" | "read" | "scan";
+  published?: unknown;
+  draft?: unknown;
+  /** Thrown when it is read. */
+  unreadable?: boolean;
+}
+
+const entry = (slug: string, id: string): HostAddress => ({
+  kind: "collection",
+  slug,
+  id,
+  path: ["content"],
+});
+
+/** A site holding `stored`, with `readable` naming who the caller may read. */
+function site(
+  stored: Stored[],
+  options: {
+    readable?: (host: HostAddress) => boolean;
+    classes?: NamedClass[];
+    deadline?: Date;
+  } = {}
+): DryRunDeps & { named: HostAddress[] } {
+  const named: HostAddress[] = [];
+  const byKey = new Map(stored.map(s => [JSON.stringify(s.host), s]));
+  return {
+    named,
+    documents: async function* () {
+      for (const s of stored) {
+        const document: HostDocument = {
+          key: JSON.stringify(s.host),
+          hosts: [{ host: s.host, access: s.access ?? "write" }],
+        };
+        yield document;
+      }
+    },
+    read: async host => {
+      const s = byKey.get(JSON.stringify(host));
+      if (s === undefined || s.unreadable === true) throw new Error("gone");
+      const read: HostRead = {
+        published:
+          s.published === undefined ? { kind: "absent" } : value(s.published),
+        draft: s.draft === undefined ? null : value(s.draft),
+        liveState: null,
+      };
+      return read;
+    },
+    placeOf: host =>
+      host.kind === "single"
+        ? "singles"
+        : host.slug === "pages"
+          ? "pages"
+          : host.slug === "components"
+            ? "components"
+            : "entries",
+    nameFor: async host => {
+      named.push(host);
+      return (options.readable?.(host) ?? true)
+        ? `${host.slug}/${host.id ?? ""}`
+        : null;
+    },
+    limits: DEFAULT_LIMITS,
+    classes: options.classes ?? [],
+    ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
+  };
+}
+
+const MOBILE = new Map([["mobile", "Mobile"]]);
+
+describe("a breakpoint removal counted across the site", () => {
+  it("counts each place's documents, drafts, styles and hides", async () => {
+    const run = await countRemoval(
+      MOBILE,
+      site([
+        { host: entry("pages", "p1"), published: page(styled("a")) },
+        // Both forms hold it: each is dropped, so each is counted.
+        {
+          host: entry("pages", "p2"),
+          published: page(styled("a")),
+          draft: page(
+            styled("a"),
+            styled("b", {
+              styles: {},
+              visibility: { devices: { mobile: false } },
+            })
+          ),
+        },
+        { host: entry("components", "c1"), published: page(styled("x")) },
+        { host: entry("pages", "plain"), published: page() },
+      ])
+    );
+    const [mobile] = run.removed;
+    expect(mobile?.places.pages).toEqual({
+      documents: 2,
+      drafts: 1,
+      styles: 6,
+      hides: 1,
+    });
+    expect(mobile?.places.components).toEqual({
+      documents: 1,
+      drafts: 0,
+      styles: 2,
+      hides: 0,
+    });
+    // Every place is answered, an empty one with zeros.
+    expect(Object.keys(mobile?.places ?? {})).toEqual([...REMOVAL_PLACES]);
+    expect(mobile?.places.layouts.documents).toBe(0);
+    expect(mobile?.documents).toEqual({
+      named: ["pages/p1", "pages/p2", "components/c1"],
+      unnamed: 0,
+    });
+    expect(run).toMatchObject({ unreadable: 0, complete: true });
+  });
+
+  it("names only what the caller may read, and lists the locked", async () => {
+    const run = await countRemoval(
+      MOBILE,
+      site(
+        [
+          { host: entry("pages", "open"), published: page(styled("a")) },
+          {
+            host: entry("pages", "secret"),
+            published: page(styled("a", { locked: true })),
+          },
+        ],
+        { readable: host => host.id !== "secret" }
+      )
+    );
+    const [mobile] = run.removed;
+    expect(mobile?.documents).toEqual({ named: ["pages/open"], unnamed: 1 });
+    expect(mobile?.locked).toEqual({ named: [], unnamed: 1 });
+    // Counted all the same: the removal drops what it holds.
+    expect(mobile?.places.pages.documents).toBe(2);
+  });
+
+  it("names at most a handful, and counts the rest", async () => {
+    const many: Stored[] = Array.from(
+      { length: NAMED_AT_MOST + 3 },
+      (_, i) => ({
+        host: entry("pages", `p${i}`),
+        published: page(styled("a")),
+      })
+    );
+    const deps = site(many);
+    const [mobile] = (await countRemoval(MOBILE, deps)).removed;
+    expect(mobile?.documents.named).toHaveLength(NAMED_AT_MOST);
+    expect(mobile?.documents.unnamed).toBe(3);
+    // The ones past the cap are never asked about.
+    expect(deps.named).toHaveLength(NAMED_AT_MOST);
+  });
+
+  it("counts what no write can reach as unaddressable, not in a place", async () => {
+    const run = await countRemoval(
+      MOBILE,
+      site([
+        {
+          host: { ...entry("pages", "grouped"), path: ["hero", "content"] },
+          access: "read",
+          published: page(styled("a")),
+        },
+        {
+          host: { ...entry("entries", "rows"), path: [] },
+          access: "scan",
+          published: { rows: [{ body: page(styled("a")) }] },
+        },
+      ])
+    );
+    const [mobile] = run.removed;
+    expect(mobile?.unaddressable).toBe(2);
+    expect(mobile?.places.pages.documents).toBe(0);
+    expect(mobile?.places.entries.documents).toBe(0);
+  });
+
+  it("reports a document it could not read, and a walk its deadline stopped", async () => {
+    const unread = await countRemoval(
+      MOBILE,
+      site([{ host: entry("pages", "p1"), unreadable: true }])
+    );
+    expect(unread).toMatchObject({ unreadable: 1, complete: true });
+
+    const stopped = await countRemoval(
+      MOBILE,
+      site([{ host: entry("pages", "p1"), published: page(styled("a")) }], {
+        deadline: new Date(Date.now() - 1),
+      })
+    );
+    expect(stopped.complete).toBe(false);
+  });
+
+  it("counts the shared styles, and walks nothing when nothing is removed", async () => {
+    const classes: NamedClass[] = [
+      {
+        id: "card",
+        slug: "card",
+        orderIndex: 0,
+        styles: { base: { mobile: { color: "#111" } } },
+        locked: true,
+        label: "Card",
+      },
+    ];
+    const run = await countRemoval(MOBILE, site([], { classes }));
+    expect(run.removed[0]?.sharedStyles).toEqual({
+      classes: 1,
+      styles: 1,
+      locked: ["Card"],
+    });
+
+    let walked = false;
+    const quiet = site([{ host: entry("pages", "p1"), published: page() }]);
+    const none = await countRemoval(new Map(), {
+      ...quiet,
+      documents: async function* () {
+        walked = true;
+        yield* quiet.documents();
+      },
+    });
+    expect(none).toEqual({ removed: [], unreadable: 0, complete: true });
+    expect(walked).toBe(false);
+  });
+});
+
+describe("the breakpoints a new set removes", () => {
+  const set = (...ids: string[]) => ({
+    viewport: ids.map((id, i) => ({
+      id,
+      label: id.toUpperCase(),
+      maxWidth: 1000 - i * 100,
+    })),
+    container: [],
+  });
+
+  it("names each breakpoint the new set no longer defines", () => {
+    expect([
+      ...removedBreakpoints(set("tablet", "mobile"), set("tablet")),
+    ]).toEqual([["mobile", "MOBILE"]]);
+    // Renamed, the same id: not removed.
+    expect(removedBreakpoints(set("tablet"), set("tablet")).size).toBe(0);
+    // The base is every site's.
+    expect(removedBreakpoints(set("tablet"), set()).has("base")).toBe(false);
+  });
+});

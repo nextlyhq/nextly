@@ -170,10 +170,18 @@ function cursorFrom(text: string | null): Cursor | null {
   return null;
 }
 
-/** The walk's hosts on a real site. */
-export function siteHostSource(site: RewriteSite): HostSource {
+/** What walking every document holding blocks needs of the site. */
+export type DocumentSite = Pick<
+  RewriteSite,
+  "nextly" | "collectionSlugs" | "resolveCollection" | "singles" | "locales"
+>;
+
+/** A collection's registry record, resolved once per walk. */
+function collectionResolver(
+  site: Pick<RewriteSite, "resolveCollection">
+): (slug: string) => Promise<unknown> {
   const reaches = new Map<string, Promise<unknown>>();
-  const collection = (slug: string) => {
+  return slug => {
     let held = reaches.get(slug);
     if (held === undefined) {
       held = site.resolveCollection(slug);
@@ -181,6 +189,24 @@ export function siteHostSource(site: RewriteSite): HostSource {
     }
     return held;
   };
+}
+
+/**
+ * Every document on the site holding blocks, with its hosts, after `cursor`:
+ * each collection's entries, then each Single. The walk every reader of the
+ * site's blocks shares, a rewrite's and a count's alike, so none of them
+ * reaches documents another misses.
+ */
+export function siteDocuments(
+  site: DocumentSite
+): (cursor: string | null) => AsyncGenerator<HostDocument> {
+  const collection = collectionResolver(site);
+  return cursor => walkDocuments(site, collection, cursorFrom(cursor));
+}
+
+/** The walk's hosts on a real site. */
+export function siteHostSource(site: RewriteSite): HostSource {
+  const collection = collectionResolver(site);
   return {
     documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
     cursorOf: document => JSON.stringify(cursorOfDocument(document)),
@@ -232,7 +258,7 @@ function cursorOfDocument(document: HostDocument): Cursor {
 
 /** Every document holding blocks: each collection's entries, then each Single. */
 async function* walkDocuments(
-  site: RewriteSite,
+  site: DocumentSite,
   collection: (slug: string) => Promise<unknown>,
   cursor: Cursor | null
 ): AsyncGenerator<HostDocument> {
@@ -244,7 +270,7 @@ async function* walkDocuments(
 
 /** Each collection's entries, by slug and then id, from the cursor on. */
 async function* collectionDocuments(
-  site: RewriteSite,
+  site: DocumentSite,
   collection: (slug: string) => Promise<unknown>,
   cursor: Cursor | null
 ): AsyncGenerator<HostDocument> {
@@ -259,7 +285,7 @@ async function* collectionDocuments(
 
 /** Each Single holding blocks, by slug, after `after` when given. */
 async function* singleDocuments(
-  site: RewriteSite,
+  site: DocumentSite,
   after: string | undefined
 ): AsyncGenerator<HostDocument> {
   const singles = await site.singles();
@@ -282,7 +308,7 @@ function unlisted(what: string): NextlyError {
 
 /** One collection's entries, by id, after `after`. */
 async function* entriesOf(
-  site: RewriteSite,
+  site: DocumentSite,
   slug: string,
   declaration: unknown,
   after: string | undefined
