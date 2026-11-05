@@ -18,6 +18,7 @@ import {
   bindingKindOf,
   DEFAULT_LIMITS,
   deriveSeoFromDocument,
+  hashId,
   isFetchableUrl,
   DOCUMENT_FORMAT_VERSION,
   regionDocument,
@@ -186,7 +187,11 @@ export interface SiteStylesProvider {
     | undefined
     | Promise<SiteStylesInput | undefined>;
   /**
-   * The single slugs `read` consults, so a write to one busts this page.
+   * The single slugs `read` consults, so a write to one busts this page. On a
+   * public route the read is cached, tagged with these, and named by the route
+   * and by this provider: these slugs and the source text of `read`. Two
+   * providers one function makes over different inputs, on routes over the
+   * same content, need their own `cacheScope`.
    *
    * Nextly's write path revalidates `nextly:single:<slug>`; naming the slug
    * here is what puts that tag on the route, exactly as `mediaCollection` does
@@ -2344,15 +2349,32 @@ async function configuredSiteStylesFor(
   // `null` stands for "none" inside the cache, which keeps values as JSON.
   const read = await cachedFind(async () => (await provider.read()) ?? null, {
     tags: provider.singles.flatMap(slug => nextlySingleTags(slug)),
-    // Per route, by what it serves: two routes may state different defaults.
-    keyParts: [
-      "nextly-public-site-styles",
-      config.cacheScope ?? "",
-      JSON.stringify([config.collections, config.field]),
-    ],
+    keyParts: siteStylesKey(config, provider),
     revalidate: await releaseBoundedRevalidate(window),
   });
   return read ?? undefined;
+}
+
+/**
+ * What names a public route's cached site style read: the route, by its scope
+ * and the content it serves, and the provider, by the Singles it declares and
+ * the source text of its `read`. Every part is the same on every server
+ * instance of one build, which a function's identity is not, and two
+ * providers that read differently differ in at least one part, unless one
+ * function made both over different inputs; such routes over the same
+ * content set their own `cacheScope`.
+ */
+function siteStylesKey(
+  config: BlocksPageConfig,
+  provider: SiteStylesProvider
+): string[] {
+  return [
+    "nextly-public-site-styles",
+    config.cacheScope ?? "",
+    JSON.stringify([config.collections, config.field]),
+    JSON.stringify([...provider.singles].sort()),
+    hashId(String(provider.read)),
+  ];
 }
 
 function blocksRouteConfig(

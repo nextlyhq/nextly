@@ -40,6 +40,8 @@ const runtime = vi.hoisted(() => ({
   site: null as Record<string, string | null> | null,
   shapes: new Map<string, unknown>(),
   tags: [] as string[][],
+  /** Each cached read's key parts, beside its tags. */
+  reads: [] as { keyParts: string[]; tags: string[] }[],
   pipelineRuns: 0,
   // Each judgement of what the public may see (a source's hidden fields, its
   // field shapes), and those made outside every cached read.
@@ -76,6 +78,10 @@ vi.mock("nextly/runtime", async importOriginal => {
       options: Parameters<typeof actual.cachedFind>[1]
     ) => {
       runtime.tags.push([...options.tags]);
+      runtime.reads.push({
+        keyParts: [...options.keyParts],
+        tags: [...options.tags],
+      });
       return actual.cachedFind(() => inCache.run(true, read), options);
     },
     readPublicSiteSettings: async () => {
@@ -265,6 +271,7 @@ beforeEach(() => {
   runtime.site = null;
   runtime.shapes = new Map();
   runtime.tags = [];
+  runtime.reads = [];
   runtime.pipelineRuns = 0;
   runtime.judged = [];
   runtime.uncached = [];
@@ -737,6 +744,47 @@ describe("a routed page's bindings", () => {
     );
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.some(Boolean)).toBe(false);
+  });
+
+  it("names a public route's cached site styles by the route and its provider, never sharing them", async () => {
+    const base = { collections: ["pages"], field: "content", blocks };
+    const brand = {
+      read: () => ({ tokenPrefix: "brand" }),
+      singles: ["brand-style"],
+    };
+    const campaign = {
+      read: () => ({ tokenPrefix: "campaign" }),
+      singles: ["campaign-style"],
+    };
+    // Another provider declaring the same Singles, told apart by its read.
+    const sameSingles = {
+      read: () => ({ tokenPrefix: "seasonal" }),
+      singles: ["brand-style"],
+    };
+    const keyOf = async (siteStyles: typeof brand) => {
+      runtime.reads = [];
+      await renderedPage(
+        createPublicBlocksPage,
+        { ...base, siteStyles },
+        instance(boundPage({ $bind: "title" }))
+      );
+      const read = runtime.reads.find(
+        entry => entry.keyParts[0] === "nextly-public-site-styles"
+      );
+      if (read === undefined) throw new Error("no cached site style read");
+      return read;
+    };
+    const first = await keyOf(brand);
+    const again = await keyOf(brand);
+    const other = await keyOf(campaign);
+    const twin = await keyOf(sameSingles);
+    // The control: the same route and provider name one entry every time.
+    expect(again.keyParts).toEqual(first.keyParts);
+    expect(other.keyParts).not.toEqual(first.keyParts);
+    expect(twin.keyParts).not.toEqual(first.keyParts);
+    // Each entry carries its own provider's Singles only.
+    expect(first.tags).toEqual(nextlySingleTags("brand-style"));
+    expect(other.tags).toEqual(nextlySingleTags("campaign-style"));
   });
 
   it("prepares each document once per render, and the renderer reuses that preparation", async () => {
