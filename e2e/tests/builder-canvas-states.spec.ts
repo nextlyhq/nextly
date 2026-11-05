@@ -12,17 +12,31 @@
  *   outlines, so the ratio is computed here from the colours the browser
  *   resolved, painted to a pixel so any colour syntax reads as RGB.
  * - A state's WORDS (a hovered block's name, a component's tag, an empty
- *   container's prompt, the gap's "+") are text: the tags are pseudo-elements
- *   axe cannot see, so they are held to 4.5:1 here; the rest is scanned by
- *   axe, scoped to the editor's chrome layer.
+ *   container's prompt) are text, held to 4.5:1, and the gap's "+" is an
+ *   icon, held to 3:1. All of them are measured here rather than by axe: the
+ *   tags are pseudo-elements axe cannot see, and the rest is drawn in the
+ *   editor's layer OVER the canvas's iframe, where axe cannot resolve the
+ *   ground and leaves every node incomplete. axe still scans the layer, and
+ *   what it could not judge is attached to the result, so a scan that starts
+ *   judging them shows here.
  *
  * @module builder-canvas-states.spec
  */
-import { expect, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import {
+  expect,
+  type Locator,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { expectNoAxeViolations } from "./support/axe";
-import { canvasBlock, canvasFrame, canvasLayer } from "./support/canvas-frame";
+import {
+  CANVAS_FRAME,
+  canvasBlock,
+  canvasFrame,
+  canvasLayer,
+} from "./support/canvas-frame";
 import { uploadImage } from "./support/media-upload";
 import { test } from "./support/test";
 
@@ -120,15 +134,17 @@ async function seed(page: Page): Promise<{ id: string; imageUrl: string }> {
 /**
  * The contrast ratio between two colours as the browser resolved them, each
  * painted to a pixel so `oklch()`, `color()` and the rest all read as RGB.
- * A translucent colour is composited over `ground`.
+ * A translucent background is composited over `under`, the ground it is
+ * drawn on (white when none is named), and the foreground over the result.
  */
 async function contrast(
   page: Page,
   foreground: string,
-  background: string
+  background: string,
+  under = "#ffffff"
 ): Promise<number> {
   return page.evaluate(
-    ([fg, bg]) => {
+    ([fg, bg, base]) => {
       const canvas = document.createElement("canvas");
       canvas.width = 1;
       canvas.height = 1;
@@ -151,13 +167,46 @@ async function contrast(
         };
         return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
       };
-      const ground = paint(bg, "#ffffff");
+      const ground = paint(bg, base);
       const groundColour = `rgb(${ground.slice(0, 3).join(",")})`;
       const a = luminance(paint(fg, groundColour));
       const b = luminance(ground);
       return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     },
-    [foreground, background] as const
+    [foreground, background, under] as const
+  );
+}
+
+/**
+ * What axe left undecided inside the editor's layer, attached to the result.
+ *
+ * Every node there is drawn over the canvas's iframe, whose pixels axe does
+ * not read, so its contrast rule cannot name a ground and reports the node as
+ * incomplete. The ratios this spec measures stand in for that judgement; the
+ * attachment shows which nodes they stand in for and why axe declined.
+ */
+async function attachAxeUndecided(page: Page, testInfo: TestInfo) {
+  const results = await new AxeBuilder({ page })
+    .include("[data-nx-canvas-layer]")
+    .withRules(["color-contrast"])
+    .analyze();
+  const undecided = results.incomplete.flatMap(rule =>
+    rule.nodes.map(node => ({
+      target: node.target.map(String).join(" "),
+      why: node.any.map(check => check.message).join("; "),
+    }))
+  );
+  await testInfo.attach("axe-undecided-in-the-layer", {
+    body: JSON.stringify(
+      { violations: results.violations.length, undecided },
+      null,
+      2
+    ),
+    contentType: "application/json",
+  });
+  // A violation axe COULD judge is still a failure.
+  expect(results.violations, "axe's contrast violations in the layer").toEqual(
+    []
   );
 }
 
@@ -166,6 +215,60 @@ async function canvasGround(page: Page): Promise<string> {
   return canvasFrame(page)
     .locator(".nx-canvas")
     .evaluate(element => getComputedStyle(element).backgroundColor);
+}
+
+/**
+ * The ground a part of the editor's layer is seen against: the nearest
+ * background it or the layer around it paints, else the canvas page's own at
+ * that point, read inside the frame through the frame's zoom. A layer part
+ * with a transparent background shows whatever the page draws beneath it.
+ */
+async function groundBehind(
+  page: Page,
+  part: Locator
+): Promise<{ own: string | null; page: string }> {
+  const own = await part.evaluate(element => {
+    for (
+      let at: Element | null = element;
+      at !== null && !at.hasAttribute("data-nx-canvas-layer");
+      at = at.parentElement
+    ) {
+      const colour = getComputedStyle(at).backgroundColor;
+      if (colour !== "rgba(0, 0, 0, 0)" && colour !== "transparent") {
+        return colour;
+      }
+    }
+    return null;
+  });
+  const box = await part.boundingBox();
+  const frame = page.locator(CANVAS_FRAME);
+  const frameBox = await frame.boundingBox();
+  if (box === null || frameBox === null) throw new Error("not laid out");
+  const laidOutWidth = await frame.evaluate(
+    element => (element as HTMLElement).offsetWidth
+  );
+  const zoom = frameBox.width / laidOutWidth;
+  const x = (box.x + box.width / 2 - frameBox.x) / zoom;
+  const y = (box.y + box.height / 2 - frameBox.y) / zoom;
+  const beneath = await canvasFrame(page)
+    .locator("body")
+    .evaluate(
+      (_body, [px, py]) => {
+        for (
+          let at: Element | null = document.elementFromPoint(px, py);
+          at !== null;
+          at = at.parentElement
+        ) {
+          const colour = getComputedStyle(at).backgroundColor;
+          if (colour !== "rgba(0, 0, 0, 0)" && colour !== "transparent") {
+            return colour;
+          }
+        }
+        return "rgb(255, 255, 255)";
+      },
+      [x, y] as const
+    );
+  return { own, page: beneath };
 }
 
 /** A mark's outline colour, and a pseudo-element tag's colours if asked. */
@@ -250,7 +353,7 @@ for (const theme of ["light", "dark"] as const) {
 
     test("a component's frame and tag, an empty container and the gap's + meet WCAG contrast", async ({
       page,
-    }) => {
+    }, testInfo) => {
       const { id } = await seed(page);
       await open(page, id, theme);
       const ground = await canvasGround(page);
@@ -273,12 +376,28 @@ for (const theme of ["light", "dark"] as const) {
         "the component's tag"
       ).toBeGreaterThanOrEqual(4.5);
 
-      // The empty section's prompt, and the + in a gap the pointer is near.
-      await expect(
-        page.getByRole("button", {
-          name: /Drop a block here, or click to add one, in /,
-        })
-      ).toBeVisible();
+      // The empty section's prompt: its words on its own ground, which is
+      // drawn over the page's.
+      const prompt = page.getByRole("button", {
+        name: /Drop a block here, or click to add one, in /,
+      });
+      await expect(prompt).toBeVisible();
+      const words = prompt.locator(".nx-empty-container-appenders__words");
+      const wordsColour = await words.evaluate(
+        element => getComputedStyle(element).color
+      );
+      const behindWords = await groundBehind(page, words);
+      expect(
+        await contrast(
+          page,
+          wordsColour,
+          behindWords.own ?? behindWords.page,
+          behindWords.page
+        ),
+        "the empty section's prompt"
+      ).toBeGreaterThanOrEqual(4.5);
+
+      // The + in a gap the pointer is near.
       // The first gap's +, named after the block above it.
       const add = page
         .getByRole("button", { name: /^Add a section after / })
@@ -291,7 +410,20 @@ for (const theme of ["light", "dark"] as const) {
       await expect
         .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
         .toBe("1");
-      await expectNoAxeViolations(page, { include: "[data-nx-canvas-layer]" });
+      const plus = await add.evaluate(element => ({
+        icon: getComputedStyle(element.querySelector("svg") ?? element).color,
+        button: getComputedStyle(element).backgroundColor,
+      }));
+      const behindPlus = await groundBehind(page, add);
+      expect(
+        await contrast(page, plus.icon, plus.button, behindPlus.page),
+        "the gap's + against its button"
+      ).toBeGreaterThanOrEqual(3);
+      expect(
+        await contrast(page, plus.button, behindPlus.page),
+        "the gap's button against the page beneath it"
+      ).toBeGreaterThanOrEqual(3);
+      await attachAxeUndecided(page, testInfo);
     });
   });
 }
@@ -315,16 +447,14 @@ test.describe("the canvas while an author works", () => {
     });
 
     await open(page, id, "light");
-    await expect(
-      canvasFrame(page).locator(
-        `img[data-nx-node="${IMAGE}"], [data-nx-node="${IMAGE}"] img`
-      )
-    ).toBeVisible();
+    // The picture is the block's own root, or inside it.
+    const picture = canvasFrame(page)
+      .locator(`img[data-nx-node="${IMAGE}"], [data-nx-node="${IMAGE}"] img`)
+      .first();
+    await expect(picture).toBeVisible();
     await expect
       .poll(() =>
-        canvasBlock(page, IMAGE)
-          .locator("img")
-          .evaluate(image => (image as HTMLImageElement).complete)
+        picture.evaluate(image => (image as HTMLImageElement).complete)
       )
       .toBe(true);
     const first = fetched.length;
