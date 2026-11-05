@@ -29,4 +29,4 @@
 "@nextlyhq/plugin-commerce": patch
 ---
 
-An update that changes only a document's status is judged by publish or unpublish even when it also sends `_overwrite`. Before, the overwrite choice made it read as an edit, so a person or key who may publish but not update was refused ("You can't edit") on an update by query, a batch, a bulk update by ids or a REST save, and a refusal named edit where it should have named publish. A write that names any field beside the status is still an edit.
+An update that changes only a document's status is judged by publish or unpublish even when it also sends `_overwrite`. Before, the overwrite choice made it read as an edit: a person or key who may publish but not update was refused ("You can't edit") on an update by query and in a batch, and a caller who may neither publish nor edit was refused in the words of edit, not publish, on a REST save and a bulk update by ids. A write that names any field beside the status is still an edit.

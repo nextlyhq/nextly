@@ -1214,7 +1214,7 @@ describe.each(getConfiguredTestDialects())(
           () => "applied",
           (error: unknown) => String((error as { code?: unknown }).code)
         );
-      expect(unpublished).not.toBe("FORBIDDEN");
+      expect(["applied", "NOT_FOUND"]).toContain(unpublished);
       expect((await stored(POSTS, id)).status).toBe("draft");
     });
 
@@ -1310,6 +1310,7 @@ describe.each(getConfiguredTestDialects())(
         data: { status: "draft", ...OVERWRITE },
       });
       expect(unpublished.json.errors).toEqual([]);
+      expect((await stored(POSTS, id)).status).toBe("draft");
       expect((await stored(POSTS, other)).status).toBe("draft");
     });
 
@@ -1407,9 +1408,17 @@ describe.each(getConfiguredTestDialects())(
       );
       const byIdsBody = (await byIds.json()) as {
         items?: unknown[];
-        error?: unknown;
+        error?: { code?: unknown; message?: unknown };
+        errors?: { code?: unknown; message?: unknown }[];
       };
-      expect(byIds.status === 403 || byIdsBody.items?.length === 0).toBe(true);
+      // Refused as an edit, whole or for the one row: a route that dropped
+      // the row and answered nothing would not say so.
+      const byIdsRefusal =
+        byIds.status === 403 ? byIdsBody.error : byIdsBody.errors?.[0];
+      expect(byIdsRefusal, JSON.stringify(byIdsBody)).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringMatching(/^You can't edit/),
+      });
       const batch = await pluginServices().collections.updateMany(
         POSTS,
         [{ id, data: edit }],
