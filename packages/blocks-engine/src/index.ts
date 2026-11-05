@@ -724,6 +724,10 @@ export {
   checkCssValue,
   checkDimensionValue,
   checkUrlValue,
+  // Whether a word is one of the keywords legal on every property, which
+  // stands only alone: a shorthand's editor needs it to refuse `underline
+  // inherit`, a value the browser discards whole.
+  isCssWideKeyword,
   // How CSS reads an identifier that carries escapes. Public for the same
   // reason as the namespacing rule: anything deciding what a name IS has to
   // decode it the same way, or `font\2d family` reads as a different property
@@ -1023,6 +1027,15 @@ export type { StyleQuery, StyleSubject } from "./style/style-origin";
 // The stylesheet every page of a site shares, compiled once and addressed by its content.
 export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet, compileSiteTokenSheet } from "./style/site-sheet";
+// A site's spacing model: whether blocks space themselves with their own
+// margins (classic) or take the gap of the container holding them.
+export type { SpacingMode } from "./style/spacing-mode";
+export {
+  DEFAULT_SPACING_MODE,
+  isSpacingMode,
+  SPACING_MODES,
+  spacingModeOf,
+} from "./style/spacing-mode";
 // `outranksEntry` is published beside `styleOrigin` because that function
 // cannot answer every form of the question it answers: it is asked once per
 // STATE, so comparing two states' winners falls to the caller. Published, that

@@ -55,6 +55,7 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
@@ -474,6 +475,17 @@ export function EntryForm({
       publish: () =>
         runAfterRecordings(() => publishAllEntryLocales.mutate(entryId)),
       pending: publishAllPending,
+      preview: () =>
+        entryApi.previewPublishAllLocales(
+          collection.slug ?? collection.name,
+          entryId
+        ),
+      previewKey: [
+        "publish-all-preview",
+        "collection",
+        collection.slug ?? collection.name,
+        entryId,
+      ],
     };
   }, [
     entry?.id,
@@ -1016,8 +1028,9 @@ export function EntryForm({
     writesRefused: removedFromCode,
     contributedActions: documentActions,
     // Read when a contribution is chosen: the page above holds only the
-    // saved entry, and an unsaved title names a scheduled release.
+    // saved entry, and a schedule says when edits are not saved yet.
     currentValues: () => form.getValues(),
+    currentDirty: () => form.formState.isDirty,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,

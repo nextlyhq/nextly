@@ -5,16 +5,37 @@
  * are drawn into.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const can = vi.hoisted(() => ({ update: true }));
+type SpacingAnswer =
+  | { saved: true; refreshed: true }
+  | { saved: true; refreshed: false; issue: string }
+  | { saved: false; issue: string };
+
+const spacing = vi.hoisted(() => ({
+  saved: [] as string[],
+  answer: { saved: true, refreshed: true } as SpacingAnswer,
+  /** Answers one save; by default at once with `answer`. */
+  reply: null as null | ((mode: string) => Promise<SpacingAnswer>),
+}));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) =>
@@ -24,6 +45,14 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
 vi.mock("../site-style-client", () => ({
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: [] })),
+  }),
+  useSaveSpacingMode: () => ({
+    save: (mode: string) => {
+      spacing.saved.push(mode);
+      return spacing.reply === null
+        ? Promise.resolve(spacing.answer)
+        : spacing.reply(mode);
+    },
   }),
   useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
   useFontCatalogueClient: () => ({
@@ -61,7 +90,13 @@ beforeAll(() => {
  * the Variables tab reading from it. The tab is the panel's own state here,
  * as the shell keeps it.
  */
-function Studio({ start }: { start: string }): React.JSX.Element {
+function Studio({
+  start,
+  spacingMode = "classic",
+}: {
+  start: string;
+  spacingMode?: "classic" | "gaps";
+}): React.JSX.Element {
   const [current, choose] = React.useState<string | null>(start);
   return (
     <DesignPanel
@@ -79,6 +114,7 @@ function Studio({ start }: { start: string }): React.JSX.Element {
           }}
           supplied={undefined}
           pending={false}
+          spacingMode={spacingMode}
         >
           {tabs}
         </TokensStudio>
@@ -135,6 +171,110 @@ describe("the Variables studio", () => {
     expect(
       within(header).getByRole("button", { name: "Import or export" })
     ).toBeTruthy();
+  });
+});
+
+describe("the space between blocks", () => {
+  const classic = () =>
+    screen.getByRole("radio", { name: /From each block’s margins/ });
+  const gaps = () =>
+    screen.getByRole("radio", { name: /From the container’s gap/ });
+
+  it("shows the site's model above the spacing variables", () => {
+    can.update = true;
+    renderStudio();
+    const group = screen.getByRole("radiogroup", {
+      name: "Space between blocks",
+    });
+    expect(group).toBeTruthy();
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+    expect((gaps() as HTMLInputElement).checked).toBe(false);
+  });
+
+  beforeEach(() => {
+    spacing.saved.length = 0;
+    spacing.answer = { saved: true, refreshed: true };
+    spacing.reply = null;
+  });
+
+  it("saves a choice and shows it at once", async () => {
+    can.update = true;
+    renderStudio();
+    fireEvent.click(gaps());
+    expect((gaps() as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
+  });
+
+  it("lets the latest of two quick choices win, sent in the order they were made", async () => {
+    can.update = true;
+    const pending: ((answer: SpacingAnswer) => void)[] = [];
+    spacing.reply = () =>
+      new Promise<SpacingAnswer>(resolve => pending.push(resolve));
+    renderStudio();
+    fireEvent.click(gaps());
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
+    fireEvent.click(classic());
+    // The second waits for the first, so the server cannot store them out of
+    // order; the screen shows the latest choice meanwhile.
+    await act(() => new Promise(resolve => setTimeout(resolve, 20)));
+    expect(spacing.saved).toEqual(["gaps"]);
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+    // The first answers, refused: it is superseded, so it neither rolls the
+    // choice back nor speaks.
+    pending[0]?.({ saved: false, issue: "An older refusal." });
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps", "classic"]));
+    expect(screen.queryByText("An older refusal.")).toBeNull();
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+    pending[1]?.({ saved: true, refreshed: true });
+    await waitFor(() =>
+      expect((classic() as HTMLInputElement).checked).toBe(true)
+    );
+  });
+
+  it("never sends a choice replaced before its turn", async () => {
+    can.update = true;
+    const pending: ((answer: SpacingAnswer) => void)[] = [];
+    spacing.reply = () =>
+      new Promise<SpacingAnswer>(resolve => pending.push(resolve));
+    renderStudio();
+    fireEvent.click(gaps());
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
+    fireEvent.click(classic());
+    fireEvent.click(gaps());
+    pending[0]?.({ saved: true, refreshed: true });
+    await waitFor(() => expect(spacing.saved).toEqual(["gaps", "gaps"]));
+    pending[1]?.({ saved: true, refreshed: true });
+    expect((gaps() as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("keeps a stored choice shown and says so when the editor could not read it back", async () => {
+    can.update = true;
+    spacing.answer = {
+      saved: true,
+      refreshed: false,
+      issue: "Saved, but not read back.",
+    };
+    renderStudio();
+    fireEvent.click(gaps());
+    expect(await screen.findByText("Saved, but not read back.")).toBeTruthy();
+    expect((gaps() as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("puts the stored model back and says why when the save is refused", async () => {
+    can.update = true;
+    spacing.answer = { saved: false, issue: "Not allowed here." };
+    renderStudio();
+    fireEvent.click(gaps());
+    expect(await screen.findByText("Not allowed here.")).toBeTruthy();
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("offers no other model to a role that may not change the site style", () => {
+    can.update = false;
+    renderStudio();
+    expect((gaps() as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(gaps());
+    expect(spacing.saved).toEqual([]);
   });
 });
 
