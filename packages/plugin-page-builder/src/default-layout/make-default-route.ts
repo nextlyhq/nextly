@@ -140,7 +140,9 @@ async function makeDefault(
     );
   }
 
-  await writeLayoutSettings(nextly, slugs, {
+  // Whatever the settings hold now: choosing this Layout depends on none of
+  // it, so of two calls at once the later write wins, as said above.
+  await writeLayoutSettings(nextly, slugs, "overwrite", {
     defaultLayout: id,
     defaultLayoutChangedBy: by.userId,
   });
@@ -221,10 +223,10 @@ async function restoreIfUnusable(
   const published = (await publishedLayoutIds(nextly, slugs, [id])).has(id);
   const fenced = (await removals.removalOf(id)) !== null;
   if (published && !fenced) return;
-  const stillOurs =
-    (await readLayoutSettings(nextly, slugs)).defaultLayout === id;
+  const latest = await readLayoutSettings(nextly, slugs);
+  const stillOurs = latest.defaultLayout === id;
   if (stillOurs) {
-    await writeLayoutSettings(nextly, slugs, {
+    await writeLayoutSettings(nextly, slugs, latest, {
       defaultLayout: previous,
       defaultLayoutChangedBy: previousChangedBy,
     });

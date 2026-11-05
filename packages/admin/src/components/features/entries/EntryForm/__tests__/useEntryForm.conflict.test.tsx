@@ -228,6 +228,48 @@ describe("the version the editor's copy started from", () => {
     );
   });
 
+  it("does not pin a refusal that arrives once the form shows another entry", async () => {
+    // The refusal is about the first entry: pinned on the second, Save anyway
+    // would write the first's values over the second.
+    let refuseFirst: (reason: unknown) => void = () => {};
+    update.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuseFirst = reject;
+        })
+    );
+    const rendered = render({ ...stored, _rev: "5" });
+    act(() => {
+      rendered.result.current.form.setValue("title", "First's edit", {
+        shouldDirty: true,
+      });
+    });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = rendered.result.current.handleSubmit();
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+
+    const second = {
+      id: "e2",
+      title: "Second",
+      summary: "theirs",
+      updatedAt: "2026-10-19T03:00:00.000Z",
+      _rev: "5",
+    };
+    act(() => rendered.rerender({ entry: second }));
+    await act(async () => {
+      refuseFirst(staleVersion());
+      await saving.catch(() => {});
+    });
+
+    expect(rendered.result.current.versionConflict).toBeNull();
+    await act(async () => {
+      await rendered.result.current.saveAnyway();
+    });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
   it("moves to a newer version a read brings while nothing is pinned", async () => {
     const rendered = render();
     act(() => rendered.rerender({ entry: anas }));
@@ -383,6 +425,58 @@ describe("a save refused because the document changed since", () => {
       await rendered.result.current.saveAnyway();
     });
 
+    expect(rendered.result.current.form.getValues("related")).toEqual([
+      { id: "a1", title: "Seen" },
+      hidden,
+    ]);
+  });
+
+  it("save anyway after a refused publish leaves the form as it is, a hidden link included", async () => {
+    // A status write carries no form values: overwriting it stores the
+    // status alone, as a publish that went through does, and the form keeps
+    // what it holds rather than taking an answer that leaves out the link.
+    const related = {
+      name: "posts",
+      label: "Posts",
+      fields: [
+        { name: "title", type: "text", label: "Title" },
+        {
+          name: "related",
+          type: "relationship",
+          label: "Related",
+          relationTo: "articles",
+          hasMany: true,
+        },
+      ],
+    } as never;
+    const hidden = { id: "a2", [RESTRICTED_REFERENCE]: true };
+    const withHidden = {
+      ...stored,
+      related: [{ id: "a1", title: "Seen" }, hidden],
+    };
+    update.mockRejectedValueOnce(staleVersion());
+    update.mockResolvedValueOnce(
+      answered({
+        ...withHidden,
+        status: "published",
+        related: [{ id: "a1", title: "Seen" }],
+        _rev: "5",
+      })
+    );
+    const rendered = renderHook(() =>
+      useEntryForm({ collection: related, entry: withHidden, mode: "edit" })
+    );
+    await act(async () => {
+      await rendered.result.current.writeStatus("published");
+    });
+
+    await act(async () => {
+      await rendered.result.current.saveAnyway();
+    });
+
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "published", _overwrite: true })
+    );
     expect(rendered.result.current.form.getValues("related")).toEqual([
       { id: "a1", title: "Seen" },
       hidden,

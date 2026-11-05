@@ -967,10 +967,13 @@ function makeFakeRegistry(seed: {
 function makeFakeAdapter() {
   return {
     dialect: "postgresql" as const,
-    getDrizzle: vi.fn().mockReturnValue({}),
+    // The index names a change takes are looked up across the schema even for a table that does
+    // not exist yet: nothing holds them here, in node-postgres's `{ rows }` shape.
+    getDrizzle: vi.fn().mockReturnValue({
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    }),
     update: vi.fn().mockResolvedValue(undefined),
-    // Asked before the apply, for the index names a change takes and for the companion. No
-    // table here, so neither reads the stubbed Drizzle handle.
+    // Asked before the apply, for the index names a change takes and for the companion.
     tableExists: vi.fn().mockResolvedValue(false),
   };
 }
