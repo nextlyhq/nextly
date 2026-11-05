@@ -52,10 +52,7 @@ import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
-import {
-  recordOverwriteEvent,
-  recordTransitionEvents,
-} from "../../content-events/write-event";
+import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   readComponentSubtrees,
@@ -105,7 +102,7 @@ import {
 } from "../../versions/document-revision";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
-import { overwriteRecordOf } from "../../versions/overwrite-record";
+import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   judgeSharedValues,
   type LanguageOutcome,
@@ -657,20 +654,17 @@ export class SinglePublishAllService extends BaseService {
       },
       stale.holder
     );
-    if (stale.check.kind !== "overwrite") return;
-    await recordOverwriteEvent(
+    await recordOverwriteIfAsked(
       tx,
       { adapter: this.adapter },
+      stale.check,
       {
         subject: { kind: "single", slug: plan.slug, id: plan.existingDoc.id },
         actor: plan.actor,
         personName: version.personName,
         locale: null,
-        ...overwriteRecordOf(stale.check, {
-          main: before?.main,
-          languages: Object.values(before?.languages ?? {}),
-        }),
-      }
+      },
+      { main: before }
     );
   }
 

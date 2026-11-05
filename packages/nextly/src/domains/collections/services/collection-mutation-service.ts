@@ -174,7 +174,6 @@ import type { SupportedDialect } from "../../../types/database";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
-  recordOverwriteEvent,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -289,7 +288,7 @@ import {
   sweepDeletedDocument,
 } from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
-import { overwriteRecordOf } from "../../versions/overwrite-record";
+import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   judgeSharedValues,
   type LanguageOutcome,
@@ -2121,7 +2120,7 @@ export class CollectionMutationService extends BaseService {
    * overwrite: whatever the collection keeps, in the write's transaction, so
    * a save that cannot record it is not kept either. Whom it replaced is read
    * from `before`, the rows as the save found them before writing. See
-   * `recordOverwriteEvent`.
+   * `recordOverwriteIfAsked` in `versions/overwrite-record`.
    */
   private async recordOverwriteIfAsked(
     tx: TransactionContext,
@@ -2140,24 +2139,17 @@ export class CollectionMutationService extends BaseService {
       locale: string | undefined;
     }
   ): Promise<void> {
-    if (check.kind !== "overwrite") return;
-    await recordOverwriteEvent(
+    await recordOverwriteIfAsked(
       tx,
       { adapter: this.adapter },
+      check,
       {
         subject: { kind: "collection", slug: target.collection, id: target.id },
         actor: actorForWrite(target.actor, target.user),
         personName: target.user?.name ?? null,
         locale: before.locale ?? null,
-        ...overwriteRecordOf(check, {
-          main: before.main?.main,
-          language: before.language,
-          // Every language a write over all of them judged, as the main row's
-          // read under the lock carries them, where none are given apart.
-          languages:
-            before.languages ?? Object.values(before.main?.languages ?? {}),
-        }),
-      }
+      },
+      before
     ).catch(err => {
       // See `recordHistoryEvent`: the transaction must not keep the write.
       throw markWriteIntegrityFailure(err);
