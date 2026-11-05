@@ -624,14 +624,20 @@ async function beginRemoval(args: {
     stored.breakpoints ?? null,
     runStarterOf(ctx)
   );
+  let counted: RemovalDryRun;
   try {
     // Counted before anything is stripped, for the audit trail.
-    const counted = await removal.count(
+    counted = await removal.count(
       removed,
       currentStyle(removal, stored).classes ?? [],
       ctx,
       new Date(Date.now() + removal.cascade.countMs)
     );
+  } catch (error) {
+    await service.abandon(run.id);
+    throw error;
+  }
+  try {
     await writeRemovalSet({
       breakpoints: args.breakpoints,
       ctx,
@@ -640,10 +646,44 @@ async function beginRemoval(args: {
       stored,
       removedIds: new Set(removed.keys()),
     });
-    return { run, counted };
   } catch (error) {
-    await service.abandon(run.id);
-    throw error;
+    // A write can commit and still throw (a hook after it failed): then the
+    // set is stored, and dropping the run would leave every document holding
+    // what the site no longer defines, with no run to strip it. So the
+    // Single is read again, and the run is dropped only when the set did not
+    // land.
+    const landed = await setLanded(removal, ctx, args.breakpoints);
+    if (landed === false) {
+      await service.abandon(run.id);
+      throw error;
+    }
+    // Unknown: the run is kept and the save refused. Had the set landed,
+    // the removal job walks the run; had it not, the job closes it once it
+    // is past being prepared (`service`), its ids still defined.
+    if (landed === undefined) throw error;
+    removal.cascade.logError?.(
+      "[page-builder] a breakpoint removal's write threw after its set was " +
+        "stored; the removal goes on.",
+      { runId: run.id, error }
+    );
+  }
+  return { run, counted };
+}
+
+/**
+ * Whether the Single now stores `breakpoints`, read again after a write that
+ * threw; `undefined` when that read fails too, and nothing can be known.
+ */
+async function setLanded(
+  removal: BreakpointRemoval,
+  ctx: BreakpointsRouteContext,
+  breakpoints: SiteBreakpointsRequest["breakpoints"]
+): Promise<boolean | undefined> {
+  try {
+    const read = await removal.stored(ctx);
+    return sameStoredValue(readStoredJson(read.breakpoints), breakpoints);
+  } catch {
+    return undefined;
   }
 }
 
@@ -683,9 +723,11 @@ async function saveBreakpoints(
   // Stripping the site is what the person confirmed after the dry run, never
   // a side effect of an ordinary save: unconfirmed, the set is stored and the
   // values under a removed breakpoint stay, inert, as they always have.
+  // Before the set is stored, and refusing the save when it fails: see
+  // `retireReadded`.
+  await retireReadded(service, now, after);
   if (removed.size === 0 || !confirmed) {
     await writeSiteStyle(nextly, ctx, { breakpoints }, versionToWrite(stored));
-    await retireReadded(removal, service, now, after);
     return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
       breakpoints,
     });
@@ -699,7 +741,6 @@ async function saveBreakpoints(
     stored,
     removed,
   });
-  await retireReadded(removal, service, now, after);
   await auditRemoval(ctx, req, run.id, counted);
   let report: RewriteReport;
   try {
@@ -727,15 +768,18 @@ async function saveBreakpoints(
 }
 
 /**
- * Give up earlier removals' claims on the ids a stored set defines again, so
- * a later removal of the same id (confirmed or not) is never carried out with
- * an old run's set. Run once the set is stored, never before: a refused write
- * defines nothing. A failure is logged rather than answered, since the set is
- * stored; the old run then keeps its claim, which only a write bringing
- * values back under an id the site does not define could act on.
+ * Give up earlier removals' claims on the ids a set defines again, so a later
+ * removal of the same id (confirmed or not) is never carried out with an old
+ * run's set, and never strips values authored under the id since.
+ *
+ * Before the set is stored, and a failure refuses the save: a re-add stored
+ * with the old claims in place could later strip those new values. The other
+ * order is the harmless one. Should the write then fail, the old runs have
+ * given up a claim on an id the site still does not define, which only stops
+ * them stripping values a later write brings back under it: values the
+ * stylesheet does not emit, which stay where they are.
  */
 async function retireReadded(
-  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade },
   service: BreakpointRemovalService,
   now: BreakpointSet | undefined,
   after: BreakpointSet | undefined
@@ -745,15 +789,7 @@ async function retireReadded(
     .map(context => context.id)
     .filter(id => !before.has(id));
   if (readded.length === 0) return;
-  try {
-    await service.retire(readded);
-  } catch (error) {
-    removal.cascade.logError?.(
-      "[page-builder] breakpoints defined again were stored, but the earlier " +
-        "removals of them could not be marked as given up.",
-      { readded, error }
-    );
-  }
+  await service.retire(readded);
 }
 
 /** A walk that did not run: nothing done, and not finished. */

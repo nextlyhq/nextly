@@ -322,6 +322,70 @@ describe("a removal of a breakpoint a code-supplied shared style holds", () => {
   });
 });
 
+describe("a removal's write whose outcome its error does not tell", () => {
+  it("keeps the run of a write that stored its set and then threw", async () => {
+    const single = versionedSingle({ breakpoints: set(DESKTOP, TABLET) });
+    // The write commits; a hook after it throws.
+    const commit = single.nextly.updateSingle;
+    single.nextly.updateSingle = vi.fn(async args => {
+      await commit(args);
+      throw new Error("an after-update hook failed");
+    });
+    const { service, abandon } = fakeService();
+    const removal = removalOver(single, service);
+
+    const response = await writeSiteBreakpoints(
+      post(set(DESKTOP)),
+      ctx,
+      single.nextly,
+      removal
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { item: unknown };
+    expect(body.item).toMatchObject({ removal: { runId: "run-1" } });
+    expect(single.doc.breakpoints).toEqual(set(DESKTOP));
+    expect(abandon).not.toHaveBeenCalled();
+  });
+
+  it("drops the run of a write that threw and stored nothing", async () => {
+    const single = versionedSingle({ breakpoints: set(DESKTOP, TABLET) });
+    single.nextly.updateSingle = vi.fn(async () => {
+      throw new Error("the database is unreachable");
+    });
+    const { service, abandon } = fakeService();
+    const removal = removalOver(single, service);
+
+    await expect(
+      writeSiteBreakpoints(post(set(DESKTOP)), ctx, single.nextly, removal)
+    ).rejects.toThrow("the database is unreachable");
+    expect(abandon).toHaveBeenCalledWith("run-1");
+  });
+});
+
+describe("a re-add whose old runs cannot give up their claim", () => {
+  it("refuses the save and stores nothing", async () => {
+    const single = versionedSingle({ breakpoints: set(DESKTOP) });
+    const { service } = fakeService({
+      retire: async () => {
+        throw new Error("the runs table cannot be written");
+      },
+    });
+    const removal = removalOver(single, service);
+
+    await expect(
+      writeSiteBreakpoints(
+        post(set(DESKTOP, TABLET)),
+        ctx,
+        single.nextly,
+        removal
+      )
+    ).rejects.toThrow("the runs table cannot be written");
+    // The re-add is not stored with the old claims in place.
+    expect(single.doc.breakpoints).toEqual(set(DESKTOP));
+  });
+});
+
 describe("a removal whose walk fails after its set is stored", () => {
   it("answers with its run, still going, for its route to carry on", async () => {
     const single = versionedSingle({ breakpoints: set(DESKTOP, TABLET) });
