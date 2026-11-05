@@ -500,6 +500,19 @@ function truncationNotice(
   ];
 }
 
+/**
+ * Whether one leaf accepts a literal value, by the same rules the validator
+ * judges a stored value by.
+ *
+ * For an editor deciding what to offer at a position before anything is
+ * written, such as which of a site's variables a field may take: asked here so
+ * the offer and the write path cannot disagree about what a property allows.
+ * Literal values only; a token reference's site lookup is not this question.
+ */
+export function leafAcceptsValue(leaf: StyleLeaf, value: unknown): boolean {
+  return leafIssues(leaf, value, "").every(issue => issue.severity !== "error");
+}
+
 /** Validate a value against one leaf descriptor. */
 function leafIssues(
   leaf: StyleLeaf,

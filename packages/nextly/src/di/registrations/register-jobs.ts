@@ -281,8 +281,10 @@ export function registerJobServices(ctx: RegistrationContext): void {
     // reserved namespace, and `JobRegistry.register` refuses a duplicate slug
     // outright rather than replacing the incumbent — which would make the
     // winner depend on load order and leave the loser silently unrun.
-    for (const { definition } of declaredJobs) {
-      registry.register(definition);
+    // With the plugin that declared each, so the registry answers which
+    // sweeps a plugin may run as its own.
+    for (const { definition, plugin } of declaredJobs) {
+      registry.register(definition, { plugin });
     }
 
     return registry;

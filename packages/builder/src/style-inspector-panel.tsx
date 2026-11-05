@@ -32,7 +32,9 @@
 import {
   findNode,
   isRawColour,
+  isStyleLeaf,
   isTokenRef,
+  STYLE_CATALOG,
   trimCssWhitespace,
   walkNodes,
   type BreakpointId,
@@ -72,18 +74,25 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
+  Slider,
   TooltipProvider,
 } from "@nextlyhq/ui";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import * as React from "react";
 
+import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
-import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import {
+  breakpointQueries,
+  liveBreakpointsFor,
+  matchedBreakpoints,
+} from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { commitOnEnter } from "./commit-on-enter";
+import { DecorationField, drawsDecoration } from "./decoration-field";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
@@ -101,9 +110,21 @@ import {
   lockViewOf,
 } from "./inspector";
 import type { InspectorSectionKey } from "./inspector-sections";
+import {
+  LabelScrubRow,
+  useLabelScrub,
+  useLabelScrubProps,
+} from "./label-scrub";
 import { layerLabel } from "./layers";
-import { usePrefersDark } from "./prefers-dark";
+import {
+  CanvasTokenModeProvider,
+  useCanvasTokenMode,
+  useCanvasTokenModeAt,
+} from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
+import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
+import { SectionHeld } from "./section-held";
+import type { SharedStyleRow } from "./shared-style-library";
 import {
   moveToSharedStyleClear,
   planMoveToSharedStyle,
@@ -123,15 +144,16 @@ import {
   activeTokenMode,
   colourHexOf,
   colourShowable,
-  colourTokenFor,
-  colourTokenLabel,
-  colourTokensFor,
+  foldedLeaf,
+  variableFor,
+  variableLabel,
+  variablesFor,
   contrastAtLeaf,
   contrastObscuredAbove,
   contrastObscuredIn,
   contrastPartnerOf,
   contrastRatioText,
-  type ColourToken,
+  type SiteVariable,
 } from "./style-colour";
 import {
   formNamesOf,
@@ -144,6 +166,7 @@ import {
   foldedControlFor,
   lineHeightFromText,
   lineHeightLeafFor,
+  lineHeightScrubOrigin,
   storedKey,
   type FoldedControl,
   type FoldedOption,
@@ -160,6 +183,8 @@ import {
   CSS_NUMBER,
   measurementOf,
   measurementOfText,
+  scrubbedValue,
+  scrubOrigin,
   steppedValue,
   toggleOptionsFor,
   toggleShows,
@@ -172,6 +197,7 @@ import {
   breakpointSource,
   inheritedProvenance,
   propertiesWriting,
+  provenanceBeneath,
   type BreakpointBadge,
   type BreakpointSource,
   type StyleProvenance,
@@ -191,6 +217,8 @@ import {
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
+import { tokenForTypedName } from "./style-variables";
+import { VariableChip, VariableChoice } from "./variable-choice";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 
 /**
@@ -221,6 +249,12 @@ interface ProvenanceAnswer {
    * than as missing.
    */
   jump?: () => void;
+  /**
+   * What the control would show without the block's own value at the
+   * position being edited, judged at the edited tier: the source the
+   * "overrides" line names, and what its Reset shows again.
+   */
+  beneath: StyleProvenance;
 }
 
 type ProvenanceOf = (leaf: StyleLeaf) => ProvenanceAnswer | undefined;
@@ -395,6 +429,12 @@ export interface StyleInspectorPanelProps {
    * families. Absent, it lists the variables and the system families.
    */
   fonts?: FontChoices;
+  /**
+   * Whether the tab says above its controls why a held block's design can't
+   * be changed. True when omitted. A host that says it already, as the
+   * inspector's block card does, turns it off, so the reason is said once.
+   */
+  showReadOnlyReason?: boolean;
 }
 
 /**
@@ -513,6 +553,7 @@ function StyleInspectorBody({
   liveBreakpoints,
   onJumpToBreakpoint,
   target = BLOCK_TARGET,
+  showReadOnlyReason = true,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -526,7 +567,10 @@ function StyleInspectorBody({
   const [chosenForms, setChosenForms] = React.useState<Record<string, number>>(
     {}
   );
-  const prefersDark = usePrefersDark();
+  // The mode the selected block is drawn in, its nearest theme marker first
+  // and the device after, read once here and handed to every control below.
+  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  const prefersDark = tokenMode === "dark";
   /*
    * What the browser is applying, or `undefined` when nobody can say.
    *
@@ -567,7 +611,7 @@ function StyleInspectorBody({
     variantAt: (property, path) => chosenForms[formKey(property, path)],
     media: rendersMedia(renderedTag),
     breakpoints,
-    cascade: cascadeFor(cascade, subject),
+    cascade: targetCascade(target, cascadeFor(cascade, subject)),
     // A shared target's values are the style's own, so the controls show
     // and offer what the style stores rather than what the block does.
     styles: targetStyles(target),
@@ -676,28 +720,32 @@ function StyleInspectorBody({
 
   return (
     <StyleTargetContext.Provider value={target}>
-      <div className="nx-style-inspector" data-style-target={target.kind}>
-        <ReadOnlyNote target={target} reason={readOnlyReason} />
-        <NoStyleProperties count={inspected.sections.length} />
-        <Accordion
-          type="single"
-          collapsible
-          value={open}
-          onValueChange={setOpenGroup}
-        >
-          {inspected.sections.map(section => (
-            <StyleSectionItem
-              // Keyed by node AND group: a bare group would let React reuse one
-              // block's inputs for the next block's same-named section, so a field
-              // would keep the previous block's uncommitted text.
-              key={`${inspected.nodeId}:${section.key}`}
-              section={section}
-              readOnlyReason={readOnlyReason}
-              {...surroundings}
-            />
-          ))}
-        </Accordion>
-      </div>
+      <CanvasTokenModeProvider value={tokenMode}>
+        <div className="nx-style-inspector" data-style-target={target.kind}>
+          {showReadOnlyReason ? (
+            <ReadOnlyNote target={target} reason={readOnlyReason} />
+          ) : null}
+          <NoStyleProperties count={inspected.sections.length} />
+          <Accordion
+            type="single"
+            collapsible
+            value={open}
+            onValueChange={setOpenGroup}
+          >
+            {inspected.sections.map(section => (
+              <StyleSectionItem
+                // Keyed by node AND group: a bare group would let React reuse one
+                // block's inputs for the next block's same-named section, so a field
+                // would keep the previous block's uncommitted text.
+                key={`${inspected.nodeId}:${section.key}`}
+                section={section}
+                readOnlyReason={readOnlyReason}
+                {...surroundings}
+              />
+            ))}
+          </Accordion>
+        </div>
+      </CanvasTokenModeProvider>
     </StyleTargetContext.Provider>
   );
 }
@@ -1055,26 +1103,28 @@ function SectionFields({
       : undefined;
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
-      {rings === undefined ? null : (
-        <SpacingBox
-          margin={rings.margin}
-          padding={rings.padding}
-          surroundings={surroundings}
-        />
-      )}
-      {(rings?.rest ?? shown).map(property => (
-        <StylePropertyFields
-          key={`${surroundings.nodeId}:${property.property}`}
-          property={property}
-          namesSection={property.property === sectionKey}
-          {...surroundings}
-        />
-      ))}
-      {shown.length === 0 ? (
-        <p className="nx-inspector__note">
-          Nothing set here yet. Add a property from More.
-        </p>
-      ) : null}
+      <SectionHeld.Provider value={readOnly}>
+        {rings === undefined ? null : (
+          <SpacingBox
+            margin={rings.margin}
+            padding={rings.padding}
+            surroundings={surroundings}
+          />
+        )}
+        {(rings?.rest ?? shown).map(property => (
+          <StylePropertyFields
+            key={`${surroundings.nodeId}:${property.property}`}
+            property={property}
+            namesSection={property.property === sectionKey}
+            {...surroundings}
+          />
+        ))}
+        {shown.length === 0 ? (
+          <p className="nx-inspector__note">
+            Nothing set here yet. Add a property from More.
+          </p>
+        ) : null}
+      </SectionHeld.Provider>
     </fieldset>
   );
 }
@@ -1698,12 +1748,16 @@ function StyleFieldLabel({
   descendant: string | undefined;
 }): React.JSX.Element {
   const namedAbove = React.useContext(NamedAbove);
+  // Dragging the label to change a number field's value, while it can.
+  const scrub = useLabelScrubProps();
   return (
     <Label
       id={id}
       htmlFor={readOnly || focusOnly ? undefined : htmlFor}
       title={title}
       data-named-above={namedAbove ? "" : undefined}
+      // A read-only field's label names nothing, so it drags nothing either.
+      {...(readOnly ? {} : scrub)}
       {...(focusOnly && !readOnly
         ? {
             onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
@@ -1861,33 +1915,36 @@ function StyleControlField({
       data-side={side}
       {...writes.caption}
     >
-      <StyleFieldLabel
-        id={labelId}
-        htmlFor={id}
-        readOnly={readOnly}
-        focusOnly={drawsIcons(control.leaf)}
-        title={summary}
-        label={label}
-        answer={answer}
-        editing={editing}
-        descendant={control.leaf.descendant}
-      />
-      <InheritedValue.Provider value={inherited}>
-        <ControlOrFont
-          id={id}
-          labelledBy={labelId}
-          control={control}
-          stored={stored}
-          actionName={actionName}
-          clearOnly={clearOnly}
-          tokens={tokens}
-          prefersDark={prefersDark}
-          pairedColour={pairedColour}
-          obscuredBy={obscuredBy}
-          describedBy={describedBy}
-          onCommit={commit}
+      {/* The label drags the value the number field below offers it. */}
+      <LabelScrubRow subject={`${nodeId} ${targetKey(writes.target)}`}>
+        <StyleFieldLabel
+          id={labelId}
+          htmlFor={id}
+          readOnly={readOnly}
+          focusOnly={labelFocusOnly(control.leaf, stored)}
+          title={summary}
+          label={label}
+          answer={answer}
+          editing={editing}
+          descendant={control.leaf.descendant}
         />
-      </InheritedValue.Provider>
+        <InheritedValue.Provider value={inherited}>
+          <ControlOrFont
+            id={id}
+            labelledBy={labelId}
+            control={control}
+            stored={stored}
+            actionName={actionName}
+            clearOnly={clearOnly}
+            tokens={tokens}
+            prefersDark={prefersDark}
+            pairedColour={pairedColour}
+            obscuredBy={obscuredBy}
+            describedBy={describedBy}
+            onCommit={commit}
+          />
+        </InheritedValue.Provider>
+      </LabelScrubRow>
       <BreakpointAction
         answer={answer}
         label={actionName}
@@ -1899,6 +1956,7 @@ function StyleControlField({
       />
       <SharedValueLine
         target={target}
+        answer={answer}
         nodeStyles={nodeStyles}
         address={address}
         actionName={actionName}
@@ -2053,9 +2111,18 @@ function provenanceReader({
       badge.kind === "inherited" && badge.source.selectable
         ? badge.source.breakpoint
         : undefined;
+    /*
+     * At the tiers that match where the write lands rather than at the
+     * canvas's width: the line describes the position being edited.
+     */
+    const beneath = provenanceBeneath({
+      ...query,
+      liveBreakpoints: liveBreakpointsFor(breakpoints, breakpoint),
+    });
     return {
       provenance,
       badge,
+      beneath,
       ...(onJumpToBreakpoint === undefined || target === undefined
         ? {}
         : { jump: () => onJumpToBreakpoint(target) }),
@@ -2507,6 +2574,11 @@ function ControlValue({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // Read before any branch, as hooks must be: a folded union offers the
+  // variables either of its arms takes, and a side of the spacing box has
+  // room for a held variable's name and its clear, not a ◇ as well.
+  const fold = React.useContext(FoldedUnion);
+  const compact = React.useContext(CompactSides);
   if (clearOnly) {
     return (
       <RetainedValue
@@ -2556,13 +2628,25 @@ function ControlValue({
       />
     );
   }
+  /*
+   * A held variable, by name in place of the typed value, with the ◇ beside it
+   * to choose another. Every reference reaches this, including one at a leaf
+   * that takes no variable or to a variable the site no longer has: the chip
+   * still names it and removes it, and the ◇ draws only where a choice exists.
+   * Typing over a reference is not offered, because the text would store the
+   * variable's NAME as a literal, which compiles to nothing.
+   */
   if (isTokenRef(stored)) {
     return (
-      <TokenValue
+      <HeldVariable
+        id={id}
         labelledBy={labelledBy}
-        label={actionName}
-        name={stored.$token}
-        onClear={() => onCommit(null)}
+        leaf={variableLeafOf(control.leaf, fold)}
+        identity={stored.$token}
+        actionName={actionName}
+        tokens={tokens}
+        compact={compact}
+        onCommit={onCommit}
       />
     );
   }
@@ -2589,6 +2673,7 @@ function ControlValue({
       control={control}
       stored={stored}
       actionName={actionName}
+      tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -2596,46 +2681,100 @@ function ControlValue({
 }
 
 /**
- * A stored design-token reference, which is a value no text field can edit.
- *
- * Shown by name with a way to remove it rather than as editable text: `{$token}`
- * is one value spelled as an object, and typing over it would store the token's
- * NAME as a literal — a value that looks right in the field and compiles to
- * nothing. Choosing a token is the token picker's job and it does not exist
- * yet, so what is offered here is the honest half: see it, or clear it.
+ * A field holding a variable: the chip naming it, and the ◇ to choose
+ * another, or, in a side of the spacing box, where there is no room for both,
+ * the chip alone with its name as the way to choose.
  */
-function TokenValue({
+function HeldVariable({
+  id,
   labelledBy,
-  label,
-  name,
-  onClear,
+  leaf,
+  identity,
+  actionName,
+  tokens,
+  compact,
+  onCommit,
 }: {
-  /** The id of the label element that names this value. */
+  /** The id the typed field takes again once the variable is cleared. */
+  id: string;
   labelledBy: string;
-  label: string;
-  name: string;
-  onClear: () => void;
+  /** The leaf the field's variables are offered for; see `variableLeafOf`. */
+  leaf: StyleLeaf;
+  identity: string;
+  actionName: string;
+  tokens: SiteTokenSet | undefined;
+  compact: boolean;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  const pick = (picked: string): CommitOutcome => onCommit({ $token: picked });
+  const clear = (): void => {
+    // Removing the variable puts the typed field back in the chip's place, and
+    // the ✕ that held focus is gone: focus goes to that field once it is
+    // drawn, rather than falling to the page.
+    if (onCommit(null) === "refused") return;
+    requestAnimationFrame(() => {
+      document.getElementById(id)?.focus();
+    });
+  };
   return (
-    // Named by the property's own label, and given a role that can CARRY a
-    // name: a bare paragraph maps to the ARIA `paragraph` role, which prohibits
-    // one, so `aria-labelledby` on it may be dropped outright. The button is
-    // named for the PROPERTY as well, because a panel with several
-    // token-valued properties otherwise offers a column of buttons all called
-    // "Clear" and a screen-reader user cannot tell which style each removes.
-    <p
-      className="nx-style-inspector__token"
-      role="group"
-      aria-labelledby={labelledBy}
-      tabIndex={-1}
-    >
-      <span>{name}</span>
-      <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
-        Clear
-      </button>
-    </p>
+    <div className="nx-style-inspector__numeric">
+      <VariableChip
+        // In a side the name itself opens the list.
+        {...(compact ? { onPick: pick } : {})}
+        leaf={leaf}
+        tokens={tokens}
+        identity={identity}
+        label={actionName}
+        labelledBy={labelledBy}
+        onClear={clear}
+      />
+      {compact ? null : (
+        <VariableChoice
+          leaf={leaf}
+          tokens={tokens}
+          bound
+          current={identity}
+          label={actionName}
+          onPick={pick}
+        />
+      )}
+    </div>
   );
 }
+
+/**
+ * The leaf a field's variables are offered for: the control's own, or, for a
+ * folded union drawn as one field, one leaf over all its forms, which takes
+ * every kind any form takes and judges each variable by the form its kind is
+ * written in (see `foldedLeaf`).
+ */
+function variableLeafOf(leaf: StyleLeaf, fold: Fold | undefined): StyleLeaf {
+  return fold === undefined ? leaf : foldedLeafFor(fold.property, leaf);
+}
+
+/**
+ * The folded leaf for one catalog property, made once: its forms are the
+ * catalog's, which do not change, and one leaf object keeps the forms it
+ * carries attached. The control's own leaf stands in if the catalog has no
+ * union there.
+ */
+function foldedLeafFor(property: string, fallback: StyleLeaf): StyleLeaf {
+  const made = FOLDED_LEAVES.get(property);
+  if (made !== undefined) return made;
+  const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
+  const arms =
+    shape?.kind === "union" ? shape.of.filter(isStyleLeaf) : [fallback];
+  // With its union, so each variable is judged by the arm the engine picks
+  // for its value.
+  const leaf =
+    shape?.kind === "union" && arms.length > 0
+      ? foldedLeaf(arms, shape)
+      : foldedLeaf(arms.length > 0 ? arms : [fallback]);
+  FOLDED_LEAVES.set(property, leaf);
+  return leaf;
+}
+
+const FOLDED_LEAVES = new Map<string, StyleLeaf>();
 
 /**
  * A value that is live on the page and cannot be edited here: shown, and
@@ -2649,7 +2788,7 @@ function TokenValue({
  * action that removes it. `note` is what tells them WHICH of the three, since
  * only the first has a notice of its own beside the property.
  *
- * Named for the property for the same reason the token control is — several of
+ * Named for the property for the same reason the variable chip is — several of
  * these on one panel would otherwise be a column of identical "Clear" buttons.
  */
 function RetainedValue({
@@ -2671,7 +2810,7 @@ function RetainedValue({
   return (
     <>
       {/*
-        `group` for the reason {@link TokenValue} carries one: the ARIA
+        `group` for the reason the variable chip carries one: the ARIA
         `paragraph` role a bare paragraph maps to prohibits an accessible name.
 
         The note is pointed AT rather than left beside: it is the only thing
@@ -2785,24 +2924,49 @@ const FoldedUnion = React.createContext<Fold | undefined>(undefined);
 function FoldedField({
   id,
   fold,
+  leaf,
   stored,
+  actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
   fold: Fold;
+  /** The leaf the field's variables are offered for; see `variableLeafOf`. */
+  leaf: StyleLeaf;
   stored: StyleValue | undefined;
+  actionName: string;
+  tokens: SiteTokenSet | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The site's variables for this property, at the field's end: a fold has
+  // no unit menu to hold them.
+  const variables = (
+    <VariableChoice
+      leaf={leaf}
+      tokens={tokens}
+      bound={false}
+      empty={stored === undefined}
+      current={undefined}
+      label={actionName}
+      onPick={identity => onCommit({ $token: identity })}
+    />
+  );
   if (fold.kind === "number-or-length") {
     return (
-      <LengthOrNumberField
-        id={id}
-        stored={stored}
-        describedBy={describedBy}
-        onCommit={onCommit}
-      />
+      <div className="nx-style-inspector__numeric">
+        <LengthOrNumberField
+          id={id}
+          leaf={leaf}
+          stored={stored}
+          tokens={tokens}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+        {variables}
+      </div>
     );
   }
   return (
@@ -2812,6 +2976,7 @@ function FoldedField({
       stored={stored}
       describedBy={describedBy}
       onCommit={onCommit}
+      after={variables}
     />
   );
 }
@@ -2837,12 +3002,15 @@ function OptionSelect({
   stored,
   describedBy,
   onCommit,
+  after,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** What follows the list in its row: the site's variables, where offered. */
+  after?: React.ReactNode;
 }): React.JSX.Element {
   const current = storedKey(stored) ?? "";
   const inherited = React.useContext(InheritedValue);
@@ -2872,6 +3040,7 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
+      {after}
     </div>
   );
 }
@@ -2883,23 +3052,35 @@ function OptionSelect({
  */
 function LengthOrNumberField({
   id,
+  leaf,
   stored,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
+  /** The leaf the field's variables are offered for, both arms' kinds. */
+  leaf: StyleLeaf;
   stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const { draft, setDraft } = useDraft(stored);
+  const mode = useCanvasTokenMode();
   const hint = useUnsetHint("1.5, 24px or 150%");
   const commit = () => {
     if (draft === storedText(stored)) return;
-    if (onCommit(lineHeightFromText(draft)) === "unchanged") {
+    // A variable's name typed here is that variable, asked before the text is
+    // read as a number or a length, as every text field asks it.
+    const named = tokenForTypedName(leaf, tokens, draft, mode);
+    const value =
+      named === undefined ? lineHeightFromText(draft) : { $token: named };
+    if (onCommit(value) === "unchanged") {
       setDraft(storedText(stored));
     }
   };
+  const owning = useLineHeightLabelScrub({ draft, setDraft, stored, onCommit });
   return (
     <Input
       id={id}
@@ -2908,7 +3089,8 @@ function LengthOrNumberField({
       aria-describedby={describedBy}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
-      onBlur={commit}
+      // Nothing of its own is written while a drag on the label owns it.
+      onBlur={() => owning() || commit()}
       onKeyDown={event => {
         if (commitOnEnter(event, commit)) return;
         // An arrow steps the value as its kind steps, a number or a length,
@@ -2927,6 +3109,40 @@ function LengthOrNumberField({
       }}
     />
   );
+}
+
+/**
+ * A line height offered to its row's label to drag, as its kind steps: a
+ * number or a length. Written once on release, as a typed value is.
+ *
+ * @returns whether a drag owns the value now, so the field writes nothing of
+ *   its own meanwhile
+ */
+function useLineHeightLabelScrub({
+  draft,
+  setDraft,
+  stored,
+  onCommit,
+}: {
+  draft: string;
+  setDraft: (value: string) => void;
+  stored: StyleValue | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): () => boolean {
+  const inherited = React.useContext(InheritedValue);
+  return useLabelScrub({
+    origin: lineHeightScrubOrigin(draft, inherited),
+    at: (from, delta) => {
+      const leaf = lineHeightLeafFor(String(from));
+      return leaf === undefined ? undefined : scrubbedValue(leaf, from, delta);
+    },
+    draft,
+    show: setDraft,
+    reset: () => setDraft(storedText(stored)),
+    commit: value => {
+      if (onCommit(value) === "unchanged") setDraft(storedText(stored));
+    },
+  });
 }
 
 function actionNameFor(propertyLabel: string, label: string): string {
@@ -3145,6 +3361,16 @@ function ReadOnlyNote({
   );
 }
 
+/**
+ * The cascade the inspection judges which controls show by: the block's, or
+ * none for a shared target, whose display is read from the style's own
+ * styles, not from the block's cascade, which the block or a later style may
+ * override.
+ */
+function targetCascade<T>(target: StyleTarget, cascade: T): T | undefined {
+  return target.kind === "shared" ? undefined : cascade;
+}
+
 /** The values a shared target shows, or `undefined` while the block is the target. */
 function targetStyles(target: StyleTarget): NodeStyles | undefined {
   return target.kind === "shared" ? target.style.styles : undefined;
@@ -3192,6 +3418,7 @@ function useFieldTarget({
     "data-provenance-quiet": string | undefined;
     style: React.CSSProperties | undefined;
     onFocus: () => void;
+    onBlur: (event: React.FocusEvent<HTMLElement>) => void;
   };
   commit: (value: StyleValue | null) => CommitOutcome;
   resetBlock: () => void;
@@ -3211,6 +3438,28 @@ function useFieldTarget({
    * focused again.
    */
   const [quiet, setQuiet] = React.useState(false);
+  /*
+   * Whether focus has left the field since the caption was held back. Only a
+   * return after leaving is the author focusing it again: a pick or a clear
+   * moves focus into the field by itself, and that must not bring the caption
+   * back over the row above.
+   */
+  const left = React.useRef(false);
+  const quieten = (): void => {
+    left.current = false;
+    setQuiet(true);
+  };
+  // Held back once the value here changes, however it changed: a pick, a
+  // typed name, an undo or an edit from elsewhere, as well as a commit here.
+  const opened = React.useRef(true);
+  React.useEffect(() => {
+    if (opened.current) {
+      opened.current = false;
+      return;
+    }
+    left.current = false;
+    setQuiet(true);
+  }, [stored]);
   // A refusal describes the draft that produced it, so it stops describing
   // anything the moment the document holds a different value here. Clearing on
   // the stored value rather than only on the next commit is what covers an undo
@@ -3255,10 +3504,22 @@ function useFieldTarget({
       style: quiet
         ? ({ "--nx-provenance-caption": "none" } as React.CSSProperties)
         : undefined,
-      onFocus: () => setQuiet(false),
+      onFocus: () => {
+        if (left.current) setQuiet(false);
+      },
+      onBlur: event => {
+        // Leaving for somewhere outside the field, while what had focus is
+        // still on the page: an element removed under focus, such as a
+        // picked list closing, has not taken the author anywhere.
+        const to = event.relatedTarget;
+        const inside = isElement(to) && event.currentTarget.contains(to);
+        if (!inside && isElement(event.target) && event.target.isConnected) {
+          left.current = true;
+        }
+      },
     },
     commit: value => {
-      setQuiet(true);
+      quieten();
       return writeTarget(value);
     },
     resetBlock: () => {
@@ -3413,6 +3674,7 @@ function moveToSharedStyle({
  */
 function SharedValueLine({
   target,
+  answer,
   nodeStyles,
   address,
   actionName,
@@ -3420,6 +3682,7 @@ function SharedValueLine({
   onMoveTo,
 }: {
   target: StyleTarget;
+  answer: ProvenanceAnswer | undefined;
   nodeStyles: NodeStyles | undefined;
   address: StyleAddress;
   actionName: string;
@@ -3444,11 +3707,7 @@ function SharedValueLine({
       </div>
     );
   }
-  // The style that would show here without the block's value: the last one
-  // in library order setting this address, as the cascade applies them.
-  const under = [...target.worn]
-    .reverse()
-    .find(row => readStyleValue(row.styles, address) !== undefined);
+  const under = styleBeneath(target.worn, answer, address);
   if (under === undefined) return null;
   return (
     <div
@@ -3472,6 +3731,36 @@ function SharedValueLine({
       </button>
     </div>
   );
+}
+
+/**
+ * The worn style that would show at this control without the block's own
+ * value, or `undefined` when none would: the block's own value at a wider
+ * tier, or nothing at all.
+ *
+ * Read from the cascade's answer where the host supplies one, so a value the
+ * block sets at a narrow breakpoint or in a state over the style's wider or
+ * base-state value is named, and a block value between the two is not. With
+ * no cascade, or a declaration the trace cannot tie to one control, the
+ * style's own value at this exact address, the last in library order as the
+ * cascade applies them: true where it answers, silent elsewhere.
+ */
+function styleBeneath(
+  worn: readonly SharedStyleRow[],
+  answer: ProvenanceAnswer | undefined,
+  address: StyleAddress
+): SharedStyleRow | undefined {
+  const beneath = answer?.beneath;
+  if (beneath === undefined || beneath.kind === "ambiguous") {
+    return [...worn]
+      .reverse()
+      .find(row => readStyleValue(row.styles, address) !== undefined);
+  }
+  if (beneath.kind !== "inherited") return undefined;
+  const from = beneath.from;
+  return from.kind === "class"
+    ? worn.find(row => row.id === from.id)
+    : undefined;
 }
 
 /**
@@ -3967,13 +4256,13 @@ const PICKER_FALLBACK = "#000000";
  * an affordance on top, and it reports nothing until the author moves it.
  *
  * **A token reference is EDITABLE here rather than read-only**, which is the
- * other half of what this control adds. `TokenValue` shows a reference and
- * offers only Clear because choosing a token had nowhere to happen; a colour
- * control has the site's table, so it shows the token's CURRENT name and lets
- * the author swap it, replace it with a literal, or remove it.
+ * other half of what this control adds: it shows the token's CURRENT name on
+ * its own trigger, with its swatch, and lets the author swap it, replace it
+ * with a literal, or remove it. Every other field shows a held variable as the
+ * chip beside its ◇ instead.
  *
  * **A token is stored by IDENTITY, never by the name shown.** The two differ
- * after a rename, and `ColourToken` carries both for that reason — the list
+ * after a rename, and `SiteVariable` carries both for that reason — the list
  * hands back the variable it was given, so the identity travels with it and
  * the label never reaches the document.
  *
@@ -4017,7 +4306,7 @@ function ColourField({
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(prefersDark);
-  const choices = colourTokensFor(control.leaf, tokens, mode);
+  const choices = variablesFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
   // What the picker has produced and not yet written. Held in a ref as well as
@@ -4187,6 +4476,7 @@ function ColourField({
             stored={stored}
             draft={draft}
             setDraft={setDraft}
+            tokens={tokens}
             describedBy={describes}
             // The REFUSAL alone. `describes` also carries the contrast verdict,
             // which is supplementary text and never a complaint.
@@ -4243,7 +4533,7 @@ function ColourPicker({
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
-  choices: readonly ColourToken[];
+  choices: readonly SiteVariable[];
   /** Whether the site's variables have arrived; until then the list waits. */
   tokensRead: boolean;
   /** The identity the value refers to, or `null` for a value or none. */
@@ -4505,7 +4795,7 @@ function CustomColour({
 interface ColourChoice {
   readonly key: string;
   readonly label: string;
-  readonly token: ColourToken;
+  readonly token: SiteVariable;
 }
 
 /**
@@ -4518,7 +4808,7 @@ function ColourVariables({
   current,
   onPick,
 }: {
-  choices: readonly ColourToken[];
+  choices: readonly SiteVariable[];
   /** Whether the site's variables have arrived. */
   read: boolean;
   /** The identity the value refers to, marked in the list. */
@@ -4554,7 +4844,7 @@ function ColourVariables({
     // this name: two under one name with equal colours are otherwise
     // indistinguishable, and choosing either stores an identity the author
     // could not have predicted.
-    label: colourTokenLabel(token, choices),
+    label: variableLabel(token, choices),
     token,
   }));
   return (
@@ -4599,7 +4889,7 @@ function ColourVariables({
  * rather than an error — the value goes on compiling — so showing the stored
  * string is more use than showing an empty space.
  *
- * Separate from {@link colourTokenLabel} because that one answers about a token
+ * Separate from {@link variableLabel} because that one answers about a token
  * in hand, and this one has to find the token first, or account for there being
  * none.
  */
@@ -4607,11 +4897,11 @@ function storedTokenLabel(
   reference: string | null,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode,
-  among: readonly ColourToken[]
+  among: readonly SiteVariable[]
 ): string {
   if (reference === null) return "";
-  const token = colourTokenFor(reference, tokens, mode);
-  return token === undefined ? reference : colourTokenLabel(token, among);
+  const token = variableFor(reference, tokens, mode);
+  return token === undefined ? reference : variableLabel(token, among);
 }
 
 /**
@@ -4722,6 +5012,65 @@ function ContrastNote({
   );
 }
 
+/**
+ * Keywords a menu leaves out, still accepted when typed and still shown when
+ * stored: a font size's absolute sizes say no size an author can picture
+ * ("x-large"), where the type scale above them does.
+ */
+const UNOFFERED_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
+  "font-size": [
+    "xx-small",
+    "x-small",
+    "small",
+    "medium",
+    "large",
+    "x-large",
+    "xx-large",
+    "xxx-large",
+  ],
+};
+
+/**
+ * Properties whose free CSS has a field of its own, by CSS property: an aspect
+ * ratio's menu and text decoration's icons, each with what it can draw.
+ */
+const OWN_FIELDS: Readonly<
+  Record<
+    string,
+    {
+      draws: (stored: StyleValue | undefined) => boolean;
+      Field: typeof AspectRatioField;
+      /** Whether its tab stop is a button a label's `for` would click. */
+      buttons: boolean;
+    }
+  >
+> = {
+  "aspect-ratio": {
+    draws: drawsAspectRatio,
+    Field: AspectRatioField,
+    buttons: false,
+  },
+  "text-decoration": {
+    draws: drawsDecoration,
+    Field: DecorationField,
+    buttons: true,
+  },
+};
+
+/**
+ * Whether a field's label only moves focus: where the control drawn is a
+ * group of buttons, whose tab stop a label's `for` would click. Read from the
+ * same decision that picks the control, so the two never disagree.
+ */
+function labelFocusOnly(
+  leaf: StyleControl["leaf"],
+  stored: StyleValue | undefined
+): boolean {
+  if (drawsIcons(leaf)) return true;
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own !== undefined && own.buttons && own.draws(stored);
+}
+
 /** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({
   writingMode: "horizontal-tb",
@@ -4764,6 +5113,7 @@ function ValueField({
   control,
   stored,
   actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
@@ -4774,6 +5124,8 @@ function ValueField({
   stored: StyleValue | undefined;
   /** What this control's clear action removes, named for the property. */
   actionName: string;
+  /** The site's variables, which a field offers where its property takes one. */
+  tokens: SiteTokenSet | undefined;
   /**
    * The id of the message explaining why this control's last value was refused,
    * or `undefined` when nothing was. Also what marks the control invalid: the
@@ -4795,7 +5147,10 @@ function ValueField({
       <FoldedField
         id={id}
         fold={fold}
+        leaf={variableLeafOf(control.leaf, fold)}
         stored={stored}
+        actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -4807,6 +5162,21 @@ function ValueField({
         id={id}
         labelledBy={labelledBy}
         group={alignment}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  // A property with a field of its own, where the stored value is one that
+  // field can draw; any other spelling keeps the text field.
+  const own = OWN_FIELDS[control.leaf.cssProperty];
+  if (own !== undefined && own.draws(stored)) {
+    return (
+      <own.Field
+        id={id}
+        labelledBy={labelledBy}
         stored={stored}
         actionName={actionName}
         describedBy={describedBy}
@@ -4842,14 +5212,227 @@ function ValueField({
       />
     );
   }
+  const Field =
+    control.leaf.cssProperty === "opacity" ? OpacityField : NumericField;
   return (
-    <NumericField
+    <Field
       id={id}
       control={control}
       stored={stored}
       actionName={actionName}
+      tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
+    />
+  );
+}
+
+/**
+ * A number written as text, as CSS reads one (`0.5`, `1e-7`), with only the
+ * whitespace CSS trims around it: not JavaScript's `\s`, which also takes a
+ * no-break space the engine refuses. `undefined` for anything else.
+ */
+function textNumber(text: string): number | undefined {
+  const trimmed = trimCssWhitespace(text);
+  return CSS_NUMBER.test(trimmed) ? Number(trimmed) : undefined;
+}
+
+/**
+ * What describes a number field: its own description, and the words for its
+ * unit while what it shows is a number, or nothing at all. What it shows is
+ * the draft, or, while that is empty, the inherited value it hints. A keyword
+ * such as `inherit` has no unit to be said in.
+ */
+export function describedWithUnit(
+  describedBy: string | undefined,
+  unitWords: string | undefined,
+  draft: string,
+  inherited: string | undefined
+): string | undefined {
+  const shown = trimCssWhitespace(draft) === "" ? (inherited ?? "") : draft;
+  const keyword =
+    trimCssWhitespace(shown) !== "" && textNumber(shown) === undefined;
+  return unitWords === undefined || keyword
+    ? describedBy
+    : [describedBy, unitWords].filter(Boolean).join(" ");
+}
+
+/**
+ * The id of words naming a field's unit for a screen reader, where the unit
+ * shows only as a sign beside it (opacity's %). Read by the number field and
+ * added to what describes it, never to what marks it invalid.
+ */
+const UnitWords = React.createContext<string | undefined>(undefined);
+
+/**
+ * A fraction as a percent, and back: multiplied or divided by 100 and no
+ * more, to twelve significant figures, which drops the binary noise of the
+ * division (`12.345 / 100` is `0.12345000000000001`) without rounding a
+ * value an author typed.
+ */
+function percentOf(fraction: number): number {
+  return Number((fraction * 100).toPrecision(12));
+}
+
+function fractionOf(percent: number): number {
+  return Number((percent / 100).toPrecision(12));
+}
+
+/** A stored opacity as the percent the field shows; anything else as stored. */
+function toPercent(value: StyleValue | undefined): StyleValue | undefined {
+  return typeof value === "number" ? percentOf(value) : value;
+}
+
+/**
+ * What the percent field commits, as the fraction CSS takes. A number, or a
+ * number typed as text, is divided by 100; a CSS-wide keyword is a whole
+ * value and passes through unscaled.
+ */
+function fromPercent(value: StyleValue | null): StyleValue | null {
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? textNumber(value)
+        : undefined;
+  return number === undefined ? value : fractionOf(number);
+}
+
+/**
+ * Opacity, which an author thinks of in percent: a slider for "more or
+ * less" and the number field beside it for an exact value, both 0 to 100.
+ *
+ * The number field is the ordinary one, handed the value and its range in
+ * percent and converting what it commits back, so every behaviour it has (a
+ * draft held while its menu opens, a refused value said beside it, a keyword
+ * passed through, the variables at its end) is the same here. The inherited
+ * value it shows as a hint is converted the same way.
+ */
+function OpacityField(
+  props: React.ComponentProps<typeof NumericField>
+): React.JSX.Element {
+  const { control, stored, actionName, describedBy, onCommit } = props;
+  const unitId = React.useId();
+  const { shown, inheritedShown, resting } = opacityReading(
+    stored,
+    React.useContext(InheritedValue)
+  );
+  const leaf = control.leaf;
+  const percentControl =
+    leaf.kind === "number"
+      ? { ...control, leaf: { ...leaf, min: 0, max: 100 } }
+      : control;
+  return (
+    <div className="nx-style-inspector__opacity">
+      {resting === undefined ? null : (
+        <OpacitySlider
+          resting={resting}
+          actionName={actionName}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+      )}
+      <InheritedValue.Provider value={inheritedShown}>
+        <UnitWords.Provider value={unitId}>
+          <NumericField
+            {...props}
+            control={percentControl}
+            stored={shown}
+            onCommit={value => onCommit(fromPercent(value))}
+          />
+        </UnitWords.Provider>
+      </InheritedValue.Provider>
+      <span className="nx-style-inspector__percent" aria-hidden="true">
+        %
+      </span>
+      {/* The sign is not read; these words are, as the field's description. */}
+      <span id={unitId} className="sr-only">
+        percent
+      </span>
+    </div>
+  );
+}
+
+/**
+ * An opacity as the field shows it: the stored value in percent, the
+ * inherited one in percent as its hint, and where the slider's thumb rests.
+ *
+ * The thumb rests on the value set here, else the one inherited, else the
+ * 100% of an unset opacity. A keyword (`inherit`) is none of these, so it has
+ * no resting place and no slider: no position stands for it, and a nudge
+ * would replace it with a number built from a position it never had.
+ */
+function opacityReading(
+  stored: StyleValue | undefined,
+  inherited: string | undefined
+): {
+  shown: StyleValue | undefined;
+  inheritedShown: string | undefined;
+  resting: number | undefined;
+} {
+  const shown = toPercent(stored);
+  const inheritedNumber =
+    inherited === undefined ? undefined : textNumber(inherited);
+  const inheritedPercent =
+    inheritedNumber === undefined ? undefined : percentOf(inheritedNumber);
+  const unsetResting =
+    inheritedPercent ?? (inherited === undefined ? 100 : undefined);
+  return {
+    shown,
+    inheritedShown:
+      inheritedPercent === undefined ? inherited : String(inheritedPercent),
+    resting:
+      typeof shown === "number"
+        ? shown
+        : shown === undefined
+          ? unsetResting
+          : undefined,
+  };
+}
+
+/**
+ * Opacity's slider, 0 to 100: the thumb follows a drag, and the value is
+ * written once it settles.
+ */
+function OpacitySlider({
+  resting,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  resting: number;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const [preview, setPreview] = React.useState<number | undefined>(undefined);
+  // Held with its section, as the fieldset holds the form controls; a
+  // slider's thumb is not one, so it is told.
+  const held = React.useContext(SectionHeld);
+  const at = preview ?? resting;
+  return (
+    <Slider
+      value={[at]}
+      min={0}
+      max={100}
+      step={1}
+      disabled={held}
+      onValueChange={([next]) => setPreview(next)}
+      onValueCommit={([next]) => {
+        setPreview(undefined);
+        if (next !== undefined) onCommit(fractionOf(next));
+      }}
+      thumbs={[
+        {
+          "aria-label": `${actionName} slider`,
+          "aria-valuetext": `${at} percent`,
+          // A refusal said for the field is said for the slider too, which
+          // may hold the focus when it arrives.
+          ...(describedBy === undefined
+            ? {}
+            : { "aria-describedby": describedBy }),
+        },
+      ]}
     />
   );
 }
@@ -4938,12 +5521,14 @@ function NumericField({
   control,
   stored,
   actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
   /**
    * This control's own name, position included.
    *
@@ -4956,6 +5541,10 @@ function NumericField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // Words for a unit shown only as a sign beside the field, for its description.
+  const unitWords = React.useContext(UnitWords);
+  // The value reaching the field from another tier, which it shows as a hint.
+  const inheritedHint = React.useContext(InheritedValue);
   const units = unitChoicesFor(control.leaf);
   // The draft lives HERE rather than inside the text field, because two
   // controls edit one value and the unit menu was reading the other copy. An
@@ -4997,12 +5586,16 @@ function NumericField({
   // a controlled select over it renders an EMPTY trigger above a value that is
   // doing something. Offered verbatim as its own item, which is what the
   // keyword select above already does for a value outside its vocabulary.
-  const extraUnit =
-    measurement !== undefined &&
-    measurement.unit !== "" &&
-    !units.includes(measurement.unit)
-      ? measurement.unit
-      : null;
+  const extraUnit = unlistedUnit(measurement, units);
+  const commitText = useNumericLabelScrub({
+    control,
+    stored,
+    draft,
+    unit,
+    setDraft,
+    setTyping,
+    onCommit,
+  });
 
   return (
     <div className="nx-style-inspector__numeric">
@@ -5012,12 +5605,17 @@ function NumericField({
         stored={stored}
         draft={draft}
         setDraft={setDraft}
-        describedBy={describedBy}
+        tokens={tokens}
+        describedBy={describedWithUnit(
+          describedBy,
+          unitWords,
+          draft,
+          inheritedHint
+        )}
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
-        // A bare number takes the unit the field shows: "24" is 24px.
-        onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
+        onCommit={commitText}
         // The unit shown in the suffix is left out of the field.
         {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}
         onStep={(draft, delta) => {
@@ -5071,17 +5669,131 @@ function NumericField({
                 {choice}
               </SelectItem>
             ))}
-            {keywords.length === 0 ? null : <SelectSeparator />}
-            {keywords.map(keyword => (
-              <SelectItem key={keyword} value={keyword} title={keyword}>
-                {keywordLabel(control.leaf.cssProperty, keyword)}
-              </SelectItem>
-            ))}
+            <KeywordItems
+              cssProperty={control.leaf.cssProperty}
+              keywords={keywords}
+              draft={draft}
+            />
           </SelectContent>
         </Select>
       ) : null}
+      {/* The site's variables for this field, after its unit; nothing where
+          the site has none the property takes. */}
+      <VariableChoice
+        leaf={control.leaf}
+        tokens={tokens}
+        bound={false}
+        empty={stored === undefined}
+        current={undefined}
+        label={actionName}
+        onPick={identity => onCommit({ $token: identity })}
+      />
     </div>
   );
+}
+
+/**
+ * A unit menu's keywords after a line, in words with the CSS spelling in the
+ * tooltip; see style-keyword-labels. Those a menu leaves out are left out
+ * unless the field holds one.
+ */
+function KeywordItems({
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  const unoffered = UNOFFERED_KEYWORDS[cssProperty] ?? [];
+  const offered = keywords.filter(
+    keyword => keyword === draft || !unoffered.includes(keyword)
+  );
+  if (offered.length === 0) return null;
+  return (
+    <>
+      <SelectSeparator />
+      {offered.map(keyword => (
+        <SelectItem key={keyword} value={keyword} title={keyword}>
+          {keywordLabel(cssProperty, keyword)}
+        </SelectItem>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The unit a measurement carries that the menu does not list, or `null`.
+ * Its own function so the field reads as what it draws, not as the test.
+ */
+function unlistedUnit(
+  measurement: ReturnType<typeof measurementOfText>,
+  units: readonly string[]
+): string | null {
+  const unit = unitOf(measurement);
+  return unit !== undefined && !units.includes(unit) ? unit : null;
+}
+
+/**
+ * The number field's value, offered to its row's label to drag: shown in the
+ * field while the pointer is down, and written once on release through the
+ * same commit as a typed value, so one drag is one undo step.
+ *
+ * @returns the field's own commit for its text: a bare number given the unit
+ *   the field shows ("24" is 24px), and nothing written while a drag owns the
+ *   value — a blur mid-drag would write the preview, and the release again.
+ */
+function useNumericLabelScrub({
+  control,
+  stored,
+  draft,
+  unit,
+  setDraft,
+  setTyping,
+  onCommit,
+}: {
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  draft: string;
+  unit: string;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): (value: StyleValue | null) => CommitOutcome {
+  const inherited = React.useContext(InheritedValue);
+  const mode = useCanvasTokenMode();
+  const commitText = (value: StyleValue | null): CommitOutcome =>
+    onCommit(withDefaultUnit(control.leaf, value, unit));
+  const owning = useLabelScrub({
+    origin: scrubOrigin(control.leaf, draft, unit, inherited),
+    at: (from, delta) => scrubbedValue(control.leaf, from, delta),
+    draft,
+    show: text => {
+      // Shown as a value, not as typing, so the unit stays beside it.
+      setTyping(false);
+      setDraft(text);
+    },
+    reset: () => {
+      setTyping(false);
+      setDraft(storedText(stored));
+    },
+    commit: value =>
+      commitDraft({
+        draft: String(value),
+        stored,
+        kind: control.kind,
+        leaf: control.leaf,
+        // A drag writes a quantity, never a variable's name, so no variable
+        // is matched against it.
+        tokens: undefined,
+        mode,
+        onCommit: commitText,
+        setDraft,
+      }),
+  });
+  // "refused" keeps the text on screen, which is the drag's live value.
+  return value => (owning() ? "refused" : commitText(value));
 }
 
 /**
@@ -5344,17 +6056,72 @@ function useHeldBlur(
   };
 }
 
+/**
+ * A side's tooltip: its whole value, for one the narrow cell cannot show, or
+ * none where there is nothing to show or the field is not a side.
+ */
+function sideTitle(compact: boolean, draft: string): string | undefined {
+  return compact && draft !== "" ? draft : undefined;
+}
+
+/**
+ * A text field's commit: the draft written, a variable's typed name matched
+ * in the mode the canvas shows, as the field's variables list offers them.
+ */
+function useDraftCommit({
+  draft,
+  stored,
+  control,
+  tokens,
+  onCommit,
+  setDraft,
+  setTyping,
+}: {
+  draft: string;
+  stored: StyleValue | undefined;
+  control: StyleControl;
+  tokens: SiteTokenSet | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+}): () => void {
+  const mode = useCanvasTokenMode();
+  return () => {
+    // Written or not, the text is no longer mid-edit.
+    setTyping(false);
+    commitDraft({
+      draft,
+      stored,
+      kind: control.kind,
+      leaf: control.leaf,
+      tokens,
+      mode,
+      onCommit,
+      setDraft,
+    });
+  };
+}
+
 /** Write a text field's draft, when it differs from what is stored. */
 function commitDraft({
   draft,
   stored,
   kind,
+  leaf,
+  tokens,
+  mode,
   onCommit,
   setDraft,
 }: {
   draft: string;
   stored: StyleValue | undefined;
   kind: StyleControlKind | undefined;
+  /** The leaf the field edits, whose variables a typed name may pick. */
+  leaf: StyleLeaf;
+  /** The site's variables, so a variable's name typed here picks it. */
+  tokens: SiteTokenSet | undefined;
+  /** The mode the canvas shows, so typing matches what the list offers. */
+  mode: TokenMode;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   setDraft: (value: string) => void;
 }): void {
@@ -5364,7 +6131,19 @@ function commitDraft({
   // non-breaking space would read as empty and DELETE the declaration —
   // where the engine treats it as a value and refuses it.
   const emptied = trimCssWhitespace(draft) === "";
-  const outcome = onCommit(emptied ? null : committedValue(kind, draft));
+  // A variable's name typed in, "Display" or "Text", is that variable, asked
+  // BEFORE the text is read as a value: read first, the word is refused as
+  // "not a length" or stored as a literal no page can use.
+  const named = emptied
+    ? undefined
+    : tokenForTypedName(leaf, tokens, draft, mode);
+  const outcome = onCommit(
+    emptied
+      ? null
+      : named === undefined
+        ? committedValue(kind, draft)
+        : { $token: named }
+  );
   // The document did not move because it already holds this value in another
   // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
   // effect above cannot cover it — `stored` is identical, so it does not fire
@@ -5451,6 +6230,7 @@ function TextField({
   stored,
   draft,
   setDraft,
+  tokens,
   describedBy,
   invalid,
   onCommit,
@@ -5472,6 +6252,8 @@ function TextField({
    */
   draft: string;
   setDraft: (value: string) => void;
+  /** The site's variables, so a variable's name typed here picks it. */
+  tokens: SiteTokenSet | undefined;
   /**
    * Everything describing this field: a refusal message, a contrast verdict, or
    * both.
@@ -5514,11 +6296,15 @@ function TextField({
   const hint = useUnsetHint(
     compact ? "–" : (fallbackHint ?? placeholderFor(control))
   );
-  const commit = () => {
-    // Written or not, the text is no longer mid-edit.
-    setTyping(false);
-    commitDraft({ draft, stored, kind: control.kind, onCommit, setDraft });
-  };
+  const commit = useDraftCommit({
+    draft,
+    stored,
+    control,
+    tokens,
+    onCommit,
+    setDraft,
+    setTyping,
+  });
 
   return (
     <Input
@@ -5526,7 +6312,7 @@ function TextField({
       {...shownText(display, typing, draft, hint)}
       // A side of the spacing box is narrow: its whole value is in its
       // tooltip, for one the cell cannot show.
-      title={compact && draft !== "" ? draft : undefined}
+      title={sideTitle(compact, draft)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
@@ -5584,13 +6370,18 @@ function stepOnKey(
  * the two rules it encodes sit together, since they are easy to change apart
  * and wrong apart.
  *
- * Arrow steps by one and Shift by ten, which is what Figma, Framer and Webflow
- * all do: an author arrives already knowing it, and a different scale here
- * would cost them for no gain.
+ * Arrow steps by one, Shift by ten and Alt by a tenth, which is what Figma,
+ * Framer and Webflow all do: an author arrives already knowing it, and a
+ * different scale here would cost them for no gain. The sizes are the label
+ * drag's own (`fieldStep`), so a modifier means the same on both.
  *
- * Alt, Control and Meta are refused outright. Those chords are platform,
- * browser and assistive-navigation shortcuts, so claiming one would mutate a
- * style and add an undo entry from a keystroke aimed somewhere else entirely.
+ * Alt+Up and Alt+Down are claimed only here, inside a number field: the
+ * editor's block moves on those keys stay out of fields, where they would be
+ * caret movement in a text field and are a step in this one.
+ *
+ * Control and Meta are refused outright. Those chords are platform, browser
+ * and assistive-navigation shortcuts, so claiming one would mutate a style
+ * and add an undo entry from a keystroke aimed somewhere else entirely.
  */
 function arrowStep(event: React.KeyboardEvent): number | null {
   // A keystroke arriving mid-composition belongs to the IME, which uses the
@@ -5599,11 +6390,11 @@ function arrowStep(event: React.KeyboardEvent): number | null {
   // shortcut manager states the same rule for the same reason, and this is the
   // second reader of a keyboard event in this repository that has to know it.
   if (event.nativeEvent.isComposing) return null;
-  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (event.ctrlKey || event.metaKey) return null;
   const direction =
     event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0;
   if (direction === 0) return null;
-  return direction * (event.shiftKey ? 10 : 1);
+  return direction * fieldStep(scrubModifiersOf(event));
 }
 
 /**

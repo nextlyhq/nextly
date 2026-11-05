@@ -30,6 +30,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import {
   boxOf,
+  canvasRoot,
   clearSelection,
   layerRow,
   openLayers,
@@ -38,6 +39,7 @@ import {
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { settleTransitions } from "./support/axe-scan.mjs";
+import { canvasBlock } from "./support/canvas-frame";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { storedPageNodes } from "./support/stored-page";
 import { fileAccount, test } from "./support/test";
@@ -337,6 +339,206 @@ test.describe("the Components panel", () => {
     await saveDraft(page);
 
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
+  });
+
+  test("starts an empty page from the start card on it", async ({ page }) => {
+    const title = `Start ${stamp()}`;
+    const component = await createComponent(page.request, title);
+    const id = await createPage(page.request, true);
+    await openBuilder(page, id);
+
+    await expect(page.getByText("Start your page")).toBeVisible();
+    await page.getByRole("button", { name: "Add section" }).click();
+    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
+    await tile(page, title).click();
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([`component:${component}`]);
+    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+  });
+
+  test("takes a drag anywhere on an empty page", async ({ page }) => {
+    // The start card promises "drag one here": aimed low on the page, well
+    // clear of the card, the drop still lands, as the page's one section.
+    const title = `Dropped ${stamp()}`;
+    const component = await createComponent(page.request, title);
+    const id = await createPage(page.request, true);
+    await openBuilder(page, id);
+    await openPanel(page, "Add");
+    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
+
+    const from = await tile(page, title).boundingBox();
+    const to = await (await canvasRoot(page)).boundingBox();
+    if (from === null || to === null) throw new Error("[e2e] no boxes");
+    const x = from.x + from.width / 2;
+    const y = from.y + from.height / 2;
+    const aimY = to.y + to.height * 0.85;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 24, y, { steps: 4 });
+    await page.mouse.move(x + 24, aimY, { steps: 8 });
+    await page.mouse.move(to.x + to.width / 2, aimY, { steps: 12 });
+    // The start card goes while the drag is under way.
+    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+    await page.mouse.up();
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([`component:${component}`]);
+  });
+
+  test("adds a section in the gap between two from the + there", async ({
+    page,
+  }) => {
+    const title = `Between ${stamp()}`;
+    const component = await createComponent(page.request, title);
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await clearSelection(page);
+
+    // Near the gap below the heading, off to its side, the + there shows.
+    const add = page.getByRole("button", {
+      name: "Add a section after Heading",
+    });
+    const spot = await add.boundingBox();
+    if (spot === null) throw new Error("[e2e] the + is not laid out");
+    await page.mouse.move(spot.x - 200, spot.y + spot.height / 2, { steps: 4 });
+    await expect
+      .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+      .toBe("1");
+    await add.hover();
+    await expect(page.getByRole("tooltip")).toHaveText("Add a section here");
+    await add.click();
+
+    await expect(
+      page.locator(".nx-insert-panel__placement").first()
+    ).toHaveText("Adding after Heading");
+    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
+    await tile(page, title).click();
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([
+      "core/heading",
+      `component:${component}`,
+      "core/section",
+    ]);
+  });
+
+  test("reaches the + between sections from the keyboard", async ({ page }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    const add = page.getByRole("button", {
+      name: "Add a section after Heading",
+    });
+    // Into the tab order from the control before it, by Tab, so the focus
+    // is a keyboard focus and the + shows as one.
+    await add.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(add).not.toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(add).toBeFocused();
+    await expect
+      .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+      .toBe("1");
+  });
+
+  test("keeps the + after a section styled display: contents", async ({
+    page,
+  }) => {
+    // A section with `display: contents` draws no box of its own while its
+    // children are on the page. A browser's `checkVisibility()` answers false
+    // for it, which jsdom cannot show: the gap after it must still be there.
+    const t = stamp();
+    const created = await page.request.post(PAGES, {
+      data: {
+        title: `Contents section ${t}`,
+        slug: `contents-section-${t}`,
+        status: "draft",
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: HEADING,
+              type: "core/heading",
+              version: 1,
+              props: { text: "Components panel heading", level: "h2" },
+            },
+            {
+              id: SECTION,
+              type: "core/section",
+              version: 1,
+              name: "Our team",
+              props: { as: "section", contained: true },
+              styles: { base: { base: { display: "contents" } } },
+              slots: {
+                children: [
+                  {
+                    id: "00000000-0000-4000-8000-00000000d003",
+                    type: "core/text",
+                    version: 1,
+                    props: { text: "Drawn by its children alone." },
+                  },
+                ],
+              },
+            },
+            {
+              id: "00000000-0000-4000-8000-00000000d004",
+              type: "core/section",
+              version: 1,
+              name: "Contact",
+              props: { as: "section", contained: true },
+              slots: { children: [] },
+            },
+          ],
+        },
+      },
+    });
+    expect(created.ok(), `creating the page: ${created.status()}`).toBe(true);
+    const id = ((await created.json()) as { item: { id: string } }).item.id;
+    await openBuilder(page, id);
+
+    // The control: the stored style reached the canvas, so the section
+    // really is drawn without a box of its own.
+    await expect
+      .poll(() =>
+        canvasBlock(page, SECTION).evaluate(
+          element => getComputedStyle(element).display
+        )
+      )
+      .toBe("contents");
+    await expect(
+      page.getByRole("button", { name: "Add a section after Heading" })
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Add a section after Our team" })
+    ).toHaveCount(1);
+  });
+
+  test.describe("on a touch screen", () => {
+    test.use({ hasTouch: true });
+
+    test("shows the + between sections without a pointer near it, and takes a tap", async ({
+      page,
+    }) => {
+      // No pointer moves before a tap, so the + is shown and pressable from
+      // the start where the screen's pointer is coarse.
+      const id = await createPage(page.request);
+      await openBuilder(page, id);
+      expect(
+        await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches),
+        "the browser reports a coarse pointer"
+      ).toBe(true);
+      const add = page.getByRole("button", {
+        name: "Add a section after Heading",
+      });
+      await expect
+        .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+        .toBe("1");
+      await add.tap();
+      await expect(
+        page.locator(".nx-insert-panel__placement").first()
+      ).toHaveText("Adding after Heading");
+    });
   });
 
   for (const way of ["click", "keyboard"] as const) {

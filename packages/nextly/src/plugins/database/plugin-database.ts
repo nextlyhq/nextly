@@ -108,6 +108,13 @@ export interface PluginDatabaseDeps {
        * (`plugin-transaction-link`).
        */
       adapterTx?: TransactionContext;
+      /**
+       * Hold `effect` until the transaction commits: until the OUTERMOST
+       * transaction commits when this one joined another, dropped when it
+       * rolls back. The adapter's `afterCommit`, called from inside the
+       * transaction, so it knows which transaction the effect waits for.
+       */
+      afterCommit(effect: () => unknown): void;
     }) => Promise<R>,
     /** What the caller asked of the transaction; see `PluginDatabase.transaction`. */
     options?: PluginTransactionOptions
@@ -1347,19 +1354,22 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
     },
 
     async transaction(fn, options) {
-      // What core work inside asked to run once this transaction commits
-      // (`LinkedTransaction.afterCommit`). Run below, after `deps.transaction`
-      // has resolved, which it does only once the commit has succeeded; a
-      // rollback rejects first and the effects are dropped with the array.
-      const committed: Array<() => unknown> = [];
       const snapshot = options?.isolation === "snapshot";
       // The option is handed on only when asked for, so a supplier is called
       // exactly as before for every ordinary transaction.
-      const open = <T>(work: (tx: TransactionHandles) => Promise<T>) =>
+      //
+      // The name carries meaning: the transaction-escape check in the tests
+      // names the code that opened a transaction by the first frame of its
+      // stack outside the adapters, skipping a frame whose function name
+      // matches /transaction/i as a wrapper. Named otherwise, this frame
+      // would stand for every caller of `ctx.db.transaction` at once.
+      const openTransaction = <T>(
+        work: (tx: TransactionHandles) => Promise<T>
+      ) =>
         snapshot
           ? deps.transaction(work, { isolation: "snapshot" })
           : deps.transaction(work);
-      const result = await open(async tx => {
+      const result = await openTransaction(async tx => {
         // The same surface, reading the transaction's handles. Built rather
         // than mutated so a caller holding the outer `ctx.db` cannot
         // accidentally write outside the transaction.
@@ -1418,12 +1428,14 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           readOnly: snapshot,
           track: scope.track,
           // A `contributed` write's expiry waits for the commit with the core
-          // work's, so a rolled-back write expires nothing.
-          afterCommit: effect => committed.push(effect),
+          // work's, so a rolled-back write expires nothing. Both are held by
+          // the transaction itself, so when this one joined an outer one they
+          // wait for the outer commit rather than for this one's end.
+          afterCommit: effect => tx.afterCommit(effect),
         });
         if (tx.adapterTx) {
           linkPluginTransaction(scoped, tx.adapterTx, scope, effect =>
-            committed.push(effect)
+            tx.afterCommit(effect)
           );
         }
         // Marked as the flow's transaction, so a core write that opens its
@@ -1433,7 +1445,6 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           runInPluginTransactionFlow(scoped, () => fn(scoped))
         );
       });
-      await runCommitEffects(committed);
       return result;
     },
 
@@ -1705,12 +1716,6 @@ async function whenColumnsExist<T>(
  * read from there; read from the pair, every MySQL write reported -1.
  */
 /**
- * Run a committed transaction's effects in the order they were registered.
- * Each is awaited before the next starts, and one that fails is logged rather
- * than thrown: the transaction has committed, and its caller is owed that
- * result, not an effect's failure in its place.
- */
-/**
  * Expire the cached reads of the entry or Single a `contributed` write to row
  * `id` of `tableName` changed: now, or inside a transaction once it commits.
  * The row's document is found before the commit, on the write's own
@@ -1764,27 +1769,6 @@ async function findAndExpire(
     return;
   }
   await expireContent(target);
-}
-
-async function runCommitEffects(
-  effects: readonly (() => unknown)[]
-): Promise<void> {
-  for (const effect of effects) {
-    try {
-      await effect();
-    } catch (error) {
-      // Guarded too: a logger that throws must not replace the committed
-      // result, or stop the effects after this one.
-      try {
-        getNextlyLogger().error({
-          kind: "after-commit-effect-failed",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      } catch {
-        // Nothing is left to report it to.
-      }
-    }
-  }
 }
 
 function affectedRows(result: unknown): number {

@@ -40,6 +40,14 @@ export interface PinnedConnection {
    * removed from it, because it may still be inside the transaction.
    */
   release(dirty: boolean): void;
+  /**
+   * Runs once the connection is back, whichever way the transaction ended,
+   * before the caller hears of it: what was held until the transaction
+   * ended, run where it no longer holds a connection. Handed whether the
+   * connection went back `dirty`, with no ROLLBACK confirmed on it. Never
+   * rejects.
+   */
+  afterRelease?(dirty: boolean): Promise<void>;
 }
 
 /**
@@ -52,7 +60,8 @@ export interface PinnedConnection {
  * and the confirmation that the connection is out of the transaction when
  * Drizzle's did not. If that ROLLBACK fails too, nothing can confirm it, and
  * the connection is closed rather than pooled. The work's own error is what
- * the caller receives, never a ROLLBACK's.
+ * the caller receives, never a ROLLBACK's. Once the connection is back, its
+ * `afterRelease` runs, and only then does the caller hear how it ended.
  *
  * @param db - A Drizzle handle on the adapter's pool
  * @param checkout - Checks out a connection for one transaction
@@ -62,29 +71,38 @@ export function pinTransactions<D extends DrizzleTransactor>(
   db: D,
   checkout: () => Promise<PinnedConnection>
 ): D {
-  const pinned: DrizzleTransactor["transaction"] = async (work, config) => {
+  const pinned = async <T>(
+    work: (tx: unknown) => Promise<T>,
+    config?: never
+  ): Promise<T> => {
     const connection = await checkout();
     let dirty = false;
     // Boxed, so a work that throws `undefined` is still told apart from one
     // that did not throw.
     let workFailure: { error: unknown } | undefined;
+    let outcome: { value: T } | { error: unknown };
     try {
-      return await connection.drizzle.transaction(async tx => {
-        try {
-          return await work(tx);
-        } catch (error) {
-          workFailure = { error };
-          throw error;
-        }
-      }, config);
+      outcome = {
+        value: await connection.drizzle.transaction(async tx => {
+          try {
+            return await work(tx);
+          } catch (error) {
+            workFailure = { error };
+            throw error;
+          }
+        }, config),
+      };
     } catch (error) {
       await connection.rollback().catch(() => {
         dirty = true;
       });
-      throw workFailure ? workFailure.error : error;
+      outcome = { error: workFailure ? workFailure.error : error };
     } finally {
       connection.release(dirty);
     }
+    await connection.afterRelease?.(dirty);
+    if ("error" in outcome) throw outcome.error;
+    return outcome.value;
   };
   // An own property over the prototype's method, on this handle alone.
   Object.defineProperty(db, "transaction", {

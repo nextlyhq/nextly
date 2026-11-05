@@ -256,6 +256,7 @@ describe("init - Nextly API", () => {
       "meta",
       "notices",
       "permissions",
+      "plugins",
       "principals",
       "register",
       "releases",

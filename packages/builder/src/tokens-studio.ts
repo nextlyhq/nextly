@@ -672,38 +672,88 @@ const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
   other: "Other",
 };
 
+/**
+ * Every group with its heading, in the order the Design panel lists them, for
+ * a list elsewhere that groups variables the same way.
+ */
+export function variableGroupHeadings(): readonly {
+  group: VariableGroup;
+  heading: string;
+}[] {
+  return VARIABLE_GROUPS.map(group => ({
+    group,
+    heading: VARIABLE_GROUP_LABELS[group],
+  }));
+}
+
 /** The code-name prefixes of a type size and of its line height. */
 const SIZE_PREFIX = "font-size.";
 const LINE_HEIGHT_PREFIX = "line-height.";
 
-/** Code-name prefixes that put a length in the spacing group. */
-const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "radius."];
+/** Code-name prefixes of a spacing step, and of a radius. */
+const SPACING_PREFIXES = ["space.", "spacing.", "gap."];
+const RADIUS_PREFIX = "radius.";
+
+/** The families a length variable belongs to, each made for its own fields. */
+export type LengthFamily = "font-size" | "line-height" | "spacing" | "radius";
+
+/**
+ * The family a length variable belongs to, read from its code name as the
+ * Design panel groups it, or `undefined` for a length that names none (a
+ * content width) and for anything that is not a length.
+ *
+ * The inspector offers each field its own family, so a padding lists the
+ * spacing steps and a radius the radii; asked here so the Design panel's
+ * groups and the inspector's lists cannot disagree about what a variable is.
+ */
+export function lengthFamilyOf(token: {
+  name: string;
+  kind: TokenKind;
+}): LengthFamily | undefined {
+  const type = typeScaleProperty(token);
+  if (type !== undefined) return type;
+  if (token.kind !== "dimension") return undefined;
+  if (token.name.startsWith(RADIUS_PREFIX)) return "radius";
+  return SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
+    ? "spacing"
+    : undefined;
+}
+
+/**
+ * The CSS property a type-scale variable is made for: `font-size` for a type
+ * size, `line-height` for its paired line height, or `undefined` for any other
+ * variable.
+ *
+ * Read from the code name, as the Design panel groups by it, and asked here
+ * once so the panel's "Type scale" group and the inspector's offer of a type
+ * size only where text is sized cannot disagree about what a type size is.
+ */
+export function typeScaleProperty(token: {
+  name: string;
+  kind: TokenKind;
+}): "font-size" | "line-height" | undefined {
+  if (token.kind !== "dimension" && token.kind !== "number") return undefined;
+  if (token.name.startsWith(SIZE_PREFIX)) return "font-size";
+  if (token.name.startsWith(LINE_HEIGHT_PREFIX)) return "line-height";
+  return undefined;
+}
 
 /**
  * Which group a variable belongs in: by kind for colours and shadows, and by
  * its code name for the lengths, since a size, a gap and a radius are all
  * dimensions.
+ *
+ * Exported so the inspector's variable list groups exactly as Design does.
  */
-function variableGroupOf(token: {
+export function variableGroupOf(token: {
   name: string;
   kind: TokenKind;
 }): VariableGroup {
   if (token.kind === "color") return "colours";
   if (token.kind === "shadow") return "spacing";
-  const lengthish = token.kind === "dimension" || token.kind === "number";
-  if (
-    lengthish &&
-    (token.name.startsWith(SIZE_PREFIX) ||
-      token.name.startsWith(LINE_HEIGHT_PREFIX))
-  ) {
-    return "type";
-  }
-  if (
-    token.kind === "dimension" &&
-    SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
-  ) {
-    return "spacing";
-  }
+  const family = lengthFamilyOf(token);
+  if (family === "font-size" || family === "line-height") return "type";
+  if (family === "spacing" || family === "radius") return "spacing";
   return "other";
 }
 
@@ -715,6 +765,52 @@ export interface VariableEntry {
   readonly label: string;
   /** A type size's line height, paired by name, when there is one. */
   readonly lineHeight?: TokenRow;
+  /**
+   * What kind of variable it is, in words ("radius"), when another row is
+   * shown under the same name: `space.card` and `radius.card` both read
+   * "Card", and side by side nothing else says which is which.
+   */
+  readonly kindWord?: string;
+}
+
+/** A row's kind in words, as the panel tells two rows of one name apart. */
+function kindWordOf(row: TokenRow): string {
+  const family = lengthFamilyOf(row);
+  if (family === "font-size") return "type size";
+  if (family === "line-height") return "line height";
+  if (family !== undefined) return family;
+  // The kind's own label, as the panel names kinds elsewhere.
+  return TOKEN_KIND_LABELS[row.kind].toLowerCase();
+}
+
+/**
+ * A group's rows with their kind added where two or more share a name,
+ * ignoring case, as {@link labelClashes} compares names. Where the kinds
+ * clash as well (`space.card` and `spacing.card`, both spacing steps called
+ * "Card"), the code name, which no two variables share, tells them apart.
+ */
+function withKindWhereNamesClash(
+  entries: readonly VariableEntry[]
+): VariableEntry[] {
+  const count = (keys: readonly string[]) => {
+    const seen = new Map<string, number>();
+    for (const key of keys) seen.set(key, (seen.get(key) ?? 0) + 1);
+    return seen;
+  };
+  const names = count(entries.map(entry => entry.label.toLowerCase()));
+  const kinds = count(
+    // JSON, so no label can run into its kind.
+    entries.map(entry =>
+      JSON.stringify([entry.label.toLowerCase(), kindWordOf(entry.row)])
+    )
+  );
+  return entries.map(entry => {
+    const name = entry.label.toLowerCase();
+    if ((names.get(name) ?? 0) < 2) return entry;
+    const kind = kindWordOf(entry.row);
+    const unique = (kinds.get(JSON.stringify([name, kind])) ?? 0) < 2;
+    return { ...entry, kindWord: unique ? kind : entry.row.name };
+  });
 }
 
 /**
@@ -760,10 +856,14 @@ export function variableGroups(
       ...(lineHeight === undefined ? {} : { lineHeight }),
     });
   }
-  return VARIABLE_GROUPS.map(group => ({
+  // Within each group: rows of one name under two headings are told apart
+  // by the headings already.
+  return variableGroupHeadings().map(({ group, heading }) => ({
     group,
-    heading: VARIABLE_GROUP_LABELS[group],
-    entries: (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
+    heading,
+    entries: withKindWhereNamesClash(
+      (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
+    ),
   }));
 }
 

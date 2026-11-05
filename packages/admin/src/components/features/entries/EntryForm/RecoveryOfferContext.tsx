@@ -24,6 +24,8 @@ import {
 /** A recovery point on offer: when it was stored, and the two answers. */
 export interface HostedRecoveryOffer {
   savedAt: Date;
+  /** Whether it is from an older version; see `AutosaveRecoveryOffer`. */
+  olderVersion?: boolean;
   /** Write the recovered values into the document. */
   restore: () => void;
   /** Stop offering for this session, without deleting anything. */

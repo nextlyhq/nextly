@@ -372,13 +372,24 @@ function tiersFrom(
 }
 
 /**
- * Labels shorter than the property's name, where the name is cut short in
- * the Style tab's 7rem label column: "Justify content" read "Justify cont…".
- * Webflow's and Figma's words for the same two controls.
+ * Labels other than the property's name: shorter, where the name is cut short
+ * in the Style tab's 7rem label column ("Justify content" read "Justify
+ * cont…"), Webflow's and Figma's words for the same two controls; or plainer,
+ * where the name says how CSS does it rather than what it is.
  */
 const SHORT_LABELS: Readonly<Record<string, string>> = {
   justifyContent: "Justify",
   alignItems: "Align",
+  textTransform: "Letter case",
+  objectFit: "Fit",
+};
+
+/**
+ * What a property's label says on hover, where the inspector edits it on
+ * another scale than the catalog describes: opacity is a percent here.
+ */
+const SUMMARIES: Readonly<Record<string, string>> = {
+  opacity: "How solid the element is, from 0 (clear) to 100 percent.",
 };
 
 /** One property's controls and the value they are showing. */
@@ -419,8 +430,8 @@ function inspectProperty(
     // A shortened label keeps the property's CSS name in its tooltip.
     summary:
       short === undefined
-        ? entry.summary
-        : `${fieldLabel(property)}: ${entry.summary}`,
+        ? (SUMMARIES[property] ?? entry.summary)
+        : `${fieldLabel(property)}: ${SUMMARIES[property] ?? entry.summary}`,
     controls: set.controls,
     variants: set.variants,
     value,

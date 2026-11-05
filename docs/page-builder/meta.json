@@ -6,6 +6,8 @@
     "placement",
     "locked-areas",
     "layouts",
+    "moving-between-sites",
+    "compose-through-the-api",
     "contributed-blocks"
   ]
 }

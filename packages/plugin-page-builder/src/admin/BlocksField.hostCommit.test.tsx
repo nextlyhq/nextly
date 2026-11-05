@@ -202,6 +202,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+// The question before a publish registers a before-action of its own, which
+// this harness would take for the host commit's; it has its own tests.
+vi.mock("./publish-offer", () => ({
+  usePublishOffer: () => null,
+  useFormPublishOffer: () => null,
+}));
+
 /** Asking the stored style again, as the editor does after a save. */
 const refetchStoredStyle = async () => ({ isError: false });
 // The stored site style arrives through the editor's one read, the plugin's
