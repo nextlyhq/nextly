@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A conditional write that adopts a Single another writer created during it now reads that row under its lock, so on MySQL the value its expectation is judged against is the one committed when the lock is taken, not an older snapshot.
+A conditional write that adopts a Single another writer created during it now reads that row under its lock, so on MySQL the value its expectation is judged against is the one committed when the lock is taken, not an older snapshot. Two first conditional writes of a Single that is not stored yet now run one after the other: one lands and the other is refused with a conflict, where on MySQL one used to fail with a deadlock and on PostgreSQL both inserted a row.

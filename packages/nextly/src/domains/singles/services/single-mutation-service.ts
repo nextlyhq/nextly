@@ -2736,14 +2736,14 @@ export class SingleMutationService extends BaseService {
             // rolls the insert back, with no compensating delete. Idempotent: a
             // hook's read (`get`) may have auto-created the row, and a retry
             // re-enters here; either way the existing row is reused. A
-            // conditional write reads it under the row lock, so the snapshot
-            // its expectation reads on MySQL is taken under that lock, not
-            // before it, while another writer could still change the row.
+            // conditional write reads it under locks (see `firstWriteRead`).
             if (autoCreated && pendingAutoCreateValues) {
-              const committed = await tx.selectOne<SingleDocument>(
-                singleMeta.tableName,
-                storedFieldRead.firstReadLock(options.context)
-              );
+              const committed =
+                await storedFieldRead.firstWriteRead<SingleDocument>(
+                  tx,
+                  singleMeta,
+                  options.context
+                );
               if (committed) {
                 existingDoc = committed;
               } else {

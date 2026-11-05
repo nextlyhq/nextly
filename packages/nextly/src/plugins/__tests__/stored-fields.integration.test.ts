@@ -42,6 +42,7 @@ import { grantTo } from "../../__tests__/fixtures/permission-holders";
 import { resetSessionStandingForTests } from "../../auth/session/session-standing";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { storedValueHash } from "../../domains/collections/services/stored-field-read";
+import { untilSomeoneWaitsOnALock } from "../../domains/versions/__tests__/helpers/lock-wait";
 import { NextlyError } from "../../errors";
 import type { PluginStoredValue } from "../contributions";
 import { definePlugin } from "../plugin-context";
@@ -174,21 +175,19 @@ function raceSeam(
   return { paused, locked, state, letCommit };
 }
 
-/** How long a racing write is given to commit before the seam moves on. */
-const RACE_GRACE_MS = 1_000;
-
 /**
  * Pauses the plugin's first write transaction twice: before it begins, after
  * the write has looked for the Single and found none, so another writer can
- * create it; and inside it, right after its first read of the Single (the
- * read that adopts the row the other writer created), so the other writer can
- * try to change it before the write reaches its row lock.
+ * create it; and inside it, right after its first read of the Single's own
+ * table (the read that adopts a row another writer created), so a competing
+ * write can run before the write reaches its row lock. Records when, after
+ * that read, the author's chain asks for a write transaction of its own.
  */
 function adoptSeam(t: TestNextly) {
   const adapter = t.adapter as unknown as {
     transaction<T>(
       work: (tx: {
-        selectOne(table: string, options: unknown): Promise<unknown>;
+        select(table: string, options: unknown): Promise<unknown[]>;
       }) => Promise<T>,
       ...rest: unknown[]
     ): Promise<T>;
@@ -202,11 +201,15 @@ function adoptSeam(t: TestNextly) {
     releases.push(() => open());
     return { opened, open };
   };
-  const reached = { start: gate(), read: gate() };
+  const reached = { start: gate(), read: gate(), authorAsked: gate() };
   const proceed = { begin: gate(), lock: gate() };
-  const seen = { claimed: false, adopted: false };
+  const seen = { claimed: false, adopted: false, read: false };
   vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
-    if (isSnapshot(rest) || writerOf.getStore() !== "plugin" || seen.claimed) {
+    if (isSnapshot(rest)) return original(work, ...rest);
+    if (writerOf.getStore() === "author" && seen.read) {
+      reached.authorAsked.open();
+    }
+    if (writerOf.getStore() !== "plugin" || seen.claimed) {
       return original(work, ...rest);
     }
     seen.claimed = true;
@@ -214,17 +217,16 @@ function adoptSeam(t: TestNextly) {
     return proceed.begin.opened.then(() =>
       original(
         async tx => {
-          const selectOne = tx.selectOne.bind(tx);
-          let first = true;
-          tx.selectOne = async (table, options) => {
-            const row = await selectOne(table, options);
-            if (first) {
-              first = false;
-              seen.adopted = row !== null && row !== undefined;
+          const select = tx.select.bind(tx);
+          tx.select = async (table, options) => {
+            const rows = await select(table, options);
+            if (!seen.read && table.startsWith("single_")) {
+              seen.read = true;
+              seen.adopted = rows.length > 0;
               reached.read.open();
               await proceed.lock.opened;
             }
-            return row;
+            return rows;
           };
           return work(tx);
         },
@@ -235,10 +237,50 @@ function adoptSeam(t: TestNextly) {
   return {
     atStart: reached.start.opened,
     afterRead: reached.read.opened,
+    authorAsked: reached.authorAsked.opened,
     begin: proceed.begin.open,
     lock: proceed.lock.open,
     seen,
   };
+}
+
+/**
+ * What a competing write did once started while the seam holds the plugin's
+ * write: it `settled`, nothing having held it back, or it is `waiting` on a
+ * lock the held write took. On SQLite, where one writer holds the database,
+ * asking for its write transaction is waiting. Fails the test when it does
+ * neither in time, rather than taking either for granted.
+ */
+async function competingProgress(
+  t: TestNextly,
+  dialect: TestDialect,
+  seam: ReturnType<typeof adoptSeam>,
+  competing: Promise<unknown>
+): Promise<"settled" | "waiting"> {
+  const waiting = (
+    dialect === "sqlite"
+      ? seam.authorAsked
+      : untilSomeoneWaitsOnALock(t.adapter, dialect)
+  ).then(() => "waiting" as const);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("the competing write never progressed")),
+      10_000
+    );
+  });
+  // Whichever loses the race settles later, unobserved.
+  waiting.catch(() => undefined);
+  timeout.catch(() => undefined);
+  try {
+    return await Promise.race([
+      competing.then(() => "settled" as const),
+      waiting,
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The error a promise rejected with. */
@@ -385,7 +427,7 @@ describe.each(getConfiguredTestDialects())(
           ),
           // Created by another writer while a conditional write is under way,
           // with the field it expects left unset.
-          ...["adoptrace", "adoptcontrol"].map(
+          ...["adoptrace", "adoptcontrol", "firstpair"].map(
             slug =>
               ({
                 slug,
@@ -892,26 +934,68 @@ describe.each(getConfiguredTestDialects())(
 
       it("loses no change another writer makes to the Single the write adopted before its row lock", async () => {
         const { seam, write } = await adoptingWrite("adoptrace");
-        // The other writer changes the field the write expects: it commits
-        // now, or waits on the lock the write holds.
-        const edit = authorSavesSingle("adoptrace", { body: { v: "author" } });
-        await Promise.race([
-          edit,
-          new Promise(resolve => setTimeout(resolve, RACE_GRACE_MS)),
-        ]);
+        // The other writer changes the field the write expects, while the
+        // write holds the row its first read locked.
+        const edit = authorSavesSingle("adoptrace", {
+          body: { v: "author" },
+        }).then(
+          () => "saved" as const,
+          (error: unknown) => error
+        );
+        const progress = await competingProgress(t, dialect, seam, edit);
         seam.lock();
         const outcome = await write;
-        await edit;
 
-        // The write landed before the edit, or was refused after it; either
-        // way the edit is the value kept, never overwritten unseen.
-        expect(
-          outcome === "landed" || NextlyError.isCode(outcome, "CONFLICT")
-        ).toBe(true);
+        // The edit waited on the lock the write took with its first read, so
+        // the write landed first and the edit after it, the value kept.
+        expect(progress).toBe("waiting");
+        expect(outcome).toBe("landed");
+        expect(await edit).toBe("saved");
         expect(await bodyOf("adoptrace")).toEqual({
           kind: "found",
           values: { body: { kind: "value", value: { v: "author" } } },
         });
+      });
+
+      it("lands one of two first conditional writes to a never-stored Single, and refuses the other with a conflict", async () => {
+        expect(await bodyOf("firstpair")).toEqual({ kind: "absent" });
+        const hash = await storedValueHash({ kind: "absent" });
+        const conditional = (writer: Writer, v: string) =>
+          writerOf
+            .run(writer, () =>
+              updateIfUnchanged(owner, {
+                single: "firstpair",
+                data: { body: { v } },
+                expect: { field: "body", form: "published", hash },
+              })
+            )
+            .then(
+              () => "landed" as const,
+              (error: unknown) => error
+            );
+        const seam = adoptSeam(t);
+        seam.begin();
+        const first = conditional("plugin", "first");
+        await seam.afterRead;
+        expect(seam.seen.adopted).toBe(false);
+        // A second first write, also expecting the Single absent, while the
+        // first holds what its first read locked.
+        const second = conditional("author", "second");
+        const progress = await competingProgress(t, dialect, seam, second);
+        seam.lock();
+
+        expect(progress).toBe("waiting");
+        expect(await first).toBe("landed");
+        expect(NextlyError.isCode(await second, "CONFLICT")).toBe(true);
+        expect(await bodyOf("firstpair")).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "first" } } },
+        });
+        // One row: the second neither inserted a row of its own nor lost one.
+        const rows = await t.adapter.executeQuery<{ n: number | string }>(
+          "SELECT COUNT(*) AS n FROM single_firstpair"
+        );
+        expect(Number(rows[0]?.n)).toBe(1);
       });
 
       it("lands a write that adopts a Single another writer created with the field it expects still unset", async () => {

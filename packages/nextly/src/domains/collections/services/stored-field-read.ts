@@ -1339,26 +1339,45 @@ function unknownForm(form: never): never {
 }
 
 /**
- * The options of a write path's first read inside its transaction, for the
- * write called with `context`: a locking read where a conditional write's
- * expectation travels with it, and a plain one otherwise.
+ * A Single's first write's read of its row inside its transaction, for the
+ * write called with `context`: `undefined` where it is not stored yet.
  *
- * A Single's first write may find, inside its transaction, a row another
- * writer created since this request looked. On MySQL a transaction's first
- * plain read fixes the snapshot every later plain read answers from, and the
- * expectation is read plainly after the row lock; read before that lock, the
- * row could change under a snapshot the expectation would then trust. A
- * locking read takes the lock at once and fixes no snapshot, so the
- * expectation's snapshot is taken under the lock, where no writer can move
- * what it reads. A write without an expectation keeps its plain read: two
- * first writes locking an empty table would each hold its gap and deadlock.
- * An entry's update takes its row lock as its transaction's first statement,
- * so it reads nothing before the lock.
+ * A write carrying a conditional write's expectation reads under locks. On
+ * MySQL a transaction's first plain read fixes the snapshot every later plain
+ * read answers from, and the expectation is read plainly after the row lock;
+ * read before that lock, the row could change under a snapshot the
+ * expectation would then trust. A locking read takes its lock at once and
+ * fixes no snapshot, so the expectation's snapshot is taken under the lock.
+ *
+ * The Single's registry row is locked first: it always exists, so the lock is
+ * on that one record, and two first writes of one Single are made one after
+ * the other. The second then finds the row the first inserted and judges its
+ * expectation against it, rather than both locking the empty table's gap and
+ * deadlocking on MySQL, or both inserting a row on PostgreSQL, where a lock
+ * on no row holds nothing. An insert-if-absent cannot do this: a Single's
+ * table has no key two first rows would collide on. The order, registry row
+ * then the document's row, is the one every history write and deletion takes
+ * (`history-locks`).
+ *
+ * A write without an expectation keeps its plain read. An entry's update
+ * takes its row lock as its transaction's first statement, so it reads
+ * nothing before the lock.
  */
-export function firstReadLock(context: Record<string, unknown> | undefined): {
-  readonly forUpdate?: boolean;
-} {
-  return context !== undefined && expectations.has(context)
-    ? { forUpdate: true }
-    : {};
+export async function firstWriteRead<T>(
+  tx: VersionsDbApi,
+  single: { readonly id: string; readonly tableName: string },
+  context: Record<string, unknown> | undefined
+): Promise<T | undefined> {
+  if (context === undefined || !expectations.has(context)) {
+    return (await tx.select<T>(single.tableName, { limit: 1 }))[0];
+  }
+  await tx.select("dynamic_singles", {
+    columns: ["id"],
+    where: { and: [{ column: "id", op: "=", value: single.id }] },
+    limit: 1,
+    forUpdate: true,
+  });
+  return (
+    await tx.select<T>(single.tableName, { limit: 1, forUpdate: true })
+  )[0];
 }
