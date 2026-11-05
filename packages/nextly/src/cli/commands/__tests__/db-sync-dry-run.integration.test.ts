@@ -14,9 +14,15 @@
  * - a real `db:sync` prints and changes what it did before the dry run shared its code.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -221,7 +227,7 @@ async function syncedWorld(dialect: SupportedDialect): Promise<{
 
 /** `nextly <args>` in `project`, against `world`'s database. */
 function nextlyIn(world: LockWorld, project: string) {
-  return (args: string[]) =>
+  return (args: string[], env: Record<string, string | undefined> = {}) =>
     runNextly(args, project, {
       NODE_ENV: undefined,
       CI: undefined,
@@ -231,7 +237,25 @@ function nextlyIn(world: LockWorld, project: string) {
         world.dialect === "sqlite" ? `file:${world.url}` : world.url,
       NEXTLY_SECRET: randomBytes(32).toString("hex"),
       NEXT_PUBLIC_APP_URL: "http://localhost:3000",
+      ...env,
     });
+}
+
+/** Every file under `dir`, relative to it, sorted. */
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry =>
+      relative(dir, join(entry.parentPath, entry.name)).split(sep).join("/")
+    )
+    .sort();
+}
+
+/** The files a dry run's lines name as written. */
+function plannedWrites(stdout: string): string[] {
+  return [...stdout.matchAll(/^ℹ Would write (\S+)$/gm)]
+    .map(match => match[1])
+    .sort();
 }
 
 describe.each(LOCK_DIALECTS)("a real db:sync on %s", dialect => {
@@ -326,8 +350,12 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
   }, 60_000);
 
   /** Runs a dry run, and asserts it exited 0 and said it changed nothing. */
-  async function dryRun(name: string, args: string[]): Promise<string> {
-    const run = await nextly(["db:sync", ...args, "--dry-run"]);
+  async function dryRun(
+    name: string,
+    args: string[],
+    env: Record<string, string | undefined> = {}
+  ): Promise<string> {
+    const run = await nextly(["db:sync", ...args, "--dry-run"], env);
     expect(run.status, `${name}: ${run.stdout}${run.stderr}`).toBe(0);
     expect(run.stdout, name).toContain("Dry run: nothing was changed.");
     printed[name] = run.stdout;
@@ -416,6 +444,21 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
       holder = undefined;
     },
     12 * NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "names the production refusal a real sync makes on collections it would change, exit 0",
+    async () => {
+      const before = await databaseState(adapter, dialect);
+      const out = await dryRun("production", [], { NODE_ENV: "production" });
+      // The registry step creates dsd_moved and rewrites dsd_posts' fields.
+      expect(out).toContain(
+        "A real run would refuse: Cannot auto-sync schema in production mode. `NODE_ENV` is `production`, and 2 collections would change: dsd_moved, dsd_posts."
+      );
+      expect(out).not.toMatch(/^ℹ Would run /m);
+      expect(await databaseState(adapter, dialect)).toEqual(before);
+    },
+    2 * NEXTLY_RUN_TIMEOUT
   );
 
   it(
@@ -512,6 +555,33 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
   );
 
   it(
+    "names the files --types and --schemas write, writes none; a real run writes exactly those",
+    async () => {
+      const before = await databaseState(adapter, dialect);
+      const filesBefore = filesUnder(project);
+      const out = await dryRun("files", ["--types", "--schemas"]);
+      const named = plannedWrites(out);
+      expect(named).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/dsd_posts\.zod\.ts$/),
+          expect.stringMatching(/dsd_moved\.zod\.ts$/),
+        ])
+      );
+      expect(named.some(file => !file.endsWith(".zod.ts"))).toBe(true);
+      expect(filesUnder(project)).toEqual(filesBefore);
+      expect(await databaseState(adapter, dialect)).toEqual(before);
+
+      const real = await nextly(["db:sync", "--types", "--schemas"]);
+      expect(real.status, real.stdout + real.stderr).toBe(0);
+      const written = filesUnder(project).filter(
+        file => !filesBefore.includes(file)
+      );
+      expect(written).toEqual(named);
+    },
+    3 * NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
     "names a field-group storage migration in flight as the real run's refusal, exit 0",
     async () => {
       const entries = [
@@ -548,3 +618,49 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
     5 * NEXTLY_RUN_TIMEOUT
   );
 });
+
+describe.each(LOCK_DIALECTS)(
+  "db:sync --dry-run on %s with no core tables",
+  dialect => {
+    let world: LockWorld;
+    let adapter: DrizzleAdapter;
+    let project: string;
+
+    beforeAll(async () => {
+      // A database of its own that nothing has set up: no core tables, no registries.
+      world = await lockWorld(dialect, { fresh: true });
+      adapter = await world.connect();
+      project = mkdtempSync(join(tmpdir(), "nextly-db-sync-dry-fresh-"));
+      writeFileSync(join(project, "nextly.config.ts"), CONFIG_V2);
+    }, 120_000);
+
+    afterAll(async () => {
+      await adapter?.disconnect();
+      if (project !== undefined)
+        rmSync(project, { recursive: true, force: true });
+      await world?.dispose();
+    }, 60_000);
+
+    it(
+      "plans the core tables and the configured schema, with no orphans, exit 0",
+      async () => {
+        const before = await databaseState(adapter, dialect);
+        const run = await nextlyIn(
+          world,
+          project
+        )(["db:sync", "--remove-orphaned", "--dry-run"]);
+        expect(run.status, run.stdout + run.stderr).toBe(0);
+        expect(run.stdout).toContain(
+          "Would write the core tables (users, roles, permissions, the registries)"
+        );
+        expect(run.stdout).toMatch(/^ℹ Would run add_table dc_dsd_posts$/m);
+        expect(run.stdout).toMatch(/^ℹ Would run add_table dc_dsd_moved$/m);
+        expect(run.stdout).not.toMatch(/^ℹ Would remove /m);
+        expect(run.stdout).not.toContain("A real run would refuse");
+        expect(run.stdout).toContain("Dry run: nothing was changed.");
+        expect(await databaseState(adapter, dialect)).toEqual(before);
+      },
+      2 * NEXTLY_RUN_TIMEOUT
+    );
+  }
+);

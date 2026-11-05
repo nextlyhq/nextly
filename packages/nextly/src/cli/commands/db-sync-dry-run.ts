@@ -19,6 +19,8 @@ import { describeOp } from "../../domains/schema/pipeline/diff/describe-operatio
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import type { ClassifierEvent } from "../../domains/schema/pipeline/resolution/types";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
+import { CollectionSyncService } from "../../services/collections/collection-sync-service";
+import type { Logger as ServiceLogger } from "../../services/shared/types";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { DryRunChange, DryRunPlan } from "../dry-run";
@@ -30,7 +32,8 @@ import { deletionChanges } from "../utils/data-loss-consent";
 import type { ResolvedDevOptions } from "./db-sync";
 import { syncRefusalOf } from "./db-sync-registry";
 import { collectOrphanDeletions, publishExtensionSchema } from "./dev-build";
-import { desiredSchemaForSync } from "./dev-server";
+import { desiredSchemaForSync, productionSyncRefusal } from "./dev-server";
+import { shownPath } from "./generate-manifest";
 
 /** What a sync's dry run does not show, and what its schema plan is made against. */
 const SYNC_DRY_RUN_NOTE =
@@ -69,8 +72,9 @@ export async function planDbSync(
       await assertSyncAllowed(configResult, drizzleAdapter, context);
 
       // The orphans `--remove-orphaned` deletes, in the consent listing's own words, from the
-      // listing the real sync judges its consent on. The syncs delete them before the push.
-      if (options.removeOrphaned) {
+      // listing the real sync judges its consent on. The syncs delete them before the push. A
+      // registry the sync has yet to create holds no orphan.
+      if (options.removeOrphaned && coreTablesPresent) {
         changes.push(
           ...deletionChanges(
             await collectOrphanDeletions(configResult, adapter, context.logger)
@@ -78,11 +82,47 @@ export async function planDbSync(
         );
       }
 
+      // The registry step's own decision of which collections it creates and updates, and the
+      // files `--types` and `--schemas` have it generate for them, named rather than written.
+      const cwd = options.cwd ?? process.cwd();
+      const planned = await new CollectionSyncService(
+        drizzleAdapter,
+        quietLogger(context)
+      ).planSync(configResult.config, {
+        generateTypes: options.types === true,
+        generateZodSchemas: options.schemas === true,
+        cwd,
+        registryPresent: coreTablesPresent,
+      });
+      changes.push(
+        ...planned.generatedFiles.map(file => ({
+          action: "write" as const,
+          target: shownPath(cwd, file),
+        }))
+      );
+
+      // In production a real sync pushes nothing, and refuses on what its registry step found
+      // created or updated, as that step decides it.
+      if (options.autoSync !== false && process.env.NODE_ENV === "production") {
+        const refusal = productionSyncRefusal(planned.sync);
+        return {
+          changes,
+          ...(refusal === undefined
+            ? {}
+            : { refusals: [`${refusal.what} ${refusal.why}`] }),
+          notes: [
+            "NODE_ENV is production: a real run applies no schema change (use nextly migrate:create and nextly migrate).",
+            SYNC_DRY_RUN_NOTE,
+          ],
+        };
+      }
+
       const push = await planPush(
         configResult,
         drizzleAdapter,
         options,
-        context
+        context,
+        coreTablesPresent
       );
       changes.push(...push.changes);
       return {
@@ -125,26 +165,19 @@ async function assertSyncAllowed(
 /**
  * The schema push's plan: each operation the push would run, from the desired schema the real
  * push applies, and each question it would ask, named rather than asked. A run that applies no
- * schema change (`--no-auto-sync`, or production) says so instead.
+ * schema change (`--no-auto-sync`) says so instead.
  */
 async function planPush(
   configResult: LoadConfigResult,
   adapter: DrizzleAdapter,
   options: ResolvedDevOptions,
-  context: CommandContext
+  context: CommandContext,
+  registriesPresent: boolean
 ): Promise<{ changes: DryRunChange[]; notes: string[] }> {
   if (options.autoSync === false) {
     return {
       changes: [],
       notes: ["--no-auto-sync: a real run applies no schema change."],
-    };
-  }
-  if (process.env.NODE_ENV === "production") {
-    return {
-      changes: [],
-      notes: [
-        "NODE_ENV is production: a real run applies no schema change, and refuses when it finds a collection created or changed (use nextly migrate:create and nextly migrate).",
-      ],
     };
   }
 
@@ -154,7 +187,8 @@ async function planPush(
   const { desired } = await desiredSchemaForSync(
     configResult.config,
     adapter,
-    context.logger
+    context.logger,
+    { registriesPresent }
   );
   const preview = await previewDesiredSchema({
     desired,
@@ -175,6 +209,16 @@ async function planPush(
       ),
       ...preview.events.map(questionOf),
     ],
+  };
+}
+
+/** The registry services' progress, as debug output: a dry run's report is its plan. */
+function quietLogger(context: CommandContext): ServiceLogger {
+  return {
+    info: message => context.logger.debug(message),
+    warn: message => context.logger.debug(message),
+    error: message => context.logger.debug(message),
+    debug: message => context.logger.debug(message),
   };
 }
 

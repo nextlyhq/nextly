@@ -116,6 +116,18 @@ function isPipelineSource(source: CollectionSource | undefined): boolean {
   return source === "code" || (!!source && source.startsWith("plugin:"));
 }
 
+/**
+ * What a code-first sync does with one collection (`codeFirstSyncStep`), with the record it acts
+ * on when the registry holds one, the schema hash it records and the table it addresses.
+ */
+type CodeFirstSyncStep = { schemaHash: string; desiredTableName: string } & (
+  | { step: "create" }
+  | {
+      step: "update" | "metadata" | "unchanged";
+      existing: DynamicCollectionRecord;
+    }
+);
+
 /** Options for listing collections. */
 export interface ListCollectionsOptions extends BaseListOptions {
   source?: CollectionSource;
@@ -749,6 +761,80 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
   }
 
+  /**
+   * What a code-first sync does with `config`, given the record the registry holds for its slug
+   * (null for none): register it (`create`), write a schema change through (`update`: fields, the
+   * status switch, a declared default or the physical table changed), write only its metadata
+   * (`metadata`: admin options, labels or description changed), or leave it (`unchanged`).
+   *
+   * The one decision of it: `syncCodeFirstCollections` acts on it, and
+   * `planCodeFirstCollections` reports it without writing.
+   */
+  private codeFirstSyncStep(
+    config: CodeFirstCollectionConfig,
+    existing: DynamicCollectionRecord | null
+  ): CodeFirstSyncStep {
+    const schemaHash = calculateSchemaHash(config.fields);
+    const desiredTableName = config.tableName
+      ? this.ensureTableNamePrefix(config.tableName)
+      : this.generateTableName(config.slug);
+    if (!existing) return { step: "create", schemaHash, desiredTableName };
+    const decided = (
+      step: "update" | "metadata" | "unchanged"
+    ): CodeFirstSyncStep => ({ step, existing, schemaHash, desiredTableName });
+    if (
+      this.schemaSyncNeeded(
+        config,
+        existing,
+        !schemaHashesMatch(schemaHash, existing.schemaHash)
+      ) ||
+      // Declared defaults are read from the stored definitions when an
+      // entry is created, and the schema hash omits them, so they need
+      // their own comparison or a changed default never reaches the write.
+      fieldDefaultsSignature(config.fields) !==
+        fieldDefaultsSignature(existing.fields) ||
+      // A collection's physical table, which a Single has no equivalent of.
+      desiredTableName !== existing.tableName
+    ) {
+      return decided("update");
+    }
+    if (
+      this.adminConfigChanged(config.admin, existing.admin) ||
+      this.labelsChanged(config.labels, existing.labels) ||
+      resolveDescription(config) !== (existing.description ?? undefined)
+    ) {
+      return decided("metadata");
+    }
+    return decided("unchanged");
+  }
+
+  /**
+   * Which of `configs` a code-first sync would register (`created`) and which it would write
+   * (`updated`), as `syncCodeFirstCollections` reports them, reading the registry and writing
+   * nothing. `registryPresent: false` answers for a registry the sync is about to create, which
+   * holds no record: every collection is created.
+   */
+  async planCodeFirstCollections(
+    configs: CodeFirstCollectionConfig[],
+    { registryPresent = true }: { registryPresent?: boolean } = {}
+  ): Promise<Pick<SyncResult, "created" | "updated" | "unchanged">> {
+    const planned: Pick<SyncResult, "created" | "updated" | "unchanged"> = {
+      created: [],
+      updated: [],
+      unchanged: [],
+    };
+    for (const config of configs) {
+      const existing = registryPresent
+        ? await this.getCollectionBySlug(config.slug)
+        : null;
+      const { step } = this.codeFirstSyncStep(config, existing);
+      if (step === "create") planned.created.push(config.slug);
+      else if (step === "unchanged") planned.unchanged.push(config.slug);
+      else planned.updated.push(config.slug);
+    }
+    return planned;
+  }
+
   async syncCodeFirstCollections(
     configs: CodeFirstCollectionConfig[]
   ): Promise<SyncResult> {
@@ -765,13 +851,13 @@ export class CollectionRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.getCollectionBySlug(config.slug);
-        const schemaHash = calculateSchemaHash(config.fields);
-        const desiredTableName = config.tableName
-          ? this.ensureTableNamePrefix(config.tableName)
-          : this.generateTableName(config.slug);
+        const decision = this.codeFirstSyncStep(
+          config,
+          await this.getCollectionBySlug(config.slug)
+        );
+        const { schemaHash, desiredTableName } = decision;
 
-        if (!existing) {
+        if (decision.step === "create") {
           await this.registerCollection({
             slug: config.slug,
             labels: config.labels,
@@ -797,20 +883,8 @@ export class CollectionRegistryService extends BaseRegistryService<
           });
           result.created.push(config.slug);
           await this.seedPermissionsForCollection(config.slug);
-        } else if (
-          this.schemaSyncNeeded(
-            config,
-            existing,
-            !schemaHashesMatch(schemaHash, existing.schemaHash)
-          ) ||
-          // Declared defaults are read from the stored definitions when an
-          // entry is created, and the schema hash omits them, so they need
-          // their own comparison or a changed default never reaches the write.
-          fieldDefaultsSignature(config.fields) !==
-            fieldDefaultsSignature(existing.fields) ||
-          // A collection's physical table, which a Single has no equivalent of.
-          desiredTableName !== existing.tableName
-        ) {
+        } else if (decision.step === "update") {
+          const { existing } = decision;
           // Fields changed, status toggle flipped, or `dbName` resolved to a
           // new physical table — all three need to be written through.
           if (desiredTableName !== existing.tableName) {
@@ -853,11 +927,7 @@ export class CollectionRegistryService extends BaseRegistryService<
           );
           result.updated.push(config.slug);
           await this.seedPermissionsForCollection(config.slug);
-        } else if (
-          this.adminConfigChanged(config.admin, existing.admin) ||
-          this.labelsChanged(config.labels, existing.labels) ||
-          resolveDescription(config) !== (existing.description ?? undefined)
-        ) {
+        } else if (decision.step === "metadata") {
           await this.updateCollection(
             config.slug,
             {

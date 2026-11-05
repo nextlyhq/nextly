@@ -30,7 +30,10 @@ import {
   kindOption,
   resolveEntityTables,
 } from "../../domains/i18n/migration/resolve-entity-table";
-import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
+import {
+  restoreI18nArchive,
+  type RestoreArchiveResult,
+} from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors/nextly-error";
 import { createContext, type CommandContext } from "../context";
@@ -213,6 +216,53 @@ export async function runI18nRestore(
 }
 
 /**
+ * The changes a restore's dry run names, in the order the restore makes them: the archive brought
+ * up to date (created, its kind column added, its legacy rows labelled), then the translation rows
+ * written, the values claimed and, with `--purge`, those deleted.
+ */
+export function restoreDryRunChanges(
+  result: RestoreArchiveResult,
+  restoreArgs: { companionTableName: string; purge?: boolean }
+): DryRunChange[] {
+  const changes: DryRunChange[] = [];
+  const upgrade = result.archiveUpgrade;
+  if (upgrade?.createTable !== undefined) {
+    changes.push({
+      action: "create",
+      target: `the archive table ${upgrade.createTable}`,
+    });
+  }
+  if (upgrade?.addColumn !== undefined) {
+    changes.push({
+      action: "add",
+      target: `the ${upgrade.addColumn.column} column to ${upgrade.addColumn.table}`,
+    });
+  }
+  for (const { kind, rows } of upgrade?.labels ?? []) {
+    changes.push({ action: "label", target: `${rows} legacy rows as ${kind}` });
+  }
+  if (result.rowsRestored > 0) {
+    changes.push({
+      action: "write",
+      target: `${result.rowsRestored} translation row(s) into ${restoreArgs.companionTableName} (${result.locales.join(", ")})`,
+    });
+  }
+  if (result.rowsClaimed > 0) {
+    changes.push({
+      action: "record",
+      target: `${result.rowsClaimed} archived value(s) of unknown kind as this entity's`,
+    });
+  }
+  if (restoreArgs.purge && result.rowsRead > 0) {
+    changes.push({
+      action: "remove",
+      target: `${result.rowsRead} archived value(s) from the archive`,
+    });
+  }
+  return changes;
+}
+
+/**
  * What a restore would do, named and not done: the translation rows it writes,
  * the archived values it claims, and with `--purge` the ones it deletes, from
  * the database opened read-only. A field the restore refuses is named as the
@@ -231,26 +281,9 @@ async function previewRestore(
       ...restoreArgs,
       dryRun: true,
     });
-    const changes: DryRunChange[] = [];
-    if (result.rowsRestored > 0) {
-      changes.push({
-        action: "write",
-        target: `${result.rowsRestored} translation row(s) into ${restoreArgs.companionTableName} (${result.locales.join(", ")})`,
-      });
-    }
-    if (result.rowsClaimed > 0) {
-      changes.push({
-        action: "record",
-        target: `${result.rowsClaimed} archived value(s) of unknown kind as this entity's`,
-      });
-    }
-    if (restoreArgs.purge && result.rowsRead > 0) {
-      changes.push({
-        action: "remove",
-        target: `${result.rowsRead} archived value(s) from the archive`,
-      });
-    }
-    reportDryRun(logger, { changes });
+    reportDryRun(logger, {
+      changes: restoreDryRunChanges(result, restoreArgs),
+    });
   } catch (error) {
     // A field not translated now: the real restore's refusal.
     if (!NextlyError.is(error) || error.code !== "CONFLICT") throw error;

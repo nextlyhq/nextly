@@ -93,6 +93,7 @@ import {
   databaseCatalogUnreadable,
   schemaSyncInProduction,
 } from "../errors/areas/commands";
+import type { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -442,6 +443,20 @@ export async function ensureCoreTables(
 }
 
 /**
+ * What a sync does in production, where it never pushes schema: it refuses, naming them, when its
+ * registry step found collections created or updated, and otherwise goes on without a push
+ * (undefined). The one decision of it: the real sync acts on it, and its dry run names it.
+ */
+export function productionSyncRefusal(
+  sync: Pick<CollectionSyncResultWithValidation["sync"], "created" | "updated">
+): CliError | undefined {
+  const pendingCollections = [...sync.created, ...sync.updated];
+  return pendingCollections.length > 0
+    ? schemaSyncInProduction(pendingCollections)
+    : undefined;
+}
+
+/**
  * The schema a sync pushes: every collection and Single the configuration declares, merged with
  * what the Schema Builder registered (collections, Singles and components), leaving out what was
  * removed from code. Also the schema registry holding each declared table's runtime schema, for
@@ -453,7 +468,16 @@ export async function ensureCoreTables(
 export async function desiredSchemaForSync(
   config: LoadConfigResult["config"],
   drizzleAdapter: DrizzleAdapter,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  {
+    registriesPresent = true,
+  }: {
+    /**
+     * False for a database whose core tables a sync has yet to create: its registries will hold
+     * nothing, so nothing registered is merged in.
+     */
+    registriesPresent?: boolean;
+  } = {}
 ): Promise<{
   desired: DesiredSchema;
   desiredCollections: Record<string, DesiredCollection>;
@@ -592,25 +616,30 @@ export async function desiredSchemaForSync(
     collections: await mergeRegisteredCollectionsSafely(
       desiredCollections,
       async () =>
-        withoutRemovedFromCode(
-          await registry.getAllCollections(),
-          declaredCollections
-        ),
+        registriesPresent
+          ? withoutRemovedFromCode(
+              await registry.getAllCollections(),
+              declaredCollections
+            )
+          : [],
       logger
     ),
     singles: await mergeRegisteredSafely(
       desiredSingles,
       async () =>
-        withoutRemovedFromCode(
-          await singleRegistry.getAllSingles(),
-          declaredSingles
-        ),
+        registriesPresent
+          ? withoutRemovedFromCode(
+              await singleRegistry.getAllSingles(),
+              declaredSingles
+            )
+          : [],
       (row, base) => ({ ...base, status: row.status === true }),
       logger
     ),
     components: await mergeRegisteredSafely(
       {},
-      () => componentRegistry.getAllComponents(),
+      async () =>
+        registriesPresent ? componentRegistry.getAllComponents() : [],
       (_row, base) => base,
       logger
     ),
@@ -658,14 +687,8 @@ export async function performAutoSync(
   // Production guard: never auto-apply schema in production. Users must
   // explicitly run `nextly migrate:create` + `nextly migrate`.
   if (process.env.NODE_ENV === "production") {
-    const pendingCollections = [
-      ...syncResult.sync.created,
-      ...syncResult.sync.updated,
-    ];
-
-    if (pendingCollections.length > 0) {
-      exitWithError(logger, schemaSyncInProduction(pendingCollections));
-    }
+    const refusal = productionSyncRefusal(syncResult.sync);
+    if (refusal !== undefined) exitWithError(logger, refusal);
     return;
   }
 

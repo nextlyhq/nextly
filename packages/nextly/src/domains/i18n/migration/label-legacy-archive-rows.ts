@@ -21,7 +21,7 @@
  * @module domains/i18n/migration/label-legacy-archive-rows
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, getTableName, inArray, sql } from "drizzle-orm";
+import { and, count, eq, getTableName, inArray, sql } from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
 import { loadedDialect } from "../../../database/dialect-tables";
@@ -228,6 +228,56 @@ export function ownedSince(
   return sql`${archivedEpoch(dialect, archivedAt)} >= ${Math.floor(createdAt.getTime() / 1000) + creationMargin(dialect)}`;
 }
 
+/** One kind the labelling gives unknown rows, and the rows it gives it, by their condition. */
+interface PlannedLabel {
+  kind: string;
+  where: SQL | undefined;
+}
+
+/**
+ * What `labelLegacyArchiveRows` does, read and not written: each labelled slug's rows (unknown,
+ * the slug's, archived after its holder was created) with the kind they get, and then every row
+ * still unknown, which becomes unresolved. `kindColumn: false` plans for an archive older than the
+ * kind, whose rows all become unknown once the column is added.
+ */
+async function planLegacyArchiveLabels(
+  adapter: LabelArchiveAdapter,
+  { kindColumn = true }: { kindColumn?: boolean } = {}
+): Promise<PlannedLabel[]> {
+  const db = adapter.getDrizzle<LabelDb>();
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  const unknown = kindColumn
+    ? eq(archive.entityKind, UNKNOWN_ARCHIVE_KIND)
+    : undefined;
+  const slugs = (
+    (await db
+      .selectDistinct({ slug: archive.collection })
+      .from(archive)
+      .where(unknown)) as { slug: string }[]
+  ).map(r => r.slug);
+  if (slugs.length === 0) return [];
+
+  const holders = await holdersOf(adapter, db, slugs);
+  const planned: PlannedLabel[] = [];
+  for (const slug of slugs) {
+    const label = labelFrom(holders, slug);
+    if (label === undefined) continue;
+    planned.push({
+      kind: label.kind,
+      where: and(
+        unknown,
+        eq(archive.collection, slug),
+        ownedSince(adapter.dialect, archive.archivedAt, label.createdAt)
+      ),
+    });
+  }
+  // Every row this pass did not label stays without an owner, decided now rather than later.
+  planned.push({ kind: UNRESOLVED_ARCHIVE_KIND, where: unknown });
+  return planned;
+}
+
 /**
  * Settles the unknown rows: those whose owner the registries identify get its kind, and the rest
  * become unresolved. Idempotent: it reads and writes only rows still unknown, so it can run before
@@ -240,33 +290,42 @@ export async function labelLegacyArchiveRows(
   const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
     adapter.dialect
   );
-  const unknown = eq(archive.entityKind, UNKNOWN_ARCHIVE_KIND);
-  const slugs = (
-    (await db
-      .selectDistinct({ slug: archive.collection })
-      .from(archive)
-      .where(unknown)) as { slug: string }[]
-  ).map(r => r.slug);
-  if (slugs.length === 0) return;
-
-  const holders = await holdersOf(adapter, db, slugs);
-  for (const slug of slugs) {
-    const label = labelFrom(holders, slug);
-    if (label === undefined) continue;
-    await db
-      .update(archive)
-      .set({ entityKind: label.kind })
-      .where(
-        and(
-          unknown,
-          eq(archive.collection, slug),
-          ownedSince(adapter.dialect, archive.archivedAt, label.createdAt)
-        )
-      );
+  // In order: each slug's own rows first, then every row left unknown.
+  for (const { kind, where } of await planLegacyArchiveLabels(adapter)) {
+    await db.update(archive).set({ entityKind: kind }).where(where);
   }
-  // Every row this pass did not label stays without an owner, decided now rather than later.
-  await db
-    .update(archive)
-    .set({ entityKind: UNRESOLVED_ARCHIVE_KIND })
-    .where(unknown);
+}
+
+/**
+ * How many rows `labelLegacyArchiveRows` would give each kind, counted from its own plan and
+ * written nowhere; kinds it would give no row are left out. `kindColumn: false` counts for an
+ * archive older than the kind, whose rows all become unknown once the column is added.
+ */
+export async function countLegacyArchiveLabels(
+  adapter: LabelArchiveAdapter,
+  options: { kindColumn?: boolean } = {}
+): Promise<{ kind: string; rows: number }[]> {
+  const db = adapter.getDrizzle<LabelDb>();
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  const counts = new Map<string, number>();
+  let labelled = 0;
+  for (const { kind, where } of await planLegacyArchiveLabels(
+    adapter,
+    options
+  )) {
+    const [row] = (await db
+      .select({ n: count() })
+      .from(archive)
+      .where(where)) as { n: number | string }[];
+    // The last step labels what the steps before it left unknown.
+    const rows =
+      kind === UNRESOLVED_ARCHIVE_KIND
+        ? Number(row?.n ?? 0) - labelled
+        : Number(row?.n ?? 0);
+    if (kind !== UNRESOLVED_ARCHIVE_KIND) labelled += rows;
+    if (rows > 0) counts.set(kind, (counts.get(kind) ?? 0) + rows);
+  }
+  return [...counts].map(([kind, rows]) => ({ kind, rows }));
 }

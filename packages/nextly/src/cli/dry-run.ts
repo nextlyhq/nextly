@@ -32,8 +32,17 @@ export function withDryRun(
 
 /** One change the real run would make, by what it does to what. */
 export interface DryRunChange {
-  /** The verb after "Would": write, edit, remove, run, record or set. */
-  action: "write" | "edit" | "remove" | "run" | "record" | "set";
+  /** The verb after "Would": write, edit, remove, run, record, set, create, add or label. */
+  action:
+    | "write"
+    | "edit"
+    | "remove"
+    | "run"
+    | "record"
+    | "set"
+    | "create"
+    | "add"
+    | "label";
   /** A path, a command line, a ledger entry or a setting. */
   target: string;
 }
