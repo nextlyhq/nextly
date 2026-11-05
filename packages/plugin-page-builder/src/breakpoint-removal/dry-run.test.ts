@@ -56,16 +56,33 @@ function site(
     readable?: (host: HostAddress) => boolean;
     /** Milliseconds every naming answer takes. */
     slowNames?: number;
+    /** A document's title as saved, where a draft renamed it. */
+    saved?: (host: HostAddress) => string | undefined;
     classes?: NamedClass[];
     deadline?: Date;
   } = {}
-): DryRunDeps & { named: HostAddress[]; batches: number[] } {
+): DryRunDeps & {
+  named: HostAddress[];
+  batches: number[];
+  savedAsks: HostAddress[][];
+} {
   const named: HostAddress[] = [];
   const batches: number[] = [];
+  const savedAsks: HostAddress[][] = [];
   const byKey = new Map(stored.map(s => [JSON.stringify(s.host), s]));
   return {
     named,
     batches,
+    savedAsks,
+    savedTitles: async hosts => {
+      savedAsks.push([...hosts]);
+      const titles = new Map<string, string>();
+      for (const host of hosts) {
+        const title = options.saved?.(host);
+        if (title !== undefined) titles.set(documentKeyOf(host), title);
+      }
+      return titles;
+    },
     documents: async function* () {
       for (const s of stored) {
         const document: HostDocument = {
@@ -227,6 +244,115 @@ describe("a breakpoint removal counted across the site", () => {
     expect(mobile?.documents.unnamed).toBe(110);
     // Asked in one batch; once a list holds its names, nothing more is asked.
     expect(deps.batches).toEqual([50]);
+  });
+
+  it("asks for saved titles of exactly the documents it names, in walk order, once", async () => {
+    // 15 readable pages, each renamed in a draft: the ten named first in the
+    // walk are asked about in one call and shown by their saved titles.
+    const pages: Stored[] = Array.from({ length: 15 }, (_, i) => ({
+      host: entry("pages", `p${String(i).padStart(2, "0")}`),
+      published: page(styled("a", { locked: true })),
+    }));
+    const deps = site(pages, { saved: host => `${host.id ?? ""} (draft)` });
+    const [mobile] = (await countRemoval(MOBILE, deps)).removed;
+    const firstTen = pages.slice(0, NAMED_AT_MOST).map(p => p.host);
+    expect(mobile?.documents.named).toEqual(
+      firstTen.map(host => `${host.id ?? ""} (draft)`)
+    );
+    // The locked list names the same documents, without asking again.
+    expect(mobile?.locked.named).toEqual(mobile?.documents.named);
+    expect(deps.savedAsks).toEqual([firstTen]);
+  });
+
+  it("reads at most twenty saved titles in one dry run, however many breakpoints go", async () => {
+    // Three breakpoints, each held by ten pages of its own: thirty documents
+    // would be named, and only the first twenty are read as saved.
+    const at = (breakpoint: string, id: string): Stored => ({
+      host: entry("pages", id),
+      published: page({
+        id: "a",
+        type: "core/text",
+        version: 1,
+        props: {},
+        styles: { base: { [breakpoint]: { color: "#111" } } },
+      }),
+    });
+    const stored = ["mobile", "watch", "tv"].flatMap(breakpoint =>
+      Array.from({ length: 10 }, (_, i) => at(breakpoint, `${breakpoint}-${i}`))
+    );
+    const deps = site(stored, { saved: host => `${host.id ?? ""} (draft)` });
+    const run = await countRemoval(
+      new Map([
+        ["mobile", "Mobile"],
+        ["watch", "Watch"],
+        ["tv", "TV"],
+      ]),
+      deps
+    );
+    expect(deps.savedAsks.flat()).toHaveLength(20);
+    // The third list keeps the titles the access read gave.
+    expect(run.removed[2]?.documents.named[0]).toBe("pages/tv-0");
+    expect(run.removed[0]?.documents.named[0]).toBe("mobile-0 (draft)");
+  });
+
+  it("spends no saved-title read on a Single, which is named by its slug", async () => {
+    // Ten Singles hold Mobile, ten pages Watch and ten pages TV. The Singles
+    // take nothing from the twenty reads, so both lists of pages get theirs.
+    const at = (breakpoint: string, host: HostAddress): Stored => ({
+      host,
+      published: page({
+        id: "a",
+        type: "core/text",
+        version: 1,
+        props: {},
+        styles: { base: { [breakpoint]: { color: "#111" } } },
+      }),
+    });
+    const singles = Array.from({ length: 10 }, (_, i) =>
+      at("mobile", { kind: "single", slug: `s${i}`, path: ["content"] })
+    );
+    const pages = ["watch", "tv"].flatMap(breakpoint =>
+      Array.from({ length: 10 }, (_, i) =>
+        at(breakpoint, entry("pages", `${breakpoint}-${i}`))
+      )
+    );
+    const deps = site([...singles, ...pages], {
+      saved: host => `${host.id ?? host.slug} (draft)`,
+    });
+    const run = await countRemoval(
+      new Map([
+        ["mobile", "Mobile"],
+        ["watch", "Watch"],
+        ["tv", "TV"],
+      ]),
+      deps
+    );
+    expect(
+      deps.savedAsks.flat().every(host => host.kind === "collection")
+    ).toBe(true);
+    expect(run.removed[2]?.documents.named[0]).toBe("tv-0 (draft)");
+  });
+
+  it("asks once for saved titles that run out of time, and keeps the names it has", async () => {
+    const deps = site([
+      {
+        host: entry("pages", "p1"),
+        published: page(styled("a", { locked: true })),
+      },
+    ]);
+    const asks: number[] = [];
+    const run = await countRemoval(MOBILE, {
+      ...deps,
+      savedTitles: hosts => {
+        asks.push(hosts.length);
+        return new Promise(() => {});
+      },
+      deadline: new Date(Date.now() + 100),
+    });
+    // Named in both lists by the access read's title, and asked only once.
+    expect(run.removed[0]?.documents.named).toEqual(["pages/p1"]);
+    expect(run.removed[0]?.locked.named).toEqual(["pages/p1"]);
+    expect(asks).toEqual([1]);
   });
 
   it("counts the whole site however slowly the caller's names come", async () => {
