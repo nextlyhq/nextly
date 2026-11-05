@@ -67,7 +67,7 @@ function stateOf(value: string): HostState {
 }
 
 /** The table operations a record is written through: `ctx.db`, or a transaction. */
-type ProgressHandle = Pick<
+export type ProgressHandle = Pick<
   PluginTransaction,
   "select" | "table" | "update" | "insert"
 >;
@@ -97,6 +97,22 @@ async function writeRow(
     deletionId: runId,
     hostKey: documentKey,
     ...set,
+  });
+}
+
+/**
+ * Mark one document pending in a run's progress, through `handle`: a caller
+ * sending the run back to its converting walk in the same transaction, so the
+ * pending row and the run's phase land together or not at all.
+ */
+export async function markPending(
+  handle: ProgressHandle,
+  runId: string,
+  documentKey: string
+): Promise<void> {
+  await writeRow(handle, runId, documentKey, {
+    state: "pending",
+    reason: null,
   });
 }
 
@@ -154,10 +170,7 @@ export function progressStore(
         // or done, would never be visited again, so the two land together or
         // neither does.
         await db.transaction(async tx => {
-          await writeRow(tx, run.id, documentKey, {
-            state: "pending",
-            reason: null,
-          });
+          await markPending(tx, run.id, documentKey);
           const t = tx.table(componentDeletions);
           await tx
             .update(componentDeletions, { phase: "converting", cursor: null })
