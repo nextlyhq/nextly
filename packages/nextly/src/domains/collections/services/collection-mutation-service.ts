@@ -221,6 +221,7 @@ import {
   isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { forgetRecoveryPointIn } from "../../i18n/forget-recovery-point";
 import {
   languagesChangedConflict,
   languagesGoingLiveFrom,
@@ -5589,6 +5590,17 @@ export class CollectionMutationService extends BaseService {
           draftLocale
         );
         await releaseSharedBase(tx, discardedRef, draftLocale);
+        // The author's unsaved work recorded in the discarded language goes
+        // with it, so the editor no longer offers to restore what they threw
+        // away. Their work recorded in another language stays.
+        await forgetRecoveryPointIn(tx, {
+          ref: discardedRef,
+          author: params.user?.id,
+          slot: draftLocale,
+          documentLocalized:
+            (collection as { localized?: boolean }).localized === true,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
         // In the document's history only when there was a draft to discard.
         if (removed > 0) {
           // A reader of the pending change now sees the live entry, so the

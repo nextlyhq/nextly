@@ -63,10 +63,9 @@ export function LanguageDots({
   const translatable = locales.filter(l => l.code !== defaultLocale);
   const { translated, total } = translationCounts(
     translations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
-  const missing = untranslatedLocales(translations, locales, defaultLocale);
+  const missing = untranslatedLocales(translations, locales);
   const shown = translatable.slice(0, MAX_DOTS);
   const overflow = translatable.length - shown.length;
 

@@ -776,8 +776,7 @@ export function LanguagePanel({
   const pendingCount = pendingLanguageCount(locales, translations);
   const counts = translationCounts(
     translations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
 
   const { offersFilter, shown } = filteredLanguages(locales, filter);

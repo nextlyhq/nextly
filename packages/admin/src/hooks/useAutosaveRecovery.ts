@@ -442,6 +442,10 @@ export function useAutosaveRecovery({
   // after a `return`.
   const offer = useMemo<AutosaveRecoveryOffer | null>(() => {
     if (dismissed || !data) return null;
+    // A point belongs to the language it was recorded in: restored into
+    // another language's form it would put one language's text in another's
+    // fields, so it is offered only where it was typed.
+    if ((data.locale ?? null) !== locale) return null;
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
     // Put off in this tab already: see `dismiss`.

@@ -237,25 +237,30 @@ describe("useAutosaveRecovery", () => {
     );
   });
 
-  it("judges a point equal to the document only in the language it was recorded in", async () => {
-    // A point from another language can hold values equal to this one's
-    // stored document while differing from its own.
+  // A recovery point belongs to the language it was recorded in: restored
+  // into another language's form, it would put one language's text in
+  // another's fields. The plausible broken implementation offers the one
+  // point the author has wherever the editor stands.
+  it("offers a point only in the language it was recorded in", async () => {
     getSpy.mockResolvedValue({
-      snapshot: { ...STORED },
+      snapshot: { ...STORED, title: "French work" },
       updatedAt: "2026-08-17T10:00:00.000Z",
       locale: "fr",
     });
     const other = renderRecovery(SCOPE, STORED, "en");
     await waitFor(() =>
-      expect(other.result.current.recovery.offer).not.toBeNull()
+      expect(other.result.current.recovery.isResolved).toBe(true)
     );
+    expect(other.result.current.recovery.offer).toBeNull();
     other.unmount();
 
     const same = renderRecovery(SCOPE, STORED, "fr");
     await waitFor(() =>
-      expect(same.result.current.recovery.isResolved).toBe(true)
+      expect(same.result.current.recovery.offer).not.toBeNull()
     );
-    expect(same.result.current.recovery.offer).toBeNull();
+    expect(same.result.current.recovery.offer?.snapshot).toMatchObject({
+      title: "French work",
+    });
   });
 
   it("offers a point in another language stored in the same second with the same values, after one was put off", async () => {
@@ -265,7 +270,7 @@ describe("useAutosaveRecovery", () => {
       updatedAt: at,
       locale: "en",
     });
-    const first = renderRecovery(SCOPE);
+    const first = renderRecovery(SCOPE, undefined, "en");
     await waitFor(() =>
       expect(first.result.current.recovery.offer).not.toBeNull()
     );
@@ -277,7 +282,7 @@ describe("useAutosaveRecovery", () => {
       updatedAt: at,
       locale: "fr",
     });
-    const other = renderRecovery(SCOPE);
+    const other = renderRecovery(SCOPE, undefined, "fr");
     await waitFor(() =>
       expect(other.result.current.recovery.offer).not.toBeNull()
     );

@@ -57,7 +57,7 @@ describe("LanguageDots", () => {
     render(<LanguageDots translations={TRANSLATIONS} />);
     expect(
       screen.getByRole("group", {
-        name: "1 of 2 languages translated; missing Arabic",
+        name: "2 of 3 languages translated; missing Arabic",
       })
     ).toBeInTheDocument();
   });
@@ -70,7 +70,7 @@ describe("LanguageDots", () => {
       />
     );
     expect(
-      screen.getByRole("group", { name: "All 2 languages translated" })
+      screen.getByRole("group", { name: "All 3 languages translated" })
     ).toBeInTheDocument();
   });
 
@@ -128,9 +128,9 @@ describe("LanguageDots", () => {
     useBranding.mockReturnValue({ locales: many });
     render(<LanguageDots translations={{}} onOpenLocale={vi.fn()} />);
     expect(screen.getAllByRole("button")).toHaveLength(6);
-    // Nothing is lost: the group's name still accounts for all nine.
+    // Nothing is lost: the group's name still accounts for every language.
     expect(
-      screen.getByRole("group", { name: /0 of 9 languages translated/ })
+      screen.getByRole("group", { name: /0 of 10 languages translated/ })
     ).toBeInTheDocument();
   });
 });
