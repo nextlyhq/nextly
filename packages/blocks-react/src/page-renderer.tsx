@@ -31,6 +31,7 @@ import {
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
+  blockPartsFor,
   drawlessTestFor,
   effectiveCompile,
   gatedEntriesCoverRemovedNodes,
@@ -982,10 +983,13 @@ export function PageRenderer({
         ? css === ""
           ? undefined
           : compileSiteTokenSheet(siteSheetInput)
-        : compileSiteSheet({
-            ...siteSheetInput,
-            breakpoints: siteBreakpoints,
-          });
+        : compileSiteSheet(
+            { ...siteSheetInput, breakpoints: siteBreakpoints },
+            // The parts of the types this page draws, over the composed tree
+            // the page sheet reads, so the classes in the shared sheet route a
+            // wrapped image's corners to its picture as the page sheet does.
+            blockPartsFor(doc, resolver, pageStyleContext?.blockParts)
+          );
 
   return (
     <div className={rootClassName}>

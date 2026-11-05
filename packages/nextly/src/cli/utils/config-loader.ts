@@ -31,6 +31,7 @@ import {
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
+import { adoptPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -890,6 +891,9 @@ export async function loadConfig(
     // pipeline both read the active value, so `migrate` cannot end up applying
     // DDL to `public` while the application it is migrating runs in `cms`.
     publishConfiguredPostgresSchema(loaded.config);
+    // Likewise its per-language storage choice, so a command's DDL lays tables out as the site
+    // does. A booted site already chose and keeps its choice.
+    adoptPerLanguageStorage(loaded.config.perLanguageStorage);
     return loaded;
   });
 
