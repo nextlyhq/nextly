@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineSingle, text } from "../../../config";
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
@@ -21,6 +22,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 
@@ -176,6 +178,158 @@ describe.each(
         en: "published",
         de: "draft",
       });
+    });
+
+    it("drops the per-language states when translation is turned off and they agree, and moves no value", async () => {
+      await seeded();
+      await toggle(true);
+
+      await toggle(false);
+
+      expect(await companionColumns()).not.toContain("_status");
+      expect(await headingIn("de")).toBe("Hallo");
+      expect(await headingIn("en")).toBe("Hello");
+    });
+  }
+);
+
+/** The two Builder paths that turn a collection's translation on or off. */
+const COLLECTION_PATHS = ["its schema dialog", "its settings"] as const;
+
+describe.each(
+  getConfiguredTestDialects().flatMap(dialect =>
+    COLLECTION_PATHS.map(path => [dialect, path] as const)
+  )
+)(
+  "turning a collection's translation on and off under per-language storage (%s, through %s)",
+  (dialect: TestDialect, path: (typeof COLLECTION_PATHS)[number]) => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const run = (sql: string) => current!.adapter.executeQuery(sql);
+    let id = "";
+
+    /** A published, untranslated Draft/Published collection made in the Builder, in two languages. */
+    async function seeded(): Promise<void> {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [],
+      });
+      const handler = current.getService("collectionsHandler") as unknown as {
+        createCollection(
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const made = await handler.createCollection({
+        name: "posts",
+        label: "Post",
+        status: true,
+        fields: FIELDS,
+      });
+      expect(made.success, JSON.stringify(made)).toBe(true);
+      const created = await current.nextly.create({
+        collection: "posts",
+        data: { heading: "Hello" },
+      });
+      id = (created.item as { id: string }).id;
+      await current.nextly.update({
+        collection: "posts",
+        id,
+        locale: "de",
+        data: { heading: "Hallo" },
+      });
+      await run(`UPDATE ${q("dc_posts")} SET ${q("status")} = 'published'`);
+    }
+
+    async function toggle(localized: boolean): Promise<unknown> {
+      const [row] = await current!.adapter.executeQuery<{
+        version: number | string | null;
+      }>(
+        `SELECT ${q("schema_version")} AS version FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'posts'`
+      );
+      return path === "its schema dialog"
+        ? dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: "posts" },
+            {
+              fields: FIELDS,
+              confirmed: true,
+              localized,
+              schemaVersion: Number(row?.version ?? 1),
+            }
+          )
+        : dispatchCollections(
+            {} as ServiceContainer,
+            "updateCollection",
+            { collectionName: "posts" },
+            { localized }
+          );
+    }
+
+    async function companionColumns(): Promise<string[]> {
+      const snapshot = await introspectLiveSnapshot(
+        current!.adapter.getDrizzle(),
+        current!.adapter.dialect,
+        ["dc_posts_locales"]
+      );
+      return (
+        snapshot.tables[0]?.columns.map(column => column.name.toLowerCase()) ??
+        []
+      );
+    }
+
+    async function statesByLanguage(): Promise<Record<string, unknown>> {
+      const rows = await current!.adapter.executeQuery<{
+        locale: string;
+        state: unknown;
+      }>(
+        `SELECT ${q("_locale")} AS locale, ${q("_status")} AS state FROM ${q("dc_posts_locales")}`
+      );
+      return Object.fromEntries(rows.map(row => [row.locale, row.state]));
+    }
+
+    async function headingIn(locale: string): Promise<unknown> {
+      const read = await current!.nextly.findByID({
+        collection: "posts",
+        id,
+        locale,
+      } as never);
+      return (read as { heading?: unknown }).heading;
+    }
+
+    it("gives every language the entry's publish state when translation is turned on, and moves no value", async () => {
+      await seeded();
+      expect(await companionColumns()).not.toContain("_status");
+
+      await toggle(true);
+
+      expect(await companionColumns()).toContain("_status");
+      expect(await statesByLanguage()).toEqual({
+        en: "published",
+        de: "published",
+      });
+      expect(await headingIn("de")).toBe("Hallo");
+      expect(await headingIn("en")).toBe("Hello");
+    });
+
+    it("refuses turning translation off while a language's publish state differs from the entry's", async () => {
+      await seeded();
+      await toggle(true);
+      await run(
+        `UPDATE ${q("dc_posts_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_locale")} = 'de'`
+      );
+
+      const refused = await toggle(false).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(JSON.stringify(refused)).toContain(
+        "1 entry has a language whose publish state differs from the entry's"
+      );
+      expect(await companionColumns()).toContain("_status");
     });
 
     it("drops the per-language states when translation is turned off and they agree, and moves no value", async () => {
