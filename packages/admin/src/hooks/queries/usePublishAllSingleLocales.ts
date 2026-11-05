@@ -20,7 +20,10 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 
-import { publishedSummary } from "@admin/components/features/entries/publishAllOutcomes";
+import {
+  languageLabelOf,
+  publishedSummary,
+} from "@admin/components/features/entries/publishAllOutcomes";
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { EVERY_LANGUAGE, versionOf } from "@admin/lib/document-version";
@@ -53,9 +56,7 @@ export function usePublishAllSingleLocales({
   unknown
 > {
   const queryClient = useQueryClient();
-  const { locales } = useLocalization();
-  const labelOf = (code: string) =>
-    locales.find(locale => locale.code === code)?.label ?? code;
+  const labelOf = languageLabelOf(useLocalization().locales);
 
   return useMutation({
     // With the version of every language, from a read of every language just

@@ -406,6 +406,57 @@ function useRestoreOffer({
 }
 
 /**
+ * The offer a stored point makes, or null when it makes none: dismissed, put
+ * off in this tab, unreadable, or holding what the document already stores.
+ */
+function offerOf(
+  data: AutosaveDetail | null | undefined,
+  dismissed: boolean,
+  isPutOff: (identity: string) => boolean,
+  stored: Parameters<typeof holdsStored>[1],
+  locale: string | null
+): AutosaveRecoveryOffer | null {
+  if (dismissed || !data) return null;
+  const savedAt = new Date(data.updatedAt);
+  if (Number.isNaN(savedAt.getTime())) return null;
+  // Put off in this tab already: see `dismiss`.
+  if (isPutOff(pointIdentity(data))) return null;
+  // A recovery point holding what the document already stores is no unsaved
+  // work: an author who undid back to the saved document left one behind,
+  // and offering it back on every load restores nothing.
+  if (holdsStored(data, stored, locale)) return null;
+  const startedFrom = versionOf(data.snapshot);
+  return {
+    savedAt,
+    snapshot: data.snapshot,
+    // Written since the point began, by anyone, the author included, or by
+    // a write the server cannot name: offered, and said to be from an older
+    // version. Not withheld when the later writes were all the author's
+    // own: a save of theirs deletes the point, so one still here outlived
+    // a write that did not store it, such as publishing every language,
+    // and it is the only copy of that work.
+    olderVersion: data.superseded !== undefined,
+    ...(startedFrom === undefined ? {} : { startedFrom }),
+    ...(data.changedSince ? { changedSince: data.changedSince } : {}),
+    startingVersionUnknown: data.startingVersionUnknown === true,
+  };
+}
+
+/**
+ * The key a document's recovery point is read under. Keyed by the document,
+ * so switching entries asks again rather than reusing the previous document's
+ * answer; memoised on those fields, so the restore, which writes the answer
+ * back under it, is not rebuilt on every render.
+ */
+function useRecoveryQueryKey(scope: VersionScope | null): readonly unknown[] {
+  const scopeId = scope?.kind === "single" ? scope.documentId : scope?.entryId;
+  return useMemo(
+    () => ["autosave-recovery", scope?.kind, scope?.slug, scopeId],
+    [scope?.kind, scope?.slug, scopeId]
+  );
+}
+
+/**
  * @param options - the document to read for, and the form an offer restores into
  * @returns the offer to present, and ways to accept it or stop presenting it
  */
@@ -419,15 +470,7 @@ export function useAutosaveRecovery({
   // Recovery points are each author's own, so a "Not now" is too: another
   // account signed in to this tab is offered its own point.
   const author = useCurrentUserId();
-  // Keyed by the document, so switching entries asks again rather than
-  // reusing the previous document's answer.
-  // Memoised on those fields, so the restore below, which writes the answer
-  // back under it, is not rebuilt on every render.
-  const scopeId = scope?.kind === "single" ? scope.documentId : scope?.entryId;
-  const queryKey = useMemo(
-    () => ["autosave-recovery", scope?.kind, scope?.slug, scopeId],
-    [scope?.kind, scope?.slug, scopeId]
-  );
+  const queryKey = useRecoveryQueryKey(scope);
   const [dismissed, setDismissed] = useState(false);
   // Withdrawn once a save lands: see `savedCount`. Both answers belong to the
   // document they were given for: an editor that moves to another document
@@ -482,33 +525,10 @@ export function useAutosaveRecovery({
   // Computed rather than returned from an early exit so the accept action below
   // can close over it: hooks run unconditionally, and a `useCallback` cannot sit
   // after a `return`.
-  const offer = useMemo<AutosaveRecoveryOffer | null>(() => {
-    if (dismissed || !data) return null;
-    const savedAt = new Date(data.updatedAt);
-    if (Number.isNaN(savedAt.getTime())) return null;
-    // Put off in this tab already: see `dismiss`.
-    if (isPutOff(pointIdentity(data))) return null;
-    // A recovery point holding what the document already stores is no unsaved
-    // work: an author who undid back to the saved document left one behind,
-    // and offering it back on every load restores nothing.
-    if (holdsStored(data, stored, locale)) return null;
-    return {
-      savedAt,
-      snapshot: data.snapshot,
-      // Written since the point began, by anyone, the author included, or by
-      // a write the server cannot name: offered, and said to be from an older
-      // version. Not withheld when the later writes were all the author's
-      // own: a save of theirs deletes the point, so one still here outlived
-      // a write that did not store it, such as publishing every language,
-      // and it is the only copy of that work.
-      olderVersion: data.superseded !== undefined,
-      ...(versionOf(data.snapshot) === undefined
-        ? {}
-        : { startedFrom: versionOf(data.snapshot) }),
-      ...(data.changedSince ? { changedSince: data.changedSince } : {}),
-      startingVersionUnknown: data.startingVersionUnknown === true,
-    };
-  }, [dismissed, data, stored, locale, isPutOff]);
+  const offer = useMemo(
+    () => offerOf(data, dismissed, isPutOff, stored, locale),
+    [dismissed, data, stored, locale, isPutOff]
+  );
 
   const { restore, take } = useRestoreOffer({
     offer,

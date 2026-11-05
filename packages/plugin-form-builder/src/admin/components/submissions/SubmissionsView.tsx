@@ -88,7 +88,7 @@ export function submissionPatch(
 }
 
 /** What a refused change says when someone saved the submission since. */
-export const SUBMISSION_CHANGED_SINCE =
+const SUBMISSION_CHANGED_SINCE =
   "Someone changed this submission since the list loaded. The list now shows their change; make yours again.";
 
 export interface FormOption {
