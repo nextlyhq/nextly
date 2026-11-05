@@ -82,7 +82,11 @@ import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
-import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import {
+  breakpointQueries,
+  liveBreakpointsFor,
+  matchedBreakpoints,
+} from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { ChoiceList } from "./choice-list";
@@ -119,6 +123,8 @@ import {
 } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
+import { SectionHeld } from "./section-held";
+import type { SharedStyleRow } from "./shared-style-library";
 import {
   moveToSharedStyleClear,
   planMoveToSharedStyle,
@@ -191,6 +197,7 @@ import {
   breakpointSource,
   inheritedProvenance,
   propertiesWriting,
+  provenanceBeneath,
   type BreakpointBadge,
   type BreakpointSource,
   type StyleProvenance,
@@ -242,6 +249,12 @@ interface ProvenanceAnswer {
    * than as missing.
    */
   jump?: () => void;
+  /**
+   * What the control would show without the block's own value at the
+   * position being edited, judged at the edited tier: the source the
+   * "overrides" line names, and what its Reset shows again.
+   */
+  beneath: StyleProvenance;
 }
 
 type ProvenanceOf = (leaf: StyleLeaf) => ProvenanceAnswer | undefined;
@@ -598,7 +611,7 @@ function StyleInspectorBody({
     variantAt: (property, path) => chosenForms[formKey(property, path)],
     media: rendersMedia(renderedTag),
     breakpoints,
-    cascade: cascadeFor(cascade, subject),
+    cascade: targetCascade(target, cascadeFor(cascade, subject)),
     // A shared target's values are the style's own, so the controls show
     // and offer what the style stores rather than what the block does.
     styles: targetStyles(target),
@@ -1943,6 +1956,7 @@ function StyleControlField({
       />
       <SharedValueLine
         target={target}
+        answer={answer}
         nodeStyles={nodeStyles}
         address={address}
         actionName={actionName}
@@ -2097,9 +2111,18 @@ function provenanceReader({
       badge.kind === "inherited" && badge.source.selectable
         ? badge.source.breakpoint
         : undefined;
+    /*
+     * At the tiers that match where the write lands rather than at the
+     * canvas's width: the line describes the position being edited.
+     */
+    const beneath = provenanceBeneath({
+      ...query,
+      liveBreakpoints: liveBreakpointsFor(breakpoints, breakpoint),
+    });
     return {
       provenance,
       badge,
+      beneath,
       ...(onJumpToBreakpoint === undefined || target === undefined
         ? {}
         : { jump: () => onJumpToBreakpoint(target) }),
@@ -2741,7 +2764,12 @@ function foldedLeafFor(property: string, fallback: StyleLeaf): StyleLeaf {
   const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
   const arms =
     shape?.kind === "union" ? shape.of.filter(isStyleLeaf) : [fallback];
-  const leaf = foldedLeaf(arms.length > 0 ? arms : [fallback]);
+  // With its union, so each variable is judged by the arm the engine picks
+  // for its value.
+  const leaf =
+    shape?.kind === "union" && arms.length > 0
+      ? foldedLeaf(arms, shape)
+      : foldedLeaf(arms.length > 0 ? arms : [fallback]);
   FOLDED_LEAVES.set(property, leaf);
   return leaf;
 }
@@ -3333,6 +3361,16 @@ function ReadOnlyNote({
   );
 }
 
+/**
+ * The cascade the inspection judges which controls show by: the block's, or
+ * none for a shared target, whose display is read from the style's own
+ * styles, not from the block's cascade, which the block or a later style may
+ * override.
+ */
+function targetCascade<T>(target: StyleTarget, cascade: T): T | undefined {
+  return target.kind === "shared" ? undefined : cascade;
+}
+
 /** The values a shared target shows, or `undefined` while the block is the target. */
 function targetStyles(target: StyleTarget): NodeStyles | undefined {
   return target.kind === "shared" ? target.style.styles : undefined;
@@ -3636,6 +3674,7 @@ function moveToSharedStyle({
  */
 function SharedValueLine({
   target,
+  answer,
   nodeStyles,
   address,
   actionName,
@@ -3643,6 +3682,7 @@ function SharedValueLine({
   onMoveTo,
 }: {
   target: StyleTarget;
+  answer: ProvenanceAnswer | undefined;
   nodeStyles: NodeStyles | undefined;
   address: StyleAddress;
   actionName: string;
@@ -3667,11 +3707,7 @@ function SharedValueLine({
       </div>
     );
   }
-  // The style that would show here without the block's value: the last one
-  // in library order setting this address, as the cascade applies them.
-  const under = [...target.worn]
-    .reverse()
-    .find(row => readStyleValue(row.styles, address) !== undefined);
+  const under = styleBeneath(target.worn, answer, address);
   if (under === undefined) return null;
   return (
     <div
@@ -3695,6 +3731,36 @@ function SharedValueLine({
       </button>
     </div>
   );
+}
+
+/**
+ * The worn style that would show at this control without the block's own
+ * value, or `undefined` when none would: the block's own value at a wider
+ * tier, or nothing at all.
+ *
+ * Read from the cascade's answer where the host supplies one, so a value the
+ * block sets at a narrow breakpoint or in a state over the style's wider or
+ * base-state value is named, and a block value between the two is not. With
+ * no cascade, or a declaration the trace cannot tie to one control, the
+ * style's own value at this exact address, the last in library order as the
+ * cascade applies them: true where it answers, silent elsewhere.
+ */
+function styleBeneath(
+  worn: readonly SharedStyleRow[],
+  answer: ProvenanceAnswer | undefined,
+  address: StyleAddress
+): SharedStyleRow | undefined {
+  const beneath = answer?.beneath;
+  if (beneath === undefined || beneath.kind === "ambiguous") {
+    return [...worn]
+      .reverse()
+      .find(row => readStyleValue(row.styles, address) !== undefined);
+  }
+  if (beneath.kind !== "inherited") return undefined;
+  const from = beneath.from;
+  return from.kind === "class"
+    ? worn.find(row => row.id === from.id)
+    : undefined;
 }
 
 /**
@@ -5172,10 +5238,24 @@ function textNumber(text: string): number | undefined {
 }
 
 /**
- * Whether the section a field sits in is held read-only. Its fieldset holds
- * the form controls; a control that is not one (a slider's thumb) reads this.
+ * What describes a number field: its own description, and the words for its
+ * unit while what it shows is a number, or nothing at all. What it shows is
+ * the draft, or, while that is empty, the inherited value it hints. A keyword
+ * such as `inherit` has no unit to be said in.
  */
-const SectionHeld = React.createContext(false);
+export function describedWithUnit(
+  describedBy: string | undefined,
+  unitWords: string | undefined,
+  draft: string,
+  inherited: string | undefined
+): string | undefined {
+  const shown = trimCssWhitespace(draft) === "" ? (inherited ?? "") : draft;
+  const keyword =
+    trimCssWhitespace(shown) !== "" && textNumber(shown) === undefined;
+  return unitWords === undefined || keyword
+    ? describedBy
+    : [describedBy, unitWords].filter(Boolean).join(" ");
+}
 
 /**
  * The id of words naming a field's unit for a screen reader, where the unit
@@ -5463,6 +5543,8 @@ function NumericField({
 }): React.JSX.Element {
   // Words for a unit shown only as a sign beside the field, for its description.
   const unitWords = React.useContext(UnitWords);
+  // The value reaching the field from another tier, which it shows as a hint.
+  const inheritedHint = React.useContext(InheritedValue);
   const units = unitChoicesFor(control.leaf);
   // The draft lives HERE rather than inside the text field, because two
   // controls edit one value and the unit menu was reading the other copy. An
@@ -5524,11 +5606,12 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         tokens={tokens}
-        describedBy={
-          unitWords === undefined
-            ? describedBy
-            : [describedBy, unitWords].filter(Boolean).join(" ")
-        }
+        describedBy={describedWithUnit(
+          describedBy,
+          unitWords,
+          draft,
+          inheritedHint
+        )}
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}

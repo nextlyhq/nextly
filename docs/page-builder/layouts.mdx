@@ -104,8 +104,9 @@ Layout's header or footer is a component that isn't published, you're asked firs
 
 The default changes every page that names no Layout, so it is treated like publishing.
 Send `{ "dryRun": true }` to see what would change without changing it. The answer is
-the usual `{ message, item }` shape, where `item` holds `defaultLayout` and
-`previousDefaultLayout`.
+the usual `{ message, item }` shape, where `item` holds `defaultLayout`,
+`previousDefaultLayout` and `by`, who made the change: `{ kind: "user", userId }`, or
+`{ kind: "api-key", userId, apiKeyId }` for a call made with an API key.
 
 ### The default is protected
 
@@ -175,7 +176,8 @@ Content-Type: application/json
 ```
 
 `action` is `delete` or `unpublish`. A dry run changes nothing. Its `item.check` holds
-`isDefault`, `pages` (`{ id, title }`), `unreadable` and `complete`. A real removal that
+`isDefault`, `pages` (`{ id, title }`), `unreadable` and `complete`, and every answer's
+`item.by` says who asked, as make-default's does. A real removal that
 something stops answers `409 CONFLICT`, with the reason in the message.
 
 If a Layout is made the default at the very moment it is being deleted, the delete loses:

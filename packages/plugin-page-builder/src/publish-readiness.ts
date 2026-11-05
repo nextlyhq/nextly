@@ -54,7 +54,7 @@ import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
-import { storeIsLocalized } from "./component-facts-route";
+import { componentStoreShape } from "./component-facts-route";
 import {
   AS_THE_SYSTEM,
   asDocument,
@@ -535,11 +535,15 @@ export function publishReadinessRoute(setup: PublishReadinessSetup): {
           // answers for none in particular: components are not judged there,
           // as the readiness notice does not judge them, rather than named
           // as missing while live. The Layout's own state still is.
-          judgeComponents: !(await storeIsLocalized(
-            ctx.services.collections,
-            stores.components,
-            ctx.user
-          )),
+          // Read through the store's one shape reader, which says whether it
+          // is localized, as the component facts route reads it.
+          judgeComponents: !(
+            await componentStoreShape(
+              ctx.services.collections,
+              stores.components,
+              ctx.user
+            )
+          ).localized,
         },
         systemReads(nextly, stores, limits)
       );
