@@ -134,6 +134,14 @@ export interface ScheduledTask {
 }
 
 /**
+ * @experimental A plugin's admin strings, `contributes.translations`: interface
+ * language, then key, then the text.
+ */
+export type PluginTranslations = Readonly<
+  Record<string, Readonly<Record<string, string>>>
+>;
+
+/**
  * @experimental A webhook event type a plugin declares: `contributes.webhookEvents`.
  */
 export interface PluginWebhookEventType {
@@ -858,6 +866,17 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   fieldTypes?: PluginFieldType[];
   /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
+  /**
+   * @experimental The admin's strings this plugin's components show, by
+   * interface language and then by key: `{ en: { "acme-shop.cart.title": "Cart" } }`.
+   *
+   * Each key begins with the plugin's admin slug and a dot. Startup refuses
+   * a key outside that namespace, a malformed key or language, a value that is
+   * not text, and a key another plugin already declares. The admin's own keys
+   * begin with `nextly.`, which no plugin's may, so a plugin slugged `nextly`
+   * can declare none. English is the fallback for a key a language lacks.
+   */
+  translations?: PluginTranslations;
   /**
    * @experimental Webhook event types this plugin declares, which an
    * endpoint may subscribe to beside core's. Distinct from `events`, which are

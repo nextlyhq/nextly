@@ -397,6 +397,37 @@ const key = userId === null ? null : `my-plugin.layout:${userId}`;
 This hook is experimental while its first consumer settles. Its name and its
 `string | null` answer are meant to stay.
 
+### Translating your strings
+
+A plugin declares its admin strings in `contributes.translations`, by interface language and
+then by key, and its components read them with `usePluginTranslate()` from
+`@nextlyhq/plugin-sdk/admin`:
+
+```tsx
+// In definePlugin({ ... })
+contributes: {
+  translations: {
+    en: { "acme-shop.cart.title": "Cart", "acme-shop.cart.count": "{count} items" },
+    fr: { "acme-shop.cart.title": "Panier" },
+  },
+}
+
+// In a component
+const t = usePluginTranslate();
+t("acme-shop.cart.title"); // "Panier" in French, "Cart" in English
+t("acme-shop.cart.count", { count: 3 }); // "3 items"
+```
+
+Every key begins with your plugin's admin slug and a dot (`@acme/shop` is `acme-shop`). A string
+is read in the interface language, then English, then the key itself. Startup refuses a key
+outside your namespace, a malformed key or language, a language not spelled as browsers report it
+(`pt-BR`, not `pt-br`), a value that isn't text, and a key another plugin declares. A disabled
+plugin's strings are still served, since its field editors still show. The admin's own strings begin with `nextly.`, so a plugin slugged `nextly` can
+declare none. The strings reach signed-in readers only, so they are not yet on the sign-in
+screen.
+
+This surface is experimental while its first consumer settles.
+
 ## Dashboard widgets
 
 A plugin adds dashboard widgets under `contributes.dashboard.widgets`, each declared with
