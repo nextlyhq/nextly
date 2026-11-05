@@ -62,6 +62,7 @@ import {
   useContext,
   useMemo,
   useRef,
+  useState,
   type Context,
 } from "react";
 
@@ -606,6 +607,59 @@ export interface SiteStyleWrite {
   readonly saving: boolean;
 }
 
+/** The version a site-style save sends, and how it moves; see `useSiteStyleVersion`. */
+interface SiteStyleVersion {
+  /** A section's write, with the version the editor's copy started from. */
+  readonly sectionWrite: (
+    section: SiteStyleSection,
+    value: unknown
+  ) => Record<string, unknown>;
+  /** A section write the server answered with `saved` stored the copy. */
+  readonly answered: (saved: unknown) => void;
+  /** A breakpoints write went through Settings' route, unjudged. */
+  readonly breakpointsWritten: () => void;
+}
+
+/**
+ * The Single's version the next save sends: the one a read gave, then the one
+ * each save answered, so a studio's second save is not refused for its own
+ * first one. A newer read takes over only until this editor writes a section:
+ * from then on each studio keeps its own copy, the authority while it is open,
+ * so a read it never shows must not move the version its next save sends, or
+ * that save would pass over the change it replaces. The read after a
+ * breakpoints write, which Settings' route stores unjudged, is this editor's
+ * own and is taken once.
+ */
+function useSiteStyleVersion(data: unknown): SiteStyleVersion {
+  const readVersion = versionOfStored(data);
+  const lastRead = useRef(readVersion);
+  const startedFrom = useRef(readVersion);
+  const readsMove = useRef<"every" | "next" | "none">("every");
+  if (lastRead.current !== readVersion) {
+    lastRead.current = readVersion;
+    if (readsMove.current !== "none") startedFrom.current = readVersion;
+    if (readsMove.current === "next") readsMove.current = "none";
+  }
+  const [version] = useState<SiteStyleVersion>(() => ({
+    sectionWrite: (section, value) => {
+      readsMove.current = "none";
+      return {
+        [section]: value,
+        ...(startedFrom.current === undefined
+          ? {}
+          : { [DOCUMENT_VERSION_KEY]: startedFrom.current }),
+      };
+    },
+    answered: saved => {
+      startedFrom.current = versionOfStored(saved) ?? startedFrom.current;
+    },
+    breakpointsWritten: () => {
+      if (readsMove.current === "none") readsMove.current = "next";
+    },
+  }));
+  return version;
+}
+
 /**
  * Write one section of the site style.
  *
@@ -631,16 +685,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   const { data, refetch } = useStoredSiteStyle();
   const stored = useRef(data);
   stored.current = data;
-  // The Single's version the next save sends: the one a read gave, then the
-  // one each save answered, so a studio's second save is not refused for its
-  // own first one. A newer read takes over when it arrives.
-  const readVersion = versionOfStored(data);
-  const lastRead = useRef(readVersion);
-  const startedFrom = useRef(readVersion);
-  if (lastRead.current !== readVersion) {
-    lastRead.current = readVersion;
-    startedFrom.current = readVersion;
-  }
+  const version = useSiteStyleVersion(data);
   const history = useContext(SiteStyleHistoryContext);
   // The entry form's storing gate, which every write in turn is tracked with.
   const track = useTrackedWrite();
@@ -663,15 +708,13 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             // finishes the write if the page goes before it answers.
             keepalive: true,
           });
+          version.breakpointsWritten();
           await refetch();
         } else {
-          const saved: unknown = await mutation.mutateAsync({
-            [section]: value,
-            ...(startedFrom.current === undefined
-              ? {}
-              : { [DOCUMENT_VERSION_KEY]: startedFrom.current }),
-          });
-          startedFrom.current = versionOfStored(saved) ?? startedFrom.current;
+          const saved: unknown = await mutation.mutateAsync(
+            version.sectionWrite(section, value)
+          );
+          version.answered(saved);
           // The editor reads the style through the plugin's route, which the
           // Single's own write does not invalidate, so it is asked again.
           // Not awaited, as the Single's own invalidation is not: the save has
@@ -705,7 +748,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return { saved: false, issues };
       }
     },
-    [mutation, refetch]
+    [mutation, refetch, version]
   );
 
   /**

@@ -291,6 +291,62 @@ describe("writing one section", () => {
     ]);
   });
 
+  it("keeps the version a save sends when a read arrives after this editor saved", async () => {
+    // Once a studio has saved it keeps its own copy, the authority while it
+    // is open, so a newer read it never shows must not move the version: its
+    // next save would pass over the change it replaces.
+    const style = {
+      tokens: null,
+      fonts: null,
+      classes: null,
+      breakpoints: null,
+      _rev: "3",
+    };
+    readAnswer = { data: style, isPending: false, error: null };
+    writeBehaviour = async () => ({ id: "1", _rev: "4" });
+    const { result, rerender } = renderHook(() => useSaveSiteStyle());
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+
+    // Someone else saves; the studio's read brings their version.
+    readAnswer = {
+      data: { ...style, _rev: "6" },
+      isPending: false,
+      error: null,
+    };
+    rerender();
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [{ id: "t1" }] });
+    });
+
+    expect(writes[1]).toMatchObject({ _rev: "4" });
+  });
+
+  it("takes a newer read's version while this editor has saved nothing", async () => {
+    const style = {
+      tokens: null,
+      fonts: null,
+      classes: null,
+      breakpoints: null,
+      _rev: "3",
+    };
+    readAnswer = { data: style, isPending: false, error: null };
+    const { result, rerender } = renderHook(() => useSaveSiteStyle());
+    readAnswer = {
+      data: { ...style, _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    rerender();
+
+    await act(async () => {
+      await result.current.save("fonts", []);
+    });
+
+    expect(writes[0]).toMatchObject({ _rev: "5" });
+  });
+
   it("says who changed the style since, against the section a refused save was for", async () => {
     writeBehaviour = () =>
       Promise.reject(

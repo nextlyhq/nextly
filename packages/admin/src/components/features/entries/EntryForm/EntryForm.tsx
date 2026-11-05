@@ -1078,12 +1078,12 @@ export function EntryForm({
   // and the author's choices, over the edits it keeps. The comparison is of
   // the change that made the save stale, where the entry keeps history.
   const staleHistory = versionConflict?.stale.historyVersion;
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(collection);
   const conflictDialog = (
     <VersionConflictDialog
       conflict={versionConflict}
-      keepsRecoveryPoints={
-        autosaveScope !== null && autosaveEnabledFor(collection)
-      }
+      keepsRecoveryPoints={keepsRecoveryPoints}
       compareHref={
         staleHistory && autosaveScope
           ? versionsHref(
@@ -1094,9 +1094,9 @@ export function EntryForm({
           : null
       }
       onLoadCurrent={async () => {
-        await loadCurrentVersion();
+        await loadCurrentVersion(keepsRecoveryPoints);
         // The edits were just kept as a recovery point: offer it now.
-        recovery.recheck();
+        if (keepsRecoveryPoints) recovery.recheck();
       }}
       onSaveAnyway={saveAnyway}
     />
