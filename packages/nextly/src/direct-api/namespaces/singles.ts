@@ -24,13 +24,13 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { withoutHiddenFields } from "./hidden-fields";
 import {
   accessOptions,
   buildMutationMessage,
   createErrorFromSingleResult,
   mergeConfig,
 } from "./helpers";
+import { withoutHiddenFields } from "./hidden-fields";
 
 /**
  * Retrieve the content of a single by slug. With `createIfMissing: false`, a

@@ -36,11 +36,6 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
-  hiddenPathsFor,
-  refuseHiddenQuery,
-  withoutHiddenFields,
-} from "./hidden-fields";
-import {
   accessOptions,
   buildMutationMessage,
   callerAccess,
@@ -48,6 +43,11 @@ import {
   isNotFoundError,
   mergeConfig,
 } from "./helpers";
+import {
+  hiddenPathsFor,
+  refuseHiddenQuery,
+  withoutHiddenFields,
+} from "./hidden-fields";
 
 /**
  * Find multiple documents in a collection.
