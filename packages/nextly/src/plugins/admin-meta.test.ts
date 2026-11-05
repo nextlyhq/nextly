@@ -1254,7 +1254,7 @@ describe("buildPluginAdminMeta menu slugs", () => {
 describe("buildPluginAdminMeta, a plugin's translations", () => {
   const catalog = { en: { "acme-p.cart.title": "Cart" } };
 
-  it("serves an enabled plugin's translations, and not a disabled one's", () => {
+  it("serves a plugin's translations whether or not it is enabled, as its field editors still mount", () => {
     const [enabled] = buildPluginAdminMeta(
       asPlugins([{ ...base, contributes: { translations: catalog } }]),
       undefined
@@ -1267,7 +1267,7 @@ describe("buildPluginAdminMeta, a plugin's translations", () => {
     );
 
     expect(enabled?.translations).toEqual(catalog);
-    expect(disabled).not.toHaveProperty("translations");
+    expect(disabled?.translations).toEqual(catalog);
   });
 
   it("refuses to serve a catalog startup would refuse", () => {

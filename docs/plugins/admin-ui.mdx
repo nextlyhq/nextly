@@ -401,8 +401,9 @@ t("acme-shop.cart.count", { count: 3 }); // "3 items"
 
 Every key begins with your plugin's admin slug and a dot (`@acme/shop` is `acme-shop`). A string
 is read in the interface language, then English, then the key itself. Startup refuses a key
-outside your namespace, a malformed key or language, a value that isn't text, and a key another
-plugin declares. The admin's own strings begin with `nextly.`, so a plugin slugged `nextly` can
+outside your namespace, a malformed key or language, a language not spelled as browsers report it
+(`pt-BR`, not `pt-br`), a value that isn't text, and a key another plugin declares. A disabled
+plugin's strings are still served, since its field editors still show. The admin's own strings begin with `nextly.`, so a plugin slugged `nextly` can
 declare none. The strings reach signed-in readers only, so they are not yet on the sign-in
 screen.
 

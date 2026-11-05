@@ -347,7 +347,8 @@ export function buildPluginAdminMeta(
   validatePluginSlugs(plugins);
   validatePluginMenus(plugins);
   // The same collector boot runs, so this cannot serve a catalog boot refused.
-  // Enabled plugins only: a disabled one renders no screen to translate.
+  // Served regardless of enabled state, as `fieldTypes` and `clientConfig`
+  // are: a disabled plugin's field editors still mount and read their strings.
   const translations = collectPluginTranslations(plugins);
 
   return plugins.map(plugin => {

@@ -31,6 +31,48 @@ const LANGUAGE_SHAPE = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** A language tag's canonical spelling, or `undefined` when it is not one. */
+function canonicalLanguage(language: string): string | undefined {
+  try {
+    return Intl.getCanonicalLocales(language)[0];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Refuse a language that is malformed, holds anything but keys, or is not
+ * spelled canonically. The admin matches a catalog to the browser's language
+ * by exact spelling and browsers report the canonical one, so `pt-br` would
+ * never be chosen; refused rather than rewritten, so two spellings of one
+ * language are never quietly merged.
+ */
+function assertLanguage(
+  pluginName: string,
+  language: string,
+  entries: unknown
+): asserts entries is Record<string, unknown> {
+  const canonical = canonicalLanguage(language);
+  if (
+    !LANGUAGE_SHAPE.test(language) ||
+    !isRecord(entries) ||
+    canonical === undefined
+  ) {
+    throw resolutionError(
+      "plugin-translations-malformed",
+      `Plugin "${pluginName}" declares translations for "${language}", which must be a language code such as "en" or "pt-BR" holding keys and their text.`,
+      { plugin: pluginName, language }
+    );
+  }
+  if (canonical !== language) {
+    throw resolutionError(
+      "plugin-translations-malformed",
+      `Plugin "${pluginName}" declares translations for "${language}", which must be spelled "${canonical}", as browsers report it.`,
+      { plugin: pluginName, language, expected: canonical }
+    );
+  }
+}
+
 /** Refuse a catalog that is not languages of keys of text. */
 function assertCatalogShape(
   pluginName: string,
@@ -44,13 +86,7 @@ function assertCatalogShape(
     );
   }
   for (const [language, entries] of Object.entries(translations)) {
-    if (!LANGUAGE_SHAPE.test(language) || !isRecord(entries)) {
-      throw resolutionError(
-        "plugin-translations-malformed",
-        `Plugin "${pluginName}" declares translations for "${language}", which must be a language code such as "en" or "pt-BR" holding keys and their text.`,
-        { plugin: pluginName, language }
-      );
-    }
+    assertLanguage(pluginName, language, entries);
     for (const [key, text] of Object.entries(entries)) {
       if (typeof text !== "string") {
         throw resolutionError(
@@ -108,13 +144,15 @@ function claimKeys(
 }
 
 /**
- * Every enabled plugin's translations, by plugin name, each checked.
+ * Every plugin's translations, by plugin name, each checked.
  *
  * Refuses, naming what it refuses: a plugin slugged as the admin's own
- * segment that declares any, a malformed catalog, a value that is not text, a
- * malformed key, a key outside the plugin's namespace, and a key another
- * plugin already declares, naming both plugins. A disabled plugin is skipped,
- * as its other declarations are.
+ * segment that declares any, a malformed catalog or language, a language not
+ * spelled canonically, a value that is not text, a malformed key, a key
+ * outside the plugin's namespace, and a key another plugin already declares,
+ * naming both plugins. A disabled plugin's catalog is kept and checked, as
+ * its field types are: its collections stay, so its field editors still
+ * mount and still read their strings.
  */
 export function collectPluginTranslations(
   plugins: readonly PluginDefinition[]
@@ -122,7 +160,6 @@ export function collectPluginTranslations(
   const collected = new Map<string, PluginTranslations>();
   const owners = new Map<string, string>();
   for (const plugin of plugins) {
-    if (plugin.enabled === false) continue;
     const translations: unknown = plugin.contributes?.translations;
     if (translations === undefined) continue;
     if (pluginAdminSlug(plugin.name) === ADMIN_TRANSLATION_SEGMENT) {

@@ -130,6 +130,28 @@ describe("collectPluginTranslations", () => {
     }
   });
 
+  it("refuses a language not spelled canonically, naming the spelling browsers report", () => {
+    // The admin matches a catalog to the browser's language by exact
+    // spelling, so `pt-br` would never be chosen.
+    for (const [language, expected] of [
+      ["pt-br", "pt-BR"],
+      ["zh-hant", "zh-Hant"],
+    ]) {
+      expect(
+        refusal([
+          plugin("@acme/shop", {
+            [language]: { "acme-shop.cart.title": "Cart" },
+          }),
+        ]),
+        language
+      ).toMatchObject({
+        reason: "plugin-translations-malformed",
+        language,
+        expected,
+      });
+    }
+  });
+
   it("refuses a value that is not text", () => {
     for (const value of [42, { text: "Cart" }, null]) {
       expect(
@@ -141,10 +163,16 @@ describe("collectPluginTranslations", () => {
     }
   });
 
-  it("skips a disabled plugin, refusing nothing of it", () => {
+  it("keeps and checks a disabled plugin's catalog, whose field editors still mount", () => {
+    const catalog = { en: { "acme-shop.cart.title": "Cart" } };
+
     expect(
-      collectPluginTranslations([plugin("@acme/shop", "not a catalog", false)])
-        .size
-    ).toBe(0);
+      collectPluginTranslations([plugin("@acme/shop", catalog, false)]).get(
+        "@acme/shop"
+      )
+    ).toEqual(catalog);
+    expect(
+      refusal([plugin("@acme/shop", "not a catalog", false)])
+    ).toMatchObject({ reason: "plugin-translations-malformed" });
   });
 });
