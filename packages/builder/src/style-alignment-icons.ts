@@ -27,6 +27,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { SideOrientation } from "./side-orientation";
+import { keywordLabel } from "./style-keyword-labels";
 import { readStyleValue } from "./style-values";
 
 /** How the edited container lays its content out. */
@@ -59,8 +60,15 @@ export interface AlignmentOption {
 
 /** A property's icon buttons, and the values it accepts that have none. */
 export interface AlignmentGroup {
+  /** The CSS property, which the values beside the icons are named for. */
+  readonly cssProperty: string;
   readonly options: readonly AlignmentOption[];
   readonly rest: readonly string[];
+  /**
+   * What each value does, in a line under the icons, where an icon alone
+   * cannot say it: an image's fit. Absent where the icons are the whole story.
+   */
+  readonly help?: Readonly<Record<string, string>>;
 }
 
 type Edge = "left" | "right" | "top" | "bottom";
@@ -145,21 +153,16 @@ const MIRRORED: Readonly<Record<string, string>> = Object.fromEntries(
   ])
 );
 
+/** An icon choice; its words come from the keyword labels, by its value. */
 interface Entry {
   readonly value: string;
-  readonly label: string;
   /** The icon along a horizontal axis, and along a vertical one. */
   readonly horizontal: string;
   readonly vertical: string;
 }
 
-function entry(
-  value: string,
-  label: string,
-  horizontal: string,
-  vertical: string
-): Entry {
-  return { value, label, horizontal, vertical };
+function entry(value: string, horizontal: string, vertical: string): Entry {
+  return { value, horizontal, vertical };
 }
 
 /** Which axis a property's values point along. */
@@ -173,25 +176,17 @@ const GROUPS: Readonly<
     entries: [
       entry(
         "start",
-        "Start",
         "AlignHorizontalJustifyStart",
         "AlignVerticalJustifyStart"
       ),
       entry(
         "center",
-        "Center",
         "AlignHorizontalJustifyCenter",
         "AlignVerticalJustifyCenter"
       ),
-      entry(
-        "end",
-        "End",
-        "AlignHorizontalJustifyEnd",
-        "AlignVerticalJustifyEnd"
-      ),
+      entry("end", "AlignHorizontalJustifyEnd", "AlignVerticalJustifyEnd"),
       entry(
         "space-between",
-        "Space between",
         "AlignHorizontalSpaceBetween",
         "AlignVerticalSpaceBetween"
       ),
@@ -202,11 +197,11 @@ const GROUPS: Readonly<
   "align-items": {
     along: "cross",
     entries: [
-      entry("start", "Start", "AlignStartVertical", "AlignStartHorizontal"),
-      entry("center", "Center", "AlignCenterVertical", "AlignCenterHorizontal"),
-      entry("end", "End", "AlignEndVertical", "AlignEndHorizontal"),
-      entry("stretch", "Stretch", "StretchHorizontal", "StretchVertical"),
-      entry("baseline", "Baseline", "Baseline", "Baseline"),
+      entry("start", "AlignStartVertical", "AlignStartHorizontal"),
+      entry("center", "AlignCenterVertical", "AlignCenterHorizontal"),
+      entry("end", "AlignEndVertical", "AlignEndHorizontal"),
+      entry("stretch", "StretchHorizontal", "StretchVertical"),
+      entry("baseline", "Baseline", "Baseline"),
     ],
   },
   "align-content": {
@@ -214,41 +209,118 @@ const GROUPS: Readonly<
     entries: [
       entry(
         "start",
-        "Start",
         "AlignHorizontalJustifyStart",
         "AlignVerticalJustifyStart"
       ),
       entry(
         "center",
-        "Center",
         "AlignHorizontalJustifyCenter",
         "AlignVerticalJustifyCenter"
       ),
-      entry(
-        "end",
-        "End",
-        "AlignHorizontalJustifyEnd",
-        "AlignVerticalJustifyEnd"
-      ),
+      entry("end", "AlignHorizontalJustifyEnd", "AlignVerticalJustifyEnd"),
       entry(
         "space-between",
-        "Space between",
         "AlignHorizontalSpaceBetween",
         "AlignVerticalSpaceBetween"
       ),
-      entry("stretch", "Stretch", "StretchHorizontal", "StretchVertical"),
+      entry("stretch", "StretchHorizontal", "StretchVertical"),
     ],
   },
   "text-align": {
     along: "inline",
     entries: [
-      entry("start", "Start", "AlignLeft", "AlignLeft"),
-      entry("center", "Center", "AlignCenter", "AlignCenter"),
-      entry("end", "End", "AlignRight", "AlignRight"),
-      entry("justify", "Justify", "AlignJustify", "AlignJustify"),
+      entry("start", "AlignLeft", "AlignLeft"),
+      entry("center", "AlignCenter", "AlignCenter"),
+      entry("end", "AlignRight", "AlignRight"),
+      entry("justify", "AlignJustify", "AlignJustify"),
     ],
   },
 };
+
+/**
+ * Choices whose icons say what a value is rather than which way it points, so
+ * they are drawn the same in every flow: Display, text case and an image's
+ * fit. `help` says what each value does, where its icon cannot.
+ *
+ * `more` is what the list beside the icons offers. A value the catalog accepts
+ * and neither names, a table or ruby display mode or a two-keyword spelling, is
+ * not offered, since the icons and the list cover what a layout reaches for;
+ * one already stored still shows, as the field lists any value it does not
+ * carry.
+ */
+const FIXED_GROUPS: Readonly<
+  Record<
+    string,
+    {
+      entries: readonly { value: string; icon: string }[];
+      more: readonly string[];
+      help?: Readonly<Record<string, string>>;
+    }
+  >
+> = {
+  display: {
+    entries: [
+      { value: "block", icon: "RectangleHorizontal" },
+      { value: "flex", icon: "Columns3" },
+      { value: "grid", icon: "Grid2x2" },
+      { value: "none", icon: "EyeOff" },
+    ],
+    more: [
+      "inline",
+      "inline-block",
+      "inline-flex",
+      "inline-grid",
+      "flow-root",
+      "list-item",
+    ],
+  },
+  "text-transform": {
+    entries: [
+      { value: "none", icon: "Minus" },
+      { value: "uppercase", icon: "CaseUpper" },
+      { value: "lowercase", icon: "CaseLower" },
+      { value: "capitalize", icon: "CaseSensitive" },
+    ],
+    more: ["math-auto", "full-width", "full-size-kana"],
+  },
+  // Cover first: the fit most images want. Original size and Shrink to fit
+  // are rarer, and wait under More.
+  "object-fit": {
+    entries: [
+      { value: "cover", icon: "Crop" },
+      { value: "contain", icon: "Shrink" },
+      { value: "fill", icon: "StretchHorizontal" },
+    ],
+    more: ["none", "scale-down"],
+    help: {
+      cover: "Fills the box; edges may be cut.",
+      contain: "Shows all of it inside the box.",
+      fill: "Stretches it to the box's shape.",
+      none: "Shows it at its own size, cut to the box.",
+      "scale-down": "Shows all of it, never larger than it is.",
+    },
+  },
+};
+
+/** A fixed group's icons and list, kept to the values the property accepts. */
+function fixedGroup(
+  cssProperty: string,
+  group: (typeof FIXED_GROUPS)[string],
+  values: readonly string[]
+): AlignmentGroup {
+  return {
+    cssProperty,
+    options: group.entries
+      .filter(entry => values.includes(entry.value))
+      .map(entry => ({
+        ...entry,
+        // In the words every keyword is offered in; see style-keyword-labels.
+        label: keywordLabel(cssProperty, entry.value),
+      })),
+    rest: group.more.filter(value => values.includes(value)),
+    ...(group.help === undefined ? {} : { help: group.help }),
+  };
+}
 
 /** The four directions, each an arrow the way it runs on the screen. */
 function directionOptions(
@@ -258,19 +330,14 @@ function directionOptions(
   const inline = inlineAxis(flow);
   const block = blockAxis(flow);
   const options: AlignmentOption[] = [
-    { value: "row", label: "Row", icon: ARROWS[OPPOSITE[inline.start]] },
-    {
-      value: "row-reverse",
-      label: "Row, reversed",
-      icon: ARROWS[inline.start],
-    },
-    { value: "column", label: "Column", icon: ARROWS[OPPOSITE[block.start]] },
-    {
-      value: "column-reverse",
-      label: "Column, reversed",
-      icon: ARROWS[block.start],
-    },
-  ];
+    { value: "row", icon: ARROWS[OPPOSITE[inline.start]] },
+    { value: "row-reverse", icon: ARROWS[inline.start] },
+    { value: "column", icon: ARROWS[OPPOSITE[block.start]] },
+    { value: "column-reverse", icon: ARROWS[block.start] },
+  ].map(option => ({
+    ...option,
+    label: keywordLabel("flex-direction", option.value),
+  }));
   return options.filter(option => values.includes(option.value));
 }
 
@@ -304,20 +371,19 @@ function wrapOptions(values: readonly string[], flow: Flow): AlignmentOption[] {
   };
   const forward = matrixFor(OPPOSITE[cross.start]);
   const options: AlignmentOption[] = [
-    { value: "nowrap", label: "No wrap", icon: "ArrowRightToLine", ...forward },
-    { value: "wrap", label: "Wrap", icon: "WrapText", ...forward },
-    {
-      value: "wrap-reverse",
-      label: "Wrap, reversed",
-      icon: "WrapText",
-      ...matrixFor(cross.start),
-    },
-  ];
+    { value: "nowrap", icon: "ArrowRightToLine", ...forward },
+    { value: "wrap", icon: "WrapText", ...forward },
+    { value: "wrap-reverse", icon: "WrapText", ...matrixFor(cross.start) },
+  ].map(option => ({
+    ...option,
+    label: keywordLabel("flex-wrap", option.value),
+  }));
   return options.filter(option => values.includes(option.value));
 }
 
 /** The icon buttons for one aligned property, in this flow. */
 function alignedOptions(
+  property: string,
   group: { along: Along; entries: readonly Entry[] },
   values: readonly string[],
   flow: Flow
@@ -333,7 +399,8 @@ function alignedOptions(
         axis.horizontal || rotated ? candidate.horizontal : candidate.vertical;
       return {
         value: candidate.value,
-        label: candidate.label,
+        // In the words every keyword is offered in; see style-keyword-labels.
+        label: keywordLabel(property, candidate.value),
         icon: swap ? (MIRRORED[drawn] ?? drawn) : drawn,
         ...(rotated ? { rotated: true as const } : {}),
       };
@@ -350,6 +417,10 @@ export function alignmentGroupFor(
   values: readonly string[],
   flow: Flow
 ): AlignmentGroup | undefined {
+  const fixed = FIXED_GROUPS[cssProperty];
+  if (fixed !== undefined && Object.hasOwn(FIXED_GROUPS, cssProperty)) {
+    return fixedGroup(cssProperty, fixed, values);
+  }
   let options: AlignmentOption[];
   if (cssProperty === "flex-direction") {
     options = directionOptions(values, flow);
@@ -358,12 +429,16 @@ export function alignmentGroupFor(
   } else if (Object.hasOwn(GROUPS, cssProperty)) {
     const group = GROUPS[cssProperty];
     if (group === undefined) return undefined;
-    options = alignedOptions(group, values, flow);
+    options = alignedOptions(cssProperty, group, values, flow);
   } else {
     return undefined;
   }
   const iconed = new Set(options.map(option => option.value));
-  return { options, rest: values.filter(value => !iconed.has(value)) };
+  return {
+    cssProperty,
+    options,
+    rest: values.filter(value => !iconed.has(value)),
+  };
 }
 
 /**
@@ -420,6 +495,7 @@ export function drawsIcons(leaf: StyleLeaf): boolean {
   return (
     property === "flex-direction" ||
     property === "flex-wrap" ||
-    Object.hasOwn(GROUPS, property)
+    Object.hasOwn(GROUPS, property) ||
+    Object.hasOwn(FIXED_GROUPS, property)
   );
 }

@@ -26,13 +26,6 @@ import {
 } from "@admin/components/icons";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
   Button,
   DropdownMenu,
   DropdownMenuContent,
@@ -49,7 +42,6 @@ import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
   useChangeReleaseMemberAction,
-  useRemoveReleaseMember,
   type ReleaseDocumentNames,
 } from "@admin/hooks/queries/useReleases";
 import { cn } from "@admin/lib/utils";
@@ -80,6 +72,7 @@ import {
   type ProblemWords,
 } from "./release-problems";
 import { relativeTime } from "./release-time";
+import { ReleaseMemberRemoveDialog } from "./ReleaseMemberRemoveDialog";
 
 /** What the readiness read gave, as the section reads it. */
 export interface ReadinessState {
@@ -557,9 +550,9 @@ function DocumentRow({
       </div>
 
       {controls.remove.offered ? (
-        <RemoveDialog
-          release={release}
-          member={member}
+        <ReleaseMemberRemoveDialog
+          releaseId={release.id}
+          memberId={member.id}
           title={label.text}
           cancelsRelease={controls.remove.cancelsRelease}
           open={removing}
@@ -847,84 +840,5 @@ function RemoveMenuItem({
         </p>
       ) : null}
     </>
-  );
-}
-
-/**
- * The confirmation before a document leaves the release. Held open while the
- * removal is failing, so a refusal is read by the person who asked for it.
- * Taking the only document out of a single-document release cancels the
- * release, and the confirmation says so before anything happens.
- */
-function RemoveDialog({
-  release,
-  member,
-  title,
-  cancelsRelease,
-  open,
-  onOpenChange,
-}: {
-  release: Release;
-  member: ReleaseMember;
-  title: string;
-  cancelsRelease: boolean;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const remove = useRemoveReleaseMember(release.id);
-  return (
-    <AlertDialog
-      open={open || remove.isError}
-      onOpenChange={next => {
-        if (!next) remove.reset();
-        onOpenChange(next);
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          {/* A title that names the document runs to two lines; the theme's
-              snug leading keeps them apart where the shared style sets none. */}
-          <AlertDialogTitle className="leading-snug">
-            {cancelsRelease
-              ? `Remove “${title}” and cancel this release?`
-              : `Remove “${title}” from this release?`}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {cancelsRelease
-              ? "This is a single-document release: it holds only this document. This cancels the release. It moves to Done as cancelled, and nothing in it goes live or comes down. The document itself is not changed."
-              : "The document itself is not changed. It simply stops being part of what this release does."}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {remove.isError ? (
-          <p
-            role="alert"
-            className="text-sm text-destructive-700 dark:text-destructive"
-          >
-            {releaseErrorMessage(
-              remove.error,
-              "This document was not removed. It is still in the release."
-            )}
-          </p>
-        ) : null}
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={remove.isPending}>
-            Keep it
-          </AlertDialogCancel>
-          <Button
-            variant="destructive"
-            disabled={remove.isPending}
-            onClick={() =>
-              remove.mutate(member.id, { onSuccess: () => onOpenChange(false) })
-            }
-          >
-            {remove.isPending
-              ? "Removing…"
-              : cancelsRelease
-                ? "Remove and cancel release"
-                : "Remove"}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

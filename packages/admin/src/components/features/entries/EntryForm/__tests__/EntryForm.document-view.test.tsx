@@ -15,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import {
   Activity,
   useEffect,
+  useState,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
@@ -55,6 +56,7 @@ const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
       isResolved: true,
       dismiss: () => {},
       restore: () => {},
+      take: () => {},
     },
   },
 }));
@@ -500,6 +502,34 @@ describe("EntryForm with a document view", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
   });
 
+  it("changes nothing in the view until the offer is confirmed", async () => {
+    // The recovery asks about a current offer again before restoring it, and
+    // may refuse it; the view goes and comes back only once it is confirmed.
+    lifecycle.length = 0;
+    let confirm: () => void = () => undefined;
+    const restore = vi.fn((apply?: () => void) => {
+      confirm = () => act(() => (apply ?? (() => undefined))());
+    });
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+      take: vi.fn(() => {
+        lifecycle.push("restore");
+      }),
+    };
+    renderView();
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(lifecycle).toEqual(["mount"]);
+
+    confirm();
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    expect(lifecycle).toEqual(["mount", "unmount", "restore", "mount"]);
+  });
+
   it("draws the view afresh when recovered work is restored", async () => {
     // A restore replaces the form's values from outside the view, and a view
     // may keep a working copy read once at mount, as the Page Builder does. So
@@ -510,13 +540,17 @@ describe("EntryForm with a document view", () => {
     // Page Builder does, for a takeover) would otherwise write its pre-restore
     // copy over the restored values, and the new mount would read those.
     lifecycle.length = 0;
-    const restore = vi.fn(() => {
+    // The recovery's take writes the values; its restore runs the view's
+    // steps in place of the take once the offer is confirmed.
+    const take = vi.fn(() => {
       lifecycle.push("restore");
     });
+    const restore = vi.fn((apply?: () => void) => (apply ?? take)());
     recovery.current = {
       ...recovery.current,
       offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
       restore,
+      take,
     };
     renderView();
     expect(mounted).toHaveBeenCalledTimes(1);
@@ -654,11 +688,13 @@ describe("EntryForm with a document view", () => {
       return <DocumentSaveIndicator />;
     }
     registerComponent(CHIP_VIEW, ChipView);
-    const restore = vi.fn();
+    const take = vi.fn();
+    const restore = vi.fn((apply?: () => void) => (apply ?? take)());
     recovery.current = {
       ...recovery.current,
       offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
       restore,
+      take,
     };
     renderView({ documentView: { component: CHIP_VIEW, onExit } });
 
@@ -734,18 +770,21 @@ describe("EntryForm with a document view", () => {
     }
 
     function offerRecovery() {
-      // As the recovery's own restore does: the snapshot into the form, kept
-      // dirty against the stored defaults.
-      const restore = vi.fn(() => {
+      // As the recovery's own take does: the snapshot into the form, kept
+      // dirty against the stored defaults. Its restore, the offer confirmed,
+      // runs the caller's steps in place of the take.
+      const take = vi.fn(() => {
         formOf.reset?.(snapshot, { keepDefaultValues: true });
       });
+      const restore = vi.fn((apply?: () => void) => (apply ?? take)());
       recovery.current = {
         ...recovery.current,
         offer: { savedAt: new Date(), snapshot },
         dismiss: vi.fn(),
         restore,
+        take,
       };
-      return { restore };
+      return { restore, take };
     }
 
     function open() {
@@ -1334,5 +1373,59 @@ describe("a field the form would not let the author edit", () => {
       },
     ]);
     refusedSaying(/read-only/);
+  });
+});
+
+describe("a document view that copies the form as it mounts, when the entry is gained", () => {
+  const COPYING = "@acme/copy/admin#Copying";
+
+  /** A view that keeps its own copy of the form, read once as it mounts. */
+  function CopyingView(): ReactElement {
+    const { getValues } = useFormContext();
+    const [copy] = useState(() => String(getValues("title")));
+    return <p data-testid="copied">{copy}</p>;
+  }
+
+  it("mounts again on the loaded copy, not the one from before", async () => {
+    // Unlocked over its own copy of what was read while the colleague held
+    // the entry, the view's next write would put that copy back.
+    registerComponent(COPYING, CopyingView);
+    const reload = vi.fn(() => Promise.resolve());
+    const view = (title: string, readAt: number) => (
+      <EntryForm
+        collection={collection}
+        entry={
+          { id: "e1", title, updatedAt: "2026-01-01T00:00:00.000Z" } as never
+        }
+        mode="edit"
+        onCancel={onCancel}
+        documentView={{ component: COPYING, onExit }}
+        latest={{ readAt, failed: false, reload }}
+      />
+    );
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      gains: 0,
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    const { rerender } = render(view("Hello", 1), { wrapper: Providers });
+    expect(screen.getByTestId("copied")).toHaveTextContent("Hello");
+
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    rerender(view("Hello", 1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // Bob's save arrives with the same timestamp, as two saves inside one
+    // second do on a column kept to the second.
+    rerender(view("Bob's page", 2));
+    await waitFor(() =>
+      expect(screen.getByTestId("copied")).toHaveTextContent("Bob's page")
+    );
   });
 });

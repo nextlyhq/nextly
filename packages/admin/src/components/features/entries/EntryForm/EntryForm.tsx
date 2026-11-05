@@ -38,20 +38,24 @@ import {
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useCan } from "@admin/hooks/useCan";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
 import {
   autosaveScopeFor,
+  documentRecordingKey,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
@@ -130,6 +134,7 @@ import {
   offerHeldWhileRecovering,
   quickEditSave,
 } from "./useRefusedForm";
+import { useResetOnReload } from "./useResetOnReload";
 
 // ============================================================================
 // Types
@@ -159,6 +164,13 @@ export interface EntryFormProps {
    * collection); an embedded editor reading the live row passes `false`.
    */
   readDraft?: boolean;
+  /**
+   * When the entry on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, an entry this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Called when the user switches the active content language. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
@@ -324,6 +336,7 @@ export function EntryForm({
   onCancel,
   locale,
   readDraft,
+  latest,
   onLocaleChange,
   seedFromLocale,
   onSeedHandled,
@@ -380,6 +393,7 @@ export function EntryForm({
 
   const {
     form,
+    defaultValues,
     handleSubmit: submitEntry,
     writeStatus,
     handleDelete: deleteEntry,
@@ -440,6 +454,14 @@ export function EntryForm({
   const publishAllEntryLocales = usePublishAllLocales({
     collectionSlug: collection.slug ?? collection.name,
   });
+  // Publishing every language waits for the entry's recordings in flight.
+  const { run: runAfterRecordings, pending: publishAllPending } =
+    useAfterRecordings(
+      documentRecordingKey(
+        autosaveScopeFor("collection", collection.name, entry?.id)
+      ),
+      publishAllEntryLocales.isPending
+    );
 
   // Publish-every-language rides the same kind of seam `fetchSourceValues`
   // does, and its ABSENCE is what keeps the action off a create form: there is
@@ -449,10 +471,30 @@ export function EntryForm({
     if (!entryId) return undefined;
     return {
       slug: collection.slug ?? collection.name,
-      publish: () => publishAllEntryLocales.mutate(entryId),
-      pending: publishAllEntryLocales.isPending,
+      // After this entry's recordings in flight land, as a save waits.
+      publish: () =>
+        runAfterRecordings(() => publishAllEntryLocales.mutate(entryId)),
+      pending: publishAllPending,
+      preview: () =>
+        entryApi.previewPublishAllLocales(
+          collection.slug ?? collection.name,
+          entryId
+        ),
+      previewKey: [
+        "publish-all-preview",
+        "collection",
+        collection.slug ?? collection.name,
+        entryId,
+      ],
     };
-  }, [entry?.id, collection.slug, collection.name, publishAllEntryLocales]);
+  }, [
+    entry?.id,
+    collection.slug,
+    collection.name,
+    publishAllEntryLocales,
+    runAfterRecordings,
+    publishAllPending,
+  ]);
 
   const translationMode = useTranslationSource({
     fields: getCollectionFields(collection),
@@ -663,8 +705,15 @@ export function EntryForm({
     enabled: mode === "edit",
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
   });
-  const lock = heldWhileRecovering(lockSurface, recovering);
+  // A gained entry's latest version starts the whole form again, whatever its
+  // `updatedAt` says, and the lock holds until it has; the document views key
+  // on the count it carries.
+  const lock = heldWhileRecovering(
+    useResetOnReload(form, lockSurface, defaultValues),
+    recovering
+  );
 
   /*
    * Delegated whole, including the decision to answer NULL when there is
@@ -790,6 +839,9 @@ export function EntryForm({
       // read-only form dirty with work it cannot save.
       scope: readOnlyForReader ? null : autosaveScope,
       form,
+      // The language the form shows: a point recorded in another is never
+      // taken for the document.
+      locale: locale ?? null,
       savedCount,
     }),
     recovering
@@ -976,8 +1028,9 @@ export function EntryForm({
     writesRefused: removedFromCode,
     contributedActions: documentActions,
     // Read when a contribution is chosen: the page above holds only the
-    // saved entry, and an unsaved title names a scheduled release.
+    // saved entry, and a schedule says when edits are not saved yet.
     currentValues: () => form.getValues(),
+    currentDirty: () => form.formState.isDirty,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
@@ -1023,6 +1076,7 @@ export function EntryForm({
               notice={lock.notice}
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
+              onRetry={lock.retryLoad}
             />
             {/* No page around a modal to carry the removed-from-code notice in
                 a document banner, so the modal says it itself. */}

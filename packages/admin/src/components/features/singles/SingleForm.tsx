@@ -93,6 +93,7 @@ import {
   offerHeldWhileRecovering,
   useRefusedForm,
 } from "@admin/components/features/entries/EntryForm/useRefusedForm";
+import { useResetOnReload } from "@admin/components/features/entries/EntryForm/useResetOnReload";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -115,14 +116,17 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
   autosaveScopeFor,
+  documentRecordingKey,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
+import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { generateClientSchema } from "@admin/lib/field-validation";
@@ -132,6 +136,7 @@ import {
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
+import { singleApi } from "@admin/services/singleApi";
 import type { SingleAdminOptions } from "@admin/types/entities";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
@@ -276,6 +281,13 @@ export interface SingleFormProps {
    * when the route names one.
    */
   documentView?: DocumentViewMount;
+  /**
+   * When the Single on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, a Single this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Additional CSS classes */
   className?: string;
 }
@@ -616,6 +628,7 @@ export function SingleForm({
   documentActions,
   documentBanner,
   documentView,
+  latest,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -800,8 +813,15 @@ export function SingleForm({
     entryId: document.id,
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
   });
-  const lock = heldWhileRecovering(lockSurface, recovering);
+  // A gained Single's latest version starts the whole form again, whatever
+  // its `updatedAt` says, and the lock holds until it has; the document views
+  // key on the count it carries.
+  const lock = heldWhileRecovering(
+    useResetOnReload(form, lockSurface, defaultValues),
+    recovering
+  );
 
   // System fields: title (drawn first in the editor) and slug (not drawn for a
   // Single, whose slug its config fixes). Per the
@@ -913,6 +933,18 @@ export function SingleForm({
     [busy, onSubmit, locale, document.id, submissionLatch]
   );
 
+  // Recovery points for this author, the same mechanism the entry editor uses.
+  // A Single always exists once its schema does, so unlike an entry there is no
+  // pre-creation state -- but the address still comes from the stored document,
+  // so a schema whose row has not been materialised yet records nothing rather
+  // than addressing a document that is not there.
+  const autosaveScope = useMemo(
+    () => autosaveScopeFor("single", schema.slug, document?.id),
+    [schema.slug, document?.id]
+  );
+  // Where a save and publishing every language wait for its recordings.
+  const recordingsFor = documentRecordingKey(autosaveScope);
+
   // Resolves to what the submission came to, never rejects, as the entry
   // editor's does: the toasts report to the author, the outcome to the caller.
   const handleSubmit = useCallback(
@@ -955,6 +987,8 @@ export function SingleForm({
           mayWrite: () => !writesHeldNow.current,
           // And the editor can move to another language.
           stillShown: () => scopeNow.current === startedIn,
+          // This Single's recovery points, addressed as its recorder does.
+          recordingsFor,
           // Why: shared intent→payload helper mirrors the EntryForm
           // contract (see useEntryForm.mapIntentToPayload). Unpublish
           // strips other dirty fields so a confirm-modal misclick can't
@@ -1014,6 +1048,7 @@ export function SingleForm({
       writesHeldNow,
       submissionLatch,
       scopeNow,
+      recordingsFor,
     ]
   );
 
@@ -1139,6 +1174,11 @@ export function SingleForm({
   const publishAllSingleLanguages = usePublishAllSingleLocales({
     slug: schema.slug,
   });
+  // Publishing every language waits for the Single's recordings in flight.
+  const afterRecordings = useAfterRecordings(
+    recordingsFor,
+    publishAllSingleLanguages.isPending
+  );
 
   const translationMode = useTranslationSource({
     fields: schema.fields,
@@ -1190,20 +1230,14 @@ export function SingleForm({
     fetchSourceValues: singleSourceFetcher(schema.slug),
     publishAllLanguages: {
       slug: schema.slug,
-      publish: () => publishAllSingleLanguages.mutate(),
-      pending: publishAllSingleLanguages.isPending,
+      // After this Single's recordings in flight land, as a save waits.
+      publish: () => afterRecordings.run(publishAllSingleLanguages.mutate),
+      pending: afterRecordings.pending,
+      preview: () => singleApi.previewPublishAllLocales(schema.slug),
+      previewKey: ["publish-all-preview", "single", schema.slug],
     },
   });
 
-  // Recovery points for this author, the same mechanism the entry editor uses.
-  // A Single always exists once its schema does, so unlike an entry there is no
-  // pre-creation state -- but the address still comes from the stored document,
-  // so a schema whose row has not been materialised yet records nothing rather
-  // than addressing a document that is not there.
-  const autosaveScope = useMemo(
-    () => autosaveScopeFor("single", schema.slug, document?.id),
-    [schema.slug, document?.id]
-  );
   /*
    * The same advisory claim the entry editor holds, on the same terms. A single
    * is addressed by its slug and the row behind it, and before that row exists
@@ -1231,6 +1265,9 @@ export function SingleForm({
       // read-only form dirty with work it cannot save.
       scope: readOnlyForReader ? null : autosaveScope,
       form,
+      // The language the form shows: a point recorded in another is never
+      // taken for the document.
+      locale: locale ?? null,
       savedCount,
     }),
     recovering

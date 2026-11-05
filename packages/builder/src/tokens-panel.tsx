@@ -33,6 +33,7 @@ import {
   tokenIdentity,
   type SiteToken,
   type SiteTokenSet,
+  type SpacingMode,
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
@@ -53,17 +54,22 @@ import {
   Plus,
   Ruler,
   Search,
+  SquareRoundCorner,
   Timer,
   Type,
 } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { ShowMore } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
+import { SpacingModeChoice } from "./spacing-mode-choice";
 import { colourHexOf, colourPairOf } from "./style-colour";
+import { lengthInPx, variableValueText } from "./style-variables";
 import {
   addVariable,
   labelNewVariable,
+  lengthFamilyOf,
   variableGroups,
   type NewVariable,
   type VariableEntry,
@@ -81,6 +87,17 @@ export interface TokensPanelProps {
   tokens: SiteTokenSet | undefined;
   /** An edit. The host owns the site style and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * The author is still at work here: typing in a field before it commits.
+   * For a host that waits for a pause before persisting, so a save is not
+   * made between one field's edit and the next.
+   */
+  onActivity?: () => void;
+  /**
+   * The author is done for now: a variable's editor closed, or this panel
+   * went away. A host waiting for a pause persists what it holds at once.
+   */
+  onSettle?: () => void;
   /**
    * The set the host holds RIGHT NOW, asked at the moment it is needed.
    * Answer it from a ref the host writes as it dispatches: an import reads
@@ -121,6 +138,19 @@ export interface TokensPanelProps {
    * the controls, and what an import or export reports, to the host.
    */
   header?: VariablesHeader;
+  /**
+   * The site's spacing model, shown as "Space between blocks" above the
+   * spacing variables. Absent, the choice is not drawn.
+   */
+  spacing?: SpacingModeControl;
+}
+
+/** The site's spacing model as the Variables view offers it. */
+export interface SpacingModeControl {
+  /** The model as it is now. */
+  readonly mode: SpacingMode;
+  /** A new model. The host saves it, as it saves an edit. */
+  readonly onChange: (mode: SpacingMode) => void;
 }
 
 /** The Design panel's header controls, and the preview mode they choose. */
@@ -197,6 +227,8 @@ function OwnHeader(props: TokensPanelProps): React.JSX.Element {
 function VariablesView({
   tokens,
   onChange,
+  onActivity,
+  onSettle,
   currentTokens,
   supplied,
   issue,
@@ -205,6 +237,7 @@ function VariablesView({
   headerActions,
   header,
   placed,
+  spacing,
 }: TokensPanelProps & {
   header: VariablesHeader;
   /** Whether this view draws the header's controls and reports itself. */
@@ -217,7 +250,38 @@ function VariablesView({
     onChange,
     currentTokens,
     onAdded: () => setQuery(""),
+    onSettle,
   });
+  // Going away ends the author's work here as closing an editor does: a tab
+  // change or the panel closing. The latest callback, so the effect runs
+  // only on unmount rather than on every render that hands a new one.
+  const settle = React.useRef(onSettle);
+  settle.current = onSettle;
+  // Which editor is open as of the latest render, and whether the panel is
+  // still mounted: read when an editor commits, which it may do as it goes
+  // away, after the close or the unmount has already settled.
+  const openNow = React.useRef(openKey);
+  openNow.current = openKey;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      settle.current?.();
+    };
+  }, []);
+  /*
+   * An edit committed by an editor that is already closed, such as a colour
+   * picker writing what it held as it unmounts, comes after the settle its
+   * closing made, so it settles again rather than wait for a pause the
+   * author has already ended.
+   */
+  const commitFrom =
+    (key: string) =>
+    (next: SiteTokenSet): void => {
+      onChange(next);
+      if (!mounted.current || openNow.current !== key) settle.current?.();
+    };
   const search = React.useRef<HTMLInputElement>(null);
 
   const groups = React.useMemo(
@@ -232,10 +296,13 @@ function VariablesView({
   }
 
   return (
+    // Typing anywhere in the panel, the editors beside the rows included
+    // (React carries their events here through the portal), is activity.
     <div
       className="nx-vars"
       ref={root}
       data-read-only={readOnly ? "" : undefined}
+      onInput={onActivity}
     >
       {placed ? (
         <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
@@ -258,38 +325,68 @@ function VariablesView({
           <p className="nx-vars__note">No variables match this search.</p>
         ) : (
           shown.map(group => (
-            <Group
-              key={group.group}
-              group={group.group}
-              heading={group.heading}
-              entries={group.entries}
-              searching={needle !== ""}
-              readOnly={readOnly}
-              openKey={openKey}
-              onAdd={add}
-            >
-              {(entry: VariableEntry) => (
-                <VariableRow
-                  key={entry.row.key}
-                  entry={entry}
-                  tokens={tokens}
-                  mode={mode}
-                  suppliedOf={identity => suppliedFor(supplied, identity)}
-                  readOnly={readOnly}
-                  open={openKey === entry.row.key}
-                  onOpenChange={open => toggle(entry.row.key, open)}
-                  onChange={onChange}
-                  onRemoved={() => {
-                    forget(entry.row.key);
-                    search.current?.focus();
-                  }}
-                />
-              )}
-            </Group>
+            <React.Fragment key={group.group}>
+              <SpacingModeAbove
+                group={group.group}
+                spacing={spacing}
+                readOnly={readOnly}
+              />
+              <Group
+                group={group.group}
+                heading={group.heading}
+                entries={group.entries}
+                searching={needle !== ""}
+                readOnly={readOnly}
+                openKey={openKey}
+                onAdd={add}
+              >
+                {(entry: VariableEntry) => (
+                  <VariableRow
+                    key={entry.row.key}
+                    entry={entry}
+                    tokens={tokens}
+                    mode={mode}
+                    suppliedOf={identity => suppliedFor(supplied, identity)}
+                    readOnly={readOnly}
+                    open={openKey === entry.row.key}
+                    onOpenChange={open => toggle(entry.row.key, open)}
+                    onChange={commitFrom(entry.row.key)}
+                    onRemoved={() => {
+                      forget(entry.row.key);
+                      search.current?.focus();
+                    }}
+                  />
+                )}
+              </Group>
+            </React.Fragment>
           ))
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * "Space between blocks", drawn above the spacing variables (the model they
+ * space by), and nothing above any other group or when the host offers no
+ * choice.
+ */
+function SpacingModeAbove({
+  group,
+  spacing,
+  readOnly,
+}: {
+  group: VariableGroup;
+  spacing: SpacingModeControl | undefined;
+  readOnly: boolean;
+}): React.JSX.Element | null {
+  if (group !== "spacing" || spacing === undefined) return null;
+  return (
+    <SpacingModeChoice
+      mode={spacing.mode}
+      onChange={spacing.onChange}
+      readOnly={readOnly}
+    />
   );
 }
 
@@ -363,11 +460,14 @@ function useOpenVariable({
   onChange,
   currentTokens,
   onAdded,
+  onSettle,
 }: {
   tokens: SiteTokenSet | undefined;
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
   onAdded: () => void;
+  /** The author is done with a variable; see `TokensPanelProps.onSettle`. */
+  onSettle: (() => void) | undefined;
 }): {
   /** The panel's element, which rows are found in to be focused. */
   root: React.RefObject<HTMLDivElement | null>;
@@ -404,16 +504,22 @@ function useOpenVariable({
 
   const close = (key: string): void => {
     setOpenKey(null);
-    if (!fresh.current.delete(key)) return;
-    const named = namedAfterLabel(currentTokens(), key);
-    if (named === undefined) return;
-    onChange(named.tokens);
-    setFocusKey(named.key);
+    // Settled after the renaming below, so a just-added variable's code name
+    // is part of what is persisted with the rest of its edit.
+    if (fresh.current.delete(key)) {
+      const named = namedAfterLabel(currentTokens(), key);
+      if (named !== undefined) {
+        onChange(named.tokens);
+        setFocusKey(named.key);
+      }
+    }
+    onSettle?.();
   };
 
   const forget = (key: string): void => {
     fresh.current.delete(key);
     setOpenKey(null);
+    onSettle?.();
   };
 
   const toggle = (key: string, open: boolean): void => {
@@ -600,15 +706,11 @@ function Group({
       ) : (
         <ul className="nx-vars__list">{shown.map(children)}</ul>
       )}
-      {hidden > 0 ? (
-        <button
-          type="button"
-          className="nx-vars__link"
-          onClick={() => setPages(count => count + 1)}
-        >
-          {`Show ${String(Math.min(hidden, PAGE_SIZE))} more`}
-        </button>
-      ) : null}
+      <ShowMore
+        hidden={hidden}
+        pageSize={PAGE_SIZE}
+        onMore={() => setPages(count => count + 1)}
+      />
     </section>
   );
 }
@@ -749,11 +851,16 @@ function VariableRow({
             data-variable-key={entry.row.key}
             // The visible name first, then the values the swatches show, so
             // a screen reader hears both and speech input still matches.
-            aria-label={`${entry.label}${describe(entry, token, tokens, mode)}`}
+            aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}`}
             data-kind={entry.row.kind}
           >
             <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
-            <span className="nx-vars__name">{entry.label}</span>
+            <span className="nx-vars__name">
+              {entry.label}
+              {entry.kindWord === undefined ? null : (
+                <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
+              )}
+            </span>
             <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
           </button>
         </PopoverTrigger>
@@ -776,6 +883,16 @@ function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/**
+ * The row's name as it is read: its label, and its kind when another row is
+ * shown under the same name.
+ */
+function shownName(entry: VariableEntry): string {
+  return entry.kindWord === undefined
+    ? entry.label
+    : `${entry.label} · ${entry.kindWord}`;
 }
 
 /** The value a variable shows for the preview mode, falling back to light. */
@@ -827,9 +944,15 @@ function RowLead({
       </span>
     );
   }
-  const Icon = KIND_ICONS[kind];
+  // A radius draws a corner, so it is told from a spacing step at a glance.
+  const radius = lengthFamilyOf(entry.row) === "radius";
+  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
   return (
-    <span className="nx-vars__kind" aria-hidden="true">
+    <span
+      className="nx-vars__kind"
+      aria-hidden="true"
+      data-variable-icon={lengthFamilyOf(entry.row) ?? kind}
+    >
       {kind === "shadow" ? (
         <span
           className="nx-vars__shadow"
@@ -860,9 +983,10 @@ const KIND_ICONS: Readonly<
  * still reads larger than body text without growing the row.
  */
 function specimenSize(value: string): number {
-  const match = /^(\d*\.?\d+)(px|rem)$/.exec(value.trim());
-  const px =
-    match === null ? 16 : Number(match[1]) * (match[2] === "rem" ? 16 : 1);
+  // Read through the inspector's own reading of a length, so a type size is
+  // measured the same way in both places; a value it cannot measure is drawn
+  // at body size, as before.
+  const px = lengthInPx(value) ?? 16;
   return Math.min(18, Math.max(11, Math.round(10 + px * 0.2)));
 }
 
@@ -892,22 +1016,38 @@ function RowTail({
   if (entry.row.kind === "color") {
     return <ColourPair {...colourPairOf(token)} />;
   }
+  const own = valueFor(token, mode);
+  const words = chipText(entry, own);
   return (
-    <span className="nx-vars__chip" aria-hidden="true">
-      {chipText(entry, token, mode)}
+    <span
+      className="nx-vars__chip"
+      aria-hidden="true"
+      // The whole value on hover when the chip says it in fewer words, as
+      // "Fluid" does; the row's name says it to a screen reader already.
+      title={words === chipText(entry, own, "raw") ? undefined : own}
+    >
+      {words}
     </span>
   );
 }
 
-/** "16 / 26" for a type size with its line height, or the value itself. */
+/**
+ * "16 / 26" for a type size with its line height, or the value itself, in
+ * the picker's words: "Fluid" for a length that changes with the page, whose
+ * whole `clamp()` crowded the name out of the row. `raw` keeps the value as
+ * written, to tell whether the words shortened it.
+ */
 function chipText(
   entry: VariableEntry,
-  token: SiteToken,
-  mode: TokenMode
+  own: string,
+  form: "words" | "raw" = "words"
 ): string {
-  const own = valueFor(token, mode);
-  if (entry.lineHeight === undefined) return own;
-  return `${bare(own)} / ${bare(entry.lineHeight.value)}`;
+  const text =
+    form === "raw"
+      ? own
+      : variableValueText({ kind: entry.row.kind, value: own });
+  if (entry.lineHeight === undefined) return text;
+  return `${bare(text)} / ${bare(entry.lineHeight.value)}`;
 }
 
 /** A px value without its unit, as designers write a type scale. */

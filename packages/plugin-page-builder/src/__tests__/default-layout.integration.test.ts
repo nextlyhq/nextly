@@ -27,6 +27,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
@@ -47,6 +48,11 @@ import {
   relationId,
   writeLayoutSettings,
 } from "../default-layout/store";
+import {
+  layoutRemovalStore,
+  type LayoutRemovalStore,
+} from "../layout-removal/store";
+import { KEPT_AS_DEFAULT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 
@@ -78,10 +84,28 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * A plugin depending on the page builder, so its `ctx.db` reaches the page
+ * builder's tables: the repair restores from Layout removals' copies, and the
+ * test hands it the same fence the plugin keeps.
+ */
+function probePlugin(holder: { store?: LayoutRemovalStore }): PluginDefinition {
+  return definePlugin({
+    name: "@test/default-layout-probe",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    init(ctx) {
+      holder.store = layoutRemovalStore(ctx.db, ctx.dialect);
+    },
+  });
+}
+
 describe.each(getConfiguredTestDialects())(
   "the site's default Layout (%s)",
   (dialect: TestDialect) => {
     let current: TestNextly | undefined;
+    const probe: { store?: LayoutRemovalStore } = {};
 
     /** What the instance booted last logged as warnings. */
     let warnings: string[] = [];
@@ -106,7 +130,7 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         logger,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), probePlugin(probe)],
         // The boot's permission seeding, which is what stores the plugin's own
         // `manage-page-builder-site` beside the collections' grants.
         seedPublic: true,
@@ -136,9 +160,12 @@ describe.each(getConfiguredTestDialects())(
     }
 
     function ensure(t: TestNextly) {
+      if (probe.store === undefined) throw new Error("the probe did not boot");
       return ensureDefaultLayout({
         nextly: t.nextly,
         slugs: SLUGS,
+        pagesSlug: "pages",
+        removals: probe.store,
         warn: () => {},
       });
     }
@@ -307,13 +334,31 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** POST the make-default route as the session's owner. */
-    async function makeDefault(
+    function makeDefault(
       cookie: string,
       id: string,
       body: unknown = {}
     ): Promise<{ status: number; body: Record<string, unknown> }> {
+      return postLayoutRoute(cookie, [id, "make-default"], body);
+    }
+
+    /** POST Remove Layout as the session's owner. */
+    function removeLayout(
+      cookie: string,
+      id: string,
+      action: "delete" | "unpublish"
+    ): Promise<{ status: number; body: Record<string, unknown> }> {
+      return postLayoutRoute(cookie, [id, "remove"], { action });
+    }
+
+    /** POST one of the plugin's `/layouts/:id/...` routes. */
+    async function postLayoutRoute(
+      cookie: string,
+      path: string[],
+      body: unknown
+    ): Promise<{ status: number; body: Record<string, unknown> }> {
       const handlers = createDynamicHandlers();
-      const sub = ["layouts", id, "make-default"];
+      const sub = ["layouts", ...path];
       const url = `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}/${sub.join("/")}`;
       const response = await handlers.POST(
         new Request(url, {
@@ -353,7 +398,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     describe("the seed", () => {
-      it("gives a fresh site a published 'Default (site)' Layout as its default, recorded as the seed", async () => {
+      it("gives a fresh site a published 'Site layout' Layout as its default, recorded as the seed", async () => {
         const t = await boot();
         await ensure(t);
 
@@ -364,8 +409,8 @@ describe.each(getConfiguredTestDialects())(
         expect(await allLayouts(t)).toHaveLength(1);
         const seed = await rowOf(t, String(settings.defaultLayout));
         expect(seed).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
       });
@@ -373,7 +418,7 @@ describe.each(getConfiguredTestDialects())(
       it("never adopts an authored Layout titled Default that holds the seed's slug", async () => {
         const t = await boot();
         await forgetTheSeed(t, await person(t, "owner"));
-        const authored = await layout(t, "Default", "default-site");
+        const authored = await layout(t, "Default", "site-layout");
 
         await ensure(t);
 
@@ -381,13 +426,13 @@ describe.each(getConfiguredTestDialects())(
         expect(settings.defaultLayout).not.toBe(authored);
         const seed = await rowOf(t, String(settings.defaultLayout));
         expect(seed).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site-2",
+          title: "Site layout",
+          slug: "site-layout-2",
           status: "published",
         });
         expect(await rowOf(t, authored)).toMatchObject({
           title: "Default",
-          slug: "default-site",
+          slug: "site-layout",
           status: "published",
         });
       });
@@ -554,24 +599,18 @@ describe.each(getConfiguredTestDialects())(
         expect((await rowOf(t, id)).status).toBe("published");
       });
 
-      it("lets a Layout that is not the default be unpublished and deleted", async () => {
+      it("lets a Layout that is not the default be unpublished and deleted, through Remove Layout", async () => {
         const t = await boot();
         await ensure(t);
+        const cookie = await sessionOf(t, await person(t, "owner"));
         const other = await layout(t, "Other", "other");
 
-        await t.nextly.update({
-          collection: LAYOUTS_SLUG,
-          id: other,
-          data: { status: "draft" },
-          overrideAccess: true,
-        });
+        const unpublished = await removeLayout(cookie, other, "unpublish");
+        expect(unpublished.status, JSON.stringify(unpublished.body)).toBe(200);
         expect((await rowOf(t, other)).status).toBe("draft");
 
-        await t.nextly.delete({
-          collection: LAYOUTS_SLUG,
-          id: other,
-          overrideAccess: true,
-        });
+        const deleted = await removeLayout(cookie, other, "delete");
+        expect(deleted.status, JSON.stringify(deleted.body)).toBe(200);
         expect((await allLayouts(t)).map(row => row.id)).not.toContain(other);
       });
     });
@@ -633,8 +672,8 @@ describe.each(getConfiguredTestDialects())(
         expect(reseeded.defaultLayout).not.toBe(seed);
         expect(reseeded.seededLayout).toBe(reseeded.defaultLayout);
         expect(await rowOf(t, String(reseeded.defaultLayout))).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
 
@@ -644,11 +683,36 @@ describe.each(getConfiguredTestDialects())(
         expect((await allLayouts(t)).length).toBe(count);
       });
 
-      it("seeds exactly one Layout beside an authored 'Default (site)' when no seed was ever recorded, and adopts nothing", async () => {
+      it("deletes a seed it could not record, through the Layout fence, leaving no extra Layout", async () => {
+        const t = await boot();
+        await forgetTheSeed(t, await person(t, "owner"));
+        // The settings write that would record the new seed fails once.
+        let armed = true;
+        t.hooks.register(
+          "beforeChange",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async context => {
+            const data = (context as { data?: Record<string, unknown> }).data;
+            if (!armed || relationId(data?.seededLayout) === null) return;
+            armed = false;
+            throw new Error("the settings write failed");
+          }
+        );
+
+        await expect(ensure(t)).rejects.toThrow();
+
+        expect(armed).toBe(false);
+        // The created seed is gone again: its delete passed the Layout guard.
+        expect(await allLayouts(t)).toHaveLength(0);
+        await ensure(t);
+        expect(await allLayouts(t)).toHaveLength(1);
+      });
+
+      it("seeds exactly one Layout beside an authored 'Site layout' when no seed was ever recorded, and adopts nothing", async () => {
         const t = await boot();
         await forgetTheSeed(t, await person(t, "owner"));
         expect((await settingsOf(t)).seededLayout).toBeNull();
-        const authored = await layout(t, "Default (site)", "default-site");
+        const authored = await layout(t, "Site layout", "site-layout");
 
         await ensure(t);
         await ensure(t);
@@ -659,13 +723,13 @@ describe.each(getConfiguredTestDialects())(
         const rows = await allLayouts(t);
         expect(rows).toHaveLength(2);
         expect(await rowOf(t, String(settings.seededLayout))).toMatchObject({
-          title: "Default (site) 2",
-          slug: "default-site-2",
+          title: "Site layout 2",
+          slug: "site-layout-2",
           status: "published",
         });
         expect(await rowOf(t, authored)).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
       });
@@ -676,7 +740,7 @@ describe.each(getConfiguredTestDialects())(
         await ensure(t);
         const seed = String((await settingsOf(t)).seededLayout);
         await deleteSkippingHooks(t, seed, owner);
-        const authored = await layout(t, "Default (site)", "default-site");
+        const authored = await layout(t, "Site layout", "site-layout");
 
         await ensure(t);
         await ensure(t);
@@ -688,13 +752,13 @@ describe.each(getConfiguredTestDialects())(
         const rows = await allLayouts(t);
         expect(rows).toHaveLength(2);
         expect(await rowOf(t, String(settings.seededLayout))).toMatchObject({
-          title: "Default (site) 2",
-          slug: "default-site-2",
+          title: "Site layout 2",
+          slug: "site-layout-2",
           status: "published",
         });
         expect(await rowOf(t, authored)).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
       });
@@ -892,33 +956,30 @@ describe.each(getConfiguredTestDialects())(
         expect((await settingsOf(t)).defaultLayout).toBe(second);
       });
 
-      it("queues the repair when a Layout is made the default after its unpublish passed the guard, and the repair re-points the default at the seed", async () => {
+      it("queues the repair when a Layout is made the default after its unpublish removal's last look at the default, and the repair re-points the default at the seed", async () => {
         const t = await boot();
         const owner = await person(t, "owner");
         const cookie = await sessionOf(t, owner);
         const seed = String((await settingsOf(t)).seededLayout);
         const target = await layout(t, "Landing", "landing");
 
-        // Fires after the guard has read the default (not this Layout) and
-        // before the unpublish commits: the make-default lands in that gap,
-        // through the real route, while the Layout is still published.
+        // Fires after the default guard has read the default (not this
+        // Layout) and before the unpublish commits. Through the route, a
+        // make-default arriving now meets the fence and refuses itself, so
+        // the promotion that lands here is one whose checks ran before the
+        // fence went up: its write, made the way the route makes it.
         let armed = true;
-        let madeDefault = 0;
         t.hooks.register("beforeUpdate", LAYOUTS_SLUG, async context => {
           const original = (context as { originalData?: unknown }).originalData;
           if (!armed || relationId(original) !== target) return;
           armed = false;
-          madeDefault = (await makeDefault(cookie, target)).status;
+          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: target });
         });
 
-        await t.nextly.update({
-          collection: LAYOUTS_SLUG,
-          id: target,
-          data: { status: "draft" },
-          overrideAccess: true,
-        });
+        const answer = await removeLayout(cookie, target, "unpublish");
 
-        expect(madeDefault).toBe(200);
+        expect(armed).toBe(false);
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
         expect((await settingsOf(t)).defaultLayout).toBe(target);
         expect((await rowOf(t, target)).status).toBe("draft");
         // The guard's after-check queued a repair: queueing it again finds
@@ -935,41 +996,38 @@ describe.each(getConfiguredTestDialects())(
         expect((await rowOf(t, seed)).status).toBe("published");
       });
 
-      it("queues the repair when a Layout is made the default after its delete passed the guard, and the repair re-points the default at the seed", async () => {
+      it("restores a Layout made the default after its delete removal's last look at the default, and the repair keeps it", async () => {
         const t = await boot();
         const owner = await person(t, "owner");
         const cookie = await sessionOf(t, owner);
-        const seed = String((await settingsOf(t)).seededLayout);
         const target = await layout(t, "Landing", "landing");
 
         let armed = true;
-        let madeDefault = 0;
         t.hooks.register("beforeDelete", LAYOUTS_SLUG, async context => {
           const doomed = (context as { data?: unknown }).data;
           if (!armed || relationId(doomed) !== target) return;
           armed = false;
-          madeDefault = (await makeDefault(cookie, target)).status;
+          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: target });
         });
 
-        await t.nextly.delete({
-          collection: LAYOUTS_SLUG,
-          id: target,
-          overrideAccess: true,
-        });
+        const answer = await removeLayout(cookie, target, "delete");
 
-        expect(madeDefault).toBe(200);
-        expect((await settingsOf(t)).defaultLayout).toBe(target);
+        expect(armed).toBe(false);
+        expect(answer.status).toBe(409);
+        expect(JSON.stringify(answer.body)).toContain(KEPT_AS_DEFAULT);
         expect((await allLayouts(t)).map(row => row.id)).not.toContain(target);
-        expect((await queueDefaultLayoutRepair(t.nextly)).deduped).toBe(true);
-
-        await ensure(t);
-        expect(await settingsOf(t)).toEqual({
-          defaultLayout: seed,
-          seededLayout: seed,
-          // The repair's own choice names nobody.
-          defaultLayoutChangedBy: null,
+        const restored = String((await settingsOf(t)).defaultLayout);
+        expect(restored).not.toBe(target);
+        expect(await rowOf(t, restored)).toMatchObject({
+          title: "Landing",
+          slug: "landing",
+          status: "published",
         });
-        expect((await rowOf(t, seed)).status).toBe("published");
+        // The default guard's after-check queued a repair when the delete
+        // left the default missing; it finds the restored Layout and keeps it.
+        expect((await queueDefaultLayoutRepair(t.nextly)).deduped).toBe(true);
+        await ensure(t);
+        expect((await settingsOf(t)).defaultLayout).toBe(restored);
       });
     });
 

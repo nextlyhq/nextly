@@ -4,16 +4,26 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import type { SharedStyleUsageKind } from "./library-contract";
+import {
+  SHARED_STYLE_IN_USE_CODE,
+  sharedStyleUsagePath,
+  sharedStyleWhereUsedPath,
+  type SharedStyleUsageKind,
+} from "./library-contract";
 import { pageBuilder } from "./plugin";
 import {
+  countSharedStyleUsage,
+  firstReadableTitle,
   LOCK_SHARED_STYLES_PERMISSION,
+  SHARED_STYLE_COUNT_MS,
   lockSharedStyle,
+  mayReadSharedStyleUsage,
   readSharedStyleUsage,
   readSharedStyleUses,
   removeSharedStyles,
   sharedStyleRoutes,
   type SharedStyleStore,
+  type StillUsedCheck,
   type SharedStyleUsageSource,
 } from "./shared-styles-routes";
 import { SHARED_STYLE_LOCK_WRITE_CONTEXT } from "./site-style-storage";
@@ -82,6 +92,12 @@ const post = (body: unknown) =>
     body: JSON.stringify(body),
   });
 
+/** A rescan that finds no stored document still using any style. */
+const NOT_STILL_USED: StillUsedCheck = {
+  uses: async () => [],
+  firstReadable: async () => undefined,
+};
+
 async function refusal(run: Promise<unknown>): Promise<unknown> {
   try {
     await run;
@@ -105,7 +121,7 @@ describe("the shared-style permission", () => {
     ]);
   });
 
-  it("gates each route on its own permission", () => {
+  it("gates lock and remove on their permission, and leaves the usage reads to their handler", () => {
     const routes = sharedStyleRoutes({
       configClassIds: new Set(),
       usage: () => usageOf(WHOLE).source,
@@ -119,16 +135,53 @@ describe("the shared-style permission", () => {
       routes.map(route => [
         route.method,
         route.path,
+        route.requiredPermission === undefined ||
         typeof route.requiredPermission === "string"
           ? route.requiredPermission
           : route.requiredPermission(scope),
       ])
     ).toEqual([
       ["POST", "/shared-styles/lock", "lock-page-builder-shared-styles"],
-      ["GET", "/shared-styles/usage", "read-renamed_site-style"],
-      ["GET", "/shared-styles/where-used", "read-renamed_site-style"],
+      ["GET", "/shared-styles/usage", undefined],
+      ["GET", "/shared-styles/where-used", undefined],
+      // Design's update: whoever a whole count lets remove a style.
+      ["POST", "/shared-styles/count", "update-renamed_site-style"],
       ["POST", "/shared-styles/remove", "update-renamed_site-style"],
     ]);
+  });
+});
+
+describe("who may read shared styles' usage", () => {
+  /** A caller holding exactly the permissions named, as `action-resource`. */
+  const holding = (...held: string[]) => ({
+    self: { singles: { "site-style": "renamed_site-style" } } as never,
+    caller: {
+      can: vi.fn(async (action: string, resource: string) =>
+        held.includes(`${action}-${resource}`)
+      ),
+    } as never,
+  });
+
+  it("admits Design's read of the RESOLVED site style", async () => {
+    expect(
+      await mayReadSharedStyleUsage(holding("read-renamed_site-style"))
+    ).toBe(true);
+  });
+
+  it("admits the lock permission alone", async () => {
+    expect(
+      await mayReadSharedStyleUsage(holding(LOCK_SHARED_STYLES_PERMISSION))
+    ).toBe(true);
+  });
+
+  it("refuses a caller holding neither, and nobody", async () => {
+    expect(await mayReadSharedStyleUsage(holding("read-pages"))).toBe(false);
+    expect(
+      await mayReadSharedStyleUsage({
+        self: { singles: {} } as never,
+        caller: null,
+      })
+    ).toBe(false);
   });
 });
 
@@ -211,11 +264,15 @@ describe("how widely shared styles are used", () => {
     new Request(
       `http://local/shared-styles/usage?${ids.map(id => `id=${encodeURIComponent(id)}`).join("&")}`
     );
-  const caller = (lock: boolean) => ({
+  const caller = (lock: boolean, design = false) => ({
+    self: { singles: { "site-style": "renamed_site-style" } } as never,
     caller: {
-      can: vi.fn(async (action: string, resource: string) =>
-        lock ? `${action}-${resource}` === LOCK_SHARED_STYLES_PERMISSION : false
-      ),
+      can: vi.fn(async (action: string, resource: string) => {
+        const held = `${action}-${resource}`;
+        if (lock && held === LOCK_SHARED_STYLES_PERMISSION) return true;
+        // Design's update of the RESOLVED site style.
+        return design && held === "update-renamed_site-style";
+      }),
     } as never,
   });
 
@@ -234,7 +291,10 @@ describe("how widely shared styles are used", () => {
     );
     expect(answer).toEqual({
       whole: true,
+      counting: false,
       mayLock: true,
+      // The lock alone counts nothing: counting is Design's update.
+      mayCount: false,
       styles: {
         "c-card": {
           documents: 4,
@@ -247,6 +307,37 @@ describe("how widely shared styles are used", () => {
           complete: true,
         },
       },
+    });
+  });
+
+  it("says this caller may count the pages now only with Design's update", async () => {
+    const { source } = usageOf(NOT_WHOLE);
+    const design = await readSharedStyleUsage(
+      usageRequest("c-card"),
+      caller(false, true),
+      source
+    );
+    expect(design.mayCount).toBe(true);
+    const lockOnly = await readSharedStyleUsage(
+      usageRequest("c-card"),
+      caller(true),
+      source
+    );
+    expect(lockOnly.mayCount).toBe(false);
+  });
+
+  it("says whether the counts may still become whole", async () => {
+    const counting = usageOf({ ...NOT_WHOLE, backfillPending: true }).source;
+    const stuck = usageOf({ ...NOT_WHOLE, backfillPending: false }).source;
+    const ask = (source: SharedStyleUsageSource) =>
+      readSharedStyleUsage(usageRequest("c-card"), caller(false), source);
+    // A backfill still walking: the next read may be whole.
+    expect(await ask(counting)).toMatchObject({ whole: false, counting: true });
+    // Content the index can never reach: floors for good, nothing to wait for.
+    expect(await ask(stuck)).toMatchObject({ whole: false, counting: false });
+    expect(await ask(usageOf(WHOLE).source)).toMatchObject({
+      whole: true,
+      counting: false,
     });
   });
 
@@ -316,6 +407,47 @@ describe("how widely shared styles are used", () => {
   });
 });
 
+describe("the paths the browser asks on", () => {
+  // Built by the contract and read by the routes, so the editor's reads
+  // cannot drift from what the routes parse.
+  it("asks the usage route about every id it names, awkward ones included", async () => {
+    const ids = ["c-card", "a&b=c", "__proto__"];
+    const { source, asked } = usageOf(WHOLE);
+    const answer = await readSharedStyleUsage(
+      new Request(`http://local${sharedStyleUsagePath(ids)}`),
+      {
+        self: { singles: { "site-style": "site-style" } } as never,
+        caller: { can: async () => false } as never,
+      },
+      source
+    );
+    expect(asked).toEqual(ids);
+    expect(Object.keys(answer.styles)).toEqual(ids);
+  });
+
+  it("asks the where-used route for one style and the page named", async () => {
+    // Zero-padded, so their order by id is the order they are made in.
+    const documents = Array.from(
+      { length: 25 },
+      (_, n) => `p${String(n).padStart(2, "0")}`
+    );
+    const { source } = usageOf(WHOLE, {
+      "a&b": [{ collection: "pages", documents }],
+    });
+    const response = await readSharedStyleUses(
+      new Request(`http://local${sharedStyleWhereUsedPath("a&b", 2)}`),
+      source,
+      async (_c, ids) => ids.map(id => ({ id, title: id }))
+    );
+    const body = (await response.json()) as {
+      items: { id: string }[];
+      meta: { page: number };
+    };
+    expect(body.meta.page).toBe(2);
+    expect(body.items.map(item => item.id)).toEqual(documents.slice(20));
+  });
+});
+
 describe("where a shared style is used", () => {
   const whereUsed = new Request(
     "http://local/shared-styles/where-used?id=c-card"
@@ -352,7 +484,11 @@ describe("where a shared style is used", () => {
   });
 
   describe("a style used on many documents", () => {
-    const documents = Array.from({ length: 45 }, (_, n) => `p${n}`);
+    // Zero-padded, so their order by id is the order they are made in.
+    const documents = Array.from(
+      { length: 45 },
+      (_, n) => `p${String(n).padStart(2, "0")}`
+    );
     const named = async (_c: string, ids: readonly string[]) =>
       ids.map(id => ({ id, title: id }));
     const page = async (query: string) => {
@@ -410,6 +546,46 @@ describe("where a shared style is used", () => {
     });
   });
 
+  it("pages the same order on every request, so pages neither repeat nor drop a document", async () => {
+    const pages = Array.from({ length: 14 }, (_, n) => `p${n}`);
+    const posts = Array.from({ length: 13 }, (_, n) => `x${n}`);
+    let calls = 0;
+    // Each request lists the collections and their documents in another
+    // order, as reads without an ORDER BY may.
+    const source: SharedStyleUsageSource = {
+      health: async () => WHOLE,
+      documentsUsingEach: async ids => {
+        calls += 1;
+        const turn = <T>(items: readonly T[]) =>
+          calls % 2 === 0 ? [...items].reverse() : [...items];
+        const collections = turn([
+          { collection: "pages", documents: turn(pages) },
+          { collection: "posts", documents: turn(posts) },
+        ]);
+        return new Map(ids.map(id => [id, { collections, complete: true }]));
+      },
+      kindOf: () => "pages",
+    };
+    const named = async (_c: string, ids: readonly string[]) =>
+      [...ids].reverse().map(id => ({ id, title: id }));
+    const read = async (page: number) =>
+      (
+        (await (
+          await readSharedStyleUses(
+            new Request(
+              `http://local/shared-styles/where-used?id=c-card&page=${page}`
+            ),
+            source,
+            named
+          )
+        ).json()) as { items: { collection: string; id: string }[] }
+      ).items.map(item => `${item.collection}:${item.id}`);
+    const seen = [...(await read(1)), ...(await read(2))];
+    expect(seen).toHaveLength(27);
+    expect(new Set(seen).size).toBe(27);
+    expect(seen.slice(0, 2)).toEqual(["pages:p0", "pages:p1"]);
+  });
+
   it("says the list may be short while the index is not whole", async () => {
     const { source } = usageOf(NOT_WHOLE);
     const body = (await (
@@ -427,7 +603,8 @@ describe("removing unused shared styles", () => {
       post({ ids: ["c-card"] }),
       store,
       source,
-      new Set()
+      new Set(),
+      NOT_STILL_USED
     );
     expect(write).toHaveBeenCalledWith([hero], {});
     expect(await response.json()).toEqual({
@@ -441,12 +618,18 @@ describe("removing unused shared styles", () => {
     const { source } = usageOf(NOT_WHOLE);
     expect(
       await refusal(
-        removeSharedStyles(post({ ids: ["c-card"] }), store, source, new Set())
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
       )
     ).toMatchObject({
       code: "CONFLICT",
       publicMessage:
-        "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet.",
+        "Nothing was removed. Some pages haven't been counted yet, so no shared style can be removed.",
     });
     expect(write).not.toHaveBeenCalled();
   });
@@ -466,15 +649,45 @@ describe("removing unused shared styles", () => {
           post({ ids: ["c-card", "c-hero", "c-code"] }),
           store,
           source,
-          new Set(["c-code"])
+          new Set(["c-code"]),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      // A style the index counts as used makes it the in-use refusal, its
+      // one issue naming every reason, as the rescan's refusal does.
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: SHARED_STYLE_IN_USE_CODE,
+            message:
+              "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+          },
+        ],
+      },
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses a lock alone as a conflict, saying nothing of use", async () => {
+    const { store } = storeOf([{ ...card, locked: true }]);
+    const { source } = usageOf(WHOLE);
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
         )
       )
     ).toMatchObject({
       code: "CONFLICT",
-      publicMessage:
-        "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+      publicMessage: "Nothing was removed. Card is locked.",
     });
-    expect(write).not.toHaveBeenCalled();
   });
 
   it("refuses a style whose uses could not all be counted", async () => {
@@ -482,10 +695,73 @@ describe("removing unused shared styles", () => {
     const { source } = usageOf(WHOLE, {}, false);
     expect(
       await refusal(
-        removeSharedStyles(post({ ids: ["c-card"] }), store, source, new Set())
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
       )
     ).toMatchObject({ code: "CONFLICT" });
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses a style the index counts on nothing while a stored document still uses it", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE);
+    const asked: (readonly string[])[] = [];
+    const check: StillUsedCheck = {
+      uses: async ids => {
+        asked.push(ids);
+        return [
+          { kind: "collection", slug: "pages", id: "p1" },
+          { kind: "collection", slug: "pages", id: "p2" },
+          { kind: "single", slug: "home", id: "", label: "Home" },
+        ];
+      },
+      firstReadable: async () => "Home",
+    };
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          source,
+          new Set(),
+          check
+        )
+      )
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "IN_USE",
+            message:
+              "Still used on Home and 2 more. Remove it from those pages first.",
+          },
+        ],
+      },
+    });
+    expect(asked).toEqual([["c-card"]]);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("does not walk the documents once the index has refused", async () => {
+    const { store } = storeOf([card]);
+    const { source } = usageOf(WHOLE, {
+      "c-card": [{ collection: "pages", documents: ["p1"] }],
+    });
+    const uses = vi.fn<StillUsedCheck["uses"]>(async () => []);
+    await refusal(
+      removeSharedStyles(post({ ids: ["c-card"] }), store, source, new Set(), {
+        uses,
+        firstReadable: async () => undefined,
+      })
+    );
+    expect(uses).not.toHaveBeenCalled();
   });
 
   it("refuses a style that is not stored", async () => {
@@ -493,8 +769,93 @@ describe("removing unused shared styles", () => {
     const { source } = usageOf(WHOLE);
     expect(
       await refusal(
-        removeSharedStyles(post({ ids: ["c-none"] }), store, source, new Set())
+        removeSharedStyles(
+          post({ ids: ["c-none"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
       )
     ).toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("naming a stored use in a refusal", () => {
+  const uses = [
+    { kind: "collection", slug: "secret", id: "s1" },
+    { kind: "collection", slug: "pages", id: "p1" },
+    { kind: "collection", slug: "pages", id: "p2" },
+    { kind: "single", slug: "home", id: "", label: "Home" },
+  ] as const;
+
+  it("names the first document the caller may read, read as the caller", async () => {
+    const readNamed = vi.fn(
+      async (collection: string, ids: readonly string[]) =>
+        collection === "secret"
+          ? null
+          : ids.filter(id => id === "p2").map(id => ({ id, title: "About" }))
+    );
+    expect(await firstReadableTitle(uses, readNamed, async () => true)).toBe(
+      "About"
+    );
+    expect(readNamed.mock.calls).toEqual([
+      ["secret", ["s1"]],
+      ["pages", ["p1", "p2"]],
+    ]);
+  });
+
+  it("names a Single by its label only when the caller may read it", async () => {
+    const none = async () => [];
+    expect(await firstReadableTitle(uses, none, async () => true)).toBe("Home");
+    expect(
+      await firstReadableTitle(uses, none, async () => false)
+    ).toBeUndefined();
+  });
+});
+
+describe("counting the pages now", () => {
+  const jobsThat = (ran: boolean) => ({
+    runSweepNow: vi.fn(async () => ({ ran })),
+  });
+
+  it("runs the usage backfill for a bounded time, then answers the health after", async () => {
+    const jobs = jobsThat(true);
+    // Read once, after the run: the answer says how far this run got.
+    const health = vi.fn(async () => ({ ...NOT_WHOLE, backfillPending: true }));
+    const response = await countSharedStyleUsage(jobs, { health });
+    const body = (await response.json()) as {
+      item: { ran: boolean; whole: boolean; counting: boolean };
+    };
+
+    expect(jobs.runSweepNow).toHaveBeenCalledWith(
+      "page-builder:usage-backfill",
+      { maxDurationMs: SHARED_STYLE_COUNT_MS }
+    );
+    expect(health).toHaveBeenCalledTimes(1);
+    expect(
+      jobs.runSweepNow.mock.invocationCallOrder[0] ?? Infinity
+    ).toBeLessThan(health.mock.invocationCallOrder[0] ?? -Infinity);
+    expect(body.item).toEqual({ ran: true, whole: false, counting: true });
+  });
+
+  it("says when every page is counted", async () => {
+    const response = await countSharedStyleUsage(jobsThat(true), {
+      health: async () => WHOLE,
+    });
+    const body = (await response.json()) as {
+      message: string;
+      item: { whole: boolean; counting: boolean };
+    };
+    expect(body.item).toMatchObject({ whole: true, counting: false });
+    expect(body.message).toBe("Every page has been counted.");
+  });
+
+  it("says when another run was already counting", async () => {
+    const response = await countSharedStyleUsage(jobsThat(false), {
+      health: async () => ({ ...NOT_WHOLE, backfillPending: true }),
+    });
+    const body = (await response.json()) as { item: { ran: boolean } };
+    expect(body.item.ran).toBe(false);
   });
 });

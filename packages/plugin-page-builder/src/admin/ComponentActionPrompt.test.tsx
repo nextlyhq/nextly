@@ -224,6 +224,36 @@ describe("a copy the editor cannot load", () => {
   });
 });
 
+describe("the dialogs' words", () => {
+  it("speak of this page, never of a placement", async () => {
+    // "Placement" is the engine's word; an author placed a component on a
+    // page, and the dialogs say what happens on that page.
+    routes.detach.mockResolvedValue(detachAnswer());
+    mount("detach");
+    const detach = await screen.findByRole("dialog");
+    expect(detach.textContent).toMatch(/plain blocks/);
+    expect(detach.textContent).not.toMatch(/placement/i);
+    cleanup();
+
+    mount("duplicate");
+    const duplicate = await screen.findByRole("dialog");
+    // Only the selected one switches: another of the same on this page keeps
+    // the original, so "this page uses it" overstated it.
+    expect(duplicate.textContent).toMatch(/the one you selected uses it/);
+    expect(duplicate.textContent).toMatch(/other uses on this page included/);
+    expect(duplicate.textContent).not.toMatch(/placement/i);
+  });
+
+  it("say what a detach is checking in the author's words, while it checks", async () => {
+    // Held unanswered, so the line shown while the check is on its way is
+    // the one read, rather than whatever is on screen when it lands.
+    routes.detach.mockReturnValue(new Promise(() => {}));
+    mount("detach");
+    const checking = await screen.findByRole("status");
+    expect(checking.textContent).toBe("Checking what it draws…");
+  });
+});
+
 describe("updating a pattern from the editor", () => {
   it("is held until a pattern is chosen, and says earlier inserts keep their copies", () => {
     mount("update-pattern");

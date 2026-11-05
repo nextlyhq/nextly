@@ -157,7 +157,8 @@ export async function publishedLayoutIds(
  */
 export async function layoutExists(
   nextly: Pick<DefaultLayoutDirectApi, "find">,
-  slugs: DefaultLayoutSlugs,
+  // Only the Layouts slug: a page's publish asks this without the Single.
+  slugs: Pick<DefaultLayoutSlugs, "layouts">,
   id: string
 ): Promise<boolean> {
   const found = await nextly.find({
@@ -173,6 +174,19 @@ export async function layoutExists(
   return found.items.length > 0;
 }
 
+/**
+ * Whether Layout `id` can be a default: it is published now. The one test of
+ * a usable default, for the Single's own default and for a Layout about to
+ * become it.
+ */
+export async function isUsableDefault(
+  nextly: Pick<DefaultLayoutDirectApi, "find">,
+  slugs: DefaultLayoutSlugs,
+  id: string
+): Promise<boolean> {
+  return (await publishedLayoutIds(nextly, slugs, [id])).has(id);
+}
+
 /** Whether the Single's default names a Layout that is published now. */
 export async function defaultIsUsable(
   nextly: Pick<DefaultLayoutDirectApi, "find" | "findSingle">,
@@ -180,7 +194,5 @@ export async function defaultIsUsable(
 ): Promise<boolean> {
   const { defaultLayout } = await readLayoutSettings(nextly, slugs);
   if (defaultLayout === null) return false;
-  return (await publishedLayoutIds(nextly, slugs, [defaultLayout])).has(
-    defaultLayout
-  );
+  return isUsableDefault(nextly, slugs, defaultLayout);
 }

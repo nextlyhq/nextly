@@ -85,21 +85,27 @@ async function prune(
     registry: db.registry as never,
     adapter: db.adapter as never,
     currentSlugs: [],
+    // Runs the drop as it is: these fakes have no database to lock, and what
+    // is under test here is the consent, not the schema lock.
+    lock: work => work(),
     approve,
   });
   return { result, db };
 }
 
 describe("nextly prune and the data-loss consent", () => {
-  it("drops nothing without consent or a terminal, and names the consent", async () => {
-    const { approve, lines } = approvalFor(resolveDataLossConsent({ env: {} }));
-    const { result, db } = await prune(approve);
-    expect(result.dropped).toEqual([]);
+  it("stops without consent or a terminal, dropping nothing and naming the consent", async () => {
+    const { approve } = approvalFor(resolveDataLossConsent({ env: {} }));
+    const db = orphanedDatabase();
+    // A stop, not a listing that ends well: the command exits 1 on it.
+    await expect(prune(approve, db)).rejects.toMatchObject({
+      code: "DATA_LOSS_CONSENT_REQUIRED",
+      next: expect.stringContaining(
+        "--accept-data-loss=dc_a,dc_b,dc_b_locales"
+      ),
+    });
     expect(db.executed).toEqual([]);
     expect(db.deleted).toEqual([]);
-    expect(lines.join("\n")).toContain(
-      "--accept-data-loss=dc_a,dc_b,dc_b_locales"
-    );
   });
 
   it("drops every orphan with the consent without targets, listing each first", async () => {
@@ -125,6 +131,8 @@ describe("nextly prune and the data-loss consent", () => {
       registry: db.registry as never,
       adapter: db.adapter as never,
       currentSlugs: [],
+      // Runs the drop as it is, as above: no database to lock.
+      lock: work => work(),
       approve,
       countArchived: async slug => (slug === "a" ? 3 : 0),
     });
@@ -139,23 +147,29 @@ describe("nextly prune and the data-loss consent", () => {
       resolveDataLossConsent({ flag: "dc_a", env: {} })
     );
     const db = orphanedDatabase();
-    await expect(prune(approve, db)).rejects.toThrow(
-      /does not cover 2 deletions:\n {2}- table dc_b\n {2}- table dc_b_locales/
-    );
+    await expect(prune(approve, db)).rejects.toMatchObject({
+      code: "DATA_LOSS_CONSENT_NOT_COVERED",
+      what: expect.stringContaining("does not cover 2 deletions"),
+      why: expect.stringContaining("- table dc_b\n- table dc_b_locales"),
+    });
     expect(db.executed).toEqual([]);
     expect(db.deleted).toEqual([]);
   });
 
-  it("asks a terminal, and drops nothing when it says no", async () => {
+  it("asks a terminal, and stops dropping nothing when it says no, naming the consent", async () => {
     const ask = vi.fn(async () => false);
     const { approve } = approvalFor(resolveDataLossConsent({ env: {} }), {
       interactive: true,
       ask,
     });
-    const { result, db } = await prune(approve);
+    const db = orphanedDatabase();
+    await expect(prune(approve, db)).rejects.toMatchObject({
+      what: expect.stringContaining("the deletion was not confirmed"),
+      next: expect.stringContaining("--accept-data-loss"),
+    });
     expect(ask).toHaveBeenCalledTimes(1);
-    expect(result.dropped).toEqual([]);
     expect(db.executed).toEqual([]);
+    expect(db.deleted).toEqual([]);
   });
 
   it("reads --accept-data-loss and NEXTLY_ACCEPT_DATA_LOSS, and honours --force as deprecated", () => {

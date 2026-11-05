@@ -29,6 +29,7 @@ function deps(over: Record<string, unknown> = {}) {
     assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
     markOldBuilderFilesFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
+    documentColumnsFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
       singlesRegistered: 0,
@@ -264,6 +265,41 @@ describe("migrateCore", () => {
     await migrateCore(d as never);
 
     expect(order).toEqual(["files", "precondition", "metadata"]);
+  });
+
+  // Before the files, because a file written once the per-document columns existed may name
+  // them (a SQLite table rebuild copies every column); after the files and the metadata, because a
+  // file written before them creates tables without, whose registry rows the metadata records.
+  it("adds the per-document columns before the files and again after the metadata", async () => {
+    const order: string[] = [];
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 1;
+      }),
+      documentColumnsFn: vi.fn(async () => {
+        order.push("document columns");
+      }),
+      reconcileMetadataFn: vi.fn(async () => {
+        order.push("metadata");
+        return {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          marked: 0,
+          stillPending: 0,
+          unreadable: [],
+        };
+      }),
+    });
+
+    await migrateCore(d as never);
+
+    expect(order).toEqual([
+      "document columns",
+      "files",
+      "metadata",
+      "document columns",
+    ]);
   });
 
   // Refused there, the registry keeps the definitions it had, and the next run judges the same
@@ -502,11 +538,103 @@ describe("a plugin's migration history", () => {
         order.push("core");
         return { changed: false };
       }),
+      withLock: async (
+        _db: unknown,
+        _d: unknown,
+        fn: () => Promise<unknown>
+      ) => {
+        order.push("lock");
+        return { ran: true as const, value: await fn() };
+      },
     });
     // The plugin phase that follows reads the stub database and fails; only
     // what ran before it is under test here.
     await migrateCore(d as never).catch(() => undefined);
-    expect(order).toEqual(["ledger", "core"]);
+    const lock = order.indexOf("lock");
+    // Before the lock only the data-loss consent reads which modules are
+    // pending; under it the history check reads the ledger first, then the
+    // consent is judged again, then the core reconcile runs.
+    expect(order.slice(0, lock)).toEqual(["ledger"]);
+    expect(order.slice(lock)).toEqual(["lock", "ledger", "ledger", "core"]);
+  });
+});
+
+describe("a pending plugin module that deletes data", () => {
+  // Its UP runs in the plugin phase, before the app files: the consent the
+  // run asks for covers it as it covers a file.
+  const deleting: PluginMigration = (() => {
+    const up = ["DELETE FROM posts"];
+    const content = {
+      name: "002_prune",
+      schemaVersion: 2,
+      dialects: {
+        postgresql: { up, down: [] },
+        mysql: { up, down: [] },
+        sqlite: { up, down: [] },
+      },
+      snapshot: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      before: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+    };
+    return { ...content, checksum: migrationChecksum(content) };
+  })();
+
+  it("is refused before anything runs when no consent covers it and nobody can be asked", async () => {
+    const d = deps({
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+    });
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /plugin:fx\/002_prune/
+    );
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+
+  it("names the database's DDL event triggers beside the deletions, and asks no more consent for them", async () => {
+    const planned = {
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+      readEventTriggersFn: vi.fn(async () => ["audit_ddl", "watch_ddl"]),
+    };
+    const refusal = (over: Record<string, unknown>) =>
+      migrateCore(deps({ ...planned, ...over }) as never).then(
+        () => "ran",
+        (error: Error) => error.message
+      );
+    // The triggers add no deletion to judge: the same refusal, told beside it.
+    expect(await refusal({})).toBe(
+      `${await refusal({ readEventTriggersFn: async () => [] })}\nThis database has the DDL event triggers audit_ddl, watch_ddl: they run on schema changes, and Nextly cannot see what they do, so what they delete is not listed.`
+    );
+  });
+
+  it("says when whether the database has DDL event triggers could not be read", async () => {
+    const d = deps({
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+      readEventTriggersFn: vi.fn(async () => {
+        throw new Error("permission denied for pg_event_trigger");
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /could not read whether this database has DDL event triggers/
+    );
   });
 });
 

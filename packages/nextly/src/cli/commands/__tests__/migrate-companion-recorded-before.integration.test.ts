@@ -18,6 +18,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { ColumnSpec } from "../../../domains/schema/pipeline/diff/types";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -158,9 +159,11 @@ describeEachDialect(
       clock += 1;
       vi.setSystemTime(new Date(Date.UTC(2026, 9, 29, 12, 0, 0, clock)));
       const { context, said } = command();
+      // As `--non-interactive` does: no rename is asked about.
+      setNonInteractive(true);
       const code = await exiting(() =>
-        runMigrateCreate(name, { cwd: dir, nonInteractive: true }, context)
-      );
+        runMigrateCreate(name, { cwd: dir }, context)
+      ).finally(() => setNonInteractive(false));
       expect(code, said.join("\n")).toBeUndefined();
     }
 

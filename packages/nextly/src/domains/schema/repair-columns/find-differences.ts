@@ -10,6 +10,7 @@
 //
 // @module domains/schema/repair-columns/find-differences
 
+import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
@@ -21,7 +22,7 @@ import {
 } from "../services/field-column-descriptor";
 import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
-import { classifyDifference } from "./classify";
+import { classifyDifference, planDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
 import { differenceCause } from "./difference-cause";
 import type {
@@ -227,7 +228,13 @@ async function readLiveTables(
       table.name.toLowerCase(),
       {
         name: table.name,
-        columns: new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
+        // The per-document columns are Nextly's own, added by `nextly
+        // migrate` rather than by any field, so no comparison sees them.
+        columns: new Map(
+          table.columns
+            .filter(c => !isNextlyOwnedDocumentColumn(c.name))
+            .map(c => [c.name.toLowerCase(), c])
+        ),
       },
     ])
   );
@@ -342,16 +349,21 @@ async function appliedColumnFindings(
       findings.push(finding);
       continue;
     }
+    const difference = {
+      kind: entity.kind,
+      field: column.field,
+      location: finding.location,
+      live: finding.live,
+      expected: finding.expected,
+      ...liveNamesOf(live, finding.location),
+    };
+    const judgement = await classifyDifference(db, dialect, difference);
     findings.push({
       ...finding,
-      judgement: await classifyDifference(db, dialect, {
-        kind: entity.kind,
-        field: column.field,
-        location: finding.location,
-        live: finding.live,
-        expected: finding.expected,
-        ...liveNamesOf(live, finding.location),
-      }),
+      judgement,
+      // What the conversion would run and what the new type cannot keep, read from the same live
+      // table, so the report can say both and block what cannot be carried.
+      conversion: await planDifference(db, dialect, difference, judgement),
     });
   }
   return findings;
@@ -393,6 +405,7 @@ function judgeAppliedColumn(
     live: state,
     aspects,
     judgement: null,
+    conversion: null,
     cause: differenceCause({
       field: column.field,
       kind: entity.kind,

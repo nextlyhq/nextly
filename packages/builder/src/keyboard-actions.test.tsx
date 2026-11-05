@@ -12,7 +12,13 @@
  * @module keyboard-actions.test
  */
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  ShortcutProvider,
+  useShortcuts,
+} from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -1742,5 +1748,102 @@ describe("sharing the verbs without a render loop", () => {
     ]);
     rerender(view(editorSpy(locked, "a")));
     expect(shared).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Escape in an open picker closes the picker, and only that", () => {
+  /** A block inside a container, selected, so Escape has a parent to go to. */
+  function nestedEditor(): EditorSpy {
+    return editorSpy(
+      documentOf([
+        {
+          id: "box",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "inner", type: "acme/text", version: 1, props: {} },
+            ],
+          },
+        },
+      ]),
+      "inner"
+    );
+  }
+
+  it("closes a popover's list on the first press, and goes up on the second", () => {
+    const editor = nestedEditor();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
+        <Popover defaultOpen>
+          <PopoverTrigger>Variables</PopoverTrigger>
+          <PopoverContent>
+            <ul role="listbox" aria-label="Variables" tabIndex={0} />
+          </PopoverContent>
+        </Popover>
+      </ShortcutProvider>
+    );
+    const list = screen.getByRole("listbox", { name: "Variables" });
+    act(() => list.focus());
+
+    press("Escape", {}, list);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(editor.select).not.toHaveBeenCalled();
+
+    // The picker is closed, so the next press is the editor's again.
+    press("Escape");
+    expect(editor.select).toHaveBeenCalledWith("box");
+  });
+
+  it("holds the key, without going up, inside a floating menu that closes itself", () => {
+    /*
+     * A menu that answers Escape on its own and does not mark the event as
+     * handled. Without the editor standing down while focus is in a floating
+     * layer, that one press would close the menu AND select the parent.
+     */
+    const editor = nestedEditor();
+    const hostCancel = vi.fn();
+    function HostBindings(): null {
+      useShortcuts(
+        [{ keys: "Escape", description: "Cancel", run: hostCancel }],
+        {
+          name: "test-entry-form",
+        }
+      );
+      return null;
+    }
+    const layer = window.document.createElement("div");
+    layer.setAttribute("data-radix-popper-content-wrapper", "");
+    const menu = window.document.createElement("ul");
+    menu.setAttribute("role", "menu");
+    menu.tabIndex = 0;
+    layer.append(menu);
+    window.document.body.append(layer);
+    try {
+      render(
+        <ShortcutProvider>
+          <HostBindings />
+          <BlockKeyboardActions
+            onSaveAsPattern={() => undefined}
+            editor={editor}
+          />
+        </ShortcutProvider>
+      );
+      menu.focus();
+
+      const event = press("Escape", {}, menu);
+
+      expect(editor.select).not.toHaveBeenCalled();
+      // Still consumed: released, it would reach the page's cancel.
+      expect(event.defaultPrevented).toBe(true);
+      expect(hostCancel).not.toHaveBeenCalled();
+    } finally {
+      layer.remove();
+    }
   });
 });

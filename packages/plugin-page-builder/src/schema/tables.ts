@@ -1,5 +1,8 @@
 /**
- * The page builder's own tables: the usage indexes' bookkeeping.
+ * The page builder's own tables: the usage indexes' bookkeeping, the fence a
+ * Layout's removal puts up, the runs that turn every copy of a component into
+ * plain blocks before it is deleted, and the site-wide options only this
+ * plugin writes.
  *
  * Kept in tables this plugin declares, reached only through its own `ctx.db`,
  * rather than in collections. A collection has an admin screen, a REST route
@@ -29,7 +32,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 4;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -107,8 +110,203 @@ export const usageProgress: TableDefinition<
   { indexes: [{ columns: ["token", "scopeKey"], unique: true }] }
 );
 
+/** The columns of {@link layoutRemovals}, as `defineTable` checks and publishes them. */
+type LayoutRemovalsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly layoutId: ColumnBuilder<string, false, false>;
+  readonly action: ColumnBuilder<string, false, false>;
+  readonly step: ColumnBuilder<string, false, false>;
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, true, false>;
+  readonly pagesLeft: ColumnBuilder<number, true, false>;
+  readonly copy: ColumnBuilder<unknown, true, false>;
+  readonly copyVersion: ColumnBuilder<string, true, false>;
+  readonly settledAt: ColumnBuilder<Date, true, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per Layout being removed: inserting it is the fence.
+ *
+ * While a row exists, the Layout cannot be made the site default, and the
+ * Layout's own delete or unpublish is refused unless the write carries this
+ * row's `token` and the row is at its `final` step. A table rather than a
+ * collection, for the reason the module docblock gives: a super-admin can
+ * write any collection row, and a fence an author could forge or delete would
+ * let a plain delete through.
+ *
+ * - `step` moves `marked` → `checked` → `final` → `removed`, each move a
+ *   compare-and-set on `token` and the step it leaves, so a request another
+ *   one replaced changes nothing.
+ * - `copy` is the Layout as it stood at the final step, its live row and its
+ *   working draft, so a delete that a promotion raced can be restored. Cleared
+ *   once the check after the write passed (`settledAt`).
+ * - `copyVersion` is the two rows' `updatedAt`, and the delete or unpublish
+ *   goes ahead only while the Layout still has it.
+ * - `updatedAt` is the lease: a row left at an earlier step by a request that
+ *   stopped is taken over by a later one, and cleared by the sweep, once it is
+ *   older than the lease.
+ *
+ * A `removed` row stays. For an unpublish it keeps the fence until the Layout
+ * is published again; for a delete it records that the Layout was removed.
+ */
+export const layoutRemovals: TableDefinition<
+  "layout_removals",
+  LayoutRemovalsColumns
+> = defineTable<"layout_removals", LayoutRemovalsColumns>(
+  "layout_removals",
+  {
+    id: col.id(),
+    layoutId: col.varchar(255),
+    action: col.varchar(16),
+    step: col.varchar(16),
+    token: col.char(36),
+    startedBy: col.varchar(255, { nullable: true }),
+    pagesLeft: col.integer({ nullable: true }),
+    copy: col.json({ nullable: true }),
+    copyVersion: col.varchar(128, { nullable: true }),
+    settledAt: col.timestamp({ nullable: true }),
+    ...col.timestamps(),
+  },
+  // One row per Layout, so two removals of one Layout cannot both insert the
+  // fence: the second meets the unique index and is told the first is running.
+  { indexes: [{ columns: ["layoutId"], unique: true }] }
+);
+
+/** The columns of {@link componentDeletions}. */
+type ComponentDeletionsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly componentId: ColumnBuilder<string, false, false>;
+  readonly purpose: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, false, false>;
+  readonly phase: ColumnBuilder<string, false, true>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * One run rewriting every host of a component, one row per component and
+ * purpose: `delete` turns its copies into plain blocks before it is deleted,
+ * `strip-retired` removes the values of fields it no longer exposes. The two
+ * may run at once, each with its own progress.
+ *
+ * Inserting a `delete` row IS the fence: while it exists, a write that would
+ * add a reference to the component is refused. A `strip-retired` run fences
+ * nothing. The unique (`componentId`, `purpose`) means two people starting one
+ * run at once start it once.
+ *
+ * `startedBy` names who the run's writes are made as, as `user:<id>` for a
+ * signed-in person or `api-key:<id>` for a key, so a later call can be
+ * matched against it.
+ *
+ * `phase` says which walk the run is on: `converting` (every host, skipping
+ * the ones its progress says are done), `final` (every host again, trusting
+ * no progress row) or `done`. `cursor` is where the final walk stopped, so a
+ * walk larger than one tick resumes rather than starting over.
+ */
+export const componentDeletions: TableDefinition<
+  "component_deletions",
+  ComponentDeletionsColumns
+> = defineTable<"component_deletions", ComponentDeletionsColumns>(
+  "component_deletions",
+  {
+    id: col.id(),
+    componentId: col.varchar(255),
+    purpose: col.varchar(32),
+    startedBy: col.varchar(255),
+    phase: col.varchar(16, { default: "converting" }),
+    cursor: col.varchar(1024, { nullable: true }),
+  },
+  { indexes: [{ columns: ["componentId", "purpose"], unique: true }] }
+);
+
+/** The columns of {@link componentDeletionHosts}. */
+type ComponentDeletionHostsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly deletionId: ColumnBuilder<string, false, false>;
+  readonly hostKey: ColumnBuilder<string, false, false>;
+  readonly state: ColumnBuilder<string, false, false>;
+  readonly reason: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * What a run has done to one host document: `rewritten`, `unchanged`, `left`
+ * (with the reason) or `pending` (re-queued by a write made while fenced).
+ * Hosts outside every walk that block the run (a Layout naming the component)
+ * are recorded here too, as `left`, before the run is marked done.
+ *
+ * An ordering hint for the converting walk only. The final walk reads every
+ * host again whatever these rows say, so a row claiming a host is done skips
+ * nothing that still needs converting.
+ */
+export const componentDeletionHosts: TableDefinition<
+  "component_deletion_hosts",
+  ComponentDeletionHostsColumns
+> = defineTable<"component_deletion_hosts", ComponentDeletionHostsColumns>(
+  "component_deletion_hosts",
+  {
+    id: col.id(),
+    deletionId: col.char(36),
+    hostKey: col.varchar(512),
+    state: col.varchar(16),
+    reason: col.varchar(64, { nullable: true }),
+  },
+  { indexes: [{ columns: ["deletionId", "hostKey"], unique: true }] }
+);
+
+/** The columns of {@link siteOptions}, as `defineTable` checks and publishes them. */
+type SiteOptionsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly value: ColumnBuilder<string, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per site-wide option this plugin keeps outside the Site Style
+ * document: `name` says which, `value` holds it.
+ *
+ * A table rather than a field on a Single, because a row can be written only
+ * if absent: one conflict-safe insert both records a choice and refuses to
+ * replace one already made, which a Single's read-merge-write cannot promise.
+ * See `spacing-mode-store` for the one option it holds today.
+ */
+export const siteOptions: TableDefinition<"site_options", SiteOptionsColumns> =
+  defineTable<"site_options", SiteOptionsColumns>(
+    "site_options",
+    {
+      id: col.id(),
+      name: col.varchar(64),
+      value: col.varchar(255),
+      ...col.timestamps(),
+    },
+    // One row per option, so two writers inserting the same option at once
+    // cannot both succeed.
+    { indexes: [{ columns: ["name"], unique: true }] }
+  );
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
   typeof usageProgress,
-] = [usageRuns, usageProgress];
+  typeof layoutRemovals,
+  typeof componentDeletions,
+  typeof componentDeletionHosts,
+  typeof siteOptions,
+] = [
+  usageRuns,
+  usageProgress,
+  layoutRemovals,
+  componentDeletions,
+  componentDeletionHosts,
+  siteOptions,
+];

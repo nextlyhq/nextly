@@ -34,7 +34,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { colourTokensFor } from "./style-colour";
+import { variablesFor } from "./style-colour";
 
 /** The `color` property's leaf, from the catalog rather than written here. */
 const COLOR = (
@@ -96,7 +96,7 @@ function declared(css: string): string[] {
 }
 
 describe("a token chosen in the picker resolves on the page", () => {
-  const offered = colourTokensFor(COLOR, TOKENS);
+  const offered = variablesFor(COLOR, TOKENS);
   const brand = offered.find(token => token.name === "brand.main");
 
   it("offers the renamed token under its current name", () => {

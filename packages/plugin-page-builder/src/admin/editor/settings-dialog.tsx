@@ -56,6 +56,7 @@ import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentProps,
   type JSX,
@@ -68,7 +69,20 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
+import {
+  pageAddressPath,
+  type PageAddressResponse,
+} from "../../pages-search-contract";
+import type { PublishReadinessResponse } from "../../publish-readiness-contract";
+import {
+  askReadiness,
+  publishChosen,
+  PublishOfferDialog,
+  reportLeftUnpublished,
+  type PublishChoice,
+} from "../publish-offer";
 
+import type { SettingsAddress } from "./settings-address";
 import type { SharePreview } from "./share-preview";
 
 /** What the shell hands the dialog. */
@@ -90,6 +104,17 @@ export interface SettingsDialogProps extends DialogState {
    * server knows which.
    */
   share: SharePreview;
+  /**
+   * Whether the page has the SEO plugin's fields. Where it does, they are among
+   * the page's fields above; where it does not, the preview is all there is,
+   * and a line says the SEO plugin adds them.
+   */
+  seoFields: boolean;
+  /**
+   * The page whose address to show, or null for a page never saved, which
+   * has no address to read yet.
+   */
+  address?: SettingsAddress | null;
   /** The site's breakpoints: what is saved, how to save, whether it is read. */
   breakpoints: Pick<
     ComponentProps<typeof BreakpointManager>,
@@ -116,6 +141,8 @@ export function SettingsDialog({
   pageFields,
   pageLayout = null,
   share,
+  seoFields,
+  address = null,
   breakpoints,
 }: SettingsDialogProps): JSX.Element {
   const site = usePluginRoute<SiteSettingsRead>({
@@ -143,7 +170,9 @@ export function SettingsDialog({
         }
       >
         <DialogContent
-          className="flex max-h-[85vh] max-w-[680px] flex-col gap-0 p-0"
+          // One height for both tabs, so moving between them never resizes
+          // the dialog under the pointer.
+          className="flex h-[min(85vh,720px)] max-w-[680px] flex-col gap-0 p-0"
           onCloseAutoFocus={event => {
             const target = returnFocus();
             if (target === null) return;
@@ -174,6 +203,12 @@ export function SettingsDialog({
                 pageFields={pageFields}
                 pageLayout={pageLayout}
                 share={share}
+                seoFields={seoFields}
+                address={
+                  address === null ? null : (
+                    <AddressLine address={address} open={open} />
+                  )
+                }
               />
             </TabsContent>
             {siteTab ? (
@@ -193,11 +228,13 @@ export function SettingsDialog({
               </TabsContent>
             ) : null}
           </Tabs>
-          <p className="border-t px-6 py-3 text-xs text-muted-foreground">
-            {
-              "This page's settings save with the page, from Save or Publish in the top bar. Site settings save as you change them."
-            }
-          </p>
+          {/* Per tab, one line: This page says when its settings save. Site
+              has its own banner saying it applies at once, so it adds none. */}
+          {leave.tab === "page" ? (
+            <p className="border-t px-6 py-3 text-xs text-muted-foreground">
+              Saved with the page when you Save or Publish.
+            </p>
+          ) : null}
         </DialogContent>
       </Dialog>
       <AlertDialog
@@ -335,20 +372,98 @@ function SiteTab({
 }
 
 /**
- * The page's own fields, the Layout it is drawn inside, then how a shared link
- * to it would look.
+ * Where the page is served, as it is saved: read from the server, which
+ * resolves it as the pages search does, never built here from the slug, so
+ * it names the address visitors reach rather than a guess at it.
+ *
+ * A slug changed since the last save does not move it: the line says this is
+ * the saved address and that it changes when the page is saved. Nothing shows
+ * while it is read, or where the page has no address (another collection, a
+ * site that states none, a page whose fields cannot fill it yet).
+ */
+function AddressLine({
+  address,
+  open,
+}: {
+  address: SettingsAddress;
+  open: boolean;
+}): JSX.Element | null {
+  const read = usePluginRoute<PageAddressResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: pageAddressPath(address.page, address.locale),
+    staleTime: 0,
+    enabled: open,
+  });
+  // Read again after each save, whichever field it changed: the host's path
+  // can name more than the slug, and the query's own key would not move.
+  const { refetch } = read;
+  const revisionSeen = useRef(address.savedRevision);
+  useEffect(() => {
+    if (revisionSeen.current === address.savedRevision) return;
+    revisionSeen.current = address.savedRevision;
+    void refetch();
+  }, [address.savedRevision, refetch]);
+  if (read.data === undefined) {
+    return read.error === null ? null : (
+      <p className="text-xs text-muted-foreground">
+        {"This page's address could not be read."}
+      </p>
+    );
+  }
+  const path = read.data.path;
+  if (path === null) return null;
+  return (
+    // Drawn as the Address field's own line, right under it, rather than as
+    // a section of its own: it is the same address, written out in full.
+    <section
+      aria-label="Address on your site"
+      className="space-y-1 text-xs text-muted-foreground"
+    >
+      <p>
+        On your site:{" "}
+        <span
+          className="break-all font-mono text-sm text-foreground"
+          data-page-address=""
+        >
+          {path}
+        </span>
+      </p>
+      {address.slugChanged ? (
+        <p role="status">
+          This is the saved address. It changes when you save the page.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The page's own fields, its address, the Layout it is drawn inside, then how
+ * a shared link to it would look.
  */
 function ThisPage({
   pageFields,
   pageLayout,
   share,
+  seoFields,
+  address,
 }: Pick<
   SettingsDialogProps,
-  "pageFields" | "pageLayout" | "share"
->): JSX.Element {
+  "pageFields" | "pageLayout" | "share" | "seoFields"
+> & {
+  /** The page's address line, or null where it has none to show. */
+  address: ReactNode | null;
+}): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
-      {pageFields === null ? null : <section>{pageFields}</section>}
+      {/* The address line sits with the page's own fields, under the
+          Address field it writes out. */}
+      {pageFields === null && address === null ? null : (
+        <section className="space-y-2">
+          {pageFields}
+          {address}
+        </section>
+      )}
       {pageLayout ?? null}
       <section aria-labelledby="settings-share-title" className="space-y-2">
         <h3 id="settings-share-title" className="text-sm font-semibold">
@@ -358,6 +473,13 @@ function ThisPage({
         <p className="text-xs text-muted-foreground">
           {"Approximate: your site's metadata may differ."}
         </p>
+        {seoFields ? null : (
+          <p className="text-sm text-muted-foreground">
+            {
+              "Built from this page's title, first heading and first image. The SEO plugin adds fields to set the title, description and image yourself."
+            }
+          </p>
+        )}
       </section>
     </div>
   );
@@ -464,7 +586,54 @@ function DefaultLayout({
   useEffect(() => {
     if (chosen !== null && read.defaultLayout === chosen) setChosen(null);
   }, [chosen, read.defaultLayout]);
+  // A Layout about to wrap every page that names none, asked about first:
+  // the components its areas place that are not live, with the offer to
+  // publish them before it becomes the default. Never a refusal.
+  const [offer, setOffer] = useState<{
+    id: string;
+    readiness: PublishReadinessResponse;
+  } | null>(null);
   const choose = (id: string): void => {
+    setSave({ kind: "saving" });
+    void askReadiness({ documents: [], layout: id }).then(readiness => {
+      if (
+        readiness === null ||
+        (readiness.dependencies.length === 0 && readiness.missing === 0)
+      ) {
+        makeDefault(id);
+        return;
+      }
+      setSave({ kind: "idle" });
+      setOffer({ id, readiness });
+    });
+  };
+  const answer = (choice: PublishChoice): void => {
+    const asked = offer;
+    setOffer(null);
+    if (asked === null || choice.kind === "cancel") return;
+    if (choice.kind === "only") {
+      makeDefault(asked.id);
+      return;
+    }
+    setSave({ kind: "saving" });
+    publishChosen(choice.dependencies).then(
+      result => {
+        reportLeftUnpublished(result, asked.readiness, "Layout");
+        makeDefault(asked.id);
+      },
+      (reason: unknown) => {
+        setSave({
+          kind: "failed",
+          message:
+            reason instanceof Error
+              ? reason.message
+              : "The components could not be published.",
+          retry: () => choose(asked.id),
+        });
+      }
+    );
+  };
+  const makeDefault = (id: string): void => {
     setSave({ kind: "saving" });
     writePluginRoute({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -516,6 +685,17 @@ function DefaultLayout({
         </Select>
         <SaveWords save={save} />
       </div>
+      <PublishOfferDialog
+        readiness={offer?.readiness ?? null}
+        subject="Layout"
+        onAnswer={answer}
+        onlyLabel="Make default anyway"
+        withLabel={count =>
+          count === 1
+            ? "Publish it, then make default"
+            : `Publish ${String(count)}, then make default`
+        }
+      />
       {read.mayChooseDefaultLayout ? null : (
         <p className="text-xs text-muted-foreground">
           {current === undefined ? "" : `${current.title}. `}You can see the

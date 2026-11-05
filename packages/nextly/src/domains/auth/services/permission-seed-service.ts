@@ -22,6 +22,10 @@ import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
+import {
+  WORKFLOW_PERMISSION_GROUP,
+  workflowPermissionActions,
+} from "../../workflows/permissions";
 
 import { entityPermissionSpelling } from "./entity-permission-spelling";
 import { PermissionService } from "./permission-service";
@@ -727,6 +731,7 @@ export class PermissionSeedService extends BaseService {
       }
     }
 
+    await this.seedWorkflowPermissions("collection", collectionSlug, result);
     return result;
   }
 
@@ -779,7 +784,67 @@ export class PermissionSeedService extends BaseService {
       }
     }
 
+    await this.seedWorkflowPermissions("single", singleSlug, result);
     return result;
+  }
+
+  /**
+   * Into `result`, the permissions the workflow attached to `entitySlug` adds
+   * (`workflowPermissionActions`): each of its steps' own actions, and `publish-without-review`.
+   * Seeded with the entity's built-in ones, so every path that seeds those, boot and the per-entity
+   * syncs alike, seeds these, idempotently. Nothing is attached until the workflows are published,
+   * so a pass before that seeds none and the next one does.
+   *
+   * One an app or a plugin already declared stays theirs: identity is the action and the resource,
+   * so a step asks for that permission either way, and taking it over would flip its owner on
+   * every boot.
+   */
+  private async seedWorkflowPermissions(
+    kind: "collection" | "single",
+    entitySlug: string,
+    result: SeedResult
+  ): Promise<void> {
+    // Loaded on demand: the registry reaches the versions domain, which the auth seeder need not
+    // load to seed an entity with no workflow.
+    const { workflowAttachedTo } = await import("../../workflows/registry");
+    const attached = workflowAttachedTo(kind, entitySlug);
+    if (!attached) return;
+    // Held as the class itself, so the call below is read as the service's own member.
+    const permissions: PermissionService = this.permissionService;
+    for (const action of workflowPermissionActions(attached.workflow)) {
+      result.total++;
+      try {
+        // A row already there keeps its owner and group: an app's, a plugin's, or an admin's own
+        // ownerless permission the step happens to name is not made the workflow's. Only a row
+        // the seeder creates is stored under the workflow group.
+        const owner = await permissions.ownerOf(action, entitySlug);
+        if (owner !== undefined) {
+          result.skipped++;
+          continue;
+        }
+        const { name, slug, description } = entityPermissionSpelling(
+          action,
+          entitySlug
+        );
+        // Stored under the workflow group, which is how the presets tell it is a workflow's.
+        const ensured = await permissions.ensurePermission(
+          action,
+          entitySlug,
+          name,
+          slug,
+          description,
+          { group: WORKFLOW_PERMISSION_GROUP }
+        );
+        if (ensured.created) {
+          result.created++;
+          result.newPermissionIds.push(ensured.id);
+        } else {
+          result.skipped++;
+        }
+      } catch {
+        result.errors++;
+      }
+    }
   }
 
   /**
@@ -1349,44 +1414,76 @@ export class PermissionSeedService extends BaseService {
     return inPermissionSweep(() => this.cleanupOrphanedPermissionsRows());
   }
 
+  /**
+   * The permissions `cleanupOrphanedPermissions` would retire, read without
+   * retiring any. `removing` names entities about to be deleted, by kind:
+   * their permissions are counted as orphaned too, since the cleanup that
+   * follows their deletion retires them. Lets a command list what a cleanup
+   * deletes and take consent for it before the first deletion. Throws when
+   * the registries or the permissions cannot be read.
+   */
+  async findOrphanedPermissions(
+    removing: {
+      collections?: readonly string[];
+      singles?: readonly string[];
+      fieldGroups?: readonly string[];
+    } = {}
+  ): Promise<Array<{ id: string; slug: string; resource: string }>> {
+    const orphaned = await this.orphanedPermissionRows(removing);
+    return orphaned.map(({ id, slug, resource }) => ({ id, slug, resource }));
+  }
+
+  /**
+   * Every permission no known resource or declaring package accounts for:
+   * the one answer both the cleanup and `findOrphanedPermissions` read.
+   */
+  private async orphanedPermissionRows(
+    removing: {
+      collections?: readonly string[];
+      singles?: readonly string[];
+      fieldGroups?: readonly string[];
+    } = {}
+  ) {
+    // Each kind's slugs less those about to go: a slug a removed entity
+    // shares with a kept one of another kind stays known through the kept one.
+    const remaining = (
+      slugs: readonly string[],
+      going: readonly string[] = []
+    ) => slugs.filter(slug => !going.includes(slug));
+    const knownResources = new Set([
+      ...(SYSTEM_RESOURCES as readonly string[]),
+      ...remaining(await this.getAllCollectionSlugs(), removing.collections),
+      ...remaining(await this.getAllSingleSlugs(), removing.singles),
+      ...remaining(await this.getAllComponentSlugs(), removing.fieldGroups),
+    ]);
+
+    // listPermissions returns `{data, meta}` directly and throws on DB
+    // errors; the caller decides what a failure means.
+    const allPerms = await this.permissionService.listPermissions({
+      page: 1,
+      limit: 10000,
+      // The whole point of this pass is to find what the rest of the app is
+      // deliberately not shown.
+      includeOrphaned: true,
+    });
+
+    return allPerms.data.filter(perm => isRubbish(perm, knownResources));
+  }
+
   private async cleanupOrphanedPermissionsRows(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
     try {
-      const collectionSlugs = await this.getAllCollectionSlugs();
-      const singleSlugs = await this.getAllSingleSlugs();
-      const componentSlugs = await this.getAllComponentSlugs();
-      const knownResources = new Set([
-        ...(SYSTEM_RESOURCES as readonly string[]),
-        ...collectionSlugs,
-        ...singleSlugs,
-        ...componentSlugs,
-      ]);
+      for (const perm of await this.orphanedPermissionRows()) {
+        result.total++;
 
-      // PR 4 migration: listPermissions now returns `{data, meta}` directly
-      // and throws on DB errors. Failures bubble up to the outer catch
-      // below, matching the legacy "if (!allPerms.data) return result"
-      // graceful-degradation behavior.
-      const allPerms = await this.permissionService.listPermissions({
-        page: 1,
-        limit: 10000,
-        // The whole point of this pass is to find what the rest of the app is
-        // deliberately not shown.
-        includeOrphaned: true,
-      });
-
-      for (const perm of allPerms.data) {
-        if (isRubbish(perm, knownResources)) {
-          result.total++;
-
-          if (await this.retirePermissionRow(perm.id)) {
-            result.created++;
-            this.logger.info?.(
-              `Cleaned up orphaned permission "${perm.slug}" (resource: ${perm.resource})`
-            );
-          } else {
-            result.skipped++;
-          }
+        if (await this.retirePermissionRow(perm.id)) {
+          result.created++;
+          this.logger.info?.(
+            `Cleaned up orphaned permission "${perm.slug}" (resource: ${perm.resource})`
+          );
+        } else {
+          result.skipped++;
         }
       }
 

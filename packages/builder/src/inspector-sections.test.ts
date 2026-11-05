@@ -109,6 +109,16 @@ describe("which tier shows without being asked", () => {
     );
   });
 
+  it("puts an image's fit and ratio first in Size, before its width and height", () => {
+    // What an author changes first on an image is how it fills its box.
+    const fit = placementOf("objectFit", "dimensions");
+    const ratio = placementOf("aspectRatio", "dimensions");
+    const width = placementOf("width", "dimensions");
+    expect(fit.section).toBe("size");
+    expect(fit.order).toBeLessThan(ratio.order);
+    expect(ratio.order).toBeLessThan(width.order);
+  });
+
   it("shows the media controls on a replaced element, and transition in a state", () => {
     expect(tierShows("media", plain)).toBe(false);
     expect(tierShows("media", { ...plain, media: true })).toBe(true);

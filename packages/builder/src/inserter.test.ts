@@ -46,6 +46,7 @@ import {
   PATTERN_ENTRY_PREFIX,
   COMPONENT_ENTRY_PREFIX,
   componentEntriesFrom,
+  unplaceableComponentEntries,
   compositionRefusal,
   nodeForComponentEntry,
   placementTypesOf,
@@ -212,6 +213,32 @@ describe("catalogFrom", () => {
       tone: "plain",
       size: "md",
     });
+  });
+
+  it("offers a block once, not once per look", () => {
+    // A look (a variation with styles) and the block's own named look are
+    // picked for a block already on the page, so the Add panel lists the
+    // block, and its insert presets, and no row per look.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/card",
+        editor: {
+          variations: [
+            { name: "primary", label: "Primary", isDefault: true },
+            {
+              name: "outline",
+              label: "Outline",
+              styles: { base: { base: { color: "red" } } },
+            },
+            { name: "loud", props: { tone: "shout" } },
+          ],
+        },
+      },
+    ]);
+    expect(
+      entries.filter(each => each.kind === "block").map(each => each.id)
+    ).toEqual(["acme/card", "acme/card#loud"]);
   });
 
   it("gives an entry its own props, so the definition cannot be reached through it", () => {
@@ -1453,6 +1480,19 @@ describe("the component tier", () => {
       )
     );
   }
+
+  it("lists as unplaceable exactly the rows the built entries leave out", () => {
+    // Read off the entries already built, so the definitions are walked once:
+    // a row with no document has no entry, and is the one listed.
+    const placed = stored({ id: "placed" });
+    const empty = stored({ id: "empty", document: null });
+    const entries = componentEntriesFrom([placed, empty], lookupOf(placed));
+
+    const unplaceable = unplaceableComponentEntries([placed, empty], entries);
+
+    expect(unplaceable.map(entry => entry.componentId)).toEqual(["empty"]);
+    expect(unplaceable[0]?.roots).toEqual([]);
+  });
 
   it("keys a component out of the block namespace, and apart from patterns", () => {
     // A definition may be saved under any id. Its catalog key carries the

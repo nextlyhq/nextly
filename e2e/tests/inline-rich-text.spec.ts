@@ -21,6 +21,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { canvasFrame } from "./support/canvas-frame";
 import { LOCK } from "./support/locks";
 
 /*
@@ -58,10 +59,9 @@ function textNode(text: string) {
  * A heading node, for the caret case a paragraph cannot cover.
  *
  * A paragraph's box barely moves when the library's typographic baseline is
- * applied — line height and margins only. A heading's moves the most of
- * anything on the page: `h1` carries a `2.25em` size, a `1.15` line height and
- * a `1.5em` top margin, so its glyph boxes sit somewhere a paragraph's never
- * do. The caret is derived from the POINTER against those boxes, so a fixture
+ * applied. A heading's moves the most of anything on the page: `h1` carries a
+ * `2.25em` size and a `1.15` line height, so its glyph boxes sit somewhere a
+ * paragraph's never do. The caret is derived from the POINTER against those boxes, so a fixture
  * whose layout cannot change is a fixture that cannot see this fail.
  */
 function heading(text: string) {
@@ -128,7 +128,9 @@ async function openBuilderWith(page: Page, children: unknown[]): Promise<void> {
   await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   // The passage must be ON SCREEN before anything is aimed at it: a gesture
   // sent at an element that has not rendered lands on the page behind it.
-  await expect(page.locator(PASSAGE).first()).toBeVisible({ timeout: 30_000 });
+  await expect(canvasFrame(page).locator(PASSAGE).first()).toBeVisible({
+    timeout: 30_000,
+  });
 }
 
 /**
@@ -148,25 +150,35 @@ async function glyphPoint(
   page: Page,
   across: number
 ): Promise<{ x: number; y: number }> {
-  const point = await page
-    .locator(PASSAGE)
-    .first()
-    .evaluate((element, fraction) => {
-      const text = element.ownerDocument.evaluate(
-        ".//text()[normalize-space()]",
-        element,
-        null,
-        9 /* FIRST_ORDERED_NODE_TYPE */,
-        null
-      ).singleNodeValue;
-      if (text === null) return null;
-      const range = element.ownerDocument.createRange();
-      range.selectNodeContents(text);
-      const box = range.getBoundingClientRect();
-      return { x: box.x + box.width * fraction, y: box.y + box.height / 2 };
-    }, across);
+  const passage = canvasFrame(page).locator(PASSAGE).first();
+  const point = await passage.evaluate((element, fraction) => {
+    const text = element.ownerDocument.evaluate(
+      ".//text()[normalize-space()]",
+      element,
+      null,
+      9 /* FIRST_ORDERED_NODE_TYPE */,
+      null
+    ).singleNodeValue;
+    if (text === null) return null;
+    const range = element.ownerDocument.createRange();
+    range.selectNodeContents(text);
+    const box = range.getBoundingClientRect();
+    const own = element.getBoundingClientRect();
+    // Relative to the passage, so it can be placed on the page below.
+    return {
+      x: (box.x + box.width * fraction - own.x) / own.width,
+      y: (box.y + box.height / 2 - own.y) / own.height,
+    };
+  }, across);
   if (point === null) throw new Error("[e2e] the passage rendered no text");
-  return point;
+  // The canvas is a frame, drawn at the editor's zoom: the passage's box on
+  // the page places the point where the mouse has to go.
+  const onPage = await passage.boundingBox();
+  if (onPage === null) throw new Error("[e2e] the passage has no box");
+  return {
+    x: onPage.x + point.x * onPage.width,
+    y: onPage.y + point.y * onPage.height,
+  };
 }
 
 /**
@@ -180,7 +192,9 @@ async function glyphPoint(
 async function enterPassage(page: Page, across: number): Promise<void> {
   const point = await glyphPoint(page, across);
   await page.mouse.dblclick(point.x, point.y);
-  await expect(page.locator(`${PASSAGE}[contenteditable="true"]`)).toBeVisible({
+  await expect(
+    canvasFrame(page).locator(`${PASSAGE}[contenteditable="true"]`)
+  ).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -209,7 +223,7 @@ test.describe("a passage edited on the canvas", () => {
 
     await page.keyboard.type("X");
 
-    const passage = page.locator(PASSAGE).first();
+    const passage = canvasFrame(page).locator(PASSAGE).first();
     // The whole string, at the OFFSET the click implies, rather than "contains
     // X" and "does not end with X" — that pair rules out an append and an
     // editor that typed nothing, and is satisfied by every other insertion
@@ -223,7 +237,7 @@ test.describe("a passage edited on the canvas", () => {
     /*
      * The same property as the paragraph case above, on the block whose layout
      * this library actually moves. A heading is styled by the typographic
-     * baseline — size, line height, weight and a top margin — so its text sits
+     * baseline — size, line height and weight — so its text sits
      * at coordinates a paragraph's never occupies, and the inline editor
      * applies its own theme at edit-start. If those two typographies diverge,
      * the caret is measured against a layout the author never saw and lands on
@@ -238,7 +252,7 @@ test.describe("a passage edited on the canvas", () => {
     // `heading` node the block does not render as a heading would leave this
     // case a second paragraph test wearing a heading's name — passing, and
     // covering nothing the case above does not already cover.
-    const rendered = page.locator(`${PASSAGE} h1`).first();
+    const rendered = canvasFrame(page).locator(`${PASSAGE} h1`).first();
     await expect(rendered).toBeVisible();
     const size = await rendered.evaluate(
       element => getComputedStyle(element).fontSize
@@ -256,7 +270,7 @@ test.describe("a passage edited on the canvas", () => {
 
     await page.keyboard.type("X");
 
-    const passage = page.locator(PASSAGE).first();
+    const passage = canvasFrame(page).locator(PASSAGE).first();
     // The whole string, at the OFFSET the click implies. `contains "X"` plus
     // `does not contain "worldX"` is satisfied by every insertion except the
     // final one — `XHello world` and `Hello Xworld` both pass it — so it rules
@@ -332,7 +346,7 @@ test.describe("a passage edited on the canvas", () => {
 
     await page.keyboard.press("Enter");
 
-    const items = page.locator(`${PASSAGE} li`);
+    const items = canvasFrame(page).locator(`${PASSAGE} li`);
     /*
      * The precondition, asserted rather than assumed, and it carries the
      * fixture control too. Two items reading `Item` and nothing prove the list

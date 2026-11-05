@@ -6,7 +6,8 @@
  * lock moved or a style removed by any other write
  * (`refuseSharedStyleChangesOutsideTheirRoutes`, beside the Single), so these
  * routes are where the permission to lock is asked, and where removal is
- * checked against the usage index just before the write.
+ * checked against the usage index, then against the stored documents
+ * themselves ({@link shared-style-rescan}), just before the write.
  *
  * Usage comes from the class usage index, through the same listing the
  * component counts are derived from, so a count, its split by kind and the
@@ -15,7 +16,9 @@
  *
  * Concurrency: each write here reads the class list and writes it back whole,
  * as the Design panel's own writes do. A concurrent change to another class
- * between the read and the write is overwritten.
+ * between the read and the write is overwritten. The Shared styles tab holds
+ * its own route writes while one of its renames is pending, which covers one
+ * editor; two editors writing at once remain the known limit.
  *
  * @module shared-styles-routes
  */
@@ -28,13 +31,16 @@ import {
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
+import type { WhereFilter } from "nextly";
 import { z } from "nextly/zod";
 
 import { titleFieldIn } from "./entries-route";
 import { entryOf, findAsCaller } from "./entry-reads";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import {
+  SHARED_STYLE_COUNT_ROUTE_PATH,
   SHARED_STYLE_ID_PARAM,
+  SHARED_STYLE_IN_USE_CODE,
   SHARED_STYLE_LOCK_ROUTE_PATH,
   SHARED_STYLE_PAGE_PARAM,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
@@ -45,19 +51,37 @@ import {
   SHARED_STYLE_WHERE_USED_ROUTE_PATH,
   type SharedStyleLockRequest,
   type SharedStyleRemoveRequest,
+  type SharedStylesCountResponse,
   type SharedStylesUsageResponse,
   type SharedStyleUsage,
   type SharedStyleUsageKind,
   type SharedStyleUseItem,
 } from "./library-contract";
 import {
+  RESCAN_PAGE_SIZE,
+  stillUsedMessage,
+  storedUsesOf,
+  type StoredDocuments,
+  type StoredUse,
+} from "./shared-style-rescan";
+import {
+  collectionsTheBuilderOpens,
+  singlesTheBuilderOpens,
+  type SiteStyleRouteContext,
+} from "./site-style-route";
+import {
   SHARED_STYLE_LOCK_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
   sharedStyleName,
 } from "./site-style-storage";
 import { readStoredJson } from "./stored-json";
+import { USAGE_BACKFILL_JOB } from "./usage-backfill-job";
 import { documentCountOf, type DocumentsUsing } from "./usage-count";
-import { indexIsWhole, type UsageIndexHealth } from "./usage-index-health";
+import {
+  indexIsWhole,
+  indexStillCounting,
+  type UsageIndexHealth,
+} from "./usage-index-health";
 
 /** The permission that locks and unlocks shared styles, in its parts. */
 const LOCK_SHARED_STYLES = {
@@ -250,7 +274,7 @@ function usageOf(
  */
 export async function readSharedStyleUsage(
   req: Request,
-  ctx: Pick<PluginRouteContext, "caller">,
+  ctx: Pick<PluginRouteContext, "caller" | "self">,
   usage: SharedStyleUsageSource
 ): Promise<SharedStylesUsageResponse> {
   const ids = usageIds(req.url);
@@ -272,7 +296,14 @@ export async function readSharedStyleUsage(
       LOCK_SHARED_STYLES.action,
       LOCK_SHARED_STYLES.resource
     )) ?? false;
-  return { whole: indexIsWhole(health), mayLock, styles };
+  return {
+    whole: indexIsWhole(health),
+    // From the same health reading, so it cannot disagree with `whole`.
+    counting: indexStillCounting(health),
+    mayLock,
+    mayCount: await mayCountSharedStyleUsage(ctx),
+    styles,
+  };
 }
 
 /** What a where-used read asks for: one style, and which page of its uses. */
@@ -315,7 +346,24 @@ async function listingOf(
 }
 
 /**
- * Every document of a listing the caller may read, in the listing's order,
+ * One order for the readable documents, by collection then id, compared by
+ * code unit so it is the same on every server. The index and the as-caller
+ * reads both answer in no stated order, and the where-used list is paged by
+ * slicing, so without it two requests could slice different orders and a
+ * page could repeat one document and drop another.
+ */
+function byCollectionThenId(
+  a: SharedStyleUseItem,
+  b: SharedStyleUseItem
+): number {
+  if (a.collection !== b.collection)
+    return a.collection < b.collection ? -1 : 1;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? -1 : 1;
+}
+
+/**
+ * Every document of a listing the caller may read, by collection then id,
  * and how many it may not: each collection's read as the caller, a batch at a
  * time. Bounded by the listing, which the index read bounds.
  */
@@ -337,7 +385,7 @@ async function readableUses(
       }
     }
   }
-  return { readable, hidden };
+  return { readable: readable.sort(byCollectionThenId), hidden };
 }
 
 /**
@@ -410,14 +458,18 @@ function storedRefusals(
 async function usageRefusals(
   removable: readonly { id: string; name: string }[],
   usage: SharedStyleUsageSource
-): Promise<string[]> {
+): Promise<{ reasons: string[]; used: boolean }> {
   const health = await usage.health();
   if (!indexIsWhole(health)) {
-    return [
-      "Some pages are still being counted, so no shared style can be removed yet.",
-    ];
+    return {
+      reasons: [
+        "Some pages haven't been counted yet, so no shared style can be removed.",
+      ],
+      used: false,
+    };
   }
   const reasons: string[] = [];
+  let used = false;
   const counted = await usage.documentsUsingEach(
     removable.map(style => style.id),
     health
@@ -427,6 +479,7 @@ async function usageRefusals(
     const found = counted.get(id) ?? { collections: [], complete: false };
     const documents = documentCountOf(found);
     if (documents > 0) {
+      used = true;
       reasons.push(
         `${name} is used on ${documents} ${documents === 1 ? "document" : "documents"}.`
       );
@@ -434,7 +487,69 @@ async function usageRefusals(
       reasons.push(`${name}'s uses could not all be counted.`);
     }
   }
-  return reasons;
+  return { reasons, used };
+}
+
+/**
+ * The refusal when a removal is refused: the in-use refusal, carrying
+ * {@link SHARED_STYLE_IN_USE_CODE}, when any style is used, so the editor
+ * reads every "it is used" alike, whichever check found it; else a conflict.
+ * Either names every reason, so nothing is half removed.
+ */
+function removalRefusal(
+  message: string,
+  used: boolean,
+  classIds: readonly string[]
+): NextlyError {
+  if (used) {
+    return NextlyError.validation({
+      errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
+      logContext: { classIds },
+    });
+  }
+  return NextlyError.conflict({
+    reason: "state",
+    message,
+    logContext: { classIds },
+  });
+}
+
+/**
+ * The stored documents' own answer to whether some styles are still used,
+ * asked once the index has found none, and how the first use the caller may
+ * open is named.
+ */
+export interface StillUsedCheck {
+  /** Every stored document still referencing any of the ids, read past access. */
+  uses(ids: readonly string[]): Promise<readonly StoredUse[]>;
+  /** The title of the first of these the caller may open, if any. */
+  firstReadable(uses: readonly StoredUse[]): Promise<string | undefined>;
+}
+
+/**
+ * Refuse when a stored document still references any of the styles, though
+ * the index counted none: an index zero is not proof, since interleaved saves
+ * of one document can drop a usage row. The refusal names only a document the
+ * caller may open, and counts the rest.
+ */
+async function refuseStoredUses(
+  ids: readonly string[],
+  check: StillUsedCheck
+): Promise<void> {
+  const uses = await check.uses(ids);
+  if (uses.length === 0) return;
+  const message = stillUsedMessage(
+    uses.length,
+    await check.firstReadable(uses),
+    ids.length
+  );
+  throw NextlyError.validation({
+    errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
+    logContext: {
+      classIds: ids,
+      uses: uses.map(use => `${use.kind}:${use.slug}:${use.id}`),
+    },
+  });
 }
 
 /**
@@ -442,15 +557,16 @@ async function usageRefusals(
  *
  * Every check runs on what the server reads just before the write, never on
  * what the panel showed: each style must be stored, not defined in code and
- * not locked, the usage index must be whole, and no document may use it.
- * One refusal refuses the whole request, naming every reason, so nothing is
- * half removed.
+ * not locked, the usage index must be whole, and no document may use it,
+ * first by the index and then by the stored documents themselves. One
+ * refusal refuses the whole request, so nothing is half removed.
  */
 export async function removeSharedStyles(
   req: Request,
   store: SharedStyleStore,
   usage: SharedStyleUsageSource,
-  configClassIds: ReadonlySet<string>
+  configClassIds: ReadonlySet<string>,
+  stillUsed: StillUsedCheck
 ): Promise<Response> {
   const parsed = RemoveBody.safeParse(await jsonBody(req));
   if (!parsed.success) {
@@ -464,14 +580,18 @@ export async function removeSharedStyles(
   const classes = await store.read();
   const { reasons, removable } = storedRefusals(ids, classes, configClassIds);
   // Read just before the write, never taken from what the panel showed.
-  reasons.push(...(await usageRefusals(removable, usage)));
+  const counted = await usageRefusals(removable, usage);
+  reasons.push(...counted.reasons);
   if (reasons.length > 0) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message: `Nothing was removed. ${reasons.join(" ")}`,
-      logContext: { classIds: ids },
-    });
+    throw removalRefusal(
+      `Nothing was removed. ${reasons.join(" ")}`,
+      counted.used,
+      ids
+    );
   }
+  // Only once the index found nothing: its refusals name every reason
+  // cheaply, and this read walks every document the builder opens.
+  await refuseStoredUses(ids, stillUsed);
   const gone = new Set(ids);
   await store.write(
     classes.filter(
@@ -571,6 +691,211 @@ function namedDocumentsReader(
   };
 }
 
+/** The slice of the Direct API the rescan reads stored documents through. */
+interface RescanDirectApi {
+  find(args: {
+    collection: string;
+    where?: WhereFilter;
+    select: Record<string, boolean>;
+    sort: string;
+    limit: number;
+    page: number;
+    depth: number;
+    overrideAccess: boolean;
+  }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
+  findSingle(args: {
+    slug: string;
+    select: Record<string, boolean>;
+    draft?: boolean;
+    status: "all";
+    createIfMissing: false;
+    depth: number;
+    overrideAccess: boolean;
+  }): Promise<unknown>;
+}
+
+/** The top-level fields a row is read with: the id, and each path's first key. */
+function rescanSelect(paths: readonly string[]): Record<string, boolean> {
+  return Object.fromEntries([
+    ["id", true],
+    ...paths.map(path => [path.split(".")[0] ?? path, true]),
+  ]);
+}
+
+/**
+ * The stored documents the builder opens, read as the system: the removal's
+ * rescan must see a document the caller may not, since that document's
+ * styling is lost all the same.
+ */
+function storedDocumentsOf(
+  ctx: SiteStyleRouteContext,
+  nextly: RescanDirectApi
+): StoredDocuments {
+  return {
+    collections: () => collectionsTheBuilderOpens(ctx),
+    singles: () => singlesTheBuilderOpens(ctx),
+    rowsAfter: async (type, after) => {
+      const page = await nextly.find({
+        collection: type.slug,
+        // Always the first page of what is left past the cursor.
+        ...(after === undefined
+          ? {}
+          : { where: { id: { greater_than: after } } }),
+        select: rescanSelect(type.paths),
+        sort: "id",
+        limit: RESCAN_PAGE_SIZE,
+        page: 1,
+        depth: 0,
+        overrideAccess: true,
+      });
+      return { items: page.items, hasNext: page.meta.hasNext };
+    },
+    singleForms: async type => {
+      const read = (draft: boolean) =>
+        nextly.findSingle({
+          slug: type.slug,
+          select: rescanSelect(type.paths),
+          ...(draft ? { draft: true } : {}),
+          // Every state, and never created by being read.
+          status: "all",
+          createIfMissing: false,
+          depth: 0,
+          overrideAccess: true,
+        });
+      return [await read(false), await read(true)];
+    },
+  };
+}
+
+/**
+ * The title of the first stored use the caller may open: collection rows read
+ * as the caller, a batch at a time, then a Single the caller may read, by its
+ * label. `undefined` when the caller may open none of them.
+ */
+export async function firstReadableTitle(
+  uses: readonly StoredUse[],
+  readNamed: ReadNamedDocuments,
+  mayReadSingle: (slug: string) => Promise<boolean>
+): Promise<string | undefined> {
+  return (
+    (await firstReadableRow(uses, readNamed)) ??
+    (await firstReadableSingle(uses, mayReadSingle))
+  );
+}
+
+/** The collection rows among the uses, their ids grouped by collection. */
+function rowsByCollection(uses: readonly StoredUse[]): Map<string, string[]> {
+  const rows = new Map<string, string[]>();
+  for (const use of uses.filter(use => use.kind === "collection")) {
+    rows.set(use.slug, [...(rows.get(use.slug) ?? []), use.id]);
+  }
+  return rows;
+}
+
+/** The title of the first collection row the caller may read, as the caller. */
+async function firstReadableRow(
+  uses: readonly StoredUse[],
+  readNamed: ReadNamedDocuments
+): Promise<string | undefined> {
+  for (const [collection, ids] of rowsByCollection(uses)) {
+    for (const batch of chunked(ids, ID_BATCH_SIZE)) {
+      const first = (await readNamed(collection, batch))?.[0];
+      if (first !== undefined) return first.title;
+    }
+  }
+  return undefined;
+}
+
+/** The label of the first Single among the uses the caller may read. */
+async function firstReadableSingle(
+  uses: readonly StoredUse[],
+  mayReadSingle: (slug: string) => Promise<boolean>
+): Promise<string | undefined> {
+  for (const use of uses.filter(use => use.kind === "single")) {
+    if (await mayReadSingle(use.slug)) return use.label ?? use.slug;
+  }
+  return undefined;
+}
+
+/**
+ * Whether this caller may read shared styles' usage: Design's read of the
+ * site style, or the right to lock shared styles, which the Lock control
+ * needs the usage read's `mayLock` to offer. One decision, asked through
+ * `ctx.caller.can` before anything is read, as the site-style route asks.
+ */
+export async function mayReadSharedStyleUsage(
+  ctx: Pick<PluginRouteContext, "caller" | "self">
+): Promise<boolean> {
+  const { caller } = ctx;
+  // The routes are authenticated, so the dispatcher refuses an anonymous
+  // caller first; `null` must still never read as allowed.
+  if (caller === null) return false;
+  const style = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
+  if (await caller.can("read", style)) return true;
+  return caller.can(LOCK_SHARED_STYLES.action, LOCK_SHARED_STYLES.resource);
+}
+
+/**
+ * Whether this caller may ask for the pages to be counted now: whoever may
+ * change Design, the same people who may remove a style, which is what a
+ * whole count is for. The route declares the same permission, so this is
+ * the panel's hint and the route is the decision.
+ */
+async function mayCountSharedStyleUsage(
+  ctx: Pick<PluginRouteContext, "caller" | "self">
+): Promise<boolean> {
+  if (ctx.caller === null) return false;
+  const style = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
+  return ctx.caller.can("update", style);
+}
+
+/**
+ * The most the count route spends starting the usage backfill: long enough
+ * to count a small site in one go, and well inside a serverless request's
+ * limit. A site larger than one pass is counted further on the next ask, or
+ * by a scheduler; the backfill's progress is durable either way.
+ */
+export const SHARED_STYLE_COUNT_MS = 10_000;
+
+/**
+ * Count the site's pages now: run the usage backfill, this plugin's own
+ * sweep, for at most {@link SHARED_STYLE_COUNT_MS}, then answer the index's
+ * health as it stands after. On a site no scheduler drains, this is the only
+ * way the counts ever become exact.
+ */
+export async function countSharedStyleUsage(
+  jobs: Pick<PluginRouteContext["services"]["jobs"], "runSweepNow">,
+  usage: Pick<SharedStyleUsageSource, "health">
+): Promise<Response> {
+  const { ran } = await jobs.runSweepNow(USAGE_BACKFILL_JOB, {
+    maxDurationMs: SHARED_STYLE_COUNT_MS,
+  });
+  // Read after the run, so the answer says how far this run got.
+  const health = await usage.health();
+  const item: SharedStylesCountResponse = {
+    ran,
+    whole: indexIsWhole(health),
+    counting: indexStillCounting(health),
+  };
+  return respondMutation(
+    item.whole
+      ? "Every page has been counted."
+      : "Some pages are still to count.",
+    item
+  );
+}
+
+/** Refuse a caller who may not read shared styles' usage, before any read. */
+async function admitUsageReader(
+  ctx: Pick<PluginRouteContext, "caller" | "self">
+): Promise<void> {
+  if (!(await mayReadSharedStyleUsage(ctx))) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "shared-style-usage-needs-read-or-lock" },
+    });
+  }
+}
+
 /** What the routes are built from, per request. */
 export interface SharedStyleRouteSetup {
   /** The ids of the classes the site's code supplies. */
@@ -585,11 +910,15 @@ const siteStylePermission =
   ({ single }: PluginRoutePermissionScope): string =>
     single(SITE_STYLE_SLUG, action);
 
-/** The four shared-style routes, each with its permission declared. */
+/**
+ * The five shared-style routes. Lock, count and remove declare their permission; the
+ * two usage reads are authenticated and decide in the handler, since one
+ * permission cannot say "Design's read, or the lock".
+ */
 export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
   method: "GET" | "POST";
   path: string;
-  requiredPermission: string | ((scope: PluginRoutePermissionScope) => string);
+  requiredPermission?: string | ((scope: PluginRoutePermissionScope) => string);
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 }[] {
   return [
@@ -608,28 +937,56 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
     {
       method: "GET",
       path: SHARED_STYLE_USAGE_ROUTE_PATH,
-      requiredPermission: siteStylePermission("read"),
-      handler: async (req, ctx) =>
-        respondDoc(await readSharedStyleUsage(req, ctx, setup.usage(ctx))),
+      handler: async (req, ctx) => {
+        await admitUsageReader(ctx);
+        return respondDoc(
+          await readSharedStyleUsage(req, ctx, setup.usage(ctx))
+        );
+      },
     },
     {
       method: "GET",
       path: SHARED_STYLE_WHERE_USED_ROUTE_PATH,
-      requiredPermission: siteStylePermission("read"),
-      handler: async (req, ctx) =>
-        readSharedStyleUses(req, setup.usage(ctx), namedDocumentsReader(ctx)),
+      handler: async (req, ctx) => {
+        await admitUsageReader(ctx);
+        return readSharedStyleUses(
+          req,
+          setup.usage(ctx),
+          namedDocumentsReader(ctx)
+        );
+      },
+    },
+    {
+      method: "POST",
+      path: SHARED_STYLE_COUNT_ROUTE_PATH,
+      // Design's update: whoever a whole count lets remove a style.
+      requiredPermission: siteStylePermission("update"),
+      handler: async (_req, ctx) =>
+        countSharedStyleUsage(ctx.services.jobs, setup.usage(ctx)),
     },
     {
       method: "POST",
       path: SHARED_STYLE_REMOVE_ROUTE_PATH,
       requiredPermission: siteStylePermission("update"),
-      handler: async (req, ctx) =>
-        removeSharedStyles(
+      handler: async (req, ctx) => {
+        const nextly = await getCachedNextly();
+        const readNamed = namedDocumentsReader(ctx);
+        return removeSharedStyles(
           req,
-          siteStyleClassStore(ctx, await getCachedNextly()),
+          siteStyleClassStore(ctx, nextly),
           setup.usage(ctx),
-          setup.configClassIds
-        ),
+          setup.configClassIds,
+          {
+            uses: ids => storedUsesOf(ids, storedDocumentsOf(ctx, nextly)),
+            firstReadable: uses =>
+              firstReadableTitle(
+                uses,
+                readNamed,
+                async slug => (await ctx.caller?.can("read", slug)) ?? false
+              ),
+          }
+        );
+      },
     },
   ];
 }

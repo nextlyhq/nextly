@@ -32,9 +32,8 @@ import {
   removedEntityHasNoTable,
 } from "@admin/components/features/entries/removed-from-code-notice";
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
-import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
+import { useScheduleDocumentAction } from "@admin/components/features/releases/ScheduleDocumentAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
-import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
 import {
   CONTENT_PAGE_MEASURE,
   CONTENT_MEASURE_LENGTH,
@@ -281,7 +280,11 @@ export default function EditEntryPage({
   // depth: 2 ensures relationship fields include display labels (title, name, etc.)
   // On a localized app, request the per-locale translation-status overview so the editor
   // can show per-language status pills. Inert (param omitted) for non-localized apps.
-  const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+  const {
+    defaultLocale,
+    enabled: localizationEnabled,
+    locales,
+  } = useLocalization();
   // The overview reads every language's state, so it is asked only of a user
   // the server lets read them all; otherwise the editor would be refused.
   const asksTranslationStatus = useAsksTranslationStatus(slug ?? "");
@@ -319,6 +322,7 @@ export default function EditEntryPage({
     document: entry,
     isLoading: isLoadingEntry,
     error: entryError,
+    latest: entryLatest,
   } = useWithStoredReferences({
     // The fields the form renders, so the merge and the form read one list.
     fields: collection
@@ -343,36 +347,37 @@ export default function EditEntryPage({
    * loading it reports no action, which is correct — there is nothing on screen
    * to contribute one to.
    */
-  // The reader's own pin of this entry, offered beside "Add to release".
+  // The reader's own pin of this entry, offered beside "Schedule…".
   const pin = usePinAction(
     id && slug
       ? { targetType: "collection", targetSlug: slug, entryId: id }
       : null
   );
-  const release = useAddToReleaseAction({
-    scopeKind: "collection",
-    scopeSlug: slug,
-    entryId: id,
-    // The same flag the editor's own publish controls read. A release member
-    // performs a publish or unpublish, and the route refuses a collection whose
-    // schema declares no lifecycle.
-    lifecycleEnabled: collection?.status,
-    onDefaultLocale: !isNonDefaultLocale,
-  });
-  // The Publish split's other way to publish: at a time, in a release of its
-  // own named after the entry as the form holds it, so a title typed and not
-  // yet saved is the name the release takes.
-  const schedule = useSchedulePublishAction({
+  // Schedule…, on the Publish split: on its own at a time, with a release or
+  // in a new one. A release of its own is named after the entry as it is
+  // SAVED, the version the release ships, so a title typed and not yet saved
+  // does not name a release it is not in.
+  const schedule = useScheduleDocumentAction({
     scopeKind: "collection",
     scopeSlug: slug,
     entryId: id,
     lifecycleEnabled: collection?.status,
     onDefaultLocale: !isNonDefaultLocale,
-    documentTitle: ({ values }) =>
-      entryTitleValue(values, collection?.admin?.useAsTitle),
+    documentTitle: () =>
+      entry ? entryTitleValue(entry, collection?.admin?.useAsTitle) : undefined,
     // With no drafts, a save of a live entry is published at once.
     savesGoLive:
       collection?.draftsEnabled !== true && entry?.status === "published",
+    // A release moves every language of a translated entry together. The
+    // collection read carries `localized`, which the admin's Collection type
+    // does not declare, so it is narrowed here rather than cast.
+    languages:
+      localizationEnabled &&
+      collection !== undefined &&
+      "localized" in collection &&
+      collection.localized === true
+        ? locales.map(each => each.label)
+        : undefined,
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
@@ -450,11 +455,14 @@ export default function EditEntryPage({
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,
+    latest: entryLatest,
     // 🔴 The same prerequisites the custom branch renders under, not merely a
     // resolved component. A claim taken while the entry is still loading, or
     // after it failed, heartbeats a document the editor is not looking at - and
     // on a load failure that leaves the lock endpoint reachable, colleagues are
-    // told this person is editing a page that never appeared for them.
+    // told this person is editing a page that never appeared for them. A failed
+    // re-read of the entry on screen is not such a failure: `error` stays
+    // empty, the view stays, and so does its claim.
     enabled: Boolean(
       CustomEditView &&
         slug &&
@@ -561,7 +569,8 @@ export default function EditEntryPage({
     );
   }
 
-  // Error state
+  // Error state: no entry to show. A failed re-read of the entry on screen
+  // keeps the editor, read-only until a read succeeds.
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
@@ -699,6 +708,7 @@ export default function EditEntryPage({
             notice={customViewLock.notice}
             onTakeOver={customViewLock.takeOver}
             onRequestAccess={customViewLock.requestAccess}
+            onRetry={customViewLock.retryLoad}
           />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
@@ -706,8 +716,11 @@ export default function EditEntryPage({
               generated element box. A view rooted in bare text, or in an
               element with `display: contents`, produces none and is
               auto-placed into a gutter. The registry imposes no root-element
-              contract, so the page provides the box. */}
-          <div>
+              contract, so the page provides the box. Keyed on the loads of
+              the latest version, since a view may read `initialData` once, as
+              it mounts: one that gains the document starts again from the
+              copy just loaded rather than unlocking over the one before. */}
+          <div key={customViewLock.reloads}>
             <PluginSlot path={customEditViewPath} props={customViewProps} />
           </div>
         </MeasuredPageFrame>
@@ -769,7 +782,6 @@ export default function EditEntryPage({
               <PluginSlot path={beforeEditPath} props={editInjectionProps} />
             </div>
           )}
-          {release.dialog}
           {schedule.dialog}
           <EntryForm
             /* A standing fact about the whole document, so a band across the
@@ -826,9 +838,6 @@ export default function EditEntryPage({
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
-                    ...(release.contributed === null
-                      ? []
-                      : [release.contributed]),
                     ...(pin === null ? [] : [pin]),
                   ]
             }
@@ -847,6 +856,7 @@ export default function EditEntryPage({
             onDelete={handleDelete}
             onCancel={handleCancel}
             documentView={documentView}
+            latest={entryLatest}
           />
           {afterEditPath && (
             <div

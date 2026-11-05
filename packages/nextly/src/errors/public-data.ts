@@ -142,8 +142,48 @@ export type SampleContentPublicData = {
   startedAt?: string;
 };
 
+/**
+ * What an update refused as made from an out-of-date version tells its caller:
+ * the document's current version always, and, to a caller who may read the
+ * document, who or what changed it last and when. `historyVersion` names the
+ * newest recorded version of the part the save writes, for comparing against,
+ * where the document keeps history and the caller may read it. Never a value
+ * of the document.
+ *
+ * @experimental
+ */
+export type StaleVersionPublicData = {
+  currentVersion: string;
+  changedBy?: {
+    kind: "person" | "apiKey" | "release" | "agent" | "principal" | "system";
+    /** The name shown for it now, or null where there is none. */
+    name: string | null;
+    /** A plugin-defined person's kind, such as `member`, for kind `principal`. */
+    principalKind?: string;
+  };
+  /** When, as an ISO 8601 string. */
+  changedAt?: string;
+  historyVersion?: { version: number; locale: string | null };
+};
+
+/**
+ * What an update refused for saying neither which version it was made from
+ * nor that it overwrites tells its caller: the keys that say either, so a
+ * client can be told how to send one. `revsKey` only where the update names
+ * its documents by id, so a version can be given for each.
+ *
+ * @experimental
+ */
+export type VersionRequiredPublicData = {
+  versionKey: string;
+  overwriteKey: string;
+  revsKey?: string;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | StaleVersionPublicData
+  | VersionRequiredPublicData
   | SampleContentPublicData
   | RemovedFromCodePublicData
   | NotMigratedPublicData

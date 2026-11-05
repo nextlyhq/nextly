@@ -5,7 +5,11 @@
  * panel, the keyboard behaviour of that editor, the read-only view, and each
  * state the panel can be in.
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  emitTokenBlocks,
+  validateStyleValues,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   act,
   cleanup,
@@ -120,6 +124,133 @@ describe("the rows", () => {
     // A type size and its line height are one row, written "16 / 26".
     expect(row(/^Body/).textContent).toContain("16 / 26");
     expect(screen.queryByText(/used by|uses/i)).toBeNull();
+  });
+
+  it("shows a length that changes with the page as Fluid, its whole value on hover", () => {
+    // The whole clamp() crowded the name out of the row; the row says what
+    // kind of value it is, and the hover and the name say the value.
+    const fluid = "clamp(1rem, 0.5rem + 2vw, 2rem)";
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.section-y",
+              kind: "dimension",
+              values: { light: fluid },
+            },
+          ],
+        }}
+      />
+    );
+    const section = row(/^Section y/);
+    const chip = section.querySelector(".nx-vars__chip");
+    expect(chip?.textContent).toBe("Fluid");
+    expect(chip?.getAttribute("title")).toBe(fluid);
+    expect(section.getAttribute("aria-label")).toBe(`Section y, ${fluid}`);
+    // A fixed length still reads as itself, with no hover to add.
+    const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
+    expect(fixed?.textContent).toBe("1rem");
+    expect(fixed?.getAttribute("title")).toBeNull();
+  });
+
+  it("tells apart two rows shown under one name by their kind, and only those", () => {
+    // `space.card` and `radius.card` both read "Card": side by side, nothing
+    // said which was which.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "radius.card",
+              kind: "dimension",
+              values: { light: "12px" },
+            },
+          ],
+        }}
+      />
+    );
+    const spacing = row(/^Card · spacing/);
+    const radius = row(/^Card · radius/);
+    expect(spacing.getAttribute("aria-label")).toBe("Card · spacing, 24px");
+    expect(radius.getAttribute("aria-label")).toBe("Card · radius, 12px");
+    // The kind is muted beside the name, not part of it.
+    expect(radius.querySelector(".nx-vars__name")?.textContent).toBe(
+      "Card · radius"
+    );
+    expect(radius.querySelector(".nx-vars__name-kind")?.textContent).toBe(
+      " · radius"
+    );
+    // A name only one row has stays as it is.
+    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 1rem");
+    // Each draws its kind's icon, so the two differ at a glance too.
+    expect(
+      radius
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("radius");
+    expect(
+      spacing
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("spacing");
+  });
+
+  it("names the code name when two rows of one name are of one kind too", () => {
+    // `space.card` and `spacing.card` are both spacing steps called "Card":
+    // the kind cannot tell them apart, the code name can.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "spacing.card",
+              kind: "dimension",
+              values: { light: "32px" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Card · space\.card,/).getAttribute("aria-label")).toBe(
+      "Card · space.card, 24px"
+    );
+    expect(row(/^Card · spacing\.card,/).getAttribute("aria-label")).toBe(
+      "Card · spacing.card, 32px"
+    );
+  });
+
+  it("says no kind for one name shown in two groups, whose headings tell them apart", () => {
+    // The body font and the body type size both read "Body", each under its
+    // own heading.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "font.body",
+              kind: "fontFamily",
+              values: { light: "Inter" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Body, size/).querySelector(".nx-vars__name-kind")).toBeNull();
   });
 
   it("never says token to the author", () => {
@@ -542,6 +673,214 @@ describe("dark values for every kind", () => {
   });
 });
 
+describe("a type size's line height", () => {
+  const REFUSAL = "A line height is a number like 1.4, or a length like 24px.";
+
+  it("says dark follows light when a light edit changes which kind they are", async () => {
+    const dark: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={dark} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(
+      within(editor).getByText(
+        "Dark now follows the light value; set a dark value again if you need one."
+      )
+    ).toBeDefined();
+  });
+
+  const FOLLOWS =
+    "Dark now follows the light value; set a dark value again if you need one.";
+  const BOTH: SiteTokenSet = {
+    tokens: [
+      { name: "font-size.body", kind: "dimension", values: { light: "16px" } },
+      {
+        name: "line-height.body",
+        kind: "dimension",
+        values: { light: "24px", dark: "28px" },
+      },
+    ],
+  };
+
+  it("drops the dark-follows note when Add dark values sets dark again", async () => {
+    render(<Hosted tokens={BOTH} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Add dark values" })
+    );
+    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
+  });
+
+  it("drops the dark-follows note when Reset puts the code's values back", async () => {
+    render(<Hosted tokens={BOTH} supplied={BOTH} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, light"), "1.4");
+    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
+    fireEvent.click(within(editor).getByRole("button", { name: "Reset" }));
+    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
+  });
+
+  it("drops a refusal when Use light value removes the refused field", async () => {
+    const dark: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={dark} />);
+    const editor = await openEditor(/^Body/);
+    enter(within(editor).getByLabelText("Line height, dark"), "tall");
+    expect(within(editor).getByText(REFUSAL)).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Use light line height" })
+    );
+    expect(within(editor).queryByText(REFUSAL)).toBeNull();
+  });
+
+  it("drops a refusal when Reset puts back the value the site's code supplies", async () => {
+    const supplied: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={SITE} supplied={supplied} />);
+    const editor = await openEditor(/^Body/);
+    const line = within(editor).getByLabelText("Line height, light");
+    enter(line, "tall");
+    expect(line.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(within(editor).getByRole("button", { name: "Reset" }));
+    expect(within(editor).queryByText(REFUSAL)).toBeNull();
+    expect(line).toHaveProperty("value", "24px");
+    expect(line.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  const savedLine = (onChange: ReturnType<typeof vi.fn>) =>
+    (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet | undefined)?.tokens.find(
+      token => token.name === "line-height.body"
+    );
+
+  it("takes a unitless number, stored as a number the page reads unitless", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "1.02");
+
+    const line = savedLine(onChange);
+    expect(line?.values).toEqual({ light: "1.02" });
+    expect(line?.kind).toBe("number");
+    // The field keeps what was typed rather than going back to the old value.
+    expect(field).toHaveProperty("value", "1.02");
+
+    // What the site's sheet emits: the value as written, with no unit added
+    // and nothing reported, which is what a save is judged on.
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    const sheet = emitTokenBlocks(saved, ":root");
+    expect(sheet.issues).toEqual([]);
+    expect(sheet.css).toContain("--site-line-height-body:1.02");
+    // And a block whose line height is bound to it is a valid style.
+    const kinds = new Map(saved.tokens.map(token => [token.name, token.kind]));
+    expect(
+      validateStyleValues(
+        { lineHeight: { $token: "line-height.body" } },
+        "/styles",
+        "strict",
+        undefined,
+        false,
+        { kindOf: name => kinds.get(name) }
+      )
+    ).toEqual([]);
+  });
+
+  it("goes back to a length when a unit is typed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "1.4");
+    enter(field, "28px");
+    expect(savedLine(onChange)).toMatchObject({
+      kind: "dimension",
+      values: { light: "28px" },
+    });
+  });
+
+  it("says why a value is refused, under the field, and keeps what was typed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const field = within(editor).getByLabelText("Line height, light");
+    enter(field, "tall");
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(
+      within(editor).getByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeDefined();
+    expect(field).toHaveProperty("value", "tall");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+
+    // A value that is accepted clears the message.
+    enter(field, "1.5");
+    expect(
+      within(editor).queryByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeNull();
+    expect(field.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("keeps a refusal until that field is corrected, whatever else is committed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const line = within(editor).getByLabelText("Line height, light");
+    enter(line, "tall");
+    // Another field committed successfully says nothing about this one.
+    enter(within(editor).getByLabelText("Size, light"), "18px");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(
+      within(editor).getByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeDefined();
+    expect(line).toHaveProperty("value", "tall");
+    expect(line.getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
 describe("a variable added past the first page", () => {
   it("is shown and opened, though its group holds more than a page", async () => {
     const many: SiteTokenSet = {
@@ -826,6 +1165,33 @@ describe("a row's name in the dark preview", () => {
 });
 
 describe("the colour picker in the editor", () => {
+  it("has what the open picker held stored before the editor says it is done", async () => {
+    // Closing the editor with its picker still open: the picker's colour is
+    // committed as it goes away, and the host is told the edit is done after
+    // that commit, not before it.
+    const events: string[] = [];
+    render(
+      <Hosted
+        tokens={SITE}
+        onChange={() => events.push("change")}
+        onSettle={() => events.push("settle")}
+      />
+    );
+    const editor = await openEditor(/^Text/);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Pick the light colour" })
+    );
+    fireEvent.keyDown(
+      within(editor).getByLabelText(/^Saturation and brightness/),
+      { key: "ArrowRight" }
+    );
+    expect(events).toEqual([]);
+    escape();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(events).toContain("change");
+    expect(events.at(-1)).toBe("settle");
+  });
+
   it("keeps each step of a gesture rather than snapping back", async () => {
     render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Text/);

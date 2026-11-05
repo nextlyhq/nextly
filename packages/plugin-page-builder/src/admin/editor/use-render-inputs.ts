@@ -9,6 +9,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-render-inputs
  */
 import {
+  allBlocks,
   BASE_BREAKPOINT,
   registryNestingSource,
   getBlock,
@@ -22,6 +23,7 @@ import {
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
+  fallbackBreakpoint,
   registrySlotSource,
   type SlotSource,
 } from "@nextlyhq/builder";
@@ -35,10 +37,12 @@ import {
   useCanvasDrag,
   type CanvasDrag,
   type CanvasZoom,
+  type PageClassBlocks,
   type SpacingScrubContext,
 } from "@nextlyhq/builder/shell";
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -47,7 +51,8 @@ import {
   type Dispatch,
 } from "react";
 
-import { classUsageOf, type ClassUsage } from "../../class-usage";
+import { classUsageOf } from "../../class-usage";
+import { withBlockLooks } from "../../core-looks";
 import {
   hostFetchPolicy,
   readRemotePatterns,
@@ -58,6 +63,8 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
+import { useCanvasPageContext } from "./canvas-page-context";
+import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
   useBreakpointWriter,
@@ -129,8 +136,12 @@ export function useSiteStyleInputs(
    * preview channel to keep in step because there are not two sources to keep
    * in step.
    */
+  // With every registered block's looks, other plugins' among them: the
+  // published config is a copy taken before those blocks registered, so the
+  // editor reads them from its own registry, by the same rule the server does.
   const configSiteStyle = useMemo(
-    () => readSiteStyleRecord(clientConfig?.siteStyle),
+    () =>
+      withBlockLooks(readSiteStyleRecord(clientConfig?.siteStyle), allBlocks()),
     [clientConfig]
   );
   const {
@@ -139,6 +150,7 @@ export function useSiteStyleInputs(
     unreadableFonts: unreadableStoredFonts,
     pending: siteStylePending,
     error: siteStyleError,
+    current: siteStyleCurrent,
   } = useSiteStyle(configSiteStyle);
 
   // The site-style half of the class surface. The node half stays with the
@@ -211,6 +223,7 @@ export function useSiteStyleInputs(
     unreadableStoredFonts,
     siteStylePending,
     siteStyleError,
+    siteStyleCurrent,
     classes,
     remotePatterns,
     stylePolicy,
@@ -226,6 +239,8 @@ export type SiteStyleInputs = {
   unreadableStoredFonts: readonly string[];
   siteStylePending: boolean;
   siteStyleError: Error | null;
+  /** Whether the stored style in hand is the site as it is now. */
+  siteStyleCurrent: boolean;
   classes: ClassSurface;
   remotePatterns: readonly RemotePattern[] | undefined;
   stylePolicy: HostFetchPolicy;
@@ -307,9 +322,12 @@ function useCanvasRender({
    * edited, and a surface showing the page as published must not have one.
    */
 
+  // The canvas's own page context, one object for the editor's life: see
+  // `canvas-page-context.ts`.
+  const canvasContext = useCanvasPageContext();
   const canvasRender = useMemo(
-    () =>
-      pageRenderInputs({
+    () => ({
+      ...pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         // None: the canvas is a frame at the previewed device's size, so the
@@ -322,16 +340,19 @@ function useCanvasRender({
         // keystroke.
         definitions: componentLibrary.definitions,
       }),
+      context: canvasContext,
+    }),
     [
       canvasSiteStyle,
       clientConfig,
       documentLimits,
       componentLibrary.definitions,
+      canvasContext,
     ]
   );
 
   /*
-   * What the classes manager compiles each class's summary with, so the summary
+   * What the Shared styles tab compiles each style's summary with, so the summary
    * describes the stylesheet the page gets.
    *
    * The canvas's context supplies the breakpoints: without them only the base
@@ -378,7 +399,9 @@ type CanvasViewport = {
 /** The device being edited, the width it is shown at, and the zoom. */
 function useCanvasViewport({
   canvasRender,
-}: Pick<CanvasRender, "canvasRender">): CanvasViewport {
+  siteStyleCurrent,
+}: Pick<CanvasRender, "canvasRender"> &
+  Pick<SiteStyleInputs, "siteStyleCurrent">): CanvasViewport {
   const breakpoints = canvasRender.styleContext.breakpoints;
   /*
    * The device the SHELL holds, mirrored here to draw the canvas with it.
@@ -406,10 +429,37 @@ function useCanvasViewport({
   }, []);
 
   /*
+   * The device to move to when the site removes the one being edited: the
+   * next wider breakpoint that remains, else the base. Sent to the shell as a
+   * choice, so it stores and shows that device as the author's own.
+   *
+   * Compared against the last set a CURRENT stored answer gave: one read
+   * since the editor opened, or still fresh in the shared cache. Before the
+   * first, the set in hand is the host's config defaults, or a cached answer
+   * older than a removal made while the author was away, so a device restored
+   * on load that the site no longer has goes to the base, through
+   * `editingBreakpointOf` below, whichever read is the one that answers. A
+   * later read that fails keeps the last current set, so a removal a retry
+   * then confirms still moves to the next wider breakpoint.
+   */
+  const previousBreakpoints = useRef<BreakpointSet | undefined>(undefined);
+  useEffect(() => {
+    if (!siteStyleCurrent) return;
+    const before = previousBreakpoints.current;
+    previousBreakpoints.current = breakpoints;
+    if (before === undefined || before === breakpoints) return;
+    // Only a device that WAS being edited and is gone now moves.
+    if (editingBreakpointOf(before, chosenDevice) !== chosenDevice) return;
+    if (editingBreakpointOf(breakpoints, chosenDevice) === chosenDevice) return;
+    chooseDevice(fallbackBreakpoint(before, breakpoints, chosenDevice));
+  }, [breakpoints, siteStyleCurrent, chosenDevice, chooseDevice]);
+
+  /*
    * Which breakpoint an edit lands in: the device the author chose, and
    * nothing else — never the room the editor has, which narrows as panels
    * open. A device the site no longer defines resolves to the base
-   * breakpoint, so an edit is never stored under a breakpoint nothing draws.
+   * breakpoint until the move above arrives, so an edit is never stored under
+   * a breakpoint nothing draws.
    */
   const editedBreakpoint = editingBreakpointOf(breakpoints, chosenDevice);
   /*
@@ -596,10 +646,11 @@ function useCanvasWiring({
 type StyleReadings = {
   spacingScrub: SpacingScrubContext;
   styleCascade: PageStyleCascade | undefined;
-  documentClasses: ClassUsage;
+  /** The blocks on the page as stored that carry each class, for Shared styles. */
+  pageClassBlocks: PageClassBlocks;
 };
 
-/** What the spacing handles, the inspector and the classes manager read. */
+/** What the spacing handles, the inspector and the Shared styles tab read. */
 function useStyleReadings({
   editor,
   documentLimits,
@@ -741,39 +792,17 @@ function useStyleReadings({
   );
 
   /*
-   * Which classes the OPEN document renders, for the manager's on-this-page
-   * filter.
-   *
-   * `classUsageOf` rather than a walk written here: it is the same traversal
-   * the style compiler and the usage index already share, and two walks with
-   * equal limits reached by different routes select different nodes — a class
-   * on a node one walk reaches and the other does not would be reported as
-   * absent from a page that renders it.
-   * Composed through the SAME map the canvas draws with, because the stored
-   * document holds one instance node where the canvas draws a definition: a
-   * class applied inside that definition is on the page as rendered, and a
-   * walk over the stored nodes alone would leave it out of the filter. The
-   * usage record asks a different question of the same walk — what this
-   * document itself references — and passes no map.
-   *
-   *
-   * `complete` is deliberately unread. It says whether the walk hit the
-   * document's node ceiling, which bounds what this could CLAIM about usage —
-   * and this claims nothing about usage. It answers one question, "does the
-   * open page apply this class", and a truncated walk answers that for fewer
-   * nodes rather than answering it wrongly.
+   * How many blocks on this page carry each class, for the Shared styles
+   * tab's "3 blocks on this page". The same walk, asked of the page as
+   * stored: a block inside a component's definition belongs to that
+   * component, which the site's index counts as a component of its own.
    */
-  const documentClasses = useMemo(
-    // The HOST's limits, not the engine's defaults. A site that raised or
-    // lowered them renders under those, and a walk here under different bounds
-    // selects different nodes — which would report a class as absent from a
-    // page that renders it, or present on one that does not.
-    () =>
-      classUsageOf(editor.document, documentLimits, canvasRender.definitions),
-    [editor.document, documentLimits, canvasRender.definitions]
-  );
+  const pageClassBlocks = useMemo((): PageClassBlocks => {
+    const usage = classUsageOf(editor.document, documentLimits);
+    return { counts: usage.blocks, complete: usage.complete };
+  }, [editor.document, documentLimits]);
 
-  return { spacingScrub, styleCascade, documentClasses };
+  return { spacingScrub, styleCascade, pageClassBlocks };
 }
 
 /**
@@ -790,7 +819,7 @@ export function useCanvasInputs(
   style: SiteStyleInputs
 ): CanvasInputs {
   const render = useCanvasRender({ ...mount, ...style });
-  const viewport = useCanvasViewport(render);
+  const viewport = useCanvasViewport({ ...render, ...style });
   const styleState = useStyleState(mount.editor);
   const wiring = useCanvasWiring(mount);
   const readings = useStyleReadings({
@@ -801,6 +830,13 @@ export function useCanvasInputs(
     ...styleState,
   });
   const site = useSiteCanvas(mount.clientConfig);
+  // Shared styles on the selected block, read off the same class surface and
+  // page counts the inspector and the Shared styles tab read.
+  const sharedStyle = useSharedStyleVerb({
+    editor: mount.editor,
+    classes: style.classes,
+    pageClassBlocks: readings.pageClassBlocks,
+  });
   return {
     ...render,
     ...viewport,
@@ -808,6 +844,7 @@ export function useCanvasInputs(
     ...wiring,
     ...readings,
     ...site,
+    sharedStyle,
   };
 }
 
@@ -821,4 +858,7 @@ export type CanvasInputs = CanvasRender &
   ShownStyleState &
   CanvasWiring &
   StyleReadings &
-  SiteCanvas;
+  SiteCanvas & {
+    /** The Style tab's shared-style host, the save verb and its dialog. */
+    sharedStyle: SharedStyleVerb;
+  };

@@ -11,15 +11,19 @@
  * flex selected"). A preset carries no capability its sibling lacks, so neither
  * failure is reachable from here.
  *
- * **Zero default padding.** A hardcoded default is the single most-cited
+ * **No padding of its own here.** A hardcoded default is the single most-cited
  * complaint about Elementor V4, because every project then begins by removing
- * it. Spacing comes from the document or from a token, never from this file.
+ * it, and nested containers inherit the problem. A preset that pads (Section,
+ * Card) reads a site token in its own `baseStyles`; Box and Column stay at
+ * zero. What every preset shares is {@link CONTAINER_CHILD_GAP}: the space
+ * between the blocks it holds, which belongs to the container rather than to
+ * a margin on each child.
  *
  * @module blocks/library/container
  */
 
 import { CONTENT_WIDTH_CLASS } from "@nextlyhq/blocks-engine";
-import type { ContentModel } from "@nextlyhq/blocks-engine";
+import type { ContentModel, TokenRef } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs } from "../context";
@@ -48,6 +52,16 @@ export interface ContainerProps {
    */
   link?: string;
 }
+
+/**
+ * The space a container puts between the blocks it holds, as a site token.
+ *
+ * One value for every flow container, so a site changing `space.stack` moves
+ * the rhythm of every section, box, card and column at once. The compiler
+ * writes it as a top margin on each child after the first, and as `gap` once
+ * an author makes the container flex or grid.
+ */
+export const CONTAINER_CHILD_GAP: TokenRef = { $token: "space.stack" };
 
 /** The tags a container may render, as a set the validator can check against. */
 export const CONTAINER_TAGS = [

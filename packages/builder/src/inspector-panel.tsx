@@ -25,6 +25,7 @@
 
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   findNode,
   type BlockDocument,
   type BlockInspectorProps,
@@ -32,6 +33,7 @@ import {
   type BreakpointSet,
   type ComponentLookup,
   type ComponentPath,
+  type NodeStyles,
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -48,7 +50,6 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
-import { deviceLabel } from "./breakpoint-switcher";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
   ComponentFieldsContext,
@@ -64,13 +65,14 @@ import {
   ComponentVariantsSection,
 } from "./component-variants-panel";
 import {
+  ContentServicesContext,
   contentControlFor,
   UnsupportedField,
   type ContentServices,
 } from "./content-controls";
-import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { FocalFrame } from "./focal-frame";
 import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
@@ -84,6 +86,7 @@ import {
   lockStatusOf,
   lockViewOf,
   propIsWritable,
+  propLabel,
   propPatch,
   renameOp,
   selectedNode,
@@ -93,6 +96,9 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { commitLinkChanges } from "./link-control";
+import { useCanvasTokenModeAt } from "./prefers-dark";
+import { propGroupsOf } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -100,9 +106,16 @@ import {
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
+import {
+  StyleTargetBar,
+  useStyleTarget,
+  type SharedStylesHost,
+  type StyleTargetBarProps,
+} from "./style-target";
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
+import { VisibleOn, type BreakpointsStatus } from "./visible-on";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -144,17 +157,23 @@ export interface InspectorPanelProps {
    * Declared here only to CARRY it: this panel has no opinion about classes,
    * and the meaning of each — including why an absent library is a read in
    * flight rather than a host opting out — lives on
-   * {@link StyleInspectorPanelProps.classLibrary}.
+   * {@link StyleTargetBarProps.library}.
    *
    * Forwarded rather than left out because a prop the chain drops is invisible:
    * the surface renders in isolation, its tests pass, and every real selection
    * in the shipped editor shows nothing.
    */
-  classLibrary?: StyleInspectorPanelProps["classLibrary"];
+  classLibrary?: StyleTargetBarProps["library"];
   /** Why the library is absent, when it is. Carried, not interpreted. */
-  classLibraryAbsence?: StyleInspectorPanelProps["classLibraryAbsence"];
-  /** Create a class and apply it to the selected block. Opts the surface in. */
-  onCreateClass?: StyleInspectorPanelProps["onCreateClass"];
+  classLibraryAbsence?: StyleTargetBarProps["libraryAbsence"];
+  /**
+   * What the host lends for shared styles: the author's right, the write that
+   * stores a style, and the reads of its reach. Without it a block's shared
+   * styles are listed but cannot become the target.
+   *
+   * @experimental Settles with the shared-styles editor.
+   */
+  sharedStyles?: SharedStylesHost;
   /**
    * The site's fonts, carried to the Style tab's Font control. See
    * {@link StyleInspectorPanelProps.fonts}.
@@ -214,6 +233,14 @@ export interface InspectorPanelProps {
   cascade?: PageStyleCascade;
   /** The site's breakpoints, which decide which of those declarations are live. */
   breakpoints?: BreakpointSet;
+  /**
+   * Whether `breakpoints` is the site's own set yet: `loading` while the
+   * config's defaults stand in for the stored set being read, `unavailable`
+   * when that read failed. "Visible on" writes only once it is `ready`: a
+   * hide resolved against the wrong set is stored wrong. Defaults to
+   * `ready`, for a host whose breakpoints are known up front.
+   */
+  breakpointsStatus?: BreakpointsStatus;
   /**
    * The container the canvas compiled its breakpoints against, when it is
    * previewing rather than rendering at the browser's own width.
@@ -548,6 +575,7 @@ function SelectionInspector({
   inspectors,
   verbs,
   contentServices,
+  breakpointsStatus = "ready",
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: Omit<
@@ -634,7 +662,15 @@ function SelectionInspector({
     (componentLibrary ?? NO_LIBRARY).definitions,
     canvasRoot
   );
-  if ("tabless" in surface) return surface.tabless;
+  // A tabless surface still reaches the host's media library: a component
+  // placement's exposed image chooses a file as the Content tab does.
+  if ("tabless" in surface) {
+    return (
+      <ContentServicesContext.Provider value={contentServices}>
+        {surface.tabless}
+      </ContentServicesContext.Provider>
+    );
+  }
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
 
@@ -682,9 +718,15 @@ function SelectionInspector({
         onValueChange={tabChangeHandler(setTab, styleState?.onChange)}
         className="nx-inspector__tabs"
       >
-        <TabsList>
+        {/* Compact underlined tabs at the start of the panel; the classes
+            carry the inspector's own tab rules over the shared tabs'. */}
+        <TabsList className="nx-inspector__tablist">
           {INSPECTOR_TABS.map(tab => (
-            <TabsTrigger key={tab.value} value={tab.value}>
+            <TabsTrigger
+              key={tab.value}
+              value={tab.value}
+              className="nx-inspector__tab"
+            >
               {tab.label}
             </TabsTrigger>
           ))}
@@ -709,6 +751,9 @@ function SelectionInspector({
             onScreen={tab === "content"}
             reasonId={reasonId}
             fields={fields}
+            breakpoints={styleOnly.breakpoints}
+            breakpoint={breakpoint ?? BASE_BREAKPOINT}
+            breakpointsStatus={breakpointsStatus}
           />
         </TabsContent>
 
@@ -718,11 +763,14 @@ function SelectionInspector({
             editor={editor}
             styleNode={styleNode}
             renderedTag={canvas.tag}
+            renderedPicture={canvas.picture}
+            renderedPicturePosition={canvas.picturePosition}
             sideOrientation={canvas.orientation}
             styleState={styleState}
             breakpoint={breakpoint}
             cascade={cascade}
             previewContainer={previewContainer}
+            verbs={verbs}
           />
         </TabsContent>
       </Tabs>
@@ -744,6 +792,9 @@ function ContentTab({
   onScreen,
   reasonId,
   fields,
+  breakpoints,
+  breakpoint,
+  breakpointsStatus,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -757,6 +808,12 @@ function ContentTab({
   onScreen: boolean;
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
+  /** The site's breakpoints, for "Visible on". */
+  breakpoints: BreakpointSet | undefined;
+  /** The device being edited. */
+  breakpoint: BreakpointId;
+  /** Whether `breakpoints` is the site's own set yet. */
+  breakpointsStatus: BreakpointsStatus;
 }): React.JSX.Element {
   // Whether the Advanced section is open, so the panel inside it can be told
   // when it stops being on screen and settle its draft.
@@ -781,6 +838,17 @@ function ContentTab({
         services={services}
         reasonId={reasonId}
         fields={fields}
+      />
+      {/* Which devices the block shows on: after its own fields, before the
+          Advanced section, as the design draws the Content tab. */}
+      <VisibleOn
+        editor={editor}
+        nodeId={block.nodeId}
+        breakpoints={breakpoints}
+        editing={breakpoint}
+        status={breakpointsStatus}
+        heldBy={designLocked}
+        reasonId={reasonId}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*
@@ -830,6 +898,39 @@ function ContentTab({
 }
 
 /**
+ * Where an edit lands, as the bar's second line says it: the devices the
+ * value reaches, in words rather than as a breakpoint's id.
+ */
+function barPlace(
+  breakpoints: BreakpointSet | undefined,
+  breakpoint: BreakpointId | undefined
+): { device: string } {
+  return { device: editReach(breakpoints, breakpoint ?? BASE_BREAKPOINT) };
+}
+
+/**
+ * The State menu the bar carries, bound to the host's choice, or nothing when
+ * the host cannot act on one. Its dots read the TARGET's styles (the block's,
+ * or the shared style being edited), so a state is marked where the edit goes.
+ */
+function stateControlFor(
+  state: StyleState,
+  styleState: StyleStateBinding | undefined,
+  holder: { styles?: NodeStyles } | null,
+  breakpoints: BreakpointSet | undefined
+): React.JSX.Element | undefined {
+  if (styleState?.onChange === undefined) return undefined;
+  return (
+    <StyleStateField
+      state={state}
+      onSelect={styleState.onChange}
+      node={holder}
+      breakpoints={breakpoints}
+    />
+  );
+}
+
+/**
  * The Style tab: the bar that says what an edit changes, then the style
  * controls themselves.
  */
@@ -837,6 +938,8 @@ function StyleTab({
   editor,
   styleNode,
   renderedTag,
+  renderedPicture,
+  renderedPicturePosition,
   sideOrientation,
   styleState,
   policy,
@@ -847,10 +950,9 @@ function StyleTab({
   liveBreakpoints,
   onJumpToBreakpoint,
   tokens,
-  classLibrary,
-  classLibraryAbsence,
-  onCreateClass,
   fonts,
+  // The bar's own inputs, kept together: the library, the host and the verbs.
+  ...shared
 }: Pick<
   InspectorPanelProps,
   | "editor"
@@ -865,14 +967,26 @@ function StyleTab({
   | "tokens"
   | "classLibrary"
   | "classLibraryAbsence"
-  | "onCreateClass"
+  | "sharedStyles"
+  | "verbs"
   | "fonts"
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
+  renderedPicture: string | undefined;
+  renderedPicturePosition: string | undefined;
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
+  // ONE holder of what an edit changes, read by the bar and the controls.
+  const { target, choose, held } = useStyleTarget(
+    editor,
+    shared.classLibrary,
+    shared.sharedStyles
+  );
+  // The mode the selected block is drawn in, read once for the look tiles and
+  // the controls below, so the canvas is watched by one subscription.
+  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
   return (
     <>
       {/*
@@ -881,37 +995,51 @@ function StyleTab({
       and an author would have edited a value before meeting the thing
       that says which state the value belongs to.
     */}
-      <EditingBar
-        target={{ kind: "block" }}
-        device={editedDevice(breakpoints, breakpoint ?? BASE_BREAKPOINT)}
-        state={state}
-        stateControl={
-          <StyleStateField
-            state={state}
-            onSelect={styleState?.onChange}
-            node={styleNode}
-            breakpoints={breakpoints}
-          />
-        }
-      />
-      <StyleInspectorPanel
+      <StyleTargetBar
         editor={editor}
-        renderedTag={renderedTag}
-        sideOrientation={sideOrientation}
-        policy={policy}
-        state={state}
-        breakpoint={breakpoint}
-        cascade={cascade}
-        breakpoints={breakpoints}
-        previewContainer={previewContainer}
-        liveBreakpoints={liveBreakpoints}
-        onJumpToBreakpoint={onJumpToBreakpoint}
         tokens={tokens}
-        classLibrary={classLibrary}
-        classLibraryAbsence={classLibraryAbsence}
-        onCreateClass={onCreateClass}
-        fonts={fonts}
+        tokenMode={tokenMode}
+        target={target}
+        onChoose={choose}
+        held={held}
+        library={shared.classLibrary}
+        libraryAbsence={shared.classLibraryAbsence}
+        host={shared.sharedStyles}
+        verbs={shared.verbs}
+        {...barPlace(breakpoints, breakpoint)}
+        breakpoints={breakpoints}
+        state={state}
+        stateControl={stateControlFor(
+          state,
+          styleState,
+          target.kind === "shared" ? target.style : styleNode,
+          breakpoints
+        )}
       />
+      {/* The picture the canvas draws, for the focal point aimed over it. */}
+      <FocalFrame.Provider
+        value={{ picture: renderedPicture, position: renderedPicturePosition }}
+      >
+        <StyleInspectorPanel
+          editor={editor}
+          tokenMode={tokenMode}
+          // The block card above says why a held block can't be changed.
+          showReadOnlyReason={false}
+          renderedTag={renderedTag}
+          sideOrientation={sideOrientation}
+          policy={policy}
+          state={state}
+          breakpoint={breakpoint}
+          cascade={cascade}
+          breakpoints={breakpoints}
+          previewContainer={previewContainer}
+          liveBreakpoints={liveBreakpoints}
+          onJumpToBreakpoint={onJumpToBreakpoint}
+          tokens={tokens}
+          target={target}
+          fonts={fonts}
+        />
+      </FocalFrame.Provider>
     </>
   );
 }
@@ -986,6 +1114,9 @@ function ContentSurface({
           name,
           lockViewOf(editor)
         )
+      }
+      onCommitMany={changes =>
+        commitLinkChanges(editor, inspection.nodeId, changes)
       }
     />
   );
@@ -1159,9 +1290,14 @@ function ContentFields({
   reasonId,
   fields,
   writable,
+  onCommitMany,
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  /** Several props written as one edit, for a block's prop groups. */
+  onCommitMany: (
+    changes: Readonly<Record<string, unknown>>
+  ) => BlockDocument | null | void;
   services: ContentServices | undefined;
   /** The id of the lock reason a held field points to. */
   reasonId: string;
@@ -1175,32 +1311,92 @@ function ContentFields({
   /** The component's own view, when the document is a component. */
   fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
-  if (inspection.props.length === 0) {
+  // A prop the inspector leaves out draws no control, but in a component's
+  // view keeps its expose icon: a page may clear what hides it.
+  const drawn = inspection.props.filter(
+    prop => prop.offered || fields !== undefined
+  );
+  if (drawn.length === 0) {
     return (
       <p className="nx-inspector__note">
         This block has no editable properties.
       </p>
     );
   }
+  // What the block holds, for a control whose choices depend on another of
+  // its props: a loop's sort offers its collection's fields.
+  const values = Object.fromEntries(
+    inspection.props.map(prop => [prop.name, prop.value])
+  );
+  // Props an author reads as one thing (a link and what qualifies it, an
+  // image's source, its alt text) are drawn as one group, where the group's
+  // lead prop sits; the others it draws get no row of their own. Built from
+  // the props the block offers, so a sibling its own `onlyWithout` hides is
+  // neither drawn nor written by a group.
+  const groups = propGroupsOf(inspection.props.filter(prop => prop.offered));
+  const leads = new Map(groups.map(group => [group.lead, group]));
+  const grouped = new Set(groups.flatMap(group => [...group.drawn]));
   return (
     <div className="nx-inspector__fields">
-      {inspection.props.map(prop => {
-        const field = (
-          <HeldByLock
-            // Keyed by node AND prop: a bare prop name would let React reuse
-            // one block's field for the next block's same-named prop, so the
-            // input would keep the previous block's uncommitted text.
-            key={`${inspection.nodeId}:${prop.name}`}
-            // A held field points at the reason in the card.
-            reasonId={writable(prop.name) ? undefined : reasonId}
-          >
-            <PropField
-              prop={prop}
-              disabled={!writable(prop.name)}
-              onCommit={onCommit}
-              services={services}
-            />
-          </HeldByLock>
+      {drawn.map(prop => {
+        const group = leads.get(prop.name);
+        if (group === undefined && grouped.has(prop.name)) {
+          // Drawn inside its group, but in a component's view still a prop of
+          // its own to expose: named, with its icon, as a prop the inspector
+          // leaves out is, so a placement may still set it.
+          return fields === undefined ? null : (
+            <div
+              key={`${inspection.nodeId}:${prop.name}`}
+              className="nx-inspector__prop"
+            >
+              <p className="nx-inspector__note">
+                {propLabel(prop.name, prop.schema)}
+              </p>
+              <PropExposeControl
+                binding={fields}
+                nodeId={inspection.nodeId}
+                prop={prop}
+              />
+            </div>
+          );
+        }
+        const groupField =
+          group === undefined ? undefined : (
+            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+              {group.render({
+                props: inspection.props,
+                writable,
+                reasonId,
+                services,
+                placedWith: inspection.placedWith,
+                onCommitMany,
+              })}
+            </React.Fragment>
+          );
+        // Named as the block names it, so its icon is not drawn bare.
+        const field = !prop.offered ? (
+          <p className="nx-inspector__note">
+            {propLabel(prop.name, prop.schema)}
+          </p>
+        ) : (
+          (groupField ?? (
+            <HeldByLock
+              // Keyed by node AND prop: a bare prop name would let React reuse
+              // one block's field for the next block's same-named prop, so the
+              // input would keep the previous block's uncommitted text.
+              key={`${inspection.nodeId}:${prop.name}`}
+              // A held field points at the reason in the card.
+              reasonId={writable(prop.name) ? undefined : reasonId}
+            >
+              <PropField
+                prop={prop}
+                disabled={!writable(prop.name)}
+                onCommit={onCommit}
+                services={services}
+                values={values}
+              />
+            </HeldByLock>
+          ))
         );
         if (fields === undefined) return field;
         // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
@@ -1229,11 +1425,14 @@ function PropField({
   disabled,
   onCommit,
   services,
+  values,
 }: {
   prop: EditableProp;
   disabled: boolean;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   services: ContentServices | undefined;
+  /** The block's props as stored, for a control that reads another of them. */
+  values: Readonly<Record<string, unknown>>;
 }): React.JSX.Element {
   // Unique per mount, so two editors on one page never share a field id and a
   // label never points at the other editor's control.
@@ -1251,6 +1450,7 @@ function PropField({
       disabled={disabled}
       onCommit={onCommit}
       services={services}
+      values={values}
     />
   );
 }
@@ -1307,13 +1507,25 @@ function ManyBlocksPanel({
 }
 
 /**
- * The device the Style tab edits, named as the device switcher names it, so
- * the bar and the switcher beside it agree. A tier the switcher does not offer
- * (a container tier) is named by its own definition.
+ * The devices an edit at one tier reaches: the unconditional tier reaches
+ * "All devices"; a narrower one reaches itself and every narrower one on its
+ * axis ("Tablet and smaller"), or only itself when it is the narrowest
+ * ("Mobile"). Read from the site's own breakpoints in the engine's order
+ * (`breakpointContexts`: each axis widest first), named by each definition's
+ * own label, so a site with its own breakpoints is described in its words.
  */
-function editedDevice(
+function editReach(
   breakpoints: BreakpointSet | undefined,
   id: BreakpointId
 ): string {
-  return deviceLabel(breakpoints, id) ?? breakpointLabel(breakpoints, id);
+  if (id === BASE_BREAKPOINT) return "All devices";
+  const contexts = breakpointContexts(breakpoints);
+  const at = contexts.findIndex(context => context.id === id);
+  const label = breakpointLabel(breakpoints, id);
+  if (at === -1) return label;
+  const axis = contexts[at]?.axis;
+  const narrower = contexts
+    .slice(at + 1)
+    .some(context => context.axis === axis);
+  return narrower ? `${label} and smaller` : label;
 }

@@ -4,7 +4,7 @@
  * Implements `nextly prune` — explicitly drop orphaned plugin/code schema
  * (collections in the registry that are no longer in the config). Orphans are
  * never dropped without the data-loss consent: with none, a terminal is asked
- * and a run with no terminal lists them and drops nothing.
+ * and a run that cannot ask lists them, drops nothing and exits 1.
  *
  * **Runtime restriction:** CLI-only. Do NOT import from runtime code.
  *
@@ -31,14 +31,16 @@ import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
 } from "../../domains/i18n/migration/teardown-entity-i18n";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   countDeletions,
-  isInteractiveTerminal,
   judgeDataLoss,
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-changed-after-consent";
 import type { ExtensionSchemaRecord } from "../../domains/schema/ownership/dependent-elements";
+import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
@@ -54,6 +56,7 @@ import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
   readDataLossConsent,
+  requireConsented,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 
@@ -86,7 +89,8 @@ interface RunPruneArgs {
   /**
    * Whether the tables listed may be dropped: the data-loss consent's
    * judgement (`pruneApproval`). False drops nothing; a throw stops the run
-   * before anything changes.
+   * before anything changes, as `pruneApproval` does for every outcome but
+   * consent.
    */
   approve: (deletions: Deletion[]) => Promise<boolean>;
   /**
@@ -106,6 +110,54 @@ interface RunPruneArgs {
   extensionSchema?: (
     orphans: readonly DynamicCollectionRecord[]
   ) => Promise<ExtensionSchemaRecord | null>;
+  /**
+   * Holds the schema lock for the drop (`pruneUnderSchemaLock`), taken after
+   * `approve` has answered so no lock is held while a person is asked.
+   */
+  lock: PruneLock;
+}
+
+/** Runs `work` while holding the schema lock, and returns what it returned. */
+export type PruneLock = <T>(work: () => Promise<T>) => Promise<T>;
+
+/** What a prune's claim on the schema lock names as its holder. */
+const PRUNE_LOCK_COMMAND = "nextly prune";
+
+/**
+ * The lock `nextly prune` drops under: the one schema lock, waited for as
+ * every command waits for it (about a minute, or `waitMs`), and then refused
+ * naming its holder.
+ */
+export function pruneUnderSchemaLock(
+  adapter: DrizzleAdapter,
+  options: {
+    waitMs?: number;
+    ttlSeconds?: number;
+    logger?: { warn?: (m: string) => void; info?: (m: string) => void };
+  } = {}
+): PruneLock {
+  return async work => {
+    const outcome = await withMigrateLock(
+      adapter,
+      adapter.getCapabilities().dialect,
+      work,
+      {
+        command: PRUNE_LOCK_COMMAND,
+        mode: "wait",
+        waitMs: options.waitMs,
+        ttlSeconds: options.ttlSeconds,
+        releaseOnInterrupt: true,
+        logger: options.logger,
+      }
+    );
+    // Only a wait given `isSettled` ends without running, and this one is not.
+    if (!outcome.ran) {
+      throw NextlyError.internal({
+        logContext: { reason: "the prune ended without running" },
+      });
+    }
+    return outcome.value;
+  };
 }
 
 /**
@@ -132,19 +184,22 @@ function companionMainTable(companionTable: string): string {
   return companionTable.replace(/_locales$/, "");
 }
 
+/** What a prune would drop, read from the database as it stands. */
+interface PrunePlan {
+  orphans: DynamicCollectionRecord[];
+  orphanedCompanions: string[];
+  /** Every table the drop would take, as the consent is asked about them. */
+  deletions: Deletion[];
+}
+
 /**
- * Core prune logic (D14): detect orphaned pipeline collections, then drop
- * their physical table + metadata once `approve` allows every table it would
- * drop, or drop nothing. A prune that drops refuses, before its first drop
- * and for the whole set, while anything outside the orphans depends on one
- * of them (`assertNothingDependsOn`). Kept free of CLI/IO concerns for
- * unit/integration testing.
+ * Detect the orphaned pipeline collections and the companion tables whose main
+ * table is gone, and list every table dropping them would take.
  */
-export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
+async function planPrune(args: RunPruneArgs): Promise<PrunePlan> {
   const orphans = await args.registry.findOrphanedCollections(
     args.currentSlugs
   );
-  const slugs = orphans.map(o => o.slug);
 
   // Catalog sweep for companions whose main table is already gone. With no registry row
   // pointing at them they are invisible to `findOrphanedCollections`; only a table listing
@@ -171,14 +226,95 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   deletions.push(
     ...orphanedCompanions.map(table => ({ kind: "table" as const, table }))
   );
-  if (deletions.length === 0 || !(await args.approve(deletions))) {
+  return { orphans, orphanedCompanions, deletions };
+}
+
+/**
+ * A plan as one comparable value: each orphan by slug and table, and each
+ * deletion as the consent listed it, in a fixed order so two reads of an
+ * unchanged database compare equal whatever order the database returned.
+ */
+function planKey(plan: PrunePlan): string {
+  return JSON.stringify({
+    orphans: plan.orphans.map(o => `${o.slug}:${o.tableName}`).sort(),
+    deletions: plan.deletions
+      .map(d =>
+        d.kind === "table"
+          ? JSON.stringify([d.table, d.alongside ?? ""])
+          : JSON.stringify(d)
+      )
+      .sort(),
+  });
+}
+
+/**
+ * A plan's deletions as the consent listed them (`dc_a`, or `dc_a, with the
+ * collection's 3 archived translations`), for a refusal to show what changed.
+ */
+function plannedTables(plan: PrunePlan): string[] {
+  return plan.deletions
+    .flatMap(d =>
+      d.kind === "table"
+        ? [
+            d.alongside === undefined
+              ? d.table
+              : `${d.table}, with ${d.alongside}`,
+          ]
+        : []
+    )
+    .sort();
+}
+
+/**
+ * Core prune logic (D14): detect orphaned pipeline collections, then drop
+ * their physical table + metadata once `approve` allows every table it would
+ * drop, or drop nothing. A prune that drops refuses, before its first drop
+ * and for the whole set, while anything outside the orphans depends on one
+ * of them (`assertNothingDependsOn`). Kept free of CLI/IO concerns for
+ * unit/integration testing.
+ *
+ * The drop runs inside `lock`, taken only once `approve` has answered so no
+ * lock is held while a person is asked. Inside it the plan is read again, and
+ * a plan that differs from the one approved is refused with nothing dropped:
+ * the consent was given for that list and no other.
+ */
+export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
+  const consented = await planPrune(args);
+  const slugs = consented.orphans.map(o => o.slug);
+  if (
+    consented.deletions.length === 0 ||
+    !(await args.approve(consented.deletions))
+  ) {
     return {
       orphans: slugs,
       dropped: [],
-      orphanedCompanions,
+      orphanedCompanions: consented.orphanedCompanions,
       droppedCompanions: [],
     };
   }
+  return args.lock(async () => {
+    const current = await planPrune(args);
+    if (planKey(current) !== planKey(consented)) {
+      throw planChangedAfterConsent({
+        command: PRUNE_LOCK_COMMAND,
+        message:
+          "What `nextly prune` would drop changed after it was agreed to, so nothing was dropped. " +
+          "Run `nextly prune` again to see what it would drop now.",
+        agreed: plannedTables(consented),
+        current: plannedTables(current),
+      });
+    }
+    return dropPlanned(args, consented);
+  });
+}
+
+/** Drop what `plan` lists: the orphans' tables and metadata, then the stray companions. */
+async function dropPlanned(
+  args: RunPruneArgs,
+  plan: PrunePlan
+): Promise<PruneResult> {
+  const { orphans, orphanedCompanions } = plan;
+  const slugs = orphans.map(o => o.slug);
 
   // Before the first drop and for the whole set: a refusal part way through
   // would leave some orphans dropped and the rest not, and orphans that point
@@ -284,6 +420,11 @@ interface PruneCommandOptions {
   force?: boolean;
   config?: string;
   cwd?: string;
+  /**
+   * How long a held schema lock is waited for, in milliseconds, before the
+   * run stops naming its holder. Absent, the lock's own wait.
+   */
+  lockWaitMs?: number;
 }
 
 /**
@@ -306,11 +447,11 @@ export function pruneConsent(
 /**
  * The `approve` a prune runs with: the tables counted where the database
  * answers, then judged by the consent. Covered, or agreed to at a terminal,
- * they are dropped. With no consent and no terminal, the refusal is printed
- * as the listing — the command still lists what it would drop, as it always
- * has, and now names the consent that drops it — and nothing is dropped. A
- * consent naming tables that leaves one out is refused outright: the
- * operator named what may go, and this is not it.
+ * they are dropped. Otherwise the run stops before anything is dropped, and
+ * exits 1: a no at the terminal names the consent that drops without asking;
+ * with no consent and nobody to ask, the refusal lists what it would drop and
+ * that consent; and a consent naming tables that leaves one out is refused
+ * outright: the operator named what may go, and this is not it.
  */
 export function pruneApproval(args: {
   consent: DataLossConsent;
@@ -328,19 +469,8 @@ export function pruneApproval(args: {
       ask: args.ask,
       print: args.print,
     });
-    if (verdict.kind === "proceed") return true;
-    if (verdict.kind === "declined") {
-      args.print("Nothing was dropped.");
-      return false;
-    }
-    if (verdict.reason === "needs-consent") {
-      args.print(verdict.message);
-      return false;
-    }
-    throw NextlyError.invalidInput({
-      message: verdict.message,
-      logContext: { reason: "data-loss-not-covered" },
-    });
+    requireConsented(verdict);
+    return true;
   };
 }
 
@@ -403,11 +533,20 @@ export async function runPruneCommand(
         countArchivedTranslations(drizzleAdapter, dialect, slug),
       approve: pruneApproval({
         consent,
-        interactive: isInteractiveTerminal(),
+        interactive: canPrompt(),
         ask: askToDeleteInTerminal,
         print: line => logger.info(line),
         db: drizzleAdapter.getDrizzle(),
         dialect,
+      }),
+      // Taken once the consent has answered, never while a prompt waits.
+      lock: pruneUnderSchemaLock(drizzleAdapter, {
+        waitMs: options.lockWaitMs,
+        ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
+        logger: {
+          warn: message => logger.warn(message),
+          info: message => logger.info(message),
+        },
       }),
       // Compiled here, not published: this command serves nothing, and only
       // reads what the configured plugins and the app declare.

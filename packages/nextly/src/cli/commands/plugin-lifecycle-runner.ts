@@ -18,13 +18,14 @@ import {
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import { isInteractiveTerminal } from "../../domains/schema/migrate/data-loss-consent";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   orderedMigrations,
   pluginModuleStatements,
   qualifiedFilename,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import type { PluginMigrationSet } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import {
   asLifecycleCommandBoot,
@@ -43,7 +44,7 @@ import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
 import {
   downDatabaseDeps,
-  isDestructiveDown,
+  rollbackDeletions,
   planRollback,
   refusalOf,
   rollBackOne,
@@ -53,6 +54,7 @@ import {
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
+  type InstallOptions,
   type LifecyclePlugin,
   type PreparedModuleDown,
   type UninstallOptions,
@@ -323,16 +325,21 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       if (refusal !== undefined) throw refusal;
     }
     planned = new Map(plans.map(down => [down.filename, down]));
+    // Each module's DOWN judged by the reader `migrate:down` names a
+    // rollback's deletions with, every module read as one run in the order
+    // they run: a module that removes rows, converts a column or calls code
+    // that may delete is destructive, as one that drops is.
+    const deletions = await rollbackDeletions(
+      plans,
+      dialect,
+      deps.readDeletionFacts
+    );
     return plans.map((down, at) => ({
       moduleName: moduleNames[at],
       filename: down.filename,
       statements: down.statements,
       transaction: down.transaction,
-      destructive: isDestructiveDown(
-        down.statements,
-        dialect,
-        down.liveColumns
-      ),
+      deletions: deletions[at] ?? [],
     }));
   };
 
@@ -428,22 +435,16 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     );
 
   /**
-   * Apply this plugin's pending modules, through the phase `migrate` uses.
-   *
-   * Not a second implementation: `runPluginPhase` owns the ledger, the drop
-   * guard and the owner records, and an install that applied modules its own
-   * way would record them differently from every later `migrate`. Scoped to
-   * the one plugin being installed, which is the only difference.
-   *
-   * The caller holds the migrate lock (`underMigrateLock`), as `migrateCore`
-   * does around the same phase: install keeps it from before the modules
-   * apply until after `onInstall`, so an uninstall cannot run in between.
+   * The module sets an install of `plugin` applies (`applyMigrations`):
+   * none when it ships no modules. Read once for the consent and the run, so
+   * the two judge and apply the same modules.
    */
-  const applyMigrations = async (plugin: LifecyclePlugin): Promise<void> => {
+  const installSets = async (
+    plugin: LifecyclePlugin
+  ): Promise<PluginMigrationSet[]> => {
     const definition = definitions.find(d => d.name === plugin.name);
     const modules = definition?.contributes?.schema?.migrations ?? [];
-    if (definition === undefined || modules.length === 0) return;
-    const { runPluginPhase } = await import("./migrate");
+    if (definition === undefined || modules.length === 0) return [];
     const { pluginMigrationSetsFrom } = await import(
       "../../domains/schema/migrate/plugin/run-plugin-migrations"
     );
@@ -488,9 +489,37 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const sorted = await pluginMigrationSetsFrom([
       ...withDependencies.values(),
     ]);
-    const pluginMigrationSets = sorted.filter(
-      set => set.pluginName === definition.name
-    );
+    return sorted.filter(set => set.pluginName === definition.name);
+  };
+
+  /** What the modules an install of `plugin` applies delete (`PluginLifecycleDeps.installDeletions`). */
+  const installDeletions = async (plugin: LifecyclePlugin) => {
+    const sets = await installSets(plugin);
+    if (sets.length === 0) return [];
+    const { pendingPluginDeletions } = await import("./migrate");
+    return pendingPluginDeletions(sets, {
+      adapter,
+      db: drizzleAdapter.getDrizzle(),
+      dialect,
+    });
+  };
+
+  /**
+   * Apply this plugin's pending modules, through the phase `migrate` uses.
+   *
+   * Not a second implementation: `runPluginPhase` owns the ledger, the drop
+   * guard and the owner records, and an install that applied modules its own
+   * way would record them differently from every later `migrate`. Scoped to
+   * the one plugin being installed, which is the only difference.
+   *
+   * The caller holds the migrate lock (`underMigrateLock`), as `migrateCore`
+   * does around the same phase: install keeps it from before the modules
+   * apply until after `onInstall`, so an uninstall cannot run in between.
+   */
+  const applyMigrations = async (plugin: LifecyclePlugin): Promise<void> => {
+    const pluginMigrationSets = await installSets(plugin);
+    if (pluginMigrationSets.length === 0) return;
+    const { runPluginPhase } = await import("./migrate");
 
     const { compileExtensionSchema } = await import(
       "../../domains/schema/extension/publish"
@@ -745,6 +774,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     adapter,
     dialect,
     applyMigrations,
+    installDeletions,
     readLifecycle,
     recordLifecycle,
     // Read PER ACCESS, never captured. The same cast `migrate` makes —
@@ -769,8 +799,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     runDown,
     underMigrateLock,
     // A full uninstall without consent asks the person at a terminal, and is
-    // refused at once where nobody is there to answer.
-    interactive: isInteractiveTerminal(),
+    // refused at once where nobody can answer: no terminal, `CI` set, or
+    // `--non-interactive`.
+    interactive: canPrompt(),
     askToDelete: askToDeleteInTerminal,
     // What other owners built on or into the plugin's schema. Loaded when an
     // uninstall asks: nothing else in a command needs the dependents' reader.
@@ -932,12 +963,12 @@ interface SettingsDeleteDb {
 
 export async function runPluginInstall(
   name: string,
-  options: RunnerOptions,
+  options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
   const deps = await connect(options, context);
   try {
-    await runPluginInstallCommand(name, deps);
+    await runPluginInstallCommand(name, deps, { consent: options.consent });
   } finally {
     await deps.adapter.disconnect();
   }
@@ -945,12 +976,12 @@ export async function runPluginInstall(
 
 /** Install every configured plugin, in the config loader's dependency order. */
 export async function runPluginInstallAll(
-  options: RunnerOptions,
+  options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
   const deps = await connect(options, context);
   try {
-    await runPluginInstallAllCommand(deps);
+    await runPluginInstallAllCommand(deps, { consent: options.consent });
   } finally {
     await deps.adapter.disconnect();
   }

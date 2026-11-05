@@ -2,8 +2,9 @@
  * Shared styles over HTTP and the Direct API, on a real site: a locked style
  * holds for every Design manager without the lock permission, a lock moves and
  * a style leaves only through their own routes, usage counts gated content and
- * says when it is a floor, where-used names only what the caller may read, and
- * a page may not add a reference to a style the site does not define.
+ * says when it is a floor, where-used names only what the caller may read,
+ * removal reads the stored pages again rather than trusting an index zero,
+ * and a page may not add a reference to a style the site does not define.
  */
 
 // Set before the harness boots: the routes verify the session with it.
@@ -24,6 +25,7 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { CLASS_USAGE_INDEX_SLUG } from "../collections/class-usage-index";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -403,7 +405,7 @@ describe.each(getConfiguredTestDialects())(
       const early = await remove(["c-spare"]);
       expect(early.status).toBe(409);
       expect(JSON.stringify(early.body)).toContain(
-        "Some pages are still being counted, so no shared style can be removed yet."
+        "Some pages haven't been counted yet, so no shared style can be removed."
       );
 
       await tick();
@@ -413,7 +415,9 @@ describe.each(getConfiguredTestDialects())(
       expect(usage.body).toMatchObject({ whole: true });
 
       const used = await remove(["c-hero", "c-spare"]);
-      expect(used.status).toBe(409);
+      // The in-use refusal, whichever check found the use.
+      expect(used.status).toBe(400);
+      expect(JSON.stringify(used.body)).toContain('"code":"IN_USE"');
       expect(JSON.stringify(used.body)).toContain(
         "hero is used on 1 document."
       );
@@ -428,6 +432,122 @@ describe.each(getConfiguredTestDialects())(
         "c-card",
         "c-hero",
       ]);
+    });
+
+    it("counts the pages now for a Design manager, with no scheduler, and refuses a reader", async () => {
+      // No `tick`: nothing drains the queue in this run, as on a site with no
+      // scheduler, so only the count route can make the index whole.
+      const { t } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Gated", slug: "gated", content: gatedUse("c-hero") },
+        overrideAccess: true,
+      });
+      const designer = await holding(t, ...DESIGN);
+      const reader = await holding(t, "read-site-style");
+      const usage = (cookie: string) =>
+        call("GET", `${route("usage")}?id=c-hero`, cookie);
+
+      // CONTROL: not whole before, and the panel is told who may count.
+      expect((await usage(designer)).body).toMatchObject({
+        whole: false,
+        counting: true,
+        mayCount: true,
+      });
+      expect((await usage(reader)).body).toMatchObject({ mayCount: false });
+
+      const refused = await call("POST", route("count"), reader, {});
+      expect(refused.status).toBe(403);
+      expect((await usage(designer)).body).toMatchObject({ whole: false });
+
+      const counted = await call("POST", route("count"), designer, {});
+      expect(counted.status).toBe(200);
+      expect(counted.body).toMatchObject({
+        item: { ran: true, whole: true, counting: false },
+      });
+      expect((await usage(designer)).body).toMatchObject({
+        whole: true,
+        styles: { "c-hero": { documents: 1, complete: true } },
+      });
+    });
+
+    it("reads usage with the lock permission alone, and refuses a caller holding neither", async () => {
+      const { t } = await boot();
+      const usage = `${route("usage")}?id=c-hero`;
+      const lockOnly = await holding(t, "lock-page-builder-shared-styles");
+      const locker = await call("GET", usage, lockOnly);
+      expect(locker.status).toBe(200);
+      expect(locker.body).toMatchObject({
+        mayLock: true,
+        styles: { "c-hero": { documents: 0 } },
+      });
+      expect(
+        (await call("GET", `${route("where-used")}?id=c-hero`, lockOnly)).status
+      ).toBe(200);
+
+      const pageReader = await holding(t, "read-pages");
+      expect((await call("GET", usage, pageReader)).status).toBe(403);
+      expect(
+        (await call("GET", `${route("where-used")}?id=c-hero`, pageReader))
+          .status
+      ).toBe(403);
+    });
+
+    it("refuses removing a style a stored page still uses though the index counts none", async () => {
+      const { t, tick } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageOf([text("a", { classes: ["c-spare"] })]),
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      // The row two interleaved saves can lose, lost here directly.
+      const rows = await t.nextly.find({
+        collection: CLASS_USAGE_INDEX_SLUG,
+        where: { classId: { equals: "c-spare" } },
+        limit: 100,
+        overrideAccess: true,
+      });
+      expect(rows.items.length).toBeGreaterThan(0);
+      for (const row of rows.items) {
+        await t.nextly.delete({
+          collection: CLASS_USAGE_INDEX_SLUG,
+          id: String((row as { id: unknown }).id),
+          overrideAccess: true,
+        });
+      }
+      const designer = await holding(t, ...DESIGN, "read-pages");
+      // CONTROL: the index is whole and counts the style on nothing, so the
+      // refusal below comes from the stored page and not from the index.
+      const usage = await call("GET", `${route("usage")}?id=c-spare`, designer);
+      expect(usage.body).toMatchObject({
+        whole: true,
+        styles: { "c-spare": { documents: 0, complete: true } },
+      });
+
+      const refused = await call("POST", route("remove"), designer, {
+        ids: ["c-spare"],
+      });
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain(
+        "Still used on Home. Remove it from that page first."
+      );
+      expect((await stored(t)).map(entry => entry.id)).toContain("c-spare");
+
+      // A designer who may not read the page is told how many, never which.
+      const blind = await holding(t, ...DESIGN);
+      const unnamed = await call("POST", route("remove"), blind, {
+        ids: ["c-spare"],
+      });
+      expect(unnamed.status).toBe(400);
+      expect(JSON.stringify(unnamed.body)).toContain(
+        "Still used on 1 page you can't open."
+      );
+      expect(JSON.stringify(unnamed.body)).not.toContain("Home");
     });
 
     it("refuses a page that adds a class the site does not define, and keeps one it already held", async () => {

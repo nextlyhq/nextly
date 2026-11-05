@@ -120,12 +120,11 @@ export const PANEL_BOUNDS = {
 } as const;
 
 /**
- * The rail's fixed width in CSS pixels: wide enough for the longest label,
- * "Components", under its icon at the 12px the admin's text never goes below.
- * At the narrowest supported shell, with both panels open at their initial
- * widths, the canvas keeps 576px — above its own floor.
+ * The rail's fixed width in CSS pixels: a 36px icon square with 6px either
+ * side. The rail shows icons alone, each named by its tooltip, so it gives the
+ * canvas back the width a labelled rail took.
  */
-export const RAIL_WIDTH = 84;
+export const RAIL_WIDTH = 48;
 
 /**
  * The narrowest the canvas may become before a drag stops taking from it.
@@ -255,39 +254,26 @@ export interface ShellPreferences {
    */
   layouts: Record<string, Record<string, number>>;
   /**
-   * Whether the canvas draws a box for containers that have no children yet.
+   * Whether the rail's single-letter keys (A, L, P, C, D) open its panels.
    *
-   * ON by default: a container with nothing in it has no height, so with this
-   * off it is invisible and unclickable, which is the state an author is most
-   * likely to need help with. It is a preference rather than a hardcode
-   * because the box is editor chrome the visitor never sees, and an author
-   * checking how the page really looks needs a way to take it away.
+   * ON by default, and a preference because a key with no modifier can be
+   * set off by speech input or a stray press: WCAG 2.1.4 asks that such a
+   * shortcut can be turned off. Help holds the switch, beside the keys.
+   *
+   * Optional in this published type, so a host that builds preferences
+   * written before the switch still compiles; absent reads as on.
    */
-  showEmptyElements: boolean;
+  panelKeys?: boolean;
 }
-
-/**
- * The DOM attribute the shell stamps on `.nx-builder-chrome` when
- * {@link ShellPreferences.showEmptyElements} is off.
- *
- * `builder-chrome.css` has no module system, so it cannot import this and its
- * selector spells the same string out literally. Exported so every reader of
- * that spelling — the shell that writes it and the test that pins the
- * stylesheet against it — takes it from one place: a rename here that missed
- * the CSS would otherwise leave the selector matching nothing, silently, with
- * no type error and no failed import to notice.
- */
-export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
 
 /**
  * The class marking the editor shell's own root element.
  *
- * The scope every piece of editor chrome is drawn inside, and the element
- * {@link EMPTY_ELEMENTS_ATTRIBUTE} is stamped on. Kept beside that attribute
- * and away from the component, for the reason its docblock gives: the markers
- * `builder-chrome.css` has to spell out literally are the ones a rename can
- * break silently, so each has one exported spelling that the shell writing it,
- * the code asking about it and the test pinning the stylesheet all take from.
+ * The scope every piece of editor chrome is drawn inside. Kept here and away
+ * from the component because `builder-chrome.css` has to spell it out
+ * literally, and a marker spelled out literally is one a rename can break
+ * silently: so it has one exported spelling that the shell writing it, the
+ * code asking about it and the test pinning the stylesheet all take from.
  */
 export const BUILDER_CHROME_CLASS = "nx-builder-chrome";
 
@@ -338,7 +324,7 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   zoom: FIT_ZOOM,
   editingBreakpoint: null,
   layouts: {},
-  showEmptyElements: true,
+  panelKeys: true,
 };
 
 /**
@@ -483,6 +469,11 @@ function isLayout(value: unknown): value is Record<string, number> {
  * Every field is validated separately and falls back on its own, rather than
  * one malformed field discarding the rest. A layout written under a different
  * panel set should reset the layout, not the author's panel choice with it.
+ *
+ * Only the fields named below are read, and anything else in the record is
+ * ignored rather than refused. Records written by an earlier release still
+ * carry `showEmptyElements`, a preference that no longer exists because empty
+ * containers are always shown: such a record loads whole, without it.
  */
 export function readPreferences(store: PreferenceStore): ShellPreferences {
   let raw: unknown;
@@ -522,10 +513,9 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
         ? record.editingBreakpoint
         : DEFAULT_PREFERENCES.editingBreakpoint,
     layouts: readLayouts(record.layouts),
-    // Always shown. The editor no longer offers to hide empty containers, so a
-    // stored false, written while it did, is read as shown: otherwise an author
-    // who once hid them would have no way to bring them back.
-    showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
+    // On unless a stored false says otherwise, which covers every preference
+    // written before the keys could be turned off.
+    panelKeys: record.panelKeys !== false,
   };
 }
 

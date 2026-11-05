@@ -657,6 +657,32 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental A document's stored field values read with no read hook, and
+ *   a write of a field made only if the stored value is still the one read.
+ *   Graduates once `@nextlyhq/plugin-page-builder`'s component delete has
+ *   rewritten site content through it in a release.
+ *
+ * A plugin that rewrites content it did not author has two problems the
+ *   ordinary Direct API cannot solve: a site's `afterRead` hook can hide or
+ *   reshape the value it reads, and a check made before the write's
+ *   transaction leaves a gap in which an author's save is overwritten.
+ *   `readStoredFields` reads the stored form (live row, working draft, one
+ *   language) of fields of a plugin field type stored as JSON, judged by the
+ *   person's read access. `updateIfUnchanged` makes the ordinary update as
+ *   that person, refused with a `CONFLICT` error when the field no longer
+ *   hashes, under the write's own row lock, to what was read.
+ *   `storedValueHash` is the one hash both sides compare.
+ */
+export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
+export type {
+  PluginConditionalUpdate,
+  PluginStoredDocument,
+  PluginStoredFields,
+  PluginStoredFieldsRequest,
+  PluginWriteExpectation,
+} from "nextly";
+
+/**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.
  *
@@ -812,7 +838,9 @@ export type {
  * @experimental Background jobs.
  *
  * A plugin declares a job type with `defineJob` and asks for one to happen with
- * `nextly.jobs.queue`. Held experimental per D55 until a first-party plugin
+ * `nextly.jobs.queue`. `ctx.services.jobs.runSweepNow(slug)` runs one of the
+ * plugin's OWN sweeps from a request, for a site no scheduler drains
+ * (`PluginJobsNamespace`). Held experimental per D55 until a first-party plugin
  * ships one — the release drain is core's, not a plugin's, so nothing has yet
  * exercised this from the outside.
  */
@@ -825,6 +853,7 @@ export type {
   JobInputFor,
   JobRetryPolicy,
   JobSlug,
+  PluginJobsNamespace,
   QueueJobArgs,
   QueueJobResult,
 } from "nextly";

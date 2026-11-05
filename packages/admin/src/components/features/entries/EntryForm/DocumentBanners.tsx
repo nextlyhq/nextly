@@ -40,7 +40,10 @@ export interface DocumentBannersProps {
   /** The page's strip about the whole document, drawn first. */
   documentBanner?: ReactNode;
   /** The editor's claim on the document, which says why it is held. */
-  lock: Pick<DocumentLockSurface, "notice" | "takeOver" | "requestAccess">;
+  lock: Pick<
+    DocumentLockSurface,
+    "notice" | "takeOver" | "requestAccess" | "retryLoad"
+  >;
   /** The editor's recovery state. */
   recovery: UseAutosaveRecoveryResult;
   /** The past version on screen, or null while the live document is. */
@@ -63,6 +66,7 @@ export function DocumentBanners({
         notice={lock.notice}
         onTakeOver={lock.takeOver}
         onRequestAccess={lock.requestAccess}
+        onRetry={lock.retryLoad}
         className={BAND}
       />
       <LiveDocumentRecoveryOffer

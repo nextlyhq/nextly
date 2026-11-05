@@ -28,7 +28,11 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import type { ContentServices, MediaPickerProps } from "./content-controls";
+import {
+  RichTextField,
+  type ContentServices,
+  type MediaPickerProps,
+} from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 import { createOpenPassages } from "./open-passages";
@@ -145,6 +149,48 @@ function StayingPicker({
 }
 
 describe("the media control", () => {
+  it("shows a stored file by its thumbnail, its name and its alt text", async () => {
+    // Without a read of the stored id, every image read "A file from the
+    // media library." and two pictures could not be told apart.
+    register();
+    const editor = editorFor({ mediaId: "m-42" });
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          MediaPicker: FakePicker,
+          readMedia: async id =>
+            id === "m-42"
+              ? { name: "hero.png", thumbnail: "/t/m-42.png", alt: "A hero" }
+              : null,
+        }}
+      />
+    );
+    expect(await screen.findByText("hero.png")).toBeDefined();
+    expect(screen.getByText("Library alt text: A hero")).toBeDefined();
+    const thumbnail = document.querySelector(".nx-inspector__media-thumb");
+    expect(thumbnail?.getAttribute("src")).toBe("/t/m-42.png");
+    expect(screen.queryByText(/A file from the media library/)).toBeNull();
+  });
+
+  it("still says a file is chosen when it cannot be read", async () => {
+    register();
+    const editor = editorFor({ mediaId: "m-gone" });
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          MediaPicker: FakePicker,
+          readMedia: async () => null,
+        }}
+      />
+    );
+    expect(
+      await screen.findByText("A file from the media library.")
+    ).toBeDefined();
+    expect(document.querySelector(".nx-inspector__media-thumb")).toBeNull();
+  });
+
   it("closes the picker once a choice is made", () => {
     register();
     const editor = editorFor({});
@@ -233,6 +279,62 @@ function fakeEditor(attach: (element: HTMLElement, value: unknown) => unknown) {
   return vi.fn(async () => ({
     attach,
   })) as unknown as ContentServices["loadRichTextEditor"];
+}
+
+describe("a rich-text field whose write was refused", () => {
+  it("gives the refused words up when the stored passage changes under them", async () => {
+    // A Reset, an undo: the passage now stored is what the field shows, and
+    // the refused draft and its notice go rather than sitting over it.
+    const detach = vi.fn();
+    const attach = vi.fn(() => ({
+      status: "attached",
+      session: {
+        focus: vi.fn(),
+        read: () => ({ root: "too long" }),
+        detach,
+        hold: vi.fn(),
+      },
+    }));
+    const services = { loadRichTextEditor: fakeEditor(attach) };
+    const field = (value: unknown) => (
+      <>
+        <span id="body-label">Body</span>
+        <RichTextField
+          id="body"
+          labelledBy="body-label"
+          value={value}
+          disabled={false}
+          onCommit={() => null}
+          services={services}
+        />
+      </>
+    );
+    const view = render(field(passageOf("Ours")));
+    const box = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(box);
+    });
+    await act(async () => {
+      fireEvent.blur(box);
+    });
+    expect(screen.getByText(/could not be saved/)).toBeDefined();
+    expect(detach).not.toHaveBeenCalled();
+
+    view.rerender(field(passageOf("The component's")));
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/could not be saved/)).toBeNull();
+    expect(box.textContent).toBe("The component's");
+  });
+});
+
+/** A one-paragraph passage, as the rich-text editor stores one. */
+function passageOf(text: string): unknown {
+  return {
+    root: {
+      type: "root",
+      children: [{ type: "paragraph", children: [{ type: "text", text }] }],
+    },
+  };
 }
 
 describe("the rich-text control", () => {

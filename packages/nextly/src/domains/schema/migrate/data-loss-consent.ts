@@ -264,7 +264,7 @@ export function deprecationNotices(consent: DataLossConsent): string[] {
 }
 
 /** A key that names one deletion, for telling two listings' entries apart. */
-function deletionKey(deletion: Deletion): string {
+export function deletionKey(deletion: Deletion): string {
   switch (deletion.kind) {
     case "table":
       return `table:${deletion.table}`;
@@ -282,6 +282,15 @@ function deletionKey(deletion: Deletion): string {
  * covered before, the consent without targets for everything, and a list for
  * the deletions in a table it names or of a column it names.
  */
+/**
+ * Whether only the consent without targets covers `deletion`: one its
+ * command cannot name, or one on a schema-qualified table, which a target
+ * list cannot tell from a `table.column`.
+ */
+function onlyBlanketCovers(deletion: Deletion): boolean {
+  return deletion.kind === "unnamed" || deletion.table.includes(".");
+}
+
 export function consentCovers(
   consent: DataLossConsent,
   deletion: Deletion
@@ -293,7 +302,7 @@ export function consentCovers(
   const given = consent.given;
   if (given === null) return false;
   if (given.targets === "all") return true;
-  if (deletion.kind === "unnamed") return false;
+  if (deletion.kind === "unnamed" || onlyBlanketCovers(deletion)) return false;
   if (given.targets.tables.has(deletion.table)) return true;
   return (
     deletion.kind === "column" &&
@@ -341,7 +350,7 @@ function consentHint(
   consent: DataLossConsent,
   flag: boolean
 ): string {
-  const blanket = deletions.some(d => d.kind === "unnamed");
+  const blanket = deletions.some(onlyBlanketCovers);
   const forms = (value: string | null): string => {
     const env =
       value === null
@@ -373,6 +382,15 @@ function consentHint(
   return forms(tokens.join(","));
 }
 
+/**
+ * The consent a command taking `--accept-data-loss` needs to delete
+ * `deletions` when none is given: what a dry run names, so the operator
+ * learns the exact value before a real run refuses.
+ */
+export function consentToCover(deletions: readonly Deletion[]): string {
+  return consentHint(deletions, NO_CONSENT, true);
+}
+
 /** What `judgeDataLoss` decided. */
 export type DataLossVerdict =
   | { kind: "proceed" }
@@ -381,8 +399,8 @@ export type DataLossVerdict =
       kind: "refused";
       /**
        * `not-covered`: a consent naming targets was given and leaves some
-       * deletion out. `needs-consent`: none covers it, and no terminal is
-       * there to ask.
+       * deletion out. `needs-consent`: none covers it, and nobody can be
+       * asked (no terminal, `CI` set, or `--non-interactive`).
        */
       reason: "not-covered" | "needs-consent";
       /** The refusal, naming each deletion left out and the consent that covers it. */
@@ -403,7 +421,9 @@ export type DataLossVerdict =
  * `approved` holds deletions the operator already agreed to in this run (a
  * command that decides twice, before and under its lock, asks only once).
  * `flag` says whether the command takes `--accept-data-loss`, so the hint
- * names only a spelling that reaches it.
+ * names only a spelling that reaches it. `sourceOf` names the file a
+ * deletion comes from, so one listing, and one question, can cover a run of
+ * several files: each file is named above what it deletes.
  */
 export async function judgeDataLoss(args: {
   deletions: readonly Deletion[];
@@ -413,6 +433,7 @@ export async function judgeDataLoss(args: {
   print: (line: string) => void;
   flag?: boolean;
   approved?: readonly Deletion[];
+  sourceOf?: (deletion: Deletion) => string | undefined;
 }): Promise<DataLossVerdict> {
   const { deletions, consent } = args;
   if (deletions.length === 0) return { kind: "proceed" };
@@ -420,8 +441,22 @@ export async function judgeDataLoss(args: {
   const uncovered = deletions.filter(
     d => !consentCovers(consent, d) && !approved.has(deletionKey(d))
   );
-  const lines = (list: readonly Deletion[]) =>
-    list.map(d => `  - ${describeDeletion(d)}`);
+  const lines = (list: readonly Deletion[]) => {
+    const out: string[] = [];
+    let heading: string | undefined;
+    for (const d of list) {
+      const source = args.sourceOf?.(d);
+      if (source === undefined) {
+        heading = undefined;
+        out.push(`  - ${describeDeletion(d)}`);
+        continue;
+      }
+      if (source !== heading) out.push(`  ${source}:`);
+      heading = source;
+      out.push(`    - ${describeDeletion(d)}`);
+    }
+    return out;
+  };
 
   if (uncovered.length === 0) {
     args.print(
@@ -434,8 +469,8 @@ export async function judgeDataLoss(args: {
   const flag = args.flag ?? true;
   const targets = consent.given?.targets;
   if (targets !== undefined && targets !== "all") {
-    const unnamedNote = uncovered.some(d => d.kind === "unnamed")
-      ? " A deletion its command cannot name is covered only by the consent without targets."
+    const unnamedNote = uncovered.some(onlyBlanketCovers)
+      ? " A deletion its command cannot name, or one on a schema-qualified table, is covered only by the consent without targets."
       : "";
     return {
       kind: "refused",
@@ -463,7 +498,7 @@ export async function judgeDataLoss(args: {
     reason: "needs-consent",
     uncovered,
     message:
-      `Deleting data needs consent, and no terminal is attached to ask. This would delete:\n` +
+      `Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive). This would delete:\n` +
       `${lines(uncovered).join("\n")}\n` +
       `Nothing was changed. To consent: ${consentHint(uncovered, consent, flag)}.`,
   };
@@ -497,9 +532,4 @@ export async function countDeletions(
     }
   }
   return counted;
-}
-
-/** Whether a person is there to answer: a terminal on both ends. */
-export function isInteractiveTerminal(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
