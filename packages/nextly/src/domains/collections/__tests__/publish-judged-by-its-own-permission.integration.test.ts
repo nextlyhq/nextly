@@ -22,6 +22,7 @@ import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineCollection, defineSingle, text } from "../../../config";
+import type { ApiKeyService } from "../../auth/services/api-key-service";
 import { Nextly } from "../../../direct-api/nextly";
 import { NextlyError } from "../../../errors/nextly-error";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
@@ -1107,5 +1108,313 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+  }
+);
+
+/** A full-access API key of `userId`, which acts with that person's grants. */
+async function keyOf(userId: string): Promise<string> {
+  const keys = current!.getService("apiKeyService") as unknown as ApiKeyService;
+  const { key } = await keys.createApiKey(userId, {
+    name: `${userId} key`,
+    tokenType: "full-access",
+    expiresIn: "unlimited",
+  });
+  return key;
+}
+
+/** A REST write with an API key, answered with its status and JSON. */
+async function restWithKey(
+  key: string,
+  method: "PATCH" | "POST",
+  path: string[],
+  body: unknown
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const handlers = createDynamicHandlers() as unknown as Record<
+    string,
+    (request: Request, context: unknown) => Promise<Response>
+  >;
+  const res = await handlers[method]!(
+    new Request(`http://localhost/api/${path.join("/")}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+}
+
+/** The refusal message a REST answer carries, whole or for its first item. */
+function refusalMessage(json: Record<string, unknown>): unknown {
+  const whole = (json.error as { message?: unknown } | undefined)?.message;
+  if (whole !== undefined) return whole;
+  return (json.errors as { message?: unknown }[] | undefined)?.[0]?.message;
+}
+
+// The overwrite choice is no field: it says how the version is judged, and the
+// write never stores it. So a body naming only the status beside it is still a
+// status-only write, judged by publish or unpublish, on every path that judges
+// the body before the version keys leave it.
+describe.each(getConfiguredTestDialects())(
+  "a status-only write that chooses to overwrite is judged by its own permission (%s)",
+  dialect => {
+    const OVERWRITE = { _overwrite: true } as const;
+
+    it("publishes and unpublishes over REST", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+
+      expect(
+        await rest(PUBLISHER, "PATCH", entry, {
+          status: "published",
+          ...OVERWRITE,
+        })
+      ).toBe(200);
+      expect((await stored(POSTS, id)).status).toBe("published");
+
+      expect(
+        await rest(PUBLISHER, "PATCH", entry, { status: "draft", ...OVERWRITE })
+      ).toBe(200);
+      expect(await stored(POSTS, id)).toMatchObject({
+        title: "t",
+        status: "draft",
+      });
+    });
+
+    it("publishes and unpublishes by query", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      const where = { id: { equals: id } };
+
+      await as(PUBLISHER).update({
+        collection: POSTS,
+        where,
+        data: { status: "published", ...OVERWRITE },
+      } as never);
+      expect((await stored(POSTS, id)).status).toBe("published");
+
+      // The unpublish is let through and applies. The Direct API then reads
+      // the entry back as the caller, and a draft is not this caller's to
+      // read, which answers "not found" with or without the overwrite choice;
+      // what matters here is that the gate did not refuse it as an edit.
+      const unpublished = await as(PUBLISHER)
+        .update({
+          collection: POSTS,
+          where,
+          data: { status: "draft", ...OVERWRITE },
+        } as never)
+        .then(
+          () => "applied",
+          (error: unknown) => String((error as { code?: unknown }).code)
+        );
+      expect(unpublished).not.toBe("FORBIDDEN");
+      expect((await stored(POSTS, id)).status).toBe("draft");
+    });
+
+    it("publishes and unpublishes by ids over REST", async () => {
+      await boot(dialect);
+      const a = await draft(POSTS, "a");
+      const b = await draft(POSTS, "b");
+      const bulk = ["collections", POSTS, "entries", "bulk-update"];
+
+      const published = await restResponse(PUBLISHER, "POST", bulk, {
+        ids: [a, b],
+        data: { status: "published", ...OVERWRITE },
+      });
+      expect(published.status).toBe(200);
+      expect(
+        ((await published.json()) as { errors?: unknown[] }).errors
+      ).toEqual([]);
+      expect((await stored(POSTS, a)).status).toBe("published");
+      expect((await stored(POSTS, b)).status).toBe("published");
+
+      const unpublished = await restResponse(PUBLISHER, "POST", bulk, {
+        ids: [a, b],
+        data: { status: "draft", ...OVERWRITE },
+      });
+      expect(
+        ((await unpublished.json()) as { errors?: unknown[] }).errors
+      ).toEqual([]);
+      expect((await stored(POSTS, a)).status).toBe("draft");
+      expect((await stored(POSTS, b)).status).toBe("draft");
+    });
+
+    it("publishes and unpublishes each row of a batch", async () => {
+      await boot(dialect);
+      const a = await draft(POSTS, "a");
+      const b = await draft(POSTS, "b");
+      const collections = pluginServices().collections;
+
+      const published = await collections.updateMany(
+        POSTS,
+        [
+          { id: a, data: { status: "published", ...OVERWRITE } },
+          { id: b, data: { status: "published", ...OVERWRITE } },
+        ],
+        asPlugin(PUBLISHER)
+      );
+      expect(published).toMatchObject({ successful: 2, failed: 0 });
+
+      const unpublished = await collections.updateMany(
+        POSTS,
+        [{ id: a, data: { status: "draft", ...OVERWRITE } }],
+        asPlugin(PUBLISHER)
+      );
+      expect(unpublished).toMatchObject({ successful: 1, failed: 0 });
+      expect((await stored(POSTS, a)).status).toBe("draft");
+      expect((await stored(POSTS, b)).status).toBe("published");
+    });
+
+    it("publishes and unpublishes over REST with an API key, by id and by ids", async () => {
+      await boot(dialect);
+      const key = await keyOf(PUBLISHER);
+      const id = await draft(POSTS, "t");
+      const other = await draft(POSTS, "u");
+      const entry = ["collections", POSTS, "entries", id];
+      const bulk = ["collections", POSTS, "entries", "bulk-update"];
+
+      const byId = await restWithKey(key, "PATCH", entry, {
+        status: "published",
+        ...OVERWRITE,
+      });
+      expect(byId.status, JSON.stringify(byId.json)).toBe(200);
+      expect((await stored(POSTS, id)).status).toBe("published");
+      const undone = await restWithKey(key, "PATCH", entry, {
+        status: "draft",
+        ...OVERWRITE,
+      });
+      expect(undone.status, JSON.stringify(undone.json)).toBe(200);
+      expect((await stored(POSTS, id)).status).toBe("draft");
+
+      const byIds = await restWithKey(key, "POST", bulk, {
+        ids: [id, other],
+        data: { status: "published", ...OVERWRITE },
+      });
+      expect(byIds.json.errors, JSON.stringify(byIds.json)).toEqual([]);
+      const unpublished = await restWithKey(key, "POST", bulk, {
+        ids: [id, other],
+        data: { status: "draft", ...OVERWRITE },
+      });
+      expect(unpublished.json.errors).toEqual([]);
+      expect((await stored(POSTS, other)).status).toBe("draft");
+    });
+
+    it("refuses one who may neither publish nor edit in the words of publish, not edit", async () => {
+      const t = await boot(dialect);
+      await userWhoMay(t, READER, "read", [POSTS, NOTES, HOME]);
+      const key = await keyOf(READER);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+      const publish = { status: "published", ...OVERWRITE };
+
+      // The refusal names the action the body asks: a status beside the
+      // overwrite choice asks publish, so being told "edit" would be wrong.
+      expect
+        .soft(await restRefusal(READER, entry, publish))
+        .toEqual({ status: 403, message: "You can't publish this posts." });
+      expect
+        .soft(
+          await restRefusal(READER, ["collections", POSTS, "entries"], {
+            where: { id: { equals: id } },
+            data: publish,
+          })
+        )
+        .toEqual({ status: 403, message: "You can't publish posts." });
+      expect
+        .soft(refusalMessage((await restWithKey(key, "PATCH", entry, publish)).json))
+        .toBe("You can't publish this posts.");
+      expect
+        .soft(
+          refusalMessage(
+            (
+              await restWithKey(
+                key,
+                "POST",
+                ["collections", POSTS, "entries", "bulk-update"],
+                { ids: [id], data: publish }
+              )
+            ).json
+          )
+        )
+        .toMatch(/^You can't publish/);
+      // And the same body naming a field is an edit, refused as one.
+      expect
+        .soft(
+          await restRefusal(READER, entry, { ...publish, title: "edited" })
+        )
+        .toEqual({ status: 403, message: "You can't edit this posts." });
+      expect((await stored(POSTS, id)).status).toBe("draft");
+    });
+
+    it("publishes a Single over REST", async () => {
+      await boot(dialect);
+      await trusted().updateSingle({
+        slug: HOME,
+        data: { headline: "h", status: "draft" },
+      } as never);
+
+      expect(
+        await rest(PUBLISHER, "PATCH", ["singles", HOME], {
+          status: "published",
+          ...OVERWRITE,
+        })
+      ).toBe(200);
+      expect(
+        (await trusted().findSingle({ slug: HOME } as never)) as {
+          status?: unknown;
+        }
+      ).toMatchObject({ headline: "h", status: "published" });
+    });
+
+    it("still asks update of a write naming a field beside the choice, on every path, writing nothing", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      const edit = { status: "published", title: "edited", ...OVERWRITE };
+
+      expect(
+        await rest(PUBLISHER, "PATCH", ["collections", POSTS, "entries", id], edit)
+      ).toBe(403);
+      await expect(
+        as(PUBLISHER).update({
+          collection: POSTS,
+          where: { id: { equals: id } },
+          data: edit,
+        } as never)
+      ).rejects.toThrow();
+      const byIds = await restResponse(
+        PUBLISHER,
+        "POST",
+        ["collections", POSTS, "entries", "bulk-update"],
+        { ids: [id], data: edit }
+      );
+      const byIdsBody = (await byIds.json()) as {
+        items?: unknown[];
+        error?: unknown;
+      };
+      expect(byIds.status === 403 || byIdsBody.items?.length === 0).toBe(true);
+      const batch = await pluginServices().collections.updateMany(
+        POSTS,
+        [{ id, data: edit }],
+        asPlugin(PUBLISHER)
+      );
+      expect(batch).toMatchObject({ successful: 0, failed: 1 });
+      await expect(
+        pluginServices().collections.updateEntry(
+          POSTS,
+          id,
+          edit,
+          asPlugin(PUBLISHER)
+        )
+      ).rejects.toThrow();
+
+      expect(await stored(POSTS, id)).toMatchObject({
+        title: "t",
+        status: "draft",
+      });
+    });
   }
 );
