@@ -10,7 +10,13 @@ const listed: WebhookEventTypeEntry[] = [
   { type: "acme-shop.order.paid", owner: "@acme/shop" },
 ];
 
-function renderTable(eventType?: string) {
+function renderTable(
+  eventType?: string,
+  // `null` for a list that has not arrived; a default would stand in for
+  // `undefined`.
+  eventTypes: WebhookEventTypeEntry[] | null = listed,
+  eventTypesFailed = false
+) {
   const onEventTypeChange = vi.fn();
   render(
     <DeliveryTable
@@ -20,7 +26,8 @@ function renderTable(eventType?: string) {
       page={0}
       pageSize={20}
       eventType={eventType}
-      eventTypes={listed}
+      eventTypes={eventTypes ?? undefined}
+      eventTypesFailed={eventTypesFailed}
       onPageChange={vi.fn()}
       onPageSizeChange={vi.fn()}
       onStatusChange={vi.fn()}
@@ -58,5 +65,32 @@ describe("DeliveryTable's event filter", () => {
     expect(openEventFilter()).toContain(
       "acme-blog.comment.added (unavailable)"
     );
+  });
+
+  it("names a plugin's type by its label beside its id, as the webhook form does", () => {
+    renderTable(undefined, [
+      {
+        type: "acme-shop.order.paid",
+        owner: "@acme/shop",
+        label: "Order paid",
+      },
+    ]);
+
+    expect(openEventFilter()).toContain("Order paid (acme-shop.order.paid)");
+  });
+
+  it("says when the event types could not be loaded, rather than look empty", () => {
+    renderTable(undefined, null, true);
+
+    expect(
+      screen.getByText(/Could not load the event types to filter by/)
+    ).toBeInTheDocument();
+  });
+
+  it("offers only All events while the types load, and says nothing failed", () => {
+    renderTable(undefined, null, false);
+
+    expect(screen.queryByText(/Could not load the event types/)).toBeNull();
+    expect(openEventFilter()).toEqual(["All events"]);
   });
 });

@@ -8,10 +8,10 @@ published, a page is deleted — so another system can react without polling.
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | No plugin required |
-| Admin | A **Webhooks** section for endpoints, secrets and delivery history |
+|            |                                                                                                     |
+| ---------- | --------------------------------------------------------------------------------------------------- |
+| Built in   | No plugin required                                                                                  |
+| Admin      | A **Webhooks** section for endpoints, secrets and delivery history                                  |
 | Permission | Managing endpoints is governed by `create-webhooks`, `update-webhooks` and `delete-webhooks` grants |
 
 ## Endpoints
@@ -22,9 +22,11 @@ will ignore.
 
 ## Event types
 
-An endpoint subscribes to event types, or to `*` for every current and future one. Core's are
-`entry.*`, `single.*`, `media.*`, `user.created`, `user.deleted` and the form builder's
-`form.submission.created`. `GET /admin/api/webhooks/event-types` lists every type an endpoint may
+An endpoint subscribes to event types by their exact ids, or to `*` for every current and future
+one. Core's are `entry.created`, `entry.updated`, `entry.deleted`, `entry.published`,
+`entry.unpublished`, `entry.status_changed`, `single.updated`, `single.published`,
+`single.unpublished`, `media.uploaded`, `media.updated`, `media.deleted`, `user.created`,
+`user.deleted` and the form builder's `form.submission.created`. `*` is the only wildcard. `GET /admin/api/webhooks/event-types` lists every type an endpoint may
 subscribe to, with the plugin or `core` that declares it, to anyone who may read, create or update
 webhooks.
 
@@ -73,7 +75,7 @@ split each token on its comma, and accept if any token matches.
 
 The freshness check is not optional. Signing the timestamp proves it was not altered; it does
 not make the delivery expire. Nextly's own `verifySignature` rejects anything outside a
-**300-second (5 minute)** tolerance *before* it compares signatures, and a receiver that skips
+**300-second (5 minute)** tolerance _before_ it compares signatures, and a receiver that skips
 that step will accept a captured request forever.
 
 <Callout type="warn">
@@ -87,15 +89,16 @@ which leaves you replayable indefinitely.
 
 A Standard Webhooks verifier library does all four correctly. Prefer one over hand-rolling
 this.
+
 </Callout>
 
 Three headers travel with each delivery:
 
-| Header | Holds |
-|---|---|
-| `webhook-id` | The delivery's id, and part of the signed content |
+| Header              | Holds                                               |
+| ------------------- | --------------------------------------------------- |
+| `webhook-id`        | The delivery's id, and part of the signed content   |
 | `webhook-timestamp` | When it was signed, also part of the signed content |
-| `webhook-signature` | The signature itself |
+| `webhook-signature` | The signature itself                                |
 
 Because the timestamp is signed, a captured payload cannot be replayed later under its
 original signature.
@@ -113,11 +116,11 @@ rolled back.
 
 Delivery is then retried on a schedule:
 
-| | |
-|---|---|
-| Attempts | 6 by default |
-| First retry | 30 seconds |
-| Longest delay | 1 hour |
+|               |              |
+| ------------- | ------------ |
+| Attempts      | 6 by default |
+| First retry   | 30 seconds   |
+| Longest delay | 1 hour       |
 
 A `2xx` response counts as delivered. A `429` or any `5xx` is retried. Other `4xx`
 responses are not retried, because a receiver rejecting the request as malformed will

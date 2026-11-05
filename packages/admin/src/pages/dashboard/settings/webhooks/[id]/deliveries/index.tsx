@@ -224,7 +224,8 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
           pageSize={pageSize}
           status={status}
           eventType={eventType}
-          eventTypes={eventTypes.data ?? []}
+          eventTypes={eventTypes.data}
+          eventTypesFailed={eventTypes.isError}
           onPageChange={setPage}
           onPageSizeChange={setPageSize}
           onStatusChange={handleStatusChange}

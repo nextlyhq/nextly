@@ -20,7 +20,10 @@ import { useMemo } from "react";
 
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
-import { webhookEventChoices } from "@admin/lib/webhook-event-choices";
+import {
+  webhookEventChoices,
+  type WebhookEventChoice,
+} from "@admin/lib/webhook-event-choices";
 import {
   WEBHOOK_DELIVERY_STATUSES,
   type WebhookDeliveryStatus,
@@ -37,6 +40,18 @@ import {
   formatStatusCode,
 } from "./deliveryStatus";
 
+/**
+ * What the event filter calls a choice: a plugin's label beside its id, so it
+ * reads as the webhook form names it, and a type the server no longer lists
+ * marked unavailable.
+ */
+function eventChoiceText(choice: WebhookEventChoice): string {
+  if (choice.unavailable) return `${choice.type} (unavailable)`;
+  return choice.label === choice.type
+    ? choice.type
+    : `${choice.label} (${choice.type})`;
+}
+
 /** Sentinel for the "no filter" option (Radix Select forbids an empty value). */
 const ALL = "all" as const;
 
@@ -52,8 +67,13 @@ export interface DeliveryTableProps {
   /** Active filters; undefined means unfiltered. */
   status?: WebhookDeliveryStatus;
   eventType?: WebhookEventType;
-  /** The event types the server lists, which the event filter offers. */
-  eventTypes: readonly WebhookEventTypeEntry[];
+  /**
+   * The event types the server lists, which the event filter offers;
+   * `undefined` while they load or when they could not be loaded.
+   */
+  eventTypes: readonly WebhookEventTypeEntry[] | undefined;
+  /** The list could not be loaded, which the filter says rather than look empty. */
+  eventTypesFailed?: boolean;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   onStatusChange: (status?: WebhookDeliveryStatus) => void;
@@ -71,6 +91,7 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
   status,
   eventType,
   eventTypes,
+  eventTypesFailed = false,
   onPageChange,
   onPageSizeChange,
   onStatusChange,
@@ -185,17 +206,21 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
             {/* The filter in force stays offered, named, though the server
                 no longer lists it, as a disabled plugin's type is not. */}
             {webhookEventChoices(
-              eventTypes,
+              eventTypes ?? [],
               eventType === undefined ? [] : [eventType]
             ).map(choice => (
               <SelectItem key={choice.type} value={choice.type}>
-                {choice.unavailable
-                  ? `${choice.type} (unavailable)`
-                  : choice.type}
+                {eventChoiceText(choice)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        {eventTypesFailed && (
+          <p className="text-sm text-destructive-500">
+            Could not load the event types to filter by. Reload the page to try
+            again.
+          </p>
+        )}
       </div>
 
       <DataTableView<WebhookDeliverySummary>

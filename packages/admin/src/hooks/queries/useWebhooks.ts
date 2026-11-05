@@ -41,8 +41,10 @@ export const webhookKeys = {
 
 /**
  * The event types an endpoint may subscribe to, as the server lists them:
- * core's and every enabled plugin's. The list changes only when the app
- * restarts with other plugins, so it is held for the session.
+ * core's and every enabled plugin's. The list changes only when the server
+ * starts with other plugins, so it is held for five minutes rather than read
+ * on every screen, and read again after that, so a tab left open across a
+ * restart picks up the new list.
  */
 export function useWebhookEventTypes(): UseQueryResult<
   WebhookEventTypeEntry[],
@@ -51,7 +53,7 @@ export function useWebhookEventTypes(): UseQueryResult<
   return useQuery<WebhookEventTypeEntry[], Error>({
     queryKey: webhookKeys.eventTypes(),
     queryFn: () => webhookApi.listWebhookEventTypes(),
-    staleTime: Infinity,
+    staleTime: 5 * 60_000,
   });
 }
 
