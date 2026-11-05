@@ -210,7 +210,10 @@ on a Mac) for actual size, or <kbd>Shift</kbd>+<kbd>1</kbd> to fit again. Choosi
 device goes back to fitting. The editor remembers the device and the zoom you left, for you
 rather than for the browser. If you remove the breakpoint you are styling, the editor moves to
 the next wider breakpoint that remains, or to Desktop when none is wider. A breakpoint removed
-while you were away is replaced by Desktop when you come back.
+while you were away is replaced by Desktop when you come back. If someone else removes a
+breakpoint while you still have the editor open, a save that adds styles or hiding at it is
+refused with "That breakpoint was removed from the site. Reload to keep editing.", since the
+published page would never show them. Styles a page already held there still save.
 
 ### Limits
 
