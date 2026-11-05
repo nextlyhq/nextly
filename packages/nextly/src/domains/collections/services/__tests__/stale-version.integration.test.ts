@@ -1478,5 +1478,59 @@ describe.each(getConfiguredTestDialects())(
         [`${id}.es`]: 1,
       });
     });
+
+    // SQLite runs one write transaction at a time: the other connection's
+    // save would wait for the caller's transaction to end.
+    it.skipIf(dialect === "sqlite")(
+      "refuses, in a caller's transaction that read first, a first translation another connection created meanwhile",
+      async () => {
+        const t = await boot(dialect);
+        const created = await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { note: "n" }
+        );
+        const id = idOf(created);
+        // An entry with no translation row, as one saved before translation
+        // was turned on: a read's version gives English as 0.
+        await t.adapter.executeQuery(`DELETE FROM ${q(t, LANGUAGES)}`, []);
+        const read = String(
+          (
+            (await t.nextly.findByID({
+              collection: DOCS as never,
+              id,
+              locale: "en",
+              overrideAccess: true,
+            } as never)) as { _rev: string }
+          )._rev
+        );
+        expect(read).toMatch(/\.en:0$/);
+        let go!: () => void;
+        const signalled = new Promise<void>(resolve => {
+          go = resolve;
+        });
+        const theirs = signalled.then(() =>
+          update(t, DOCS, id, { title: "theirs" }, { locale: "en" })
+        );
+        await expect(
+          t.adapter.transaction(async tx => {
+            // The caller's own read of the translation table first: on MySQL
+            // every plain read in this transaction sees it as it was then.
+            await tx.execute(`SELECT * FROM ${q(t, LANGUAGES)}`, []);
+            go();
+            const saved = await theirs;
+            expect(saved.success, JSON.stringify(saved)).toBe(true);
+            // A transactional update writes the default language, English.
+            await serviceOf(t).updateEntryInTransaction(
+              tx,
+              DOCS,
+              id,
+              { title: "mine", _rev: read },
+              { overrideAccess: true } as never
+            );
+          })
+        ).rejects.toMatchObject({ code: "STALE_VERSION" });
+        expect(await languageCounters(t, [id])).toEqual({ [`${id}.en`]: 1 });
+      }
+    );
   }
 );
