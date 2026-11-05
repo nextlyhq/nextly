@@ -699,7 +699,7 @@ function IconSwatch({ resolved }: { resolved: Resolved }): React.JSX.Element {
         "grid size-7 shrink-0 place-items-center rounded-[5px]",
         resolved.status === "found"
           ? "bg-muted"
-          : "border border-dashed border-muted-foreground/60",
+          : "border border-dashed border-muted-foreground",
         resolved.status === "loading" &&
           "animate-pulse bg-muted motion-reduce:animate-none"
       )}
