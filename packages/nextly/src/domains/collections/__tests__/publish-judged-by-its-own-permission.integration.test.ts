@@ -456,7 +456,7 @@ describe.each(getConfiguredTestDialects())(
       await as(PUBLISHER).update({
         collection: POSTS,
         where,
-        data: { status: "published", _overwrite: true },
+        data: { status: "published" },
       } as never);
       expect((await stored(POSTS, id)).status).toBe("published");
     });

@@ -654,7 +654,8 @@ const OPERATIONS: Operation[] = [
       t().nextly.update({
         collection: x.collection as never,
         where: { id: { equals: x.entryId } } as never,
-        data: { headline: "Changed" } as never,
+        // Removal from code is under test, not versions.
+        data: { headline: "Changed", _overwrite: true } as never,
       }),
   },
   {
@@ -689,7 +690,7 @@ const OPERATIONS: Operation[] = [
       t().nextly.update({
         collection: x.collection as never,
         where: MATCHES_NOTHING as never,
-        data: { headline: "Changed" } as never,
+        data: { headline: "Changed", _overwrite: true } as never,
       }),
   },
   {
