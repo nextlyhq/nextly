@@ -93,11 +93,7 @@ import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
 import type { CommandContext } from "../program";
-import {
-  createCliAdapter,
-  type CLIDatabaseAdapter,
-  type SupportedDialect,
-} from "../utils/adapter";
+import { openCommandAdapter, type SupportedDialect } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
@@ -1235,17 +1231,27 @@ export async function runMigrateDown(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  const adapter: CLIDatabaseAdapter = await createCliAdapter({
-    dialect: dbValidation.dialect,
-    databaseUrl: dbValidation.databaseUrl,
-    logger: options.verbose ? logger : undefined,
-  });
+  const adapter = await openCommandAdapter(
+    {
+      dialect: dbValidation.dialect,
+      databaseUrl: dbValidation.databaseUrl,
+      logger: options.verbose ? logger : undefined,
+      dryRun: options.dryRun,
+    },
+    logger
+  );
+  // A dry run whose database is not there has said so, and ends here.
+  if (adapter === undefined) return;
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
 
-    if (options.forceUnlock) {
+    // A dry run clears no lock, which may be an active operation's; it says a
+    // real run would.
+    if (options.forceUnlock && options.dryRun) {
+      logger.info("Would remove any migrate lock held");
+    } else if (options.forceUnlock) {
       const { forceUnlock } = await import(
         "../../domains/schema/pipeline/locks"
       );
