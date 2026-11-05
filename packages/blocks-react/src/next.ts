@@ -20,7 +20,9 @@ import {
   deriveSeoFromDocument,
   hashId,
   isFetchableUrl,
+  isListDay,
   DOCUMENT_FORMAT_VERSION,
+  readListQuery,
   regionDocument,
   safeTimeZone,
   type BindingDemand,
@@ -33,6 +35,7 @@ import {
   type DefinitionsById,
   type DocumentLimits,
   type LayoutRegion,
+  type ListQuery,
   type RemotePatternInput,
   type SeoImageCandidate,
   type SiteSheetInput,
@@ -1964,20 +1967,89 @@ async function readSite(
   }
 }
 
-/** The collections the page's lists draw, whose items its bindings read. */
-function listCollections(documents: readonly BlockDocument[]): Set<string> {
+/**
+ * The collections the page's lists read that `wanted` keeps, each list's
+ * query read as the engine reads it. One walk for every question about the
+ * page's lists, so no two of them disagree about which lists a page holds.
+ */
+function listCollectionsWhere(
+  documents: readonly BlockDocument[],
+  wanted: (query: ListQuery) => boolean
+): Set<string> {
   const found = new Set<string>();
   const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    const collection: unknown = node.props.collection;
-    if (node.type === collectionLoop.name && typeof collection === "string") {
-      if (collection.trim() !== "") found.add(collection.trim());
+    if (node.type === collectionLoop.name) {
+      const { query } = readListQuery(node.props);
+      if (query.collection !== undefined && wanted(query)) {
+        found.add(query.collection);
+      }
     }
     for (const children of Object.values(node.slots ?? {})) {
       stack.push(...children);
     }
   }
   return found;
+}
+
+/** The collections the page's lists draw, whose items its bindings read. */
+function listCollections(documents: readonly BlockDocument[]): Set<string> {
+  return listCollectionsWhere(documents, () => true);
+}
+
+/**
+ * The collections whose lists filter by a day, which compares in the site's
+ * zone or as a calendar day by the field's shape.
+ */
+function listsComparingDays(documents: readonly BlockDocument[]): Set<string> {
+  return listCollectionsWhere(documents, query =>
+    query.filters.some(row => isListDay(row.value))
+  );
+}
+
+/**
+ * The site's zone and the field shapes of the collections whose lists filter
+ * by a day; nothing when no list does. The page's bindings' answers are used
+ * where they were already read.
+ */
+async function listDayInputs(args: {
+  config: BlocksPageConfig;
+  documents: readonly BlockDocument[];
+  bindings: PageBindings | undefined;
+  budget: QueryBudget;
+  window: number | false | undefined;
+  context: RenderContext;
+}): Promise<Pick<PageContext, "timeZone" | "fieldShapes">> {
+  const collections = listsComparingDays(args.documents);
+  if (collections.size === 0) return {};
+  const site =
+    args.bindings?.site ??
+    (args.config.timeZone === undefined
+      ? await readSite(args.config, args.budget, args.window)
+      : undefined);
+  const timeZone =
+    args.bindings?.timeZone ??
+    pageTimeZone(args.config, site ?? undefined, args.context);
+  const cache: ReadCache = {
+    scope: args.config.cacheScope ?? "",
+    locale: args.context.locale,
+    window: args.window,
+  };
+  const known = new Map<string, readonly BindingFieldShape[] | undefined>();
+  for (const collection of collections) {
+    try {
+      known.set(collection, await cachedFieldShapes({ collection }, cache));
+    } catch {
+      known.set(collection, undefined);
+    }
+  }
+  return {
+    ...(timeZone === undefined ? {} : { timeZone }),
+    fieldShapes: {
+      fieldsOf: ref =>
+        "collection" in ref ? known.get(ref.collection) : undefined,
+    },
+  };
 }
 
 /** A shape ref as a map key. */
@@ -2529,6 +2601,10 @@ function blocksRouteConfig(
         // localized pages that need it.
         locale: context.locale,
         isWorkingDraft: entry[WORKING_DRAFT_KEY] === true,
+        // A working draft is served only to an author previewing it, so a
+        // list there tells that author what it could not read as stored. A
+        // published page never does.
+        diagnostics: entry[WORKING_DRAFT_KEY] === true,
         data: dataFor(data, config, context.locale, listWindow),
         // Fresh for THIS render. `core/collection-loop` claims from it before
         // each read, and an absent budget reads as unlimited — the loop's own
@@ -2579,8 +2655,22 @@ function blocksRouteConfig(
       // What every document drawn on this page shares: the context (so the
       // regions spend the page's ONE budget and read in its locale), the
       // blocks, the caps, the host's posture and the page's bindings.
+      // What a list's date filter needs to compare whole days: the site's
+      // zone and the public's field shapes, read only when a list on the
+      // page filters by a day.
+      const listDays = await listDayInputs({
+        config,
+        documents: [document, ...regions.map(part => part.document)],
+        bindings,
+        budget,
+        window: listWindow,
+        context,
+      });
       const shared: SharedRendererProps = {
-        context: pageContext,
+        context:
+          Object.keys(listDays).length === 0
+            ? pageContext
+            : { ...pageContext, ...listDays },
         blocks: resolver,
         styleContext,
         blockFallback,

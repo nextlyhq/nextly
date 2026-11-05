@@ -9,10 +9,12 @@
  * duplicate JS template for live preview. Here the canvas and the page run the
  * same function.
  *
- * Failure is contained rather than fatal: a query that throws renders nothing
- * and the page survives. That is the "strict at publish, forgiving at render"
- * half of the migration policy applied to data — a page that cannot reach its
- * database should degrade, not disappear.
+ * Failure is contained rather than fatal: a query that throws draws the list's
+ * empty state and the page survives, and an author looking (the editor, a
+ * preview) is told what failed. That is the "strict at publish, forgiving at
+ * render" half of the migration policy applied to data — a page that cannot
+ * reach its database should degrade, not disappear. How the stored query
+ * becomes reads is `list-read`'s.
  *
  * The template is drawn once per entry rather than drawn once and copied, with
  * the entry named on the context each time. That is the whole reason a slot is
@@ -26,7 +28,10 @@ import {
   type BlockDefinition,
   blockTypeClassName,
   CHILD_GAP_CLASS,
+  COLLECTION_LIST_TYPE,
   defineBlock,
+  type ListFilter,
+  type ListRelation,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
@@ -34,17 +39,25 @@ import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
+import { readList, type ListOutcome } from "./list-read";
 
 export interface CollectionLoopProps {
-  /** The collection queried. */
+  /** The collection queried, or the collection a related source's entries are in. */
   collection?: string;
-  /** How many entries at most. */
+  /** How many entries at most: 1 to 100. */
   limit?: number;
   /**
-   * Sort keys, comma-separated, `-field` descending. A key the reader refuses
-   * lists in id order instead.
+   * Sort keys, comma-separated, `-field` descending. The id breaks ties, and
+   * empty values come last either way. A key the reader refuses lists in id
+   * order instead, and an author is told.
    */
   sort?: string;
+  /** Filter rows, all of which an entry must meet. */
+  filters?: ListFilter[];
+  /** How many matching entries to skip, from 0. */
+  offset?: number;
+  /** The to-many relation of the page's entry or the outer item to list. */
+  relation?: ListRelation;
 }
 
 /**
@@ -60,54 +73,12 @@ function keyFor(item: Record<string, unknown>, index: number): string | number {
   return typeof id === "string" || typeof id === "number" ? id : index;
 }
 
-/** The prop schema's bounds, applied to what was actually stored. */
-const MIN_LIMIT = 1;
-const MAX_LIMIT = 100;
-const DEFAULT_LIMIT = 10;
-
-/**
- * The number of entries to ask for.
- *
- * The schema's bounds describe what an editor offers, not what a document
- * holds: props are validated as an object and nothing more, so a stored or
- * migrated node can carry a limit of zero, of minus one, or of a million. The
- * value goes straight to a host-supplied data source, which may honour a huge
- * one or reject a malformed one and take the block with it.
- */
-function safeLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return DEFAULT_LIMIT;
-  }
-  return Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.floor(limit)));
-}
-
-/**
- * Whether a read failed because its sort was refused, and nothing else.
- *
- * Recognized by its shape, not its class, because this package does not
- * import the CMS: a refusal lists its problems, and every one is a sort key
- * the reader would not order by. That refusal comes before any read, so a
- * retry in id order costs no second read; any other failure, a timeout
- * included, may have reached the database and is not retried.
- */
-function sortWasRefused(error: unknown): boolean {
-  const errors = (error as { publicData?: { errors?: unknown } } | null)
-    ?.publicData?.errors;
-  return (
-    Array.isArray(errors) &&
-    errors.length > 0 &&
-    errors.every(
-      problem =>
-        (problem as { code?: unknown } | null)?.code === "FIELD_NOT_SORTABLE"
-    )
-  );
-}
-
 /**
  * This block's registered name, used for the definition and for the class each
- * entry's wrapper wears.
+ * entry's wrapper wears. The engine's, so the validator and the renderer name
+ * one block.
  */
-const COLLECTION_LOOP_BLOCK = "core/collection-loop";
+const COLLECTION_LOOP_BLOCK = COLLECTION_LIST_TYPE;
 
 /**
  * The classes an entry's wrapper wears: the block-type class and the gap
@@ -122,6 +93,23 @@ const COLLECTION_LOOP_BLOCK = "core/collection-loop";
  * the loop and not to every entry.
  */
 const ENTRY_CLASS = `${blockTypeClassName(COLLECTION_LOOP_BLOCK)} ${CHILD_GAP_CLASS}`;
+
+/**
+ * The note an author sees about a list's read, and a visitor never: drawn
+ * only when the context says an author is looking. Unstyled here; the
+ * editor's chrome styles it by its data attribute.
+ */
+function diagnosticNote(
+  outcome: ListOutcome,
+  ctx: PageContext
+): ReactElement | null {
+  if (ctx.diagnostics !== true || outcome.diagnostic === undefined) return null;
+  return (
+    <div role="status" data-nx-list-diagnostic={outcome.diagnostic.kind}>
+      {outcome.diagnostic.message} Only you see this message.
+    </div>
+  );
+}
 
 export async function renderCollectionLoop({
   props,
@@ -145,7 +133,6 @@ export async function renderCollectionLoop({
     // still sees what they are building.
     return <div className={className}>{renderSlot("children")}</div>;
   }
-  let items: Record<string, unknown>[] = [];
   // A loop inside a loop runs once per entry of the outer one, so depth in a
   // document becomes multiplication in queries. Claiming from a shared
   // allowance before reading is what keeps a page bounded; without one the
@@ -153,57 +140,42 @@ export async function renderCollectionLoop({
   if (ctx.queries?.take() === false) {
     return <div className={className} />;
   }
-  const sort =
-    typeof props.sort === "string" && props.sort.trim() !== ""
-      ? props.sort.trim()
-      : undefined;
-  const read = (sortKeys: string | readonly string[]) =>
-    data.find({
-      collection,
-      limit: safeLimit(props.limit),
-      // Always sent, so a loop with no sort lists in id order, the same on
-      // every read, rather than in whatever order a database returns.
-      sort: sortKeys,
-      // The locale the page is being rendered in. Without it the provider reads
-      // the default one, so a French page embeds English rows — the surrounding
-      // blocks translate and the looped content silently does not. Taken from
-      // the context rather than from a prop: which locale a page is in is the
-      // route's decision, not a per-block one an editor could contradict.
-      ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
-    });
-  try {
-    let result;
-    try {
-      result = await read(sort ?? []);
-    } catch (error) {
-      // A stored sort the reader refuses (a field since removed, or one the
-      // public may not read) would otherwise empty a published list. Once
-      // more in id order: the refusal comes before any read, so the one
-      // claim above still covers it. Any other failure is contained below.
-      if (sort === undefined || !sortWasRefused(error)) throw error;
-      result = await read([]);
-    }
-    items = Array.isArray(result.items) ? [...result.items] : [];
-  } catch {
-    // A page that cannot reach its data renders empty rather than failing.
-    items = [];
-  }
-  return (
+  // Never throws: a page that cannot reach its data draws the list's empty
+  // state rather than failing, and an author is told why.
+  const outcome = await readList(props, collection, ctx, {
+    find: async query => {
+      const result = await data.find(query);
+      return Array.isArray(result.items) ? [...result.items] : [];
+    },
+    claim: () => ctx.queries?.take() !== false,
+  });
+  const note = diagnosticNote(outcome, ctx);
+  // Nothing matched, or the read failed: the designable empty state, as a
+  // visitor sees it. Otherwise each entry, drawn with the template.
+  const content =
+    outcome.items.length === 0
+      ? renderSlot("empty")
+      : outcome.items.map((item, index) => (
+          <div
+            key={keyFor(item, index)}
+            // Under the classic model no gap is written, so an entry wears
+            // nothing: its blocks space themselves with their own margins.
+            {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}
+          >
+            {/* Drawn again per entry, with this entry on the context, so
+                anything inside the template reads its own values rather than
+                the first entry's. The collection goes with it, so an item
+                binding is checked against that collection's fields. */}
+            {renderSlot("children", { ...ctx, item, itemSource: collection })}
+          </div>
+        ));
+  // The note, when an author is looking, goes above what visitors see.
+  return note === null ? (
+    <div className={className}>{content}</div>
+  ) : (
     <div className={className}>
-      {items.map((item, index) => (
-        <div
-          key={keyFor(item, index)}
-          // Under the classic model no gap is written, so an entry wears
-          // nothing: its blocks space themselves with their own margins.
-          {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}
-        >
-          {/* Drawn again per entry, with this entry on the context, so anything
-              inside the template reads its own values rather than the first
-              entry's. The collection goes with it, so an item binding is
-              checked against that collection's fields. */}
-          {renderSlot("children", { ...ctx, item, itemSource: collection })}
-        </div>
-      ))}
+      {note}
+      {content}
     </div>
   );
 }
@@ -259,6 +231,10 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       // a property of the collection being looped, which this block cannot see
       // from its own declaration.
       children: {},
+      // Drawn in place of the entries when none match, or when the read
+      // failed, so a visitor sees a designed "nothing here yet" rather than
+      // a gap. Left empty, the list shows nothing, as it always did.
+      empty: {},
     },
     // Spaces one entry from the next, as any container spaces its blocks.
     childGap: CONTAINER_CHILD_GAP,
@@ -276,6 +252,8 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
     // them ZERO times. A reader of the stored document sees the template either
     // way and cannot tell which happened without running the query, so it is told
     // here instead — otherwise an empty loop's heading speaks for the page.
-    conditionalSlots: ["children"],
+    //
+    // The empty state is the other half: drawn only when no entry is.
+    conditionalSlots: ["children", "empty"],
     render: renderCollectionLoop,
   });

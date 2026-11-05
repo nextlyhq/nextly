@@ -420,6 +420,32 @@ export interface PageContext {
    * hanging.
    */
   queries?: QueryBudget;
+  /**
+   * Whether an author is looking: the editor's canvas, or a preview of a
+   * working draft. A block may then draw what it could not do as stored,
+   * such as a list whose read failed or whose sort fell back to id order,
+   * with a note only that author sees. Absent on a published page, which
+   * shows visitors only what they may see.
+   *
+   * @experimental
+   */
+  diagnostics?: boolean;
+  /**
+   * The site's IANA time zone, in which a list's date filter compares whole
+   * days for a field holding an instant. UTC when absent.
+   *
+   * @experimental
+   */
+  timeZone?: string;
+  /**
+   * The fields of the collections the page's lists read, as the public sees
+   * them, so a list's date filter can tell a field holding a calendar day
+   * (compared as that day) from one holding an instant (compared in
+   * {@link timeZone}). Absent, every date compares as an instant.
+   *
+   * @experimental
+   */
+  fieldShapes?: BlocksFieldShapes;
 }
 
 /**

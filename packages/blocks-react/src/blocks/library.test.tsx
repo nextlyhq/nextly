@@ -67,9 +67,11 @@ function args<P>(
     partClass: () => "",
     ctx,
     drawnWith,
-    renderSlot: (_name: string, override?: PageContext) => {
+    renderSlot: (name: string, override?: PageContext) => {
       const used = override ?? ctx;
       drawnWith.push(used);
+      // The empty state names itself, so a test tells it from an entry.
+      if (name === "empty") return <span>empty</span>;
       const title = used.item?.title;
       return <span>{typeof title === "string" ? title : "child"}</span>;
     },
@@ -173,7 +175,8 @@ describe("core/collection-loop", () => {
     // conditional slots, and this is the block saying its children are one.
     // Without the declaration the walk has nothing to skip, and an empty loop's
     // template would title the page with content it never rendered.
-    expect(collectionLoop.conditionalSlots).toEqual(["children"]);
+    // Its empty state is the other half: drawn only when no entry is.
+    expect(collectionLoop.conditionalSlots).toEqual(["children", "empty"]);
   });
 
   it("queries in the locale the page is being rendered in", async () => {
@@ -280,7 +283,9 @@ describe("core/collection-loop", () => {
       )
     );
     expect(reads).toBe(1);
-    expect(renderToStaticMarkup(element)).toBe('<div class="nx-n1"></div>');
+    expect(renderToStaticMarkup(element)).toBe(
+      '<div class="nx-n1"><span>empty</span></div>'
+    );
   });
 
   it("does not retry a read that failed with no sort to drop", async () => {
@@ -311,9 +316,10 @@ describe("core/collection-loop", () => {
       )
     );
     const html = renderToStaticMarkup(element);
-    // The page survives a data source it cannot reach: this block goes empty,
-    // and everything around it still renders.
-    expect(html).toBe('<div class="nx-n1"></div>');
+    // The page survives a data source it cannot reach: this block draws its
+    // empty state, and everything around it still renders. A visitor is
+    // shown no note about why.
+    expect(html).toBe('<div class="nx-n1"><span>empty</span></div>');
   });
 
   it("keys each iteration by the entry id, falling back to its position", async () => {
