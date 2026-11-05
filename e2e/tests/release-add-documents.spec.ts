@@ -11,6 +11,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { cancel, membersOf, ok, post } from "./support/releases-api";
+import { LOCK } from "./support/locks";
 import { removeMigrationsOf } from "./support/runtime-collection";
 import { test } from "./support/test";
 
@@ -55,7 +56,11 @@ async function pieceLinking(
         labels: { singular: "Piece", plural: "Pieces" },
         status: true,
         fields: [
-          { name: "writer", type: "relationship", relationTo: "authors" },
+          {
+            name: "writer",
+            type: "relationship",
+            options: { relationType: "manyToOne", target: "authors" },
+          },
         ],
       },
     })
@@ -79,6 +84,9 @@ async function openPicker(page: Page, releaseId: string, stamp: string) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Each test writes documents, releases and, for the links, a collection of its own, and the
+  // first reads of the dev server compile on demand: more than the default allows.
+  test.setTimeout(90_000);
   await page.setViewportSize({ width: 1440, height: 900 });
 });
 
@@ -123,6 +131,9 @@ test("adds three documents from two collections in one action", async ({
 });
 
 test.describe("the linked documents offered next", () => {
+  // Each test makes a collection at runtime, which writes migration files and the schema.
+  test.describe.configure({ lock: [LOCK.schema] });
+
   test("offers an unpublished author of a piece going live, and adds it", async ({
     page,
   }) => {
