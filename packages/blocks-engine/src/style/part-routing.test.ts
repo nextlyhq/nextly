@@ -237,11 +237,10 @@ describe("a part that takes properties from a wrapping root", () => {
         frame: { baseStyles: values({ display: "flex" }) },
       },
     } as unknown as StyleCompileContext["blockParts"];
-    const { css } = compileSiteSheet({
-      breakpoints: FIXTURE_BREAKPOINTS,
-      classes: [framed],
-      blockParts: parts,
-    });
+    const { css } = compileSiteSheet(
+      { breakpoints: FIXTURE_BREAKPOINTS, classes: [framed] },
+      parts ?? {}
+    );
     const { off, onto } = routedPair(".nx-pb-page.nx-pb-page .nx-c-framed");
     expect(css).toContain(`${off} { border-radius: 4px }`);
     expect(css).toContain(`${onto} { border-radius: 4px }`);

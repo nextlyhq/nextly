@@ -17,7 +17,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   blockLooks,
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
+  type DefinitionsById,
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
 
@@ -65,32 +68,66 @@ const BREAKPOINTS = {
 };
 
 /** The page drawn with one image wearing Circle and Framed, its own corner 0. */
+/** The image every case draws: Circle and Framed, its own corner 0. */
+function imageNode(props: Record<string, unknown>) {
+  return {
+    id: "n1",
+    type: "core/image",
+    version: 1,
+    props: {
+      src: "https://example.test/team.png",
+      alt: "The team",
+      ...props,
+    },
+    classes: [circle.id, framed.id],
+    styles: {
+      base: {
+        base: {
+          borderRadius: "0",
+          objectFit: "contain",
+          objectPosition: "20% 80%",
+        },
+      },
+    },
+  };
+}
+
 async function page(
   props: Record<string, unknown>,
-  via: "styleContext" | "siteStyles" = "styleContext"
+  via: "styleContext" | "siteStyles" = "styleContext",
+  inComponent = false
 ): Promise<Document> {
+  // Drawn directly, or inside a component instance the page places, whose
+  // definition holds the image: the renderer composes it before compiling.
+  const definitions: DefinitionsById = new Map([
+    [
+      "pic",
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [imageNode(props)],
+      } as unknown as BlockDocument,
+    ],
+  ]);
   const document = {
-    formatVersion: 1,
+    formatVersion: DOCUMENT_FORMAT_VERSION,
     kind: "page",
     nodes: [
-      {
-        id: "n1",
-        type: "core/image",
-        version: 1,
-        props: {
-          src: "https://example.test/team.png",
-          alt: "The team",
-          ...props,
-        },
-        classes: [circle.id, framed.id],
-        styles: { base: { base: { borderRadius: "0" } } },
-      },
+      inComponent
+        ? {
+            id: "p1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "pic" },
+          }
+        : imageNode(props),
     ],
   } as unknown as BlockDocument;
   const html = await renderToHtml(
     <PageRenderer
       document={document}
       blocks={resolver}
+      definitions={definitions}
       // The site's classes reach a page two ways: in the compile context, or
       // in the site sheet every page shares, as the canvas and the published
       // routes pass them. Both must route.
@@ -158,38 +195,49 @@ function tiersSetting(
 
 const RADIUS = /border(-[a-z]+)*-radius/;
 const RATIO = /aspect-ratio/;
+const FIT = /object-fit/;
+const FOCUS = /object-position/;
 
 describe("a wrapped image's corners and proportion", () => {
-  for (const via of ["styleContext", "siteStyles"] as const)
-    for (const [name, props, wrapper] of [
-      ["captioned", { caption: "Our team" }, "figure"],
-      ["linked", { href: "/about" }, "a"],
-      [
-        "captioned and linked",
-        { caption: "Our team", href: "/about" },
-        "figure",
-      ],
-    ] as const) {
-      it(`land on the picture from every tier, in the tiers' order, when ${name} (classes in ${via})`, async () => {
-        const doc = await page(props, via);
-        const picture = doc.querySelector("img");
-        expect(tiersSetting(doc, picture, RADIUS)).toEqual([
-          "look",
-          "shared",
-          "own",
-        ]);
-        expect(tiersSetting(doc, picture, RATIO)).toEqual(["look"]);
-      });
+  for (const inComponent of [false, true])
+    for (const via of ["styleContext", "siteStyles"] as const)
+      for (const [name, props, wrapper] of [
+        ["captioned", { caption: "Our team" }, "figure"],
+        ["linked", { href: "/about" }, "a"],
+        [
+          "captioned and linked",
+          { caption: "Our team", href: "/about" },
+          "figure",
+        ],
+      ] as const) {
+        it(`land on the picture from every tier, in the tiers' order, when ${name} (classes in ${via}${inComponent ? ", in a component" : ""})`, async () => {
+          const doc = await page(props, via, inComponent);
+          const picture = doc.querySelector("img");
+          expect(tiersSetting(doc, picture, RADIUS)).toEqual([
+            "look",
+            "shared",
+            "own",
+          ]);
+          expect(tiersSetting(doc, picture, RATIO)).toEqual(["look"]);
+          // The fit and focal point the picture used to inherit through its
+          // wrappers now reach it the same way: the look's, then its own.
+          expect(tiersSetting(doc, picture, FIT)).toEqual(["look", "own"]);
+          expect(tiersSetting(doc, picture, FOCUS)).toEqual(["own"]);
+        });
 
-      it(`never land on the ${wrapper} around the picture, when ${name} (classes in ${via})`, async () => {
-        const doc = await page(props, via);
-        const root = doc.querySelector(`.nx-pb-page ${wrapper}`);
-        expect(tiersSetting(doc, root, RADIUS)).toEqual([]);
-        expect(tiersSetting(doc, root, RATIO)).toEqual([]);
-        // What no part takes stays on the root: the framing background.
-        expect(tiersSetting(doc, root, /background-color/)).toEqual(["shared"]);
-      });
-    }
+        it(`never land on the ${wrapper} around the picture, when ${name} (classes in ${via}${inComponent ? ", in a component" : ""})`, async () => {
+          const doc = await page(props, via, inComponent);
+          const root = doc.querySelector(`.nx-pb-page ${wrapper}`);
+          expect(tiersSetting(doc, root, RADIUS)).toEqual([]);
+          expect(tiersSetting(doc, root, RATIO)).toEqual([]);
+          expect(tiersSetting(doc, root, FIT)).toEqual([]);
+          expect(tiersSetting(doc, root, FOCUS)).toEqual([]);
+          // What no part takes stays on the root: the framing background.
+          expect(tiersSetting(doc, root, /background-color/)).toEqual([
+            "shared",
+          ]);
+        });
+      }
 
   it("land on the picture itself when it is the root", async () => {
     const doc = await page({});

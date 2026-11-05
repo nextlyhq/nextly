@@ -150,8 +150,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * compiler emits for inputs it already accepted, not only when this file
  * changes. It costs one recompile per artifact, which is the safe direction —
  * the unbumped alternative is a stale stylesheet served indefinitely, silently.
+ *
+ * `v5`: a part may take properties from a wrapping root, and the compiler
+ * writes those declarations on the part, off the wrapper. A sheet stored
+ * before wrote a wrapped image's corners and proportion on its root, which the
+ * renderer now gives the image's look as well, so it is refused, not served.
  */
-const ENCODING = "v4";
+const ENCODING = "v5";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.

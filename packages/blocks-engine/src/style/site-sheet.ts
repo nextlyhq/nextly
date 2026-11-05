@@ -45,15 +45,6 @@ export interface SiteSheetInput {
   classes?: readonly NamedClass[];
   /** Each block type's default look, keyed by type. */
   blockBases?: Readonly<Record<string, NodeStyles>>;
-  /**
-   * The parts of the block types the page draws, keyed by type. Read only for
-   * the root properties a part takes from a wrapping root, so the classes
-   * written here route them as the page's own sheet does; no part's defaults
-   * are written here.
-   *
-   * @experimental
-   */
-  blockParts?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>;
   /** The site's breakpoints, which decide the at-rules every tier is emitted under. */
   breakpoints: BreakpointSet;
   /** The custom-property prefix tokens are written under. */
@@ -418,7 +409,21 @@ export function compileSiteTokenSheet(
  * then the named classes. A page's own sheet is appended after this one, which is what lets a
  * node's own value beat a class and a class beat a block default.
  */
-export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
+export function compileSiteSheet(
+  input: SiteSheetInput,
+  /**
+   * The parts of the block types the page draws, keyed by type, as the page's
+   * own sheet reads them. Read only for the root properties a part takes from
+   * a wrapping root, so the classes written here route them as the page sheet
+   * does; no part's defaults are written here. Required, and apart from the
+   * site's inputs, because a sheet compiled without them still succeeds and
+   * styles a wrapped image's box where its picture was meant: `{}` says the
+   * page draws no such part.
+   *
+   * @experimental
+   */
+  parts: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>
+): SiteSheetArtifact {
   const { blocks, warnings, tokenPrefix } =
     compileBreakpointIndependentTiers(input);
 
@@ -430,7 +435,7 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     // A class here styles a node's root as the page's own sheet does, so it
     // routes what a part takes from a wrapping root the same way. The parts'
     // own defaults stay in the page sheet: this document draws none of them.
-    ...(input.blockParts === undefined ? {} : { blockParts: input.blockParts }),
+    blockParts: parts,
     ...(tokenPrefix === undefined ? {} : { tokenPrefix }),
     ...(input.mayFetchUrl === undefined
       ? {}

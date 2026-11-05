@@ -268,9 +268,6 @@ export function pruneRenderedPlaceholders(
  *   site's predicate, or the reconciliation is over a value it never saw.
  * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
  *   token blocks, and the page compile emits neither and reads neither.
- * - `blockParts` is derived for the sheet from the page's own walk, the one
- *   the page compile reads, so the classes in both sheets route what a part
- *   takes from a wrapping root alike.
  */
 interface SiteInputRoles {
   breakpoints: "reconciled-here";
@@ -281,7 +278,6 @@ interface SiteInputRoles {
   previewStates: "reconciled-here";
   spacingMode: "reconciled-here";
   mayFetchUrl: "reconciled-elsewhere";
-  blockParts: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
 }
@@ -924,11 +920,6 @@ export function PageRenderer({
     // given. Spreading `siteInput` alone would leave each consumer
     // computing its own answer, which is the defect this closes.
     ...(shared.blockBases == null ? {} : { blockBases: shared.blockBases }),
-    // The parts of the types this page draws, as its own sheet reads them
-    // (over the stored tree, which the page sheet's identity also reads), so
-    // the classes in the shared sheet route a wrapped image's corners to its
-    // picture exactly as the page sheet does.
-    blockParts: blockPartsFor(doc, resolver, pageStyleContext?.blockParts),
     ...(shared.tokenPrefix == null ? {} : { tokenPrefix: shared.tokenPrefix }),
     tokens: resolveSiteTokens(siteInput?.tokens),
     // The SAME predicate the page sheet is compiled with, taken from the
@@ -992,10 +983,13 @@ export function PageRenderer({
         ? css === ""
           ? undefined
           : compileSiteTokenSheet(siteSheetInput)
-        : compileSiteSheet({
-            ...siteSheetInput,
-            breakpoints: siteBreakpoints,
-          });
+        : compileSiteSheet(
+            { ...siteSheetInput, breakpoints: siteBreakpoints },
+            // The parts of the types this page draws, over the composed tree
+            // the page sheet reads, so the classes in the shared sheet route a
+            // wrapped image's corners to its picture as the page sheet does.
+            blockPartsFor(doc, resolver, pageStyleContext?.blockParts)
+          );
 
   return (
     <div className={rootClassName}>
