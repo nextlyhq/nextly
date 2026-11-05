@@ -17,6 +17,7 @@ import {
 import { publishedSummary } from "@admin/components/features/entries/publishAllOutcomes";
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { EVERY_LANGUAGE, versionOf } from "@admin/lib/document-version";
 import { entryApi, entryKeys } from "@admin/services/entryApi";
 import type { PublishAllLanguageOutcome } from "@admin/services/publishAllPreview";
 
@@ -50,8 +51,19 @@ export function usePublishAllLocales({
     locales.find(locale => locale.code === code)?.label ?? code;
 
   return useMutation({
-    mutationFn: (entryId: string) =>
-      entryApi.publishAllLocales(collectionSlug, entryId),
+    // With the version of every language, from a read of every language just
+    // before: the editor reads one, and a publish of every language is judged
+    // on all of them.
+    mutationFn: async (entryId: string) => {
+      const everyLanguage = await entryApi.findByID(collectionSlug, entryId, {
+        locale: EVERY_LANGUAGE,
+      });
+      return entryApi.publishAllLocales(
+        collectionSlug,
+        entryId,
+        versionOf(everyLanguage)
+      );
+    },
     onSuccess: (data, entryId) => {
       // Refresh the entry detail (all locale-keyed variants) and the collection list.
       void queryClient.invalidateQueries({

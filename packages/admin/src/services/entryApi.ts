@@ -22,6 +22,7 @@
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
+import { DOCUMENT_VERSION_KEY } from "../lib/document-version";
 import type { HookWarning, MutationResult } from "../lib/mutation-warnings";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
 
@@ -875,7 +876,12 @@ export const entryApi = {
    */
   publishAllLocales: async (
     collectionSlug: string,
-    id: string
+    id: string,
+    /**
+     * The version of every language, as a read of every language gives it: a
+     * publish of every language is refused when any of them changed since.
+     */
+    version?: string
   ): Promise<{
     id: string;
     status?: string;
@@ -890,7 +896,10 @@ export const entryApi = {
         status?: string;
         languages?: PublishAllLanguageOutcome[];
       };
-    }>(`/collections/${collectionSlug}/entries/${id}/publish-all`, {});
+    }>(
+      `/collections/${collectionSlug}/entries/${id}/publish-all`,
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
+    );
     return result.item;
   },
 

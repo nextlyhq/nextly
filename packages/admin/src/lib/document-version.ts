@@ -23,6 +23,12 @@ export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
 /** The key a bulk update by ids sends each document's version under. */
 export const DOCUMENT_REVS_KEY = "revs";
 
+/**
+ * The language a read names to read every language at once: the one read
+ * whose version names them all.
+ */
+export const EVERY_LANGUAGE = "all";
+
 /** The code and status of the refusal of a save made from an older version. */
 export const STALE_VERSION_CODE = "STALE_VERSION";
 export const STALE_VERSION_STATUS = 409;

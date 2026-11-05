@@ -23,6 +23,7 @@ import {
 import { publishedSummary } from "@admin/components/features/entries/publishAllOutcomes";
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { EVERY_LANGUAGE, versionOf } from "@admin/lib/document-version";
 import type { PublishAllLanguageOutcome } from "@admin/services/publishAllPreview";
 import { singleApi } from "@admin/services/singleApi";
 
@@ -57,7 +58,15 @@ export function usePublishAllSingleLocales({
     locales.find(locale => locale.code === code)?.label ?? code;
 
   return useMutation({
-    mutationFn: () => singleApi.publishAllLocales(slug),
+    // With the version of every language, from a read of every language just
+    // before: the editor reads one, and a publish of every language is judged
+    // on all of them.
+    mutationFn: async () => {
+      const everyLanguage = await singleApi.getDocument(slug, {
+        locale: EVERY_LANGUAGE,
+      });
+      return singleApi.publishAllLocales(slug, versionOf(everyLanguage));
+    },
     onSuccess: data => {
       // Every locale-keyed variant of this document changed status, so the
       // whole detail key goes rather than one language's entry.
