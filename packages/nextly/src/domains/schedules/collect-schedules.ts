@@ -40,7 +40,16 @@ export interface CollectedSchedule {
 
 /** The current shape, as declared; values a plugin wrote are checked here. */
 const scheduleShape = z.object({
-  slug: z.string().trim().min(1, "its slug is empty"),
+  // Lowercase letters, digits, dots, dashes and underscores: a key the
+  // database compares exactly on every dialect, whatever its collation.
+  slug: z
+    .string()
+    .trim()
+    .min(1, "its slug is empty")
+    .regex(
+      /^[a-z0-9][a-z0-9._-]*$/,
+      "its slug may hold only lowercase letters, digits, '.', '_' and '-'"
+    ),
   cron: z.string(),
   job: z.string(),
   tz: z.string().optional(),
@@ -142,7 +151,13 @@ function jobOf(
   job: string,
   ownJobs: ReadonlySet<string>
 ): string {
-  const runs = normalizeJobSlug(job);
+  let runs: string;
+  try {
+    runs = normalizeJobSlug(job);
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    throw refuse(plugin, slug, `its job "${job}" is not a job slug`);
+  }
   if (!ownJobs.has(runs)) {
     throw refuse(
       plugin,
@@ -188,6 +203,9 @@ export function collectSchedules(
   jobs: readonly CollectedJob[]
 ): CollectedSchedule[] {
   const out: CollectedSchedule[] = [];
+  // Keys across the installation, compared without case: two plugins whose
+  // name and slug join to one key would share each other's windows.
+  const keys = new Set<string>();
   for (const plugin of plugins) {
     // `enabled` is optional and absent means enabled, as for jobs.
     if (plugin.enabled === false) continue;
@@ -209,6 +227,15 @@ export function collectSchedules(
         );
       }
       seen.add(schedule.slug);
+      const folded = schedule.key.toLowerCase();
+      if (keys.has(folded)) {
+        throw refuse(
+          plugin.name,
+          schedule.slug,
+          `another plugin's schedule has the same key "${schedule.key}"`
+        );
+      }
+      keys.add(folded);
       out.push(schedule);
     }
   }

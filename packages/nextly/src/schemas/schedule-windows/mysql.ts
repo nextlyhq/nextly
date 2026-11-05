@@ -5,6 +5,7 @@
  */
 import {
   datetime,
+  index,
   mysqlTable,
   primaryKey,
   text,
@@ -23,5 +24,8 @@ export const nextlyScheduleWindowsMysql = mysqlTable(
       .$defaultFn(() => new Date())
       .notNull(),
   },
-  table => [primaryKey({ columns: [table.scheduleKey, table.windowAt] })]
+  table => [
+    primaryKey({ columns: [table.scheduleKey, table.windowAt] }),
+    index("nextly_schedule_windows_window_idx").on(table.windowAt),
+  ]
 );

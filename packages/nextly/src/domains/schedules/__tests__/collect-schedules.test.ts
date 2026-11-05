@@ -100,6 +100,12 @@ describe("collecting plugin schedules", () => {
     ["an unknown job", { slug: "tick", cron: "@daily", job: "acme:nothing" }],
     ["an empty slug", { slug: "", cron: "@daily", job: "acme:tick" }],
     [
+      "a slug with capitals",
+      { slug: "Tick", cron: "@daily", job: "acme:tick" },
+    ],
+    ["a slug with a colon", { slug: "a:b", cron: "@daily", job: "acme:tick" }],
+    ["a blank job slug", { slug: "tick", cron: "@daily", job: "   " }],
+    [
       "input that is not an object",
       { slug: "tick", cron: "@daily", job: "acme:tick", input: [1, 2] },
     ],
@@ -166,6 +172,24 @@ describe("collecting plugin schedules", () => {
     );
     expect(error.message).toContain("@acme/plugin");
     expect(error.message).toContain("cron");
+  });
+
+  it("refuses two plugins whose schedules join to one key, naming the second", () => {
+    const first = plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }]);
+    const second = plugin(
+      [{ slug: "tick", cron: "@hourly", job: "acme:tick" }],
+      {
+        name: "@ACME/plugin",
+      }
+    );
+    let thrown: unknown;
+    try {
+      collectSchedules([first, second], jobsOf(first, second));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect((thrown as NextlyError).message).toContain("@ACME/plugin");
   });
 
   it("leaves a schedule in the earlier shape unexecuted, as before", () => {

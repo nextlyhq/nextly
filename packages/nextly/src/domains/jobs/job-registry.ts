@@ -365,6 +365,7 @@ export class JobRegistry {
  * latest window that has opened, once, and prune windows past keeping.
  */
 export interface JobSchedules {
-  sweep(now: Date): Promise<void>;
+  /** Sweep at `now`, stopping once the wall clock reaches `deadline` (epoch ms). */
+  sweep(now: Date, deadline?: number): Promise<void>;
   prune(before: Date, limit: number): Promise<number>;
 }

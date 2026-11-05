@@ -19,7 +19,12 @@ import type { JobRegistry } from "./job-registry";
 import { DEFAULT_RETENTION_MS, resolveRetentionMs } from "./job-retention";
 import { JobsRepository, type JobsDatabase } from "./jobs-repository";
 import { SWEEP_KEY_PREFIX } from "./portable-key";
-import { runJobs, type JobsStore, type RunJobsResult } from "./run-jobs";
+import {
+  DEFAULT_MAX_DURATION_MS,
+  runJobs,
+  type JobsStore,
+  type RunJobsResult,
+} from "./run-jobs";
 
 /**
  * The users read the identity resolver needs.
@@ -304,14 +309,25 @@ export async function runJobsPass(
   // The plugins' schedules, after the sweeps and before the drain for the
   // same reason: the pass that enqueues a window's job is the pass that runs
   // it. A schedule that cannot be swept is reported by the schedules
-  // themselves and never fails the pass.
-  await registry
-    .schedules()
-    ?.sweep((options?.now ?? (() => new Date()))())
-    .catch(() => undefined);
+  // themselves and never fails the pass. The sweep spends the pass's own
+  // time, so the drain is given what is left of it rather than a fresh
+  // budget a serverless limit would cut short.
+  const schedules = registry.schedules();
+  let drainOptions = options;
+  if (schedules !== undefined) {
+    const budgetMs = options?.maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
+    const sweptFrom = Date.now();
+    await schedules
+      .sweep((options?.now ?? (() => new Date()))(), sweptFrom + budgetMs)
+      .catch(() => undefined);
+    drainOptions = {
+      ...options,
+      maxDurationMs: Math.max(0, budgetMs - (Date.now() - sweptFrom)),
+    };
+  }
 
   const result = await runJobs(
-    passDeps(adapter, registry, repository, options)
+    passDeps(adapter, registry, repository, drainOptions)
   );
 
   // Prune AFTER the drain, and never in a way that can fail it. A queue without

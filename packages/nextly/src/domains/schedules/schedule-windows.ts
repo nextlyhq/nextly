@@ -161,6 +161,26 @@ async function latestWindowOf(
   return latest?.windowAt;
 }
 
+/**
+ * The definition the schedule was last seen with: that of its most recently
+ * recorded row. A definition changed and changed back is seen afresh, since
+ * the row recorded in between is the newer.
+ */
+async function currentDefinitionOf(
+  drizzle: WindowReadDb,
+  dialect: SupportedDialect,
+  scheduleKey: string
+): Promise<string | undefined> {
+  const table = tableOf(dialect);
+  const [latest] = await drizzle
+    .select({ windowAt: table.windowAt, definition: table.definition })
+    .from(table)
+    .where(eq(table.scheduleKey, scheduleKey))
+    .orderBy(desc(table.createdAt))
+    .limit(1);
+  return latest?.definition;
+}
+
 /** What a window is read with: the schedule's cron and its time zone. */
 function definitionOf(schedule: CollectedSchedule): string {
   return JSON.stringify([schedule.cron.source.trim(), schedule.timeZone]);
@@ -183,12 +203,15 @@ async function sweepOne(
       eq(table.scheduleKey, schedule.key),
       eq(table.windowAt, windowAt)
     );
-    const known = await latestWindowOf(
+    const seenWith = await currentDefinitionOf(
       drizzle,
       db.dialect,
-      schedule.key,
-      definition
+      schedule.key
     );
+    const known =
+      seenWith === definition
+        ? await latestWindowOf(drizzle, db.dialect, schedule.key, definition)
+        : undefined;
     if (known === undefined) {
       // First sight, of the schedule or of its current definition: the
       // window is recorded with no job, so the first job is for the next.
@@ -200,9 +223,12 @@ async function sweepOne(
         createdAt: now,
       });
       // The same instant recorded under the earlier definition was had
-      // already; it becomes this definition's first window.
+      // already; it becomes this definition's first window, recorded now.
       if (!recorded) {
-        await drizzle.update(table).set({ definition }).where(atWindow);
+        await drizzle
+          .update(table)
+          .set({ definition, createdAt: now })
+          .where(atWindow);
       }
       return;
     }
@@ -334,9 +360,14 @@ export function scheduleWindows(
   } = {}
 ): JobSchedules {
   const enqueue = options.enqueue ?? enqueueInTransaction;
+  // Where the next prune starts, kept for the life of the process.
+  let pruneTurn = 0;
   return {
-    async sweep(now) {
+    async sweep(now, deadline) {
       for (const schedule of schedules) {
+        // The pass's time is shared with the drain that follows: a sweep that
+        // ran out of it leaves the rest to the next pass, as a drain does.
+        if (deadline !== undefined && Date.now() >= deadline) return;
         try {
           await sweepOne(db, schedule, now, enqueue);
         } catch (error) {
@@ -347,25 +378,32 @@ export function scheduleWindows(
     async prune(before, limit) {
       // One bound for the whole pass, shared out in turn, so many schedules
       // cannot make the pass a long delete.
-      let pruned = 0;
-      for (const schedule of schedules) {
-        if (pruned >= limit) break;
-        try {
-          pruned += await pruneOne(db, schedule, before, limit - pruned);
-        } catch (error) {
-          options.onError?.(error, schedule.key);
-        }
-      }
-      if (pruned < limit) {
-        try {
-          pruned += await pruneRemoved(
+      // Each pass starts one turn later, removed schedules taking a turn too,
+      // so a bound spent early on one pass reaches the rest on the next.
+      const turns = [
+        ...schedules.map(
+          schedule => (left: number) => pruneOne(db, schedule, before, left)
+        ),
+        (left: number) =>
+          pruneRemoved(
             db,
             schedules.map(schedule => schedule.key),
             before,
-            limit - pruned
-          );
+            left
+          ),
+      ];
+      const start = pruneTurn % turns.length;
+      pruneTurn += 1;
+      let pruned = 0;
+      for (let step = 0; step < turns.length && pruned < limit; step += 1) {
+        const index = (start + step) % turns.length;
+        try {
+          pruned += await turns[index](limit - pruned);
         } catch (error) {
-          options.onError?.(error, "removed schedules");
+          options.onError?.(
+            error,
+            schedules[index]?.key ?? "removed schedules"
+          );
         }
       }
       return pruned;

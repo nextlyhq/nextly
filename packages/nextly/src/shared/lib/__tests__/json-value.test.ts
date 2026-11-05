@@ -34,6 +34,13 @@ describe("isJsonValue", () => {
     expect(isJsonValue(value)).toBe(false);
   });
 
+  it("refuses an array with a hole, which JSON writes as null", () => {
+    const holed: unknown[] = [];
+    holed.length = 1;
+    expect(isJsonValue(holed)).toBe(false);
+    expect(isJsonValue({ list: holed })).toBe(false);
+  });
+
   it("refuses a value that contains itself, rather than recursing forever", () => {
     const cycle: Record<string, unknown> = { a: 1 };
     cycle.self = cycle;

@@ -4,6 +4,7 @@
  * @module schemas/schedule-windows/sqlite
  */
 import {
+  index,
   integer,
   primaryKey,
   sqliteTable,
@@ -21,5 +22,8 @@ export const nextlyScheduleWindowsSqlite = sqliteTable(
       .$defaultFn(() => new Date())
       .notNull(),
   },
-  table => [primaryKey({ columns: [table.scheduleKey, table.windowAt] })]
+  table => [
+    primaryKey({ columns: [table.scheduleKey, table.windowAt] }),
+    index("nextly_schedule_windows_window_idx").on(table.windowAt),
+  ]
 );

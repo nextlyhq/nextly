@@ -85,7 +85,8 @@ export interface PluginRole {
 
 /**
  * @experimental A plugin's schedule: the job it runs once per window of a cron
- * expression. Each jobs pass (`/api/jobs/run`) enqueues the job for the
+ * expression. Each jobs pass (the jobs route, `/admin/api/jobs/run` in a
+ * scaffolded app) enqueues the job for the
  * latest window that has opened, once, whatever runs the pass and however
  * often; a schedule's first job is for the first window that opens after the
  * installation first sees it, and windows missed while nothing called the

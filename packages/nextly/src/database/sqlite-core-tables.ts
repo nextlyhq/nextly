@@ -502,6 +502,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL,
       PRIMARY KEY ("schedule_key", "window_at")
     )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_schedule_windows_window_idx"
+      ON "nextly_schedule_windows" ("window_at")`,
     // The record of content events. Columns match
     // schemas/content-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_content_events" (

@@ -4,8 +4,9 @@
  * Strings, finite numbers, booleans, null, arrays and plain objects of
  * those. A `Date`, a `Map`, a class instance, `undefined`, a `bigint`, a
  * function or a non-finite number is not: each is dropped, rewritten or
- * refused by a JSON round trip. A value that contains itself is not either,
- * and is answered rather than recursed into forever.
+ * refused by a JSON round trip, and neither is an array with holes, which
+ * JSON writes as nulls. A value that contains itself is not either, and is
+ * answered rather than recursed into forever.
  *
  * @module shared/lib/json-value
  */
@@ -26,7 +27,12 @@ function isJsonWithin(value: unknown, above: Set<object>): boolean {
   if (typeof value === "number") return Number.isFinite(value);
   if (typeof value !== "object") return false;
   if (above.has(value)) return false;
-  if (!Array.isArray(value)) {
+  if (Array.isArray(value)) {
+    // `Object.values` skips holes, which JSON fills with null.
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) return false;
+    }
+  } else {
     const proto: unknown = Object.getPrototypeOf(value);
     if (proto !== Object.prototype && proto !== null) return false;
   }

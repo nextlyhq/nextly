@@ -9,7 +9,13 @@
  *
  * @module schemas/schedule-windows/postgres
  */
-import { pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  index,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
 
 export const nextlyScheduleWindowsPg = pgTable(
   "nextly_schedule_windows",
@@ -29,5 +35,9 @@ export const nextlyScheduleWindowsPg = pgTable(
       .$defaultFn(() => new Date())
       .notNull(),
   },
-  table => [primaryKey({ columns: [table.scheduleKey, table.windowAt] })]
+  table => [
+    primaryKey({ columns: [table.scheduleKey, table.windowAt] }),
+    // Pruning a removed schedule reads the oldest windows of every key.
+    index("nextly_schedule_windows_window_idx").on(table.windowAt),
+  ]
 );
