@@ -1012,18 +1012,18 @@ export function SingleForm({
     async (status: "published" | "draft"): Promise<SubmitOutcome> => {
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
+      const write = version.writeFor();
       try {
-        const adopt = version.answerFor();
         const stored = await onSubmit(version.withVersion({ status })).catch(
           (error: unknown) => {
-            version.refused(error, { status });
+            write.refused(error, { status });
             throw error;
           }
         );
         setSavedCount(n => n + 1);
         if (stored) {
           ownSave.current.storedKey = singleResetKey(stored, locale);
-          adopt(stored);
+          write.answered(stored);
         }
         return { ok: true, item: { id: document.id } };
       } catch (error) {
@@ -1102,7 +1102,7 @@ export function SingleForm({
             // placeholder and written as the reference it stands for.
             ownSave.current.inFlight = true;
             const payload = withoutPlaceholders(schema.fields, data);
-            const adopt = version.answerFor();
+            const write = version.writeFor();
             const stored = await onSubmit(
               version.withVersion(payload),
               refusedForm
@@ -1110,13 +1110,13 @@ export function SingleForm({
               .catch((error: unknown) => {
                 // A save made from an older version holds the edits on
                 // screen and opens the conflict; the failure is still told.
-                version.refused(error, payload, data);
+                write.refused(error, payload, data);
                 throw error;
               })
               .finally(() => {
                 ownSave.current.inFlight = false;
               });
-            if (stored) adopt(stored);
+            if (stored) write.answered(stored);
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
@@ -1187,13 +1187,13 @@ export function SingleForm({
     const sent = version.refusedValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
-    const adopt = version.answerFor();
+    const write = version.writeFor();
     try {
       const stored = await onSubmit(payload, refusedForm);
       setSavedCount(n => n + 1);
       if (stored) {
         ownSave.current.storedKey = singleResetKey(stored, locale);
-        adopt(stored);
+        write.answered(stored);
       }
       version.release();
       if (sent !== undefined) {

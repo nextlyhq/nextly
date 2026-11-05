@@ -747,11 +747,11 @@ function useConflictChoices(choices: {
     const sent = version.refusedValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
-    const adopt = version.answerFor();
+    const write = version.writeFor();
     try {
       const result = await updateMutation.mutateAsync(payload as never);
       ownSave.current.storedVersion = storedVersionOf(result.item);
-      adopt(result.item);
+      write.answered(result.item);
       version.release();
       if (sent !== undefined) {
         form.reset(storedAfterSave(fields, sent, result.item));
@@ -1100,12 +1100,12 @@ export function useEntryForm({
             // entryId is passed to useUpdateEntry hook, so we just pass data
             // here, with the version the copy started from.
             ownSave.current.inFlight = true;
-            const adopt = version.answerFor();
+            const write = version.writeFor();
             const result = await updateMutation
               .mutateAsync(version.withVersion(payload))
               // A save made from an older version holds the edits on
               // screen and opens the conflict; the failure is still told.
-              .catch(version.refusedThen(payload, data))
+              .catch(write.refusedThen(payload, data))
               .finally(() => {
                 ownSave.current.inFlight = false;
               });
@@ -1113,7 +1113,7 @@ export function useEntryForm({
               typeof result.item.updatedAt === "string"
                 ? result.item.updatedAt
                 : undefined;
-            adopt(result.item);
+            write.answered(result.item);
             savedRow = result.item;
             return {
               item: result.item,
@@ -1169,16 +1169,16 @@ export function useEntryForm({
       }
       if (isSubmitting || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
+      const write = version.writeFor();
       try {
-        const adopt = version.answerFor();
         const result = await updateMutation.mutateAsync(
           version.withVersion({ status })
         );
-        adopt(result.item);
+        write.answered(result.item);
         onSuccess?.(result.item);
         return { ok: true, item: result.item };
       } catch (error) {
-        version.refused(error, { status });
+        write.refused(error, { status });
         onError?.(error);
         return submitFailed(error);
       } finally {
