@@ -17,6 +17,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import type {
+  CannotCarry,
+  ColumnConversionPlan,
+} from "../../domains/schema/repair-columns/conversion/types";
+import { differenceClass } from "../../domains/schema/repair-columns/difference-class";
+import type {
   ColumnFinding,
   ColumnLocation,
   ColumnState,
@@ -89,11 +94,58 @@ function describeReason(reason: ConversionReason): string {
   return `${text} (${rows}${shown}: ${keys})`;
 }
 
-/** A difference's class and every reason behind it. */
-function describeJudgement(judgement: ConversionJudgement | null): string {
+/** One thing the new type cannot keep, with what the owner can change. */
+function describeCannotCarry(problem: CannotCarry): string {
+  return `cannot keep the ${problem.property} "${problem.name}": ${problem.reason}; ${problem.ownerCan}`;
+}
+
+/**
+ * A difference's class and every reason behind it: what its rows give, then what its conversion
+ * cannot keep, then the character set or collation the new type has no place for.
+ */
+function describeJudgement(
+  judgement: ConversionJudgement | null,
+  conversion: ColumnConversionPlan | null
+): string {
   if (judgement === null) return "";
-  if (judgement.reasons.length === 0) return ` ${judgement.class}.`;
-  return ` ${judgement.class}: ${judgement.reasons.map(describeReason).join("; ")}.`;
+  const reasons = [
+    ...judgement.reasons.map(describeReason),
+    ...(conversion?.cannotCarry ?? []).map(describeCannotCarry),
+  ];
+  const notCarried = (conversion?.notCarried ?? [])
+    .map(
+      item =>
+        `${item.property === "characterSet" ? "character set" : "collation"} ${item.value}`
+    )
+    .join(", ");
+  const outcome = differenceClass(judgement, conversion);
+  const classed =
+    reasons.length === 0
+      ? ` ${outcome}.`
+      : ` ${outcome}: ${reasons.join("; ")}.`;
+  const carried =
+    notCarried === ""
+      ? classed
+      : `${classed} Not carried, since the new type has no place for it: ${notCarried}.`;
+  return conversion === null
+    ? carried
+    : `${carried}${describeCost(conversion)}`;
+}
+
+/** What the database keeps others from doing while a conversion runs, as the report says it. */
+const BLOCKS_TEXT: Record<ColumnConversionPlan["blocks"], string> = {
+  "reads-and-writes": "reads and writes of the table wait until it ends",
+  writes: "reads continue and writes wait until it ends",
+  "brief-locks":
+    "reads and writes continue, apart from brief locks as it starts and ends",
+};
+
+/** What converting the column costs while it runs. */
+function describeCost(conversion: ColumnConversionPlan): string {
+  const rewrite = conversion.rewritesTable
+    ? "rewrites the table"
+    : "changes the column without rewriting the table";
+  return ` Converting it ${rewrite}; ${BLOCKS_TEXT[conversion.blocks]}.`;
 }
 
 /** The entity, field and column a finding is about, as each line opens. */
@@ -128,7 +180,7 @@ export function formatFinding(finding: ColumnFinding): string {
       return `${at}: pending a migration, ${from} as applied, ${to} as configured. Run \`nextly migrate:create\`, then \`nextly migrate\`.${owner}`;
     }
     case "differs":
-      return `${at}: is ${describeState(finding.live)}, expected ${describeState(finding.expected)}${describeCause(finding.cause)}.${describeJudgement(finding.judgement)}${owner}`;
+      return `${at}: is ${describeState(finding.live)}, expected ${describeState(finding.expected)}${describeCause(finding.cause)}.${describeJudgement(finding.judgement, finding.conversion)}${owner}`;
   }
 }
 

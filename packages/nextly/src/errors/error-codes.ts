@@ -58,6 +58,11 @@ export const NEXTLY_ERROR_STATUS = {
   // allocation already answer and which a retry keys on: this one must never
   // be retried, since the same version stays out of date.
   STALE_VERSION: 409,
+  // An update that must say which version of a document it was made from, or
+  // that it overwrites whatever is stored, and said neither: 428, Precondition
+  // Required. Its own code beside STALE_VERSION: nothing is out of date, the
+  // request is missing the condition it is judged by.
+  VERSION_REQUIRED: 428,
   DUPLICATE: 409,
   RATE_LIMITED: 429,
   PAYLOAD_TOO_LARGE: 413,
@@ -272,6 +277,7 @@ const CANONICAL_CODE_FOR_STATUS = [
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
+  "VERSION_REQUIRED",
   "PAYLOAD_TOO_LARGE",
   "UNSUPPORTED_MEDIA_TYPE",
   "RATE_LIMITED",

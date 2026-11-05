@@ -61,6 +61,7 @@ import {
   qualifiedFilename,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
+import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/required-column-guard";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import {
   assertRunnableStatements,
@@ -329,6 +330,17 @@ export interface MigrateDownCoreDeps {
    */
   recordDownStarted?: (filename: string) => Promise<string>;
   /**
+   * Refuses a DOWN whose statements make a column required over rows that would break it,
+   * counted before its first statement and before the ledger records an attempt
+   * (`refuseRequiredColumnsOverNulls`, as `nextly migrate` judges an UP). A DOWN can make a column
+   * required again over rows saved since its UP ran. `source` is the file's name. Optional so a
+   * caller with no database of its own supplies nothing.
+   */
+  refuseRequiredColumns?: (
+    statements: readonly string[],
+    source: string
+  ) => Promise<void>;
+  /**
    * Removes a DOWN's started attempt once its ending is recorded, through
    * `db`: the handle the rolled-back row was written on when it ended in a
    * rollback, so the two commit together. The ending's own record then says
@@ -580,8 +592,12 @@ export async function rollBackOne(
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "refuseRequiredColumns"
   >
 ): Promise<void> {
+  // A column made required over rows that would break it: refused here, before the DOWN's first
+  // statement and before the ledger records an attempt, so the migration stays applied.
+  await deps.refuseRequiredColumns?.(p.statements, p.filename);
   if (!p.transaction) {
     deps.logger.warn(outsideTransactionNotice(p.filename));
   }
@@ -1015,6 +1031,7 @@ export async function downDatabaseDeps(args: {
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "refuseRequiredColumns"
   >
 > {
   const { adapter, dialect, plugin } = args;
@@ -1047,6 +1064,8 @@ export async function downDatabaseDeps(args: {
     readLiveTables: lists => readLiveTables(db, dialect, lists),
     readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
     listFileApplies: () => repo.listFileApplies(),
+    refuseRequiredColumns: (statements, source) =>
+      refuseRequiredColumnsOverNulls(db, dialect, statements, source),
     execDown: (statements, unit, after) =>
       runMigrationStatements(adapter, statements, unit, handle =>
         after(handle)

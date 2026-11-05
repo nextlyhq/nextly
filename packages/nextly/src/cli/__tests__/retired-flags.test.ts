@@ -47,7 +47,12 @@ vi.mock("../program", async () => ({
 }));
 
 // `migrate` is the largest command module, and nothing here runs it.
-vi.mock("../commands/migrate", () => ({ runMigrate: vi.fn() }));
+// Only the run itself is stood in for: what migrate:fresh reads from the module besides it
+// (its exit status for a failure) stays the real one.
+vi.mock("../commands/migrate", async importOriginal => ({
+  ...(await importOriginal<typeof import("../commands/migrate")>()),
+  runMigrate: vi.fn(),
+}));
 
 vi.mock("../utils/adapter", () => ({
   validateDatabaseEnv: () => ({

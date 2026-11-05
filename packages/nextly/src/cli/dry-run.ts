@@ -65,6 +65,9 @@ export function dryRunLines(plan: DryRunPlan): string[] {
 }
 
 /** Prints `plan` as `dryRunLines` words it. */
-export function reportDryRun(logger: Logger, plan: DryRunPlan): void {
+export function reportDryRun(
+  logger: Pick<Logger, "info">,
+  plan: DryRunPlan
+): void {
   for (const line of dryRunLines(plan)) logger.info(line);
 }

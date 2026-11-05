@@ -124,8 +124,13 @@ vi.mock("../utils/config-loader", () => ({
     }),
 }));
 
-vi.mock("../commands/db-sync-registry", () => ({
+vi.mock("../commands/db-sync-registry", async importOriginal => ({
+  ...(await importOriginal<typeof import("../commands/db-sync-registry")>()),
   openCollectionRegistry: seen.openRegistry,
+  // The write runs as it is: these fakes have no database to lock, and what is under test here
+  // is the prompt, which comes before the lock.
+  withCollectionRegistryWrite: (_args: unknown, work: () => Promise<unknown>) =>
+    work(),
 }));
 
 vi.mock("../commands/migrate", () => ({
@@ -256,7 +261,10 @@ describe("--non-interactive at a terminal", () => {
       close: () => {},
     }));
     seen.stepRun.mockResolvedValue(1);
-    seen.openRegistry.mockResolvedValue(seen.registry);
+    seen.openRegistry.mockResolvedValue({
+      registry: seen.registry,
+      adapter: { disconnect: vi.fn().mockResolvedValue(undefined) },
+    });
     seen.registry.getCollectionBySlug.mockResolvedValue({
       slug: "nw_posts",
       fields: [],
