@@ -140,6 +140,8 @@ test.describe(
         slug: "posts",
         entryId: id,
       };
+      // The page's clock, so its heartbeat can be held while the claim ends.
+      await page.clock.install();
       await gotoAdmin(page, `/collections/posts/${id}`);
       await expect(excerpt(page)).toBeEditable({ timeout: 30_000 });
       await claimedBy(page.request, ref);
@@ -147,12 +149,18 @@ test.describe(
       await excerpt(page).fill(mine);
 
       // A's claim ends under the editor, as a lapse ends it: replaced, then
-      // released, so A's next beat finds nobody holding the entry.
+      // released, so A's next beat finds nobody holding the entry. The beat
+      // is held meanwhile: one landing between the two would find A's own
+      // newer claim and read as A's other tab, not as an ended claim.
+      await page.clock.pauseAt(Date.now() + 1_000);
+      // A beat already on its way lands before the claim is replaced.
+      await page.waitForTimeout(2_000);
       const token = await claimToken(page.request, ref);
       const released = await page.request.delete("/admin/api/document-lock", {
         data: { ...ref, claimToken: token },
       });
       expect(released.ok(), await released.text()).toBe(true);
+      await page.clock.resume();
       await expect(page.getByText(/claim on this document ended/)).toBeVisible({
         timeout: 45_000,
       });
