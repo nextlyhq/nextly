@@ -39,6 +39,7 @@ import { NoticeSinkProvider } from "./builder-notices";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
+  describedWithUnit,
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
@@ -5295,6 +5296,40 @@ describe("an image's fit", () => {
     expect(screen.getByText("Fit").closest("label")?.title).toMatch(
       /^Object fit/
     );
+  });
+});
+
+describe("opacity's unit in words", () => {
+  /** The ids describing the opacity field. */
+  const described = () =>
+    (
+      screen
+        .getByRole("textbox", { name: /^Opacity/ })
+        .getAttribute("aria-describedby") ?? ""
+    )
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent ?? "");
+
+  it("says percent while the value is a number", () => {
+    mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
+    expect(described()).toContain("percent");
+  });
+
+  it("decides from what the field shows, an inherited keyword included", () => {
+    // Unset here, the field shows what reaches it as its hint; a keyword
+    // there has no unit either, and a number there does.
+    expect(describedWithUnit(undefined, "unit", "", "inherit")).toBeUndefined();
+    expect(describedWithUnit("err", "unit", "", "50")).toBe("err unit");
+    expect(describedWithUnit(undefined, "unit", "", undefined)).toBe("unit");
+    expect(describedWithUnit(undefined, "unit", "40", "inherit")).toBe("unit");
+  });
+
+  it("says no unit for a keyword, which has none", () => {
+    mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } }
+    );
+    expect(described()).not.toContain("percent");
   });
 });
 
