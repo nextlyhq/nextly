@@ -24,6 +24,7 @@ import {
   poolRevisionReader,
   storedVersionOf,
   type ChangeSinceArgs,
+  type DecodedVersion,
   type RevisionReader,
 } from "./stale-version";
 
@@ -50,14 +51,65 @@ async function documentShape(
 }
 
 /**
- * What changed since a recovery point began, for its read: the change, when
- * the parts the point covers moved since its starting version; "unknown"
- * when it stored none; undefined when nothing it covers moved, or the
- * document is gone.
+ * What changed in a document since `given`, the version an editor's copy
+ * started from, in the parts that version covers: the document's own row,
+ * and `locale`'s translation when `given` names it, as a save from that
+ * version would be judged (a version read with no language says nothing
+ * about one). Described exactly as a refused save describes it; undefined
+ * when nothing those parts cover moved, or the document is gone.
  *
- * Its language is judged only when the stored version names it, as a save
- * from that version would be: a version read with no language says nothing
- * about one.
+ * One answer for every reader of "has it changed since this copy began":
+ * a recovery point's read, and an editor's lock heartbeat alike.
+ *
+ * @experimental
+ */
+export async function changesSinceStartedFrom(
+  /** The pool: a revision reader that can also tell whether a table is there. */
+  adapter: RevisionReader & CompanionIntrospectAdapter,
+  args: {
+    scopeKind: "collection" | "single";
+    slug: string;
+    entryId: string;
+    /** The version the copy started from, decoded (`storedVersionOf`). */
+    given: DecodedVersion;
+    /** The copy's language; null for a document that keeps none. */
+    locale: string | null;
+    reader: ChangeSinceArgs["reader"];
+  }
+): Promise<StaleVersionPublicData | undefined> {
+  const shape = await documentShape(args.scopeKind, args.slug);
+  if (!shape) return undefined;
+  const languagesTable = `${shape.table}_locales`;
+  const locale =
+    shape.localized &&
+    args.locale !== null &&
+    Object.hasOwn(args.given.languages, args.locale) &&
+    (await isCompanionReady(adapter, languagesTable))
+      ? args.locale
+      : null;
+  const changes = await changesSinceVersion(poolRevisionReader(adapter), {
+    dialect: adapter.dialect,
+    scopeKind: args.scopeKind,
+    slug: args.slug,
+    id: args.entryId,
+    given: args.given,
+    at: {
+      table: shape.table,
+      languages: languagesJudged(
+        locale === null ? null : languagesTable,
+        locale === null ? undefined : [locale]
+      ),
+    },
+    reader: args.reader,
+  });
+  return changes === null || changes === "gone" ? undefined : changes;
+}
+
+/**
+ * What changed since a recovery point began, for its read: the change, when
+ * the parts the point covers moved since its starting version
+ * (`changesSinceStartedFrom`); "unknown" when it stored none; undefined when
+ * nothing it covers moved, or the document is gone.
  */
 export async function changesSinceRecoveryPoint(
   /** The pool: a revision reader that can also tell whether a table is there. */
@@ -78,32 +130,13 @@ export async function changesSinceRecoveryPoint(
       : undefined;
   const given = storedVersionOf(raw);
   if (!given) return { startingVersionUnknown: true };
-  const shape = await documentShape(args.scopeKind, args.slug);
-  if (!shape) return undefined;
-  const languagesTable = `${shape.table}_locales`;
-  const locale =
-    shape.localized &&
-    args.locale !== null &&
-    Object.hasOwn(given.languages, args.locale) &&
-    (await isCompanionReady(adapter, languagesTable))
-      ? args.locale
-      : null;
-  const changes = await changesSinceVersion(poolRevisionReader(adapter), {
-    dialect: adapter.dialect,
+  const changedSince = await changesSinceStartedFrom(adapter, {
     scopeKind: args.scopeKind,
     slug: args.slug,
-    id: args.entryId,
+    entryId: args.entryId,
     given,
-    at: {
-      table: shape.table,
-      languages: languagesJudged(
-        locale === null ? null : languagesTable,
-        locale === null ? undefined : [locale]
-      ),
-    },
+    locale: args.locale,
     reader: args.reader,
   });
-  return changes === null || changes === "gone"
-    ? undefined
-    : { changedSince: changes };
+  return changedSince ? { changedSince } : undefined;
 }
