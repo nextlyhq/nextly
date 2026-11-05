@@ -102,12 +102,6 @@ export interface RemovalDryRun {
 /** How many documents one list names; the rest are counted. */
 export const NAMED_AT_MOST = 10;
 
-/**
- * How many documents one list keeps to name from. Kept as the walk finds
- * them, named once it is done; past this a document is only counted.
- */
-const KEPT_AT_MOST = 5_000;
-
 /** How many documents one ask of the caller names at once. */
 const NAMES_PER_ASK = 50;
 
@@ -321,10 +315,13 @@ interface Naming {
   unnamed: number;
 }
 
-/** Add a document to a list, kept to name from while there is room. */
+/**
+ * Add a document to a list to name from. Every one is kept, however many the
+ * caller may not read ahead of it: an address is small, and the naming that
+ * follows stops at ten names or the deadline, whichever comes first.
+ */
 function addTo(naming: Naming, host: HostAddress): void {
-  if (naming.hosts.length < KEPT_AT_MOST) naming.hosts.push(host);
-  else naming.unnamed += 1;
+  naming.hosts.push(host);
 }
 
 /**
