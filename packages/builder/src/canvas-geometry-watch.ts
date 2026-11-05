@@ -214,7 +214,20 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
       moved();
     });
   };
-  const STATE_EVENTS = ["pointerover", "pointerout", "focusin", "focusout"];
+  /*
+   * The input modality too: `:focus-visible` can start or stop matching with
+   * no focus event at all, when a block a pointer focused is then reached by
+   * the keyboard, or the other way about, so a key or a pointer press is a
+   * change of state as well.
+   */
+  const STATE_EVENTS = [
+    "pointerover",
+    "pointerout",
+    "focusin",
+    "focusout",
+    "keydown",
+    "pointerdown",
+  ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   root.addEventListener("scroll", settled, true);
   /*

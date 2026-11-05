@@ -96,11 +96,13 @@ interface Mark {
    * it to the left of the ring's right edge.
    */
   readonly tagEdge: "right" | "left";
-  /**
-   * Drawn with no halo band: cut to the part a clipping ancestor leaves
-   * visible, or around a block its own `clip-path` shapes.
-   */
+  /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
+  /**
+   * Around a block its own `clip-path` shapes: no halo band, the ring still
+   * outside the box.
+   */
+  readonly shaped?: boolean;
   /** The placement a component frame is drawn around, by its address. */
   readonly placement?: string;
   /**
@@ -192,6 +194,7 @@ function markKey(mark: Mark): string {
     tagEdge,
     tagInset,
     clipped,
+    shaped,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -210,6 +213,7 @@ function markKey(mark: Mark): string {
     tagInset.bottom,
     tagInset.side,
     clipped,
+    shaped === true,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -279,6 +283,8 @@ interface Outline {
   readonly radius: string;
   readonly radii: CornerRadii;
   readonly clipped: boolean;
+  /** Shaped by the block's own `clip-path`: no halo band, ring outside. */
+  readonly shaped?: boolean;
 }
 
 /**
@@ -328,7 +334,9 @@ function outlineOf(
    * A block its OWN `clip-path` shapes — a circle cut from a square box —
    * draws nothing of the box outside that shape. A halo band hugging the box
    * would frame corners that show the page behind, so the ring is drawn
-   * square around the box with no band, as for a block an ancestor clips.
+   * square around the box with no band. Unlike an ancestor's clip, the
+   * block's own shape does not cut the overlay, so the ring stays OUTSIDE
+   * the box, where it covers nothing the shape shows.
    */
   const shape = style?.clipPath;
   if (shape !== undefined && shape !== "" && shape !== "none") {
@@ -336,7 +344,8 @@ function outlineOf(
       rect: space.place(own),
       radius: borderRadiusOf(SQUARE_CORNERS),
       radii: SQUARE_CORNERS,
-      clipped: true,
+      clipped: false,
+      shaped: true,
     };
   }
   const drawn = scaleCornerRadii(inRoot, { x: space.scale, y: space.scale });
@@ -371,6 +380,7 @@ function ringOf(outline: Outline): Outline {
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
+    ...(outline.shaped === true ? { shaped: true } : {}),
   };
 }
 
@@ -396,6 +406,7 @@ function placementOutline(parts: readonly Outline[]): Outline {
     radius: borderRadiusOf(SQUARE_CORNERS),
     radii: SQUARE_CORNERS,
     clipped: parts.some(part => part.clipped),
+    ...(parts.some(part => part.shaped === true) ? { shaped: true } : {}),
   };
 }
 
@@ -433,6 +444,7 @@ function selectedMark(
     rect: ring.rect,
     radius: ring.radius,
     clipped: ring.clipped,
+    ...(ring.shaped === true ? { shaped: true } : {}),
     kind: "selected",
     component: placement !== undefined,
     ...look,
@@ -761,6 +773,7 @@ export function CanvasMarks({
           data-tag={mark.hidden ? mark.tag : undefined}
           data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
+          data-shaped={mark.shaped === true ? "" : undefined}
           // The tag a placement's frame carries, drawn by the stylesheet from
           // this attribute: the layer is hidden from assistive technology,
           // and the inspector names the placement in words.

@@ -68,6 +68,28 @@ describe("a block that moves without resizing", () => {
 });
 
 describe("a block an authored state rule moves", () => {
+  it("re-measures when the input modality changes, which can turn :focus-visible on alone", () => {
+    // A block a pointer focused starts matching :focus-visible once the
+    // keyboard is used, with no focus event: the key press is the signal, as
+    // a pointer press is for the change back.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    block.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(1);
+    block.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(2);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
   it("re-measures on the frame after the pointer or focus enters or leaves a block", () => {
     // An authored :hover or :focus-visible rule can move a block (a
     // transform, a margin) with no transition: nothing resizes or mutates,

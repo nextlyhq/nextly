@@ -2241,6 +2241,37 @@ describe("the site's ground and text on the canvas root", () => {
     }
   });
 
+  it("judges the ground again when the site's theme changes, with no render", async () => {
+    // The theme marker writes the root's theme without a render; a light
+    // ground that is opaque and a dark one that is not must each be judged.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        const dark = element.getAttribute("data-nx-site-theme") === "dark";
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return dark ? "rgba(11, 15, 25, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      root?.setAttribute("data-nx-site-theme", "dark");
+      await act(async () => undefined);
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("names nothing when the host serves no site sheet", () => {
     const root = rootOf(false);
     expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");

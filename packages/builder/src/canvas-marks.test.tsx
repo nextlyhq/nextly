@@ -606,7 +606,15 @@ describe("selection marks", () => {
       if (found === undefined) throw new Error("no mark yet");
       return found as HTMLElement;
     });
-    expect(mark.hasAttribute("data-clipped")).toBe(true);
+    expect(mark.hasAttribute("data-shaped")).toBe(true);
+    // The ring stays OUTSIDE the box, unlike a clipped one: the block's own
+    // shape does not cut the overlay, and inside it would cover the circle.
+    expect(mark.hasAttribute("data-clipped")).toBe(false);
+    expect({
+      left: mark.style.left,
+      top: mark.style.top,
+      width: mark.style.width,
+    }).toEqual({ left: "-4px", top: "-4px", width: "108px" });
   });
 
   it("draws no mark for a block its clipping ancestor hides entirely", async () => {

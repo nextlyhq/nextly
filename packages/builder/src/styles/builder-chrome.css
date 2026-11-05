@@ -3633,6 +3633,15 @@
 }
 
 /*
+ * A mark around a block its own clip-path shapes: the halo band would hug the
+ * box's corners, which the shape leaves showing the page behind, so only the
+ * ring is drawn, still outside the box.
+ */
+.nx-canvas-mark[data-shaped] {
+  box-shadow: none;
+}
+
+/*
  * The parts of a selected component placement an author can edit: its exposed
  * values, dashed in the component colour, so they stand apart from the
  * component's own design around them. Drawn just inside each part, so each

@@ -1039,15 +1039,36 @@ function useSiteSurfaceMarks(
   useIsomorphicLayoutEffect(() => {
     const root = rootRef.current;
     if (root === null) return;
-    const resolved =
-      root.ownerDocument.defaultView?.getComputedStyle(root).backgroundColor ??
-      "";
-    const alpha = alphaOf(resolved.trim());
-    setFlag(
-      root,
-      "data-nx-site-ground-opaque",
-      alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
-    );
+    const view = root.ownerDocument.defaultView;
+    const mark = (): void => {
+      const resolved = view?.getComputedStyle(root).backgroundColor ?? "";
+      const alpha = alphaOf(resolved.trim());
+      setFlag(
+        root,
+        "data-nx-site-ground-opaque",
+        alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
+      );
+    };
+    mark();
+    /*
+     * And again when the site's mode changes with no render: the theme marker
+     * rewrites the root's `data-nx-site-theme` from an observer of its own,
+     * and the device's colour scheme changes on its own. A light ground and a
+     * dark one can differ in whether they are opaque.
+     */
+    const Observer = view?.MutationObserver;
+    const theme =
+      typeof Observer === "function" ? new Observer(() => mark()) : null;
+    theme?.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-nx-site-theme"],
+    });
+    const scheme = view?.matchMedia?.("(prefers-color-scheme: dark)");
+    scheme?.addEventListener("change", mark);
+    return () => {
+      theme?.disconnect();
+      scheme?.removeEventListener("change", mark);
+    };
   });
 }
 
