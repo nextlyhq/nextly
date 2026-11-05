@@ -271,7 +271,7 @@ for (const dialect of getConfiguredTestDialects()) {
       const accepting = await add(t, "fake-accepting");
       expect(
         await service.testProvider(accepting.id, "me@example.com")
-      ).toEqual({ success: true });
+      ).toEqual({ success: true, to: "me@example.com" });
       expect(sent).toEqual([
         { to: "me@example.com", provider: "fake-accepting" },
       ]);
