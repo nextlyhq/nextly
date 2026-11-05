@@ -520,9 +520,11 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         })
       );
+      // A fixture: the settings set whatever they hold.
       await writeLayoutSettings(
         t.nextly as unknown as Parameters<typeof writeLayoutSettings>[0],
         { layouts: LAYOUTS_SLUG, settings: PAGE_BUILDER_SETTINGS_SLUG },
+        "overwrite",
         { defaultLayout: site }
       );
       const res = await route(PUBLISH_READINESS_ROUTE_PATH, siteEditor, {

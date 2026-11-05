@@ -885,7 +885,7 @@ Operators (verified against `packages/nextly/src/domains/collections/query/query
 | `less_than`          | `<`                                               | `where[price][less_than]=50`           |
 | `less_than_equal`    | `<=`                                              | `where[price][less_than_equal]=50`     |
 | `like`               | SQL `LIKE` (case-sensitive).                      | `where[title][like]=%hello%`           |
-| `contains`           | Case-insensitive substring (`ILIKE`).             | `where[title][contains]=hello`         |
+| `contains`           | Substring, ignoring case on every database, letters outside ASCII included; `%` and `_` are matched as typed. See [Direct API operators](/docs/api-reference/direct-api#operators). | `where[title][contains]=hello`         |
 | `search`             | Alias for `contains`.                             | `where[title][search]=hello`           |
 | `in`                 | Value in comma-separated list.                    | `where[status][in]=draft,published`    |
 | `not_in`             | Value not in comma-separated list.                | `where[status][not_in]=archived`       |

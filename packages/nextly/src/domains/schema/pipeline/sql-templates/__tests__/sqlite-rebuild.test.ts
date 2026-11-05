@@ -307,6 +307,23 @@ describe("SQLite check and foreign-key changes rebuild the table", () => {
     ).toEqual([{ name: "fx__orders_touch" }]);
   });
 
+  it("refuses, dropping nothing, when a view reads the table", async () => {
+    // Without the guard SQLite refuses the rename instead ("error in view"),
+    // which rolls back too but names neither the cause nor what to do.
+    db = await databaseWith([orders(["open"])]);
+    db.prepare(`INSERT INTO ${ORDERS} VALUES ('1', 'open', NULL)`).run();
+    db.exec(`CREATE VIEW fx__open_orders AS SELECT id FROM FX__ORDERS`);
+
+    await expect(
+      migrate([orders(["open"])], [orders(["open", "paid"])])
+    ).rejects.toThrow(
+      /rebuilding fx__orders would break the views that read it: drop each view that reads fx__orders, migrate, then create the view again/
+    );
+    expect(db.prepare(`SELECT * FROM fx__open_orders`).all()).toEqual([
+      { id: "1" },
+    ]);
+  });
+
   it("a new foreign key the existing rows violate is refused before COMMIT", async () => {
     const withoutKey: TableSpec = { ...lines("no action"), foreignKeys: [] };
     db = await databaseWith([orders(["open"]), withoutKey]);

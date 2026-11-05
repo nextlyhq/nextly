@@ -1,7 +1,9 @@
 // The where builder's text operators against SQLite. Its LIKE already ignores
-// case for ASCII letters, so CONTAINS and ICONTAINS agree here; what this file
-// holds SQLite to is that ILIKE runs at all, which SQLite has no keyword for,
-// and that ICONTAINS still matches `%` and `_` literally.
+// case for ASCII letters, so CONTAINS and ICONTAINS agree on those; what this
+// file holds SQLite to is that ILIKE runs at all, which SQLite has no keyword
+// for, that ICONTAINS still matches `%` and `_` literally, and that both
+// ignore case for letters outside ASCII, which SQLite's own lower() and LIKE
+// do not fold.
 
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -17,7 +19,7 @@ const releases = sqliteTable(TABLE, {
   title: text("title").notNull(),
 });
 
-const TITLES = ["Spring launch", "50% off", "a_b", "AXB"];
+const TITLES = ["Spring launch", "50% off", "a_b", "AXB", "Crème brûlée"];
 
 describe("SQLite text matching", () => {
   let adapter: ReturnType<typeof createSqliteAdapter>;
@@ -54,6 +56,15 @@ describe("SQLite text matching", () => {
     expect(
       await titlesWhere({ column: "title", op: "ICONTAINS", value: "LAUNCH" })
     ).toEqual(["Spring launch"]);
+  });
+
+  it("ICONTAINS and ILIKE ignore case for letters outside ASCII", async () => {
+    expect(
+      await titlesWhere({ column: "title", op: "ICONTAINS", value: "CRÈME" })
+    ).toEqual(["Crème brûlée"]);
+    expect(
+      await titlesWhere({ column: "title", op: "ILIKE", value: "%BRÛLÉE" })
+    ).toEqual(["Crème brûlée"]);
   });
 
   it("ICONTAINS matches % and _ as characters, not wildcards", async () => {
