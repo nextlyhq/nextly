@@ -31,11 +31,11 @@ import * as React from "react";
 
 import type { CardVerbs } from "./block-card";
 import { useSurvivingReport } from "./builder-notices";
-import { LookTiles } from "./look-tiles-view";
 import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
+import { LookTiles } from "./look-tiles-view";
 import type { BuilderOp } from "./ops";
 import {
   sharedStyleReachSentence,
@@ -413,9 +413,6 @@ export function StyleTargetBar({
     host
   );
   const worn = target.worn;
-  // A look is worn beside a shared style, so "Apply" and "Save as" stay on
-  // offer while the block wears only a look.
-  const wearsSharedStyle = worn.some(row => row.look !== true);
   return (
     <>
       <LookTiles
@@ -425,36 +422,68 @@ export function StyleTargetBar({
         tokens={tokens}
       />
       <EditingBar
-      target={editTargetOf(target, reach)}
-      chips={worn.map(row => ({
-        id: row.id,
-        name: row.name,
-        className: row.className,
-        locked: row.locked,
-        ...(row.look === true ? { look: true } : {}),
-      }))}
-      onTargetChange={host === undefined ? undefined : onChoose}
-      {...chipActions(editor, nodeId, worn, report, breakpoints)}
-      chipActionsHeld={held}
-      // The shared chips too: choosing one would edit the held design.
-      targetHeld={held}
-      sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
-      actions={
-        nodeId === null || wearsSharedStyle || held !== undefined ? null : (
-          <BarActions
-            editor={editor}
-            nodeId={nodeId}
-            library={library}
-            libraryAbsence={libraryAbsence}
-            verbs={verbs}
-          />
-        )
-      }
-      device={device}
-      state={state}
-      stateControl={stateControl}
+        target={editTargetOf(target, reach)}
+        chips={worn.map(row => ({
+          id: row.id,
+          name: row.name,
+          className: row.className,
+          locked: row.locked,
+        }))}
+        onTargetChange={host === undefined ? undefined : onChoose}
+        {...chipActions(editor, nodeId, worn, report, breakpoints)}
+        chipActionsHeld={held}
+        // The shared chips too: choosing one would edit the held design.
+        targetHeld={held}
+        sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
+        actions={offeredActions({
+          editor,
+          nodeId,
+          worn,
+          held,
+          library,
+          libraryAbsence,
+          verbs,
+        })}
+        device={device}
+        state={state}
+        stateControl={stateControl}
       />
     </>
+  );
+}
+
+/**
+ * Line one's actions, or none: only for a block that wears no shared style
+ * and whose design isn't held. A look is worn beside a shared style, so
+ * "Apply" and "Save as" stay on offer while the block wears only a look.
+ */
+function offeredActions({
+  editor,
+  nodeId,
+  worn,
+  held,
+  library,
+  libraryAbsence,
+  verbs,
+}: {
+  editor: EditorState;
+  nodeId: string | null;
+  worn: readonly SharedStyleRow[];
+  held: string | undefined;
+  library: readonly NamedClass[] | undefined;
+  libraryAbsence: "pending" | "failed" | undefined;
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element | null {
+  const wearsSharedStyle = worn.some(row => row.look !== true);
+  if (nodeId === null || wearsSharedStyle || held !== undefined) return null;
+  return (
+    <BarActions
+      editor={editor}
+      nodeId={nodeId}
+      library={library}
+      libraryAbsence={libraryAbsence}
+      verbs={verbs}
+    />
   );
 }
 

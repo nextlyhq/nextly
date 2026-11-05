@@ -728,6 +728,57 @@ describe("the shared style target", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
+  describe("the Look row", () => {
+    const outline = {
+      id: "look:acme/box:outline",
+      slug: "box-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "acme/box",
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
+    };
+    const looks = () => screen.getByRole("radiogroup", { name: "Look" });
+
+    it("offers the block's own look and its type's looks, its own chosen", () => {
+      mountTarget({ library: [card, outline] });
+      const radios = within(looks()).getAllByRole("radio");
+      // A type with no named own look calls it Default, said once.
+      expect(
+        radios.map(
+          radio => radio.querySelector(".nx-look-tile__name")?.textContent
+        )
+      ).toEqual(["Default", "Outline"]);
+      expect(radios[0]?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("wears the chosen look and keeps the block's shared style", () => {
+      const { editor } = mountTarget({
+        classes: ["c-card"],
+        library: [card, outline],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Outline/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        {
+          kind: "update",
+          id: "a",
+          patch: { classes: [outline.id, "c-card"] },
+        },
+      ]);
+    });
+
+    it("keeps Apply on offer while the block wears only a look", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      expect(
+        within(bar()).getByRole("button", { name: "Apply shared style" })
+      ).toBeDefined();
+    });
+
+    it("draws no row for a type with no looks", () => {
+      mountTarget({ library: [card] });
+      expect(screen.queryByRole("radiogroup", { name: "Look" })).toBeNull();
+    });
+  });
+
   it("raises a refusal through the shell once the author has switched target", async () => {
     let refuse: (reason: string) => void = () => {};
     const raise = vi.fn();

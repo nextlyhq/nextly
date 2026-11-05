@@ -986,6 +986,7 @@ function StyleTab({
     */}
       <StyleTargetBar
         editor={editor}
+        tokens={tokens}
         target={target}
         onChoose={choose}
         held={held}

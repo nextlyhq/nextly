@@ -97,7 +97,10 @@ export function LookTiles({
   };
   const kind = specimenKind(node.type);
   return (
-    <div className="nx-look-tiles" data-held={held === undefined ? undefined : ""}>
+    <div
+      className="nx-look-tiles"
+      data-held={held === undefined ? undefined : ""}
+    >
       <div className="nx-look-tiles__head">
         <span id={labelId} className="nx-look-tiles__label">
           Look
@@ -150,7 +153,7 @@ export function LookTiles({
               </span>
               <span className="nx-look-tile__name">
                 {tile.name}
-                {tile.id === null ? (
+                {tile.id === null && tile.name !== "Default" ? (
                   <span className="nx-look-tile__tag">Default</span>
                 ) : null}
               </span>
