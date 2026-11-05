@@ -15,7 +15,7 @@ import type { BlockRenderArgs, PageContext } from "../context";
 
 import { INTERACTIVE } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
-import { boundText, oneOf, relFor, text, url } from "./props";
+import { boundText, LINK_PROPS, linkFor, oneOf, text } from "./props";
 
 /** The button's HTML behaviour when it is not a link. */
 export const BUTTON_TYPES = ["button", "submit", "reset"] as const;
@@ -47,25 +47,17 @@ export async function renderButton({
 }: BlockRenderArgs<ButtonProps>): Promise<ReactElement> {
   // A bound date keeps its machine-readable value inside the button or link.
   const label = boundText(text(props.label), bound?.label);
-  const collection = text(props.entryCollection);
-  const entryId = text(props.entryId);
-
-  // An entry reference beats a typed URL: it survives the entry being renamed,
-  // which a pasted path does not. Resolution is a read, so it can fail, and a
-  // failure means "no destination" rather than a lost page.
-  const resolvedPath =
-    collection !== "" && entryId !== ""
-      ? await ctx.resolveEntryPath(collection, entryId).catch(() => null)
-      : null;
-
-  const href = url(resolvedPath ?? undefined) ?? url(props.href);
+  // Where it goes, read as every linking block reads it.
+  const link = await linkFor(props, (collection, id) =>
+    ctx.resolveEntryPath(collection, id)
+  );
   const ariaLabel = text(props.ariaLabel);
   const shared = {
     className,
     ...(ariaLabel === "" ? {} : { "aria-label": ariaLabel }),
   };
 
-  if (href === undefined) {
+  if (link === undefined) {
     return (
       <button {...shared} type={oneOf(props.type, BUTTON_TYPES, "button")}>
         {label}
@@ -73,14 +65,8 @@ export async function renderButton({
     );
   }
 
-  const rel = relFor(props.target, props.rel);
   return (
-    <a
-      {...shared}
-      href={href}
-      {...(props.target === "_blank" ? { target: "_blank" } : {})}
-      {...(rel === undefined ? {} : { rel })}
-    >
+    <a {...shared} {...link}>
       {label}
     </a>
   );
@@ -200,20 +186,7 @@ export const button: BlockDefinition<ButtonProps, PageContext> =
       baseStyles: BUTTON_BASE_STYLES,
       props: {
         label: { label: "Label", role: "content", type: "text" },
-        href: { label: "Link", role: "content", type: "url" },
-        entryCollection: {
-          label: "Linked collection",
-          role: "content",
-          type: "text",
-        },
-        entryId: { label: "Linked entry", role: "content", type: "text" },
-        target: {
-          label: "Open link in",
-          optionLabels: { _self: "This tab", _blank: "New tab" },
-          type: "select",
-          options: ["_self", "_blank"],
-        },
-        rel: { label: "Link relationship", type: "text" },
+        ...LINK_PROPS,
         // What the button does when it is not a link: offered only without a
         // link, to a URL or to an entry, since a link is what it then does. An
         // entry link is the collection and the entry together, as the renderer
