@@ -310,7 +310,10 @@ function mapEarlier(
   declaredJobs: ReadonlySet<string>,
   contextOf: EarlierScheduleOptions["contextOf"]
 ): { schedule: CollectedSchedule; job: CollectedJob } {
-  const slug = String(task.name);
+  if (typeof task.name !== "string") {
+    throw refuse(plugin, "", "its name is not a string");
+  }
+  const slug = task.name;
   const source =
     typeof task.schedule === "number"
       ? intervalCron(task.schedule)
@@ -366,10 +369,25 @@ function mapEarlier(
   return { schedule, job: { definition, owner: plugin, plugin } };
 }
 
-/** Why `error` refused an earlier-shape schedule, in its own words. */
-function reasonOf(error: NextlyError): string {
+/**
+ * Why `error` stopped an earlier-shape schedule, in its own words: a
+ * refusal's reason, or what a plugin's own code threw while it was read.
+ */
+function reasonOf(error: unknown): string {
+  if (!NextlyError.is(error)) {
+    return `it could not be read: ${error instanceof Error ? error.message : String(error)}`;
+  }
   const reason = (error.logContext as { reason?: unknown } | undefined)?.reason;
   return typeof reason === "string" ? reason : error.message;
+}
+
+/** The name an earlier-shape schedule gives itself, as a notice can say it. */
+function earlierName(task: ScheduledTask): string {
+  try {
+    return typeof task.name === "string" ? `"${task.name}"` : "with no name";
+  } catch {
+    return "with no readable name";
+  }
 }
 
 /**
@@ -385,7 +403,7 @@ function collectEarlier(
   admit: (schedule: CollectedSchedule) => void
 ): CollectedJob | undefined {
   // Said once per schedule: each is its own surface.
-  const surface = `Plugin "${plugin}"'s schedule "${String(task.name)}" in the { name, schedule, handler } shape`;
+  const surface = `Plugin "${plugin}"'s schedule ${earlierName(task)} in the { name, schedule, handler } shape`;
   const replacement = "{ slug, cron, job } with a job the plugin declares";
   try {
     const mapped = mapEarlier(plugin, task, declaredJobs, earlier.contextOf);
@@ -393,10 +411,13 @@ function collectEarlier(
     noticeDeprecation({ surface, replacement }, earlier.notice);
     return mapped.job;
   } catch (error) {
-    if (!NextlyError.is(error)) throw error;
+    // Anything this entry throws, its own code included, is told, not
+    // raised: it never stops the start. Said apart from the deprecation, so
+    // a second entry of one name, or one that stops mapping on a reload,
+    // is still told it is not run.
     noticeDeprecation(
       {
-        surface,
+        surface: `${surface}, not run`,
         replacement,
         message: `${surface} is not run: ${reasonOf(error)}. Declare it as ${replacement} instead.`,
       },
@@ -453,11 +474,15 @@ export function collectSchedules(
       keys.add(schedule.key);
       out.push(schedule);
     };
-    for (const entry of plugin.contributes?.schedules ?? []) {
-      if (!isEarlierShape(entry)) {
+    const entries = plugin.contributes?.schedules ?? [];
+    // The current shape first, wherever it is listed: an earlier-shape entry
+    // never takes a slug or key a current one then has to be refused for.
+    for (const entry of entries) {
+      if (!isEarlierShape(entry))
         admit(collectOne(plugin.name, entry, ownJobs));
-        continue;
-      }
+    }
+    for (const entry of entries) {
+      if (!isEarlierShape(entry)) continue;
       const job = collectEarlier(
         plugin.name,
         entry as ScheduledTask,

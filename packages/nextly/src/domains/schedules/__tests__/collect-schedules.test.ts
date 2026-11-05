@@ -327,6 +327,8 @@ describe("collecting plugin schedules", () => {
       [60_000, "* * * * *"],
       [900_000, "*/15 * * * *"],
       [7_200_000, "0 */2 * * *"],
+      [3_600_000, "0 * * * *"],
+      [86_400_000, "0 0 * * *"],
     ] as const) {
       const slug = `acme.every-${ms}`;
       const p = plugin([{ name: slug, schedule: ms, handler: () => {} }]);
@@ -357,8 +359,82 @@ describe("collecting plugin schedules", () => {
     expect(notices[0]).toContain("420000 ms");
     expect(notices[1]).toContain("90000 ms");
     expect(notices[2]).toContain('"acme.bad"');
+    expect(notices[2]).toContain("five fields");
     expect(notices[3]).toContain("no handler");
     expect(notices[4]).toContain("slug");
+  });
+
+  it("leaves an interval that is no positive whole number of milliseconds a cron step keeps unexecuted, and says so", () => {
+    const intervals = [0, -60_000, Number.NaN, 5_400_000, 30_000];
+    const p = plugin(
+      intervals.map((ms, index) => ({
+        name: `acme.interval-${index}`,
+        schedule: ms,
+        handler: () => {},
+      }))
+    );
+    const { schedules, notices } = earlier(p);
+    expect(schedules).toEqual([]);
+    expect(notices).toHaveLength(intervals.length);
+    for (const notice of notices) expect(notice).toContain("is not run");
+  });
+
+  it("an earlier-shape schedule declared before a current-shape one with its slug is not run, and the current one is", () => {
+    const p = plugin([
+      { name: "acme.first", schedule: "@hourly", handler: () => {} },
+      { slug: "acme.first", cron: "@daily", job: "acme:tick" },
+    ]);
+    const { schedules, jobs, notices } = earlier(p);
+    expect(schedules.map(schedule => [schedule.slug, schedule.job])).toEqual([
+      ["acme.first", "acme:tick"],
+    ]);
+    expect(jobs).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("is not run");
+    expect(notices[0]).toContain("same slug");
+  });
+
+  it("an earlier-shape schedule whose name is not a string is not run, and the start goes on", () => {
+    const p = plugin([
+      { name: 123, schedule: "@daily", handler: () => {} },
+      { name: undefined, schedule: "@hourly", handler: () => {} },
+    ]);
+    const { schedules, jobs, notices } = earlier(p);
+    expect(schedules).toEqual([]);
+    expect(jobs).toEqual([]);
+    expect(notices.length).toBeGreaterThan(0);
+    for (const notice of notices) {
+      expect(notice).toContain("is not run");
+      expect(notice).toContain("name");
+    }
+  });
+
+  it("an earlier-shape schedule whose fields cannot be read is not run, and the start goes on", () => {
+    const unreadable = {
+      name: "acme.unreadable",
+      get schedule(): string {
+        throw new Error("no schedule here");
+      },
+      handler: () => {},
+    };
+    const p = plugin([unreadable]);
+    const { schedules, notices } = earlier(p);
+    expect(schedules).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('"acme.unreadable"');
+    expect(notices[0]).toContain("is not run");
+  });
+
+  it("two earlier-shape schedules with one name: the first runs, and the second is told it is not run", () => {
+    const p = plugin([
+      { name: "acme.same", schedule: "@hourly", handler: () => {} },
+      { name: "acme.same", schedule: "@daily", handler: () => {} },
+    ]);
+    const { schedules, notices } = earlier(p);
+    expect(schedules).toHaveLength(1);
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toContain("deprecated");
+    expect(notices[1]).toContain("is not run");
   });
 
   it("an earlier-shape schedule whose job the plugin already declares is not run, and the start goes on", () => {
