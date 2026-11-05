@@ -251,6 +251,32 @@ function overlaidValue(under: unknown, over: unknown): unknown {
   return out;
 }
 
+/** One breakpoint's values with another's laid over, property by property. */
+function overlaidValues(
+  under: Record<string, unknown> | undefined,
+  over: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...under };
+  for (const [property, value] of Object.entries(over)) {
+    out[property] = overlaidValue(out[property], value);
+  }
+  return out;
+}
+
+/** One state's breakpoints with another's laid over. */
+function overlaidBreakpoints(
+  under: Record<string, Record<string, unknown>> | undefined,
+  over: Record<string, unknown>
+): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = { ...under };
+  for (const [breakpoint, values] of Object.entries(over)) {
+    if (isPlainRecord(values)) {
+      out[breakpoint] = overlaidValues(out[breakpoint], values);
+    }
+  }
+  return out;
+}
+
 /**
  * A block type's base with the site's edit of it laid over, state by state,
  * breakpoint by breakpoint and property by property: the site keeps every
@@ -263,14 +289,8 @@ function overlaidBase(
   const out: Record<string, Record<string, Record<string, unknown>>> = {};
   for (const source of [base, edit]) {
     for (const [state, byBreakpoint] of Object.entries(source ?? {})) {
-      if (!isPlainRecord(byBreakpoint)) continue;
-      const states = (out[state] ??= {});
-      for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
-        if (!isPlainRecord(values)) continue;
-        const at = (states[breakpoint] ??= {});
-        for (const [property, value] of Object.entries(values)) {
-          at[property] = overlaidValue(at[property], value);
-        }
+      if (isPlainRecord(byBreakpoint)) {
+        out[state] = overlaidBreakpoints(out[state], byBreakpoint);
       }
     }
   }
