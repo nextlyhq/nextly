@@ -37,9 +37,36 @@ function Note({ note }: { note: RemovalNote }): JSX.Element {
   );
 }
 
-/** The buttons under a step, at its right. */
-function Actions({ children }: { children: JSX.Element[] }): JSX.Element {
-  return <div className="flex justify-end gap-2">{children}</div>;
+/**
+ * The buttons under a step, at its right. `held` keeps them at the bottom of
+ * the tab as it scrolls, for a confirmation longer than Settings is tall, so
+ * the choice it asks for, and `note` beside it, are never scrolled out of
+ * sight. Held at the tab's very edge, over its bottom padding, so nothing
+ * shows beneath them.
+ */
+function Actions({
+  children,
+  held = false,
+  note,
+}: {
+  children: JSX.Element[];
+  held?: boolean;
+  note?: string;
+}): JSX.Element {
+  return (
+    <div
+      className={
+        held
+          ? "sticky -bottom-6 -mb-6 flex items-center justify-end gap-2 bg-background pb-6 pt-3"
+          : "flex items-center justify-end gap-2"
+      }
+    >
+      {note === undefined ? null : (
+        <p className="mr-auto text-sm text-muted-foreground">{note}</p>
+      )}
+      {children}
+    </div>
+  );
 }
 
 /** The rows a save keeps, with the ones it drops struck through. */
@@ -167,9 +194,8 @@ export function RemovalStepPanel({
           {words.notes.map(note => (
             <Note key={note.lead} note={note} />
           ))}
-          <p className="text-sm text-muted-foreground">{words.undo}</p>
         </section>
-        <Actions>
+        <Actions held note={words.undo}>
           <Button
             type="button"
             variant="outline"

@@ -588,9 +588,9 @@ function step(dialog: Locator, state: string): Locator {
 /** The count a confirmation lists for one place. */
 function placeCount(dialog: Locator, place: string): Locator {
   return step(dialog, "confirm")
-    .locator("div")
-    .filter({ has: dialog.page().getByRole("term").filter({ hasText: place }) })
-    .getByRole("definition");
+    .getByRole("term")
+    .filter({ hasText: place })
+    .locator("xpath=following-sibling::dd[1]");
 }
 
 test.describe("Removing a breakpoint in Settings", () => {
