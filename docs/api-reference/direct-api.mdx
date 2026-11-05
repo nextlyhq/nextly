@@ -945,8 +945,8 @@ try {
 To save whatever the current version, add `_overwrite: true` to `data`. The update is applied,
 and the document's history records the overwrite. An update that sends neither `_rev` nor
 `_overwrite: true` throws `VERSION_REQUIRED` (428) and writes nothing: check it with
-`NextlyError.isCode(err, "VERSION_REQUIRED")`. Generated entry and Single types carry
-`_rev?: string`, and their update inputs take `_overwrite?: boolean`.
+`NextlyError.isCode(err, "VERSION_REQUIRED")`. Generated entry and Single types and Zod
+schemas carry `_rev?: string`, and their update inputs take `_overwrite?: boolean`.
 
 ## Errors
 
