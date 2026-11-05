@@ -10,8 +10,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { actorForKey } from "../../../../auth/access/resolve-actor";
-import type { KeyActor } from "../../../../auth/access/actor";
+import { apiKeyScope } from "../../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
 import {
@@ -67,6 +66,15 @@ export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
         slug: "pages",
         ...drafts,
         workflow: editorial,
+        fields: [text({ name: "title" })],
+      }),
+      // Holders of update or publish are refused both by the collection's own rule, which the
+      // workflow's built-in steps must meet as any write does.
+      defineCollection({
+        slug: "locked",
+        ...drafts,
+        workflow: editorial,
+        access: { update: () => false, publish: () => false },
         fields: [text({ name: "title" })],
       }),
       defineCollection({
@@ -345,24 +353,24 @@ export async function person(
   return { kind: "user", userId: id };
 }
 
-/** An API key `keyId` made by `ownerId`, holding exactly `grants`. */
+/** An API key `keyId` made by `ownerId`, holding exactly `grants`, as authentication scopes it. */
 export function apiKey(
   keyId: string,
   ownerId: string,
   grants: readonly Grant[]
 ): WorkflowCaller & { kind: "key" } {
-  const key: KeyActor = actorForKey({
+  return {
+    kind: "key",
     keyId,
     userId: ownerId,
-    grants: grants.map(([action, resource]) => ({
-      slug: permissionSlug(action, resource),
-      action,
-      resource,
-    })),
-    roles: [],
-    superAdmin: false,
-  });
-  return { kind: "key", key };
+    scope: apiKeyScope(
+      grants.map(([action, resource]) => ({
+        slug: permissionSlug(action, resource),
+        action,
+        resource,
+      }))
+    ),
+  };
 }
 
 export const SYSTEM: WorkflowCaller = { kind: "system" };

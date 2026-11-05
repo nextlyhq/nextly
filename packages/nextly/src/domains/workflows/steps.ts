@@ -7,8 +7,10 @@
  * caller's permission, that the caller is a person where the step needs one, self-approval, the
  * comment) is checked before anything is written.
  *
- * Who the caller is, and whether a person or role may be assigned, is read before the transaction
- * opens, through the auth resolution that answers it everywhere else (`holders.ts`). That
+ * Who the caller is, whether a built-in write (update, publish) is allowed on this document by the
+ * collection's own gate (`entry-gate.ts`), and whether a person or role may be assigned, are read
+ * before the transaction opens, through the auth resolution that answers them everywhere else
+ * (`holders.ts`). That
  * resolution reads on the pool, and a read beside an open transaction would run on another
  * connection. Nothing it reads is review state, so reading it first changes no answer.
  *
@@ -43,13 +45,14 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
-import {
-  systemActor,
-  type Actor,
-  type KeyActor,
-} from "../../auth/access/actor";
+import { systemActor, type Actor } from "../../auth/access/actor";
 import { decidePermission } from "../../auth/access/decide";
-import { actorForUser } from "../../auth/access/resolve-actor";
+import {
+  actorForKey,
+  actorForScope,
+  actorForUser,
+} from "../../auth/access/resolve-actor";
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { isUniqueViolation } from "../../database/errors";
 import { NextlyError } from "../../errors";
 import type { WorkflowRefusalPublicData } from "../../errors/public-data";
@@ -62,10 +65,12 @@ import {
 } from "../content-events/kinds";
 import { recordContentEvent } from "../content-events/record";
 import { configuredLocales } from "../i18n/configured-locales";
+import { readDocumentRevision } from "../versions/stale-version";
 import type { VersionRow } from "../versions/versions-repository";
 
 import { approvalDigest } from "./approval-digest";
 import { allowsSelfApproval, primaryStep } from "./define-workflow";
+import { entryWriteAllowed, isEntryWrite } from "./entry-gate";
 import { holderAnswer, readPerson, type HolderAnswer } from "./holders";
 import {
   documentTableOf,
@@ -90,8 +95,8 @@ import { readWorkflowSettings } from "./workflow-settings-repository";
  * Who takes a step or assigns a part.
  *
  * - `user`: a signed-in person, whose roles and grants are read as the rest of Nextly reads them.
- * - `key`: an API key as authentication resolved it. Its act is recorded as the key's, with its
- *   owner (`key.userId`) as the person accountable for it.
+ * - `key`: an API key as authentication resolved it: its id, its maker, and its scope. Its act is
+ *   recorded as the key's, with its maker (`userId`) as the person accountable for it.
  * - `system`: trusted server code acting as no person. It may take no step of kind approve or
  *   request-changes.
  *
@@ -99,7 +104,7 @@ import { readWorkflowSettings } from "./workflow-settings-repository";
  */
 export type WorkflowCaller =
   | { kind: "user"; userId: string }
-  | { kind: "key"; key: KeyActor }
+  | { kind: "key"; keyId: string; userId: string; scope: AuthenticatedScope }
   | { kind: "system" };
 
 /**
@@ -428,19 +433,28 @@ async function resolveCaller(
         ownerId: null,
       };
     }
-    case "key":
+    case "key": {
       // A key whose id is not known could not be named in the record.
-      if (caller.key.keyId === "") {
+      if (caller.keyId === "") {
         throw NextlyError.internal({
           logContext: { reason: "workflow-step-key-without-id" },
         });
       }
+      // The key's actor as a gate builds it from the scope, named with the key's id.
+      const scoped = actorForScope(caller.scope, { id: caller.userId });
       return {
-        actor: caller.key,
-        accountable: caller.key.userId,
-        event: { kind: "apiKey", id: caller.key.keyId, name: null },
-        ownerId: caller.key.userId,
+        actor: actorForKey({
+          keyId: caller.keyId,
+          userId: caller.userId,
+          grants: scoped.permissions,
+          roles: scoped.roles,
+          superAdmin: scoped.superAdmin,
+        }),
+        accountable: caller.userId,
+        event: { kind: "apiKey", id: caller.keyId, name: null },
+        ownerId: caller.userId,
       };
+    }
     case "system":
       return {
         actor: systemActor(),
@@ -650,9 +664,27 @@ export async function takeWorkflowStep(
   const reviewer = await defaultReviewer(adapter, registered, step, slug);
   const dialect = adapter.getCapabilities().dialect;
   const table = await documentTableOf(input.document);
+  // A built-in write (update, publish) is judged by the collection's own gate for this document,
+  // rule and filter included, as the write itself would be; a workflow's own action has no
+  // collection rule, so its permission answers. The gate reads on the pool, so it is asked here and
+  // its answer applied in its place below.
+  const action = stepAction(workflow, step);
+  const permitted = isEntryWrite(action)
+    ? await entryWriteAllowed(input.document, action, input.caller)
+    : decidePermission(caller.actor, action, slug).allowed;
   ensureWorkflowContentEventKinds();
 
   return adapter.transaction(async tx => {
+    // 0. The document's own row, locked before anything is read. Every save takes this lock before
+    // it writes, so a save in flight is waited for, and the version read below is the one it
+    // committed rather than the one it is replacing.
+    await readDocumentRevision(tx, {
+      dialect,
+      table: table.table,
+      id: input.document.entryId,
+      forUpdate: true,
+    });
+
     // 1. Each part's stage, read on the transaction; a part with no state is in the first stage.
     const parts: Array<{
       part: string | null;
@@ -687,9 +719,8 @@ export async function takeWorkflowStep(
     }
     if (movable.length === 0) throw notFromStageRefusal(left);
 
-    // 2. The step's permission, as the one decision answers it.
-    const action = stepAction(workflow, step);
-    if (!decidePermission(caller.actor, action, slug).allowed) {
+    // 2. The step's permission.
+    if (!permitted) {
       throw NextlyError.forbidden({
         publicData: {
           reason: "no-permission",
@@ -905,6 +936,26 @@ export async function assignWorkflowParts(
       }
     }
   }
+  // Whether the caller may make each built-in write an assigner may hold, for each document, asked
+  // of the collection's own gate before the transaction opens, as a step asks it.
+  const gated = new Map<string, boolean>();
+  const gatedKey = (index: number, action: string) =>
+    JSON.stringify([index, action]);
+  for (const [index, { assignment, registered }] of entries.entries()) {
+    const actions = new Set(
+      registered.workflow.stages.flatMap(stage =>
+        assignerActions(registered.workflow, stage.name)
+      )
+    );
+    for (const action of actions) {
+      if (isEntryWrite(action)) {
+        gated.set(
+          gatedKey(index, action),
+          await entryWriteAllowed(assignment.document, action, input.caller)
+        );
+      }
+    }
+  }
   const dialect = adapter.getCapabilities().dialect;
   ensureWorkflowContentEventKinds();
 
@@ -927,11 +978,11 @@ export async function assignWorkflowParts(
       const slug = assignment.document.scopeSlug;
       const stage = read[index]?.stage ?? registered.workflow.firstStage;
       const anyOf = assignerActions(registered.workflow, stage);
-      if (
-        !anyOf.some(
-          action => decidePermission(caller.actor, action, slug).allowed
-        )
-      ) {
+      const may = (action: string) =>
+        isEntryWrite(action)
+          ? gated.get(gatedKey(index, action)) === true
+          : decidePermission(caller.actor, action, slug).allowed;
+      if (!anyOf.some(may)) {
         refused.push({
           index,
           anyOf: anyOf.map(action => permissionSlug(action, slug)),
